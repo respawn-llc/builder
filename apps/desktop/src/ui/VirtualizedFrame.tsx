@@ -5,6 +5,8 @@ import {
   useMemo,
   useRef,
   type CSSProperties,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
   type ReactNode,
 } from "react";
 import { type Range, type VirtualItem, useVirtualizer } from "@tanstack/react-virtual";
@@ -27,7 +29,10 @@ export type VirtualizedFrameEntry = Readonly<{
   ariaLabel?: string | undefined;
   ariaSelected?: boolean | undefined;
   className?: string | undefined;
+  onClick?: MouseEventHandler<HTMLDivElement> | undefined;
+  onKeyDown?: KeyboardEventHandler<HTMLDivElement> | undefined;
   sticky?: boolean | undefined;
+  tabIndex?: number | undefined;
   render: () => ReactNode;
 }>;
 
@@ -361,6 +366,8 @@ export function VirtualizedFrame({
                 ),
               )}
               key={entry.key}
+              onClick={entry.onClick}
+              onKeyDown={entry.onKeyDown}
               role={rowRole}
               style={fallbackRowStyle({
                 count: entries.length,
@@ -368,6 +375,7 @@ export function VirtualizedFrame({
                 paddingEnd,
                 paddingStart,
               })}
+              tabIndex={entry.tabIndex}
             >
               {entry.render()}
             </div>
@@ -410,11 +418,14 @@ export function VirtualizedFrame({
               aria-selected={entry.ariaSelected}
               data-index={virtualItem.index}
               key={virtualItem.key}
+              onClick={entry.onClick}
+              onKeyDown={entry.onKeyDown}
               ref={virtualizer.measureElement}
               role={rowRole}
               style={
                 entry.sticky ? undefined : { transform: `translateY(${virtualItem.start.toString()}px)` }
               }
+              tabIndex={entry.tabIndex}
             >
               {entry.render()}
             </div>

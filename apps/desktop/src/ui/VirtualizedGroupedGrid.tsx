@@ -1,4 +1,12 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
 
 import { cx } from "./classes";
@@ -60,6 +68,8 @@ export type VirtualizedGroupedGridEntry =
       anchorKey?: string | undefined;
       occurrenceKey?: string | undefined;
       selected?: boolean | undefined;
+      onActivate?: ((event: MouseEvent<HTMLDivElement>) => void) | undefined;
+      onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
       className?: string | undefined;
     }>;
 
@@ -277,6 +287,9 @@ function groupedFrameEntry(entry: VirtualizedGroupedGridEntry, columnCount: numb
         className: entry.className,
         ariaLabel: entry.ariaLabel,
         ariaSelected: entry.selected,
+        onClick: entry.onActivate,
+        onKeyDown: entry.onKeyDown,
+        tabIndex: 0,
         render: () => (
           <>
             {entry.cells.map((cell) => (

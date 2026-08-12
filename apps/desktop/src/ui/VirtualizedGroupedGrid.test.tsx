@@ -144,6 +144,59 @@ describe("VirtualizedGroupedGrid", () => {
     ).toEqual(["columns", "group-active", "task-1"]);
   });
 
+  it("routes pointer activation through a Task row while allowing cell actions to stop it", () => {
+    const onActivate = vi.fn();
+    const onCellActivate = vi.fn();
+    const taskEntry: VirtualizedGroupedGridEntry = {
+      kind: "task",
+      key: "task-1",
+      groupKey: "active",
+      ariaLabel: "Task KENT-1",
+      onActivate,
+      onKeyDown(event) {
+        if (event.key === "Enter" || event.key === " ") {
+          onActivate();
+        }
+      },
+      cells: [
+        { key: "status", content: "Running" },
+        {
+          key: "title",
+          content: (
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                onCellActivate();
+              }}
+              type="button"
+            >
+              Edit labels
+            </button>
+          ),
+        },
+      ],
+    };
+    render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={[...entries.slice(0, 2), taskEntry]}
+        estimateSize={() => 40}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("row", { name: "Task KENT-1" }));
+    expect(onActivate).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(screen.getByRole("row", { name: "Task KENT-1" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("row", { name: "Task KENT-1" }), { key: " " });
+    expect(onActivate).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit labels" }));
+    expect(onCellActivate).toHaveBeenCalledOnce();
+    expect(onActivate).toHaveBeenCalledTimes(3);
+  });
+
   it("routes visible paging boundaries to their owning group only", () => {
     const loadActive = vi.fn();
     const loadBacklog = vi.fn();

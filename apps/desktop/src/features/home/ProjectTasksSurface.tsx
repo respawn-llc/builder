@@ -3,13 +3,14 @@ import { Plus } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { TaskListItem, WorkflowPickerItem } from "@/api";
+import type { WorkflowPickerItem } from "@/api";
 import { canonicalBoardFilter, errorMessage } from "@/api";
 import {
   queryKeys,
   useAppNavigation,
   useAppServices,
   useOwnedSidebarRoots,
+  useSidebarShell,
   type SidebarMode,
 } from "@/app-facade";
 import {
@@ -31,8 +32,7 @@ import {
   type ProjectTaskGroupData,
 } from "./projectTaskListData";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-
-const columns = ["Status", "Dependencies", "ID", "Title", "Workflow", "Labels"] as const;
+import { projectTaskColumnCount, projectTaskColumnEntry, projectTaskEntry } from "./ProjectTaskRow";
 
 export function ProjectTasksSurface({
   projectID,
@@ -46,9 +46,11 @@ export function ProjectTasksSurface({
   const { t } = useTranslation();
   const { api } = useAppServices();
   const { open } = useOwnedSidebarRoots();
+  const { activeDestination } = useSidebarShell();
   const initialMemory = viewMemory.read();
   const [disclosure, setDisclosure] = useState(initialMemory.disclosure);
   const [anchors, setAnchors] = useState(initialMemory.anchors);
+  const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
@@ -72,7 +74,7 @@ export function ProjectTasksSurface({
   });
   useProjectTaskListEvents({
     enabled: query.isSuccess,
-    labelEditorTaskID: null,
+    labelEditorTaskID,
     projectID,
   });
   const boardBoundary = directionalBoundary({
@@ -110,11 +112,29 @@ export function ProjectTasksSurface({
     }
     setDisclosure(next);
   };
+  const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
+  const activeTaskDetailMode =
+    activeDestination?.kind === "taskDetail" ? (activeDestination.mode ?? "shift") : null;
+  const openTaskDetail = useCallback(
+    (taskID: string) => {
+      setLabelEditorTaskID(null);
+      const mode = activeTaskDetailMode ?? sidebarMode;
+      open({ kind: "taskDetail", mode, taskID });
+    },
+    [activeTaskDetailMode, open, sidebarMode],
+  );
+  const toggleLabelEditor = useCallback((taskID: string) => {
+    setLabelEditorTaskID((current) => (current === taskID ? null : taskID));
+  }, []);
   const presentation = projectTasksPresentation({
     counts,
     data,
     disclosure,
+    labelEditorTaskID,
+    onLabelsActivate: toggleLabelEditor,
+    onTaskActivate: openTaskDetail,
     onToggle: toggleGroup,
+    taskDetailID,
     t,
   });
   return (
@@ -137,13 +157,21 @@ function projectTasksPresentation({
   counts,
   data,
   disclosure,
+  labelEditorTaskID,
+  onLabelsActivate,
+  onTaskActivate,
   onToggle,
+  taskDetailID,
   t,
 }: Readonly<{
   counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
   data: ReturnType<typeof useProjectTaskListData>;
   disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
+  labelEditorTaskID: string | null;
+  onLabelsActivate: (taskID: string) => void;
+  onTaskActivate: (taskID: string) => void;
   onToggle: (group: ProjectTaskGroup) => void;
+  taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
 }>): Readonly<{
   entries: readonly VirtualizedGroupedGridEntry[];
@@ -151,18 +179,27 @@ function projectTasksPresentation({
   taskCount: number | null;
 }> {
   if (counts === undefined) {
-    return { entries: columnEntries(), finalEntryKey: "columns", taskCount: null };
+    return { entries: [projectTaskColumnEntry(t)], finalEntryKey: "columns", taskCount: null };
   }
-  const lastVisibleGroup =
-    [...projectTaskGroups].reverse().find((group) => counts[group] > 0) ?? null;
+  const lastVisibleGroup = [...projectTaskGroups].reverse().find((group) => counts[group] > 0) ?? null;
   const finalEntryKey =
     lastVisibleGroup === null
       ? "columns"
       : disclosure[lastVisibleGroup]
-        ? data[lastVisibleGroup].tasks.at(-1)?.id ?? `group-${lastVisibleGroup}`
+        ? (data[lastVisibleGroup].tasks.at(-1)?.id ?? `group-${lastVisibleGroup}`)
         : `group-${lastVisibleGroup}`;
   return {
-    entries: groupedEntries({ counts, data, disclosure, onToggle, t }),
+    entries: groupedEntries({
+      counts,
+      data,
+      disclosure,
+      labelEditorTaskID,
+      onLabelsActivate,
+      onTaskActivate,
+      onToggle,
+      taskDetailID,
+      t,
+    }),
     finalEntryKey,
     taskCount: counts.active + counts.backlog + counts.done,
   };
@@ -221,7 +258,7 @@ function ProjectTasksContent({
         <VirtualizedGroupedGrid
           ariaLabel={t("home.prototype.projectTasksGrid")}
           className="h-full min-h-0 min-w-[880px] overflow-auto [scrollbar-width:thin] [&::-webkit-scrollbar:vertical]:hidden"
-          columnCount={columns.length}
+          columnCount={projectTaskColumnCount}
           entries={entries}
           estimateSize={() => 38}
           navigation={{
@@ -310,32 +347,29 @@ function ProjectTasksEmpty({
   );
 }
 
-function columnEntries(): readonly VirtualizedGroupedGridEntry[] {
-  return [
-    {
-      kind: "column-header",
-      key: "columns",
-      cells: columns.map((column) => ({ key: column.toLowerCase(), content: column })),
-      className: taskGridClassName("border-b border-[var(--color-outline)] bg-[var(--color-island-1)]"),
-    },
-  ];
-}
-
 function groupedEntries({
   counts,
   data,
   disclosure,
+  labelEditorTaskID,
+  onLabelsActivate,
+  onTaskActivate,
   onToggle,
+  taskDetailID,
   t,
 }: Readonly<{
   counts: Readonly<Record<ProjectTaskGroup, number>>;
   data: ReturnType<typeof useProjectTaskListData>;
   disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
+  labelEditorTaskID: string | null;
+  onLabelsActivate: (taskID: string) => void;
+  onTaskActivate: (taskID: string) => void;
   onToggle: (group: ProjectTaskGroup) => void;
+  taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
 }>): readonly VirtualizedGroupedGridEntry[] {
   return [
-    ...columnEntries(),
+    projectTaskColumnEntry(t),
     ...projectTaskGroups.flatMap((group) => {
       const count = counts[group];
       if (count === 0) return [];
@@ -360,12 +394,26 @@ function groupedEntries({
       if (initial !== undefined) {
         entries.push(boundaryEntry(group, "initial", initial, groupData));
       } else {
-        if (groupData.hasPreviousPage || groupData.isFetchingPreviousPage || groupData.isFetchPreviousPageError) {
-          entries.push(
-            boundaryEntry(group, "previous", groupBoundary(groupData, "previous", t), groupData),
-          );
+        if (
+          groupData.hasPreviousPage ||
+          groupData.isFetchingPreviousPage ||
+          groupData.isFetchPreviousPageError
+        ) {
+          entries.push(boundaryEntry(group, "previous", groupBoundary(groupData, "previous", t), groupData));
         }
-        entries.push(...groupData.tasks.map((task) => taskEntry(group, task)));
+        entries.push(
+          ...groupData.tasks.map((task) =>
+            projectTaskEntry({
+              group,
+              labelEditorTaskID,
+              onLabelsActivate,
+              onTaskActivate,
+              task,
+              taskDetailID,
+              t,
+            }),
+          ),
+        );
         if (groupData.hasNextPage || groupData.isFetchingNextPage || groupData.isFetchNextPageError) {
           entries.push(boundaryEntry(group, "next", groupBoundary(groupData, "next", t), groupData));
         }
@@ -373,32 +421,6 @@ function groupedEntries({
       return entries;
     }),
   ];
-}
-
-function taskEntry(group: ProjectTaskGroup, task: TaskListItem): VirtualizedGroupedGridEntry {
-  return {
-    kind: "task",
-    key: task.id,
-    groupKey: group,
-    ariaLabel: `${task.shortID} ${task.title}`,
-    className: taskGridClassName(
-      "border-b border-[var(--color-outline)] px-[var(--space-3)] hover:bg-[var(--color-island-2)]",
-    ),
-    cells: [
-      { key: "status", content: task.status.kind },
-      {
-        key: "dependencies",
-        content:
-          task.dependencyProgress === null
-            ? ""
-            : `${task.dependencyProgress.satisfiedCount.toString()}/${task.dependencyProgress.totalCount.toString()}`,
-      },
-      { key: "id", content: task.shortID },
-      { key: "title", content: task.title },
-      { key: "workflow", content: task.workflowName ?? "" },
-      { key: "labels", content: task.labels.map((label) => label.name).join(", ") },
-    ],
-  };
 }
 
 function boundaryEntry(
@@ -433,17 +455,27 @@ function groupBoundary(
   t: ReturnType<typeof useTranslation>["t"],
 ): VirtualizedInfiniteListBoundaryState | undefined {
   const initial = direction === "initial";
-  const failed =
-    initial ? data.isError && data.tasks.length === 0 : direction === "previous" ? data.isFetchPreviousPageError : data.isFetchNextPageError;
-  const loading =
-    initial ? data.isPending : direction === "previous" ? data.isFetchingPreviousPage : data.isFetchingNextPage;
+  const failed = initial
+    ? data.isError && data.tasks.length === 0
+    : direction === "previous"
+      ? data.isFetchPreviousPageError
+      : data.isFetchNextPageError;
+  const loading = initial
+    ? data.isPending
+    : direction === "previous"
+      ? data.isFetchingPreviousPage
+      : data.isFetchingNextPage;
   return directionalBoundary({
     failed,
     loading,
     loadingLabel: t("states.loading"),
     message: failed ? errorMessage(data.error) : "",
     onRetry: () => {
-      void (initial ? data.refetch() : direction === "previous" ? data.fetchPreviousPage() : data.fetchNextPage());
+      void (initial
+        ? data.refetch()
+        : direction === "previous"
+          ? data.fetchPreviousPage()
+          : data.fetchNextPage());
     },
     retryLabel: t("app.retry"),
   });
@@ -451,10 +483,6 @@ function groupBoundary(
 
 function groupName(group: ProjectTaskGroup): string {
   return group === "active" ? "Active" : group === "backlog" ? "Backlog" : "Done";
-}
-
-function taskGridClassName(extra: string): string {
-  return `grid min-w-[880px] grid-cols-[40px_96px_112px_minmax(140px,1fr)_minmax(130px,180px)_minmax(160px,240px)] items-center gap-[var(--space-2)] ${extra}`;
 }
 
 function WorkflowBoardChip({
