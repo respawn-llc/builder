@@ -1,20 +1,17 @@
-import { useInfiniteQuery, type InfiniteData } from "@tanstack/react-query";
 import { SearchIcon } from "lucide-react";
 import {
   useCallback,
   useEffect,
   useId,
-  useMemo,
   useRef,
-  useState,
   type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
 import { useTranslation } from "react-i18next";
 
-import { TaskSearchError, errorMessage, type TaskSearchGroup, type TaskSearchResponse } from "@/api";
-import { queryKeys, useAppServices } from "@/app-facade";
+import { errorMessage } from "@/api";
+import type { TaskSearchResult as SearchResult, useTaskSearch } from "@/app-facade";
 import {
   Button,
   CommandPaletteDialog,
@@ -23,25 +20,15 @@ import {
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
 } from "@/ui";
-import {
-  type TaskSearchScrollRequest,
-  type useTaskSearchSelection,
-} from "./taskSearchSelection";
-import { useRetainedQueryData } from "./useRetainedQueryData";
-import { TaskSearchResultRow, type TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
+import { type TaskSearchScrollRequest, type useTaskSearchSelection } from "./taskSearchSelection";
+import { TaskSearchResultRow } from "./TaskSearchResult";
 
-export const taskSearchDebounceMs = 300;
-const taskSearchPageSize = 40;
-const retainedTaskSearchPages = 3;
-const taskSearchContext = 20;
 const taskSearchInputHeight = 56;
 const taskSearchResultEstimatedHeight = 154;
 const taskSearchResultAreaPadding = 16;
 const taskSearchDialogMaximumHeight = 560;
 const taskSearchLoadingDialogHeight = 176;
 const taskSearchErrorDialogHeight = 240;
-
-type SearchPage = Readonly<{ offset: number | null; projectID: string | null; query: string; response: TaskSearchResponse }>;
 
 export function useTaskSearchShortcuts(onOpen: (() => void) | null): void {
   useEffect(() => {
@@ -70,70 +57,6 @@ function isTaskSearchShortcut(event: globalThis.KeyboardEvent): boolean {
   const altSpaceShortcut =
     event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey && event.code === "Space";
   return saveShortcut || altSpaceShortcut;
-}
-
-export function useDebouncedText(value: string, delayMs: number): string {
-  const [debounced, setDebounced] = useState(value);
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebounced(value);
-    }, delayMs);
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [delayMs, value]);
-  return debounced;
-}
-
-export function useTaskSearch(projectID: string | null, open: boolean, debouncedQuery: string) {
-  const { api } = useAppServices();
-  const trimmedQuery = debouncedQuery.trim();
-  const searchable = Array.from(trimmedQuery).length >= 3;
-  const request = useInfiniteQuery<
-    SearchPage,
-    Error,
-    InfiniteData<SearchPage, number | null>,
-    readonly (string | null)[],
-    number | null
-  >({
-    queryKey: queryKeys.taskSearch(projectID, trimmedQuery),
-    queryFn: async ({ pageParam, signal }) => ({
-      offset: pageParam,
-      projectID,
-      query: trimmedQuery,
-      response: await api.searchTasks(
-        {
-          mode: "literal",
-          query: trimmedQuery,
-          context: taskSearchContext,
-          caseSensitive: false,
-          includeComments: true,
-          projectIDs: projectID === null ? undefined : [projectID],
-          pageSize: taskSearchPageSize,
-          offset: pageParam ?? undefined,
-        },
-        signal,
-      ),
-    }),
-    initialPageParam: null,
-    enabled: open && searchable,
-    getNextPageParam: (lastPage) => lastPage.response.nextOffset ?? undefined,
-    maxPages: retainedTaskSearchPages,
-    retry: (failureCount, error) => !(error instanceof TaskSearchError) && failureCount < 1,
-  });
-  const retainedData = useRetainedQueryData({ projectID }, request.data, sameTaskSearchProject);
-  const normalizedTooShort = request.error instanceof TaskSearchError;
-  const visibleData = searchable && !normalizedTooShort ? retainedData : undefined;
-  const paginationUsesVisibleData = visibleData !== undefined && visibleData === request.data;
-  const results = useMemo(() => flattenSearchResults(visibleData), [visibleData]);
-  return {
-    displayedQuery: visibleData?.pages[0]?.query ?? null,
-    normalizedTooShort,
-    paginationUsesVisibleData,
-    request,
-    results,
-    searchable,
-  };
 }
 
 export function TaskSearchDialog({
@@ -485,28 +408,6 @@ function SearchRefreshError({
   );
 }
 
-function flattenSearchResults(
-  data: InfiniteData<SearchPage, number | null> | undefined,
-): readonly SearchResult[] {
-  if (data === undefined) {
-    return [];
-  }
-  return data.pages.flatMap((page) =>
-    page.response.groups.map((group, groupIndex) => ({
-      key: taskSearchResultKey(page, group, groupIndex),
-      group,
-    })),
-  );
-}
-
-function taskSearchResultKey(page: SearchPage, group: TaskSearchGroup, groupIndex: number): string {
-  const firstOrdinal = group.hits[0]?.ordinal;
-  if (firstOrdinal === undefined) {
-    throw new Error(`Task Search group ${group.taskID} at offset ${String(page.offset)} has no hits.`);
-  }
-  return JSON.stringify([page.projectID, page.query, page.offset, groupIndex, group.taskID, firstOrdinal]);
-}
-
 function taskSearchOptionID(listID: string, resultKey: string): string {
   return `${listID}-option-${resultKey}`;
 }
@@ -520,8 +421,6 @@ function searchSelectionDirection(key: string): -1 | 1 | null {
   }
   return null;
 }
-
-function sameTaskSearchProject(left: Readonly<{ projectID: string | null }>, right: Readonly<{ projectID: string | null }>): boolean { return left.projectID === right.projectID; }
 
 function searchBoundaryState(
   search: ReturnType<typeof useTaskSearch>,

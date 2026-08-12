@@ -3,6 +3,7 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -29,6 +30,27 @@ const (
 	workflowIdentityViewName = "project_default_workflow_identity"
 )
 
+type UnsupportedMetadataVersionError struct {
+	DatabasePath   string
+	CurrentVersion int64
+	MinimumVersion int64
+}
+
+func (e *UnsupportedMetadataVersionError) Error() string {
+	return fmt.Sprintf(
+		"metadata database %q uses migration version %d; direct upgrades require Kent %s or newer (minimum migration version %d)",
+		e.DatabasePath,
+		e.CurrentVersion,
+		metadatamigrations.MinimumSupportedRelease,
+		e.MinimumVersion,
+	)
+}
+
+type metadataDatabasePreflight struct {
+	Exists  bool
+	Version int64
+}
+
 func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, error) {
 	trimmedRoot, err := filepath.Abs(filepath.Clean(persistenceRoot))
 	if err != nil {
@@ -44,6 +66,17 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return nil, fmt.Errorf("metadata db path %q escapes persistence root %q: %w", trimmedDatabasePath, trimmedRoot, ErrPathEscapesPersistenceRoot)
+	}
+	preflight, err := inspectExistingMetadataDatabase(trimmedDatabasePath)
+	if err != nil {
+		return nil, err
+	}
+	if preflight.Exists && preflight.Version < metadatamigrations.MinimumSupportedVersion {
+		return nil, &UnsupportedMetadataVersionError{
+			DatabasePath:   trimmedDatabasePath,
+			CurrentVersion: preflight.Version,
+			MinimumVersion: metadatamigrations.MinimumSupportedVersion,
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(trimmedDatabasePath), 0o755); err != nil {
 		return nil, fmt.Errorf("create metadata db dir: %w", err)
@@ -68,6 +101,63 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	return db, nil
 }
 
+func inspectExistingMetadataDatabase(databasePath string) (metadataDatabasePreflight, error) {
+	if _, err := os.Stat(databasePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return metadataDatabasePreflight{}, nil
+		}
+		return metadataDatabasePreflight{}, fmt.Errorf("inspect metadata db path: %w", err)
+	}
+	dsn, err := metadataSQLiteReadOnlyDSN(databasePath)
+	if err != nil {
+		return metadataDatabasePreflight{}, fmt.Errorf("build read-only metadata db DSN: %w", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return metadataDatabasePreflight{}, fmt.Errorf("open metadata db read-only: %w", err)
+	}
+	version, inspectErr := readMetadataVersion(db)
+	closeErr := db.Close()
+	if inspectErr != nil {
+		return metadataDatabasePreflight{}, errors.Join(inspectErr, closeErr)
+	}
+	if closeErr != nil {
+		return metadataDatabasePreflight{}, fmt.Errorf("close read-only metadata db: %w", closeErr)
+	}
+	return metadataDatabasePreflight{Exists: true, Version: version}, nil
+}
+
+func readMetadataVersion(db *sql.DB) (int64, error) {
+	ctx := context.Background()
+	definitions, err := sqlitegen.New(db).ListMetadataSchemaDefinitions(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("inspect metadata schema: %w", err)
+	}
+	hasVersionTable := false
+	for _, definition := range definitions {
+		if definition.ObjectKind == "table" &&
+			definition.ObjectName == goose.DefaultTablename {
+			hasVersionTable = true
+			break
+		}
+	}
+	if !hasVersionTable {
+		return 0, nil
+	}
+	versionStore, err := goosedatabase.NewStore(
+		goosedatabase.DialectSQLite3,
+		goose.DefaultTablename,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("create metadata migration version store: %w", err)
+	}
+	version, err := versionStore.GetLatestVersion(ctx, db)
+	if err != nil {
+		return 0, fmt.Errorf("read metadata migration version: %w", err)
+	}
+	return version, nil
+}
+
 func metadataSQLiteDSN(databasePath string) (string, error) {
 	u, ok := config.LocalFileURL(databasePath)
 	if !ok {
@@ -78,6 +168,17 @@ func metadataSQLiteDSN(databasePath string) (string, error) {
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")
 	q.Add("_pragma", "busy_timeout(5000)")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func metadataSQLiteReadOnlyDSN(databasePath string) (string, error) {
+	u, ok := config.LocalFileURL(databasePath)
+	if !ok {
+		return "", fmt.Errorf("metadata database path %q is not absolute", databasePath)
+	}
+	q := url.Values{}
+	q.Add("mode", "ro")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

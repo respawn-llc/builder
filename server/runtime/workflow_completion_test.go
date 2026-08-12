@@ -136,7 +136,7 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 	}, true)
 	select {
 	case <-backgroundStarted:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("terminal background notice continuation did not start")
 	}
 
@@ -157,7 +157,7 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 		if err != nil {
 			t.Fatalf("workflow turn after background continuation: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("workflow turn did not start after the background continuation finished")
 	}
 	waitEngineLifecycleTasks(t, engine)
@@ -502,7 +502,7 @@ func testAcceptedLiveWorkflowSteeringToolChoice(t *testing.T, useAutomaticToolCh
 	}()
 	select {
 	case <-client.started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active workflow request")
 	}
 	_, queued, err := eng.SubmitUserMessageOrSteer(context.Background(), "steer active workflow", "req-steer")
@@ -1098,7 +1098,7 @@ func TestCompatibleProviderCommentaryFlushesAcceptedSteeringBeforeContinuing(t *
 	}()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for commentary response")
 	}
 	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "accepted steering", liveRunTestRequestID(t), nil)
@@ -1164,7 +1164,7 @@ func TestWorkflowTerminalCompletionFailsQueuedSteeringAtRunRelease(t *testing.T)
 	}()
 	select {
 	case <-started:
-	case <-time.After(5 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow turn")
 	}
 	queued := mustQueueUserMessageWithClientRequestID(t, eng, "do not submit after run release", "req-after-release")
@@ -1255,6 +1255,81 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		result.NoFinalReason != LiveRunNoFinalAnswerReasonWorkflow ||
 		result.AssistantMessage.Content != nil {
 		t.Fatalf("shell-command workflow completion result = %+v, want workflow no-final terminal fact", result)
+	}
+}
+
+func TestWorkflowStoppedQueuedFlushDoesNotFinalizeWithoutOutcome(t *testing.T) {
+	store := mustCreateTestSession(t)
+	controller := &fakeWorkflowController{}
+	shellTool := &externalCompletionTool{controller: controller}
+	var (
+		eng        *Engine
+		firstID    string
+		tailID     string
+		stopMarked bool
+	)
+	client := &hookClient{response: commentaryResponse("continue working")}
+	client.beforeReturn = func() error {
+		first, accepted, err := eng.QueueUserMessageForActiveRun(
+			context.Background(),
+			"queued correction",
+			runtimeids.NewRuntimeClientRequestID(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("workflow queued correction was not accepted")
+		}
+		steer, err := NewAgentSteer(runtimeids.NewSessionID(), "queued agent correction")
+		if err != nil {
+			return err
+		}
+		tail, accepted, err := eng.QueueAgentSteerForActiveRun(
+			context.Background(),
+			steer,
+			runtimeids.NewRuntimeClientRequestID(),
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+		if !accepted {
+			return errors.New("workflow queued agent correction was not accepted")
+		}
+		firstID = first.ID
+		tailID = tail.ID
+		return nil
+	}
+	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+		ID:      toolspec.ToolExecCommand,
+		Handler: shellTool,
+	}), Config{
+		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
+		OnEvent: func(event Event) {
+			if stopMarked ||
+				event.QueuedUserMessageStatus == nil ||
+				event.QueuedUserMessageStatus.QueueItemID != firstID ||
+				event.QueuedUserMessageStatus.Status != QueuedUserMessageSubmitted {
+				return
+			}
+			stopMarked = true
+			eng.liveRun.mu.Lock()
+			eng.liveRun.markStoppedQueueItemsLocked(map[runtimeids.QueueItemID]struct{}{
+				mustQueueItemID(tailID): {},
+			})
+			eng.liveRun.mu.Unlock()
+		},
+	})
+
+	_, err := eng.SubmitWorkflowTurn(context.Background())
+	var stopped *queuedUserFlushStoppedError
+	if !errors.As(err, &stopped) {
+		t.Fatalf("submit workflow turn error = %v, want stopped queued flush", err)
+	}
+	if !stopMarked {
+		t.Fatal("workflow queued flush never marked its tail stopped")
 	}
 }
 

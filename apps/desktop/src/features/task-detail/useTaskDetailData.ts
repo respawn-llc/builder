@@ -29,7 +29,7 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
   const connectionGeneration = connection.generation;
   const taskID = detail.id;
   const projectID = detail.projectID;
-  const relatedTaskIDs = useMemo(() => dependencyRelatedTaskIDs(detail), [detail]);
+  const relatedTaskIDs = useMemo(() => dependencyRelatedTaskIDs(detail.dependencies), [detail.dependencies]);
   const relatedTaskIDsRef = useRef(relatedTaskIDs);
 
   useEffect(() => {
@@ -153,7 +153,7 @@ export function useTaskComments(taskID: string, enabled: boolean) {
   );
 }
 
-type TaskLifecycleAction = "dependency_remove" | "interrupt";
+type TaskLifecycleAction = "dependency_add" | "dependency_remove" | "interrupt";
 
 type TaskMutationCallbacks = Readonly<{
   onChanged?: (() => void) | undefined;
@@ -181,6 +181,17 @@ export function useTaskMutations(
     await invalidateProjectTaskSearches(queryClient, projectID);
     onChanged?.();
   }
+  async function refreshDependencyPair(pair: TaskDependencyPair): Promise<void> {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockerTaskID) }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockedTaskID) }),
+      invalidateProjectBoardQueries(queryClient, projectID),
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.projectTaskListsRoot(projectID),
+      }),
+    ]);
+    onChanged?.();
+  }
   return {
     refresh,
     addComment: useMutation({
@@ -195,6 +206,14 @@ export function useTaskMutations(
     deleteComment: useMutation({
       mutationFn: async (commentID: string) => api.deleteComment(commentID),
       onSuccess: refresh,
+    }),
+    addDependency: useMutation({
+      mutationFn: async (pair: TaskDependencyPair) =>
+        api.addTaskDependency(pair.blockerTaskID, pair.blockedTaskID),
+      onError: (error) => {
+        onActionError?.("dependency_add", error);
+      },
+      onSuccess: async (_response, pair) => refreshDependencyPair(pair),
     }),
     removeDependency: useMutation({
       mutationFn: async (pair: TaskDependencyPair) =>
@@ -214,17 +233,7 @@ export function useTaskMutations(
         onActionError?.("dependency_remove", error);
         await queryClient.invalidateQueries({ queryKey: queryKeys.task(taskID) });
       },
-      onSuccess: async (_response, pair) => {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockerTaskID) }),
-          queryClient.invalidateQueries({ queryKey: queryKeys.task(pair.blockedTaskID) }),
-          invalidateProjectBoardQueries(queryClient, projectID),
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.projectTaskListsRoot(projectID),
-          }),
-        ]);
-        onChanged?.();
-      },
+      onSuccess: async (_response, pair) => refreshDependencyPair(pair),
     }),
     interrupt: useMutation({
       mutationFn: async (sessionID?: string) => api.interruptTask(taskID, sessionID),

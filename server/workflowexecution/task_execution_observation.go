@@ -3,6 +3,7 @@ package workflowexecution
 import (
 	"errors"
 	"fmt"
+	"sort"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -12,8 +13,9 @@ import (
 // observation. Exact executions are captured under the Authority live-state
 // lock and selected Task Quiescence is captured under the Controller lock.
 type WorkflowTaskExecutionObservation struct {
-	Executions map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
-	Quiescence map[workflow.TaskID]bool
+	Executions        map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
+	ConcurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
+	Quiescence        map[workflow.TaskID]bool
 }
 
 // ObserveWorkflowTaskExecutions captures the global exact-execution map and,
@@ -35,8 +37,9 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 	}
 
 	observation := WorkflowTaskExecutionObservation{
-		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
-		Quiescence: map[workflow.TaskID]bool{},
+		Executions:        map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
+		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
+		Quiescence:        map[workflow.TaskID]bool{},
 	}
 	err := c.authority.WithWorkflowTaskExecutionSnapshots(func(executions map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) error {
 		c.mu.Lock()
@@ -45,6 +48,34 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 			return errors.New("current node workflow controller is closed")
 		}
 		observation.Executions = executions
+		if c.agentCapacityActive >= c.agentConcurrency {
+			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+				if entry.start.policy != currentNodeAdmissionAutomaticAgent {
+					continue
+				}
+				taskID := entry.start.reference.TaskID
+				observation.ConcurrencyQueued[taskID] = append(
+					observation.ConcurrencyQueued[taskID],
+					entry.start.reference,
+				)
+			}
+		}
+		for taskID, references := range observation.ConcurrencyQueued {
+			sort.Slice(references, func(i, j int) bool {
+				left := references[i]
+				right := references[j]
+				if left.NodeID != right.NodeID {
+					return left.NodeID < right.NodeID
+				}
+				leftBranch, leftScoped := left.TransitionBranchKey()
+				rightBranch, rightScoped := right.TransitionBranchKey()
+				if leftScoped != rightScoped {
+					return !leftScoped
+				}
+				return leftBranch < rightBranch
+			})
+			observation.ConcurrencyQueued[taskID] = references
+		}
 		for taskID := range selected {
 			quiescent, err := c.taskQuiescentLocked(taskID)
 			if err != nil {

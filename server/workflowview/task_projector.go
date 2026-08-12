@@ -22,12 +22,13 @@ type TaskStatusInput struct {
 }
 
 type TaskFactsInput struct {
-	Task           sqlitegen.TaskRecord
-	Status         workflowTaskStatusFact
-	CurrentNodes   []workflow.CurrentNode
-	LiveExecutions []sessionruntime.TaskExecution
-	Definition     definitionSnapshot
-	CanDelete      bool
+	Task              sqlitegen.TaskRecord
+	Status            workflowTaskStatusFact
+	CurrentNodes      []workflow.CurrentNode
+	LiveExecutions    []sessionruntime.TaskExecution
+	ConcurrencyQueued []workflow.CurrentNodeReference
+	Definition        definitionSnapshot
+	CanDelete         bool
 }
 
 type TaskFacts struct {
@@ -71,8 +72,15 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 	return TaskFacts{
 		Summary: taskSummary(input.Task, input.Status.Status, done),
 		Status:  input.Status.Status,
-		Actions: taskActions(done, input.Status.Status, input.CurrentNodes, input.LiveExecutions, input.CanDelete),
-		Done:    done,
+		Actions: taskActions(
+			done,
+			input.Status.Status,
+			input.CurrentNodes,
+			input.LiveExecutions,
+			input.ConcurrencyQueued,
+			input.CanDelete,
+		),
+		Done: done,
 	}
 }
 
@@ -189,6 +197,7 @@ func taskActions(
 	status serverapi.WorkflowTaskStatus,
 	currentNodes []workflow.CurrentNode,
 	live []sessionruntime.TaskExecution,
+	concurrencyQueued []workflow.CurrentNodeReference,
 	canDelete bool,
 ) serverapi.WorkflowTaskActions {
 	hasLiveExecution := len(live) != 0
@@ -201,9 +210,10 @@ func taskActions(
 		CanStart:     !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
 		CanInterrupt: !done && hasInterruptibleExecution,
 		CanResume: !done &&
-			!hasLiveExecution &&
-			status.Kind == serverapi.WorkflowTaskStatusKindInterrupted &&
-			!currentNodesOwnSetupRecovery(currentNodes),
+			(len(concurrencyQueued) != 0 ||
+				(!hasLiveExecution &&
+					status.Kind == serverapi.WorkflowTaskStatusKindInterrupted &&
+					!currentNodesOwnSetupRecovery(currentNodes))),
 		CanDelete: canDelete,
 	}
 	return actions

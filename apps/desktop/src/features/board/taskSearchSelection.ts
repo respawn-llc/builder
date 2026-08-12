@@ -1,8 +1,11 @@
 import { useCallback, useRef, useState } from "react";
 
-import { useTaskSearchMemory, type TaskSearchMemorySelection } from "@/app-facade";
+import {
+  type TaskSearchResult as SearchResult,
+  useTaskSearchMemory,
+  type TaskSearchMemorySelection,
+} from "@/app-facade";
 import { prefersReducedMotion } from "@/ui";
-import type { TaskSearchResultItem as SearchResult } from "./TaskSearchResult";
 
 export type TaskSearchScrollRequest = Readonly<{
   behavior: "auto" | "smooth";

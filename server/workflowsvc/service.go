@@ -33,6 +33,7 @@ type Service struct {
 	mutationPermit       *workflowexecution.MutationPermit
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
+		PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 		EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
@@ -176,6 +177,7 @@ type Option func(*Service)
 
 func WithCurrentNodeExecution(execution interface {
 	StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
+	PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 	EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
 	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
@@ -361,183 +363,6 @@ func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequ
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	return serverapi.WorkflowGetResponse{Definition: def}, nil
-}
-
-func (s *Service) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeAddRequest) (serverapi.WorkflowNodeAddResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowNodeAddResponse{}, err
-	}
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
-	})
-	if err != nil {
-		return serverapi.WorkflowNodeAddResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeAdded, req.NodeID)
-	return serverapi.WorkflowNodeAddResponse{Version: revision}, nil
-}
-
-func (s *Service) UpdateWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeUpdateRequest) (serverapi.WorkflowNodeUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowNodeUpdateResponse{}, err
-	}
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateNode(ctx, workflowstore.NodeRecord{ID: workflow.NodeID(req.NodeID), WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.Key), Kind: workflow.NodeKind(req.Kind), DisplayName: req.DisplayName, GroupKey: req.GroupKey, SubagentRole: req.SubagentRole, CompletionMode: req.CompletionMode, ScriptPath: optionalStringValue(req.ScriptPath), JoinInputProviders: joinInputProviders(req.JoinInputProviders)})
-	})
-	if err != nil {
-		return serverapi.WorkflowNodeUpdateResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeUpdated, req.NodeID)
-	return serverapi.WorkflowNodeUpdateResponse{Version: revision}, nil
-}
-
-func (s *Service) AddWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupAddRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowNodeGroupResponse{}, err
-	}
-	var group workflowstore.NodeGroupRecord
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		var storeRevision int64
-		var err error
-		group, storeRevision, err = s.store.AddNodeGroup(ctx, workflowstore.NodeGroupRecord{ID: req.GroupID, WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.GroupKey), DisplayName: req.DisplayName, SortOrder: int64(req.SortOrder)})
-		return storeRevision, err
-	})
-	if err != nil {
-		return serverapi.WorkflowNodeGroupResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupAdded, group.ID)
-	return serverapi.WorkflowNodeGroupResponse{Group: workflowNodeGroup(group), Version: revision}, nil
-}
-
-func (s *Service) UpdateWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupUpdateRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowNodeGroupResponse{}, err
-	}
-	var group workflowstore.NodeGroupRecord
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		var storeRevision int64
-		var err error
-		group, storeRevision, err = s.store.UpdateNodeGroup(ctx, workflowstore.NodeGroupRecord{ID: req.GroupID, WorkflowID: req.WorkflowID, Key: workflow.ModelKey(req.GroupKey), DisplayName: req.DisplayName, SortOrder: int64(req.SortOrder)})
-		return storeRevision, err
-	})
-	if err != nil {
-		return serverapi.WorkflowNodeGroupResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupUpdated, group.ID)
-	return serverapi.WorkflowNodeGroupResponse{Group: workflowNodeGroup(group), Version: revision}, nil
-}
-
-func (s *Service) DeleteWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupDeleteRequest) error {
-	if err := req.Validate(); err != nil {
-		return err
-	}
-	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
-		_, err := s.store.DeleteNodeGroup(ctx, req.WorkflowID, req.GroupID)
-		return struct{}{}, err
-	}); err != nil {
-		return err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionNodeGroupDeleted, req.GroupID)
-	return nil
-}
-
-func (s *Service) AddWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupAddRequest) (serverapi.WorkflowTransitionGroupAddResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTransitionGroupAddResponse{}, err
-	}
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(req.GroupID), WorkflowID: req.WorkflowID, SourceNodeID: workflow.NodeID(req.SourceNodeID), TransitionID: workflow.TransitionID(req.TransitionID), DisplayName: req.DisplayName, Description: req.Description})
-	})
-	if err != nil {
-		return serverapi.WorkflowTransitionGroupAddResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionTransitionGroupAdded, req.GroupID)
-	return serverapi.WorkflowTransitionGroupAddResponse{Version: revision}, nil
-}
-
-func (s *Service) UpdateWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupUpdateRequest) (serverapi.WorkflowTransitionGroupUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTransitionGroupUpdateResponse{}, err
-	}
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateTransitionGroup(ctx, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(req.GroupID), WorkflowID: req.WorkflowID, SourceNodeID: workflow.NodeID(req.SourceNodeID), TransitionID: workflow.TransitionID(req.TransitionID), DisplayName: req.DisplayName, Description: req.Description})
-	})
-	if err != nil {
-		return serverapi.WorkflowTransitionGroupUpdateResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionTransitionGroupUpdated, req.GroupID)
-	return serverapi.WorkflowTransitionGroupUpdateResponse{Version: revision}, nil
-}
-
-func (s *Service) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeAddRequest) (serverapi.WorkflowEdgeAddResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowEdgeAddResponse{}, err
-	}
-	edge := workflowEdgeRecordFromValues(
-		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
-		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
-		req.ContextSource, req.PromptTemplate, req.Parameters,
-	)
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.AddEdge(ctx, edge)
-	})
-	if err != nil {
-		return serverapi.WorkflowEdgeAddResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeAdded, req.EdgeID)
-	return serverapi.WorkflowEdgeAddResponse{Version: revision}, nil
-}
-
-func (s *Service) UpdateWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeUpdateRequest) (serverapi.WorkflowEdgeUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowEdgeUpdateResponse{}, err
-	}
-	edge := workflowEdgeRecordFromValues(
-		req.EdgeID, req.WorkflowID, req.TransitionGroupID, req.Key, req.TargetNodeID,
-		req.AssigneeSelection, req.ThinkingSelection, req.RequiresApproval, req.ContextMode,
-		req.ContextSource, req.PromptTemplate, req.Parameters,
-	)
-	revision, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (int64, error) {
-		return s.store.UpdateEdge(ctx, edge)
-	})
-	if err != nil {
-		return serverapi.WorkflowEdgeUpdateResponse{}, err
-	}
-	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionEdgeUpdated, req.EdgeID)
-	return serverapi.WorkflowEdgeUpdateResponse{Version: revision}, nil
-}
-
-func workflowEdgeRecordFromValues(
-	edgeID string,
-	workflowID runtimeids.WorkflowID,
-	transitionGroupID string,
-	key string,
-	targetNodeID string,
-	assigneeSelection string,
-	thinkingSelection string,
-	requiresApproval bool,
-	contextMode string,
-	contextSource serverapi.WorkflowContextSource,
-	promptTemplate string,
-	parameters []serverapi.WorkflowParameter,
-) workflowstore.EdgeRecord {
-	return workflowstore.EdgeRecord{
-		ID:                workflow.EdgeID(edgeID),
-		WorkflowID:        workflowID,
-		TransitionGroupID: workflow.TransitionGroupID(transitionGroupID),
-		Key:               workflow.ModelKey(key),
-		TargetNodeID:      workflow.NodeID(targetNodeID),
-		AssigneeSelection: workflow.AssigneeSelection(assigneeSelection),
-		ThinkingSelection: workflow.ThinkingSelection(thinkingSelection),
-		RequiresApproval:  requiresApproval,
-		ContextMode:       workflow.ContextMode(contextMode),
-		ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{
-			Kind:    workflow.ContextSourceKind(contextSource.Kind),
-			NodeKey: workflow.ModelKey(contextSource.NodeKey),
-		}),
-		PromptTemplate: promptTemplate,
-		Parameters:     domainParameters(parameters),
-	}
 }
 
 func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
@@ -743,7 +568,11 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	result, err := s.store.PreviewWorkflowGraphSave(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil))
+	storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
+	if err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
+	result, err := s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
@@ -759,7 +588,11 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
 	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		return s.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation))
+		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		return s.store.SaveWorkflowGraph(ctx, storeRequest)
 	})
 	if err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
@@ -1599,6 +1432,28 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
 	taskID := workflow.TaskID(req.TaskID)
+	promoted, handled, err := s.currentNodeExecution.PromoteConcurrencyQueuedTask(ctx, taskID)
+	if err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	if handled {
+		if detail, detailErr := s.readModels.TaskDetail.GetTask(ctx, req.TaskID); detailErr == nil {
+			s.publishProjectWorkflowEvent(
+				ctx,
+				detail.Summary.ProjectID,
+				detail.Summary.WorkflowID,
+				serverapi.WorkflowProjectEventResourceTask,
+				serverapi.WorkflowProjectEventActionResumed,
+				req.TaskID,
+			)
+		}
+		return serverapi.WorkflowTaskResumeResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+			Applied: &serverapi.WorkflowTaskResumeApplied{
+				CurrentNodes: workflowview.ProjectCurrentNodes(promoted),
+			},
+		}, nil
+	}
 	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
@@ -2372,10 +2227,6 @@ func workflowRecord(row workflowstore.WorkflowRecord) serverapi.WorkflowRecord {
 	return record
 }
 
-func workflowNodeGroup(row workflowstore.NodeGroupRecord) serverapi.WorkflowNodeGroup {
-	return serverapi.WorkflowNodeGroup{GroupID: row.ID, WorkflowID: row.WorkflowID, GroupKey: string(row.Key), DisplayName: row.DisplayName, SortOrder: int(row.SortOrder)}
-}
-
 func projectWorkflowLink(row workflowstore.ProjectWorkflowLinkRecord) serverapi.ProjectWorkflowLink {
 	return serverapi.ProjectWorkflowLink{ID: row.ID, ProjectID: row.ProjectID, WorkflowID: row.WorkflowID, Default: row.IsDefault}
 }
@@ -2471,6 +2322,10 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 	if err != nil {
 		return workflow.Definition{}, err
 	}
+	def, err := workflowDefinitionFromGraphDraft(workflowID, graph)
+	if err != nil {
+		return workflow.Definition{}, err
+	}
 	displayName := current.DisplayName
 	if metadata != nil {
 		displayName = metadata.Name
@@ -2479,9 +2334,17 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 	if metadata != nil && metadata.ExecutionTargetPolicy != nil {
 		targetPolicy = workflowExecutionTargetPolicyFromAPI(*metadata.ExecutionTargetPolicy)
 	}
-	def := workflow.Definition{ID: workflowID, DisplayName: displayName, ExecutionTargetPolicy: targetPolicy}
+	def.DisplayName = displayName
+	def.ExecutionTargetPolicy = targetPolicy
+	return def, nil
+}
+
+func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
+	def := workflow.Definition{ID: workflowID}
 	groupMemberIDs := map[string][]workflow.NodeID{}
+	groupIDByKey := make(map[workflow.ModelKey]string, len(graph.NodeGroups))
 	for _, group := range graph.NodeGroups {
+		groupIDByKey[workflow.ModelKey(strings.TrimSpace(group.Key))] = group.ID
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
 			WorkflowID:  workflowID,
 			ID:          group.ID,
@@ -2491,6 +2354,17 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 	}
 	for _, node := range graph.Nodes {
 		groupID := optionalStringValue(node.GroupID)
+		if groupID == "" && strings.TrimSpace(node.GroupKey) != "" {
+			groupKey := workflow.ModelKey(strings.TrimSpace(node.GroupKey))
+			var ok bool
+			groupID, ok = groupIDByKey[groupKey]
+			if !ok {
+				return workflow.Definition{}, fmt.Errorf(
+					"workflow node group key %q is not in the saved graph",
+					groupKey,
+				)
+			}
+		}
 		if groupID != "" {
 			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
 		}
@@ -2571,8 +2445,12 @@ func workflowGraphSaveValidationResponses(result workflowstore.WorkflowGraphSave
 	return out
 }
 
-func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVersion int64, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, confirmation *serverapi.WorkflowGraphSaveConfirmation) workflowstore.WorkflowGraphSaveRequest {
-	req := workflowstore.WorkflowGraphSaveRequest{WorkflowID: workflowID, ExpectedVersion: expectedVersion}
+func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVersion int64, metadata *serverapi.WorkflowGraphMetadata, graph serverapi.WorkflowGraphDraft, confirmation *serverapi.WorkflowGraphSaveConfirmation) (workflowstore.WorkflowGraphSaveRequest, error) {
+	definition, err := workflowDefinitionFromGraphDraft(workflowID, graph)
+	if err != nil {
+		return workflowstore.WorkflowGraphSaveRequest{}, err
+	}
+	req := workflowstore.NewWorkflowGraphSaveRequest(definition, expectedVersion)
 	if metadata != nil {
 		req.Metadata = &workflowstore.WorkflowGraphSaveMetadata{Name: metadata.Name, Description: metadata.Description}
 		if metadata.ExecutionTargetPolicy != nil {
@@ -2589,19 +2467,7 @@ func workflowGraphStoreSaveRequest(workflowID runtimeids.WorkflowID, expectedVer
 		req.ExpectedNodeTaskReferenceCount = confirmation.ExpectedNodeTaskReferenceCount
 		req.ExpectedEdgeTaskReferenceCount = confirmation.ExpectedEdgeTaskReferenceCount
 	}
-	for _, group := range graph.NodeGroups {
-		req.NodeGroups = append(req.NodeGroups, workflowstore.NodeGroupRecord{ID: group.ID, WorkflowID: workflowID, Key: workflow.ModelKey(group.Key), DisplayName: group.DisplayName})
-	}
-	for _, node := range graph.Nodes {
-		req.Nodes = append(req.Nodes, workflowstore.NodeRecord{ID: workflow.NodeID(node.ID), WorkflowID: workflowID, Key: workflow.ModelKey(node.Key), Kind: workflow.NodeKind(node.Kind), DisplayName: node.DisplayName, GroupID: optionalStringValue(node.GroupID), GroupKey: node.GroupKey, SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode, ScriptPath: optionalStringValue(node.ScriptPath), JoinInputProviders: joinInputProviders(node.JoinInputProviders)})
-	}
-	for _, group := range graph.TransitionGroups {
-		req.TransitionGroups = append(req.TransitionGroups, workflowstore.TransitionGroupRecord{ID: workflow.TransitionGroupID(group.ID), WorkflowID: workflowID, SourceNodeID: workflow.NodeID(group.SourceNodeID), TransitionID: workflow.TransitionID(group.TransitionID), DisplayName: group.DisplayName, Description: group.Description})
-	}
-	for _, edge := range graph.Edges {
-		req.Edges = append(req.Edges, workflowstore.EdgeRecord{ID: workflow.EdgeID(edge.ID), WorkflowID: workflowID, TransitionGroupID: workflow.TransitionGroupID(edge.TransitionGroupID), Key: workflow.ModelKey(edge.Key), TargetNodeID: workflow.NodeID(edge.TargetNodeID), AssigneeSelection: workflow.AssigneeSelection(edge.AssigneeSelection), ThinkingSelection: workflow.ThinkingSelection(edge.ThinkingSelection), RequiresApproval: edge.RequiresApproval, ContextMode: workflow.ContextMode(edge.ContextMode), ContextSource: workflow.CanonicalContextSource(workflow.ContextSource{Kind: workflow.ContextSourceKind(edge.ContextSource.Kind), NodeKey: workflow.ModelKey(edge.ContextSource.NodeKey)}), PromptTemplate: edge.PromptTemplate, Parameters: domainParameters(edge.Parameters)})
-	}
-	return req
+	return req, nil
 }
 
 func workflowExecutionTargetPolicyToAPI(policy workflow.ExecutionTargetPolicy) serverapi.WorkflowExecutionTargetConfiguration {

@@ -134,6 +134,13 @@
 - Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal CLI never mutates Session storage directly. It submits Goal commands to the server.
 - Any `kent service` command that affects server state detects invocation by Kent itself and refuses to run because it is human-only.
+- On Linux and Windows, server exit status `2` must suppress automatic crash recovery for the current service-manager activation. A later independent service-manager activation may run the installed service again.
+- On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run. On macOS, every server exit must retain automatic restoration while the current service-manager activation expects Kent to run.
+- On Windows, every observed numeric server exit status other than `2` must retain automatic restoration while the current service-manager activation expects Kent to run.
+- On Windows, status `2` must make the registered service report `Stopped` without Windows recovery. An unexpected registered-service failure must retain Windows recovery.
+- When Kent cannot confirm Windows server termination, Kent must retain ownership. Kent must not report `Stopped`. Kent must not start a replacement.
+- When Windows confirms termination without a numeric status, Kent must release the server. Kent must not start a replacement. Kent must report `Stopped` for the current activation.
+- A human start or restart must begin a new activation. An install that requests startup must begin a new activation. `kent service install --no-start` must not start the service.
 
 ## Headless Run And Shared Control
 

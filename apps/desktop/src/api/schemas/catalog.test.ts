@@ -25,7 +25,7 @@ describe("Session catalog schema", () => {
       project_id: "project-1",
       category: "main",
       sessions: [{ ...session, ...(name === undefined ? {} : { name }) }],
-      older: "older-token",
+      next_offset: 50,
     });
 
     expect(value.sessions[0]).toEqual({
@@ -63,7 +63,7 @@ describe("Session catalog schema", () => {
         project_id: "project-1",
         category: "main",
         sessions: [],
-        older: null,
+        older: "obsolete",
       }),
     ).toThrow();
   });
@@ -106,7 +106,7 @@ describe("Session catalog schema", () => {
       ).toThrow();
     },
   );
-  it("rejects row categories that differ from the page category and pages above 100 rows", () => {
+  it("rejects row categories that differ from the page category and pages above 50 rows", () => {
     expect(() =>
       sessionPageResponseSchema.parse({
         project_id: "project-1",
@@ -118,13 +118,36 @@ describe("Session catalog schema", () => {
       sessionPageResponseSchema.parse({
         project_id: "project-1",
         category: "main",
-        sessions: Array.from({ length: 101 }, (_, index) => ({
+        sessions: Array.from({ length: 51 }, (_, index) => ({
           ...session,
           session_id: `session-${String(index)}`,
         })),
       }),
     ).toThrow();
   });
+  it.each([0, -1, 1.5])("rejects invalid next offsets %j", (nextOffset) => {
+    expect(() =>
+      sessionPageResponseSchema.parse({
+        project_id: "project-1",
+        category: "main",
+        sessions: [],
+        next_offset: nextOffset,
+      }),
+    ).toThrow();
+  });
+  it.each([{ older: "opaque" }, { newer: "opaque", next_offset: 50 }])(
+    "rejects obsolete Session continuation fields",
+    (fields) => {
+      expect(() =>
+        sessionPageResponseSchema.parse({
+          project_id: "project-1",
+          category: "main",
+          sessions: [],
+          ...fields,
+        }),
+      ).toThrow();
+    },
+  );
 });
 describe("Workspace list schema", () => {
   const page = {

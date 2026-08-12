@@ -33,6 +33,51 @@ func TestCurrentTaskQuiescenceIgnoresLatchedWorkerFailure(t *testing.T) {
 	}
 }
 
+func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsActive(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-resume-active-session", "node-implementation")
+	release := make(chan struct{})
+	handle, sessionID := fixture.startQuestionExecution(
+		t,
+		reference,
+		func(context.Context, sessionruntime.ExecutionScope, sessionruntime.AgentRuntimeBridge) error {
+			<-release
+			return nil
+		},
+	)
+	t.Cleanup(func() {
+		close(release)
+		if err := handle.Close(context.Background()); err != nil {
+			t.Errorf("close active retained Session execution: %v", err)
+		}
+	})
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("current node key: %v", err)
+	}
+	fixture.controller.mu.Lock()
+	delete(fixture.controller.live, handle.Scope().ID())
+	delete(fixture.controller.liveByNode, key)
+	fixture.controller.mu.Unlock()
+	fixture.store.interrupted = []workflow.CurrentNode{{
+		Reference: reference,
+		SessionID: &sessionID,
+	}}
+
+	resumed, err := fixture.controller.ResumeTask(context.Background(), reference.TaskID)
+	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("resume error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+	}
+	if len(resumed) != 0 {
+		t.Fatalf("resumed Current Nodes = %+v, want none", resumed)
+	}
+	fixture.store.mu.Lock()
+	defer fixture.store.mu.Unlock()
+	if len(fixture.store.resumed) != 0 {
+		t.Fatalf("resume mutations = %+v, want none before conflict", fixture.store.resumed)
+	}
+}
+
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
 	sessionID := runtimeids.NewSessionID()

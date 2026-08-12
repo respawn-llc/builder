@@ -173,6 +173,12 @@
 - Reviewer feedback rows use success text. Reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
+- One shared transcript renderer selects the complete content and layout for every error-severity notice from its typed reason.
+- A runtime-diagnostic error uses its complete diagnostic detail. A legacy-untyped error uses its complete legacy text when present.
+- A legacy-untyped error without complete legacy text is valid only for a worktree-enter or worktree-exit message with typed Worktree context. Every other metadata-only legacy-untyped error is invalid.
+- A cache-warning error uses its typed cache-warning text. A compaction error uses its typed detail when present and otherwise uses its typed compaction summary. A tool-output-repair error uses its typed repair text.
+- Error-severity notices ignore compact labels, condensed text, source paths, and other compact preview fields, including for metadata-only legacy errors. They wrap to transcript width without ellipsis in every Ongoing and Detail render mode.
+- Non-error rows retain their existing mode-specific compact or full content and layout rules.
 - Background shell completion notices use full-strength foreground text and remain separate transcript rows from shell tool calls/results, but join the tool-activity visual group so no blank separator appears between them.
 - Moving a shell to the background ends its mutable live-tool presentation. The backgrounded tool row remains in immutable ongoing scrollback, and completion is represented by a separate immutable notice.
 - The rendering matrix applies to ongoing and detail modes. Mode-specific compact/full rules may change which content is selected. Expanded compaction summary and reminder content uses the normal notice role; other selected content retains its semantic role.
@@ -219,7 +225,7 @@
 - Worktree-management product language uses `workspace`, not `repo`.
 - Changing worktrees keeps the Session identity stable. It changes only the workspace, optional worktree, and relative working directory used for execution.
 - `/worktree` has no separate teleport-root abstraction.
-- Bare `/worktree` opens the Worktree list.
+- Bare `/worktree` and `/wt` open the Worktree list, including during an active Agent Step.
 - `/worktree new` and `/worktree create` enter one smart-target create dialog. Raw `/worktree create <branch> [path]` bypass is unsupported.
 - Create dialog auto-suggests target name only from sanitized session name. It does not fall back to current branch, main, or generic placeholder.
 - Create dialog has no explicit new/existing selector. Kent resolves typed `Branch or ref` asynchronously and shows `new branch`, `existing branch`, or `detached ref`.
@@ -277,7 +283,7 @@
 - Built-ins: `/logout`, `/login`, `/exit`, `/new`, `/resume`, `/compact`, `/name`, `/thinking`, `/fast`, `/review`, `/init`, `/supervisor`, `/autocompaction`, `/questions`, `/status`, `/goal`, `/ps`, `/worktree` (alias `/wt`), `/copy`, `/back`.
 - Exact known slash commands use the normal queued-input drain path when queued; they are never sent as plain user prompts.
 - Run-safe commands execute immediately while busy. `/exit`, `/new`, `/resume`, `/back`, `/review`, and `/init` detach this TUI from the current Session without interrupting its Active Session Runtime.
-- Non-run-safe known commands while busy are rejected with transient status-line error.
+- Non-run-safe known commands while busy are rejected with transient status-line error. Bare `/worktree` and `/wt` are local-picker exceptions; Worktree commands with arguments remain non-run-safe.
 - `/resume` always enters the session picker, including when no other session exists. The originating attachment is released before the picker opens. A picker `Ctrl+C` leaves that run ownerless; it issues no second release and no interrupt.
 - `/copy` is always visible and reads the newest committed assistant final answer from the active transcript segment. It never uses client status or rendered terminal output as a fallback.
 - The durable final-answer read walks backward only within the active transcript segment and stops at the newest committed assistant final answer or a valid compaction boundary, whichever appears first. A valid boundary returns true absence and its carried pre-compaction answer is not reused.

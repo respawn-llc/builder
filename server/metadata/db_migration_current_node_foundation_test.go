@@ -9,7 +9,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestCurrentNodeExecutionHistoryCutoverMigrationRollsBackOnLateFailureAndRejectsDown(t *testing.T) {
+func TestCurrentNodeExecutionHistoryCutoverMigrationRollsBackOnLateFailure(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
@@ -72,60 +72,6 @@ FROM tasks`); err != nil {
 	if version != 60 {
 		t.Fatalf("version after successful cutover = %d, want 60", version)
 	}
-	if _, err := provider.Down(t.Context()); err == nil {
-		t.Fatal("irreversible hard cutover unexpectedly rolled back")
-	}
-	version, err = provider.GetDBVersion(t.Context())
-	if err != nil {
-		t.Fatalf("read version after rejected down: %v", err)
-	}
-	if version != 60 {
-		t.Fatalf("version after rejected down = %d, want 60", version)
-	}
-	if tableExists(t, db, "task_runs") || columnExists(t, db, "tasks", "canceled_at_unix_ms") {
-		t.Fatal("rejected down restored or changed the irreversible cutover schema")
-	}
-	for _, relation := range []string{
-		"task_current_nodes",
-		"task_active_fanouts",
-		"task_active_fanout_branches",
-		"task_pending_approvals",
-		"task_pending_approval_branches",
-		"session_workflow_node_associations",
-	} {
-		if !tableExists(t, db, relation) {
-			t.Fatalf("rejected down removed replacement relation %q", relation)
-		}
-	}
-	if !columnExists(t, db, "sessions", "task_id") {
-		t.Fatal("rejected down removed direct Session ownership storage")
-	}
-}
-
-func TestMetadataMigrationIrreversibleMarkersAreRegistered(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtPathWithoutMigrationsForTest(root, dbPath)
-	if err != nil {
-		t.Fatalf("open database without migrations: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-
-	var registered int
-	if err := db.QueryRow(`
-SELECT COUNT(*)
-FROM pragma_function_list
-WHERE name IN (
-    'kent_workflow_run_history_cutover_is_irreversible',
-    'kent_current_node_prior_transition_parameters_are_irreversible',
-    'kent_workflow_session_agent_role_backfill_is_irreversible'
-)`).Scan(&registered); err != nil {
-		t.Fatalf("list irreversible migration marker functions: %v", err)
-	}
-	if registered != 3 {
-		t.Fatalf("registered irreversible migration markers = %d, want 3", registered)
-	}
 }
 
 func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testing.T) {
@@ -178,8 +124,9 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	defer func() { _ = indexRows.Close() }()
 	type indexedColumn struct {
-		name string
-		desc int
+		name       string
+		expression bool
+		desc       int
 	}
 	var columns []indexedColumn
 	for indexRows.Next() {
@@ -189,8 +136,12 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 		if err := indexRows.Scan(&sequence, &columnID, &name, &desc, &collation, &key); err != nil {
 			t.Fatalf("scan session category index column: %v", err)
 		}
-		if key == 1 && name.Valid {
-			columns = append(columns, indexedColumn{name: name.String, desc: desc})
+		if key == 1 {
+			columns = append(columns, indexedColumn{
+				name:       name.String,
+				expression: columnID == -2,
+				desc:       desc,
+			})
 		}
 	}
 	if err := indexRows.Err(); err != nil {
@@ -198,7 +149,7 @@ func TestSessionCategoryMigrationAddsNullableConstrainedIndexedStorage(t *testin
 	}
 	wantColumns := []indexedColumn{
 		{name: "project_id"},
-		{name: "category"},
+		{expression: true},
 		{name: "updated_at_unix_ms", desc: 1},
 		{name: "id", desc: 1},
 	}

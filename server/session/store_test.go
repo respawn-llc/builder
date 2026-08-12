@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -813,6 +814,79 @@ func TestForkAtUserMessageCopiesPrefixBeforeSelectedMessage(t *testing.T) {
 	}
 	if meta.Locked.ReviewerPrompt != "parent reviewer prompt snapshot" || !meta.Locked.HasReviewerPrompt {
 		t.Fatalf("fork locked reviewer prompt = %+v, want replay fork to preserve parent reviewer prompt snapshot", meta.Locked)
+	}
+}
+
+func TestForkAtUserMessageCopiesGoalSnapshot(t *testing.T) {
+	cases := []struct {
+		name   string
+		status GoalStatus
+	}{
+		{name: "active", status: GoalStatusActive},
+		{name: "paused", status: GoalStatusPaused},
+		{name: "complete", status: GoalStatusComplete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := newSessionTestStore(t)
+			appendSessionTestRecord(t, parent, "s1", sessionTestMessage(MessageRoleUser, "u1"))
+			appendSessionTestRecord(t, parent, "s1", sessionTestMessage(MessageRoleAssistant, "a1"))
+			appendSessionTestRecord(t, parent, "s2", sessionTestMessage(MessageRoleUser, "u2"))
+
+			if _, _, err := parent.SetGoal("ship the forked goal", GoalActorUser); err != nil {
+				t.Fatalf("SetGoal: %v", err)
+			}
+			if tc.status != GoalStatusActive {
+				if _, _, _, err := parent.SetGoalStatus(tc.status, GoalActorUser); err != nil {
+					t.Fatalf("SetGoalStatus(%s): %v", tc.status, err)
+				}
+			}
+			parentGoal := parent.Meta().Goal
+			if parentGoal == nil {
+				t.Fatal("parent goal is nil")
+			}
+			wantGoal := *parentGoal
+
+			parentLog := mustMaterializeSessionTestEventLog(t, parent)
+			parentEvents, err := collectEvents(parent)
+			if err != nil {
+				t.Fatalf("read parent events: %v", err)
+			}
+			forked, _, err := ForkAtUserMessage(
+				parentLog,
+				userMessageSeqAt(t, parent, 2),
+				"Parent → edit u2",
+				testSessionCategory,
+			)
+			if err != nil {
+				t.Fatalf("fork at user message: %v", err)
+			}
+			forkEvents, err := collectEvents(forked)
+			if err != nil {
+				t.Fatalf("read fork events: %v", err)
+			}
+			if !reflect.DeepEqual(forkEvents, parentEvents[:2]) {
+				t.Fatalf("fork history = %+v, want exact parent prefix %+v", forkEvents, parentEvents[:2])
+			}
+
+			forkGoal := forked.Meta().Goal
+			if forkGoal == nil {
+				t.Fatal("fork goal is nil")
+			}
+			if *forkGoal != wantGoal {
+				t.Fatalf("fork goal = %+v, want %+v", *forkGoal, wantGoal)
+			}
+
+			if _, _, err := forked.ClearGoal(GoalActorUser); err != nil {
+				t.Fatalf("ClearGoal on fork: %v", err)
+			}
+			if forked.Meta().Goal != nil {
+				t.Fatalf("fork goal after clear = %+v, want nil", forked.Meta().Goal)
+			}
+			if got := parent.Meta().Goal; got == nil || *got != wantGoal {
+				t.Fatalf("parent goal after clearing fork = %+v, want %+v", got, wantGoal)
+			}
+		})
 	}
 }
 

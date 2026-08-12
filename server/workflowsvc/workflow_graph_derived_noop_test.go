@@ -10,30 +10,38 @@ import (
 
 func TestServiceWorkflowGraphSaveIgnoresPersistedDerivedEdgeWiring(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	definition, _, err := service.store.GetDefinition(ctx, workflowID)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	seed, record, err := service.store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition seed: %v", err)
+	}
+	seed.Edges[0].PromptTemplate = "Plan work with persisted wiring."
+	seed.Edges[0].InputBindings = []workflow.InputBinding{{
+		Name: "task_title", Source: workflow.BindingSourceTask, Field: "title",
+	}}
+	seed.Edges[0].OutputRequirements = []workflow.OutputRequirement{{FieldName: "summary"}}
+	seeded, err := service.store.SaveWorkflowGraph(
+		ctx,
+		workflowstore.NewWorkflowGraphSaveRequest(seed, record.Version),
+	)
+	if err != nil || !seeded.Saved || !seeded.Changed {
+		t.Fatalf("seed persisted derived wiring = %+v, err = %v", seeded, err)
+	}
+	persisted, _, err := service.store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
 	}
-	edge := definition.Edges[0]
-	if _, err := service.store.UpdateEdge(ctx, workflowstore.EdgeRecord{
-		ID: edge.ID, WorkflowID: edge.WorkflowID, TransitionGroupID: edge.TransitionGroupID,
-		Key: edge.Key, TargetNodeID: edge.TargetNodeID,
-		AssigneeSelection: edge.AssigneeSelection, ThinkingSelection: edge.ThinkingSelection,
-		RequiresApproval: edge.RequiresApproval, ContextMode: edge.ContextMode,
-		ContextSource: edge.ContextSource, PromptTemplate: edge.PromptTemplate,
-		Parameters: edge.Parameters,
-		InputBindings: []workflow.InputBinding{{
-			Name: "task_title", Source: workflow.BindingSourceTask, Field: "title",
-		}},
-		OutputRequirements: []workflow.OutputRequirement{{FieldName: "summary"}},
-	}); err != nil {
-		t.Fatalf("seed derived wiring: %v", err)
+	var derivedWiring bool
+	for _, edge := range persisted.Edges {
+		derivedWiring = derivedWiring || len(edge.InputBindings) > 0 || len(edge.OutputRequirements) > 0
+	}
+	if !derivedWiring {
+		t.Fatalf("fixture has no persisted derived wiring: %+v", persisted.Edges)
 	}
 	current := getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID)
 	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID: workflowID, ExpectedVersion: current.Workflow.Version,
-		Graph: workflowGraphDraftFromDefinition(current),
+		Graph: serverapi.WorkflowGraphDraftFromDefinition(current),
 	})
 	if err != nil {
 		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
@@ -43,7 +51,7 @@ func TestServiceWorkflowGraphSaveIgnoresPersistedDerivedEdgeWiring(t *testing.T)
 	}
 	saved, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID: workflowID, ExpectedVersion: current.Workflow.Version,
-		Graph: workflowGraphDraftFromDefinition(current),
+		Graph: serverapi.WorkflowGraphDraftFromDefinition(current),
 	})
 	if err != nil {
 		t.Fatalf("SaveWorkflowGraph: %v", err)

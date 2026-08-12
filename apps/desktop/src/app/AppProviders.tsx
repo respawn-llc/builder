@@ -12,6 +12,7 @@ import { AppServicesProvider } from "@/app-facade";
 import { StatusProvider } from "@/app-facade";
 import { TaskSearchMemoryProvider } from "@/app-facade";
 import { WindowChromeTitleProvider } from "@/app-facade";
+import { ProjectWorkspaceTabProvider } from "@/app-facade";
 
 void initializeI18n();
 
@@ -30,9 +31,11 @@ export function AppProviders({ services, children }: AppProvidersProps) {
           <WindowChromeTitleProvider>
             <StatusProvider>
               <TaskSearchMemoryProvider>
-                <ReconnectRefresh />
-                <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
-                {children}
+                <ProjectWorkspaceTabProvider>
+                  <ReconnectRefresh />
+                  <NativeWindowGlassTintSync nativeBridge={services.nativeBridge} />
+                  {children}
+                </ProjectWorkspaceTabProvider>
               </TaskSearchMemoryProvider>
             </StatusProvider>
           </WindowChromeTitleProvider>

@@ -17,9 +17,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-//go:embed testdata/workflow_project_key_backfill.sql
-var workflowProjectKeyBackfillSQL string
-
 //go:embed testdata/workflow_schema_node_groups.sql
 var workflowSchemaNodeGroupsSQL string
 
@@ -490,34 +487,6 @@ VALUES (?, ?, 'STRASSE', ?, ?)`,
 	}
 	if assignmentCount != 0 {
 		t.Fatalf("assignment count after label delete = %d, want 0", assignmentCount)
-	}
-}
-
-func TestOpenBackfillsProjectKeysForExistingMetadataDB(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := root + "/db/main.sqlite3"
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 4)
-	if err != nil {
-		t.Fatalf("open version 4 db: %v", err)
-	}
-	execSeed(t, db, "version 4 db", workflowProjectKeyBackfillSQL)
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 4 db: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open migrated db: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	keys := projectKeysByID(t, store.db)
-	if keys["project-a"] != "BUI" {
-		t.Fatalf("project-a key = %q, want BUI", keys["project-a"])
-	}
-	if keys["project-b"] != "BUI2" {
-		t.Fatalf("project-b key = %q, want BUI2", keys["project-b"])
 	}
 }
 

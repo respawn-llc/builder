@@ -206,6 +206,7 @@ describe("Task Detail retained sidebar state", () => {
     const user = userEvent.setup();
 
     await user.click(await screen.findByTestId("dependency-add-blocked-by"));
+    await user.click(await screen.findByRole("button", { name: appI18n.t("task.dependenciesCreateTask") }));
 
     expect(opened).toEqual([
       expect.objectContaining({

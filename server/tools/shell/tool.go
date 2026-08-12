@@ -14,6 +14,10 @@ const (
 	headTailSize                       = 1000
 	truncationBannerTemplate           = "\n\n...[Output is very large, omitted %d bytes. Consider using more targeted commands to reduce output size]...\n\n"
 	backgroundTruncationBannerTemplate = "\n\n...[Omitted %d bytes, read log file for details]...\n\n"
+	existingWorkingDirectoryHint       = "Please select an existing working directory"
+	missingWorkingDirectoryReason      = "does not exist, so the shell command was not executed."
+	nonDirectoryWorkingDirectoryReason = "is not a directory, so the shell command was not executed."
+	canceledByUserMessage              = "Canceled by user"
 )
 
 func marshalNoHTMLEscape(v any) (json.RawMessage, error) {
@@ -30,10 +34,26 @@ func formatToolCallError(toolName string, err error) string {
 	if err == nil {
 		return fmt.Sprintf("%s failed", toolName)
 	}
+	return formatToolCallErrorDecoration(toolName, formatToolCallErrorBase(err))
+}
+
+func formatToolCallErrorBase(err error) string {
 	if errors.Is(err, context.Canceled) {
-		return fmt.Sprintf("%s failed: %s", toolName, cancellationMessage(err))
+		return cancellationMessage(err)
 	}
-	return fmt.Sprintf("%s failed: %v", toolName, err)
+	return err.Error()
+}
+
+func formatToolCallErrorDecoration(toolName string, message string) string {
+	return fmt.Sprintf("%s failed: %s", toolName, message)
+}
+
+func formatMissingWorkingDirectoryError(path string) string {
+	return strings.Join([]string{path, missingWorkingDirectoryReason, existingWorkingDirectoryHint}, " ")
+}
+
+func formatNonDirectoryWorkingDirectoryError(path string) string {
+	return strings.Join([]string{path, nonDirectoryWorkingDirectoryReason, existingWorkingDirectoryHint}, " ")
 }
 
 func cancellationMessage(err error) string {
@@ -41,7 +61,7 @@ func cancellationMessage(err error) string {
 	if errors.As(err, &pollErr) {
 		return pollErr.Error()
 	}
-	return "Canceled by user"
+	return canceledByUserMessage
 }
 
 func truncateWithTemplate(s string, maxLen int, bannerTemplate string) (string, bool, int) {

@@ -1925,8 +1925,8 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 	if _, err := remote.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: "project-1",
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    remoteTestIntPointer(0),
+		Limit:     remoteTestIntPointer(20),
 	}); err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
 	}
@@ -2366,6 +2366,11 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 		{name: "manual compaction active", cause: serverapi.ErrManualCompactionActive, check: func(t *testing.T, err error) {
 			if !errors.Is(err, serverapi.ErrManualCompactionActive) {
 				t.Fatalf("decoded cause = %v, want manual compaction active", err)
+			}
+		}},
+		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
 			}
 		}},
 	} {

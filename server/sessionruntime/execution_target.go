@@ -236,7 +236,7 @@ func (a *Authority) HasBlockingRuntimeActivity(ctx context.Context, sessionID st
 	resource.mu.Lock()
 	active := resource.state != AgentResourceReady ||
 		resource.current != nil ||
-		resource.steps != 0
+		len(resource.steps) != 0
 	engine := resource.engine
 	resource.mu.Unlock()
 	if !active && engine != nil {

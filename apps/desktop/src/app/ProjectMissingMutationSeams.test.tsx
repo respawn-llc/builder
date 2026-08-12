@@ -111,7 +111,7 @@ describe("New Task workspace selection", () => {
       workspaces: [primaryWorkspace],
     };
 
-    const singleWorkspace = renderWithI18n(
+    const { unmount } = renderWithI18n(
       <NewTaskForm
         boardQueryWorkflowID="workflow-1"
         onSubmitted={vi.fn()}
@@ -123,7 +123,7 @@ describe("New Task workspace selection", () => {
     expect(screen.queryByText(sourceWorkspaceLabel)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: sourceWorkspaceLabel })).not.toBeInTheDocument();
 
-    singleWorkspace.unmount();
+    unmount();
     fixture.workspaces = {
       ...fixture.workspaces,
       workspaces: [

@@ -120,9 +120,14 @@ func runJob(job testJob, runStartedAt time.Time, outputMu, eventMu *sync.Mutex) 
 }
 
 func goTestArguments(job testJob) []string {
-	// Every shard selects one package. The scheduler owns process concurrency, so
-	// each child must not independently fan out package builds.
-	arguments := []string{"test", "-json", "-count=1", "-p", "1", job.packagePath}
+	// Every shard selects one package. The scheduler owns test concurrency, so
+	// each child must not independently fan out package builds or parallel tests.
+	arguments := []string{
+		"test", "-json", "-count=1",
+		"-p", "1",
+		"-parallel", "4",
+		job.packagePath,
+	}
 	if len(job.testNames) > 0 {
 		arguments = append(arguments, "-run", exactTestExpression(job.testNames))
 	}

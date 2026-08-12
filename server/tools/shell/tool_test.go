@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -138,6 +139,125 @@ func TestExecCommandSilentSuccessIsTerminalAndUnambiguous(t *testing.T) {
 		t.Fatalf("silent foreground completion must not be marked backgrounded: %+v", result.PresentationDelta)
 	}
 	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestExecCommandEmptyDefaultWorkdirReturnsManagerErrorWithoutExecuting(t *testing.T) {
+	serverCWD := t.TempDir()
+	t.Chdir(serverCWD)
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool("", 16_000, manager, "")
+	call := tools.Call{
+		ID:   "empty-default-workdir",
+		Name: toolspec.ToolExecCommand,
+	}
+	input, err := json.Marshal(map[string]any{
+		"cmd":           "touch exec-command-empty-default-side-effect",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 1_000,
+	})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	call.Input = input
+
+	_, managerErr := manager.Start(context.Background(), ExecRequest{
+		Command: []string{"/bin/sh", "-c", "touch exec-command-empty-default-side-effect"},
+		Workdir: "",
+	})
+	if managerErr == nil {
+		t.Fatal("expected empty workdir manager error")
+	}
+	want := tools.ErrorResultWith(call, managerErr.Error(), marshalNoHTMLEscape)
+
+	got, err := execTool.Call(context.Background(), call)
+	if err != nil {
+		t.Fatalf("exec_command call returned transport error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("exec_command result = %#v, want %#v", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(serverCWD, "exec-command-empty-default-side-effect")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("empty default workdir command side effect = %v, want os.ErrNotExist", err)
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestExecCommandWorkdirValidationErrors(t *testing.T) {
+	tests := []struct {
+		name, id, workdir, reason string
+		prepare                   func(*testing.T, string)
+	}{
+		{
+			name: "deleted default", id: "deleted-default-workdir", reason: missingWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.RemoveAll(workspace); err != nil {
+					t.Fatalf("remove default workdir: %v", err)
+				}
+			},
+		},
+		{
+			name: "missing relative", id: "missing-relative-workdir",
+			workdir: filepath.Join("nested", "..", "missing", ".", "child"), reason: missingWorkingDirectoryReason,
+		},
+		{
+			name: "regular file", id: "file-workdir", workdir: "workdir-file",
+			reason: nonDirectoryWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.WriteFile(filepath.Join(workspace, "workdir-file"), []byte("not a directory"), 0o600); err != nil {
+					t.Fatalf("write workdir file: %v", err)
+				}
+			},
+		},
+		{
+			name: "file ancestor", id: "file-ancestor-workdir",
+			workdir: filepath.Join("workdir-file", "child"), reason: missingWorkingDirectoryReason,
+			prepare: func(t *testing.T, workspace string) {
+				if err := os.WriteFile(filepath.Join(workspace, "workdir-file"), []byte("not a directory"), 0o600); err != nil {
+					t.Fatalf("write workdir file: %v", err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			resolved, err := filepath.Abs(ResolveWorkdir(workspace, tt.workdir))
+			if err != nil {
+				t.Fatalf("normalize workdir: %v", err)
+			}
+			if tt.prepare != nil {
+				tt.prepare(t, workspace)
+			}
+			sideEffect := filepath.Join(t.TempDir(), "side-effect")
+			input := map[string]any{
+				"cmd": "touch " + sideEffect, "shell": "/bin/sh", "login": false, "yield_time_ms": 1_000,
+			}
+			if tt.workdir != "" {
+				input["workdir"] = tt.workdir
+			}
+			rawInput, err := json.Marshal(input)
+			if err != nil {
+				t.Fatalf("marshal exec_command input: %v", err)
+			}
+			call := tools.Call{ID: tt.id, Name: toolspec.ToolExecCommand, Input: rawInput}
+			manager := newBackgroundTestManager(t)
+			got, err := NewExecCommandTool(workspace, 16_000, manager, "").Call(context.Background(), call)
+			if err != nil {
+				t.Fatalf("exec_command call returned transport error: %v", err)
+			}
+			wantMessage := strings.Join([]string{resolved, tt.reason, existingWorkingDirectoryHint}, " ")
+			want := tools.ErrorResultWith(call, wantMessage, marshalNoHTMLEscape)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("exec_command result = %#v, want %#v", got, want)
+			}
+			if _, err := os.Stat(sideEffect); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("command side effect = %v, want os.ErrNotExist", err)
+			}
+			waitForManagerCount(t, manager, 0, time.Second)
+		})
+	}
 }
 
 func envSliceToMap(t *testing.T, in []string) map[string]string {
@@ -589,18 +709,17 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan tools.Result, 1)
+	sessionID, err := strconv.Atoi(result.SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	pollInput, _ := json.Marshal(map[string]any{
+		"session_id":    sessionID,
+		"yield_time_ms": 15_000,
+	})
+	pollCall := tools.Call{ID: "cancel-poll", Name: toolspec.ToolWriteStdin, Input: pollInput}
 	go func() {
-		sessionID, err := strconv.Atoi(result.SessionID)
-		if err != nil {
-			t.Errorf("parse session id: %v", err)
-			done <- tools.Result{}
-			return
-		}
-		pollInput, _ := json.Marshal(map[string]any{
-			"session_id":    sessionID,
-			"yield_time_ms": 15_000,
-		})
-		pollResult, err := pollTool.Call(ctx, tools.Call{ID: "cancel-poll", Name: toolspec.ToolWriteStdin, Input: pollInput})
+		pollResult, err := pollTool.Call(ctx, pollCall)
 		if err != nil {
 			t.Errorf("write_stdin call returned transport error: %v", err)
 		}
@@ -615,14 +734,107 @@ func TestWriteStdinCancellationReportsActiveProcess(t *testing.T) {
 		if !pollResult.IsError {
 			t.Fatalf("expected write_stdin error result, got %+v", pollResult)
 		}
-		if pollResult.Summary == nil || *pollResult.Summary == "" {
-			t.Fatal("expected cancellation summary")
+		pollErr := &PollingCanceledError{SessionID: result.SessionID, Active: true}
+		want := tools.ErrorResultWith(pollCall, formatToolCallErrorDecoration("write_stdin", pollErr.Error()), marshalNoHTMLEscape)
+		if !reflect.DeepEqual(pollResult, want) {
+			t.Fatalf("write_stdin result = %#v, want %#v", pollResult, want)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for canceled write_stdin")
 	}
 	if snapshot, err := manager.Snapshot(result.SessionID); err != nil || !snapshot.Running {
 		t.Fatalf("expected process to remain active after polling cancellation, snapshot=%+v err=%v", snapshot, err)
+	}
+}
+
+func TestExecCommandCancellationReturnsUndecoratedBaseError(t *testing.T) {
+	workspace := t.TempDir()
+	readyMarker := filepath.Join(workspace, "exec-command-cancellation-ready")
+	manager := newBackgroundTestManager(t)
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	call := tools.Call{
+		ID:   "exec-command-cancellation",
+		Name: toolspec.ToolExecCommand,
+	}
+	var err error
+	call.Input, err = json.Marshal(map[string]any{
+		"cmd":           "touch " + readyMarker + "; while :; do :; done",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 15_000,
+	})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type callResult struct {
+		result tools.Result
+		err    error
+	}
+	done := make(chan callResult, 1)
+	go func() {
+		result, err := execTool.Call(ctx, call)
+		done <- callResult{result: result, err: err}
+	}()
+
+	testsetup.RequireUntil(t, time.Now().Add(time.Second), time.Millisecond, func() bool {
+		_, err := os.Stat(readyMarker)
+		return err == nil
+	}, "timed out waiting for exec_command readiness marker")
+	cancel()
+
+	select {
+	case completed := <-done:
+		if completed.err != nil {
+			t.Fatalf("exec_command call returned transport error: %v", completed.err)
+		}
+		want := tools.ErrorResultWith(call, canceledByUserMessage, marshalNoHTMLEscape)
+		if !reflect.DeepEqual(completed.result, want) {
+			t.Fatalf("exec_command result = %#v, want %#v", completed.result, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled exec_command")
+	}
+	waitForManagerCount(t, manager, 0, time.Second)
+}
+
+func TestExecCommandReturnsClosedManagerErrorUnchanged(t *testing.T) {
+	workspace := t.TempDir()
+	manager := newBackgroundTestManager(t)
+	if err := manager.Close(); err != nil {
+		t.Fatalf("close manager: %v", err)
+	}
+	execTool := NewExecCommandTool(workspace, 16_000, manager, "")
+	call := tools.Call{
+		ID:   "closed-manager",
+		Name: toolspec.ToolExecCommand,
+	}
+	input, err := json.Marshal(map[string]any{
+		"cmd":           "true",
+		"shell":         "/bin/sh",
+		"login":         false,
+		"yield_time_ms": 1_000,
+	})
+	if err != nil {
+		t.Fatalf("marshal exec_command input: %v", err)
+	}
+	call.Input = input
+	_, managerErr := manager.Start(context.Background(), ExecRequest{
+		Command: []string{"/bin/sh", "-c", "true"},
+		Workdir: workspace,
+	})
+	if managerErr == nil {
+		t.Fatal("expected closed manager error")
+	}
+	want := tools.ErrorResultWith(call, managerErr.Error(), marshalNoHTMLEscape)
+
+	got, err := execTool.Call(context.Background(), call)
+	if err != nil {
+		t.Fatalf("exec_command call returned transport error: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("exec_command result = %#v, want %#v", got, want)
 	}
 }
 

@@ -1388,9 +1388,7 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 	if s == nil || observation.snapshot == nil || s.options.observer == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.options.observerTimeout)
-	defer cancel()
-	if err := s.options.observer.ObservePersistedStore(ctx, *observation.snapshot); err != nil {
+	if err := s.options.observer.ObservePersistedStore(context.Background(), *observation.snapshot); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -1423,9 +1421,7 @@ func (s *Store) observeEventLogReconciliation(observation *eventLogReconciliatio
 	if s == nil || s.options.reconciler == nil {
 		return errEventLogReconcilerRequired
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.options.observerTimeout)
-	defer cancel()
-	if err := s.options.reconciler.ObserveEventLogReconciliation(ctx, observation.reconciliation); err != nil {
+	if err := s.options.reconciler.ObserveEventLogReconciliation(context.Background(), observation.reconciliation); err != nil {
 		return err
 	}
 	s.mu.Lock()
