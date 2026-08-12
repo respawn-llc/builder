@@ -674,12 +674,20 @@ func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testi
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
 	}
+	store, err := session.OpenByID(
+		persistenceRoot,
+		materialized.SessionID.String(),
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("OpenByID: %v", err)
+	}
 
 	prepared, err := (sessionChatSettingsPreparationResolver{
 		metadataStore:   appCore.MetadataStore(),
 		authManager:     appCore.AuthManager(),
 		persistenceRoot: persistenceRoot,
-	}).PrepareSessionChatSettings(t.Context(), materialized.SessionID.String(), "worker")
+	}).PrepareSessionChatSettings(t.Context(), store, "worker")
 	if err != nil {
 		t.Fatalf("PrepareSessionChatSettings: %v", err)
 	}
@@ -732,7 +740,7 @@ func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *test
 		metadataStore:   appCore.MetadataStore(),
 		authManager:     appCore.AuthManager(),
 		persistenceRoot: persistenceRoot,
-	}).PrepareSessionChatSettings(t.Context(), materialized.SessionID.String(), brand.DefaultSubagentRole)
+	}).PrepareSessionChatSettings(t.Context(), store, brand.DefaultSubagentRole)
 	if err != nil {
 		t.Fatalf("PrepareSessionChatSettings: %v", err)
 	}

@@ -20,12 +20,16 @@ type sessionChatSettingsPreparationResolver struct {
 
 func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 	ctx context.Context,
-	sessionID string,
+	store *session.Store,
 	agent string,
 ) (launch.PreparedChatSettings, error) {
 	if r.metadataStore == nil {
 		return launch.PreparedChatSettings{}, errors.New("metadata store is required")
 	}
+	if store == nil {
+		return launch.PreparedChatSettings{}, errors.New("Session store is required")
+	}
+	sessionID := strings.TrimSpace(store.Meta().SessionID)
 	target, err := r.metadataStore.ResolveSessionExecutionTarget(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
@@ -40,14 +44,6 @@ func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 		if err != nil {
 			return launch.PreparedChatSettings{}, err
 		}
-	}
-	store, err := session.OpenByID(
-		r.persistenceRoot,
-		strings.TrimSpace(sessionID),
-		r.metadataStore.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		return launch.PreparedChatSettings{}, err
 	}
 	promptFacing, err := (launch.Planner{Config: cfg}).SelectedSessionPromptFacingTargetWithStore(store)
 	if err != nil {

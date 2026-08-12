@@ -528,6 +528,6 @@ type staticChatSettingsPreparationResolver struct {
 	err      error
 }
 
-func (r staticChatSettingsPreparationResolver) PrepareSessionChatSettings(context.Context, string, string) (launch.PreparedChatSettings, error) {
+func (r staticChatSettingsPreparationResolver) PrepareSessionChatSettings(context.Context, *session.Store, string) (launch.PreparedChatSettings, error) {
 	return r.prepared, r.err
 }

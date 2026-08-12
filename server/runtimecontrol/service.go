@@ -49,7 +49,7 @@ type WorkflowTaskSessionResolver interface {
 }
 
 type ChatSettingsPreparationResolver interface {
-	PrepareSessionChatSettings(ctx context.Context, sessionID string, agent string) (launch.PreparedChatSettings, error)
+	PrepareSessionChatSettings(ctx context.Context, store *session.Store, agent string) (launch.PreparedChatSettings, error)
 }
 
 var errWorkflowTaskSessionAutoCompactionDisable = errors.New("auto-compaction cannot be disabled for workflow task sessions")
@@ -422,7 +422,7 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 			ctx,
 			req.SessionID,
 			func(ctx context.Context, store *session.Store, _ *runtime.Engine) (session.ChatSettingsMutation, error) {
-				prepared, err := s.prepareChatSettings(ctx, req.SessionID, store)
+				prepared, err := s.prepareChatSettings(ctx, store)
 				if err != nil {
 					return session.ChatSettingsMutation{}, err
 				}
@@ -459,7 +459,7 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 							return session.ChatSettingsMutation{}, errors.New("fast mode is only available for OpenAI-based Responses providers")
 						}
 					} else {
-						prepared, prepareErr := s.prepareChatSettings(ctx, req.SessionID, store)
+						prepared, prepareErr := s.prepareChatSettings(ctx, store)
 						if prepareErr != nil {
 							return session.ChatSettingsMutation{}, prepareErr
 						}
@@ -497,7 +497,7 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 			req.SessionID,
 			func(ctx context.Context, store *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
 				if req.Enabled {
-					prepared, prepareErr := s.prepareChatSettings(ctx, req.SessionID, store)
+					prepared, prepareErr := s.prepareChatSettings(ctx, store)
 					if prepareErr != nil {
 						return session.ChatSettingsMutation{}, prepareErr
 					}
@@ -599,7 +599,7 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 	})
 }
 
-func (s *Service) prepareChatSettings(ctx context.Context, sessionID string, store *session.Store) (launch.PreparedChatSettings, error) {
+func (s *Service) prepareChatSettings(ctx context.Context, store *session.Store) (launch.PreparedChatSettings, error) {
 	if s == nil || s.chatSettings == nil {
 		return launch.PreparedChatSettings{}, errors.New("Session Chat settings preparation is unavailable")
 	}
@@ -607,7 +607,7 @@ func (s *Service) prepareChatSettings(ctx context.Context, sessionID string, sto
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}
-	return s.chatSettings.PrepareSessionChatSettings(ctx, sessionID, state.Agent)
+	return s.chatSettings.PrepareSessionChatSettings(ctx, store, state.Agent)
 }
 
 func (s *Service) mutateChatSettings(
