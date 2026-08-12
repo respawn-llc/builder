@@ -79,26 +79,54 @@ type pendingApprovalRecord struct {
 }
 
 func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow) pendingApprovalRecord {
-	return pendingApprovalRecord{
-		ID: row.ID, SourceTaskID: row.SourceTaskID, SourceNodeID: row.SourceNodeID,
-		SourceTransitionBranchKey: row.SourceTransitionBranchKey,
-		SourceSessionID:           row.SourceSessionID,
-		WorkflowVersion:           row.WorkflowVersion,
-		TransitionSnapshotJSON:    row.TransitionSnapshotJson,
-		MaterializedValuesJSON:    row.MaterializedValuesJson,
-		CreatedAtUnixMs:           row.CreatedAtUnixMs,
-	}
+	return pendingApprovalRecordFromValues(
+		row.ID,
+		row.SourceTaskID,
+		row.SourceNodeID,
+		row.SourceTransitionBranchKey,
+		row.SourceSessionID,
+		row.WorkflowVersion,
+		row.TransitionSnapshotJson,
+		row.MaterializedValuesJson,
+		row.CreatedAtUnixMs,
+	)
 }
 
 func pendingApprovalRecordFromGetRow(row sqlitegen.GetTaskPendingApprovalRow) pendingApprovalRecord {
+	return pendingApprovalRecordFromValues(
+		row.ID,
+		row.SourceTaskID,
+		row.SourceNodeID,
+		row.SourceTransitionBranchKey,
+		row.SourceSessionID,
+		row.WorkflowVersion,
+		row.TransitionSnapshotJson,
+		row.MaterializedValuesJson,
+		row.CreatedAtUnixMs,
+	)
+}
+
+func pendingApprovalRecordFromValues(
+	id string,
+	sourceTaskID string,
+	sourceNodeID string,
+	sourceTransitionBranchKey sql.NullString,
+	sourceSessionID sql.NullString,
+	workflowVersion int64,
+	transitionSnapshotJSON string,
+	materializedValuesJSON string,
+	createdAtUnixMs int64,
+) pendingApprovalRecord {
 	return pendingApprovalRecord{
-		ID: row.ID, SourceTaskID: row.SourceTaskID, SourceNodeID: row.SourceNodeID,
-		SourceTransitionBranchKey: row.SourceTransitionBranchKey,
-		SourceSessionID:           row.SourceSessionID,
-		WorkflowVersion:           row.WorkflowVersion,
-		TransitionSnapshotJSON:    row.TransitionSnapshotJson,
-		MaterializedValuesJSON:    row.MaterializedValuesJson,
-		CreatedAtUnixMs:           row.CreatedAtUnixMs,
+		ID:                        id,
+		SourceTaskID:              sourceTaskID,
+		SourceNodeID:              sourceNodeID,
+		SourceTransitionBranchKey: sourceTransitionBranchKey,
+		SourceSessionID:           sourceSessionID,
+		WorkflowVersion:           workflowVersion,
+		TransitionSnapshotJSON:    transitionSnapshotJSON,
+		MaterializedValuesJSON:    materializedValuesJSON,
+		CreatedAtUnixMs:           createdAtUnixMs,
 	}
 }
 
