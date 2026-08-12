@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"core/internal/testharness/scriptedllm"
 	"core/server/llm"
@@ -226,7 +227,8 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
-		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive},
+		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
+		GoalAvailability: session.GoalAvailable,
 		GoalSuspended:    true,
 	})
 	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||
