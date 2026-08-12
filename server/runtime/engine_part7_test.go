@@ -52,7 +52,7 @@ func TestFastExecCommandCompletionDoesNotQueueBackgroundNotice(t *testing.T) {
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(dir, 16_000, manager, "")})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(dir, 16_000, manager, "")})
 	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
 	manager.SetEventHandler(func(evt shelltool.Event) bool {
 		summary, summaryErr := shelltool.SummarizeBackgroundEvent(evt, shelltool.BackgroundNoticeOptions{MaxChars: 16_000, SuccessOutputMode: shelltool.BackgroundOutputDefault})
@@ -124,7 +124,7 @@ func TestBackgroundShellNoticeFlushesOnFirstAvailableSlot(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -233,7 +233,7 @@ func TestSteerAcceptedDuringReviewerAppearsInMainAgentFollowUp(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}
 	reviewerClient, reviewerStarted, releaseReviewer := newGatedHookClient(reviewerResponse, reviewerResponse)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -289,7 +289,7 @@ func TestEmitRawClearsCommittedRangeForBackgroundUpdated(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var events []Event
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			events = append(events, evt)
@@ -347,7 +347,7 @@ func TestDeferredFinalWithBackgroundNoticeStillRunsReviewerAndEmitsAssistantEven
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -449,7 +449,7 @@ func TestFinalAssistantBeforeSameTurnBackgroundNoticeKeepsCommittedFrontierConti
 			return nil
 		},
 	}
-	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng = mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -508,7 +508,7 @@ func TestBackgroundShellNoticeSameTurnNoopAddsNoAssistantMessage(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()

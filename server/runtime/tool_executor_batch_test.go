@@ -23,7 +23,7 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: probe,
 		}),
@@ -45,6 +45,111 @@ type toolExecutionProbe struct {
 	called   bool
 	calls    atomic.Int32
 	warnings []tools.ModelWarning
+}
+
+type canonicalInputProbe struct {
+	calls atomic.Int32
+	input json.RawMessage
+}
+
+func (p *canonicalInputProbe) Call(_ context.Context, call tools.Call) (tools.Result, error) {
+	p.calls.Add(1)
+	p.input = append(json.RawMessage(nil), call.Input...)
+	return tools.Result{
+		CallID: call.ID,
+		Name:   call.Name,
+		Output: json.RawMessage(`{"ok":true}`),
+	}, nil
+}
+
+func TestExecuteToolCallsPassesOnlyPreparedCanonicalInputToHandler(t *testing.T) {
+	probe := &canonicalInputProbe{}
+	var started *llm.ToolCall
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID:      toolspec.ToolEdit,
+			Handler: probe,
+		}),
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if event.Kind == EventToolCallStarted {
+					started = event.ToolCall
+				}
+			},
+		},
+	)
+
+	rawInput := json.RawMessage(`{
+		"filePath":"a.go",
+		"oldText":"old",
+		"newText":"new",
+		"replaceAll":true,
+		"unknown":"drop"
+	}`)
+	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+		ID:    "canonical-edit",
+		Name:  "replace",
+		Input: rawInput,
+	}})
+	if err != nil {
+		t.Fatalf("execute canonical edit: %v", err)
+	}
+	if len(results) != 1 || results[0].IsError {
+		t.Fatalf("canonical edit results = %+v", results)
+	}
+	if probe.calls.Load() != 1 {
+		t.Fatalf("handler calls = %d, want 1", probe.calls.Load())
+	}
+	var input map[string]any
+	if err := json.Unmarshal(probe.input, &input); err != nil {
+		t.Fatalf("decode handler input: %v", err)
+	}
+	if len(input) != 4 ||
+		input["path"] != "a.go" ||
+		input["old_string"] != "old" ||
+		input["new_string"] != "new" ||
+		input["replace_all"] != true {
+		t.Fatalf("handler input = %#v, want canonical fields only", input)
+	}
+	if started == nil {
+		t.Fatal("tool call start was not emitted")
+	}
+	if started.Name != "replace" || string(started.Input) != string(rawInput) {
+		t.Fatalf("started tool call = %+v, want raw provider name and input %s", started, rawInput)
+	}
+}
+
+func TestExecuteToolCallsCommitsIngressFailureWithoutCallingHandler(t *testing.T) {
+	probe := &toolExecutionProbe{}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		newTestToolRegistry(t, tools.HandlerRegistration{
+			ID:      toolspec.ToolAskQuestion,
+			Handler: probe,
+		}),
+		Config{Model: "gpt-5"},
+	)
+
+	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
+		ID:    "invalid-question",
+		Name:  string(toolspec.ToolAskQuestion),
+		Input: json.RawMessage(`{"question":"Continue?","suggestions":null}`),
+	}})
+	if err != nil {
+		t.Fatalf("execute invalid question: %v", err)
+	}
+	if len(results) != 1 || !results[0].IsError {
+		t.Fatalf("invalid question results = %+v, want completed tool error", results)
+	}
+	if probe.calls.Load() != 0 {
+		t.Fatalf("invalid question reached handler %d times", probe.calls.Load())
+	}
 }
 
 func testResultGroupRosterFromPreparedCalls(calls []executorToolCall) []resultGroupCallIdentity {
@@ -167,7 +272,7 @@ func TestLocalToolHandlerStartsAfterAcceptedIntentIsDurable(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand,
 			Handler: durableIntentToolHandler{
 				store:    store,
@@ -195,7 +300,7 @@ func TestExecuteToolCallsCommitsHandlerErrorAsHonestResult(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: failingToolHandler{err: handlerErr},
 		}),
@@ -237,7 +342,7 @@ func TestToolExecutionDurabilityObservationBaseline(t *testing.T) {
 				t,
 				store,
 				&fakeClient{},
-				tools.NewRegistry(tools.HandlerRegistration{
+				newTestToolRegistry(t, tools.HandlerRegistration{
 					ID:      toolspec.ToolExecCommand,
 					Handler: durabilityToolHandler{},
 				}),
@@ -313,7 +418,7 @@ func TestExecuteToolCallsCommitsSuccessfulResultsAsOneGroup(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: durabilityToolHandler{},
 		}),

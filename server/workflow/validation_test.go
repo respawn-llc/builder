@@ -136,6 +136,50 @@ func TestDefinitionRejectsMissingChildWorkflowIDs(t *testing.T) {
 	}
 }
 
+func TestDefinitionValidationDoesNotReferenceMissingGraphIdentities(t *testing.T) {
+	def := validWorkflow(t)
+	updateNodeAt(&def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
+		identity.ID = ""
+	})
+	updateNodeAt(&def, 1, func(identity *workflow.NodeIdentity, kind *workflow.NodeKind, _ *workflow.NodeFields) {
+		identity.ID = ""
+		*kind = workflow.NodeKindJoin
+	})
+	def.TransitionGroups[0].ID = ""
+	def.TransitionGroups[1].SourceNodeID = ""
+	def.Edges[0].ID = ""
+
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{})
+
+	var missingNode, missingTransitionGroup, missingEdge, missingSourceNode bool
+	for _, validationError := range result.Errors {
+		if validationError.NodeID != nil && strings.TrimSpace(string(*validationError.NodeID)) == "" {
+			t.Fatalf("validation error references missing Node identity: %+v", validationError)
+		}
+		if validationError.TransitionGroupID != nil && strings.TrimSpace(string(*validationError.TransitionGroupID)) == "" {
+			t.Fatalf("validation error references missing Transition Group identity: %+v", validationError)
+		}
+		if validationError.EdgeID != nil && strings.TrimSpace(string(*validationError.EdgeID)) == "" {
+			t.Fatalf("validation error references missing Transition Branch identity: %+v", validationError)
+		}
+		missingNode = missingNode || validationError.Code == workflow.CodeMissingNodeID
+		missingTransitionGroup = missingTransitionGroup || validationError.Code == workflow.CodeMissingTransitionGroupID
+		missingEdge = missingEdge || validationError.Code == workflow.CodeMissingEdgeID
+		missingSourceNode = missingSourceNode ||
+			(validationError.Code == workflow.CodeEdgeTransitionGroupMissing && validationError.NodeID == nil)
+	}
+	if !missingNode || !missingTransitionGroup || !missingEdge || !missingSourceNode {
+		t.Fatalf(
+			"missing identity errors = node:%t transition:%t edge:%t source-node:%t; errors: %+v",
+			missingNode,
+			missingTransitionGroup,
+			missingEdge,
+			missingSourceNode,
+			result.Errors,
+		)
+	}
+}
+
 func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1001,7 +1045,7 @@ func setNodeGroup(nodes []workflow.Node, nodeID workflow.NodeID, groupID string)
 	for index := range out {
 		if workflow.NodeIDOf(out[index]) == nodeID {
 			out[index] = updateNode(out[index], func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
-				identity.GroupID = groupID
+				identity.GroupID = &groupID
 			})
 		}
 	}

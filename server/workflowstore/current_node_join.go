@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
@@ -22,6 +23,7 @@ func completeCurrentNodeJoinArrival(
 	outputValues map[string]string,
 	catalog workflow.TargetAgentCatalog,
 	resolveRetainedSessionSelection func(context.Context, runtimeids.SessionID) (*workflow.AgentExecutionSelection, error),
+	associatedAt time.Time,
 ) (CurrentNodeCompletionResult, error) {
 	branchKey, branchScoped := source.Reference.TransitionBranchKey()
 	if !branchScoped {
@@ -161,7 +163,7 @@ func completeCurrentNodeJoinArrival(
 	if deleted != 1 {
 		return CurrentNodeCompletionResult{}, errors.New("join arrival active fan-out is no longer current")
 	}
-	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode, associatedAt); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	result := CurrentNodeCompletionResult{

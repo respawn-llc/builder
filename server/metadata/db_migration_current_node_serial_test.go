@@ -40,7 +40,7 @@ VALUES ('project-current-node-migration', 'Project', ?, ?, '{}')`, now, now)
 	var currentInputs, priorNodeValues string
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    node_id,
+    `+graphEntityIDTextFunction+`(node_id),
     transition_branch_key,
     scheduling_state,
     session_id,
@@ -57,7 +57,7 @@ WHERE task_id = 'task-current-node-migration'`).Scan(
 	); err != nil {
 		t.Fatalf("query projected backlog current node: %v", err)
 	}
-	if nodeID != "node-start" ||
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-start") ||
 		branchKey.Valid ||
 		schedulingState.Valid ||
 		sessionID.Valid ||
@@ -127,12 +127,12 @@ VALUES ('project-terminal-current-node-migration', 'Project', ?, ?, '{}')`, now,
 	var nodeID string
 	var schedulingState, sessionID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id, scheduling_state, session_id
+SELECT `+graphEntityIDTextFunction+`(node_id), scheduling_state, session_id
 FROM task_current_nodes
 WHERE task_id = 'task-terminal-current-node-migration'`).Scan(&nodeID, &schedulingState, &sessionID); err != nil {
 		t.Fatalf("query projected terminal current node: %v", err)
 	}
-	if nodeID != "node-done" || schedulingState.Valid || sessionID.Valid {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || schedulingState.Valid || sessionID.Valid {
 		t.Fatalf("projected terminal current node = node=%q scheduling=%+v session=%+v, want terminal without executable state", nodeID, schedulingState, sessionID)
 	}
 }
@@ -167,11 +167,11 @@ VALUES ('project-duplicate-serial-migration', 'Project', ?, ?, '{}')`, now, now)
 	var currentNodeCount int
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-duplicate-serial-migration'),
+    (SELECT `+graphEntityIDTextFunction+`(node_id) FROM task_current_nodes WHERE task_id = 'task-duplicate-serial-migration'),
     (SELECT COUNT(*) FROM task_current_nodes WHERE task_id = 'task-duplicate-serial-migration')`).Scan(&nodeID, &currentNodeCount); err != nil {
 		t.Fatalf("query normalized serial current node: %v", err)
 	}
-	if nodeID != "node-done" || currentNodeCount != 1 {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || currentNodeCount != 1 {
 		t.Fatalf("normalized serial current node = node=%q count=%d, want latest terminal singleton", nodeID, currentNodeCount)
 	}
 }
@@ -296,7 +296,7 @@ WHERE id = 'entry-edge-placement-active-agent-migration'`)
 	)
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    node_id,
+    `+graphEntityIDTextFunction+`(node_id),
     current_input_values_json,
     prior_node_values_json,
     scheduling_state,
@@ -317,7 +317,7 @@ WHERE task_id = 'task-active-agent-migration'`).Scan(
 	); err != nil {
 		t.Fatalf("query projected active agent current node: %v", err)
 	}
-	if nodeID != "node-agent" ||
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
 		currentInputs != `{"note":"entry note","summary":"from transition","task_title":"Task"}` ||
 		priorNodeValues != `{"transition_parameters":{}}` ||
 		schedulingState != "interrupted" ||
@@ -341,13 +341,15 @@ WHERE task_id = 'task-active-agent-migration'`).Scan(
 	var taskID, associationNodeID string
 	var associatedAt int64
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+SELECT session.task_id, `+graphEntityIDTextFunction+`(association.node_id), association.associated_at_unix_ms
 FROM sessions session
 JOIN session_workflow_node_associations association ON association.session_id = session.id
 WHERE session.id = '550e8400-e29b-41d4-a716-446655440000'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
 		t.Fatalf("query projected active agent session ownership: %v", err)
 	}
-	if taskID != "task-active-agent-migration" || associationNodeID != "node-agent" || associatedAt != runUpdatedAt {
+	if taskID != "task-active-agent-migration" ||
+		associationNodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
+		associatedAt != runUpdatedAt {
 		t.Fatalf("projected active agent session = task=%q node=%q associated_at=%d", taskID, associationNodeID, associatedAt)
 	}
 	var legacyWorkflowMetadataType sql.NullString

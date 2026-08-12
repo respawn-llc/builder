@@ -44,7 +44,7 @@ func TestReviewerSystemPromptFileIsLazyLockedAndReused(t *testing.T) {
 	writeTestFile(t, reviewerPromptPath, "custom reviewer prompt")
 
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), reviewerPromptConfig(reviewerPromptPath))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), reviewerPromptConfig(reviewerPromptPath))
 	if got := runReviewerPrompt(t, eng).SystemPrompt; got != "custom reviewer prompt" {
 		t.Fatalf("reviewer system prompt = %q, want custom reviewer prompt", got)
 	}
@@ -57,7 +57,7 @@ func TestReviewerSystemPromptFileIsLazyLockedAndReused(t *testing.T) {
 		t.Fatalf("close engine: %v", err)
 	}
 	reopened := mustOpenTestSession(t, store.Dir())
-	reopenedEngine := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), reviewerPromptConfig(reviewerPromptPath))
+	reopenedEngine := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), reviewerPromptConfig(reviewerPromptPath))
 	if got := runReviewerPrompt(t, reopenedEngine).SystemPrompt; got != "custom reviewer prompt" {
 		t.Fatalf("reopened reviewer system prompt = %q, want locked custom reviewer prompt", got)
 	}
@@ -118,7 +118,7 @@ func TestReviewerSystemPromptFileResolvesTilde(t *testing.T) {
 	writeTestFile(t, reviewerPromptPath, "tilde reviewer prompt")
 
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), reviewerPromptConfig("~/reviewer-prompt.md"))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), reviewerPromptConfig("~/reviewer-prompt.md"))
 	if got := runReviewerPrompt(t, eng).SystemPrompt; got != "tilde reviewer prompt" {
 		t.Fatalf("reviewer system prompt = %q, want tilde reviewer prompt", got)
 	}
@@ -128,7 +128,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 	dir := t.TempDir()
 	missingPromptPath := filepath.Join(dir, "missing-reviewer-prompt.md")
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), reviewerPromptConfig(missingPromptPath))
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), reviewerPromptConfig(missingPromptPath))
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestReviewerSuggestionsRequestInheritsFastMode(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:           "gpt-5",
 		FastModeEnabled: true,
 		Reviewer: ReviewerConfig{
@@ -209,7 +209,7 @@ func TestBlankFinalProjectionIsInvisibleAndSkipsReviewer(t *testing.T) {
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "all",
@@ -307,7 +307,7 @@ func TestReviewerRunsOnEditsFrequencyOnlyWhenPatchApplied(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch}}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "edits",
@@ -415,7 +415,7 @@ func TestReviewerBlankFinalKeepsOriginalAnswerAndReportsNoChanges(t *testing.T) 
 
 func TestReviewerSuggestionsRemainVisibleWhenFollowUpReturnsNoAnswer(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
@@ -458,7 +458,7 @@ func (missingReviewerFollowUpRunner) RunStepLoopWithOptions(context.Context, str
 
 func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)
 	}

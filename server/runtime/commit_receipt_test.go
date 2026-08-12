@@ -177,7 +177,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 	t.Run("uncommitted error", func(t *testing.T) {
 		store := mustCreateTestSession(t)
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
@@ -205,7 +205,7 @@ func TestPersistedMessageAppliesProjectionByCommitReceipt(t *testing.T) {
 		gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 		store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 		var events []Event
-		eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+		eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
 		})
@@ -270,7 +270,7 @@ func TestCommittedControlFeedbackAppliesStateByCommitReceipt(t *testing.T) {
 		{
 			name: "reviewer",
 			newEngine: func(t *testing.T, store *session.Store) *Engine {
-				return mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
+				return mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
 					ID:      toolspec.ToolExecCommand,
 					Handler: fakeTool{name: toolspec.ToolExecCommand},
 				}), Config{

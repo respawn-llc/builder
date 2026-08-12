@@ -128,11 +128,11 @@ func TestManualMovePreviewExpandsFanoutTransitionChoice(t *testing.T) {
 func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	auditID := workflow.NodeID("node-audit-" + workflowID.String())
-	auditGroupID := workflow.TransitionGroupID("group-audit-" + workflowID.String())
+	auditID := testNodeID("node-audit-" + workflowID.String())
+	auditGroupID := testTransitionGroupID("group-audit-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		synth := nodeByKey(t, def, "synth")
-		doneGroupID := workflow.TransitionGroupID("group-synth-done-" + workflowID.String())
+		doneGroupID := testTransitionGroupID("group-synth-done-" + workflowID.String())
 		req.Nodes = append(req.Nodes, NodeRecord{
 			ID:           auditID,
 			WorkflowID:   workflowID,
@@ -156,7 +156,7 @@ func TestManualMovePreviewDescribesPriorJoinParameterRequirement(t *testing.T) {
 			DisplayName:  "Audit",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-audit-" + workflowID.String()),
+			ID:                testEdgeID("edge-audit-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: auditGroupID,
 			Key:               "audit",
@@ -200,7 +200,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		plan := nodeByKey(t, def, "plan")
 		target := nodeByKey(t, def, "implement")
-		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
+		groupID := testTransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -209,7 +209,7 @@ func TestManualMovePreviewRequiresAndHonorsStableTransitionSelection(t *testing.
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
+			ID:                testEdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -294,7 +294,7 @@ func TestManualMovePlansNewSessionSelectorValuesWithoutCurrentNode(t *testing.T)
 	ctx, store, _ := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -353,7 +353,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -434,7 +434,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -494,7 +494,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -568,12 +568,12 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	detailAID := workflow.NodeID("node-detail-a-" + workflowID.String())
-	detailBID := workflow.NodeID("node-detail-b-" + workflowID.String())
-	joinAGroupID := workflow.TransitionGroupID("group-join-a-" + workflowID.String())
-	joinBGroupID := workflow.TransitionGroupID("group-join-b-" + workflowID.String())
-	detailAGroupID := workflow.TransitionGroupID("group-detail-a-" + workflowID.String())
-	detailBGroupID := workflow.TransitionGroupID("group-detail-b-" + workflowID.String())
+	detailAID := testNodeID("node-detail-a-" + workflowID.String())
+	detailBID := testNodeID("node-detail-b-" + workflowID.String())
+	joinAGroupID := testTransitionGroupID("group-join-a-" + workflowID.String())
+	joinBGroupID := testTransitionGroupID("group-join-b-" + workflowID.String())
+	detailAGroupID := testTransitionGroupID("group-detail-a-" + workflowID.String())
+	detailBGroupID := testTransitionGroupID("group-detail-b-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		implA := nodeByKey(t, def, "impl_a")
 		implB := nodeByKey(t, def, "impl_b")
@@ -593,8 +593,8 @@ func TestManualMovePreviewBlocksSerialDestinationInsideFanoutBranch(t *testing.T
 			TransitionGroupRecord{ID: detailBGroupID, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(implB), TransitionID: "detail_b", DisplayName: "Detail"},
 		)
 		req.Edges = append(req.Edges,
-			EdgeRecord{ID: workflow.EdgeID("edge-detail-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
-			EdgeRecord{ID: workflow.EdgeID("edge-detail-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B."},
+			EdgeRecord{ID: testEdgeID("edge-detail-a-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailAGroupID, Key: "detail_a", TargetNodeID: detailAID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail A."},
+			EdgeRecord{ID: testEdgeID("edge-detail-b-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: detailBGroupID, Key: "detail_b", TargetNodeID: detailBID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Detail B."},
 		)
 		_ = join
 	})
@@ -947,8 +947,8 @@ func appendManualMoveRetainedReviewEdge(
 	identity string,
 	contextSource workflow.ContextSourceKind,
 ) workflow.EdgeID {
-	groupID := workflow.TransitionGroupID("group-manual-" + identity + "-rework-" + workflowID.String())
-	edgeID := workflow.EdgeID("edge-manual-" + identity + "-rework-" + workflowID.String())
+	groupID := testTransitionGroupID("group-manual-" + identity + "-rework-" + workflowID.String())
+	edgeID := testEdgeID("edge-manual-" + identity + "-rework-" + workflowID.String())
 	req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 		ID:           groupID,
 		WorkflowID:   workflowID,

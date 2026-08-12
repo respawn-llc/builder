@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 )
 
 type InvalidResponseError struct {
@@ -40,16 +42,18 @@ func validateRuntimeLiveResponseSession(operation string, requestedSessionID str
 }
 
 type Remote struct {
-	plan           remoteDialPlan
-	transport      rpcwire.ClientTransport
-	mu             sync.Mutex
-	control        *remoteControlConn
-	identity       protocol.ServerIdentity
-	attachIntent   *remoteAttachmentIntent
-	attachment     *protocol.AttachResponse
-	expectedRootID atomic.Value // string; empty disables root validation
-	noAuthAck      atomic.Bool
-	closed         atomic.Bool
+	plan                             remoteDialPlan
+	transport                        rpcwire.ClientTransport
+	mu                               sync.Mutex
+	control                          *remoteControlConn
+	identity                         protocol.ServerIdentity
+	attachIntent                     *remoteAttachmentIntent
+	attachment                       *protocol.AttachResponse
+	updateStatusResponseContract     serverjsoncontract.UpdateStatusResponse
+	sessionExecutionResponseContract serverjsoncontract.SessionExecutionEnvironmentResponse
+	expectedRootID                   atomic.Value // string; empty disables root validation
+	noAuthAck                        atomic.Bool
+	closed                           atomic.Bool
 }
 
 func DialRemoteURL(ctx context.Context, rpcURL string) (*Remote, error) {
@@ -215,13 +219,11 @@ func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerRea
 }
 
 func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	return callDedicatedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](
-		c,
-		ctx,
-		apicontract.UpdateStatusDedicatedRequestID,
-		protocol.MethodServerUpdateStatusGet,
-		req,
-	)
+	var raw json.RawMessage
+	if err := c.callDedicated(ctx, apicontract.UpdateStatusDedicatedRequestID, protocol.MethodServerUpdateStatusGet, req, &raw); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	return c.updateStatusResponseContract.Decode(raw)
 }
 
 func (c *Remote) ProjectID() string {
@@ -667,6 +669,17 @@ func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspace
 	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
 }
 
+func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	var resp serverapi.WorkspaceChatMaterializeResponse
+	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatMaterialize, req, &resp); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, invalidResponseError("workspace Chat materialization", err)
+	}
+	return resp, nil
+}
+
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	var resp serverapi.SessionMainViewResponse
 	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
@@ -689,8 +702,11 @@ func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req
 }
 
 func (c *Remote) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	var resp serverapi.SessionExecutionEnvironmentResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &resp)
+	var raw json.RawMessage
+	if err := c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &raw); err != nil {
+		return serverapi.SessionExecutionEnvironmentResponse{}, err
+	}
+	return c.sessionExecutionResponseContract.Decode(raw)
 }
 
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {

@@ -48,11 +48,11 @@ WHERE task_id = 'task-parallel-migration'`).Scan(&fanoutCount); err != nil {
 SELECT
     branch.transition_branch_key,
     branch.arrival_state,
-    current_node.node_id,
+    `+graphEntityIDTextFunction+`(current_node.node_id),
     current_node.scheduling_state,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
-    current_node.entered_by_edge_id
+    `+graphEntityIDTextFunction+`(current_node.entered_by_edge_id)
 FROM task_active_fanout_branches branch
 JOIN task_current_nodes current_node
     ON current_node.task_id = branch.task_id
@@ -94,19 +94,19 @@ ORDER BY branch.transition_branch_key`)
 	want := map[string]branchState{
 		"split_a": {
 			arrivalState:    "pending",
-			currentNodeID:   "node-branch-a",
+			currentNodeID:   graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_a"),
 			schedulingState: "interrupted",
 			currentInputs:   `{"summary":"parallel source"}`,
 			priorNodeValues: `{"transition_parameters":{}}`,
-			enteredByEdgeID: "edge-split-a",
+			enteredByEdgeID: graphEntityIDTextByKey(t, store.db, "workflow_edges", "edge_key", "split_a"),
 		},
 		"split_b": {
 			arrivalState:    "pending",
-			currentNodeID:   "node-branch-b",
+			currentNodeID:   graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_b"),
 			schedulingState: "interrupted",
 			currentInputs:   `{"summary":"parallel source"}`,
 			priorNodeValues: `{"transition_parameters":{}}`,
-			enteredByEdgeID: "edge-split-b",
+			enteredByEdgeID: graphEntityIDTextByKey(t, store.db, "workflow_edges", "edge_key", "split_b"),
 		},
 	}
 	if !reflect.DeepEqual(branches, want) {
@@ -240,7 +240,7 @@ WHERE id = 'run-parallel-a'`, sessionID)
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
     session.task_id,
-    association.node_id,
+    `+graphEntityIDTextFunction+`(association.node_id),
     association.transition_branch_key,
     association.associated_at_unix_ms
 FROM sessions session
@@ -249,7 +249,7 @@ WHERE session.id = ?`, sessionID).Scan(&taskID, &nodeID, &branchKey, &associated
 		t.Fatalf("query migrated parallel Session association: %v", err)
 	}
 	if taskID != "task-parallel-session-association-migration" ||
-		nodeID != "node-branch-a" ||
+		nodeID != graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_a") ||
 		branchKey != "split_a" ||
 		associatedAt != now+4 {
 		t.Fatalf(
@@ -303,11 +303,11 @@ INSERT INTO task_node_placements (
 	var fanoutCount int
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-completed-parallel-history'),
+    (SELECT `+graphEntityIDTextFunction+`(node_id) FROM task_current_nodes WHERE task_id = 'task-completed-parallel-history'),
     (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-completed-parallel-history')`).Scan(&nodeID, &fanoutCount); err != nil {
 		t.Fatalf("query discarded completed parallel history: %v", err)
 	}
-	if nodeID != "node-done" || fanoutCount != 0 {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || fanoutCount != 0 {
 		t.Fatalf("discarded completed parallel history = node=%q fanouts=%d", nodeID, fanoutCount)
 	}
 }
@@ -340,7 +340,7 @@ WHERE id = 'task-canceled-parallel-migration'`, now+5)
 	var fanoutCount, approvalCount int
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-migration'),
+    (SELECT `+graphEntityIDTextFunction+`(node_id) FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-migration'),
     (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-parallel-migration'),
     (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-parallel-migration')`).Scan(
 		&nodeID,
@@ -349,7 +349,7 @@ SELECT
 	); err != nil {
 		t.Fatalf("query normalized canceled parallel aggregate: %v", err)
 	}
-	if nodeID != "node-done" || fanoutCount != 0 || approvalCount != 0 {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || fanoutCount != 0 || approvalCount != 0 {
 		t.Fatalf("normalized canceled parallel aggregate = node=%q fanouts=%d approvals=%d", nodeID, fanoutCount, approvalCount)
 	}
 }
@@ -444,7 +444,7 @@ WHERE id = 'task-canceled-parallel-approval-migration'`, now+5, now+5, now+5, no
 	var currentNodeCount, approvalCount, fanoutCount int
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-approval-migration'),
+    (SELECT `+graphEntityIDTextFunction+`(node_id) FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-approval-migration'),
     (SELECT COUNT(*) FROM task_current_nodes WHERE task_id = 'task-canceled-parallel-approval-migration'),
     (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-parallel-approval-migration'),
     (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-parallel-approval-migration')`).Scan(
@@ -455,7 +455,7 @@ SELECT
 	); err != nil {
 		t.Fatalf("query normalized canceled parallel approval aggregate: %v", err)
 	}
-	if nodeID != "node-done" ||
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") ||
 		currentNodeCount != 1 ||
 		approvalCount != 0 ||
 		fanoutCount != 0 {

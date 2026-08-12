@@ -11,6 +11,7 @@ func cloneMeta(in Meta) Meta {
 		out.ParentAgentSessionID = &parentAgentSessionID
 	}
 	out.Continuation = cloneContinuationContext(in.Continuation)
+	out.ChatSettings = cloneChatSettingsOverrides(in.ChatSettings)
 	if in.PendingModelRecovery != nil {
 		pending := *in.PendingModelRecovery
 		pending.OutstandingToolCallIDs = append([]string(nil), in.PendingModelRecovery.OutstandingToolCallIDs...)

@@ -8,19 +8,18 @@ import (
 
 	"core/server/metadata"
 	"core/server/runlog"
-	"core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/tools"
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
 type API struct {
 	metadataStore            *metadata.Store
-	fastModeState            *runtime.FastModeState
 	recoveredWarningProvider func() (string, bool, error)
 	authority                *Authority
 	runtimeClientFactory     runtimewire.RuntimeClientFactory
@@ -33,10 +32,9 @@ type APIOptions struct {
 	ManagedWorktreeBaseDir   string
 }
 
-func NewAPI(metadataStore *metadata.Store, fastModeState *runtime.FastModeState, authority *Authority, options APIOptions) *API {
+func NewAPI(metadataStore *metadata.Store, authority *Authority, options APIOptions) *API {
 	return &API{
 		metadataStore:            metadataStore,
-		fastModeState:            fastModeState,
 		recoveredWarningProvider: options.RecoveredWarningProvider,
 		authority:                authority,
 		runtimeClientFactory:     options.RuntimeClientFactory,
@@ -86,14 +84,49 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
-	plan, err := s.interactiveRuntimePlan(ctx, req, sessionID.String())
-	if err != nil {
-		return serverapi.SessionRuntimeActivateResponse{}, err
-	}
-	attachment, err := s.authority.OpenRuntime(ctx, RuntimeOpenRequest{
+	attachment, err := s.authority.openRuntime(ctx, RuntimeOpenRequest{
 		SessionID: sessionID,
 		OwnerID:   ownerID,
-		Runtime:   &plan,
+	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
+		persisted := store.Meta().ChatSettings
+		if persisted != nil && req.ThinkingOverrideExplicit {
+			cloned := *persisted
+			cloned.Thinking = nil
+			persisted = &cloned
+		}
+		current := &session.ChatSettingsOverrides{
+			Supervisor:     textutil.Value(req.ActiveSettings.Reviewer.Frequency),
+			Thinking:       textutil.Value(req.ActiveSettings.ThinkingLevel),
+			Fast:           textutil.Value(req.ActiveSettings.PriorityRequestMode),
+			Questions:      req.QuestionsEnabled,
+			AutoCompaction: req.AutoCompactionEnabled,
+		}
+		effective, resolveErr := session.ResolveEffectiveChatSettings(
+			persisted,
+			current,
+			session.ChatSettings{
+				Supervisor:     req.ActiveSettings.Reviewer.Frequency,
+				Thinking:       req.ActiveSettings.ThinkingLevel,
+				Fast:           req.ActiveSettings.PriorityRequestMode,
+				Questions:      *req.QuestionsEnabled,
+				AutoCompaction: *req.AutoCompactionEnabled,
+			},
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		req.ActiveSettings.Reviewer.Frequency = effective.Supervisor
+		req.ActiveSettings.ThinkingLevel = effective.Thinking
+		req.ActiveSettings.PriorityRequestMode = effective.Fast
+		questions := effective.Questions
+		autoCompaction := effective.AutoCompaction
+		req.QuestionsEnabled = &questions
+		req.AutoCompactionEnabled = &autoCompaction
+		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
+		if planErr != nil {
+			return nil, planErr
+		}
+		return &plan, nil
 	})
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
@@ -170,7 +203,8 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 		EnabledTools:             enabledTools,
 		FilesystemContext:        tools.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
 		Sources:                  req.Source.Sources,
-		FastMode:                 s.fastModeState,
+		QuestionsEnabled:         req.QuestionsEnabled,
+		AutoCompactionEnabled:    req.AutoCompactionEnabled,
 		ClientFactory:            s.runtimeClientFactory,
 		StartLogLines:            startLogLines,
 		RecoveredWarningProvider: s.recoveredWarningProvider,

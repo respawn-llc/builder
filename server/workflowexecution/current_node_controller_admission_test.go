@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -183,7 +184,10 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	reference := currentNodeReferenceForControllerTest(t, "task-finalization-failure", "node-script")
-	store := &currentNodeControllerStore{}
+	deliveryErr := sql.ErrNoRows
+	store := &currentNodeControllerStore{
+		admittedInterruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
+	}
 	attention := &currentNodeAttentionRecorder{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -207,7 +211,7 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	}
 	t.Cleanup(func() {
 		releaseFinalizer()
-		if err := controller.Close(); err != nil {
+		if err := controller.Close(); err != nil && !errors.Is(err, deliveryErr) {
 			t.Errorf("close controller: %v", err)
 		}
 		if err := authority.Close(context.Background()); err != nil {
@@ -255,6 +259,9 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return attention.pendingCount() == 1
 	}, "outcome-less finalization did not publish interrupted Current Node attention")
+	if err := controller.Close(); !errors.Is(err, deliveryErr) {
+		t.Fatalf("outcome-less finalization diagnostic = %v, want %v", err, deliveryErr)
+	}
 }
 
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {
@@ -342,7 +349,7 @@ func (r *finalizerFailureScriptRunner) StartCurrentNode(
 	_ context.Context,
 	_ workflow.CurrentNodeReference,
 	_ workflowruntime.TaskPromptDelivery,
-	_ CurrentNodeAssignmentSteer,
+	_ *CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	_ workflowruntime.Controller,
 ) error {
@@ -998,6 +1005,61 @@ func TestCurrentNodeControllerPreparationFailureInterruptsPlacedNode(t *testing.
 	}
 	if runner.starts() != 0 {
 		t.Fatalf("runner starts = %d, want none", runner.starts())
+	}
+}
+
+func TestCurrentNodeControllerPreparationFailureConsumesCommittedInterruptionDiagnostic(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-preparation-event-diagnostic", "node-agent")
+	deliveryErr := errors.New("interruption event delivery unavailable")
+	store := &currentNodeControllerStore{
+		started: workflowstore.StartTaskResult{Mutation: workflow.CurrentNodeMutationResult{
+			Created: []workflow.CurrentNode{{
+				Reference:  reference,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+			}},
+		}},
+		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	attention := &currentNodeAttentionRecorder{}
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+		attention,
+	)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	preparationErr := errors.New("worktree setup failed")
+	finalized := make(chan TaskPreparationFinalization, 1)
+
+	if _, err := controller.StartTask(
+		context.Background(),
+		reference.TaskID,
+		testTaskPreparation(func(context.Context) error { return preparationErr }),
+		func(finalization TaskPreparationFinalization) { finalized <- finalization },
+	); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	select {
+	case finalization := <-finalized:
+		if finalization.Kind != TaskPreparationFailed ||
+			!errors.Is(finalization.Cause, preparationErr) ||
+			!errors.Is(finalization.Cause, deliveryErr) {
+			t.Fatalf("task preparation finalization = %+v, want committed interruption diagnostic", finalization)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("task preparation did not finalize")
+	}
+	if _, interrupted := store.interruption(reference); !interrupted {
+		t.Fatal("preparation Current Node was not interrupted")
+	}
+	if attention.pendingCount() != 1 {
+		t.Fatalf("interruption attention = %d, want one", attention.pendingCount())
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/worktreecontract"
 )
@@ -1806,9 +1807,9 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentID := workflow.NodeID("node-agent-" + created.ID.String())
-	startGroupID := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	doneGroupID := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	agentID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroupID := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, env.ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindStart)
 		doneID := taskWorktreeNodeIDByKind(t, definition, workflow.NodeKindTerminal)
@@ -1821,8 +1822,8 @@ func createTaskWorktreeTestTaskWithSource(t *testing.T, env *serviceTestEnv, sou
 			workflowstore.TransitionGroupRecord{ID: doneGroupID, WorkflowID: created.ID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Do work"},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	if _, err := store.LinkWorkflow(env.ctx, env.binding.ProjectID, created.ID, true); err != nil {

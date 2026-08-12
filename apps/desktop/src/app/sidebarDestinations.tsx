@@ -48,6 +48,15 @@ export function SidebarDestinationView({
     return <LinkWorkflowDestinationView destination={destination} navigator={navigator} />;
   if (destination.kind === "workflowInspect")
     return <WorkflowInspectorDestination destination={destination} navigator={navigator} />;
+  if (destination.kind === "workflowSettings")
+    return (
+      <WorkflowEditorRoute
+        navigator={navigator}
+        projectID=""
+        surface="settings"
+        workflowID={destination.workflowID}
+      />
+    );
   if (destination.kind === "workflowEditor")
     return (
       <WorkflowEditorRoute

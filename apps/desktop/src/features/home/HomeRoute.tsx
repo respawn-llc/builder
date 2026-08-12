@@ -7,12 +7,18 @@ import { errorMessage } from "@/api";
 import { basename, formatRelativeTime, projectKeyFromName } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
-import { SidebarRootOwner, useOwnedSidebarRoots, type SidebarRootController } from "@/app-facade";
+import {
+  SidebarRootOwner,
+  useOwnedSidebarRoots,
+  type SidebarMode,
+  type SidebarRootController,
+} from "@/app-facade";
 import { taskDetailInitialFocusFromAttentionItem } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
+import { desktopChatEnabled } from "@/shared/feature-flags";
 import {
   ErrorState,
   homeListCardListMaxWidthClassName,
@@ -22,7 +28,11 @@ import {
 } from "@/ui";
 import { cx } from "@/ui";
 import { HomePrimaryPane, type HomePrimaryTab } from "./HomePrimaryPane";
+import { HomePrototypeSidebar } from "./HomePrototypeSidebar";
+import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectCreateDialog, type ProjectDraft } from "./ProjectCreateForm";
+import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
+import { useHomeSidebarMode } from "./useHomeSidebarMode";
 import {
   useGlobalAttentionPages,
   useGlobalAttentionEvents,
@@ -33,7 +43,11 @@ import {
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
 export function HomeRoute() {
-  return <SidebarRootOwner><HomeRouteContent /></SidebarRootOwner>;
+  return (
+    <SidebarRootOwner>
+      <HomeRouteContent />
+    </SidebarRootOwner>
+  );
 }
 
 function HomeRouteContent() {
@@ -41,6 +55,7 @@ function HomeRouteContent() {
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
+  const sidebarMode = useHomeSidebarMode();
   const navigation = useAppNavigation();
   const { open } = useOwnedSidebarRoots();
   const queryClient = useQueryClient();
@@ -49,6 +64,8 @@ function HomeRouteContent() {
   const attentionSubscriptionReady = useGlobalAttentionEvents();
   const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
+  const [prototypeCategory, setPrototypeCategory] = useState<HomePrimaryTab>("projects");
+  const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null);
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
   const disabled = connection.phase !== "connected";
@@ -161,6 +178,57 @@ function HomeRouteContent() {
 
   useProjectCreationEvents(handleNativeProjectCreated);
 
+  if (desktopChatEnabled) {
+    const selectedProject =
+      selectedProjectID === null
+        ? null
+        : (projectItems.find((project) => project.id === selectedProjectID) ?? null);
+    const detailKey = selectedProject !== null ? `project:${selectedProject.id}` : "inbox";
+    return (
+      <div className="h-full min-h-0" data-testid="home-route-root">
+        {projectCreationDialog.fallback}
+        <div className="grid h-full min-h-0 grid-cols-[350px_minmax(0,1fr)]" data-testid="home-pane-grid">
+          <HomePrototypeSidebar
+            disabled={disabled}
+            onChooseWorkspace={() => void chooseWorkspace()}
+            onCreateWorkflow={() => {
+              open({ kind: "workflowCreate", mode: sidebarMode });
+            }}
+            onProjectSelect={(projectID) => {
+              setSelectedProjectID((current) => (current === projectID ? null : projectID));
+            }}
+            onCategorySelect={(category) => {
+              setPrototypeCategory(category);
+              setSelectedProjectID(null);
+            }}
+            selectedCategory={prototypeCategory}
+            projectItems={projectItems}
+            projectsQuery={projects}
+            sidebarMode={sidebarMode}
+            selectedProjectID={selectedProjectID}
+          />
+          <section className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
+            <OverlappingCrossfade contentKey={detailKey}>
+              {selectedProject !== null ? (
+                <ProjectPrototypeDetail
+                  key={selectedProject.id}
+                  disabled={disabled}
+                  onLinkWorkflow={() => {
+                    open({ kind: "linkWorkflow", mode: sidebarMode, projectID: selectedProject.id });
+                  }}
+                  project={selectedProject}
+                  sidebarMode={sidebarMode}
+                />
+              ) : (
+                <AttentionList items={attentionItems} query={attention} sidebarMode={sidebarMode} />
+              )}
+            </OverlappingCrossfade>
+          </section>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full min-h-0" data-testid="home-route-root">
       {projectCreationDialog.fallback}
@@ -177,18 +245,19 @@ function HomeRouteContent() {
             disabled={disabled}
             onChooseWorkspace={() => void chooseWorkspace()}
             onCreateWorkflow={() => {
-              open({ kind: "workflowCreate", mode: "overlay" });
+              open({ kind: "workflowCreate", mode: sidebarMode });
             }}
             onTabChange={setPrimaryTab}
             projectItems={projectItems}
             projectsQuery={projects}
+            sidebarMode={sidebarMode}
           />
         </section>
         <section
           aria-labelledby="attention-title"
           className="island-glass min-h-0 overflow-hidden rounded-[var(--radius-xl)]"
         >
-          <AttentionList items={attentionItems} query={attention} />
+          <AttentionList items={attentionItems} query={attention} sidebarMode={sidebarMode} />
         </section>
       </div>
     </div>
@@ -198,9 +267,10 @@ function HomeRouteContent() {
 type AttentionListProps = Readonly<{
   items: readonly AttentionItem[];
   query: ReturnType<typeof useGlobalAttentionPages>;
+  sidebarMode: SidebarMode;
 }>;
 
-function AttentionList({ items, query }: AttentionListProps) {
+function AttentionList({ items, query, sidebarMode }: AttentionListProps) {
   const { t } = useTranslation();
   const { open } = useOwnedSidebarRoots();
   if (query.isPending) {
@@ -232,7 +302,7 @@ function AttentionList({ items, query }: AttentionListProps) {
       onLoadMore={() => void query.fetchNextPage()}
       paddingEnd={16}
       paddingStart={16}
-      renderItem={(item) => <AttentionRow item={item} openSidebar={open} />}
+      renderItem={(item) => <AttentionRow item={item} openSidebar={open} sidebarMode={sidebarMode} />}
     />
   );
 }
@@ -240,9 +310,11 @@ function AttentionList({ items, query }: AttentionListProps) {
 const AttentionRow = memo(function AttentionRow({
   item,
   openSidebar,
+  sidebarMode,
 }: Readonly<{
   item: AttentionItem;
   openSidebar: SidebarRootController["open"];
+  sidebarMode: SidebarMode;
 }>) {
   const { t } = useTranslation();
   const message =
@@ -262,7 +334,7 @@ const AttentionRow = memo(function AttentionRow({
           kind: "taskDetail",
           initialFocus: taskDetailInitialFocusFromAttentionItem(item),
           inboxNav: true,
-          mode: "overlay",
+          mode: sidebarMode,
           onMutated: undefined,
           taskID: item.taskID,
         });
@@ -280,7 +352,7 @@ const AttentionRow = memo(function AttentionRow({
         ) : null}
       </div>
       {item.taskTitle.length > 0 ? <strong className="min-w-0 truncate">{item.taskTitle}</strong> : null}
-      <span className="min-w-0 text-sm break-words">{message}</span>
+      <span className="min-w-0 line-clamp-5 text-sm break-words">{message}</span>
       <span className="text-sm text-[var(--color-muted)]">{formatRelativeTime(item.occurredAt)}</span>
     </button>
   );
@@ -290,13 +362,19 @@ function attentionRowPropsEqual(
   previous: Readonly<{
     item: AttentionItem;
     openSidebar: SidebarRootController["open"];
+    sidebarMode: SidebarMode;
   }>,
   next: Readonly<{
     item: AttentionItem;
     openSidebar: SidebarRootController["open"];
+    sidebarMode: SidebarMode;
   }>,
 ): boolean {
-  return previous.openSidebar === next.openSidebar && attentionItemsEqual(previous.item, next.item);
+  return (
+    previous.openSidebar === next.openSidebar &&
+    previous.sidebarMode === next.sidebarMode &&
+    attentionItemsEqual(previous.item, next.item)
+  );
 }
 
 function attentionItemsEqual(previous: AttentionItem, next: AttentionItem): boolean {

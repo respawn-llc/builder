@@ -88,11 +88,17 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 			workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
 		)
 	})
-	if err != nil {
+	committed, diagnostic := classifyCurrentNodeInterruption(err)
+	if err != nil && !committed {
 		return 0, err
 	}
 	for _, reference := range recovered {
 		c.publishPendingInterruptedCurrentNode(ctx, reference, ReasonCurrentNodeStartupRecovery)
+	}
+	if diagnostic != nil {
+		c.mu.Lock()
+		c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
+		c.mu.Unlock()
 	}
 	return int64(len(recovered)), nil
 }
@@ -353,6 +359,14 @@ func (c *CurrentNodeController) resumeTask(
 		resumed := make([]workflow.CurrentNode, 0, len(eligible))
 		starts := make([]currentNodeQueuedStart, 0, len(eligible))
 		for index, currentNode := range eligible {
+			if err := c.store.RepairCurrentNodeSessionProvenanceForResume(ctx, currentNode); err != nil {
+				resumeErrs = append(resumeErrs, fmt.Errorf(
+					"repair retained current node provenance %v: %w",
+					currentNode.Reference,
+					err,
+				))
+				continue
+			}
 			projection, found, err := c.store.ResumeCurrentNode(ctx, currentNode.Reference)
 			if err != nil {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resume current node %v: %w", currentNode.Reference, err))
@@ -441,18 +455,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
-			starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
-			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			for _, start := range starts {
-				if err := c.queueExplicitStartLocked(start); err != nil {
-					return workflowstore.PendingApprovalApplyResult{}, err
-				}
-			}
-			return applied, nil
+			_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
+			return applied, assignmentErr
 		}
 		handle, live := c.authority.ExecutionByScope(sourceScopeID)
 		if !live {
@@ -460,23 +464,21 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		var applied workflowstore.PendingApprovalApplyResult
 		var starts []currentNodeQueuedStart
-		var pending []*pendingCurrentNodeAssignmentSteer
+		var prepared *currentNodeAssignmentBatch
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			var applyErr error
 			applied, starts, applyErr = apply()
 			if applyErr != nil {
 				return applyErr
 			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
-			c.mu.Lock()
-			c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], starts...)
-			c.mu.Unlock()
-			return applyErr
+			prepared = c.prepareCurrentNodeAssignments(ctx, starts, true, &sourceScopeID)
+			return nil
 		})
 		if err != nil {
-			return workflowstore.PendingApprovalApplyResult{}, err
+			return applied, err
 		}
-		return applied, c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		_, assignmentErr := c.classifyPreparedAutomaticStarts(prepared)
+		return applied, assignmentErr
 	})
 }
 
@@ -507,18 +509,8 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		starts, err = c.steerAndWaitStarts(ctx, starts, recoverAllCurrentNodeStarts)
-		if err != nil {
-			return moved, err
-		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		for _, start := range starts {
-			if err := c.queueExplicitStartLocked(start); err != nil {
-				return moved, err
-			}
-		}
-		return moved, nil
+		_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
+		return moved, assignmentErr
 	})
 }
 

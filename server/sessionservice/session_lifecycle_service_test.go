@@ -691,17 +691,21 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	runtimeService := sessionruntime.NewAPI(metadataStore, nil, runtimeAuthority, sessionruntime.APIOptions{})
+	runtimeService := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{})
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
+	activateSettings.ThinkingLevel = "medium"
+	activateSettings.Reviewer.Frequency = "off"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
 	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
 	activation, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-1",
-		SessionID:       forkID.String(),
-		OwnerID:         "test-owner",
-		ActiveSettings:  activateSettings,
-		Source:          config.SourceReport{},
+		ClientRequestID:       "activate-1",
+		SessionID:             forkID.String(),
+		OwnerID:               "test-owner",
+		ActiveSettings:        activateSettings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Source:                config.SourceReport{},
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)

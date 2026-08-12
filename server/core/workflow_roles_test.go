@@ -140,8 +140,8 @@ func TestWorkflowValidationRejectsDefaultRoleWithoutAskQuestion(t *testing.T) {
 		t.Fatalf("required-tool diagnostics = %+v, want exactly one", diagnostics)
 	}
 	diagnostic := diagnostics[0]
-	if diagnostic.NodeID != workflow.NodeIDOf(def.Nodes[1]) {
-		t.Fatalf("node id = %q, want %q", diagnostic.NodeID, workflow.NodeIDOf(def.Nodes[1]))
+	if diagnostic.NodeID == nil || *diagnostic.NodeID != workflow.NodeIDOf(def.Nodes[1]) {
+		t.Fatalf("node id = %v, want %q", diagnostic.NodeID, workflow.NodeIDOf(def.Nodes[1]))
 	}
 	if diagnostic.AgentRole == nil || *diagnostic.AgentRole != workflow.DefaultAgentRole {
 		t.Fatalf("agent role = %v, want %q", diagnostic.AgentRole, workflow.DefaultAgentRole)

@@ -4,26 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/toolspec"
 )
 
 type WorkspaceChatDraft = metadata.WorkspaceChatDraftDocument
 type WorkspaceChatDraftResolverInput struct {
-	Settings      config.Settings
-	Source        config.SourceReport
-	AuthState     auth.State
-	FastModeState *runtime.FastModeState
+	Settings                        config.Settings
+	Source                          config.SourceReport
+	AuthState                       auth.State
+	SkipProviderReadinessValidation bool
 }
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
@@ -41,6 +38,7 @@ type workspaceChatDraftPersistence interface {
 	ReplaceWorkspaceChatDraft(context.Context, string, *WorkspaceChatDraft) error
 }
 type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftResolverInput, error)
+type WorkspaceChatMaterializer func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error)
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
 	lanes       *requestmemo.MutationLaneRegistry[string]
@@ -52,6 +50,50 @@ func NewWorkspaceChatDraftOwner(p workspaceChatDraftPersistence) *WorkspaceChatD
 	}
 	return &WorkspaceChatDraftOwner{persistence: p, lanes: requestmemo.NewMutationLaneRegistry[string]()}
 }
+
+func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
+	ctx context.Context,
+	id string,
+	resolve WorkspaceChatDraftInputResolver,
+	materialize WorkspaceChatMaterializer,
+) (runtimeids.SessionID, error) {
+	var err error
+	if id, err = o.workspaceID(id); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if resolve == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat draft resolver is required")
+	}
+	if materialize == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat materializer is required")
+	}
+	lane, err := o.lanes.Acquire(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	defer lane.Release()
+	input, err := resolve(ctx)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	resolution, err := ResolveWorkspaceChatDraft(input, stored)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	sessionID, err := materialize(ctx, resolution)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if sessionID.IsZero() || !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("materialized Session id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
+}
+
 func (o *WorkspaceChatDraftOwner) workspaceID(id string) (string, error) {
 	if o == nil || o.persistence == nil || o.lanes == nil {
 		return "", errors.New("workspace Chat draft owner is required")
@@ -200,7 +242,14 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 			continue
 		}
 		role := selector
-		prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{Settings: input.Settings, Source: input.Source}, serverapi.RunPromptOverrides{AgentRole: &role}, input.AuthState, launch.RunPromptPreparationContext{})
+		prepared, err := launch.PrepareRunPromptOverridesWithContext(
+			config.App{Settings: input.Settings, Source: input.Source},
+			serverapi.RunPromptOverrides{AgentRole: &role},
+			input.AuthState,
+			launch.RunPromptPreparationContext{
+				SkipProviderReadinessValidation: input.SkipProviderReadinessValidation,
+			},
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -214,21 +263,33 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if target == nil {
 			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
 		}
-		capabilities, err := llm.ProviderCapabilitiesForSettings(input.AuthState, target.Settings)
+		var preparedSettings launch.PreparedChatSettings
+		if input.SkipProviderReadinessValidation {
+			preparedSettings, err = launch.PrepareChatSettingsForTargetWithoutProviderReadiness(*target)
+		} else {
+			preparedSettings, err = launch.PrepareChatSettingsForPreparedTarget(*target, prepared.FastAvailable)
+		}
 		if err != nil {
 			return nil, err
 		}
-		supervisor, valid := runtime.NormalizeReviewerFrequency(target.Settings.Reviewer.Frequency)
-		if !valid || strings.TrimSpace(target.Settings.ThinkingLevel) == "" {
-			return nil, errors.New("workspace Chat draft settings are invalid")
-		}
-		thinking := strings.TrimSpace(target.Settings.ThinkingLevel)
-		thinkingLevels := make(map[string]struct{})
-		for _, level := range append(llm.SupportedThinkingLevelsModel(target.Settings.Model), thinking) {
+		thinkingLevels := make(map[string]struct{}, len(preparedSettings.SupportedThinkingValues))
+		for _, level := range preparedSettings.SupportedThinkingValues {
 			thinkingLevels[level] = struct{}{}
 		}
-		questions, fast := slices.Contains(target.EnabledTools, toolspec.ToolAskQuestion), llm.SupportsFastModeProvider(capabilities)
-		result[selector] = workspaceChatDraftLimits{draft: WorkspaceChatDraft{Agent: selector, Supervisor: supervisor, Thinking: thinking, Fast: input.FastModeState != nil && input.FastModeState.Enabled() && fast, Questions: runtime.DefaultQuestionsEnabled && questions, AutoCompaction: runtime.DefaultAutoCompactionEnabled}, fast: fast, questions: questions, thinking: thinkingLevels}
+		baseline := preparedSettings.Baseline
+		result[selector] = workspaceChatDraftLimits{
+			draft: WorkspaceChatDraft{
+				Agent:          selector,
+				Supervisor:     baseline.Supervisor,
+				Thinking:       baseline.Thinking,
+				Fast:           baseline.Fast,
+				Questions:      baseline.Questions,
+				AutoCompaction: baseline.AutoCompaction,
+			},
+			fast:      preparedSettings.FastAvailable,
+			questions: preparedSettings.QuestionsAvailable,
+			thinking:  thinkingLevels,
+		}
 	}
 	return result, nil
 }

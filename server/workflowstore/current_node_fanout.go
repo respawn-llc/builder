@@ -114,7 +114,7 @@ func completeCurrentNodeFanout(
 		}
 		return result, nil
 	}
-	if err := replaceCurrentNodeWithFanout(ctx, q, currentSource.Reference, preparedTargets); err != nil {
+	if err := replaceCurrentNodeWithFanout(ctx, q, currentSource.Reference, preparedTargets, createdAt); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	created := make([]workflow.CurrentNode, 0, len(preparedTargets))
@@ -149,6 +149,7 @@ func replaceCurrentNodeWithFanout(
 	q *sqlitegen.Queries,
 	source workflow.CurrentNodeReference,
 	targets []currentNodeFanoutTarget,
+	associatedAt time.Time,
 ) error {
 	if source.IsBranchScoped() {
 		return errors.New("nested fan-out current node completion is not supported")
@@ -167,7 +168,7 @@ func replaceCurrentNodeWithFanout(
 	if removed != 1 {
 		return errors.New("fan-out source current node is no longer current")
 	}
-	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets)
+	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets, associatedAt)
 }
 
 func updateActiveFanoutBranchContinuationSource(
@@ -223,6 +224,7 @@ func insertTaskFanoutTargets(
 	q *sqlitegen.Queries,
 	taskID workflow.TaskID,
 	targets []workflow.CurrentNode,
+	associatedAt time.Time,
 ) error {
 	if err := validateFanoutTargets(taskID, targets); err != nil {
 		return err
@@ -245,7 +247,7 @@ func insertTaskFanoutTargets(
 		}); err != nil {
 			return err
 		}
-		if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+		if err := insertTaskCurrentNode(ctx, q, target, associatedAt); err != nil {
 			return err
 		}
 	}
@@ -257,6 +259,7 @@ func insertFrozenTaskFanoutTargets(
 	q *sqlitegen.Queries,
 	taskID workflow.TaskID,
 	targets []currentNodeFanoutTarget,
+	associatedAt time.Time,
 ) error {
 	created := make([]workflow.CurrentNode, 0, len(targets))
 	for _, target := range targets {
@@ -287,7 +290,7 @@ func insertFrozenTaskFanoutTargets(
 		if err != nil {
 			return err
 		}
-		if err := insertTaskCurrentNodeWithKind(ctx, q, target.CurrentNode, nodeKind); err != nil {
+		if err := insertTaskCurrentNodeWithKind(ctx, q, target.CurrentNode, nodeKind, associatedAt); err != nil {
 			return err
 		}
 	}

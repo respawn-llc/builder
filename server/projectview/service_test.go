@@ -23,6 +23,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestServiceDeletesProjectMetadataAndSessionArtifacts(t *testing.T) {
@@ -885,7 +886,9 @@ func newProjectViewRuntimeAuthority(
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: settings,
+		Settings:              settings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() tools.FilesystemContext {
 			context, contextErr := runtimewire.NewFilesystemContext(sessionStore.Meta().WorkspaceRoot, sessionStore.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if contextErr != nil {

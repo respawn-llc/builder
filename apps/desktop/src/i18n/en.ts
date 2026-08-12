@@ -151,6 +151,18 @@ export const englishResources = {
       primaryWorkspace: "Primary workspace",
       openProject: "Open project",
       editProject: "Edit {{name}}",
+      prototype: {
+        projectContent: "Project content",
+        boards: "Boards",
+        sessions: "Sessions",
+        subagents: "Subagents",
+        newChatUnavailable: "New chat is not available in this prototype",
+        noBoardsTitle: "No boards yet",
+        noBoardsBody: "Link a workflow to this project to create its first board.",
+        noSessionsTitle: "No sessions",
+        noSessionsBody: "Persisted chats will appear here.",
+        noPromptPreview: "No prompt preview",
+      },
     },
     projectEdit: {
       title: "Project",
@@ -195,22 +207,6 @@ export const englishResources = {
       deleteCommittedNotifyError:
         "Project was deleted, but the main window could not be updated: {{message}}",
       deleteCommittedCloseError: "Project was deleted, but this dialog could not close: {{message}}",
-    },
-    projectWorkspace: {
-      loading: "Loading project",
-      missing: "Project data is unavailable.",
-      tabs: "Project workspace",
-      workflows: "Workflows",
-      sessions: "Sessions",
-    },
-    sessions: {
-      categories: "Session categories",
-      main: "Sessions",
-      subagents: "Subagents",
-      list: "Sessions",
-      emptyTitle: "No sessions",
-      emptyBody: "Persisted sessions will appear here.",
-      loadFailed: "Sessions could not be loaded.",
     },
     board: {
       title: "Workflow board",

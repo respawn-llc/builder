@@ -6,7 +6,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -17,7 +16,7 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	client := &fakeCompactionClient{compactionResponses: []llm.CompactionResponse{
 		remoteCompactionReplacement(autoCompactLimit, 1_000, 200_000),
 	}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   200_000,
 		AutoCompactTokenLimit: autoCompactLimit,

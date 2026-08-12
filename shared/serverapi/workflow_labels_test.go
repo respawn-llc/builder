@@ -20,7 +20,7 @@ func TestWorkflowLabelPublicContractsRoundTrip(t *testing.T) {
 	projectID := "project-1"
 	taskID := "task-1"
 	workflowID := runtimeids.NewWorkflowID()
-	nodeID := "node-1"
+	nodeID := runtimeids.NewGraphEntityID()
 
 	catalog := WorkflowProjectLabelCatalog{
 		ProjectID: projectID,
@@ -169,7 +169,7 @@ func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
 func TestWorkflowDependencyFilterRequestContractsRoundTripAndValidate(t *testing.T) {
 	projectID := "project-1"
 	workflowID := runtimeids.NewWorkflowID()
-	nodeID := "node-1"
+	nodeID := runtimeids.NewGraphEntityID()
 	for _, dependencyFilter := range []*bool{nil, boolPointerForWorkflowTest(false), boolPointerForWorkflowTest(true)} {
 		t.Run(dependencyFilterName(dependencyFilter), func(t *testing.T) {
 			requests := []any{
@@ -514,7 +514,7 @@ func TestWorkflowLabelContractsRejectInvalidCollectionsBeforeUUIDWork(t *testing
 		},
 		{
 			name:    "board cards require a tagged filter",
-			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: runtimeids.NewWorkflowID(), NodeID: "node-1"},
+			request: WorkflowBoardNodeCardsListRequest{ProjectID: projectID, WorkflowID: runtimeids.NewWorkflowID(), NodeID: runtimeids.NewGraphEntityID()},
 			field:   "label_filter.kind",
 			code:    WorkflowRequestErrorRequired,
 		},
@@ -718,7 +718,7 @@ func TestWorkflowFilterBearingRequestRPCValidationPreservesErrorProvenance(t *te
 			request: WorkflowBoardNodeCardsListRequest{
 				ProjectID:  projectID,
 				WorkflowID: runtimeids.NewWorkflowID(),
-				NodeID:     "node-1",
+				NodeID:     runtimeids.NewGraphEntityID(),
 			},
 			wantField:  "label_filter.kind",
 			wantTyped:  true,

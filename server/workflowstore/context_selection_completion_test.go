@@ -39,7 +39,7 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	audit := nodeByKey(t, definition, "audit")
 	reviewNode := nodeByKey(t, definition, "review")
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
@@ -133,9 +133,9 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
-	alternateID := workflow.NodeID("node-alternate-" + workflowID.String())
-	alternateGroupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
-	alternateDoneGroupID := workflow.TransitionGroupID("group-alternate-done-" + workflowID.String())
+	alternateID := testNodeID("node-alternate-" + workflowID.String())
+	alternateGroupID := testTransitionGroupID("group-alternate-" + workflowID.String())
+	alternateDoneGroupID := testTransitionGroupID("group-alternate-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		plan := nodeByKey(t, def, "plan")
 		audit := nodeByKey(t, def, "audit")
@@ -165,7 +165,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-plan-alternate-" + workflowID.String()),
+				ID:                testEdgeID("edge-plan-alternate-" + workflowID.String()),
 				WorkflowID:        workflowID,
 				TransitionGroupID: alternateGroupID,
 				Key:               "alternate",
@@ -176,7 +176,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 				PromptTemplate:    "Alternate.",
 			},
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-alternate-audit-" + workflowID.String()),
+				ID:                testEdgeID("edge-alternate-audit-" + workflowID.String()),
 				WorkflowID:        workflowID,
 				TransitionGroupID: alternateDoneGroupID,
 				Key:               "audit",
@@ -187,7 +187,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 				PromptTemplate:    "Audit.",
 			},
 		)
-		override := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		override := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		override.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		override.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -280,7 +280,7 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 	audit := nodeByKey(t, definition, "audit")
 	reviewNode := nodeByKey(t, definition, "review")
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 		edge.AssigneeSelection = workflow.AssigneeSelectionConfigured
@@ -438,7 +438,7 @@ func appendRetainedTargetReturnToReviewFixture(
 	target workflow.Node,
 	identity string,
 ) {
-	groupID := workflow.TransitionGroupID("group-" + identity + "-return-review-" + workflowID.String())
+	groupID := testTransitionGroupID("group-" + identity + "-return-review-" + workflowID.String())
 	req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 		ID:           groupID,
 		WorkflowID:   workflowID,
@@ -447,7 +447,7 @@ func appendRetainedTargetReturnToReviewFixture(
 		DisplayName:  "Return Review",
 	})
 	req.Edges = append(req.Edges, EdgeRecord{
-		ID:                workflow.EdgeID("edge-" + identity + "-return-review-" + workflowID.String()),
+		ID:                testEdgeID("edge-" + identity + "-return-review-" + workflowID.String()),
 		WorkflowID:        workflowID,
 		TransitionGroupID: groupID,
 		Key:               "return_review",

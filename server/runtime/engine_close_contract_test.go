@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -14,7 +13,7 @@ func TestCloseRejectsUserTurnsAndSteeringWithoutNewWork(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close engine: %v", err)

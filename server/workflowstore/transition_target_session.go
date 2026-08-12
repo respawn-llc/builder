@@ -232,17 +232,21 @@ func resolveRetainedTargetTransitionContext(
 	}
 	activeSource := incomingTransitionActiveSource(source)
 	if manualMoveContext {
-		sourceReference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(sourceNode), nil)
-		if err != nil {
-			return transitionContextResolution{}, err
-		}
-		sourceAssociation, err := currentTaskSessionForNode(ctx, q, sourceReference)
-		if err != nil {
-			return transitionContextResolution{}, err
-		}
-		activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SessionID)
-		if err != nil {
-			return transitionContextResolution{}, err
+		if source == nil ||
+			source.Reference.IsBranchScoped() ||
+			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) {
+			sourceReference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(sourceNode), nil)
+			if err != nil {
+				return transitionContextResolution{}, err
+			}
+			sourceAssociation, err := currentTaskSessionForNode(ctx, q, sourceReference)
+			if err != nil {
+				return transitionContextResolution{}, err
+			}
+			activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SessionID)
+			if err != nil {
+				return transitionContextResolution{}, err
+			}
 		}
 	}
 	decision, err := workflow.EvaluateRetainedTarget(workflow.RetainedTargetEvaluationRequest{

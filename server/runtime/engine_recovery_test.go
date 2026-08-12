@@ -12,7 +12,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -30,7 +29,7 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 			Content: textutil.Value("completed"),
 			Phase:   textutil.Value(llm.MessagePhaseFinal),
 		},
-	}}}, tools.NewRegistry(), Config{
+	}}}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
@@ -94,7 +93,7 @@ func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	_ = mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	if reopened.Meta().PendingModelRecovery != nil {
 		t.Fatal("reopened runtime retained pending model recovery")
@@ -130,7 +129,7 @@ func TestNewTerminalRecoveredStepDoesNotPublishInterruption(t *testing.T) {
 		t.Fatalf("set terminal recovery: %v", err)
 	}
 	reopened := mustOpenTestSession(t, store.Dir())
-	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	_ = mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if reopened.Meta().PendingModelRecovery != nil {
 		t.Fatalf("terminal recovery retained pending metadata: %+v", reopened.Meta().PendingModelRecovery)
 	}
@@ -146,7 +145,7 @@ func TestNewRecoveryWithoutStepIDDiscardsCandidateWithoutInterruption(t *testing
 		t.Fatalf("set missing-step recovery: %v", err)
 	}
 	reopened := mustOpenTestSession(t, store.Dir())
-	_ = mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	_ = mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if reopened.Meta().PendingModelRecovery != nil {
 		t.Fatalf("missing-step recovery retained pending metadata: %+v", reopened.Meta().PendingModelRecovery)
 	}
@@ -195,7 +194,7 @@ func TestNewRepairsRecoveredDanglingToolBeforeReturningReadyEngine(t *testing.T)
 
 	reopened := mustOpenTestSession(t, store.Dir())
 	var events []Event
-	engine := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
@@ -221,7 +220,7 @@ func TestNewRepairsRecoveredDanglingToolBeforeReturningReadyEngine(t *testing.T)
 func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:               "gpt-5",
 		ContextWindowTokens: 2_000,
 	})
@@ -260,7 +259,7 @@ func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:               "gpt-5",
 		ContextWindowTokens: 2_000,
 	})
@@ -272,7 +271,7 @@ func TestReopenedSessionRestoresUsageCheckpointDeltaAccounting(t *testing.T) {
 func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if err := engine.steer("initial", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
 		steeringMessageEventNone,
@@ -332,7 +331,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 	}
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if restored.LastCommittedAssistantFinalAnswer() == nil {
 		t.Fatal("reopened compaction lost the carried final-answer fact")
 	}
@@ -341,7 +340,7 @@ func TestReopenedSessionRestoresLastAssistantFinalAnswerAcrossCompaction(t *test
 func TestExclusiveStepLifecycleClearsPendingRecoveryBeforeSchedulingBackground(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	scheduled := false
 	var recoveryAtSchedule *session.PendingModelRecovery
 	lifecycle := &defaultExclusiveStepLifecycle{
@@ -389,7 +388,7 @@ func TestExclusiveStepLifecycleDoesNotClearSuccessorPendingRecovery(t *testing.T
 		successorStepID     = "00000000-0000-4000-8000-000000000052"
 	)
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
 
 	if err := lifecycle.Run(
@@ -429,7 +428,7 @@ func TestExclusiveStepLifecyclePublishesTerminalActivityBeforeFinishPersistenceF
 	)
 	sink := &finishFailureLifecycleSink{gate: gate, failure: finishErr}
 	var events []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:         "gpt-5",
 		StepLifecycle: sink,
 		OnEvent: func(event Event) {
@@ -597,7 +596,7 @@ func testReopenRepairsToolAttemptBeforeNextModelRequest(
 			Phase:   textutil.Value(llm.MessagePhaseFinal),
 		},
 	}}}
-	engine := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if _, err := engine.SubmitUserMessage(context.Background(), "continue"); err != nil {
 		t.Fatalf("submit after reopen: %v", err)
 	}

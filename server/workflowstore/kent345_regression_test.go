@@ -189,7 +189,7 @@ func newKENT345Fixture(t *testing.T, contextSource workflow.ContextSourceKind) k
 	}
 	return kent345Fixture{
 		ctx: ctx, store: store, binding: binding, cfg: cfg, taskID: task.ID, workflowID: workflowID,
-		implementation: implementation, watcherNodeID: workflow.NodeID("node-pr-watcher-" + workflowID.String()),
+		implementation: implementation, watcherNodeID: testNodeID("node-pr-watcher-" + workflowID.String()),
 		firstReview: firstReview, implementationA: implementationA,
 	}
 }
@@ -235,11 +235,11 @@ func createKENT345Workflow(
 		}
 	}
 	suffix := created.ID.String()
-	implementationID := workflow.NodeID("node-implementation-" + suffix)
-	reviewID := workflow.NodeID("node-pr-autoreview-" + suffix)
-	watcherID := workflow.NodeID("node-pr-watcher-" + suffix)
+	implementationID := testNodeID("node-implementation-" + suffix)
+	reviewID := testNodeID("node-pr-autoreview-" + suffix)
+	watcherID := testNodeID("node-pr-watcher-" + suffix)
 	group := func(name string) workflow.TransitionGroupID {
-		return workflow.TransitionGroupID("group-" + name + "-" + suffix)
+		return testTransitionGroupID("group-" + name + "-" + suffix)
 	}
 	saveWorkflowGraphFixture(t, ctx, store, created.ID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.Nodes = append(req.Nodes,
@@ -256,12 +256,12 @@ func createKENT345Workflow(
 			TransitionGroupRecord{ID: group("done"), WorkflowID: created.ID, SourceNodeID: reviewID, TransitionID: "done", DisplayName: "Done"},
 		)
 		req.Edges = append(req.Edges,
-			kent345Edge(created.ID, workflow.EdgeID("edge-start-"+suffix), group("start"), "start", implementationID, workflow.ContextModeNewSession, workflow.ContextSource{}, "Implement."),
-			kent345Edge(created.ID, workflow.EdgeID("edge-review-"+suffix), group("review"), "initial_review", reviewID, workflow.ContextModeContinueSession, workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}, "Review."),
-			kent345Edge(created.ID, workflow.EdgeID("edge-reimplement-"+suffix), group("reimplement"), "reimplement", implementationID, workflow.ContextModeNewSession, workflow.ContextSource{}, "Reimplement."),
-			kent345Edge(created.ID, workflow.EdgeID("edge-watch-"+suffix), group("watch"), "watch", watcherID, workflow.ContextModeNewSession, workflow.ContextSource{}, ""),
-			kent345Edge(created.ID, workflow.EdgeID("edge-watcher-review-"+suffix), group("watcher-review"), "watcher_review", reviewID, workflow.ContextModeContinueSession, workflow.ContextSource{Kind: retainedTargetSource}, "Review updated implementation."),
-			kent345Edge(created.ID, workflow.EdgeID("edge-done-"+suffix), group("done"), "done", doneID, workflow.ContextModeNewSession, workflow.ContextSource{}, ""),
+			kent345Edge(created.ID, testEdgeID("edge-start-"+suffix), group("start"), "start", implementationID, workflow.ContextModeNewSession, workflow.ContextSource{}, "Implement."),
+			kent345Edge(created.ID, testEdgeID("edge-review-"+suffix), group("review"), "initial_review", reviewID, workflow.ContextModeContinueSession, workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}, "Review."),
+			kent345Edge(created.ID, testEdgeID("edge-reimplement-"+suffix), group("reimplement"), "reimplement", implementationID, workflow.ContextModeNewSession, workflow.ContextSource{}, "Reimplement."),
+			kent345Edge(created.ID, testEdgeID("edge-watch-"+suffix), group("watch"), "watch", watcherID, workflow.ContextModeNewSession, workflow.ContextSource{}, ""),
+			kent345Edge(created.ID, testEdgeID("edge-watcher-review-"+suffix), group("watcher-review"), "watcher_review", reviewID, workflow.ContextModeContinueSession, workflow.ContextSource{Kind: retainedTargetSource}, "Review updated implementation."),
+			kent345Edge(created.ID, testEdgeID("edge-done-"+suffix), group("done"), "done", doneID, workflow.ContextModeNewSession, workflow.ContextSource{}, ""),
 		)
 	})
 	return created.ID

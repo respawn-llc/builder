@@ -47,7 +47,7 @@ INSERT INTO session_workflow_node_associations (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 82); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`
@@ -131,6 +131,7 @@ INSERT INTO workflow_nodes (
 		{name: "start", taskID: "task-matrix-start", nodeID: "node-start", wantKind: sql.NullString{String: "absent", Valid: true}},
 		{name: "agent with Session", taskID: "task-matrix-agent-session", nodeID: "node-agent", sessionID: "session-matrix-agent", wantLegacy: 1},
 		{name: "agent without Session", taskID: "task-matrix-agent-fresh", nodeID: "node-agent", wantKind: sql.NullString{String: "deferred_self", Valid: true}},
+		{name: "unbound retained Agent", taskID: "task-matrix-agent-retained", nodeID: "node-agent", wantLegacy: 1},
 		{name: "Script", taskID: "task-matrix-script", nodeID: "node-script-matrix", wantLegacy: 1},
 		{name: "Join", taskID: "task-matrix-join", nodeID: "node-join-matrix", wantLegacy: 1},
 		{name: "Terminal", taskID: "task-matrix-terminal", nodeID: "node-done", wantKind: sql.NullString{String: "absent", Valid: true}},
@@ -156,12 +157,22 @@ INSERT INTO task_current_nodes (
 			test.nodeID,
 			sql.NullString{String: test.sessionID, Valid: test.sessionID != ""},
 		)
+		if test.name == "unbound retained Agent" {
+			execSeed(t, db, "retained Agent entering edge mode", `
+UPDATE workflow_edges
+SET context_mode = 'continue_session'
+WHERE id = 'edge-start-1'`)
+			execSeed(t, db, "retained Agent entering edge", `
+UPDATE task_current_nodes
+SET entered_by_edge_id = 'edge-start-1'
+WHERE task_id = ?`, test.taskID)
+		}
 	}
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 82); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for _, test := range cases {
@@ -237,6 +248,12 @@ INSERT INTO workflow_nodes (
 			wantTargetIntent: "create",
 			wantSourceKind:   "deferred_self",
 		},
+		{
+			name:             "unbound retained Agent",
+			targetNodeID:     "node-agent",
+			wantTargetIntent: "create",
+			wantSourceKind:   "legacy",
+		},
 		{name: "Script", targetNodeID: "node-script-approval", wantTargetIntent: "no_agent", wantSourceKind: "legacy"},
 		{name: "Join", targetNodeID: "node-join-approval", wantTargetIntent: "no_agent", wantSourceKind: "legacy"},
 		{name: "Terminal", targetNodeID: "node-done", wantTargetIntent: "no_agent", wantSourceKind: "absent"},
@@ -278,12 +295,23 @@ INSERT INTO task_pending_approval_branches (
 			sql.NullString{String: test.targetSessionID, Valid: test.targetSessionID != ""},
 			sql.NullString{String: test.targetSessionID, Valid: test.targetSessionID != ""},
 		)
+		if test.name == "agent without Session" {
+			execSeed(t, db, "fresh pending Approval context mode", `
+UPDATE task_pending_approval_branches
+SET effective_edge_configuration_json = json_object('context_mode', 'new_session')
+WHERE approval_id = ?`, approvalID)
+		} else if test.name == "unbound retained Agent" {
+			execSeed(t, db, "retained pending Approval context mode", `
+UPDATE task_pending_approval_branches
+SET effective_edge_configuration_json = json_object('context_mode', 'continue_session')
+WHERE approval_id = ?`, approvalID)
+		}
 	}
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 82); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for index, test := range cases {
@@ -353,7 +381,7 @@ INSERT INTO task_active_fanout_branches (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 82); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`

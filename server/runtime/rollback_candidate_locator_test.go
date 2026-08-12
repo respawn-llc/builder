@@ -8,7 +8,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -17,7 +16,7 @@ import (
 func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestart(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	if err := eng.steer(
 		"user-step",
@@ -71,7 +70,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	if err := eng.Close(); err != nil {
 		t.Fatalf("close compacted engine: %v", err)
 	}
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, tools.NewRegistry(), Config{})
+	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, newTestToolRegistry(t), Config{})
 	t.Cleanup(func() {
 		if err := reopened.Close(); err != nil {
 			t.Errorf("close reopened engine: %v", err)
@@ -123,7 +122,7 @@ func TestLatestRollbackCandidateLocatorSurvivesCandidateFreeCompactionsAndRestar
 	if err != nil {
 		t.Fatalf("fork at newer rollback target: %v", err)
 	}
-	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, tools.NewRegistry(), Config{})
+	forked := mustNewTestEngine(t, forkedStore, &fakeClient{}, newTestToolRegistry(t), Config{})
 	t.Cleanup(func() {
 		if err := forked.Close(); err != nil {
 			t.Errorf("close forked engine: %v", err)
@@ -162,7 +161,7 @@ func TestQueuedUserSubmissionUpdatesLatestRollbackCandidateLocator(t *testing.T)
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("queued answer")},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{})
 
 	mustQueueUserMessage(t, eng, "queued rollback candidate")
 	if _, err := eng.SubmitQueuedUserMessages(context.Background()); err != nil {
@@ -192,7 +191,7 @@ func TestRuntimeRestoreRejectsMalformedPersistedRollbackCandidateLocator(t *test
 	eventLog := mustMaterializeTestEventLog(t, store)
 	appendMalformedRollbackCandidateHistoryReplacement(t, store)
 
-	engine, err := New(store, eventLog, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine, err := New(store, eventLog, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if engine != nil || !errors.Is(err, rollbacktarget.ErrInvalidCandidateLocator) {
 		t.Fatalf("runtime restore result = engine:%+v error:%v", engine, err)
 	}

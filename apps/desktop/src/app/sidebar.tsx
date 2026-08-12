@@ -10,6 +10,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type PointerEvent,
+  type ReactNode,
 } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -27,6 +28,9 @@ import {
   sidebarResizeBoundsForShellWidth,
   sidebarResizeStepPx,
   resolveSidebarWidth,
+  type SidebarDestination,
+  type SidebarMode,
+  type SidebarPhase,
   type SidebarResizeBounds,
 } from "@/app-facade";
 
@@ -207,107 +211,133 @@ export function SidebarHost() {
 
   return (
     <SidebarHeaderActionProvider>
-      <aside
-        aria-labelledby={titleId}
-        className={cx(
-          "app-region-no-drag app-sidebar-panel island-glass z-10 overflow-hidden",
-          "w-[var(--app-sidebar-width)] min-w-[var(--app-sidebar-width)] rounded-[var(--radius-xl)]",
-          mode === "shift" &&
-            "app-sidebar-panel-shift relative mr-[var(--app-sidebar-inset)] mt-[var(--app-sidebar-inset)] h-[calc(100%-(var(--app-sidebar-inset)*2))] shrink-0 self-start",
-          mode === "overlay" &&
-            "app-sidebar-panel-overlay fixed top-[calc(var(--native-titlebar-height)+var(--app-sidebar-inset))] right-[var(--app-sidebar-inset)] bottom-[var(--app-sidebar-inset)]",
-          phase === "closing" && "app-sidebar-panel-closing",
-        )}
-        data-testid="app-sidebar-host"
-        data-mode={mode}
-        data-state={phase}
-        ref={sidebarRef}
-        role="complementary"
-        style={sidebarStyle}
-      >
-        <div
-          aria-label={t("app.resizeSidebar")}
-          aria-orientation="vertical"
-          aria-valuemax={resizeBounds.maxWidthPx}
-          aria-valuemin={resizeBounds.minWidthPx}
-          aria-valuenow={sidebarWidthPx}
+      <SidebarFrame mode={mode} phase={phase} resizing={resizing} style={sidebarStyle}>
+        <aside
+          aria-labelledby={titleId}
           className={cx(
-            "absolute top-0 bottom-0 left-0 z-20 w-3 cursor-ew-resize touch-none",
-            "after:absolute after:top-[var(--space-4)] after:bottom-[var(--space-4)] after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition-colors",
-            "hover:after:bg-[var(--color-primary)] focus-visible:outline-none focus-visible:after:bg-[var(--color-primary)]",
-            resizing && "after:bg-[var(--color-primary)]",
+            "app-region-no-drag app-sidebar-panel island-glass z-10 overflow-hidden",
+            "w-[var(--app-sidebar-width)] min-w-[var(--app-sidebar-width)] rounded-[var(--radius-xl)]",
+            mode === "shift" &&
+              "app-sidebar-panel-shift absolute top-[var(--app-sidebar-inset)] right-[var(--app-sidebar-inset)] bottom-[var(--app-sidebar-inset)]",
+            mode === "overlay" &&
+              "app-sidebar-panel-overlay fixed top-[calc(var(--native-titlebar-height)+var(--app-sidebar-inset))] right-[var(--app-sidebar-inset)] bottom-[var(--app-sidebar-inset)]",
+            phase === "closing" && "app-sidebar-panel-closing",
           )}
-          data-testid="app-sidebar-resize-handle"
-          onKeyDown={resizeWithKeyboard}
-          onPointerCancel={stopResize}
-          onPointerDown={startResize}
-          onPointerMove={resizeFromPointer}
-          onPointerUp={stopResize}
-          role="separator"
-          tabIndex={0}
-        />
-        {/* The title column is content-sized so a long node/edge id ellipsizes inside the flexible
+          data-testid="app-sidebar-host"
+          data-mode={mode}
+          data-state={phase}
+          ref={sidebarRef}
+          role="complementary"
+          style={sidebarStyle}
+        >
+          <div
+            aria-label={t("app.resizeSidebar")}
+            aria-orientation="vertical"
+            aria-valuemax={resizeBounds.maxWidthPx}
+            aria-valuemin={resizeBounds.minWidthPx}
+            aria-valuenow={sidebarWidthPx}
+            className={cx(
+              "absolute top-0 bottom-0 left-0 z-20 w-3 cursor-ew-resize touch-none",
+              "after:absolute after:top-[var(--space-4)] after:bottom-[var(--space-4)] after:left-1/2 after:w-px after:-translate-x-1/2 after:rounded-full after:bg-transparent after:transition-colors",
+              "hover:after:bg-[var(--color-primary)] focus-visible:outline-none focus-visible:after:bg-[var(--color-primary)]",
+              resizing && "after:bg-[var(--color-primary)]",
+            )}
+            data-testid="app-sidebar-resize-handle"
+            onKeyDown={resizeWithKeyboard}
+            onPointerCancel={stopResize}
+            onPointerDown={startResize}
+            onPointerMove={resizeFromPointer}
+            onPointerUp={stopResize}
+            role="separator"
+            tabIndex={0}
+          />
+          {/* The title column is content-sized so a long node/edge id ellipsizes inside the flexible
             action track instead of forcing the title to truncate. The action track is floored at
             min-content (the fixed-size buttons), so a pathologically long title truncates the title
             rather than pushing the inbox/pop-out/delete controls off the header. */}
-        <header
-          className="absolute top-0 right-0 left-0 z-10 grid grid-cols-[auto_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-[var(--space-3)] border-b border-[var(--color-outline)] bg-[var(--color-island-0)] px-[var(--space-4)] py-[var(--space-3)] [backdrop-filter:blur(8px)]"
-          ref={headerRef}
-        >
-          <div className="flex items-center gap-[var(--space-2)]" data-testid="app-sidebar-leading-controls">
-            <IconTooltipButton
-              disabled={!closeAvailable}
-              label={t("app.close")}
-              onClick={close}
-            >
-              <X aria-hidden="true" size={18} strokeWidth={1.5} />
-            </IconTooltipButton>
-            {canGoBack ? (
-              <IconTooltipButton
-                disabled={!backAvailable}
-                label={t("app.back")}
-                onClick={back}
-              >
-                <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.5} />
-              </IconTooltipButton>
-            ) : null}
-          </div>
-          <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
-            {title}
-          </h2>
-          <div className="flex min-w-0 items-center justify-end gap-[var(--space-2)] justify-self-end">
-            <SidebarHeaderActionSlot />
-          </div>
-        </header>
-        <div
-          className={cx(
-            "absolute right-0 bottom-0 left-0 min-h-0",
-            activeDestination.kind === "workflowEditor"
-              ? "top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]"
-              : activeDestination.kind === "taskDetail" || activeDestination.kind === "projectEdit"
-                ? "top-0 overflow-hidden"
-                : "top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]",
-          )}
-        >
-          <PageBoundary>
+          <header
+            className="absolute top-0 right-0 left-0 z-10 grid grid-cols-[auto_minmax(0,auto)_minmax(min-content,1fr)] items-center gap-[var(--space-3)] border-b border-[var(--color-outline)] bg-[var(--color-island-0)] px-[var(--space-4)] py-[var(--space-3)] [backdrop-filter:blur(8px)]"
+            ref={headerRef}
+          >
             <div
-              className="app-sidebar-page h-full"
-              data-direction={transitionDirection ?? undefined}
-              data-testid="app-sidebar-page"
+              className="flex items-center gap-[var(--space-2)]"
+              data-testid="app-sidebar-leading-controls"
             >
-              <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
-                <SidebarDestinationView
-                  destination={activeDestination}
-                  navigator={openPage.navigator}
-                  retainedState={openPage.retainedState}
-                />
-              </SidebarHeaderOffsetContext.Provider>
+              <IconTooltipButton disabled={!closeAvailable} label={t("app.close")} onClick={close}>
+                <X aria-hidden="true" size={18} strokeWidth={1.5} />
+              </IconTooltipButton>
+              {canGoBack ? (
+                <IconTooltipButton disabled={!backAvailable} label={t("app.back")} onClick={back}>
+                  <ArrowLeft aria-hidden="true" size={18} strokeWidth={1.5} />
+                </IconTooltipButton>
+              ) : null}
             </div>
-          </PageBoundary>
-        </div>
-      </aside>
+            <h2 className="m-0 min-w-0 truncate text-[1.05rem] font-bold" id={titleId}>
+              {title}
+            </h2>
+            <div className="flex min-w-0 items-center justify-end gap-[var(--space-2)] justify-self-end">
+              <SidebarHeaderActionSlot />
+            </div>
+          </header>
+          <div className={sidebarContentClassName(activeDestination.kind)}>
+            <PageBoundary>
+              <div
+                className="app-sidebar-page h-full"
+                data-direction={transitionDirection ?? undefined}
+                data-testid="app-sidebar-page"
+              >
+                <SidebarHeaderOffsetContext.Provider value={headerOffsetPx}>
+                  <SidebarDestinationView
+                    destination={activeDestination}
+                    navigator={openPage.navigator}
+                    retainedState={openPage.retainedState}
+                  />
+                </SidebarHeaderOffsetContext.Provider>
+              </div>
+            </PageBoundary>
+          </div>
+        </aside>
+      </SidebarFrame>
     </SidebarHeaderActionProvider>
   );
+}
+
+function SidebarFrame({
+  children,
+  mode,
+  phase,
+  resizing,
+  style,
+}: Readonly<{
+  children: ReactNode;
+  mode: SidebarMode;
+  phase: SidebarPhase;
+  resizing: boolean;
+  style: SidebarStyle;
+}>) {
+  return (
+    <div
+      className={cx(
+        mode === "shift" ? "app-sidebar-shift-slot relative h-full shrink-0" : "contents",
+        mode === "shift" && phase === "closing" && "app-sidebar-shift-slot-closing",
+        mode === "shift" && resizing && "app-sidebar-shift-slot-resizing",
+      )}
+      style={style}
+    >
+      {children}
+    </div>
+  );
+}
+
+function sidebarContentClassName(kind: SidebarDestination["kind"]): string {
+  const base = "absolute right-0 bottom-0 left-0 min-h-0";
+  if (kind === "workflowEditor") {
+    return `${base} top-[var(--app-sidebar-header-height)] overflow-hidden p-[var(--space-2)]`;
+  }
+  if (kind === "taskDetail" || kind === "projectEdit") {
+    return `${base} top-0 overflow-hidden`;
+  }
+  return `${base} top-0 overflow-y-auto px-[var(--space-4)] pb-[var(--space-4)] pt-[calc(var(--app-sidebar-header-height)+var(--space-4))]`;
 }
 
 function requireCurrentPage(page: ReturnType<typeof useSidebarCurrentPage>) {

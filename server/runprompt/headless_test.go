@@ -1163,7 +1163,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 		server.Close()
 	}()
 
-	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: server.URL}); err != nil {
+	if err := store.SetContinuationContext(session.ContinuationContext{OpenAIBaseURL: textutil.Value(server.URL)}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
 	}
 
@@ -1212,7 +1212,7 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 			t.Fatalf("continued run announced a new session: %+v", progress)
 		}
 	}
-	if got := store.Meta().Continuation; got == nil || got.OpenAIBaseURL != server.URL {
+	if got := store.Meta().Continuation; got == nil || got.OpenAIBaseURL == nil || *got.OpenAIBaseURL != server.URL {
 		t.Fatalf("expected persisted continuation preserved, got %+v", got)
 	}
 	replayed, err := client.RunPrompt(context.Background(), request, nil)

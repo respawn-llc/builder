@@ -8,7 +8,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -23,7 +22,7 @@ func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(7)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeDefault,
 	})
@@ -64,7 +63,7 @@ func TestVerboseCacheReuseDropPersistsTypedWarning(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(4)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeVerbose,
 	})
@@ -104,7 +103,7 @@ func TestReviewerCacheLineagePersistsScopedWarning(t *testing.T) {
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(10)}},
 		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
 	}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeVerbose,
 	})

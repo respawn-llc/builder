@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func ptrMeta(meta Meta) *Meta {
@@ -77,7 +78,7 @@ func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if err := target.SetContinuationContext(ContinuationContext{OpenAIBaseURL: "http://target.local/v1"}); err != nil {
+	if err := target.SetContinuationContext(ContinuationContext{OpenAIBaseURL: textutil.Value("http://target.local/v1")}); err != nil {
 		t.Fatalf("set continuation context: %v", err)
 	}
 
@@ -95,7 +96,7 @@ func TestOpenByIDUsesPersistedSessionResolver(t *testing.T) {
 	if meta.WorkspaceRoot != "/tmp/work-b" {
 		t.Fatalf("expected workspace root from target session, got %q", meta.WorkspaceRoot)
 	}
-	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != "http://target.local/v1" {
+	if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL == nil || *meta.Continuation.OpenAIBaseURL != "http://target.local/v1" {
 		t.Fatalf("expected continuation context from target session, got %+v", meta.Continuation)
 	}
 }

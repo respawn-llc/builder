@@ -8,7 +8,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -33,7 +32,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 			Content: textutil.Value("original"),
 		},
 		Usage: llm.Usage{WindowTokens: 200000},
-	}}}, tools.NewRegistry(), Config{
+	}}}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			events = append(events, event)
@@ -80,7 +79,7 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 }
 
 func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	var events []Event
 	engine.cfg.OnEvent = func(event Event) {
 		events = append(events, event)
@@ -104,7 +103,7 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 }
 
 func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
 	engine.cfg.OnEvent = func(event Event) {
 		switch event.Kind {
@@ -127,7 +126,7 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 }
 
 func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	stepID := "11111111-1111-4111-8111-111111111111"
 	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
@@ -194,7 +193,7 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 					engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
 						Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("answer")},
 						Usage:     llm.Usage{WindowTokens: 200000},
-					}}}, tools.NewRegistry(), Config{
+					}}}, newTestToolRegistry(t), Config{
 						Model:   "gpt-5",
 						OnEvent: func(event Event) { events = append(events, event) },
 					})

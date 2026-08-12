@@ -693,7 +693,7 @@ SET
     legacy_materialized = 0
 WHERE task_id = ?
   AND transition_branch_key IS NULL`,
-		string(nodeID),
+		testGraphEntityBlob(t, string(nodeID)),
 		persistedSessionID,
 		string(source.Kind()),
 		persistedSourceSessionID,
