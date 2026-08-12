@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 )
+
 type GoalAvailability string
+
 const (
 	GoalAvailabilityAvailable              GoalAvailability = "available"
 	GoalAvailabilityAgentCapabilityMissing GoalAvailability = "agent_capability_missing"
@@ -19,6 +21,7 @@ func (a GoalAvailability) Validate() error {
 		return fmt.Errorf("unknown goal availability %q", a)
 	}
 }
+
 type Goal struct {
 	ID        string            `json:"id"`
 	Objective string            `json:"objective"`
@@ -33,6 +36,7 @@ func (g Goal) Validate() error {
 	}
 	return nil
 }
+
 type GoalEnvelope struct {
 	Goal         *Goal            `json:"goal,omitempty"`
 	Availability GoalAvailability `json:"availability"`
@@ -46,6 +50,7 @@ type GoalMutationResult struct {
 	Pending      *GoalPreview      `json:"pending,omitempty"`
 	Availability *GoalAvailability `json:"availability,omitempty"`
 }
+
 func (g GoalEnvelope) Validate() error {
 	if err := g.Availability.Validate(); err != nil || g.Goal == nil {
 		return err
