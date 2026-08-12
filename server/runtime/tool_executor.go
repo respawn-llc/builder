@@ -59,8 +59,8 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		call := prepared.call
 		toolID := prepared.toolID
 		knownTool := prepared.knownTool
-		executableCall := prepared.call
-		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
+		executableCall := prepared.executableCall
+		transcriptCall := normalizeToolCallForTranscript(call, e.transcriptWorkingDir())
 		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
@@ -294,6 +294,7 @@ func toolResultHasCompletedOutcome(result tools.Result) bool {
 
 type executorToolCall struct {
 	call             llm.ToolCall
+	executableCall   llm.ToolCall
 	toolID           toolspec.ID
 	knownTool        bool
 	inputErr         error
@@ -325,10 +326,11 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 			}
 		}
 		prepared = append(prepared, executorToolCall{
-			call:      executableCall,
-			toolID:    toolID,
-			knownTool: knownTool,
-			inputErr:  inputErr,
+			call:           call,
+			executableCall: executableCall,
+			toolID:         toolID,
+			knownTool:      knownTool,
+			inputErr:       inputErr,
 		})
 		if !knownTool || toolID != toolspec.ToolAskQuestion || !askQuestionMaterializable(engine) {
 			continue
@@ -347,7 +349,7 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 	}
 	for ordinal, index := range askCandidateIndexes {
 		promptIDs := append([]string(nil), askCandidatePromptIDs...)
-		call := prepared[index].call
+		call := prepared[index].executableCall
 		prepared[index].askQuestionBatch = &tools.AskQuestionBatchMetadata{
 			Origin:              tools.AskQuestionOriginModelTool,
 			RunID:               runID,

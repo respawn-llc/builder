@@ -64,6 +64,7 @@ func (p *canonicalInputProbe) Call(_ context.Context, call tools.Call) (tools.Re
 
 func TestExecuteToolCallsPassesOnlyPreparedCanonicalInputToHandler(t *testing.T) {
 	probe := &canonicalInputProbe{}
+	var started *llm.ToolCall
 	engine := mustNewTestEngine(
 		t,
 		mustCreateTestSession(t),
@@ -72,19 +73,27 @@ func TestExecuteToolCallsPassesOnlyPreparedCanonicalInputToHandler(t *testing.T)
 			ID:      toolspec.ToolEdit,
 			Handler: probe,
 		}),
-		Config{Model: "gpt-5"},
+		Config{
+			Model: "gpt-5",
+			OnEvent: func(event Event) {
+				if event.Kind == EventToolCallStarted {
+					started = event.ToolCall
+				}
+			},
+		},
 	)
 
+	rawInput := json.RawMessage(`{
+		"filePath":"a.go",
+		"oldText":"old",
+		"newText":"new",
+		"replaceAll":true,
+		"unknown":"drop"
+	}`)
 	results, err := engine.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-		ID:   "canonical-edit",
-		Name: "replace",
-		Input: json.RawMessage(`{
-			"filePath":"a.go",
-			"oldText":"old",
-			"newText":"new",
-			"replaceAll":true,
-			"unknown":"drop"
-		}`),
+		ID:    "canonical-edit",
+		Name:  "replace",
+		Input: rawInput,
 	}})
 	if err != nil {
 		t.Fatalf("execute canonical edit: %v", err)
@@ -105,6 +114,12 @@ func TestExecuteToolCallsPassesOnlyPreparedCanonicalInputToHandler(t *testing.T)
 		input["new_string"] != "new" ||
 		input["replace_all"] != true {
 		t.Fatalf("handler input = %#v, want canonical fields only", input)
+	}
+	if started == nil {
+		t.Fatal("tool call start was not emitted")
+	}
+	if started.Name != "replace" || string(started.Input) != string(rawInput) {
+		t.Fatalf("started tool call = %+v, want raw provider name and input %s", started, rawInput)
 	}
 }
 

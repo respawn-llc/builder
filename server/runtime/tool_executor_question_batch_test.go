@@ -47,7 +47,7 @@ func TestPrepareExecutorToolCallsAssignsQuestionBatchOutsideWorkflow(t *testing.
 			len(call.askQuestionBatch.BatchPromptIDs) != 2 {
 			t.Fatalf("prepared call %d batch = %+v", index, call.askQuestionBatch)
 		}
-		if call.askQuestionBatch.BatchPromptIDs[index] != call.call.ID {
+		if call.askQuestionBatch.BatchPromptIDs[index] != call.executableCall.ID {
 			t.Fatalf("prepared call %d prompt order = %v", index, call.askQuestionBatch.BatchPromptIDs)
 		}
 	}
@@ -110,7 +110,7 @@ func TestPrepareExecutorToolCallsExcludesRejectedQuestionsFromCanonicalBatch(t *
 		)
 	}
 	var canonical map[string]any
-	if err := json.Unmarshal(prepared[0].call.Input, &canonical); err != nil {
+	if err := json.Unmarshal(prepared[0].executableCall.Input, &canonical); err != nil {
 		t.Fatalf("decode canonical first question: %v", err)
 	}
 	if len(canonical) != 1 || canonical["question"] != "First?" {
