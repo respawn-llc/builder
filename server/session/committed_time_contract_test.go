@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"core/shared/transcript"
 )
 
 func TestEventPayloadCommittedTimeEligibility(t *testing.T) {
@@ -167,7 +169,10 @@ func TestHistoryReplacementCommittedTimeEligibility(t *testing.T) {
 
 func TestEventRecordCommittedTimeEnvelopeContract(t *testing.T) {
 	content := "message"
-	present := int64(0)
+	present, err := transcript.NewCommittedAtUnixMs(0)
+	if err != nil {
+		t.Fatalf("create committed time: %v", err)
+	}
 	record, err := newEventRecord(1, nil, MessageRecord{
 		Role:    MessageRoleUser,
 		Content: &content,
@@ -186,7 +191,7 @@ func TestEventRecordCommittedTimeEnvelopeContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode event record: %v", err)
 	}
-	if got := decoded.CommittedAtUnixMs(); got == nil || *got != present {
+	if got := decoded.CommittedAtUnixMs(); got == nil || got.UnixMs() != present.UnixMs() {
 		t.Fatalf("decoded committed time = %v, want %d", got, present)
 	}
 
@@ -216,7 +221,7 @@ func TestEventRecordRejectsExplicitNullCommittedTime(t *testing.T) {
 
 func TestEventRecordRejectsMisplacedCommittedTime(t *testing.T) {
 	content := "notice"
-	committedAt := int64(1)
+	committedAt := transcript.CommittedAtUnixMs(1)
 	if _, err := newEventRecord(1, nil, MessageRecord{
 		Role:        MessageRoleUser,
 		MessageType: messageTypePointer(MessageTypeCompactionSummary),
@@ -267,12 +272,12 @@ func TestAppendBatchSamplesOneCommittedTimeForEligibleRecords(t *testing.T) {
 	}
 	for _, index := range []int{0, 2} {
 		got := records[index].CommittedAtUnixMs()
-		if got == nil || *got != now.UnixMilli() {
+		if got == nil || got.UnixMs() != now.UnixMilli() {
 			t.Fatalf("record %d committed time = %v, want %d", index, got, now.UnixMilli())
 		}
 	}
 	if got := records[1].CommittedAtUnixMs(); got != nil {
-		t.Fatalf("ineligible record committed time = %d, want absent", *got)
+		t.Fatalf("ineligible record committed time = %d, want absent", got.UnixMs())
 	}
 }
 
@@ -367,7 +372,7 @@ func sameCommittedTime(left, right EventRecord) bool {
 	if leftTime == nil || rightTime == nil {
 		return leftTime == nil && rightTime == nil
 	}
-	return *leftTime == *rightTime
+	return leftTime.UnixMs() == rightTime.UnixMs()
 }
 
 func TestForkPreservesAbsentCommittedTimeOnEligibleHistoricalRecords(t *testing.T) {
@@ -405,7 +410,7 @@ func TestForkPreservesAbsentCommittedTimeOnEligibleHistoricalRecords(t *testing.
 	}
 	for index, record := range records {
 		if got := record.CommittedAtUnixMs(); got != nil {
-			t.Fatalf("fork historical record %d committed time = %d, want absent", index, *got)
+			t.Fatalf("fork historical record %d committed time = %d, want absent", index, got.UnixMs())
 		}
 	}
 }

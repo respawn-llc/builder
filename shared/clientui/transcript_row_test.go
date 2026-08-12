@@ -25,7 +25,7 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 }
 
 func TestTranscriptMessageRowsValidateCommittedTime(t *testing.T) {
-	outOfRange := transcript.MaxCommittedAtUnixMs + 1
+	outOfRange := transcript.CommittedAtUnixMs(transcript.MaxCommittedAtUnixMs + 1)
 	user := TranscriptUserRow{StepID: transcriptTestStepID(t), Text: "user", CommittedAtUnixMs: &outOfRange}
 	if err := user.Validate(); err == nil {
 		t.Fatal("user row accepted out-of-range committed time")

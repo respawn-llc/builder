@@ -17,7 +17,7 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 		stepID    = "22222222-2222-4222-8222-222222222222"
 	)
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 17}
-	committedAt := int64(0)
+	committedAt := transcript.CommittedAtUnixMs(0)
 	provenance.CommittedAtUnixMs = &committedAt
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
 		StepID:              stepID,
@@ -74,7 +74,7 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 
 func TestCommittedRowProjectionOmitsTimeForHistoricalAndNonMessageRows(t *testing.T) {
 	const stepID = "22222222-2222-4222-8222-222222222222"
-	committedAt := int64(123)
+	committedAt := transcript.CommittedAtUnixMs(123)
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 7, CommittedAtUnixMs: &committedAt}
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
 		{StepID: stepID, Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: "historical", CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 6}},

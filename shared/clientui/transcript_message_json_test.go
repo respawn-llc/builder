@@ -208,7 +208,10 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 
 func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T) {
 	stepID := transcriptTestStepID(t)
-	committedAt := int64(-1)
+	committedAt, err := transcript.NewCommittedAtUnixMs(-1)
+	if err != nil {
+		t.Fatalf("create committed time: %v", err)
+	}
 	presentRows := []TranscriptCommittedRow{
 		{
 			Visibility: transcript.EntryVisibilityOngoing,
@@ -240,12 +243,12 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 		}
 		switch got.Kind {
 		case TranscriptRowUser:
-			if got.User.CommittedAtUnixMs == nil || *got.User.CommittedAtUnixMs != committedAt {
-				t.Fatalf("round-trip user timestamp = %v, want %d", got.User.CommittedAtUnixMs, committedAt)
+			if got.User.CommittedAtUnixMs == nil || got.User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("round-trip user timestamp = %v, want %d", got.User.CommittedAtUnixMs, committedAt.UnixMs())
 			}
 		case TranscriptRowAssistant:
-			if got.Assistant.CommittedAtUnixMs == nil || *got.Assistant.CommittedAtUnixMs != committedAt {
-				t.Fatalf("round-trip assistant timestamp = %v, want %d", got.Assistant.CommittedAtUnixMs, committedAt)
+			if got.Assistant.CommittedAtUnixMs == nil || got.Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("round-trip assistant timestamp = %v, want %d", got.Assistant.CommittedAtUnixMs, committedAt.UnixMs())
 			}
 		}
 	}

@@ -46,7 +46,7 @@ type TranscriptUserRowFact struct {
 	Text              string
 	CondensedText     string
 	RollbackTargetID  *string
-	CommittedAtUnixMs *int64
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 type TranscriptAssistantRowFact struct {
@@ -54,7 +54,7 @@ type TranscriptAssistantRowFact struct {
 	CondensedText     string
 	Phase             llm.MessagePhase
 	StreamID          *uuid.UUID
-	CommittedAtUnixMs *int64
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 type TranscriptToolRowFact struct {
@@ -310,7 +310,7 @@ func transcriptCommittedRowFactsFromMessage(
 	return facts
 }
 
-func committedAtUnixMs(provenance *TranscriptCommittedRowProvenance) *int64 {
+func committedAtUnixMs(provenance *TranscriptCommittedRowProvenance) *transcript.CommittedAtUnixMs {
 	if provenance == nil || provenance.CommittedAtUnixMs == nil {
 		return nil
 	}

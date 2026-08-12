@@ -1,7 +1,6 @@
 package clientui
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -41,22 +40,17 @@ type TranscriptUserRow struct {
 	Text              string
 	CondensedText     *string
 	RollbackTargetID  *string
-	CommittedAtUnixMs *int64 `json:"committed_at_unix_ms,omitempty"`
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
 }
 
 func (r *TranscriptUserRow) UnmarshalJSON(data []byte) error {
 	type rowAlias TranscriptUserRow
 	var decoded rowAlias
+	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
+		return err
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if value, present := fields["committed_at_unix_ms"]; present &&
-		bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-		return fmt.Errorf("committed_at_unix_ms must be omitted or an integer")
 	}
 	*r = TranscriptUserRow(decoded)
 	return nil
@@ -68,22 +62,17 @@ type TranscriptAssistantRow struct {
 	Text              string
 	CondensedText     *string
 	Phase             transcript.AssistantPhase
-	CommittedAtUnixMs *int64 `json:"committed_at_unix_ms,omitempty"`
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
 }
 
 func (r *TranscriptAssistantRow) UnmarshalJSON(data []byte) error {
 	type rowAlias TranscriptAssistantRow
 	var decoded rowAlias
+	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
+		return err
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if value, present := fields["committed_at_unix_ms"]; present &&
-		bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-		return fmt.Errorf("committed_at_unix_ms must be omitted or an integer")
 	}
 	*r = TranscriptAssistantRow(decoded)
 	return nil

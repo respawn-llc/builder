@@ -117,7 +117,7 @@ func TestValidateTranscriptCommittedRowRejectsInvalidTimestampBeforeIntegritySho
 	if err != nil {
 		t.Fatalf("parse step id: %v", err)
 	}
-	outOfRange := transcript.MaxCommittedAtUnixMs + 1
+	outOfRange := transcript.CommittedAtUnixMs(transcript.MaxCommittedAtUnixMs + 1)
 	for _, integrity := range []transcript.RowIntegrity{
 		transcript.RowIntegrityValid,
 		transcript.RowIntegrityRecoverableMalformed,

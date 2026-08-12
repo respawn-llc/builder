@@ -18,7 +18,7 @@ type recordAppendOutcome struct {
 type EventRecordAppendInput struct {
 	StepID              *string
 	Payload             EventRecordPayload
-	committedAtUnixMs   *int64
+	committedAtUnixMs   *transcript.CommittedAtUnixMs
 	preserveCommittedAt bool
 }
 
@@ -236,8 +236,8 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	records := make([]EventRecord, 0, len(inputs))
 	sequence := log.lastSequence
 	appendNow := storeTimestamp(s.options)
-	appendTimeUnixMs := appendNow.UnixMilli()
-	if err := transcript.ValidateCommittedAtUnixMs(&appendTimeUnixMs); err != nil {
+	appendTimeUnixMs, err := transcript.NewCommittedAtUnixMs(appendNow.UnixMilli())
+	if err != nil {
 		s.mu.Unlock()
 		return recordAppendOutcome{}, fmt.Errorf("store clock committed time: %w", err)
 	}
@@ -255,8 +255,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 				)
 			}
 			if eligible {
-				value := appendTimeUnixMs
-				committedAtUnixMs = &value
+				committedAtUnixMs = &appendTimeUnixMs
 			}
 		}
 		record, err := newEventRecord(

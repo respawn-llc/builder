@@ -5,11 +5,12 @@ import (
 	"strings"
 
 	"core/server/session"
+	"core/shared/transcript"
 )
 
 type TranscriptCommittedRowProvenance struct {
 	EventSequence     int64
-	CommittedAtUnixMs *int64
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs
 	ToolCallID        string
 	ProjectedOrdinal  *int64
 }

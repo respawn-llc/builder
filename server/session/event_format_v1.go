@@ -85,7 +85,7 @@ type EventRecord struct {
 	seq               int64
 	stepID            *string
 	payload           EventRecordPayload
-	committedAtUnixMs *int64
+	committedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (EventRecord, error) {
@@ -96,7 +96,7 @@ func newEventRecord(
 	seq int64,
 	stepID *string,
 	payload EventRecordPayload,
-	committedAtUnixMs *int64,
+	committedAtUnixMs *transcript.CommittedAtUnixMs,
 ) (EventRecord, error) {
 	if seq <= 0 {
 		return EventRecord{}, fmt.Errorf("event sequence must be positive: %d", seq)
@@ -252,7 +252,7 @@ func (r EventRecord) StepID() *string {
 	return &stepID
 }
 
-func (r EventRecord) CommittedAtUnixMs() *int64 {
+func (r EventRecord) CommittedAtUnixMs() *transcript.CommittedAtUnixMs {
 	if r.committedAtUnixMs == nil {
 		return nil
 	}
@@ -514,26 +514,21 @@ func (r ReviewerErrorRecord) validate() error {
 }
 
 type eventRecordV1Envelope struct {
-	Seq               int64           `json:"seq"`
-	Kind              EventKind       `json:"kind"`
-	StepID            *string         `json:"step_id,omitempty"`
-	CommittedAtUnixMs *int64          `json:"committed_at_unix_ms,omitempty"`
-	Payload           json.RawMessage `json:"payload"`
+	Seq               int64                         `json:"seq"`
+	Kind              EventKind                     `json:"kind"`
+	StepID            *string                       `json:"step_id,omitempty"`
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
+	Payload           json.RawMessage               `json:"payload"`
 }
 
 func (e *eventRecordV1Envelope) UnmarshalJSON(data []byte) error {
 	type envelopeAlias eventRecordV1Envelope
 	var decoded envelopeAlias
+	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
+		return err
+	}
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	if value, present := fields["committed_at_unix_ms"]; present &&
-		bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
-		return fmt.Errorf("committed_at_unix_ms must be omitted or an integer")
 	}
 	*e = eventRecordV1Envelope(decoded)
 	return nil
