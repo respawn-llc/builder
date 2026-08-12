@@ -883,23 +883,34 @@ func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequ
 }
 
 func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
+	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
 func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
+	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
 func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
+	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
 func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
+	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
 func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
+	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalClear, req)
+}
+
+func callGoalMutationRPC[Request any](c *Remote, ctx context.Context, method string, req Request) (serverapi.RuntimeGoalMutationResponse, error) {
+	response, err := callControlRPC[Request, serverapi.RuntimeGoalMutationResponse](c, ctx, method, req)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, invalidResponseError("runtime Goal mutation", err)
+	}
+	return response, nil
 }
 
 func (c *Remote) ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
