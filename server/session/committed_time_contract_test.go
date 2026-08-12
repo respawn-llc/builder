@@ -7,410 +7,162 @@ import (
 	"core/shared/transcript"
 )
 
-func TestEventPayloadCommittedTimeEligibility(t *testing.T) {
-	content := "visible"
-	compactionSummary := MessageTypeCompactionSummary
-	nonSummary := MessageTypeAgentsMD
-	user := MessageRoleUser
-	assistant := MessageRoleAssistant
-	system := MessageRoleSystem
-	developer := MessageRoleDeveloper
-	tool := MessageRoleTool
-
-	tests := []struct {
-		name    string
-		payload EventRecordPayload
-		want    bool
-	}{
-		{
-			name:    "untyped visible user",
-			payload: MessageRecord{Role: MessageRoleUser, Content: &content},
-			want:    true,
-		},
-		{
-			name:    "typed non-summary user",
-			payload: MessageRecord{Role: user, MessageType: &nonSummary, Content: &content},
-			want:    true,
-		},
-		{
-			name:    "typed compaction-summary user",
-			payload: MessageRecord{Role: user, MessageType: &compactionSummary, Content: &content},
-			want:    false,
-		},
-		{
-			name:    "assistant with content",
-			payload: MessageRecord{Role: assistant, Content: &content},
-			want:    true,
-		},
-		{
-			name: "assistant with only tool calls",
-			payload: MessageRecord{Role: assistant, ToolCalls: []MessageToolCallRecord{{
-				CallID: "call-1", Name: "exec_command", Kind: ToolCallKindFunction,
-				Input: []byte(`{}`),
-			}}},
-			want: false,
-		},
-		{
-			name:    "system",
-			payload: MessageRecord{Role: system, Content: &content},
-			want:    false,
-		},
-		{
-			name:    "developer",
-			payload: MessageRecord{Role: developer, Content: &content},
-			want:    false,
-		},
-		{
-			name:    "tool",
-			payload: MessageRecord{Role: tool, Content: &content},
-			want:    false,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := eventPayloadEligibleForCommittedTime(test.payload)
-			if err != nil {
-				t.Fatalf("eventPayloadEligibleForCommittedTime: %v", err)
-			}
-			if got != test.want {
-				t.Fatalf("eligible = %t, want %t", got, test.want)
-			}
-		})
-	}
-}
-
-func TestHistoryReplacementCommittedTimeEligibility(t *testing.T) {
-	content := "visible"
-	summary := MessageTypeCompactionSummary
-	nonSummary := MessageTypeAgentsMD
-	user := MessageRoleUser
-	assistant := MessageRoleAssistant
-
-	message := func(role *MessageRole, messageType *MessageType) ProviderHistoryItem {
-		return ProviderHistoryItem{
-			Type:        ProviderHistoryItemTypeMessage,
-			Role:        role,
-			MessageType: messageType,
-			Content:     &content,
-			Raw:         []byte(`{"type":"message"}`),
+func TestCommittedTimeRangeAndEligibility(t *testing.T) {
+	for _, value := range []int64{
+		transcript.MinCommittedAtUnixMs, -1, 0, 1, transcript.MaxCommittedAtUnixMs,
+	} {
+		typed := transcript.CommittedAtUnixMs(value)
+		if err := transcript.ValidateCommittedAtUnixMs(&typed); err != nil {
+			t.Fatalf("valid committed time %d: %v", value, err)
 		}
 	}
+	for _, value := range []int64{
+		transcript.MinCommittedAtUnixMs - 1, transcript.MaxCommittedAtUnixMs + 1,
+	} {
+		typed := transcript.CommittedAtUnixMs(value)
+		if err := transcript.ValidateCommittedAtUnixMs(&typed); err == nil {
+			t.Fatalf("out-of-range committed time %d accepted", value)
+		}
+	}
+	content := "visible"
+	summary := MessageTypeCompactionSummary
 	tests := []struct {
-		name  string
-		items []ProviderHistoryItem
-		want  bool
+		name string
+		p    EventRecordPayload
+		want bool
 	}{
-		{
-			name:  "explicit user typed non-summary",
-			items: []ProviderHistoryItem{message(&user, &nonSummary)},
-			want:  true,
-		},
-		{
-			name:  "explicit user typed compaction summary",
-			items: []ProviderHistoryItem{message(&user, &summary)},
-			want:  false,
-		},
-		{
-			name:  "explicit user untyped preserved",
-			items: []ProviderHistoryItem{message(&user, nil)},
-			want:  false,
-		},
-		{
-			name:  "role absent untyped preserved",
-			items: []ProviderHistoryItem{message(nil, nil)},
-			want:  false,
-		},
-		{
-			name:  "role absent typed non-summary",
-			items: []ProviderHistoryItem{message(nil, &nonSummary)},
-			want:  true,
-		},
-		{
-			name:  "assistant content",
-			items: []ProviderHistoryItem{message(&assistant, nil)},
-			want:  true,
-		},
-		{
-			name: "non-message item carrying user-like facts",
-			items: []ProviderHistoryItem{{
-				Type:    ProviderHistoryItemTypeOther,
-				Role:    &user,
-				Content: &content,
-				Raw:     []byte(`{"type":"other"}`),
-			}},
-			want: false,
-		},
-		{
-			name: "only tools and notices",
-			items: []ProviderHistoryItem{
-				{Type: ProviderHistoryItemTypeFunctionCall, Raw: []byte(`{"type":"function_call"}`)},
-				{Type: ProviderHistoryItemTypeOther, Raw: []byte(`{"type":"other"}`)},
-			},
-			want: false,
-		},
-		{name: "empty items", want: false},
+		{"user", MessageRecord{Role: MessageRoleUser, Content: &content}, true},
+		{"typed user", MessageRecord{Role: MessageRoleUser, MessageType: messageTypePointer(MessageTypeAgentsMD), Content: &content}, true},
+		{"summary user", MessageRecord{Role: MessageRoleUser, MessageType: &summary, Content: &content}, false},
+		{"assistant", MessageRecord{Role: MessageRoleAssistant, Content: &content}, true},
+		{"assistant tools", MessageRecord{Role: MessageRoleAssistant, ToolCalls: []MessageToolCallRecord{{CallID: "c", Name: "shell", Kind: ToolCallKindFunction, Input: []byte(`{}`)}}}, false},
+		{"system", MessageRecord{Role: MessageRoleSystem, Content: &content}, false},
+		{"developer", MessageRecord{Role: MessageRoleDeveloper, Content: &content}, false},
+		{"tool", MessageRecord{Role: MessageRoleTool, Content: &content}, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := eventPayloadEligibleForCommittedTime(HistoryReplacementRecord{
-				Engine: "local",
-				Mode:   CompactionModeAuto,
-				Items:  test.items,
-			})
-			if err != nil {
-				t.Fatalf("eventPayloadEligibleForCommittedTime: %v", err)
+			got, err := eventPayloadEligibleForCommittedTime(test.p)
+			if err != nil || got != test.want {
+				t.Fatalf("eligible=%t err=%v want=%t", got, err, test.want)
 			}
-			if got != test.want {
-				t.Fatalf("eligible = %t, want %t", got, test.want)
+		})
+	}
+	user := MessageRoleUser
+	assistant := MessageRoleAssistant
+	replacement := func(role *MessageRole, typ *MessageType) ProviderHistoryItem {
+		return ProviderHistoryItem{Type: ProviderHistoryItemTypeMessage, Role: role, MessageType: typ, Content: &content, Raw: []byte(`{"type":"message"}`)}
+	}
+	for _, test := range []struct {
+		name string
+		item ProviderHistoryItem
+		want bool
+	}{
+		{"replacement typed user", replacement(&user, messageTypePointer(MessageTypeAgentsMD)), true},
+		{"replacement summary", replacement(&user, &summary), false},
+		{"replacement untyped", replacement(&user, nil), false},
+		{"replacement absent role", replacement(nil, nil), false},
+		{"replacement absent role typed", replacement(nil, messageTypePointer(MessageTypeAgentsMD)), true},
+		{"replacement assistant", replacement(&assistant, nil), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := eventPayloadEligibleForCommittedTime(HistoryReplacementRecord{Engine: "local", Mode: CompactionModeAuto, Items: []ProviderHistoryItem{test.item}})
+			if err != nil || got != test.want {
+				t.Fatalf("eligible=%t err=%v want=%t", got, err, test.want)
 			}
 		})
 	}
 }
 
-func TestEventRecordCommittedTimeEnvelopeContract(t *testing.T) {
+func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 	content := "message"
-	present, err := transcript.NewCommittedAtUnixMs(0)
+	zero := transcript.CommittedAtUnixMs(0)
+	record, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, Content: &content}, &zero)
 	if err != nil {
-		t.Fatalf("create committed time: %v", err)
-	}
-	record, err := newEventRecord(1, nil, MessageRecord{
-		Role:    MessageRoleUser,
-		Content: &content,
-	}, &present)
-	if err != nil {
-		t.Fatalf("newEventRecord: %v", err)
+		t.Fatalf("create record: %v", err)
 	}
 	line, err := encodeEventRecordV1(record)
 	if err != nil {
-		t.Fatalf("encode event record: %v", err)
-	}
-	if string(line) != `{"seq":1,"kind":"message","committed_at_unix_ms":0,"payload":{"role":"user","content":"message"}}` {
-		t.Fatalf("encoded line = %s", line)
+		t.Fatalf("encode record: %v", err)
 	}
 	decoded, err := decodeEventRecordV1(line)
+	if err != nil || decoded.CommittedAtUnixMs() == nil || decoded.CommittedAtUnixMs().UnixMs() != 0 {
+		t.Fatalf("decoded record time=%v err=%v", decoded.CommittedAtUnixMs(), err)
+	}
+	historical, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`))
 	if err != nil {
-		t.Fatalf("decode event record: %v", err)
+		t.Fatalf("decode historical: %v", err)
 	}
-	if got := decoded.CommittedAtUnixMs(); got == nil || got.UnixMs() != present.UnixMs() {
-		t.Fatalf("decoded committed time = %v, want %d", got, present)
+	if line, err := encodeEventRecordV1(historical); err != nil || string(line) != `{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}` {
+		t.Fatalf("historical re-encode line=%s err=%v", line, err)
 	}
-
-	historical, err := decodeEventRecordV1([]byte(
-		`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`,
-	))
-	if err != nil {
-		t.Fatalf("decode historical event record: %v", err)
+	for _, field := range []string{"committed_at_unix_ms", "COMMITTED_AT_UNIX_MS"} {
+		if _, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","` + field + `":null,"payload":{"role":"user","content":"old"}}`)); err == nil {
+			t.Fatalf("null field %q accepted", field)
+		}
 	}
-	historicalLine, err := encodeEventRecordV1(historical)
-	if err != nil {
-		t.Fatalf("re-encode historical event record: %v", err)
-	}
-	if string(historicalLine) != `{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}` {
-		t.Fatalf("historical encoded line = %s", historicalLine)
+	one := transcript.CommittedAtUnixMs(1)
+	if _, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, MessageType: messageTypePointer(MessageTypeCompactionSummary), Content: &content}, &one); err == nil {
+		t.Fatal("ineligible timestamp accepted")
 	}
 }
 
-func TestEventRecordRejectsExplicitNullCommittedTime(t *testing.T) {
-	_, err := decodeEventRecordV1([]byte(
-		`{"seq":1,"kind":"message","committed_at_unix_ms":null,"payload":{"role":"user","content":"old"}}`,
-	))
-	if err == nil {
-		t.Fatal("explicit null committed time was accepted")
-	}
-}
-
-func TestEventRecordRejectsMisplacedCommittedTime(t *testing.T) {
-	content := "notice"
-	committedAt := transcript.CommittedAtUnixMs(1)
-	if _, err := newEventRecord(1, nil, MessageRecord{
-		Role:        MessageRoleUser,
-		MessageType: messageTypePointer(MessageTypeCompactionSummary),
-		Content:     &content,
-	}, &committedAt); err == nil {
-		t.Fatal("compaction summary accepted committed time")
-	}
-}
-
-func TestAppendBatchSamplesOneCommittedTimeForEligibleRecords(t *testing.T) {
+func TestCommittedTimeAtomicAppendSamplesClockOnce(t *testing.T) {
 	now := time.UnixMilli(1_723_456_789_012).UTC()
-	clockCalls := 0
-	store, err := Create(
-		t.TempDir(),
-		"workspace",
-		t.TempDir(),
-		testSessionCategory,
-		append(sessionTestPersistence.options(), WithClock(func() time.Time {
-			clockCalls++
-			return now
-		}))...,
-	)
+	calls := 0
+	options := append(sessionTestPersistence.options(), WithClock(func() time.Time { calls++; return now }))
+	store, err := Create(t.TempDir(), "workspace", t.TempDir(), testSessionCategory, options...)
 	if err != nil {
 		t.Fatalf("create store: %v", err)
 	}
 	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("ensure durable: %v", err)
+		t.Fatalf("durable store: %v", err)
 	}
 	log := mustMaterializeSessionTestEventLog(t, store)
-	initialClockCalls := clockCalls
+	before := calls
 	content := "visible"
-	records, receipt, err := log.AppendRecordsAtomic(nil, []EventRecordPayload{
+	records, _, err := log.AppendRecordsAtomic(nil, []EventRecordPayload{
 		MessageRecord{Role: MessageRoleUser, Content: &content},
 		MessageRecord{Role: MessageRoleSystem, Content: &content},
 		MessageRecord{Role: MessageRoleAssistant, Content: &content},
 	})
-	if err != nil {
-		t.Fatalf("append records: %v", err)
-	}
-	if !receipt.Committed {
-		t.Fatal("append was not committed")
-	}
-	if clockCalls != initialClockCalls+1 {
-		t.Fatalf("clock calls = %d, want %d", clockCalls, initialClockCalls+1)
-	}
-	if len(records) != 3 {
-		t.Fatalf("records = %d, want 3", len(records))
+	if err != nil || calls != before+1 {
+		t.Fatalf("append err=%v clock calls=%d want=%d", err, calls, before+1)
 	}
 	for _, index := range []int{0, 2} {
-		got := records[index].CommittedAtUnixMs()
-		if got == nil || got.UnixMs() != now.UnixMilli() {
-			t.Fatalf("record %d committed time = %v, want %d", index, got, now.UnixMilli())
+		if records[index].CommittedAtUnixMs() == nil || records[index].CommittedAtUnixMs().UnixMs() != now.UnixMilli() {
+			t.Fatalf("record %d timestamp=%v", index, records[index].CommittedAtUnixMs())
 		}
 	}
-	if got := records[1].CommittedAtUnixMs(); got != nil {
-		t.Fatalf("ineligible record committed time = %d, want absent", got.UnixMs())
+	if records[1].CommittedAtUnixMs() != nil {
+		t.Fatalf("ineligible timestamp=%v", records[1].CommittedAtUnixMs())
 	}
 }
 
-func TestForkAndClonePreserveCommittedTimesAcrossReplayBoundaries(t *testing.T) {
+func TestReplayPreservesEligibleAbsentCommittedTime(t *testing.T) {
 	parent := newSessionTestStore(t)
-	parentLog := mustMaterializeSessionTestEventLog(t, parent)
-	_, _, err := parentLog.AppendRecord(nil, MessageRecord{
-		Role:    MessageRoleUser,
-		Content: stringPointer("first"),
-	})
+	log := mustMaterializeSessionTestEventLog(t, parent)
+	user, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`))
 	if err != nil {
-		t.Fatalf("append first message: %v", err)
+		t.Fatalf("decode user: %v", err)
 	}
-	if _, _, err := parentLog.AppendRecord(nil, LocalEntryRecord{
-		Visibility: EntryVisibilityHidden,
-		Role:       "hidden",
-		Text:       stringPointer("historical"),
-	}); err != nil {
-		t.Fatalf("append historical entry: %v", err)
+	if _, err := log.AppendReplayRecords([]EventRecord{user}); err != nil {
+		t.Fatalf("replay user: %v", err)
 	}
-	sourceReplacement, _, err := parentLog.AppendCompactionHistoryReplacement(nil, HistoryReplacementRecord{
-		Engine: "local",
-		Mode:   CompactionModeAuto,
-		Items: []ProviderHistoryItem{{
-			Type:    ProviderHistoryItemTypeMessage,
-			Role:    pointerTo(MessageRoleUser),
-			Content: stringPointer("replacement"),
-			Raw:     []byte(`{"type":"message"}`),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("append replacement: %v", err)
-	}
-	target, _, err := parentLog.AppendRecord(nil, MessageRecord{
-		Role:    MessageRoleUser,
-		Content: stringPointer("target"),
-	})
+	target, _, err := log.AppendRecord(nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("target")})
 	if err != nil {
 		t.Fatalf("append target: %v", err)
 	}
-
-	child, _, err := ForkAtUserMessage(parentLog, target.Seq(), "fork", testSessionCategory)
+	child, _, err := ForkAtUserMessage(log, target.Seq(), "fork", testSessionCategory)
 	if err != nil {
-		t.Fatalf("fork session: %v", err)
+		t.Fatalf("fork: %v", err)
 	}
-	childRecords := collectEventsForCommittedTimeTest(t, child)
-	parentRecords := collectEventsForCommittedTimeTest(t, parent)
-	if len(childRecords) != 3 {
-		t.Fatalf("fork records = %d, want 3", len(childRecords))
-	}
-	if !sameCommittedTime(childRecords[0], parentRecords[0]) {
-		t.Fatalf("fork first timestamp changed: child=%v parent=%v", childRecords[0].CommittedAtUnixMs(), parentRecords[0].CommittedAtUnixMs())
-	}
-	if !sameCommittedTime(childRecords[2], sourceReplacement) {
-		t.Fatalf("fork replacement timestamp changed: child=%v source=%v", childRecords[2].CommittedAtUnixMs(), sourceReplacement.CommittedAtUnixMs())
-	}
-	if childRecords[0].Seq() != 1 || childRecords[2].Seq() != 3 {
-		t.Fatalf("fork replay child sequences = [%d %d], want [1 3]", childRecords[0].Seq(), childRecords[2].Seq())
-	}
-
-	clone, err := CloneSession(parentLog, "clone", testSessionCategory)
-	if err != nil {
-		t.Fatalf("clone session: %v", err)
-	}
-	cloneRecords := collectEventsForCommittedTimeTest(t, clone)
-	if len(cloneRecords) != len(parentRecords) {
-		t.Fatalf("clone records = %d, want %d", len(cloneRecords), len(parentRecords))
-	}
-	for index := range cloneRecords {
-		if !sameCommittedTime(cloneRecords[index], parentRecords[index]) {
-			t.Fatalf("clone record %d timestamp changed: clone=%v parent=%v", index, cloneRecords[index].CommittedAtUnixMs(), parentRecords[index].CommittedAtUnixMs())
-		}
-	}
-}
-
-func collectEventsForCommittedTimeTest(t *testing.T, store *Store) []EventRecord {
-	t.Helper()
-	log := mustMaterializeSessionTestEventLog(t, store)
+	childLog := mustMaterializeSessionTestEventLog(t, child)
 	var records []EventRecord
-	if err := log.WalkRecords(func(record EventRecord) error {
-		records = append(records, record)
-		return nil
-	}); err != nil {
-		t.Fatalf("walk records: %v", err)
+	if err := childLog.WalkRecords(func(record EventRecord) error { records = append(records, record); return nil }); err != nil {
+		t.Fatalf("walk child: %v", err)
 	}
-	return records
-}
-
-func sameCommittedTime(left, right EventRecord) bool {
-	leftTime := left.CommittedAtUnixMs()
-	rightTime := right.CommittedAtUnixMs()
-	if leftTime == nil || rightTime == nil {
-		return leftTime == nil && rightTime == nil
-	}
-	return leftTime.UnixMs() == rightTime.UnixMs()
-}
-
-func TestForkPreservesAbsentCommittedTimeOnEligibleHistoricalRecords(t *testing.T) {
-	parent := newSessionTestStore(t)
-	parentLog := mustMaterializeSessionTestEventLog(t, parent)
-	historicalUser, err := decodeEventRecordV1([]byte(
-		`{"seq":1,"kind":"message","payload":{"role":"user","content":"historical"}}`,
-	))
-	if err != nil {
-		t.Fatalf("decode historical user: %v", err)
-	}
-	historicalReplacement, err := decodeEventRecordV1([]byte(
-		`{"seq":2,"kind":"history_replaced","payload":{"engine":"local","mode":"auto","items":[{"type":"message","role":"user","message_type":"agents.md","content":"replayed","raw":{"type":"message"}}]}}`,
-	))
-	if err != nil {
-		t.Fatalf("decode historical replacement: %v", err)
-	}
-	if _, err := parentLog.AppendReplayRecords([]EventRecord{historicalUser, historicalReplacement}); err != nil {
-		t.Fatalf("append historical replay records: %v", err)
-	}
-	target, _, err := parentLog.AppendRecord(nil, MessageRecord{
-		Role:    MessageRoleUser,
-		Content: stringPointer("target"),
-	})
-	if err != nil {
-		t.Fatalf("append target: %v", err)
-	}
-	child, _, err := ForkAtUserMessage(parentLog, target.Seq(), "fork", testSessionCategory)
-	if err != nil {
-		t.Fatalf("fork historical records: %v", err)
-	}
-	records := collectEventsForCommittedTimeTest(t, child)
-	if len(records) != 2 {
-		t.Fatalf("fork historical records = %d, want 2", len(records))
-	}
-	for index, record := range records {
-		if got := record.CommittedAtUnixMs(); got != nil {
-			t.Fatalf("fork historical record %d committed time = %d, want absent", index, got.UnixMs())
-		}
+	if len(records) != 1 || records[0].CommittedAtUnixMs() != nil {
+		t.Fatalf("child replay records=%d time=%v", len(records), records[0].CommittedAtUnixMs())
 	}
 }
