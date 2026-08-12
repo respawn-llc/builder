@@ -1,7 +1,6 @@
 package clientui
 
 import (
-	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -270,7 +269,7 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 		if err != nil {
 			t.Fatalf("marshal absent %q: %v", row.Kind, err)
 		}
-		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+		if transcriptMessagePayloadHasCommittedTimeField(t, data) {
 			t.Fatalf("absent %q row emitted timestamp: %s", row.Kind, data)
 		}
 	}
@@ -321,10 +320,34 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 		if err != nil {
 			t.Fatalf("marshal non-message %q: %v", row.Kind, err)
 		}
-		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+		if transcriptMessagePayloadHasCommittedTimeField(t, data) {
 			t.Fatalf("non-message %q row emitted timestamp: %s", row.Kind, data)
 		}
 	}
+}
+
+func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bool {
+	t.Helper()
+	var envelope struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("decode transcript message envelope: %v", err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("decode transcript message payload: %v", err)
+	}
+	for _, raw := range payload {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			continue
+		}
+		if _, present := nested["committed_at_unix_ms"]; present {
+			return true
+		}
+	}
+	return false
 }
 
 func TestTranscriptMessageJSONRejectsExplicitNullCommittedTime(t *testing.T) {

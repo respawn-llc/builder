@@ -1,7 +1,6 @@
 package runtimeview
 
 import (
-	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -97,10 +96,28 @@ func TestCommittedRowProjectionOmitsTimeForHistoricalAndNonMessageRows(t *testin
 		if err != nil {
 			t.Fatalf("marshal non-message row: %v", err)
 		}
-		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+		if rowJSONHasCommittedTimeField(t, data) {
 			t.Fatalf("non-message row exposed committed time: %s", data)
 		}
 	}
+}
+
+func rowJSONHasCommittedTimeField(t *testing.T, data []byte) bool {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("decode projected row: %v", err)
+	}
+	for _, raw := range fields {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			continue
+		}
+		if _, present := nested["committed_at_unix_ms"]; present {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {
