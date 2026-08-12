@@ -396,15 +396,24 @@
 - Each Transition Branch supports `new_session`, `continue_session`, or `compact_and_continue_session`.
 - Workflow-created Session copies preserve delegation ancestry and do not reset delegation depth.
 - Continuation modes may select `immediate_source`, `node:<node_key>`, `previous_target`, or `previous_target_or_new` as context source.
-- `immediate_source` uses the Session bound to the source Current Node during normal completion. During Manual Move, it uses that Session when the source is Current, otherwise the latest retained unscoped Session associated with the selected Transition's source Node.
-- `node:<node_key>` selects the latest retained Session associated with the guaranteed-prior agent Node.
-- `previous_target` selects the latest retained Session associated with the target agent Node and fails when none exists.
-- `previous_target_or_new` selects that Session when one exists and otherwise starts a new Session.
+- `immediate_source` uses the Session bound to the source Current Node during normal completion. During Manual Move, it uses that Session when the source is Current, otherwise the source Node's current retained unscoped Session.
+- `node:<node_key>` selects the guaranteed-prior Agent Node's current retained Session.
+- Each Task, Agent Node, and optional Transition Branch Key has one current retained Session authority. Binding a replacement makes older associations historical and recursively retires current downstream associations that depend on the replaced Session while preserving its source and unaffected branches.
+- Kent never promotes a historical association through timestamps, Session identifiers, Assignee compatibility, or matching source proof.
+- A retained target records the exact active Context Source Session that established it. `previous_target` and `previous_target_or_new` reuse the target's current retained Session only when that proof matches the active source.
+- A current target proved by another source is stale. Both retained-target modes start a fresh target Session tied to the active source.
+- A target with historical provenance but no current association starts fresh. With no current or historical association, `previous_target` reports target unavailability without changing Task state and `previous_target_or_new` starts fresh.
+- Missing or contradictory proof on a current target is an invariant violation. `previous_target` reports a typed failure without changing Task state; `previous_target_or_new` starts fresh and reports an error diagnostic. Debug operation fails fast. Ordinary target absence and exact-source mismatch are not invariant violations.
+- An Agent entered through `new_session` makes its fresh Session the active Context Source. Script and Join Nodes carry their incoming active Context Source through execution.
+- Freshness is fixed when the target Current Node is materialized. Interruption, restart, Resume, and Approval apply use that result without resolving it again.
+- During Manual Move only, an exact current Agent source whose planned fresh Session has not bound uses that Node's current retained Session when present and otherwise supplies fresh context. No other missing direct source gains this fallback.
 - During parallel work, each Context Source selection stays within the source Current Node's Transition Branch Key.
-- Reaching a Join ends active branch flow but does not remove retained branch-scoped Session associations. A later legal fan-out cycle may select the prior association for the same Transition Branch Key through `previous_target` or `previous_target_or_new`.
+- Reaching a Join ends active branch flow but does not remove retained branch-scoped Session history. A later legal fan-out cycle may reuse only a current association with matching source proof.
 - Manual movement supports every Context Source. An incoming Transition is usable only when every selected branch can resolve any Session required by its Context Source.
 - Manual movement never infers one origin branch from a parallel Task or from the dragged card. During parallel work it does not preserve branch-scoped Session context. When the selected Transition source is not the Task's sole unscoped Current Node, required retained-Session context resolves only from serial associations; branch-scoped-only context makes the Transition unusable. A selected Fan-Out Transition resolves context before its targets receive their new Transition Branch Keys.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
+- A proofless retained target already materialized in legacy Current Node or pending Approval state remains trusted through restart, Resume, or Approval apply. If that legacy state later resolves another retained target, or participates in a final Join, Kent fails fast before Workflow mutation. This compatibility exception expires in the first Kent release after the release that introduces source proof.
+- If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
 - `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
 - Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
 - Transition-selected Assignees never rotate or invalidate an established Session's prompt-cache lineage.

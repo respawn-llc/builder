@@ -1,10 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
-Object.defineProperty(window, "scrollTo", {
-  configurable: true,
-  value: vi.fn(),
-});
+if (typeof window !== "undefined") {
+  Object.defineProperty(window, "scrollTo", { configurable: true, value: vi.fn() });
+}
 
 class TestResizeObserver implements ResizeObserver {
   disconnect(): void {

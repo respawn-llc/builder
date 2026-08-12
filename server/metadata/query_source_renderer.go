@@ -81,6 +81,10 @@ func (r QuerySourceRenderer) RenderTaskSearchSchemaContract() ([]byte, error) {
 	return r.renderTaskSearchQuery("taskSearchSchemaContract", false)
 }
 
+func (r QuerySourceRenderer) RenderWorkflowSessionDependencyInvalidation() ([]byte, error) {
+	return r.renderNamedQuery("workflowSessionDependencyInvalidation", renderData{})
+}
+
 type taskLabelFilterTemplateData struct {
 	FilterKind       string
 	FilterMode       string
@@ -124,6 +128,12 @@ func taskListSortSlots() []taskListSortSlotTemplateData {
 }
 
 func (r QuerySourceRenderer) renderTaskSearchQuery(templateName string, includePageDescriptors bool) ([]byte, error) {
+	return r.renderNamedQuery(templateName, renderData{
+		IncludeTaskSearchPageDescriptors: includePageDescriptors,
+	})
+}
+
+func (r QuerySourceRenderer) renderNamedQuery(templateName string, data renderData) ([]byte, error) {
 	queryTemplate, err := r.parse()
 	if err != nil {
 		return nil, err
@@ -133,10 +143,8 @@ func (r QuerySourceRenderer) renderTaskSearchQuery(templateName string, includeP
 		return nil, fmt.Errorf("task-search query template %q is absent", templateName)
 	}
 	var rendered bytes.Buffer
-	if err := query.Execute(&rendered, renderData{
-		IncludeTaskSearchPageDescriptors: includePageDescriptors,
-	}); err != nil {
-		return nil, fmt.Errorf("render task-search query template %q: %w", templateName, err)
+	if err := query.Execute(&rendered, data); err != nil {
+		return nil, fmt.Errorf("render metadata query template %q: %w", templateName, err)
 	}
 	return rendered.Bytes(), nil
 }

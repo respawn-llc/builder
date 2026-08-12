@@ -298,7 +298,22 @@ func manualMoveContextUnavailable(
 		if edge.ContextMode == workflow.ContextModeNewSession {
 			continue
 		}
-		_, err := resolveTransitionTargetSession(ctx, q, definition, edge, currentNodes[0].Reference.TaskID, contextSource, nil, choice.SourceNode, true)
+		target, targetErr := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+		if targetErr != nil {
+			return false, targetErr
+		}
+		_, err := resolveTransitionContext(
+			ctx,
+			q,
+			definition,
+			edge,
+			currentNodes[0].Reference.TaskID,
+			contextSource,
+			nil,
+			choice.SourceNode,
+			target,
+			true,
+		)
 		if err == nil {
 			continue
 		}

@@ -301,16 +301,23 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
 	seedWorkflowTaskWithID(t, store, "task-2", "link-2", 2, "OTH-1", "placement-start-2", "node-start-2")
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
+	agentNodeID := workflowGraphSeedID(t, store.db, "node-agent")
+	otherAgentNodeID := workflowGraphSeedID(t, store.db, "node-agent-2")
 
 	assertExactTableColumns(t, store.db, "session_workflow_node_associations", map[string]struct{}{
+		"task_id":               {},
 		"session_id":            {},
 		"node_id":               {},
 		"transition_branch_key": {},
+		"association_status":    {},
+		"source_session_id":     {},
 		"associated_at_unix_ms": {},
 	})
 	for _, index := range []string{
 		"session_workflow_node_associations_serial_unique_idx",
 		"session_workflow_node_associations_branch_unique_idx",
+		"session_workflow_node_associations_current_serial_unique_idx",
+		"session_workflow_node_associations_current_branch_unique_idx",
 		"session_workflow_node_associations_session_recency_idx",
 	} {
 		if !indexExists(t, store.db, index) {
@@ -344,8 +351,8 @@ WHERE "from" = 'node_id'
 	}
 
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE sessions
 SET task_id = 'task-2'
 WHERE id = ?`, sessionID)
@@ -355,51 +362,26 @@ WHERE id = ?`, sessionID); err != nil {
 		t.Fatalf("bind session to direct task owner: %v", err)
 	}
 	if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now); err != nil {
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now); err != nil {
 		t.Fatalf("insert serial association: %v", err)
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now+1)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now+1)
 	for _, branch := range []string{"branch-a", "branch-b"} {
 		if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), ?, ?)`, sessionID, branch, now); err != nil {
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, ?, 'historical', NULL, ?)`, sessionID, agentNodeID, branch, now); err != nil {
 			t.Fatalf("insert branch association %q: %v", branch, err)
 		}
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), 'branch-a', ?)`, sessionID, now+1)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, 'branch-a', 'historical', NULL, ?)`, sessionID, agentNodeID, now+1)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-2' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, otherAgentNodeID, now)
 
 	if _, err := store.db.Exec(`UPDATE sessions
 SET task_id = NULL

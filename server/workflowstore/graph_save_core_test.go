@@ -980,12 +980,14 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
 	associatedAt := time.UnixMilli(1_700_000_000_000).UTC()
-	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  agentReference,
-		AssociatedAt: associatedAt,
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  agentReference,
+			AssociatedAt: associatedAt,
+		},
 	}); err != nil {
-		t.Fatalf("AssociateTaskSession: %v", err)
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       agentReference,
@@ -1063,9 +1065,9 @@ func TestWorkflowGraphSaveAllowsRemovingCompletedSessionNode(t *testing.T) {
 	if taskOwner == nil || *taskOwner != task.ID {
 		t.Fatalf("retained Session owner = %v, want Task %q", taskOwner, task.ID)
 	}
-	association, err := store.LatestTaskSessionForNode(ctx, agentReference)
+	association, err := store.CurrentTaskSessionForNode(ctx, agentReference)
 	if err != nil {
-		t.Fatalf("LatestTaskSessionForNode after node removal: %v", err)
+		t.Fatalf("CurrentTaskSessionForNode after node removal: %v", err)
 	}
 	if association.SessionID != sessionID ||
 		!association.CurrentNode.Equal(agentReference) ||

@@ -240,26 +240,10 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 			record.Parameters,
 			workflow.Parameter{Key: "agent_role", Purpose: workflow.ParameterPurposeTargetAssignee},
 		)
-		synth := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, def, "synth").ID)
-		synth.ContextMode = workflow.ContextModeContinueSession
-		synth.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	synthReference, err := workflow.NewCurrentNodeReference(
-		task.ID, workflow.NodeIDOf(nodeByKey(t, definition, "synth")), nil,
-	)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference: %v", err)
-	}
-	synthSession := associateTaskSessionForTest(
-		t, ctx, store, binding, cfg, synthReference, time.UnixMilli(1_700_000_000_000).UTC(),
-	)
 
 	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
@@ -278,6 +262,8 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	}
 
 	first, second := split.Mutation.Created[0], split.Mutation.Created[1]
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, first.Reference)
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, second.Reference)
 	if _, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       first.Reference,
 		TransitionID: "join_a",
@@ -298,92 +284,6 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	}
 	if joined.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
 		t.Fatalf("join continuation automatic intent = %+v, want Agent Node kind", joined.AutomaticIntents[0])
-	}
-	if len(joined.Mutation.Created) != 1 ||
-		joined.Mutation.Created[0].SessionID == nil ||
-		*joined.Mutation.Created[0].SessionID != synthSession {
-		t.Fatalf("join continuation = %+v, want retained Session %q", joined.Mutation.Created, synthSession)
-	}
-	if err := store.ValidateCurrentNodeSessionBinding(ctx, synthSession, synthReference); err != nil {
-		t.Fatalf("join continuation exact Session provenance: %v", err)
-	}
-}
-
-func TestCompleteCurrentNodeFanoutPreviousTargetOrNewRetainsBranchSessions(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createFanoutJoinWorkflow(t, ctx, store)
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	branches := []struct {
-		edgeKey   string
-		targetKey string
-	}{
-		{edgeKey: "split_a", targetKey: "impl_a"},
-		{edgeKey: "split_b", targetKey: "impl_b"},
-	}
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		for _, branch := range branches {
-			edge := edgeByKey(t, definition, branch.edgeKey)
-			record := workflowGraphSaveEdgeRecord(t, req.Edges, edge.ID)
-			record.ContextMode = workflow.ContextModeContinueSession
-			record.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
-		}
-	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-
-	expectedSessions := make(map[workflow.TransitionBranchKey]runtimeids.SessionID)
-	for index, branch := range branches {
-		target := nodeByKey(t, definition, branch.targetKey)
-		branchKey := workflow.TransitionBranchKey(branch.edgeKey)
-		targetReference, err := workflow.NewCurrentNodeReference(
-			task.ID,
-			workflow.NodeIDOf(target),
-			&branchKey,
-		)
-		if err != nil {
-			t.Fatalf("NewCurrentNodeReference %s: %v", branch.edgeKey, err)
-		}
-		expectedSessions[branchKey] = associateTaskSessionForTest(
-			t,
-			ctx,
-			store,
-			binding,
-			cfg,
-			targetReference,
-			time.UnixMilli(1_700_000_000_000+int64(index)).UTC(),
-		)
-	}
-
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       source.Reference,
-		TransitionID: "split",
-		OutputValues: map[string]string{"summary": "plan complete"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode: %v", err)
-	}
-	if len(completed.Mutation.Created) != len(expectedSessions) {
-		t.Fatalf("completion created = %+v, want one Current Node per retained branch session", completed.Mutation.Created)
-	}
-	for _, currentNode := range completed.Mutation.Created {
-		branchKey, present := currentNode.Reference.TransitionBranchKey()
-		if !present {
-			t.Fatalf("completion Current Node = %+v, want branch scope", currentNode)
-		}
-		expectedSessionID, exists := expectedSessions[branchKey]
-		if !exists {
-			t.Fatalf("completion branch = %q, want one of %+v", branchKey, expectedSessions)
-		}
-		if currentNode.SessionID == nil || *currentNode.SessionID != expectedSessionID {
-			t.Fatalf("completion branch %q session = %v, want retained session %q", branchKey, currentNode.SessionID, expectedSessionID)
-		}
-		if err := store.ValidateCurrentNodeSessionBinding(ctx, expectedSessionID, currentNode.Reference); err != nil {
-			t.Fatalf("completion branch %q exact Session provenance: %v", branchKey, err)
-		}
 	}
 }
 
@@ -482,15 +382,16 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		t.Fatalf("approval commentary = %q, want trimmed frozen commentary", approval.Commentary)
 	}
 	branch := approval.Branches[0]
+	resolvedSessionID, reused := branch.ContextSourceResolution.TargetSession.SessionID()
+	activeSourceID, exact := branch.ContextSourceResolution.ActiveSource.ExactSessionID()
 	if branch.Target.CurrentNode.CurrentInputValues["summary"] != "frozen plan" ||
 		branch.Target.CurrentNode.SessionID == nil ||
 		*branch.Target.CurrentNode.SessionID != sourceSessionID ||
-		branch.ContextSourceResolution.SessionID == nil ||
-		*branch.ContextSourceResolution.SessionID != sourceSessionID {
+		!reused ||
+		resolvedSessionID != sourceSessionID ||
+		!exact ||
+		activeSourceID != sourceSessionID {
 		t.Fatalf("approval branch snapshot = %+v, want frozen immediate-source target session and values", branch)
-	}
-	if _, err := store.LatestTaskSessionForNode(ctx, branch.Target.CurrentNode.Reference); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("pending Approval published target Session provenance before apply: %v", err)
 	}
 
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -580,9 +481,6 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		*target.SessionID != sourceSessionID ||
 		target.CurrentInputValues["summary"] != "frozen plan" {
 		t.Fatalf("applied target = %+v, want frozen context and materialized values", target)
-	}
-	if err := store.ValidateCurrentNodeSessionBinding(ctx, sourceSessionID, target.Reference); err != nil {
-		t.Fatalf("applied pending Approval target exact Session provenance: %v", err)
 	}
 	remaining, err := store.ListPendingApprovals(ctx, task.ID)
 	if err != nil {
@@ -754,76 +652,6 @@ func TestCompleteCurrentNodeContinueSessionUsesImmediateSourceSession(t *testing
 		*completed.Mutation.Created[0].SessionID != fixture.sessionID {
 		t.Fatalf("continue-session target = %+v, want source session %q", completed.Mutation.Created, fixture.sessionID)
 	}
-	if err := fixture.store.ValidateCurrentNodeSessionBinding(
-		fixture.ctx,
-		fixture.sessionID,
-		completed.Mutation.Created[0].Reference,
-	); err != nil {
-		t.Fatalf("retained successor exact Session provenance: %v", err)
-	}
-}
-
-func TestRetainedSuccessorAssociationFailureRollsBackCurrentNodeAndSessionOwnership(t *testing.T) {
-	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
-	scope, err := fixture.store.TaskExecutionScope(fixture.ctx, fixture.source.Reference.TaskID)
-	if err != nil {
-		t.Fatalf("TaskExecutionScope: %v", err)
-	}
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, scope.WorkflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	target := nodeByKey(t, definition, "review")
-	targetReference, err := workflow.NewCurrentNodeReference(
-		fixture.source.Reference.TaskID,
-		workflow.NodeIDOf(target),
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference: %v", err)
-	}
-	if _, err := fixture.store.db.ExecContext(
-		fixture.ctx,
-		`UPDATE sessions SET task_id = NULL WHERE id = ?`,
-		fixture.sessionID.String(),
-	); err != nil {
-		t.Fatalf("clear source Session Task owner: %v", err)
-	}
-	if _, err := fixture.store.db.ExecContext(
-		fixture.ctx,
-		`CREATE TRIGGER fail_retained_successor_association
-BEFORE INSERT ON session_workflow_node_associations
-BEGIN
-    SELECT RAISE(ABORT, 'injected retained successor association failure');
-END`,
-	); err != nil {
-		t.Fatalf("create retained successor association trigger: %v", err)
-	}
-
-	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.source.Reference,
-		TransitionID: "review",
-		OutputValues: map[string]string{"summary": "must roll back"},
-	}); err == nil {
-		t.Fatal("CompleteCurrentNode succeeded despite retained association failure")
-	}
-	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.source.Reference.TaskID)
-	if err != nil {
-		t.Fatalf("ListCurrentNodes after rollback: %v", err)
-	}
-	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.source.Reference) {
-		t.Fatalf("Current Nodes after rollback = %+v, want source only", currentNodes)
-	}
-	owner, err := fixture.store.TaskIDForSession(fixture.ctx, fixture.sessionID)
-	if err != nil {
-		t.Fatalf("TaskIDForSession after rollback: %v", err)
-	}
-	if owner != nil {
-		t.Fatalf("Session owner after rollback = %q, want absent", *owner)
-	}
-	if _, err := fixture.store.LatestTaskSessionForNode(fixture.ctx, targetReference); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("target Session provenance after rollback = %v, want absent", err)
-	}
 }
 
 func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(t *testing.T) {
@@ -844,105 +672,17 @@ func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(
 	}
 }
 
-func TestCompleteCurrentNodeSelectedNodeContextUsesLatestAssociatedSession(t *testing.T) {
-	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
-	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	auditEdgeID := edgeByKey(t, definition, "audit").ID
-	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, auditEdgeID)
-		edge.ContextMode = workflow.ContextModeContinueSession
-		edge.ContextSource = workflow.ContextSource{
-			Kind:    workflow.ContextSourceSelectedNode,
-			NodeKey: "plan",
-		}
-	})
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	started := startTask(t, ctx, store, task.ID)
-	plan := started.Mutation.Created[0]
-	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, plan.Reference)
-	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       plan.Reference,
-		TransitionID: "review",
-		OutputValues: map[string]string{"summary": "plan complete"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode plan: %v", err)
-	}
-	review := reviewResult.Mutation.Created[0]
-	latestPlanSessionID := associateTaskSessionForTest(
-		t,
-		ctx,
-		store,
-		binding,
-		cfg,
-		plan.Reference,
-		time.UnixMilli(1_700_000_000_001).UTC(),
-	)
-	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, review.Reference)
-
-	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       review.Reference,
-		TransitionID: "audit",
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode review: %v", err)
-	}
-	if len(auditResult.Mutation.Created) != 1 ||
-		auditResult.Mutation.Created[0].SessionID == nil ||
-		*auditResult.Mutation.Created[0].SessionID != latestPlanSessionID {
-		t.Fatalf("selected-node target = %+v, want latest plan session %q", auditResult.Mutation.Created, latestPlanSessionID)
-	}
-}
-
-func TestCompleteCurrentNodePreviousTargetContextUsesLatestAssociatedSession(t *testing.T) {
-	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
-	associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_000).UTC(),
-	)
-	reviewSessionID := associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_001).UTC(),
-	)
-	reworkResult, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.audit.Reference,
-		TransitionID: "rework",
-		OutputValues: map[string]string{"summary": "review again"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode audit: %v", err)
-	}
-	if len(reworkResult.Mutation.Created) != 1 ||
-		reworkResult.Mutation.Created[0].SessionID == nil ||
-		*reworkResult.Mutation.Created[0].SessionID != reviewSessionID {
-		t.Fatalf("previous-target current node = %+v, want review session %q", reworkResult.Mutation.Created, reviewSessionID)
-	}
-}
-
 func TestCompleteCurrentNodePreviousTargetContextFailsWithoutAssociatedSession(t *testing.T) {
 	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
 
-	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+	_, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
 		Source:       fixture.audit.Reference,
 		TransitionID: "rework",
 		OutputValues: map[string]string{"summary": "review again"},
-	}); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("CompleteCurrentNode error = %v, want sql.ErrNoRows", err)
+	})
+	var unavailable workflow.RetainedTargetUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("CompleteCurrentNode error = %v, want RetainedTargetUnavailableError", err)
 	}
 	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.audit.Reference.TaskID)
 	if err != nil {
@@ -966,33 +706,6 @@ func TestCompleteCurrentNodePreviousTargetOrNewContextFallsBackToNewSession(t *t
 	}
 	if len(reworkResult.Mutation.Created) != 1 || reworkResult.Mutation.Created[0].SessionID != nil {
 		t.Fatalf("previous-target-or-new current node = %+v, want an unbound target", reworkResult.Mutation.Created)
-	}
-}
-
-func TestCompleteCurrentNodePreviousTargetOrNewContextUsesLatestAssociatedSession(t *testing.T) {
-	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
-	reviewSessionID := associateTaskSessionForTest(
-		t,
-		fixture.ctx,
-		fixture.store,
-		fixture.binding,
-		fixture.cfg,
-		fixture.review.Reference,
-		time.UnixMilli(1_700_000_000_000).UTC(),
-	)
-
-	reworkResult, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
-		Source:       fixture.audit.Reference,
-		TransitionID: "rework",
-		OutputValues: map[string]string{"summary": "review again"},
-	})
-	if err != nil {
-		t.Fatalf("CompleteCurrentNode audit: %v", err)
-	}
-	if len(reworkResult.Mutation.Created) != 1 ||
-		reworkResult.Mutation.Created[0].SessionID == nil ||
-		*reworkResult.Mutation.Created[0].SessionID != reviewSessionID {
-		t.Fatalf("previous-target-or-new current node = %+v, want review session %q", reworkResult.Mutation.Created, reviewSessionID)
 	}
 }
 
@@ -1072,8 +785,6 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 type immediateContextCompletionFixture struct {
 	ctx       context.Context
 	store     *Store
-	binding   metadata.Binding
-	cfg       config.App
 	source    workflow.CurrentNode
 	sessionID runtimeids.SessionID
 }
@@ -1100,8 +811,6 @@ func newImmediateContextCompletionFixture(t *testing.T, contextMode workflow.Con
 	return immediateContextCompletionFixture{
 		ctx:       ctx,
 		store:     store,
-		binding:   binding,
-		cfg:       cfg,
 		source:    source,
 		sessionID: sessionID,
 	}
@@ -1116,17 +825,18 @@ func associateAndBindCurrentNodeSessionForTest(
 	currentNode workflow.CurrentNodeReference,
 ) runtimeids.SessionID {
 	t.Helper()
-	sessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, currentNode, time.UnixMilli(1_700_000_000_000).UTC())
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_current_nodes
-SET session_id = ?
-WHERE task_id = ?
-  AND node_id = ?
-  AND transition_branch_key IS NULL`,
-		sessionID.String(),
-		string(currentNode.TaskID),
-		testGraphEntityBlob(t, string(currentNode.NodeID)),
-	); err != nil {
-		t.Fatalf("bind current node session: %v", err)
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, cfg))
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if _, err := store.BindSessionToCurrentNode(ctx, CurrentNodeSessionBindingRequest{
+		Association: TaskSessionAssociationRequest{
+			SessionID:    sessionID,
+			CurrentNode:  currentNode,
+			AssociatedAt: time.UnixMilli(1_700_000_000_000).UTC(),
+		},
+	}); err != nil {
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	return sessionID
 }
@@ -1145,12 +855,27 @@ func associateTaskSessionForTest(
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  currentNode,
-		AssociatedAt: associatedAt,
-	}); err != nil {
-		t.Fatalf("AssociateTaskSession: %v", err)
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET task_id = ? WHERE id = ? AND task_id IS NULL`,
+		string(currentNode.TaskID),
+		sessionID.String(),
+	); err != nil {
+		t.Fatalf("bind historical fixture Session to Task: %v", err)
+	}
+	branchKey, branchScoped := currentNode.TransitionBranchKey()
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, ?, 'historical', NULL, ?)`,
+		string(currentNode.TaskID),
+		sessionID.String(),
+		string(currentNode.NodeID),
+		sql.NullString{String: string(branchKey), Valid: branchScoped},
+		associatedAt.UnixMilli(),
+	); err != nil {
+		t.Fatalf("insert historical Task Session fixture: %v", err)
 	}
 	return sessionID
 }

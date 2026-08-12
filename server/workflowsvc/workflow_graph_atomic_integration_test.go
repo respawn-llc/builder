@@ -197,7 +197,7 @@ func TestServiceWorkflowGraphSaveAllowsCompletedSessionProvenanceDeletion(t *tes
 	if owner, err := service.store.TaskIDForSession(ctx, sessionID); err != nil || owner == nil || *owner != taskID {
 		t.Fatalf("retained Session owner = %v, err = %v", owner, err)
 	}
-	if association, err := service.store.LatestTaskSessionForNode(ctx, reference); err != nil ||
+	if association, err := service.store.CurrentTaskSessionForNode(ctx, reference); err != nil ||
 		association.SessionID != sessionID || !association.CurrentNode.Equal(reference) {
 		t.Fatalf("retained Session association = %+v, err = %v", association, err)
 	}

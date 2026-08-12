@@ -19,8 +19,9 @@ const (
 // SessionReuseAssociation is bounded retained provenance supplied by the
 // Workflow store. Associations are ordered from oldest to newest.
 type SessionReuseAssociation struct {
-	SessionID   runtimeids.SessionID
-	CurrentNode CurrentNodeReference
+	SessionID       runtimeids.SessionID
+	SourceSessionID runtimeids.SessionID
+	CurrentNode     CurrentNodeReference
 }
 
 // SessionReuseAnalysisInput contains the execution-valid graph slice needed
@@ -172,17 +173,33 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 	for _, edge := range input.Workflow.Edges {
 		analyzer.edgesByGroup[edge.TransitionGroupID] = append(analyzer.edgesByGroup[edge.TransitionGroupID], edge)
 	}
+	analyzer.staticFanouts = sessionReuseFanouts(input.Workflow)
 
 	initial := reusePathState{
 		nodeID:           input.CompletedCurrentNode.Reference.NodeID,
 		branch:           reuseBranchForReference(input.CompletedCurrentNode.Reference),
 		currentLineage:   reuseLineageCompleted,
 		completedDormant: acceptedBranchesFanout(input.AcceptedBranches),
+		joinMode:         reuseJoinPartial,
+	}
+	if sourceSessionID, exact := input.CompletedCurrentNode.ContinuationSource.ExactSessionID(); exact {
+		initial.activeSourceSessionID = sourceSessionID
+		initial.activeSourceKnown = true
+	} else {
+		initial.activeSourceSessionID = completedSessionID
+		initial.activeSourceKnown = true
 	}
 	initialTransitions := make([]reuseTransition, 0, len(input.AcceptedBranches))
 	for _, edge := range input.AcceptedBranches {
 		transition, ok := analyzer.applyEdge(initial, edge)
 		if ok {
+			if fanout, exists := analyzer.staticFanouts[edge.TransitionGroupID]; exists {
+				transition.target.staticInvocation = staticFanoutInvocation{
+					groupID: edge.TransitionGroupID, incomingBranch: initial.branch,
+					entry: fanoutEntryState(initial), sibling: TransitionBranchKey(edge.Key), joinID: fanout.joinID,
+				}
+				transition.target.joinMode = reuseJoinComplete
+			}
 			initialTransitions = append(initialTransitions, transition)
 		}
 	}
@@ -215,13 +232,25 @@ type reuseBranch struct {
 }
 
 type reusePathState struct {
-	nodeID           NodeID
-	branch           reuseBranch
-	currentLineage   reuseLineage
-	completedDormant bool
-	dormancyBlocked  bool
-	overwritten      map[reuseOverwriteKey]reuseOverwriteStatus
+	nodeID                NodeID
+	branch                reuseBranch
+	currentLineage        reuseLineage
+	activeSourceSessionID runtimeids.SessionID
+	activeSourceKnown     bool
+	completedDormant      bool
+	dormancyBlocked       bool
+	overwritten           map[reuseOverwriteKey]reuseOverwriteStatus
+	staticSource          staticContinuationSource
+	staticInvocation      staticFanoutInvocation
+	joinMode              reuseJoinMode
 }
+
+type reuseJoinMode uint8
+
+const (
+	reuseJoinPartial reuseJoinMode = iota
+	reuseJoinComplete
+)
 
 type reuseOverwriteKey struct {
 	nodeID NodeID
@@ -252,6 +281,9 @@ type sessionReuseAnalyzer struct {
 	nodeIDsByKey       map[ModelKey]NodeID
 	groupsBySource     map[NodeID][]TransitionGroup
 	edgesByGroup       map[TransitionGroupID][]Edge
+	staticValidation   bool
+	staticInvalidEdges map[EdgeID]struct{}
+	staticFanouts      map[TransitionGroupID]staticFanout
 }
 
 func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseTransition, bool) {
@@ -261,7 +293,29 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}
 	groupEdges := a.edgesByGroup[edge.TransitionGroupID]
 	targetBranch := a.nextBranch(state.branch, edge, target, len(groupEdges))
-	targetLineage, selected := a.targetLineage(state, edge, target, targetBranch)
+	if a.staticValidation {
+		requiresMergedSource := target.Kind() != NodeKindTerminal &&
+			CanonicalContextSource(edge.ContextSource).Kind != ContextSourceSelectedNode &&
+			(edge.ContextMode != ContextModeNewSession || target.Kind() != NodeKindAgent)
+		if (isRetainedTargetContextSource(edge.ContextSource) &&
+			state.staticSource.kind != staticContinuationSourceExact) ||
+			(requiresMergedSource && state.staticSource.kind == staticContinuationSourceDivergent) {
+			a.staticInvalidEdges[edge.ID] = struct{}{}
+		}
+		return reuseTransition{target: reusePathState{
+			nodeID: edge.TargetNodeID,
+			branch: targetBranch,
+			staticSource: a.transferStaticContinuationSource(
+				state.staticSource,
+				state.nodeID,
+				state.branch,
+				targetBranch,
+				edge,
+				target,
+			),
+		}}, true
+	}
+	targetLineage, activeSourceSessionID, activeSourceKnown, selected := a.targetContext(state, edge, target, targetBranch)
 	if !selected {
 		return reuseTransition{}, false
 	}
@@ -278,12 +332,14 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 		completedDormant = true
 	}
 	targetState := reusePathState{
-		nodeID:           edge.TargetNodeID,
-		branch:           targetBranch,
-		currentLineage:   targetLineage,
-		completedDormant: completedDormant,
-		dormancyBlocked:  dormancyBlocked,
-		overwritten:      cloneOverwritten(state.overwritten),
+		nodeID:                edge.TargetNodeID,
+		branch:                targetBranch,
+		currentLineage:        targetLineage,
+		activeSourceSessionID: activeSourceSessionID,
+		activeSourceKnown:     activeSourceKnown,
+		completedDormant:      completedDormant,
+		dormancyBlocked:       dormancyBlocked,
+		overwritten:           cloneOverwritten(state.overwritten),
 	}
 	if target.Kind() == NodeKindAgent &&
 		targetLineage != reuseLineageAbsent &&
@@ -309,44 +365,71 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 	}, true
 }
 
-func (a sessionReuseAnalyzer) targetLineage(state reusePathState, edge Edge, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) targetContext(
+	state reusePathState,
+	edge Edge,
+	target Node,
+	targetBranch reuseBranch,
+) (reuseLineage, runtimeids.SessionID, bool, bool) {
 	if target.Kind() != NodeKindAgent {
-		return reuseLineageAbsent, true
+		if edge.ContextMode == ContextModeContinueSession ||
+			edge.ContextMode == ContextModeCompactAndContinueSession {
+			_, sourceSessionID, sourceKnown, selected := a.resolveContextSource(state, edge.ContextSource, target, targetBranch)
+			return reuseLineageAbsent, sourceSessionID, sourceKnown, selected
+		}
+		return reuseLineageAbsent, state.activeSourceSessionID, state.activeSourceKnown, true
 	}
 	switch edge.ContextMode {
 	case ContextModeNewSession:
-		return reuseLineageOther, true
+		return reuseLineageOther, runtimeids.SessionID{}, false, true
 	case ContextModeContinueSession, ContextModeCompactAndContinueSession:
 		return a.resolveContextSource(state, edge.ContextSource, target, targetBranch)
 	default:
-		return reuseLineageUnknown, true
+		return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 	}
 }
 
-func (a sessionReuseAnalyzer) resolveContextSource(state reusePathState, source ContextSource, target Node, targetBranch reuseBranch) (reuseLineage, bool) {
+func (a sessionReuseAnalyzer) resolveContextSource(
+	state reusePathState,
+	source ContextSource,
+	target Node,
+	targetBranch reuseBranch,
+) (reuseLineage, runtimeids.SessionID, bool, bool) {
 	canonical := CanonicalContextSource(source)
 	switch canonical.Kind {
 	case ContextSourceImmediateSource:
-		return state.currentLineage, true
+		switch state.currentLineage {
+		case reuseLineageCompleted:
+			return state.currentLineage, a.completedSessionID, true, true
+		case reuseLineageAbsent:
+			return state.currentLineage, state.activeSourceSessionID, state.activeSourceKnown, true
+		default:
+			return state.currentLineage, runtimeids.SessionID{}, false, true
+		}
 	case ContextSourceSelectedNode:
 		nodeID, exists := a.nodeIDsByKey[canonical.NodeKey]
 		if !exists {
-			return reuseLineageUnknown, true
+			return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 		}
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		return a.associatedLineage(lookupBranch, state.overwritten, nodeID, true)
+		lineage, association, found := a.associatedLineage(state, lookupBranch, nodeID, true, false)
+		if !found {
+			return lineage, runtimeids.SessionID{}, false, true
+		}
+		return lineage, association.SessionID, true, true
 	case ContextSourcePreviousTarget:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		return a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), false)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), false, true)
+		return lineage, state.activeSourceSessionID, state.activeSourceKnown, found
 	case ContextSourcePreviousTargetOrNew:
 		lookupBranch, _ := reuseContextLookupBranch(state.branch, targetBranch, canonical)
-		lineage, found := a.associatedLineage(lookupBranch, state.overwritten, NodeIDOf(target), true)
+		lineage, _, found := a.associatedLineage(state, lookupBranch, NodeIDOf(target), true, true)
 		if !found {
-			return reuseLineageOther, true
+			return reuseLineageOther, runtimeids.SessionID{}, false, true
 		}
-		return lineage, true
+		return lineage, state.activeSourceSessionID, state.activeSourceKnown, true
 	default:
-		return reuseLineageUnknown, true
+		return reuseLineageUnknown, runtimeids.SessionID{}, false, true
 	}
 }
 
@@ -361,10 +444,16 @@ func reuseContextLookupBranch(sourceBranch, targetBranch reuseBranch, source Con
 	}
 }
 
-func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten map[reuseOverwriteKey]reuseOverwriteStatus, nodeID NodeID, optional bool) (reuseLineage, bool) {
-	status, overwrittenPath := overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
+func (a sessionReuseAnalyzer) associatedLineage(
+	state reusePathState,
+	branch reuseBranch,
+	nodeID NodeID,
+	optional bool,
+	retainedTarget bool,
+) (reuseLineage, SessionReuseAssociation, bool) {
+	status, overwrittenPath := state.overwritten[reuseOverwriteKey{nodeID: nodeID, branch: branch}]
 	if overwrittenPath && status == reuseOverwriteDefinite {
-		return reuseLineageOther, true
+		return reuseLineageOther, SessionReuseAssociation{}, true
 	}
 	for index := len(a.input.RetainedAssociations) - 1; index >= 0; index-- {
 		association := a.input.RetainedAssociations[index]
@@ -373,21 +462,26 @@ func (a sessionReuseAnalyzer) associatedLineage(branch reuseBranch, overwritten 
 			!sameReuseBranch(branch, association.CurrentNode) {
 			continue
 		}
+		if retainedTarget &&
+			(!state.activeSourceKnown || association.SourceSessionID.IsZero() ||
+				association.SourceSessionID != state.activeSourceSessionID) {
+			return reuseLineageOther, association, true
+		}
 		if association.SessionID == a.completedSessionID {
 			if overwrittenPath && status == reuseOverwriteMaybe {
-				return reuseLineageUnknown, true
+				return reuseLineageUnknown, association, true
 			}
-			return reuseLineageCompleted, true
+			return reuseLineageCompleted, association, true
 		}
-		return reuseLineageOther, true
+		return reuseLineageOther, association, true
 	}
 	if overwrittenPath {
-		return reuseLineageOther, true
+		return reuseLineageOther, SessionReuseAssociation{}, true
 	}
 	if optional {
-		return reuseLineageOther, false
+		return reuseLineageOther, SessionReuseAssociation{}, false
 	}
-	return reuseLineageAbsent, false
+	return reuseLineageAbsent, SessionReuseAssociation{}, false
 }
 
 func sameReuseBranch(branch reuseBranch, reference CurrentNodeReference) bool {
@@ -450,6 +544,7 @@ type reuseGraph struct {
 func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 	graph := reuseGraph{}
 	processed := make(map[int]bool)
+	joinArrivals := make(map[staticFanoutInvocationKey]map[TransitionBranchKey]reusePathState)
 	// Overwritten provenance is merged by union when structural path states
 	// converge. This deliberately trades some possible-reuse precision for a
 	// bounded worklist instead of enumerating every overwrite subset.
@@ -504,6 +599,47 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 				if transition.possibleReuse {
 					graph.possibleReuse = true
 				}
+				if transition.target.staticInvocation.joinID == transition.target.nodeID {
+					invocation := transition.target.staticInvocation
+					key := invocation.aggregationKey()
+					arrivals := joinArrivals[key]
+					if arrivals == nil {
+						arrivals = make(map[TransitionBranchKey]reusePathState, len(a.staticFanouts[invocation.groupID].siblings))
+						joinArrivals[key] = arrivals
+					}
+					if previous, exists := arrivals[invocation.sibling]; exists {
+						merged := reduceJoinState(previous, transition.target)
+						if previous.staticSource != transition.target.staticSource {
+							merged.staticSource = staticContinuationSource{kind: staticContinuationSourceDivergent}
+						}
+						arrivals[invocation.sibling] = merged
+					} else {
+						arrivals[invocation.sibling] = transition.target
+					}
+					fanout := a.staticFanouts[invocation.groupID]
+					if len(arrivals) != len(fanout.siblings) {
+						continue
+					}
+					source := staticContinuationSource{}
+					var reduced reusePathState
+					for index, sibling := range fanout.siblings {
+						state := arrivals[sibling]
+						arrival := state.staticSource
+						if index == 0 {
+							source = arrival
+							reduced = state
+						} else if source != arrival {
+							source = staticContinuationSource{kind: staticContinuationSourceDivergent}
+						}
+						reduced = reduceJoinState(reduced, state)
+					}
+					transition.target = reduced
+					transition.target.nodeID = invocation.joinID
+					transition.target.branch = reuseBranch{}
+					transition.target.staticSource = source
+					transition.target.staticInvocation = staticFanoutInvocation{}
+					transition.target.joinMode = reuseJoinPartial
+				}
 				targetID, changed := addState(transition.target)
 				if changed {
 					enqueue(targetID)
@@ -523,15 +659,54 @@ func (a sessionReuseAnalyzer) stateGroups(state reusePathState) []reuseGroup {
 	for _, group := range groups {
 		edges := a.edgesByGroup[group.ID]
 		transitions := make([]reuseTransition, 0, len(edges))
+		fanout, completeFanout := a.staticFanouts[group.ID]
 		for _, edge := range edges {
 			transition, ok := a.applyEdge(state, edge)
 			if ok {
+				if completeFanout {
+					transition.target.staticInvocation = staticFanoutInvocation{
+						groupID: group.ID, incomingBranch: state.branch,
+						entry: fanoutEntryState(state), sibling: TransitionBranchKey(edge.Key), joinID: fanout.joinID,
+					}
+					transition.target.joinMode = reuseJoinComplete
+				} else {
+					transition.target.staticInvocation = state.staticInvocation
+					transition.target.joinMode = state.joinMode
+				}
 				transitions = append(transitions, transition)
 			}
 		}
 		result = append(result, reuseGroup{transitions: transitions})
 	}
 	return result
+}
+
+func reduceJoinState(left, right reusePathState) reusePathState {
+	if left.currentLineage != right.currentLineage {
+		left.currentLineage = reuseLineageUnknown
+	}
+	if !left.activeSourceKnown || !right.activeSourceKnown ||
+		left.activeSourceSessionID != right.activeSourceSessionID {
+		left.activeSourceSessionID = runtimeids.SessionID{}
+		left.activeSourceKnown = false
+	}
+	left.completedDormant = left.completedDormant || right.completedDormant
+	left.dormancyBlocked = left.dormancyBlocked || right.dormancyBlocked
+	left.overwritten = mergeCompleteJoinOverwritten(left.overwritten, right.overwritten)
+	return left
+}
+
+func mergeCompleteJoinOverwritten(left, right map[reuseOverwriteKey]reuseOverwriteStatus) map[reuseOverwriteKey]reuseOverwriteStatus {
+	merged := cloneOverwritten(left)
+	if merged == nil && len(right) > 0 {
+		merged = make(map[reuseOverwriteKey]reuseOverwriteStatus, len(right))
+	}
+	for key, status := range right {
+		if existing, found := merged[key]; !found || status == reuseOverwriteDefinite || existing == reuseOverwriteMaybe {
+			merged[key] = status
+		}
+	}
+	return merged
 }
 
 func (a sessionReuseAnalyzer) guaranteedAccepted(initial []reuseTransition, graph reuseGraph) bool {
@@ -693,9 +868,203 @@ func sameReusePathState(left, right reusePathState) bool {
 	if left.nodeID != right.nodeID ||
 		left.branch != right.branch ||
 		left.currentLineage != right.currentLineage ||
+		left.activeSourceSessionID != right.activeSourceSessionID ||
+		left.activeSourceKnown != right.activeSourceKnown ||
+		left.staticSource != right.staticSource ||
+		left.staticInvocation != right.staticInvocation ||
+		left.joinMode != right.joinMode ||
 		left.completedDormant != right.completedDormant ||
 		left.dormancyBlocked != right.dormancyBlocked {
 		return false
 	}
 	return true
+}
+
+type staticContinuationSourceKind uint8
+
+const (
+	staticContinuationSourceAbsent staticContinuationSourceKind = iota
+	staticContinuationSourceExact
+	staticContinuationSourceDivergent
+)
+
+type staticContinuationSource struct {
+	kind   staticContinuationSourceKind
+	nodeID NodeID
+	branch reuseBranch
+}
+
+type staticFanout struct {
+	joinID   NodeID
+	siblings []TransitionBranchKey
+}
+
+type staticFanoutInvocation struct {
+	groupID        TransitionGroupID
+	incomingBranch reuseBranch
+	entry          reuseFanoutEntryState
+	sibling        TransitionBranchKey
+	joinID         NodeID
+}
+
+type staticFanoutInvocationKey struct {
+	groupID        TransitionGroupID
+	incomingBranch reuseBranch
+	entry          reuseFanoutEntryState
+	joinID         NodeID
+}
+
+type reuseFanoutEntryState struct {
+	currentLineage        reuseLineage
+	activeSourceSessionID runtimeids.SessionID
+	activeSourceKnown     bool
+	completedDormant      bool
+	staticSource          staticContinuationSource
+}
+
+func fanoutEntryState(state reusePathState) reuseFanoutEntryState {
+	return reuseFanoutEntryState{
+		currentLineage: state.currentLineage, activeSourceSessionID: state.activeSourceSessionID, activeSourceKnown: state.activeSourceKnown,
+		completedDormant: state.completedDormant, staticSource: state.staticSource,
+	}
+}
+
+func (i staticFanoutInvocation) aggregationKey() staticFanoutInvocationKey {
+	return staticFanoutInvocationKey{
+		groupID:        i.groupID,
+		incomingBranch: i.incomingBranch,
+		entry:          i.entry,
+		joinID:         i.joinID,
+	}
+}
+
+func validateStaticContinuationSources(def Definition, start NodeID) []EdgeID {
+	analyzer := newStaticSessionReuseAnalyzer(def)
+	initial := reusePathState{
+		nodeID:       start,
+		staticSource: staticContinuationSource{kind: staticContinuationSourceAbsent},
+	}
+	transitions := make([]reuseTransition, 0, len(analyzer.groupsBySource[start]))
+	for _, group := range analyzer.stateGroups(initial) {
+		transitions = append(transitions, group.transitions...)
+	}
+	analyzer.buildGraph(transitions)
+	result := make([]EdgeID, 0, len(analyzer.staticInvalidEdges))
+	for _, edge := range def.Edges {
+		if _, invalid := analyzer.staticInvalidEdges[edge.ID]; invalid {
+			result = append(result, edge.ID)
+		}
+	}
+	return result
+}
+
+func newStaticSessionReuseAnalyzer(def Definition) sessionReuseAnalyzer {
+	analyzer := sessionReuseAnalyzer{
+		input:              SessionReuseAnalysisInput{Workflow: def},
+		nodesByID:          make(map[NodeID]Node, len(def.Nodes)),
+		nodeIDsByKey:       make(map[ModelKey]NodeID, len(def.Nodes)),
+		groupsBySource:     make(map[NodeID][]TransitionGroup, len(def.TransitionGroups)),
+		edgesByGroup:       make(map[TransitionGroupID][]Edge, len(def.Edges)),
+		staticValidation:   true,
+		staticInvalidEdges: make(map[EdgeID]struct{}),
+		staticFanouts:      make(map[TransitionGroupID]staticFanout),
+	}
+	topology := newFanoutTopology(def)
+	for _, node := range def.Nodes {
+		analyzer.nodesByID[NodeIDOf(node)] = node
+		analyzer.nodeIDsByKey[NodeKey(node)] = NodeIDOf(node)
+	}
+	for _, group := range def.TransitionGroups {
+		analyzer.groupsBySource[group.SourceNodeID] = append(analyzer.groupsBySource[group.SourceNodeID], group)
+		analyzer.edgesByGroup[group.ID] = append(analyzer.edgesByGroup[group.ID], topology.edgesByGroup[group.ID]...)
+	}
+	analyzer.staticFanouts = sessionReuseFanouts(def)
+	return analyzer
+}
+
+func sessionReuseFanouts(def Definition) map[TransitionGroupID]staticFanout {
+	topology := newFanoutTopology(def)
+	fanouts := make(map[TransitionGroupID]staticFanout)
+	for _, group := range def.TransitionGroups {
+		edges := topology.edgesByGroup[group.ID]
+		if len(edges) < 2 {
+			continue
+		}
+		distances := make([]map[NodeID]int, 0, len(edges))
+		siblings := make([]TransitionBranchKey, 0, len(edges))
+		for _, edge := range edges {
+			branchDistances, ok := fanoutBranchJoinDistances(
+				topology.nodesByID, topology.groupsBySource, topology.edgesByGroup,
+				topology.outgoingByNode, edge.TargetNodeID,
+			)
+			if !ok {
+				distances = nil
+				break
+			}
+			distances = append(distances, branchDistances)
+			siblings = append(siblings, TransitionBranchKey(edge.Key))
+		}
+		if joinID, ok := fanoutNearestCommonJoin(distances); ok {
+			fanouts[group.ID] = staticFanout{joinID: joinID, siblings: siblings}
+		}
+	}
+	return fanouts
+}
+
+func (a sessionReuseAnalyzer) transferStaticContinuationSource(
+	source staticContinuationSource,
+	sourceNodeID NodeID,
+	sourceBranch reuseBranch,
+	targetBranch reuseBranch,
+	edge Edge,
+	target Node,
+) staticContinuationSource {
+	if target.Kind() == NodeKindTerminal {
+		return staticContinuationSource{kind: staticContinuationSourceAbsent}
+	}
+	if edge.ContextMode == ContextModeNewSession {
+		if target.Kind() != NodeKindAgent {
+			return source
+		}
+		return staticContinuationSource{
+			kind:   staticContinuationSourceExact,
+			nodeID: edge.TargetNodeID,
+			branch: targetBranch,
+		}
+	}
+	if edge.ContextMode != ContextModeContinueSession &&
+		edge.ContextMode != ContextModeCompactAndContinueSession {
+		return staticContinuationSource{kind: staticContinuationSourceAbsent}
+	}
+	switch contextSource := CanonicalContextSource(edge.ContextSource); contextSource.Kind {
+	case ContextSourceImmediateSource:
+		if sourceNode, exists := a.nodesByID[sourceNodeID]; exists && sourceNode.Kind() == NodeKindAgent {
+			return staticContinuationSource{
+				kind:   staticContinuationSourceExact,
+				nodeID: sourceNodeID,
+				branch: sourceBranch,
+			}
+		}
+		return source
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+		return source
+	case ContextSourceSelectedNode:
+		if nodeID, exists := a.nodeIDsByKey[contextSource.NodeKey]; exists {
+			return staticContinuationSource{
+				kind:   staticContinuationSourceExact,
+				nodeID: nodeID,
+				branch: sourceBranch,
+			}
+		}
+	}
+	return staticContinuationSource{kind: staticContinuationSourceAbsent}
+}
+
+func isRetainedTargetContextSource(source ContextSource) bool {
+	switch CanonicalContextSource(source).Kind {
+	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
+		return true
+	default:
+		return false
+	}
 }
