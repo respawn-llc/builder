@@ -2,17 +2,20 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -211,6 +214,118 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	state := store.Meta().WorktreeReminder
 	if state == nil || !session.WorktreeReminderStateEqual(*state, target) {
 		t.Fatalf("unexpected reminder target state: %+v", state)
+	}
+}
+
+func TestScheduledWorktreeTransitionRunsAtNextAgentStepBoundary(t *testing.T) {
+	store := mustCreateTestSession(t)
+	target := testWorktreeReminderState(
+		session.WorktreeReminderModeEnter,
+		"feature/step-boundary",
+		"/tmp/wt-step-boundary",
+		"/tmp/workspace",
+		"/tmp/wt-step-boundary",
+	)
+	toolStarted := make(chan struct{})
+	releaseTool := make(chan struct{})
+	call := llm.ToolCall{
+		ID:    "call-step-boundary",
+		Name:  string(toolspec.ToolExecCommand),
+		Input: json.RawMessage(`{"cmd":"pwd"}`),
+	}
+	client := &fakeClient{responses: []llm.Response{
+		{
+			Assistant: llm.Message{
+				Role:      llm.RoleAssistant,
+				Content:   textutil.Value("working"),
+				ToolCalls: []llm.ToolCall{call},
+			},
+			ToolCalls: []llm.ToolCall{call},
+			OutputItems: []llm.ResponseItem{{
+				Type:   llm.ResponseItemTypeFunctionCall,
+				ID:     textutil.Value(call.ID),
+				CallID: textutil.Value(call.ID),
+				Name:   textutil.Value(call.Name),
+			}},
+			Usage: llm.Usage{WindowTokens: 200000},
+		},
+		finalOutputItemResponse("done"),
+	}}
+	registry := tools.NewRegistry(tools.HandlerRegistration{
+		ID: toolspec.ToolExecCommand,
+		Handler: blockingTool{
+			name:    toolspec.ToolExecCommand,
+			started: toolStarted,
+			release: releaseTool,
+		},
+	})
+	eng := mustNewTestEngine(t, store, client, registry, Config{Model: "gpt-5"})
+
+	submitDone := make(chan error, 1)
+	go func() {
+		_, err := eng.SubmitUserMessage(context.Background(), "start")
+		submitDone <- err
+	}()
+	select {
+	case <-toolStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for active tool")
+	}
+
+	transitionApplied := make(chan struct{})
+	transitionDone := make(chan error, 1)
+	go func() {
+		transitionDone <- eng.RunWorktreeTransition(context.Background(), func() error {
+			if err := eng.SetWorktreeReminderState(&target); err != nil {
+				return err
+			}
+			close(transitionApplied)
+			return nil
+		})
+	}()
+	if _, accepted, err := eng.QueueUserMessageForActiveRun(
+		context.Background(),
+		"steer after worktree switch",
+		runtimeids.NewRuntimeClientRequestID(),
+		nil,
+	); err != nil || !accepted {
+		t.Fatalf("queue steer accepted=%t err=%v", accepted, err)
+	}
+
+	select {
+	case <-transitionApplied:
+		t.Fatal("worktree transition ran before the active Agent Step completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseTool)
+	select {
+	case err := <-transitionDone:
+		if err != nil {
+			t.Fatalf("run worktree transition: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("worktree transition did not run at the next Agent Step boundary")
+	}
+	if err := <-submitDone; err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+
+	assertModelCallCount(t, client, 2)
+	secondMessages := requestMessages(client.calls[1])
+	if !requestHasWorktreeReminder(client.calls[1]) {
+		t.Fatalf("next Agent Step omitted worktree reminder: %+v", secondMessages)
+	}
+	steerFound := false
+	for _, message := range secondMessages {
+		if message.Role == llm.RoleUser &&
+			message.Content != nil &&
+			*message.Content == "steer after worktree switch" {
+			steerFound = true
+			break
+		}
+	}
+	if !steerFound {
+		t.Fatalf("next Agent Step omitted queued steer: %+v", secondMessages)
 	}
 }
 
