@@ -4,7 +4,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -12,14 +14,23 @@ import (
 
 func TestOnlyCurrentNodeBindingDesignatesCurrentSessionAssociations(t *testing.T) {
 	methods := map[string]bool{"DesignateSerialCurrentSessionWorkflowNodeAssociation": false, "DesignateBranchCurrentSessionWorkflowNodeAssociation": false}
-	files, err := filepath.Glob(filepath.Join(testsetup.RepositoryRoot(t), "server", "*", "*.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, path := range files {
+	root := filepath.Join(testsetup.RepositoryRoot(t), "server")
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			if path == filepath.Join(root, "metadata", "sqlitegen") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -44,6 +55,10 @@ func TestOnlyCurrentNodeBindingDesignatesCurrentSessionAssociations(t *testing.T
 				return true
 			})
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	for method, found := range methods {
 		if !found {
