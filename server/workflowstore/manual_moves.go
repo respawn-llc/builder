@@ -236,6 +236,19 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets); err != nil {
 		return ManualMoveResult{}, err
 	}
+	associatedAt := s.now().UTC()
+	for _, target := range targets {
+		if target.SessionID == nil {
+			continue
+		}
+		if err := upsertTaskSessionAssociation(ctx, q, TaskSessionAssociationRequest{
+			SessionID:    *target.SessionID,
+			CurrentNode:  target.Reference,
+			AssociatedAt: associatedAt,
+		}); err != nil {
+			return ManualMoveResult{}, err
+		}
+	}
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
 		return ManualMoveResult{}, err
 	}
