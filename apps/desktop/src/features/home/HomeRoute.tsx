@@ -42,15 +42,15 @@ import {
 } from "./useHomeData";
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
-export function HomeRoute() {
+export function HomeRoute({ selectedProjectID }: Readonly<{ selectedProjectID: string | null }>) {
   return (
     <SidebarRootOwner>
-      <HomeRouteContent />
+      <HomeRouteContent selectedProjectID={selectedProjectID} />
     </SidebarRootOwner>
   );
 }
 
-function HomeRouteContent() {
+function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: string | null }>) {
   const { t } = useTranslation();
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
@@ -65,7 +65,6 @@ function HomeRouteContent() {
   const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
   const [prototypeCategory, setPrototypeCategory] = useState<HomePrimaryTab>("projects");
-  const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null);
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
   const disabled = connection.phase !== "connected";
@@ -179,11 +178,8 @@ function HomeRouteContent() {
   useProjectCreationEvents(handleNativeProjectCreated);
 
   if (desktopChatEnabled) {
-    const selectedProject =
-      selectedProjectID === null
-        ? null
-        : (projectItems.find((project) => project.id === selectedProjectID) ?? null);
-    const detailKey = selectedProject !== null ? `project:${selectedProject.id}` : "inbox";
+    const selectedCategory = selectedProjectID === null ? prototypeCategory : "projects";
+    const detailKey = selectedProjectID === null ? "inbox" : `project:${selectedProjectID}`;
     return (
       <div className="h-full min-h-0" data-testid="home-route-root">
         {projectCreationDialog.fallback}
@@ -195,13 +191,22 @@ function HomeRouteContent() {
               open({ kind: "workflowCreate", mode: sidebarMode });
             }}
             onProjectSelect={(projectID) => {
-              setSelectedProjectID((current) => (current === projectID ? null : projectID));
+              if (selectedProjectID === projectID) {
+                void navigation.selectHomeProject(null);
+                return;
+              }
+              void navigation.selectHomeProject(projectID);
             }}
             onCategorySelect={(category) => {
+              if (prototypeCategory === category && selectedProjectID === null) {
+                return;
+              }
               setPrototypeCategory(category);
-              setSelectedProjectID(null);
+              if (selectedProjectID !== null) {
+                void navigation.selectHomeProject(null);
+              }
             }}
-            selectedCategory={prototypeCategory}
+            selectedCategory={selectedCategory}
             projectItems={projectItems}
             projectsQuery={projects}
             sidebarMode={sidebarMode}
@@ -209,14 +214,10 @@ function HomeRouteContent() {
           />
           <section className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
             <OverlappingCrossfade contentKey={detailKey}>
-              {selectedProject !== null ? (
+              {selectedProjectID !== null ? (
                 <ProjectPrototypeDetail
-                  key={selectedProject.id}
-                  disabled={disabled}
-                  onLinkWorkflow={() => {
-                    open({ kind: "linkWorkflow", mode: sidebarMode, projectID: selectedProject.id });
-                  }}
-                  project={selectedProject}
+                  key={selectedProjectID}
+                  projectID={selectedProjectID}
                   sidebarMode={sidebarMode}
                 />
               ) : (
