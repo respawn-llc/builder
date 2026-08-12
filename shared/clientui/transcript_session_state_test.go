@@ -23,6 +23,10 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 	if err := goal.Validate(); err != nil {
 		t.Fatalf("validate goal status: %v", err)
 	}
+	invalidAvailability := GoalAvailability("invalid")
+	if err := (GoalMutationResult{Goal: goal.Goal.Goal, Availability: &invalidAvailability}).Validate(); err == nil {
+		t.Fatal("accepted Goal with invalid availability")
+	}
 
 	compaction := TranscriptCompactionStatus{
 		StepID: transcriptTestStepID(t),

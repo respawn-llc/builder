@@ -62,15 +62,19 @@ func (r GoalMutationResult) Validate() error {
 		return fmt.Errorf("goal mutation result cannot contain Goal and pending preview")
 	}
 	if r.Goal != nil {
-		return r.Goal.Validate()
+		if err := r.Goal.Validate(); err != nil {
+			return err
+		}
 	}
-	if r.Pending != nil && (strings.TrimSpace(r.Pending.Objective) == "" || !validGoalStatus(r.Pending.Status)) {
-		return fmt.Errorf("invalid goal preview fields")
+	if r.Pending != nil {
+		if strings.TrimSpace(r.Pending.Objective) == "" || !validGoalStatus(r.Pending.Status) {
+			return fmt.Errorf("invalid goal preview fields")
+		}
 	}
-	if r.Availability == nil {
-		return nil
+	if r.Availability != nil {
+		return r.Availability.Validate()
 	}
-	return r.Availability.Validate()
+	return nil
 }
 func validGoalStatus(status RuntimeGoalStatus) bool {
 	return status == RuntimeGoalStatusActive || status == RuntimeGoalStatusPaused || status == RuntimeGoalStatusComplete
