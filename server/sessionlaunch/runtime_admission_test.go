@@ -460,6 +460,19 @@ func TestServiceOpenExistingSubagentSnapshotDoesNotWaitAcrossActiveSteps(t *test
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("read-only existing-session planning remained blocked across a completed step")
 	}
+	descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+	if err != nil {
+		t.Fatalf("new opened Session descriptor: %v", err)
+	}
+	if err := authority.WithSessionStore(context.Background(), descriptor, func(_ context.Context, opened *session.Store) error {
+		got := opened.Meta().Category
+		if got == nil || *got != sessioncontract.SessionCategoryMain {
+			return errors.New("opened Session category was not promoted to main")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect opened Session category: %v", err)
+	}
 
 	close(releaseSecond)
 	if err := <-secondDone; err != nil {

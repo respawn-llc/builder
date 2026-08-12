@@ -479,6 +479,11 @@ func (s *Service) planExistingSessionSnapshot(
 			if err != nil {
 				return launch.SessionPlan{}, nil, err
 			}
+			if req.Mode == serverapi.SessionLaunchModeInteractive {
+				if _, err := store.PromoteSubagentToMain(); err != nil {
+					return launch.SessionPlan{}, nil, err
+				}
+			}
 			return plan, nil, nil
 		},
 	)
