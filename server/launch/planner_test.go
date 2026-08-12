@@ -1026,6 +1026,36 @@ func TestApplyRunPromptOverridesOverridesHeadlessSettingsWithoutMutatingBasePlan
 	}
 }
 
+func TestApplyRunPromptOverridesPreservesExplicitThinkingOverSessionSetting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking: textutil.Value("low"),
+	}); err != nil {
+		t.Fatalf("persist Session Thinking: %v", err)
+	}
+
+	updated, warnings, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{ThinkingLevel: "high"},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverridesWithStore: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("unexpected warnings: %+v", warnings)
+	}
+	if updated.ActiveSettings.ThinkingLevel != "high" {
+		t.Fatalf("thinking level = %q, want explicit override high", updated.ActiveSettings.ThinkingLevel)
+	}
+}
+
 func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)

@@ -588,7 +588,11 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 		return SessionPlan{}, nil, err
 	}
 	var chatSettings session.ChatSettings
-	next.ActiveSettings, chatSettings, err = applySessionChatSettings(store.Meta(), next.ActiveSettings)
+	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
+		store.Meta(),
+		next.ActiveSettings,
+		overrides,
+	)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
@@ -859,13 +863,33 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 		return SessionPlan{}, nil, err
 	}
 	var chatSettings session.ChatSettings
-	next.ActiveSettings, chatSettings, err = applySessionChatSettings(store.Meta(), next.ActiveSettings)
+	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
+		store.Meta(),
+		next.ActiveSettings,
+		overrides,
+	)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
 	next.QuestionsEnabled = chatSettings.Questions
 	next.AutoCompactionEnabled = chatSettings.AutoCompaction
 	return next, warnings, nil
+}
+
+func applySessionChatSettingsWithRunOverrides(
+	meta session.Meta,
+	active config.Settings,
+	overrides serverapi.RunPromptOverrides,
+) (config.Settings, session.ChatSettings, error) {
+	explicitThinking := active.ThinkingLevel
+	active, settings, err := applySessionChatSettings(meta, active)
+	if err != nil {
+		return config.Settings{}, session.ChatSettings{}, err
+	}
+	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
+		active.ThinkingLevel = explicitThinking
+	}
+	return active, settings, nil
 }
 
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
