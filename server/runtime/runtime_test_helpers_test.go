@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"core/internal/testharness/filemode"
-	"core/internal/testharness/runtimewirefixture"
+	"core/internal/testharness/toolfixture"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -29,7 +29,7 @@ import (
 
 func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
 	t.Helper()
-	return runtimewirefixture.NewToolRegistry(t, registrations...)
+	return toolfixture.NewRegistry(t, registrations...)
 }
 
 func mustReviewerSuggestionsContract(t testing.TB) jsoncontract.Structured {

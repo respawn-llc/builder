@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"testing"
 
-	"core/internal/testharness/runtimewirefixture"
 	"core/internal/testharness/testsetup"
+	"core/internal/testharness/toolfixture"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/projectview"
@@ -223,7 +223,7 @@ func newAppRuntimeEngineWithStore(t *testing.T, store *session.Store, client llm
 	if err != nil {
 		t.Fatalf("materialize event log: %v", err)
 	}
-	eng, err := runtime.New(store, eventLog, client, runtimewirefixture.NewToolRegistry(t, handlers...), cfg)
+	eng, err := runtime.New(store, eventLog, client, toolfixture.NewRegistry(t, handlers...), cfg)
 	if err != nil {
 		t.Fatalf("new engine: %v", err)
 	}

@@ -57,6 +57,12 @@ All Planning checkboxes are complete.
   and merging the tool Registry fixture into an existing test-harness package.
 - [x] Run focused tests, commit the complete review-fix round, and return to review.
 
+## QA remediation
+
+- [x] Remove the concrete-tool import cycle from the shared Registry fixture.
+- [x] Inspect every consumer and equivalent concrete-tool package test.
+- [x] Run focused package and architecture tests, commit, and return to QA.
+
 ## Verification notes
 
 - Relevant static-tool, ingress, reviewer, Workflow completion, runtime,
