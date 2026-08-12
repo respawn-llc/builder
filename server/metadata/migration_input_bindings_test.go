@@ -156,3 +156,44 @@ WHERE task_id = 'task-input-binding-migration'`).Scan(&currentInputValues); err 
 		})
 	}
 }
+
+func TestMigration81NormalizesExistingEmptyObjectInputBindings(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 80)
+	if err != nil {
+		t.Fatalf("open version 80 db: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES ('project-input-binding-normalization', 'Project', ?, ?, '{}')`, now, now)
+	seedWorkflowGraph(t, db, "project-input-binding-normalization", now)
+	if _, err := db.ExecContext(t.Context(), `
+UPDATE workflow_edges
+SET input_bindings_json = '{}'
+WHERE id = 'edge-start-1'`); err != nil {
+		t.Fatalf("seed existing empty-object input bindings: %v", err)
+	}
+
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create metadata migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 81); err != nil {
+		t.Fatalf("apply migration 81: %v", err)
+	}
+
+	var persistedBindings string
+	if err := db.QueryRowContext(t.Context(), `
+SELECT input_bindings_json
+FROM workflow_edges
+WHERE id = 'edge-start-1'`).Scan(&persistedBindings); err != nil {
+		t.Fatalf("query normalized input bindings: %v", err)
+	}
+	if persistedBindings != `[]` {
+		t.Fatalf("persisted input bindings = %q, want canonical []", persistedBindings)
+	}
+}
