@@ -211,6 +211,18 @@ func (a *GoalAuthority) withLive(
 		result.Err = err
 		return result, nil
 	}
+	if errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		err = a.execution.WithRetainedWorkflowRuntime(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+			applied, applyErr := mutate(engine)
+			result = applied
+			return applyErr
+		})
+		if result.Accepted() {
+			result.Err = err
+			return result, nil
+		}
+		return GoalCommandResult{}, err
+	}
 	if !errors.Is(err, serverapi.ErrSessionRunStarting) {
 		return GoalCommandResult{}, err
 	}
