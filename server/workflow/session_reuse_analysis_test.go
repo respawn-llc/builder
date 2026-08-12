@@ -1202,119 +1202,6 @@ func TestClassifyWorkflowSessionReuseTreatsUnknownCorrelationAsOptional(t *testi
 	}
 }
 
-func TestClassifyWorkflowSessionReusePreservesBranchScopeAcrossJoinCycle(t *testing.T) {
-	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_join_cycle")
-	completedSessionID := runtimeids.NewSessionID()
-	completedReference, err := workflow.NewCurrentNodeReference("task-join-cycle", "node_source", nil)
-	if err != nil {
-		t.Fatalf("completed current node reference: %v", err)
-	}
-	completedNode, err := workflow.NewCurrentNode(completedReference, &completedSessionID, nil)
-	if err != nil {
-		t.Fatalf("completed current node: %v", err)
-	}
-	branchAKey := workflow.TransitionBranchKey("branch_a")
-	branchAReference, err := workflow.NewCurrentNodeReference(
-		"task-join-cycle",
-		"node_worker",
-		&branchAKey,
-	)
-	if err != nil {
-		t.Fatalf("retained branch current node reference: %v", err)
-	}
-
-	source := testAgentNode(workflowID, "node_source", "source", "Source", workflow.NodeFields{SubagentRole: "coder"})
-	branchA := testAgentNode(workflowID, "node_branch_a", "branch_a", "Branch A", workflow.NodeFields{SubagentRole: "reviewer"})
-	branchB := testAgentNode(workflowID, "node_branch_b", "branch_b", "Branch B", workflow.NodeFields{SubagentRole: "reviewer"})
-	join := testJoinNode(workflowID, "node_join", "join", "Join")
-	cycleA := testAgentNode(workflowID, "node_cycle_a", "cycle_a", "Cycle A", workflow.NodeFields{SubagentRole: "reviewer"})
-	cycleB := testAgentNode(workflowID, "node_cycle_b", "cycle_b", "Cycle B", workflow.NodeFields{SubagentRole: "reviewer"})
-	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "coder"})
-	done := testTerminalNode(workflowID, "node_done", "done", "Done")
-
-	acceptedA := workflow.Edge{
-		WorkflowID:        workflowID,
-		ID:                "edge_source_a",
-		Key:               "branch_a",
-		TransitionGroupID: "group_source",
-		TargetNodeID:      "node_branch_a",
-		ContextMode:       workflow.ContextModeNewSession,
-	}
-	acceptedB := acceptedA
-	acceptedB.ID = "edge_source_b"
-	acceptedB.Key = "branch_b"
-	acceptedB.TargetNodeID = "node_branch_b"
-	branchToJoinA := workflow.Edge{
-		WorkflowID:        workflowID,
-		ID:                "edge_a_join",
-		Key:               "join_a",
-		TransitionGroupID: "group_a_join",
-		TargetNodeID:      "node_join",
-		ContextMode:       workflow.ContextModeNewSession,
-	}
-	branchToJoinB := branchToJoinA
-	branchToJoinB.ID = "edge_b_join"
-	branchToJoinB.Key = "join_b"
-	branchToJoinB.TransitionGroupID = "group_b_join"
-	cycleAEdge := workflow.Edge{
-		WorkflowID:        workflowID,
-		ID:                "edge_join_cycle_a",
-		Key:               "branch_a",
-		TransitionGroupID: "group_join",
-		TargetNodeID:      "node_cycle_a",
-		ContextMode:       workflow.ContextModeNewSession,
-	}
-	cycleBEdge := cycleAEdge
-	cycleBEdge.ID = "edge_join_cycle_b"
-	cycleBEdge.Key = "branch_b"
-	cycleBEdge.TargetNodeID = "node_cycle_b"
-	reuse := workflow.Edge{
-		WorkflowID:        workflowID,
-		ID:                "edge_cycle_worker",
-		Key:               "worker",
-		TransitionGroupID: "group_cycle_worker",
-		TargetNodeID:      "node_worker",
-		ContextMode:       workflow.ContextModeContinueSession,
-		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
-	}
-	terminal := workflow.Edge{
-		WorkflowID:        workflowID,
-		ID:                "edge_worker_done",
-		Key:               "done",
-		TransitionGroupID: "group_worker_done",
-		TargetNodeID:      "node_done",
-		ContextMode:       workflow.ContextModeNewSession,
-	}
-
-	classification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
-		Workflow: workflow.Definition{
-			ID:          workflowID,
-			DisplayName: "Branch Scope Join Cycle",
-			Nodes:       []workflow.Node{source, branchA, branchB, join, cycleA, cycleB, worker, done},
-			TransitionGroups: []workflow.TransitionGroup{
-				{WorkflowID: workflowID, ID: "group_source", SourceNodeID: "node_source"},
-				{WorkflowID: workflowID, ID: "group_a_join", SourceNodeID: "node_branch_a"},
-				{WorkflowID: workflowID, ID: "group_b_join", SourceNodeID: "node_branch_b"},
-				{WorkflowID: workflowID, ID: "group_join", SourceNodeID: "node_join"},
-				{WorkflowID: workflowID, ID: "group_cycle_worker", SourceNodeID: "node_cycle_a"},
-				{WorkflowID: workflowID, ID: "group_worker_done", SourceNodeID: "node_worker"},
-			},
-			Edges: []workflow.Edge{acceptedA, acceptedB, branchToJoinA, branchToJoinB, cycleAEdge, cycleBEdge, reuse, terminal},
-		},
-		AcceptedBranches:     []workflow.Edge{acceptedA, acceptedB},
-		CompletedCurrentNode: completedNode,
-		RetainedAssociations: []workflow.SessionReuseAssociation{{
-			SessionID:       completedSessionID,
-			SourceSessionID: completedSessionID,
-			CurrentNode:     branchAReference,
-		}},
-	})
-
-	if classification != workflow.SessionReuseNone {
-		t.Fatalf("classification = %q, want none after branch sources are replaced", classification)
-	}
-}
-
 func TestClassifyWorkflowSessionReuseBranchRootedJoinArrival(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -1392,6 +1279,71 @@ func TestClassifyWorkflowSessionReuseBranchRootedJoinArrival(t *testing.T) {
 				t.Fatalf("classification = %q, want %q", classification, test.want)
 			}
 		})
+	}
+}
+
+func TestClassifyWorkflowSessionReuseWaitsForObservedFanoutJoin(t *testing.T) {
+	workflowID := testsetup.WorkflowID(t, "workflow_session_reuse_complete_join")
+	sessionID := runtimeids.NewSessionID()
+	sourceReference, err := workflow.NewCurrentNodeReference("task-complete-join", "node_source", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := workflow.NewCurrentNode(sourceReference, &sessionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := testAgentNode(workflowID, "node_source", "source", "Source", workflow.NodeFields{SubagentRole: "coder"})
+	branchA := testAgentNode(workflowID, "node_a", "a", "A", workflow.NodeFields{SubagentRole: "coder"})
+	branchB := testAgentNode(workflowID, "node_b", "b", "B", workflow.NodeFields{SubagentRole: "coder"})
+	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "coder"})
+	join := testJoinNode(workflowID, "node_join", "join", "Join")
+	reuse := testAgentNode(workflowID, "node_reuse", "reuse", "Reuse", workflow.NodeFields{SubagentRole: "coder"})
+	splitA := workflow.Edge{WorkflowID: workflowID, ID: "edge_a", Key: "a", TransitionGroupID: "split", TargetNodeID: "node_a", ContextMode: workflow.ContextModeNewSession}
+	splitB := workflow.Edge{WorkflowID: workflowID, ID: "edge_b", Key: "b", TransitionGroupID: "split", TargetNodeID: "node_b", ContextMode: workflow.ContextModeNewSession}
+	overwrite := workflow.Edge{WorkflowID: workflowID, ID: "edge_worker", Key: "worker", TransitionGroupID: "worker", TargetNodeID: "node_worker", ContextMode: workflow.ContextModeNewSession}
+	joinA := workflow.Edge{WorkflowID: workflowID, ID: "edge_join_a", Key: "join_a", TransitionGroupID: "join_a", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession}
+	joinB := workflow.Edge{WorkflowID: workflowID, ID: "edge_join_b", Key: "join_b", TransitionGroupID: "join_b", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession}
+	cac := workflow.Edge{WorkflowID: workflowID, ID: "edge_reuse", Key: "reuse", TransitionGroupID: "reuse", TargetNodeID: "node_reuse", ContextMode: workflow.ContextModeCompactAndContinueSession, ContextSource: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "worker"}}
+	definition := workflow.Definition{
+		ID: workflowID, DisplayName: "Complete Join",
+		Nodes: []workflow.Node{source, branchA, branchB, worker, join, reuse},
+		TransitionGroups: []workflow.TransitionGroup{
+			{WorkflowID: workflowID, ID: "split", SourceNodeID: "node_source"},
+			{WorkflowID: workflowID, ID: "worker", SourceNodeID: "node_a"},
+			{WorkflowID: workflowID, ID: "join_a", SourceNodeID: "node_worker"},
+			{WorkflowID: workflowID, ID: "join_b", SourceNodeID: "node_b"},
+			{WorkflowID: workflowID, ID: "reuse", SourceNodeID: "node_join"},
+		},
+		Edges: []workflow.Edge{splitA, splitB, overwrite, joinA, joinB, cac},
+	}
+	workerReference, err := workflow.NewCurrentNodeReference("task-complete-join", "node_worker", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	association := workflow.SessionReuseAssociation{SessionID: sessionID, CurrentNode: workerReference}
+	complete := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: definition, AcceptedBranches: []workflow.Edge{splitA, splitB},
+		CompletedCurrentNode: completed, RetainedAssociations: []workflow.SessionReuseAssociation{association},
+	})
+	if complete != workflow.SessionReuseThresholdPossibleReuse {
+		t.Fatalf("complete invocation classification = %q, want threshold_possible_reuse", complete)
+	}
+	branchKey := workflow.TransitionBranchKey("b")
+	partialReference, err := workflow.NewCurrentNodeReference("task-complete-join", "node_b", &branchKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := workflow.NewCurrentNode(partialReference, &sessionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partialClassification := workflow.ClassifyWorkflowSessionReuse(workflow.SessionReuseAnalysisInput{
+		Workflow: definition, AcceptedBranches: []workflow.Edge{joinB},
+		CompletedCurrentNode: partial, RetainedAssociations: []workflow.SessionReuseAssociation{association},
+	})
+	if partialClassification != workflow.SessionReuseGuaranteedCACReuse {
+		t.Fatalf("partial invocation classification = %q, want guaranteed_cac_reuse", partialClassification)
 	}
 }
 

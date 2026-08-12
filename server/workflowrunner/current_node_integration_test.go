@@ -724,6 +724,35 @@ func TestContinueSessionRetainsInitialCompletionModeAcrossNodeOverride(t *testin
 	requireToolOutputBeforeAssignment(t, requests[1], "complete-first", targetAssignments[1])
 }
 
+func TestApprovalAppliesStrictPreviousTargetOnceAfterSourceRetires(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true, SupportsPromptCacheKey: true},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("review")},
+		ScriptedFinalAnswer(`{"transition":"review","commentary":"done"}`),
+		ScriptedFinalAnswer(`{"transition":"rework","commentary":"changes"}`),
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	f := newCurrentNodeRunnerFixtureWithClient(t, client)
+	task := f.createTask(t, createCurrentNodeApprovalLoopWorkflow(t, f.store, true))
+	implementation := f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForTaskQuiescence(t, task.ID)
+	retained, err := f.store.CurrentTaskSessionForNode(context.Background(), implementation)
+	if err != nil {
+		t.Fatalf("resolve retained implementation: %v", err)
+	}
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply pending Approval: %v", err)
+	}
+	f.waitForModelRequests(t, 3)
+	target := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(implementation) && nodes[0].SessionID != nil
+	})
+	if *target[0].SessionID != retained.SessionID {
+		t.Fatalf("strict previous target Session = %q, want %q", *target[0].SessionID, retained.SessionID)
+	}
+}
+
 func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,
@@ -841,6 +870,50 @@ func TestWorkflowPostCompletionCompactionReachesCACTargetWithoutSecondSummary(t 
 	if requests[1].PromptCacheKey == "" || requests[2].PromptCacheKey == "" ||
 		requests[1].PromptCacheKey == requests[2].PromptCacheKey {
 		t.Fatalf("source/target cache keys = %q/%q, want distinct non-empty keys", requests[1].PromptCacheKey, requests[2].PromptCacheKey)
+	}
+}
+
+func TestPostCommitDiagnosticPreservesApprovalAndCACBoundary(t *testing.T) {
+	client := NewCompactingScriptedClient(
+		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true, SupportsResponsesCompact: true, SupportsPromptCacheKey: true},
+		[]llm.CompactionResponse{workflowPostCompletionCompactionResponse("source")},
+		ScriptedToolBatch("first", llm.ToolCall{ID: "first", Name: string(toolspec.ToolCompleteNode), Input: json.RawMessage(`{"transition":"next_1","commentary":"done"}`)}),
+		ScriptedToolBatch("second", llm.ToolCall{ID: "second", Name: string(toolspec.ToolCompleteNode), Input: json.RawMessage(`{"transition":"next_2","commentary":"done"}`)}),
+		ScriptedFinalAnswer(`{"commentary":"target"}`),
+	)
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, client)
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
+	threshold := 1
+	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
+	var observed atomic.Bool
+	f.persistenceGate.FailWhen(func(session.PersistedStoreSnapshot) bool {
+		return len(client.CompactionCalls()) > 0 && observed.Swap(true)
+	}, errors.New("post-commit diagnostic"))
+	task := f.createTask(t, createCurrentNodeThreeStepWorkflow(
+		t, f.store, "Post-commit diagnostic",
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "First."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Second."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review."},
+	))
+	f.startTask(t, task)
+	approval := f.waitForPendingApproval(t, task.ID)
+	if pending, err := f.store.ListPendingApprovals(context.Background(), task.ID); err != nil ||
+		len(pending) != 1 || pending[0].ID != approval.ID {
+		t.Fatalf("pending Approval after diagnostic = %+v, err = %v", pending, err)
+	}
+	f.waitForTaskQuiescence(t, task.ID)
+	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("apply Approval after diagnostic: %v", err)
+	}
+	requests := f.waitForModelRequests(t, 3)
+	summaries := 0
+	for _, item := range requests[2].Items {
+		if item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
+			summaries++
+		}
+	}
+	if len(client.CompactionCalls()) != 1 || summaries != 1 {
+		t.Fatalf("CAC boundary = %d compactions, %d summaries; want 1, 1", len(client.CompactionCalls()), summaries)
 	}
 }
 
