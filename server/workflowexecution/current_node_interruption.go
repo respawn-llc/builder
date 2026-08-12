@@ -633,10 +633,10 @@ func interruptCurrentNodeReferences(
 		}
 		seen[key] = struct{}{}
 		err = interrupt(ctx, reference, reason, detail)
-		if errors.Is(err, sql.ErrNoRows) {
+		committed, diagnostic := classifyCurrentNodeInterruption(err)
+		if !committed && errors.Is(diagnostic, sql.ErrNoRows) {
 			continue
 		}
-		committed, diagnostic := classifyCurrentNodeInterruption(err)
 		if diagnostic != nil {
 			interruptErrs = append(interruptErrs, diagnostic)
 		}

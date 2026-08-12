@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os/exec"
 	"sync"
@@ -78,6 +79,52 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 	if hasLiveCurrentNode(authority, reference) {
 		t.Fatal("interrupted current node remains live")
+	}
+}
+
+func TestCurrentNodeControllerTaskInterruptPreservesCommittedNoRowsDiagnostic(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-no-rows-diagnostic", "node-agent")
+	store := &currentNodeControllerStore{
+		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, sql.ErrNoRows),
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap '' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 1),
+	}
+	attention := &currentNodeAttentionRecorder{}
+	controller = newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("start current node: %v", err)
+	}
+	<-runner.started
+	waitForRunningCurrentNode(t, authority, reference)
+	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("Task Interrupt diagnostic = %v, want %v", err, sql.ErrNoRows)
+	}
+	if _, interrupted := store.interruption(reference); !interrupted {
+		t.Fatal("Task Interrupt did not preserve the committed interruption")
+	}
+	if attention.pendingCount() != 0 {
+		t.Fatalf("user interruption attention = %d, want none", attention.pendingCount())
 	}
 }
 

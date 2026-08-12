@@ -823,8 +823,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 		unclassified = append(unclassified, start)
 	}
 	if len(unclassified) != 0 {
-		resolved, diagnostic := c.classifyAutomaticStarts(waitCtx, unclassified, nil)
-		classified = append(classified, resolved...)
+		_, diagnostic := c.classifyAutomaticStarts(waitCtx, unclassified, nil)
 		if diagnostic != nil {
 			c.mu.Lock()
 			c.workerDiagnostics = errors.Join(c.workerDiagnostics, diagnostic)
