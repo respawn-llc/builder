@@ -655,7 +655,7 @@ func validateRetainedWorkflowSessionAgentRole(
 	policy currentNodeSessionPolicy,
 ) error {
 	if input.CurrentNode.SessionID == nil ||
-		policy.assignee == currentNodeSessionAssigneeEstablishTarget {
+		policy.assignee != currentNodeSessionAssigneeRequireTargetMatch {
 		return nil
 	}
 	selection, err := currentNodeAgentExecutionSelection(input)
