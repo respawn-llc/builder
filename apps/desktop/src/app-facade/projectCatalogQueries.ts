@@ -45,6 +45,10 @@ export async function invalidateProjectSessionCatalogs(
   });
 }
 
+export function previousSessionCatalogOffset(offset: number): number | undefined {
+  return offset === 0 ? undefined : Math.max(0, offset - sessionCatalogPageSize);
+}
+
 function sessionCatalogInfiniteQueryOptions(
   api: SessionCatalogApi,
   projectID: string,
@@ -65,8 +69,7 @@ function sessionCatalogInfiniteQueryOptions(
       _firstPage: SessionCatalogPage,
       _allPages: SessionCatalogPage[],
       firstPageParam: number,
-    ): number | undefined =>
-      firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - sessionCatalogPageSize),
+    ): number | undefined => previousSessionCatalogOffset(firstPageParam),
     maxPages: sessionCatalogMaxPages,
   });
 }

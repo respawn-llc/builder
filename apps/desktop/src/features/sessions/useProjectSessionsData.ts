@@ -2,9 +2,9 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import type { SessionCatalogSummary, SessionCategory } from "@/api";
-import { sessionCatalogPageSize } from "@/api";
 import {
   mainSessionCatalogInfiniteQueryOptions,
+  previousSessionCatalogOffset,
   queryKeys,
   subagentSessionCatalogInfiniteQueryOptions,
   useAppServices,
@@ -112,10 +112,7 @@ function sessionCatalogOffsets(
   }
   return {
     nextOffset: nextOffset ?? null,
-    previousOffset:
-      firstOffset === undefined || firstOffset === 0
-        ? null
-        : Math.max(0, firstOffset - sessionCatalogPageSize),
+    previousOffset: firstOffset === undefined ? null : (previousSessionCatalogOffset(firstOffset) ?? null),
   };
 }
 
