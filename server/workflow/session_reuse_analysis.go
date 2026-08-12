@@ -989,10 +989,10 @@ func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 	if target.Kind() == NodeKindTerminal {
 		return staticContinuationSource{kind: staticContinuationSourceAbsent}
 	}
-	if target.Kind() != NodeKindAgent {
-		return source
-	}
 	if edge.ContextMode == ContextModeNewSession {
+		if target.Kind() != NodeKindAgent {
+			return source
+		}
 		return staticContinuationSource{kind: staticContinuationSourceExact, nodeID: edge.TargetNodeID}
 	}
 	if edge.ContextMode != ContextModeContinueSession &&

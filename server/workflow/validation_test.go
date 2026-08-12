@@ -548,6 +548,22 @@ func TestRetainedTargetRequiresExactActiveContinuationSource(t *testing.T) {
 			},
 		},
 		{
+			name: "script branches select divergent sources",
+			setup: func(def *workflow.Definition) {
+				for _, nodeKey := range []workflow.ModelKey{"impl_a", "impl_b"} {
+					updateNodeByKeyForValidationTest(t, def, nodeKey, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
+						*kind = workflow.NodeKindScript
+						fields.SubagentRole = ""
+						fields.ScriptPath = workflow.MustPresentScriptPath("./branch.sh")
+					})
+				}
+				edgeByIDForValidationTest(t, def, "edge_split_a").ContextMode = workflow.ContextModeContinueSession
+				edgeByIDForValidationTest(t, def, "edge_split_a").ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"}
+				edgeByIDForValidationTest(t, def, "edge_split_b").ContextMode = workflow.ContextModeContinueSession
+				edgeByIDForValidationTest(t, def, "edge_split_b").ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "review"}
+			},
+		},
+		{
 			name: "alternate serial routes remain separate",
 			setup: func(def *workflow.Definition) {
 				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
