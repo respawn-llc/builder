@@ -123,4 +123,5 @@ export {
   type VirtualizedInfiniteListBoundaryState,
 } from "./InfiniteListBoundary";
 export { useStableCallback } from "./useStableCallback";
+export { useElementHeight } from "./useElementHeight";
 export type { StatusNotice, ToastTone } from "./statusToast";
