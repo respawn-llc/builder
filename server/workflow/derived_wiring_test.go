@@ -306,10 +306,12 @@ func assertDerivedDiagnosticsBlock(t *testing.T, derived workflow.DerivedWiring)
 func TestDerivedWiringDiagnosticsOmitBlankGraphIdentities(t *testing.T) {
 	def := validWorkflow(t)
 	def.Edges[0].ID = ""
-	def.Edges[0].Parameters = []workflow.Parameter{
-		{Key: "result", Description: "First"},
-		{Key: "result", Description: "Second"},
-	}
+	def.Edges[0].Parameters = []workflow.Parameter{{Key: "result", Description: "First"}}
+	conflicting := def.Edges[0]
+	conflicting.ID = ""
+	conflicting.Key = "conflicting"
+	conflicting.Parameters = []workflow.Parameter{{Key: "result", Description: "Second"}}
+	def.Edges = append(def.Edges, conflicting)
 
 	derived := workflow.DeriveWiring(def)
 

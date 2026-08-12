@@ -282,14 +282,20 @@ func TransitionOutputFieldsForTargetNode(def Definition, derived DerivedWiring, 
 }
 
 func (w *DerivedWiring) addRequiredProvisionFields(edgeID EdgeID, groupID TransitionGroupID, fields []OutputField) {
-	edgeMerged, edgeDiagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByEdge[edgeID], fields, ValidationError{
-		EdgeID:            &edgeID,
-		TransitionGroupID: &groupID,
-	})
+	edgeRef := ValidationError{}
+	if strings.TrimSpace(string(edgeID)) != "" {
+		edgeRef.EdgeID = &edgeID
+	}
+	if strings.TrimSpace(string(groupID)) != "" {
+		edgeRef.TransitionGroupID = &groupID
+	}
+	edgeMerged, edgeDiagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByEdge[edgeID], fields, edgeRef)
 	w.requiredProvisionFieldsByEdge[edgeID] = edgeMerged
-	merged, diagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByGroup[groupID], fields, ValidationError{
-		TransitionGroupID: &groupID,
-	})
+	groupRef := ValidationError{}
+	if strings.TrimSpace(string(groupID)) != "" {
+		groupRef.TransitionGroupID = &groupID
+	}
+	merged, diagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByGroup[groupID], fields, groupRef)
 	w.requiredProvisionFieldsByGroup[groupID] = merged
 	w.Diagnostics = append(w.Diagnostics, edgeDiagnostics...)
 	w.Diagnostics = append(w.Diagnostics, diagnostics...)
