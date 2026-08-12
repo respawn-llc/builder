@@ -589,6 +589,7 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 					if len(arrivals) != len(fanout.siblings) {
 						continue
 					}
+					delete(joinArrivals, key)
 					source := staticContinuationSource{}
 					var reduced reusePathState
 					for index, sibling := range fanout.siblings {
