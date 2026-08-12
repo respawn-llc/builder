@@ -136,40 +136,41 @@ func TestDefinitionRejectsMissingChildWorkflowIDs(t *testing.T) {
 	}
 }
 
-func TestDefinitionValidationPreservesPresentBlankGraphIdentities(t *testing.T) {
+func TestDefinitionValidationDoesNotReferenceMissingGraphIdentities(t *testing.T) {
 	def := validWorkflow(t)
 	updateNodeAt(&def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
 		identity.ID = ""
 	})
 	def.TransitionGroups[0].ID = ""
+	def.TransitionGroups[1].SourceNodeID = ""
 	def.Edges[0].ID = ""
 
 	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{})
 
-	var blankNodeID, blankTransitionGroupID, blankEdgeID bool
+	var missingNode, missingTransitionGroup, missingEdge, missingSourceNode bool
 	for _, validationError := range result.Errors {
-		if validationError.Code == workflow.CodeMissingNodeID &&
-			validationError.NodeID != nil &&
-			*validationError.NodeID == "" {
-			blankNodeID = true
+		if validationError.NodeID != nil && strings.TrimSpace(string(*validationError.NodeID)) == "" {
+			t.Fatalf("validation error references missing Node identity: %+v", validationError)
 		}
-		if validationError.Code == workflow.CodeMissingTransitionGroupID &&
-			validationError.TransitionGroupID != nil &&
-			*validationError.TransitionGroupID == "" {
-			blankTransitionGroupID = true
+		if validationError.TransitionGroupID != nil && strings.TrimSpace(string(*validationError.TransitionGroupID)) == "" {
+			t.Fatalf("validation error references missing Transition Group identity: %+v", validationError)
 		}
-		if validationError.Code == workflow.CodeMissingEdgeID &&
-			validationError.EdgeID != nil &&
-			*validationError.EdgeID == "" {
-			blankEdgeID = true
+		if validationError.EdgeID != nil && strings.TrimSpace(string(*validationError.EdgeID)) == "" {
+			t.Fatalf("validation error references missing Transition Branch identity: %+v", validationError)
 		}
+		missingNode = missingNode || validationError.Code == workflow.CodeMissingNodeID
+		missingTransitionGroup = missingTransitionGroup || validationError.Code == workflow.CodeMissingTransitionGroupID
+		missingEdge = missingEdge || validationError.Code == workflow.CodeMissingEdgeID
+		missingSourceNode = missingSourceNode ||
+			(validationError.Code == workflow.CodeEdgeTransitionGroupMissing && validationError.NodeID == nil)
 	}
-	if !blankNodeID || !blankTransitionGroupID || !blankEdgeID {
+	if !missingNode || !missingTransitionGroup || !missingEdge || !missingSourceNode {
 		t.Fatalf(
-			"blank identity presence = node:%t transition:%t edge:%t; errors: %+v",
-			blankNodeID,
-			blankTransitionGroupID,
-			blankEdgeID,
+			"missing identity errors = node:%t transition:%t edge:%t source-node:%t; errors: %+v",
+			missingNode,
+			missingTransitionGroup,
+			missingEdge,
+			missingSourceNode,
 			result.Errors,
 		)
 	}

@@ -317,7 +317,9 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	if err := s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description); err != nil {
+	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionUpdated, req.WorkflowID.String())
@@ -776,24 +778,17 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
-	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-	if err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, err
-	}
-	if currentVersion != req.ExpectedVersion {
-		resp := workflowGraphSaveResponse(
-			workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion),
-			map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
-		)
-		if err := resp.Validate(); err != nil {
-			return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
-		}
-		return resp, nil
-	}
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, err
-	}
 	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		if currentVersion != req.ExpectedVersion {
+			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+		}
+		if err := req.Validate(); err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
 		return s.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation))
 	})
 	if err != nil {

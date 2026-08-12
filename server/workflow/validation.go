@@ -135,7 +135,10 @@ func (s *validationState) indexNodeGroups() {
 func (s *validationState) indexNodes() {
 	for _, node := range s.def.Nodes {
 		nodeID := NodeIDOf(node)
-		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: &nodeID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(nodeID)) != "" {
+			ref.NodeID = &nodeID
+		}
 		nodeWorkflowID := NodeWorkflowID(node)
 		if nodeWorkflowID == nil || nodeWorkflowID.IsZero() {
 			s.addHard(CodeMissingWorkflowID, "node workflow id is required", ref)
@@ -161,9 +164,13 @@ func (s *validationState) indexTransitionGroups() {
 	seenTransitions := map[string]TransitionGroupID{}
 	for _, group := range s.def.TransitionGroups {
 		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			TransitionGroupID: &group.ID,
-			NodeID:            &group.SourceNodeID,
+			WorkflowID: WorkflowIDPointer(s.def.ID),
+		}
+		if strings.TrimSpace(string(group.ID)) != "" {
+			ref.TransitionGroupID = &group.ID
+		}
+		if strings.TrimSpace(string(group.SourceNodeID)) != "" {
+			ref.NodeID = &group.SourceNodeID
 		}
 		if group.WorkflowID.IsZero() {
 			s.addHard(CodeMissingWorkflowID, "transition group workflow id is required", ref)
@@ -200,9 +207,13 @@ func (s *validationState) indexTransitionGroups() {
 func (s *validationState) indexEdges() {
 	for _, edge := range s.def.Edges {
 		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			EdgeID:            &edge.ID,
-			TransitionGroupID: &edge.TransitionGroupID,
+			WorkflowID: WorkflowIDPointer(s.def.ID),
+		}
+		if strings.TrimSpace(string(edge.ID)) != "" {
+			ref.EdgeID = &edge.ID
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
 		}
 		if edge.WorkflowID.IsZero() {
 			s.addHard(CodeMissingWorkflowID, "edge workflow id is required", ref)
@@ -230,7 +241,10 @@ func (s *validationState) indexEdges() {
 func (s *validationState) validateNodes() {
 	for _, node := range s.def.Nodes {
 		nodeID := NodeIDOf(node)
-		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: &nodeID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(nodeID)) != "" {
+			ref.NodeID = &nodeID
+		}
 		if strings.TrimSpace(string(NodeKey(node))) == "" {
 			s.addHard(CodeMissingNodeKey, "node key is required", ref)
 		} else if !workflowkey.Valid(string(NodeKey(node))) {
@@ -443,10 +457,12 @@ func nodeIDSetEqual(left map[NodeID]bool, right map[NodeID]bool) bool {
 
 func (s *validationState) validateTransitionGroups() {
 	for _, group := range s.def.TransitionGroups {
-		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			TransitionGroupID: &group.ID,
-			NodeID:            &group.SourceNodeID,
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(group.ID)) != "" {
+			ref.TransitionGroupID = &group.ID
+		}
+		if strings.TrimSpace(string(group.SourceNodeID)) != "" {
+			ref.NodeID = &group.SourceNodeID
 		}
 		if strings.TrimSpace(string(group.SourceNodeID)) == "" {
 			s.addHard(CodeEdgeTransitionGroupMissing, "transition group source node is required", ref)
@@ -475,10 +491,12 @@ func (s *validationState) validateTransitionGroups() {
 
 func (s *validationState) validateEdges() {
 	for _, edge := range s.def.Edges {
-		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			EdgeID:            &edge.ID,
-			TransitionGroupID: &edge.TransitionGroupID,
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(edge.ID)) != "" {
+			ref.EdgeID = &edge.ID
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
 		}
 		if _, groupExists := s.groupsByID[edge.TransitionGroupID]; !groupExists {
 			s.addHard(CodeEdgeTransitionGroupMissing, "edge transition group must exist", ref)
@@ -681,10 +699,12 @@ func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, r
 
 func (s *validationState) validateRuntimeSupport() {
 	for _, edge := range s.def.Edges {
-		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			EdgeID:            &edge.ID,
-			TransitionGroupID: &edge.TransitionGroupID,
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(edge.ID)) != "" {
+			ref.EdgeID = &edge.ID
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
 		}
 		targetKind := NodeKind("")
 		var target Node
@@ -934,11 +954,15 @@ func (s *validationState) validatePromptPlaceholders() {
 		if prompt == "" {
 			continue
 		}
-		ref := ValidationError{
-			WorkflowID:        WorkflowIDPointer(s.def.ID),
-			EdgeID:            &edge.ID,
-			TransitionGroupID: &edge.TransitionGroupID,
-			NodeID:            &edge.TargetNodeID,
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(edge.ID)) != "" {
+			ref.EdgeID = &edge.ID
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
+		}
+		if strings.TrimSpace(string(edge.TargetNodeID)) != "" {
+			ref.NodeID = &edge.TargetNodeID
 		}
 		refs, err := ExtractPromptTemplateReferences(prompt)
 		if err != nil {
@@ -1178,11 +1202,14 @@ func (s *validationState) validateFanouts() {
 			continue
 		}
 		if !s.fanoutHasValidJoin(group, edges) {
-			s.addSemantic(CodeInvalidFanoutJoinTopology, "fan-out transition group must have one unambiguous nearest common join without terminal, nested fan-out, or cycle before it", ValidationError{
-				WorkflowID:        WorkflowIDPointer(s.def.ID),
-				TransitionGroupID: &group.ID,
-				NodeID:            &group.SourceNodeID,
-			})
+			ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+			if strings.TrimSpace(string(group.ID)) != "" {
+				ref.TransitionGroupID = &group.ID
+			}
+			if strings.TrimSpace(string(group.SourceNodeID)) != "" {
+				ref.NodeID = &group.SourceNodeID
+			}
+			s.addSemantic(CodeInvalidFanoutJoinTopology, "fan-out transition group must have one unambiguous nearest common join without terminal, nested fan-out, or cycle before it", ref)
 		}
 	}
 }

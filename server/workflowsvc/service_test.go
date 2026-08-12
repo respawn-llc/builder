@@ -2877,6 +2877,67 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 	}
 }
 
+func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+
+	permitStarted := make(chan struct{})
+	releasePermit := make(chan struct{})
+	permitDone := make(chan error, 1)
+	go func() {
+		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
+			close(permitStarted)
+			<-releasePermit
+			return service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
+		})
+	}()
+	<-permitStarted
+
+	saveDone := make(chan struct {
+		response serverapi.WorkflowGraphSaveResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+			WorkflowID:      workflowID,
+			ExpectedVersion: current.Definition.Workflow.Version,
+			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+				ID:             "node-prefixed",
+				Kind:           string(serverapi.WorkflowNodeKindAgent),
+				CompletionMode: "tool",
+			}}},
+		})
+		saveDone <- struct {
+			response serverapi.WorkflowGraphSaveResponse
+			err      error
+		}{response: response, err: err}
+	}()
+
+	select {
+	case outcome := <-saveDone:
+		t.Fatalf("SaveWorkflowGraph bypassed mutation ordering: response=%+v error=%v", outcome.response, outcome.err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releasePermit)
+	if err := <-permitDone; err != nil {
+		t.Fatalf("concurrent workflow mutation: %v", err)
+	}
+	outcome := <-saveDone
+	if outcome.err != nil {
+		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", outcome.err)
+	}
+	if outcome.response.Saved ||
+		outcome.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
+		!workflowServiceHasGraphSaveBlocker(outcome.response.Blockers, "version_changed") {
+		t.Fatalf("save = %+v, want current-version blocker", outcome.response)
+	}
+}
+
 func workflowServiceHasGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
 	for _, blocker := range blockers {
 		if blocker.Code == code {
