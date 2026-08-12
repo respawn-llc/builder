@@ -87,7 +87,9 @@ export function ProjectEditRoute({
       catalogPending={catalog.isPending}
       headerAccessory={headerAccessory}
       hasNextPage={catalog.hasNextPage}
+      hasPreviousPage={catalog.hasPreviousPage}
       isFetchingNextPage={catalog.isFetchingNextPage}
+      isFetchingPreviousPage={catalog.isFetchingPreviousPage}
       key={query.data?.projectID ?? projectId}
       metadata={
         query.isPending
@@ -101,6 +103,8 @@ export function ProjectEditRoute({
             : { state: "loaded", project: query.data }
       }
       onLoadMore={() => void catalog.fetchNextPage()}
+      onLoadPrevious={() => void catalog.fetchPreviousPage()}
+      previousBoundary={projectCatalogPreviousBoundary(catalog, t)}
       projectID={projectId}
       workspaceOccurrences={workspaceOccurrences}
     />
@@ -112,9 +116,13 @@ function ProjectEditContent({
   catalogPending,
   headerAccessory,
   hasNextPage,
+  hasPreviousPage,
   isFetchingNextPage,
+  isFetchingPreviousPage,
   metadata,
   onLoadMore,
+  onLoadPrevious,
+  previousBoundary,
   projectID,
   workspaceOccurrences,
 }: Readonly<{
@@ -122,9 +130,13 @@ function ProjectEditContent({
   catalogPending: boolean;
   headerAccessory?: ReactNode;
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
   metadata: ProjectEditMetadataState;
   onLoadMore: () => void;
+  onLoadPrevious: () => void;
+  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   projectID: string;
   workspaceOccurrences: readonly ProjectWorkspaceOccurrence[];
 }>) {
@@ -259,10 +271,14 @@ function ProjectEditContent({
       <ProjectWorkspaceList
         disabled={mutating}
         hasNextPage={hasNextPage}
+        hasPreviousPage={hasPreviousPage}
         header={header}
         isFetchingNextPage={isFetchingNextPage}
+        isFetchingPreviousPage={isFetchingPreviousPage}
         nextBoundary={catalogBoundary}
         onLoadMore={onLoadMore}
+        onLoadPrevious={onLoadPrevious}
+        previousBoundary={previousBoundary}
         onMakeDefault={(workspace) => void saveDefaultWorkspace(workspace)}
         onUnlink={(workspace) => {
           void unlinkDialog.open({
@@ -459,24 +475,32 @@ function ProjectWorkspaceList({
   catalogPending,
   disabled,
   hasNextPage,
+  hasPreviousPage,
   header,
   isFetchingNextPage,
+  isFetchingPreviousPage,
   nextBoundary,
   onLoadMore,
+  onLoadPrevious,
   onMakeDefault,
   onUnlink,
   workspaceOccurrences,
+  previousBoundary,
 }: Readonly<{
   catalogPending: boolean;
   disabled: boolean;
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   header: ReactNode;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   onLoadMore: () => void;
+  onLoadPrevious: () => void;
   onMakeDefault: (workspace: WorkspaceCatalogRow) => void;
   onUnlink: (workspace: WorkspaceCatalogRow) => void;
   workspaceOccurrences: readonly ProjectWorkspaceOccurrence[];
+  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
@@ -501,12 +525,17 @@ function ProjectWorkspaceList({
       estimateSize={() => 72}
       getItemKey={(occurrence) => occurrence.occurrenceKey}
       hasNextPage={hasNextPage && nextBoundary?.state !== "error"}
+      hasPreviousPage={hasPreviousPage && previousBoundary?.state !== "error"}
       header={header}
       isFetchingNextPage={isFetchingNextPage}
+      isFetchingPreviousPage={isFetchingPreviousPage}
       items={workspaceOccurrences}
       loadingLabel={t("app.loadingMore")}
       nextBoundary={workspaceOccurrences.length === 0 ? undefined : nextBoundary}
       onLoadMore={onLoadMore}
+      onLoadPrevious={onLoadPrevious}
+      previousBoundary={previousBoundary}
+      previousLoadItemKey={workspaceOccurrences[0]?.occurrenceKey}
       paddingEnd={16}
       paddingStart={16 + headerOffset}
       renderItem={({ workspace }) => (
@@ -555,6 +584,26 @@ function projectCatalogBoundary(
         } else {
           void catalog.fetchNextPage();
         }
+      },
+    };
+  }
+  return undefined;
+}
+
+function projectCatalogPreviousBoundary(
+  catalog: ReturnType<typeof useInfiniteQuery>,
+  t: ReturnType<typeof useTranslation>["t"],
+): VirtualizedInfiniteListBoundaryState | undefined {
+  if (catalog.isFetchingPreviousPage) {
+    return { state: "loading", label: t("app.loadingMore") };
+  }
+  if (catalog.isFetchPreviousPageError) {
+    return {
+      state: "error",
+      message: errorMessage(catalog.error),
+      retryLabel: t("app.retry"),
+      onRetry: () => {
+        void catalog.fetchPreviousPage();
       },
     };
   }

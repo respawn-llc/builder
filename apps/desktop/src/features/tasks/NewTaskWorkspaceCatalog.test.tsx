@@ -38,6 +38,7 @@ interface TestState {
   };
   select: TestSelectProps | undefined;
   create: ReturnType<typeof vi.fn>;
+  resetQueries: ReturnType<typeof vi.fn>;
 }
 
 const state = vi.hoisted((): TestState => ({
@@ -63,16 +64,25 @@ const state = vi.hoisted((): TestState => ({
   },
   select: undefined,
   create: vi.fn(async () => "task-created"),
+  resetQueries: vi.fn(async () => undefined),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
   useInfiniteQuery: () => state.catalog,
   useQuery: () => state.exact,
+  useQueryClient: () => ({ resetQueries: state.resetQueries }),
 }));
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("@/app-facade", () => ({
   projectWorkspaceQueryOptions: () => ({}),
+  queryKeys: {
+    projectWorkspaceCatalog: (projectID: string) => [
+      "project-catalog",
+      projectID,
+      "workspaces",
+    ],
+  },
   useAppServices: () => ({ api: {} }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
   useStatusController: () => ({ push: vi.fn() }),
@@ -179,6 +189,7 @@ describe("New Task Workspace catalog integration", () => {
     state.catalog.refetch.mockClear();
     state.exact.refetch.mockClear();
     state.create.mockClear();
+    state.resetQueries.mockClear();
     state.select = undefined;
     props.onSubmitted.mockClear();
   });
@@ -243,7 +254,7 @@ describe("New Task Workspace catalog integration", () => {
     expect(screen.getByRole("button", { name: "task.create" })).toBeEnabled();
   });
 
-  it("restores the default-first page when the retained catalog window starts after zero", () => {
+  it("restarts once from the default-first page when the retained catalog window starts after zero", () => {
     state.catalog.data = {
       pages: [
         {
@@ -261,7 +272,10 @@ describe("New Task Workspace catalog integration", () => {
 
     render(<NewTaskForm {...props} />);
 
-    expect(state.catalog.fetchPreviousPage).toHaveBeenCalledOnce();
+    expect(state.resetQueries).toHaveBeenCalledWith({
+      exact: true,
+      queryKey: ["project-catalog", "project-1", "workspaces"],
+    });
     expect(state.select?.value).toBeUndefined();
     expect(screen.getByRole("button", { name: "task.create" })).toBeDisabled();
   });

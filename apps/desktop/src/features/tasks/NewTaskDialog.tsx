@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useReducer, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -15,6 +15,7 @@ import {
 import {
   useConnectionSnapshot,
   projectWorkspaceQueryOptions,
+  queryKeys,
   useTextFieldSubmitShortcut,
   workspaceCatalogInfiniteQueryOptions,
 } from "@/app-facade";
@@ -33,7 +34,7 @@ import {
   updateWorkspaceSelection,
   type WorkspaceSelectionState,
 } from "@/shared/workspaces";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
   Button,
@@ -385,6 +386,7 @@ function useNewTaskWorkspaceCatalog(
   t: ReturnType<typeof useTranslation>["t"],
 ) {
   const workspaces = useNewTaskWorkspaceQuery(api, projectID);
+  const queryClient = useQueryClient();
   const initiatingWorkspace = useQuery(
     projectWorkspaceQueryOptions(api, projectID, initialSourceWorkspaceID),
   );
@@ -397,22 +399,17 @@ function useNewTaskWorkspaceCatalog(
       selection: { state: "uncommitted" },
     }),
   );
-  const fetchPreviousWorkspacePage = workspaces.fetchPreviousPage;
-  const isFetchingPreviousWorkspacePage = workspaces.isFetchingPreviousPage;
+  const catalogRestartedRef = useRef(false);
   const firstRetainedOffset = workspaces.data?.pages[0]?.offset;
   useEffect(() => {
-    if (
-      firstRetainedOffset !== undefined &&
-      firstRetainedOffset > 0 &&
-      !isFetchingPreviousWorkspacePage
-    ) {
-      void fetchPreviousWorkspacePage();
+    if (firstRetainedOffset !== undefined && firstRetainedOffset > 0 && !catalogRestartedRef.current) {
+      catalogRestartedRef.current = true;
+      void queryClient.resetQueries({
+        exact: true,
+        queryKey: queryKeys.projectWorkspaceCatalog(projectID),
+      });
     }
-  }, [
-    fetchPreviousWorkspacePage,
-    firstRetainedOffset,
-    isFetchingPreviousWorkspacePage,
-  ]);
+  }, [firstRetainedOffset, projectID, queryClient]);
   const defaultWorkspace = workspaces.data?.pages[0]?.workspaces.find(
     (workspace) => workspace.isDefault,
   );

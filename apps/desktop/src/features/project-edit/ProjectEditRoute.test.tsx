@@ -16,10 +16,14 @@ interface CatalogState {
   data: Readonly<{ pages: readonly WorkspaceCatalogPage[]; pageParams: readonly number[] }> | undefined;
   error: Error | null;
   fetchNextPage: ReturnType<typeof vi.fn>;
+  fetchPreviousPage: ReturnType<typeof vi.fn>;
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   isError: boolean;
   isFetchNextPageError: boolean;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
+  isFetchPreviousPageError: boolean;
   isPending: boolean;
   refetch: ReturnType<typeof vi.fn>;
 }
@@ -44,10 +48,14 @@ const catalogState = vi.hoisted((): CatalogState => ({
   },
   error: null,
   fetchNextPage: vi.fn(async () => undefined),
+  fetchPreviousPage: vi.fn(async () => undefined),
   hasNextPage: false,
+  hasPreviousPage: false,
   isError: false,
   isFetchNextPageError: false,
   isFetchingNextPage: false,
+  isFetchingPreviousPage: false,
+  isFetchPreviousPageError: false,
   isPending: false,
   refetch: vi.fn(async () => undefined),
 }));
@@ -59,6 +67,12 @@ const attachMutation = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
 }));
 const sidebarBackWhen = vi.hoisted(() => vi.fn());
+const renderedList = vi.hoisted(
+  (): {
+    hasPreviousPage: boolean;
+    onLoadPrevious: (() => void) | undefined;
+  } => ({ hasPreviousPage: false, onLoadPrevious: undefined }),
+);
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -167,9 +181,14 @@ vi.mock("@/ui", () => ({
       header: ReactNode;
       items: readonly { workspace: { id: string } }[];
       nextBoundary?: Readonly<{ state: "error"; onRetry(): void }>;
+      previousBoundary?: Readonly<{ state: "error"; onRetry(): void }>;
+      hasPreviousPage?: boolean;
+      onLoadPrevious?: () => void;
       renderItem(item: { workspace: { id: string } }): ReactNode;
     }>,
   ) => {
+    renderedList.hasPreviousPage = props.hasPreviousPage ?? false;
+    renderedList.onLoadPrevious = props.onLoadPrevious;
     return (
       <>
         {props.header}
@@ -179,6 +198,9 @@ vi.mock("@/ui", () => ({
         {props.items.length === 0 ? props.empty : null}
         {props.nextBoundary?.state === "error" ? (
           <button onClick={props.nextBoundary.onRetry}>retry</button>
+        ) : null}
+        {props.previousBoundary?.state === "error" ? (
+          <button onClick={props.previousBoundary.onRetry}>retry-previous</button>
         ) : null}
       </>
     );
@@ -203,12 +225,17 @@ describe("ProjectEditRoute sidebar header composition", () => {
     };
     catalogState.error = null;
     catalogState.hasNextPage = false;
+    catalogState.hasPreviousPage = false;
     catalogState.isError = false;
     catalogState.isFetchNextPageError = false;
     catalogState.isFetchingNextPage = false;
+    catalogState.isFetchingPreviousPage = false;
+    catalogState.isFetchPreviousPageError = false;
     catalogState.isPending = false;
     catalogState.refetch.mockClear();
     sidebarBackWhen.mockClear();
+    renderedList.hasPreviousPage = false;
+    renderedList.onLoadPrevious = undefined;
   });
 
   it("keeps metadata editable and Attach available while the first catalog page owns Retry", () => {
@@ -320,6 +347,26 @@ describe("ProjectEditRoute sidebar header composition", () => {
     expect(screen.getAllByText("same")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "retry" }));
     expect(catalogState.fetchNextPage).toHaveBeenCalledOnce();
+  });
+
+  it("exposes the previous edge after the oldest retained Workspace page is evicted", () => {
+    catalogState.data = {
+      pages: [
+        {
+          projectID: "project-1",
+          offset: 200,
+          workspaces: [{ id: "retained", isDefault: false, name: "Retained", rootPath: "/retained" }],
+          nextOffset: 300,
+        },
+      ],
+      pageParams: [200],
+    };
+    catalogState.hasPreviousPage = true;
+    render(<ProjectEditRoute projectId="project-1" />);
+
+    expect(renderedList.hasPreviousPage).toBe(true);
+    renderedList.onLoadPrevious?.();
+    expect(catalogState.fetchPreviousPage).toHaveBeenCalledOnce();
   });
 
   it("always sends Attach and reports already-attached without changing retained rows", async () => {
