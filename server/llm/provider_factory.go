@@ -40,10 +40,18 @@ type ProviderModelMatcher func(model string) bool
 type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
-	ProviderID      string
-	Capabilities    ProviderCapabilities
-	NewErrorReducer ProviderErrorReducerFactory
+	ProviderID               string
+	Capabilities             ProviderCapabilities
+	RemoteCompactionProtocol remoteCompactionProtocol
+	NewErrorReducer          ProviderErrorReducerFactory
 }
+
+type remoteCompactionProtocol uint8
+
+const (
+	remoteCompactionUnsupported remoteCompactionProtocol = iota
+	remoteCompactionResponsesTriggerV2
+)
 
 type ProviderContract struct {
 	Provider                Provider
@@ -107,7 +115,8 @@ func providerContracts() []ProviderContract {
 			NewClient:               newOpenAIProviderClient,
 			ProviderVariants: []ProviderVariantContract{
 				{
-					ProviderID: "openai",
+					ProviderID:               "openai",
+					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "openai",
 						SupportsResponsesAPI:           true,
@@ -139,7 +148,8 @@ func providerContracts() []ProviderContract {
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},
 				{
-					ProviderID: "chatgpt-codex",
+					ProviderID:               "chatgpt-codex",
+					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "chatgpt-codex",
 						SupportsResponsesAPI:           true,

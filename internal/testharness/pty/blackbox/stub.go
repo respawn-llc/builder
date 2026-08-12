@@ -106,7 +106,6 @@ func startResponsesStub(required []RequiredOperation, scripted *scriptedResponse
 	}
 	router := http.NewServeMux()
 	router.HandleFunc("POST /v1/responses", stub.serveRoute(RouteResponses))
-	router.HandleFunc("POST /v1/responses/compact", stub.serveRoute(RouteCompact))
 	router.HandleFunc("POST /v1/responses/input_tokens", stub.serveRoute(RouteInputTokens))
 	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
 	router.HandleFunc("/", stub.serveUnsupportedRoute)
@@ -272,6 +271,14 @@ func (s *ResponsesStub) serveRoute(route Route) http.HandlerFunc {
 			http.Error(writer, "invalid request", http.StatusRequestEntityTooLarge)
 			return
 		}
+		if route == RouteResponses {
+			route, err = classifyResponsesOperation(body)
+			if err != nil {
+				s.recordFailure(err)
+				http.Error(writer, "invalid request", http.StatusBadRequest)
+				return
+			}
+		}
 		if err := validateRouteBody(route, body); err != nil {
 			s.recordFailure(err)
 			http.Error(writer, "invalid request", http.StatusBadRequest)
@@ -406,9 +413,16 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 			s.recordFailure(fmt.Errorf("write model metadata response: %w", err))
 		}
 	case RouteCompact:
-		if err := writeJSON(writer, http.StatusOK, map[string]any{"output": []any{}}); err != nil {
-			s.recordFailure(fmt.Errorf("write compact response: %w", err))
+		writer.Header().Set("Content-Type", "text/event-stream")
+		if operation != nil && operation.Outcome == OutcomeHoldSSE {
+			<-ctx.Done()
+			return
 		}
+		checkpoint := map[string]any{"type": "compaction", "id": "cmp_stub", "encrypted_content": "encrypted_stub_checkpoint"}
+		if !s.writeResponseCompleted(writer, "", []any{checkpoint}, llm.Usage{}) {
+			return
+		}
+		s.writeResponseDone(writer)
 	default:
 		http.Error(writer, "unsupported model route", http.StatusNotFound)
 	}
@@ -665,6 +679,33 @@ func validateRouteBody(route Route, body []byte) error {
 
 type modelRequest struct {
 	Input *json.RawMessage `json:"input"`
+}
+
+func classifyResponsesOperation(body []byte) (Route, error) {
+	var request struct {
+		Input []struct {
+			Type string `json:"type"`
+		} `json:"input"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return "", fmt.Errorf("decode responses request DTO: %w", err)
+	}
+	triggerIndex := -1
+	for index, item := range request.Input {
+		if item.Type == "compaction_trigger" {
+			if triggerIndex >= 0 {
+				return "", errors.New("responses request contains multiple compaction triggers")
+			}
+			triggerIndex = index
+		}
+	}
+	if triggerIndex < 0 {
+		return RouteResponses, nil
+	}
+	if triggerIndex != len(request.Input)-1 {
+		return "", errors.New("responses compaction trigger must be the final input item")
+	}
+	return RouteCompact, nil
 }
 
 type responseRequest struct {

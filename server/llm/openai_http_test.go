@@ -24,17 +24,6 @@ import (
 
 type staticAuth struct{}
 
-const compactResponseFixtureJSON = `{
-	"id":"resp_cmp_1",
-	"object":"response.compaction",
-	"created_at":1731459200,
-	"output":[
-		{"type":"message","role":"user","content":[{"type":"input_text","text":"u1"}]},
-		{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}
-	],
-	"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}
-}`
-
 func (staticAuth) AuthorizationHeader(context.Context) (string, error) {
 	return "Bearer token", nil
 }
@@ -441,7 +430,7 @@ func TestMapOpenAIRequestError_UnwrapStabilityAcrossWrappingLayers(t *testing.T)
 	}
 }
 
-func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testing.T) {
+func TestCompactErrorPath_ReturnsProviderAPIErrorForOpenAIV2(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -450,7 +439,7 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	defer server.Close()
 
 	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL + "/v1"
+	transport.Client = newRewritingHTTPClient(t, server)
 
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5",
@@ -464,8 +453,8 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorWithDetectedProviderID(t *testi
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("expected ProviderAPIError from transport path, got %T err=%v", err, err)
 	}
-	if providerErr.ProviderID != "openai-compatible" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
-		t.Fatalf("expected openai-compatible overflow classification on loopback transport, got %+v", providerErr)
+	if providerErr.ProviderID != "openai" || providerErr.Code != UnifiedErrorCodeContextLengthOverflow {
+		t.Fatalf("expected openai overflow classification on V1 transport, got %+v", providerErr)
 	}
 	if !IsNonRetriableModelError(err) {
 		t.Fatalf("expected 400 overflow response to remain non-retriable, got %v", err)

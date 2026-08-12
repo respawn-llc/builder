@@ -521,7 +521,13 @@ func (a *Authority) openRuntime(
 		return RuntimeAttachment{}, errors.New("runtime owner id is required")
 	}
 	gate := a.gateFor(request.SessionID)
-	gate.lock.Lock()
+	if err := gate.lock.LockContext(ctx); err != nil {
+		return RuntimeAttachment{}, fmt.Errorf(
+			"wait to open session %s runtime: %w",
+			request.SessionID,
+			err,
+		)
+	}
 	defer gate.lock.Unlock()
 	if len(gate.blocks) != 0 {
 		return RuntimeAttachment{}, sessionStartsBlockedError(request.SessionID)

@@ -24,6 +24,12 @@ func (staticTransportAuth) AuthorizationHeader(context.Context) (string, error) 
 	return "Bearer test", nil
 }
 
+type oauthStaticTransportAuth struct{ staticTransportAuth }
+
+func (oauthStaticTransportAuth) OpenAIAuthMetadata(context.Context) (string, string, error) {
+	return "oauth", "test-account", nil
+}
+
 func TestResponsesStubRejectsUnexpectedDeveloperMessageCount(t *testing.T) {
 	want := 0
 	stub, err := blackbox.StartResponsesStub([]blackbox.RequiredOperation{{
@@ -143,7 +149,7 @@ func TestResponsesStubCancelsHeldSSEAndReturnsDeclaredProviderFailure(t *testing
 		t.Fatalf("StartResponsesStub compact failure: %v", err)
 	}
 	t.Cleanup(compact.Close)
-	response, err = http.Post(compact.URL()+"/responses/compact", "application/json", bytes.NewBufferString(`{"input":[]}`))
+	response, err = http.Post(compact.URL()+"/responses", "application/json", bytes.NewBufferString(`{"input":[{"type":"compaction_trigger"}]}`))
 	if err != nil {
 		t.Fatalf("POST compact provider failure: %v", err)
 	}
@@ -455,16 +461,16 @@ func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.
 			ID: uuid.New(), Route: blackbox.RouteResponses, Output: &oversized, Outcome: blackbox.OutcomeJSON,
 		},
 		"non-responses stream": {
-			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeStream,
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeStream,
 		},
 		"non-responses held stream": {
-			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeHoldSSE,
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeHoldSSE,
 		},
 		"non-responses probe": {
-			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, Probe: &invalidProbe,
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, Probe: &invalidProbe,
 		},
 		"non-responses developer message count": {
-			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON,
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON,
 			DeveloperMessageCount: &negative,
 		},
 		"non-responses output": {
@@ -475,7 +481,7 @@ func TestResponsesStubRejectsInvalidDeclaredOperationBeforeListening(t *testing.
 			ResponsePhase: blackbox.NewResponsePhase(blackbox.ResponsePhaseFinal),
 		},
 		"non-responses session cache key": {
-			ID: uuid.New(), Route: blackbox.RouteCompact, Outcome: blackbox.OutcomeJSON, SessionCacheKey: true,
+			ID: uuid.New(), Route: blackbox.RouteInputTokens, Outcome: blackbox.OutcomeJSON, SessionCacheKey: true,
 		},
 		"emitted message missing phase": {
 			ID: uuid.New(), Route: blackbox.RouteResponses, Outcome: blackbox.OutcomeJSON, Output: &output,
@@ -792,7 +798,10 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 		t.Fatalf("StartResponsesStub compact: %v", err)
 	}
 	t.Cleanup(compact.Close)
-	compactTransport := newStubTransport(compact)
+	compactTransport := llm.NewHTTPTransport(oauthStaticTransportAuth{})
+	compactTransport.BaseURL = compact.URL()
+	compactTransport.BaseURLExplicit = true
+	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:      "gpt-5",
 		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),

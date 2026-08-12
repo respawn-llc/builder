@@ -1569,6 +1569,47 @@ func TestStaleRuntimeAttachmentReleaseCannotAffectReplacement(t *testing.T) {
 	}
 }
 
+func TestOpenRuntimeStopsWaitingForAdmissionWhenContextIsCanceled(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse session id: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{
+		PersistenceRoot: fixture.config.PersistenceRoot,
+		StoreOptions:    fixture.metadata.AuthoritativeSessionStoreOptions(),
+	})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	gate := authority.gateFor(sessionID)
+	gate.lock.Lock()
+	defer gate.lock.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, openErr := authority.OpenRuntime(ctx, RuntimeOpenRequest{
+			SessionID: sessionID,
+			OwnerID:   "waiting-owner",
+		})
+		result <- openErr
+	}()
+	cancel()
+
+	select {
+	case openErr := <-result:
+		if !errors.Is(openErr, context.Canceled) {
+			t.Fatalf("open canceled runtime error = %v, want context.Canceled", openErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("open canceled runtime remained blocked on session admission")
+	}
+}
+
 func TestResourceReplacementWaitsForRetainedGenerationToDrain(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	sessionID, err := runtimeids.ParseSessionID(fixture.store.Meta().SessionID)

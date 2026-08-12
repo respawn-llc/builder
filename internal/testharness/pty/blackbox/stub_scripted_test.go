@@ -413,7 +413,7 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 		if err := json.NewDecoder(modelResponse.Body).Decode(&model); err != nil || model.ContextWindow != window {
 			t.Fatalf("model metadata = %+v, %v", model, err)
 		}
-		response, err := http.Post(stub.URL()+"/responses/compact", "application/json", strings.NewReader(`{"input":[]}`))
+		response, err := http.Post(stub.URL()+"/responses", "application/json", strings.NewReader(`{"input":[{"type":"compaction_trigger"}]}`))
 		if err != nil {
 			t.Fatalf("POST compact: %v", err)
 		}

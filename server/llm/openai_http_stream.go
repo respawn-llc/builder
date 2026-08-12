@@ -893,7 +893,23 @@ func newPassthroughOutputAccumulator() *passthroughOutputAccumulator {
 }
 
 func (a *passthroughOutputAccumulator) Upsert(item responses.ResponseOutputItemUnion, outputIndex int64) {
-	if a == nil || isKnownResponseOutputItemType(item.Type) {
+	if a == nil {
+		return
+	}
+	if item.Type == "compaction" {
+		parsed, err := (compactionOutputItemParser{}).Parse(item, nil)
+		if err != nil || len(parsed.CanonicalItems) != 1 {
+			return
+		}
+		checkpoint := parsed.CanonicalItems[0]
+		checkpoint.OutputIndex = outputIndex
+		if _, exists := a.byIndex[outputIndex]; !exists {
+			a.order = append(a.order, outputIndex)
+		}
+		a.byIndex[outputIndex] = checkpoint
+		return
+	}
+	if isKnownResponseOutputItemType(item.Type) {
 		return
 	}
 	raw := json.RawMessage(item.RawJSON())
@@ -930,14 +946,23 @@ func mergePassthroughOutputItems(items []ResponseItem, passthrough []ResponseIte
 	}
 	out := CloneResponseItems(items)
 	seen := make(map[string]struct{}, len(out))
+	completedCompactionIndexes := make(map[int64]struct{})
 	for _, item := range out {
-		if item.Type != ResponseItemTypeOther || len(item.Raw) == 0 {
+		if item.Type == ResponseItemTypeCompaction {
+			completedCompactionIndexes[item.OutputIndex] = struct{}{}
+		}
+		if (item.Type != ResponseItemTypeOther && item.Type != ResponseItemTypeCompaction) || len(item.Raw) == 0 {
 			continue
 		}
 		seen[fmt.Sprintf("%d\x00%s", item.OutputIndex, string(item.Raw))] = struct{}{}
 	}
 	for _, item := range passthrough {
-		if item.Type != ResponseItemTypeOther || len(item.Raw) == 0 {
+		if item.Type == ResponseItemTypeCompaction {
+			if _, exists := completedCompactionIndexes[item.OutputIndex]; exists {
+				continue
+			}
+		}
+		if (item.Type != ResponseItemTypeOther && item.Type != ResponseItemTypeCompaction) || len(item.Raw) == 0 {
 			continue
 		}
 		key := fmt.Sprintf("%d\x00%s", item.OutputIndex, string(item.Raw))
