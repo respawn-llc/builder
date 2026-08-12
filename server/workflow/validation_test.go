@@ -703,6 +703,36 @@ func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
 	assertHasCodes(t, result, workflow.CodeUnsupportedApprovalExecution)
 }
 
+func TestFanoutJoinRejectsDivergentSourceCarriedIntoScript(t *testing.T) {
+	def := fanoutWorkflow(t)
+	script := testNode(
+		def.ID,
+		"node_script",
+		"script",
+		"Script",
+		workflow.NodeKindScript,
+		workflow.NodeFields{ScriptPath: workflow.MustPresentScriptPath("./script.sh")},
+	)
+	def.Nodes = append(def.Nodes, script)
+	joinEdge := edgeByIDForValidationTest(t, &def, "edge_join_done")
+	joinEdge.TargetNodeID = workflow.NodeIDOf(script)
+	joinEdge.ContextMode = workflow.ContextModeNewSession
+	def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
+		WorkflowID: def.ID, ID: "group_script_done",
+		SourceNodeID: workflow.NodeIDOf(script), TransitionID: "done", DisplayName: "Done",
+	})
+	def.Edges = append(def.Edges, workflow.Edge{
+		WorkflowID: def.ID, ID: "edge_script_done", Key: "done",
+		TransitionGroupID: "group_script_done", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	})
+	def = normalizeWorkflowEdgeShape(def)
+
+	result := validateForTask(def)
+
+	assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+}
+
 func TestContextSourceValidation(t *testing.T) {
 	t.Run("default immediate source preserves existing workflows", func(t *testing.T) {
 		def := validWorkflow(t)

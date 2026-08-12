@@ -793,6 +793,125 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	}
 }
 
+func TestManualMoveRetainedTargetUsesCurrentAssociationBeforePlannedSourceBinds(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	review := nodeByKey(t, definition, "review")
+	audit := nodeByKey(t, definition, "audit")
+	reviewEdgeID := edgeByKey(t, definition, "review").ID
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		reviewEdge := workflowGraphSaveEdgeRecord(t, req.Edges, reviewEdgeID)
+		reviewEdge.ContextMode = workflow.ContextModeContinueSession
+		reviewEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+		appendManualMoveRetainedReviewEdge(
+			req,
+			workflowID,
+			audit,
+			review,
+			"unbound-source",
+			workflow.ContextSourcePreviousTargetOrNew,
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	implementationA := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	associateAndBindCurrentNodeSessionForTest(
+		t, ctx, store, binding, cfg, implementationA.Reference,
+	)
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       implementationA.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "implementation A"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode implementation A: %v", err)
+	}
+	firstReview := reviewResult.Mutation.Created[0]
+	associateAndBindCurrentNodeSessionForTest(
+		t, ctx, store, binding, cfg, firstReview.Reference,
+	)
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source: firstReview.Reference, TransitionID: "audit",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode Review: %v", err)
+	}
+	auditSessionID := associateAndBindCurrentNodeSessionForTest(
+		t, ctx, store, binding, cfg, auditResult.Mutation.Created[0].Reference,
+	)
+	transitionKey := workflow.TransitionID("rework")
+	reviewFromAudit := applyManualMoveFixture(t, ctx, store, binding, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"audit": {"summary": "audit A"},
+		},
+	}).Mutation.Created[0]
+	if reviewFromAudit.SessionID != nil {
+		t.Fatalf("planned Review from Audit = %+v, want fresh", reviewFromAudit)
+	}
+	retainedReviewSessionID := associateAndBindCurrentNodeSessionForTest(
+		t, ctx, store, binding, cfg, reviewFromAudit.Reference,
+	)
+	replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		reviewFromAudit,
+		workflow.NodeIDOf(audit),
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+	)
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET entered_by_edge_id = ?
+WHERE task_id = ?
+  AND transition_branch_key IS NULL`,
+		testGraphEntityBlob(t, string(edgeByKey(t, definition, "audit").ID)),
+		string(task.ID),
+	); err != nil {
+		t.Fatalf("set unbound Audit entering Edge: %v", err)
+	}
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		reworkEdge := workflowGraphSaveEdgeRecord(
+			t,
+			req.Edges,
+			*reviewFromAudit.EnteredByEdgeID,
+		)
+		reworkEdge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}
+	})
+
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"audit": {"summary": "audit B"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove Review: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	if err != nil {
+		t.Fatalf("ApplyManualMove Review: %v", err)
+	}
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID != retainedReviewSessionID {
+		t.Fatalf("manual Review = %+v, want retained Review Session %q", moved.Mutation.Created, retainedReviewSessionID)
+	}
+	sourceID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
+	if !exact || sourceID != auditSessionID {
+		t.Fatalf("manual Review source = %q, %v; want retained Audit Session %q", sourceID, exact, auditSessionID)
+	}
+}
+
 func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWithoutInvariant(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)

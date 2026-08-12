@@ -1232,7 +1232,7 @@ func (s *validationState) validateContinuationSources() {
 		}
 		s.addSemantic(
 			CodeInvalidContextSource,
-			"retained target context source requires one exact active source across every fan-out branch",
+			"transition requires one exact active source across every fan-out branch",
 			ValidationError{
 				WorkflowID:        WorkflowIDPointer(s.def.ID),
 				EdgeID:            &edge.ID,

@@ -234,18 +234,27 @@ func resolveRetainedTargetTransitionContext(
 	if manualMoveContext {
 		if source == nil ||
 			source.Reference.IsBranchScoped() ||
-			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) {
+			source.Reference.NodeID != workflow.NodeIDOf(sourceNode) ||
+			source.SessionID == nil {
 			sourceReference, err := workflow.NewCurrentNodeReference(taskID, workflow.NodeIDOf(sourceNode), nil)
 			if err != nil {
 				return transitionContextResolution{}, err
 			}
-			sourceAssociation, err := currentTaskSessionForNode(ctx, q, sourceReference)
-			if err != nil {
-				return transitionContextResolution{}, err
-			}
-			activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SessionID)
-			if err != nil {
-				return transitionContextResolution{}, err
+			sourceAssociation, associationErr := currentTaskSessionForNode(
+				sqlitegen.WithExpectedNoRows(ctx),
+				q,
+				sourceReference,
+			)
+			if associationErr == nil {
+				activeSource, err = workflow.NewExactMaterializedContinuationSource(sourceAssociation.SessionID)
+				if err != nil {
+					return transitionContextResolution{}, err
+				}
+			} else if !errors.Is(associationErr, sql.ErrNoRows) ||
+				source == nil ||
+				!source.Reference.Equal(sourceReference) ||
+				source.SessionID != nil {
+				return transitionContextResolution{}, associationErr
 			}
 		}
 	}
