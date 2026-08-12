@@ -785,35 +785,45 @@ func (s *Store) CreateProjectForWorkspaceWithKey(ctx context.Context, workspaceR
 	return s.insertWorkspaceBinding(ctx, canonicalRoot, trimmedProjectName, strings.TrimSpace(projectKey), workspaceName, projectID, workspaceID, now, true)
 }
 
+type ProjectWorkspaceAttachResult struct {
+	Binding  Binding
+	Attached bool
+}
+
 func (s *Store) AttachWorkspaceToProject(ctx context.Context, projectID string, workspaceRoot string) (Binding, error) {
+	result, err := s.AttachWorkspaceToProjectWithResult(ctx, projectID, workspaceRoot)
+	return result.Binding, err
+}
+
+func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectID string, workspaceRoot string) (ProjectWorkspaceAttachResult, error) {
 	if s == nil || s.queries == nil {
-		return Binding{}, errors.New("metadata store is required")
+		return ProjectWorkspaceAttachResult{}, errors.New("metadata store is required")
 	}
 	trimmedProjectID := strings.TrimSpace(projectID)
 	if trimmedProjectID == "" {
-		return Binding{}, errors.New("project id is required")
+		return ProjectWorkspaceAttachResult{}, errors.New("project id is required")
 	}
 	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
 	if err != nil {
-		return Binding{}, err
+		return ProjectWorkspaceAttachResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Binding{}, fmt.Errorf("begin workspace attach tx: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("begin workspace attach tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
-		return Binding{}, fmt.Errorf("lock workspace attach: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("lock workspace attach: %w", err)
 	}
-	binding, _, err := attachWorkspaceToProjectWithQueries(ctx, q, trimmedProjectID, canonicalRoot, time.Now().UTC())
+	binding, attached, err := attachWorkspaceToProjectWithQueries(ctx, q, trimmedProjectID, canonicalRoot, time.Now().UTC())
 	if err != nil {
-		return Binding{}, err
+		return ProjectWorkspaceAttachResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return Binding{}, fmt.Errorf("commit workspace attach tx: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("commit workspace attach tx: %w", err)
 	}
-	return binding, nil
+	return ProjectWorkspaceAttachResult{Binding: binding, Attached: attached}, nil
 }
 
 // UpdateProjectMetadata updates a project's display name and, when projectKey is

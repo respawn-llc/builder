@@ -1,10 +1,11 @@
 import { ChevronDown } from "lucide-react";
-import { forwardRef, type ComponentPropsWithoutRef } from "react";
+import { forwardRef, useCallback, useEffect, useRef, type ComponentPropsWithoutRef } from "react";
 
 import { cx } from "./classes";
 import type { FieldError } from "./Field";
 import { fieldInputClassName } from "./fieldInputStyles";
-import type { SelectFieldOption } from "./SelectField";
+import { InfiniteListBoundary } from "./InfiniteListBoundary";
+import type { SelectFieldOption, SelectFieldPaging } from "./SelectField";
 import { DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from "./radix/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 
@@ -81,25 +82,52 @@ export const SelectTrigger = forwardRef<HTMLButtonElement, SelectTriggerProps>(f
 export type SelectOptionsListProps = Readonly<{
   menuId: string;
   options: readonly SelectFieldOption[];
-  value: string;
+  value: string | undefined;
   onValueChange: (value: string) => void;
+  paging?: SelectFieldPaging | undefined;
 }>;
 
-export function SelectOptionsList({ menuId, options, value, onValueChange }: SelectOptionsListProps) {
+export function SelectOptionsList({ menuId, options, paging, value, onValueChange }: SelectOptionsListProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const lastLoadKeyRef = useRef<string | null>(null);
+  const requestNextIfVisible = useCallback(() => {
+    const element = contentRef.current;
+    const loadKey = paging?.loadKey;
+    if (
+      element === null ||
+      paging?.hasNextPage !== true ||
+      paging.nextBoundary !== undefined ||
+      loadKey === undefined ||
+      lastLoadKeyRef.current === loadKey
+    ) {
+      return;
+    }
+    if (element.scrollTop + element.clientHeight < element.scrollHeight - 1) return;
+    lastLoadKeyRef.current = loadKey;
+    paging.onLoadNext();
+  }, [paging]);
+  useEffect(() => {
+    requestNextIfVisible();
+  }, [requestNextIfVisible]);
   return (
     <DropdownMenuContent
       className="max-h-[min(var(--radix-dropdown-menu-content-available-height),20rem)] w-[var(--radix-dropdown-menu-trigger-width)]"
       id={menuId}
       level={3}
       loop
+      onScroll={requestNextIfVisible}
+      ref={contentRef}
     >
       <TooltipProvider delayDuration={0}>
-        <DropdownMenuRadioGroup onValueChange={onValueChange} value={value}>
+        <DropdownMenuRadioGroup onValueChange={onValueChange} value={value ?? ""}>
           {options.map((option) => (
             <SelectOptionItem key={option.value} option={option} />
           ))}
         </DropdownMenuRadioGroup>
       </TooltipProvider>
+      {paging?.nextBoundary !== undefined ? (
+        <InfiniteListBoundary direction="next" state={paging.nextBoundary} />
+      ) : null}
     </DropdownMenuContent>
   );
 }

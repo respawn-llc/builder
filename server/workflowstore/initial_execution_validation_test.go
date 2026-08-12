@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/internal/testharness/testsetup"
-	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/toolspec"
@@ -82,7 +81,8 @@ func TestRepeatedStartAfterRoleToolDriftSkipsInitialExecutionPreflight(t *testin
 func TestTaskSourceResolutionRetainsPrimaryWorkspaceOutsideCollectionLimit(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
-	for index := 0; index < metadata.ProjectWorkspaceCollectionLimit; index++ {
+	const formerCollectionLimit = 500
+	for index := 0; index < formerCollectionLimit; index++ {
 		if _, err := store.metadata.AttachWorkspaceToProject(ctx, binding.ProjectID, t.TempDir()); err != nil {
 			t.Fatalf("AttachWorkspaceToProject %d: %v", index, err)
 		}

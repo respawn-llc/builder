@@ -127,7 +127,8 @@ func TestProjectWorkspaceDetachThroughCLIAndGatewayAcrossWorkingDirectories(t *t
 	}
 	workspaces, err := remote.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{
 		ProjectID: projectB,
-		PageSize:  100,
+		Offset:    0,
+		Limit:     serverapi.MaxProjectWorkspacePageSize,
 	})
 	if err != nil {
 		t.Fatalf("list Project B workspaces: %v", err)
