@@ -230,6 +230,38 @@ func TestServiceRejectsThinkingUnsupportedBySelectedAgentWithoutPersistingDorman
 	}
 }
 
+func TestServiceAcceptsSelectedAgentNonEnumeratedThinkingValue(t *testing.T) {
+	initial := session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "provider-specific-depth",
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	fixture := newChatControlFixture(t, initial)
+	fixture.service.WithChatSettingsPreparationResolver(staticChatSettingsPreparationResolver{
+		prepared: launch.PreparedChatSettings{
+			Baseline:                initial,
+			SupportedThinkingValues: []string{"provider-specific-depth", "provider-specific-wide"},
+			FastAvailable:           true,
+			QuestionsAvailable:      true,
+		},
+	})
+	_, engine := fixture.openRuntime(t, fixture.store, initial, "non-enumerated-thinking")
+
+	if err := fixture.service.SetThinkingLevel(t.Context(), serverapi.RuntimeSetThinkingLevelRequest{
+		ClientRequestID: "non-enumerated-thinking",
+		SessionID:       fixture.store.Meta().SessionID,
+		Level:           " provider-specific-wide ",
+	}); err != nil {
+		t.Fatalf("SetThinkingLevel: %v", err)
+	}
+
+	want := initial
+	want.Thinking = "provider-specific-wide"
+	assertPersistedChatSettings(t, fixture.persistence, fixture.store.Meta().SessionID, want)
+	assertEngineChatSettings(t, engine, want)
+}
+
 func TestServiceSupervisorEnableUsesSelectedAgentBaselineWithoutHiddenResumeMode(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -270,6 +302,48 @@ func TestServiceSupervisorEnableUsesSelectedAgentBaselineWithoutHiddenResumeMode
 				Questions:      true,
 				AutoCompaction: true,
 			})
+		})
+	}
+}
+
+func TestServiceRepeatedSupervisorEnablePreservesCurrentMode(t *testing.T) {
+	initial := session.ChatSettings{
+		Supervisor:     "all",
+		Thinking:       "medium",
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	for _, live := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
+			fixture := newChatControlFixture(t, initial)
+			fixture.service.WithChatSettingsPreparationResolver(staticChatSettingsPreparationResolver{
+				prepared: launch.PreparedChatSettings{
+					Baseline:                session.ChatSettings{Supervisor: "edits", Thinking: "medium", Questions: true, AutoCompaction: true},
+					SupportedThinkingValues: []string{"low", "medium", "high"},
+					FastAvailable:           true,
+					QuestionsAvailable:      true,
+				},
+			})
+			var engine *runtime.Engine
+			if live {
+				_, engine = fixture.openRuntime(t, fixture.store, initial, "repeated-supervisor-enable")
+			}
+
+			response, err := fixture.service.SetReviewerEnabled(t.Context(), serverapi.RuntimeSetReviewerEnabledRequest{
+				ClientRequestID: "repeated-enable",
+				SessionID:       fixture.store.Meta().SessionID,
+				Enabled:         true,
+			})
+			if err != nil {
+				t.Fatalf("SetReviewerEnabled: %v", err)
+			}
+			if response.Changed || response.Mode != "all" {
+				t.Fatalf("response = %+v, want unchanged all", response)
+			}
+			assertPersistedChatSettings(t, fixture.persistence, fixture.store.Meta().SessionID, initial)
+			if engine != nil {
+				assertEngineChatSettings(t, engine, initial)
+			}
 		})
 	}
 }

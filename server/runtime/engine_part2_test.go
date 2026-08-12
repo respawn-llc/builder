@@ -528,12 +528,12 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		},
 	)
 
-	t.Run("invalid thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel("unsupported"); err == nil {
-			t.Fatal("expected invalid thinking level error")
+	t.Run("blank thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel(" "); err == nil {
+			t.Fatal("expected blank thinking level error")
 		}
 		if got := eng.ThinkingLevel(); got != "high" {
-			t.Fatalf("thinking level after invalid set = %q, want high", got)
+			t.Fatalf("thinking level after blank set = %q, want high", got)
 		}
 	})
 

@@ -280,9 +280,9 @@ func (e *Engine) SetSessionName(name string) error {
 }
 
 func (e *Engine) SetThinkingLevel(level string) error {
-	normalized, ok := NormalizeThinkingLevel(level)
-	if !ok {
-		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(level))
+	normalized := strings.TrimSpace(level)
+	if normalized == "" {
+		return errors.New("thinking level is required")
 	}
 	return e.setThinkingValue(normalized)
 }

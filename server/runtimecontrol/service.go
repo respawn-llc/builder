@@ -412,9 +412,9 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	level, ok := runtime.NormalizeThinkingLevel(req.Level)
-	if !ok {
-		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(req.Level))
+	level := strings.TrimSpace(req.Level)
+	if level == "" {
+		return errors.New("thinking level is required")
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: level}
 	_, err := memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
@@ -501,9 +501,20 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 					if prepareErr != nil {
 						return session.ChatSettingsMutation{}, prepareErr
 					}
-					mode = prepared.Baseline.Supervisor
+					state, stateErr := session.ChatSettingsStateFromMeta(store.Meta())
+					if stateErr != nil {
+						return session.ChatSettingsMutation{}, stateErr
+					}
+					current, resolveErr := session.ResolveEffectiveChatSettings(state.Settings, nil, prepared.Baseline)
+					if resolveErr != nil {
+						return session.ChatSettingsMutation{}, resolveErr
+					}
+					mode = current.Supervisor
 					if mode == "off" {
-						mode = "edits"
+						mode = prepared.Baseline.Supervisor
+						if mode == "off" {
+							mode = "edits"
+						}
 					}
 				}
 				if engine != nil {
