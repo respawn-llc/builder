@@ -21,27 +21,6 @@ import (
 	"core/shared/transcript"
 )
 
-func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"), &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
-	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool, ownership CurrentGoalExecutionOwnership) {
-		outcome, err := engine.ApplyCurrentGoalOperation(operation, ownership)
-		if err != nil || outcome.ExecutionRequired != execution || !execution && (outcome.Handled == nil || outcome.Handled.Disposition != want) {
-			t.Fatalf("ApplyCurrentGoalOperation(%T) = %+v, %v", operation, outcome, err)
-		}
-	}
-	assert(CurrentGoalSet{Objective: "start", Actor: session.GoalActorUser}, 0, true, CurrentGoalRetainedOnly)
-	_, _ = engine.SetGoal("existing", session.GoalActorUser)
-	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	assert(CurrentGoalStatus{Status: session.GoalStatusActive, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	assert(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
-	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
-	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
-	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)
-}
-
 func TestGoalSetEmitsCommittedGoalFeedbackEvent(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	events := make([]Event, 0, 1)

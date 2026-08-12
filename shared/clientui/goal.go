@@ -68,7 +68,7 @@ func (r GoalMutationResult) Validate() error {
 		}
 	}
 	if r.Pending != nil {
-		if strings.TrimSpace(r.Pending.Objective) == "" || !validGoalStatus(r.Pending.Status) {
+		if strings.TrimSpace(r.Pending.Objective) == "" || r.Pending.Status != RuntimeGoalStatusActive {
 			return fmt.Errorf("invalid goal preview fields")
 		}
 	}

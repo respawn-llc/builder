@@ -283,6 +283,9 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 	}
 	switch msg.operation {
 	case goalRuntimeShow:
+		if msg.mutationSerial != m.goalRuntimeMutationSerial {
+			return followUpCmd
+		}
 		m.goal.goal = goalCoreFromRuntimeGoal(msg.goal)
 		m.goal.pending = nil
 		m.goal.error = ""

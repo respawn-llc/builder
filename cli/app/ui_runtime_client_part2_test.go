@@ -270,7 +270,7 @@ func TestRuntimeClientGoalMutationMethodsReturnTypedResults(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		call func() (clientui.GoalMutationResult, error)
-		want *serverapi.RuntimeGoal
+		want *clientui.Goal
 	}{
 		{name: "set", call: func() (clientui.GoalMutationResult, error) { return runtimeClient.SetGoal("set goal") }, want: setGoal},
 		{name: "pause", call: runtimeClient.PauseGoal, want: pauseGoal},
@@ -626,7 +626,7 @@ func TestRuntimeClientMainViewRecoveryPreservesReadDeadline(t *testing.T) {
 }
 
 func TestRuntimeClientShowGoalRecoversRuntimeUnavailableSilently(t *testing.T) {
-	goal := &serverapi.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: "active"}
+	goal := runtimeClientTestGoal("goal-1", "ship", clientui.RuntimeGoalStatusActive)
 	controls := &reconnectRetryRuntimeControlClient{
 		showGoalErr:  serverapi.ErrRuntimeUnavailable,
 		showGoalResp: runtimeClientTestShowResponse(goal),
@@ -698,13 +698,16 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 
 func TestGoalMutationDoesNotOverrideAuthoritativeBroadcast(t *testing.T) {
 	stale := runtimeClientTestGoal("goal-1", "stale objective", clientui.RuntimeGoalStatusActive)
-	model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{pauseGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale}}), WithUISessionID("session-1"))
-	message := model.goalRuntimeCommand(goalRuntimePause, "")().(goalRuntimeDoneMsg)
-	goal := runtimeClientTestGoal("goal-2", "authoritative objective", clientui.RuntimeGoalStatusPaused)
-	model.goal.open = true
-	model.applyAdmittedTranscriptMessageState(ongoingTranscriptMessage(1, clientui.TranscriptMessageGoalStatus), runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
-	updateUIModel(t, model, message)
-	if model.goal.pending != nil || *model.goal.goal != *goal {
-		t.Fatal("Pause overwrote authoritative Goal")
+	for _, operation := range []goalRuntimeOperation{goalRuntimePause, goalRuntimeShow} {
+		controls := &reconnectRetryRuntimeControlClient{pauseGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale}, showGoalResp: runtimeClientTestShowResponse(stale)}
+		model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(controls), WithUISessionID("session-1"))
+		message := model.goalRuntimeCommand(operation, "")().(goalRuntimeDoneMsg)
+		goal := runtimeClientTestGoal("goal-2", "authoritative objective", clientui.RuntimeGoalStatusPaused)
+		model.goal.open = true
+		model.applyAdmittedTranscriptMessageState(ongoingTranscriptMessage(1, clientui.TranscriptMessageGoalStatus), runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
+		updateUIModel(t, model, message)
+		if model.goal.pending != nil || *model.goal.goal != *goal {
+			t.Fatalf("%s overwrote authoritative Goal", operation)
+		}
 	}
 }

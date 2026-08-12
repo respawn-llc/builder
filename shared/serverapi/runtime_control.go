@@ -234,8 +234,6 @@ type RuntimeRecordPromptHistoryRequest struct {
 	Text            string `json:"text"`
 }
 
-type RuntimeGoal = clientui.Goal
-
 type RuntimeGoalShowRequest struct {
 	SessionID string `json:"session_id"`
 }

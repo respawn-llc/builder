@@ -256,7 +256,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 	})
 }
 
-func goalAlreadyComplete(goal *serverapi.RuntimeGoal) bool {
+func goalAlreadyComplete(goal *clientui.Goal) bool {
 	return goal != nil && goal.Status == clientui.RuntimeGoalStatusComplete
 }
 
@@ -324,7 +324,7 @@ func openGoalCommandRemote(ctx context.Context) (goalCommandRemote, error) {
 	return remote, nil
 }
 
-func writeGoalShowText(stdout io.Writer, goal *serverapi.RuntimeGoal) {
+func writeGoalShowText(stdout io.Writer, goal *clientui.Goal) {
 	if goal == nil {
 		fmt.Fprintln(stdout, "No goal")
 		return
