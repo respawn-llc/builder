@@ -94,11 +94,11 @@ func (o CurrentGoalOperationOutcome) Validate() error {
 }
 
 func currentGoalHandled(result GoalCommandResult, err error) (CurrentGoalOperationOutcome, error) {
-	if err != nil {
-		return CurrentGoalOperationOutcome{}, err
-	}
 	outcome := CurrentGoalOperationOutcome{Handled: &result}
-	return outcome, outcome.Validate()
+	if validationErr := outcome.Validate(); validationErr != nil {
+		return CurrentGoalOperationOutcome{}, validationErr
+	}
+	return outcome, err
 }
 
 func currentGoalExecutionRequired() (CurrentGoalOperationOutcome, error) {

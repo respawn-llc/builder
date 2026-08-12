@@ -480,8 +480,11 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
 		t.Fatalf("update response=%+v err=%v", response, err)
 	}
+	if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftClear}}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
+		t.Fatalf("clear response=%+v err=%v", response, err)
+	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
-	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast {
+	if err != nil || got.Draft.Message != "" || got.Draft.Fast {
 		t.Fatalf("aggregate=%+v err=%v", got.Draft, err)
 	}
 }

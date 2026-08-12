@@ -219,11 +219,15 @@ func applyGoalOperationWithAdmission(
 	admit func() (GoalCommandResult, AgentExecutionAdmission),
 ) (GoalCommandResult, error) {
 	outcome, err := apply()
+	if outcome.Handled != nil {
+		result := fromRuntimeResult(*outcome.Handled, err)
+		if result.Accepted() {
+			result.Err = err
+			return result, nil
+		}
+	}
 	if err != nil {
 		return GoalCommandResult{}, err
-	}
-	if outcome.Handled != nil {
-		return fromRuntimeResult(*outcome.Handled, nil), nil
 	}
 	result, admission := admit()
 	err = admission.Err
@@ -235,11 +239,15 @@ func applyGoalOperationWithAdmission(
 		return GoalCommandResult{}, err
 	}
 	outcome, err = apply()
+	if outcome.Handled != nil {
+		result := fromRuntimeResult(*outcome.Handled, err)
+		if result.Accepted() {
+			result.Err = err
+			return result, nil
+		}
+	}
 	if err != nil {
 		return GoalCommandResult{}, err
-	}
-	if outcome.Handled != nil {
-		return fromRuntimeResult(*outcome.Handled, nil), nil
 	}
 	return GoalCommandResult{}, errors.Join(serverapi.ErrSessionRunStarting, sessionruntime.ErrSessionRunActive)
 }
