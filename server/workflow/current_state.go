@@ -275,6 +275,7 @@ type CurrentNode struct {
 	CurrentInputValues      map[string]string
 	PriorValues             MaterializedPriorValues
 	SessionID               *runtimeids.SessionID
+	ContinuationSource      MaterializedContinuationSource
 	Scheduling              *CurrentNodeScheduling
 	AgentExecutionSelection *AgentExecutionSelection
 }
@@ -301,6 +302,26 @@ func NewCurrentNodeWithExecutionSelection(
 	scheduling *CurrentNodeScheduling,
 	selection *AgentExecutionSelection,
 ) (CurrentNode, error) {
+	return NewCurrentNodeWithMaterializedSource(
+		reference,
+		currentInputValues,
+		priorValues,
+		sessionID,
+		AbsentMaterializedContinuationSource(),
+		scheduling,
+		selection,
+	)
+}
+
+func NewCurrentNodeWithMaterializedSource(
+	reference CurrentNodeReference,
+	currentInputValues map[string]string,
+	priorValues MaterializedPriorValues,
+	sessionID *runtimeids.SessionID,
+	continuationSource MaterializedContinuationSource,
+	scheduling *CurrentNodeScheduling,
+	selection *AgentExecutionSelection,
+) (CurrentNode, error) {
 	if err := reference.Validate(); err != nil {
 		return CurrentNode{}, err
 	}
@@ -309,6 +330,9 @@ func NewCurrentNodeWithExecutionSelection(
 	}
 	if sessionID != nil && sessionID.IsZero() {
 		return CurrentNode{}, fmt.Errorf("current node session id must be non-zero when present")
+	}
+	if err := continuationSource.Validate(); err != nil {
+		return CurrentNode{}, fmt.Errorf("current node continuation source: %w", err)
 	}
 	if err := validateCurrentNodeScheduling(scheduling); err != nil {
 		return CurrentNode{}, err
@@ -326,6 +350,7 @@ func NewCurrentNodeWithExecutionSelection(
 		CurrentInputValues:      cloneMaterializedInputValues(currentInputValues),
 		PriorValues:             cloneMaterializedPriorValues(priorValues),
 		SessionID:               cloneCurrentNodeSessionID(sessionID),
+		ContinuationSource:      continuationSource,
 		Scheduling:              cloneCurrentNodeScheduling(scheduling),
 		AgentExecutionSelection: clonedSelection,
 	}

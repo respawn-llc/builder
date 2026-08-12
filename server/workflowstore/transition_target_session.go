@@ -44,7 +44,7 @@ func resolveTransitionTargetSession(
 			if err != nil {
 				return nil, err
 			}
-			association, err := latestTaskSessionForNode(ctx, q, sourceReference)
+			association, err := currentTaskSessionForNode(ctx, q, sourceReference)
 			if err != nil {
 				return nil, err
 			}
@@ -68,7 +68,7 @@ func resolveTransitionTargetSession(
 		if err != nil {
 			return nil, err
 		}
-		association, err := latestTaskSessionForNode(ctx, q, selectedReference)
+		association, err := currentTaskSessionForNode(ctx, q, selectedReference)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +83,7 @@ func resolveTransitionTargetSession(
 		if err != nil {
 			return nil, err
 		}
-		association, err := latestTaskSessionForNode(ctx, q, targetReference)
+		association, err := currentTaskSessionForNode(ctx, q, targetReference)
 		if err != nil {
 			if contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew && errors.Is(err, sql.ErrNoRows) {
 				return nil, nil

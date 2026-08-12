@@ -2299,7 +2299,11 @@ WHERE sessions.id = sqlc.arg(session_id)
 
 -- name: BindSessionToSerialCurrentNode :execrows
 UPDATE task_current_nodes
-SET session_id = sqlc.arg(session_id)
+SET
+    session_id = sqlc.arg(session_id),
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = sqlc.arg(source_session_id),
+    legacy_materialized = 0
 WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key IS NULL
@@ -2314,7 +2318,11 @@ WHERE task_id = sqlc.arg(task_id)
 
 -- name: BindSessionToBranchCurrentNode :execrows
 UPDATE task_current_nodes
-SET session_id = sqlc.arg(session_id)
+SET
+    session_id = sqlc.arg(session_id),
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = sqlc.arg(source_session_id),
+    legacy_materialized = 0
 WHERE task_id = sqlc.arg(task_id)
   AND node_id = sqlc.arg(node_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
@@ -2327,34 +2335,70 @@ WHERE task_id = sqlc.arg(task_id)
       OR session_id = CAST(sqlc.narg(expected_current_session_id) AS TEXT)
   );
 
--- name: UpsertSerialSessionWorkflowNodeAssociation :exec
+-- name: RetireSerialCurrentSessionWorkflowNodeAssociation :exec
+UPDATE session_workflow_node_associations
+SET association_status = 'historical'
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key IS NULL
+  AND association_status = 'current'
+  AND session_id != sqlc.arg(session_id);
+
+-- name: DesignateSerialCurrentSessionWorkflowNodeAssociation :exec
 INSERT INTO session_workflow_node_associations (
+    task_id,
     session_id,
     node_id,
     transition_branch_key,
+    association_status,
+    source_session_id,
     associated_at_unix_ms
 ) VALUES (
+    sqlc.arg(task_id),
     sqlc.arg(session_id),
     sqlc.arg(node_id),
     NULL,
+    'current',
+    sqlc.arg(source_session_id),
     sqlc.arg(associated_at_unix_ms)
 )
 ON CONFLICT(session_id, node_id) WHERE transition_branch_key IS NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'current',
+    source_session_id = excluded.source_session_id,
     associated_at_unix_ms = excluded.associated_at_unix_ms;
 
--- name: UpsertBranchSessionWorkflowNodeAssociation :exec
+-- name: RetireBranchCurrentSessionWorkflowNodeAssociation :exec
+UPDATE session_workflow_node_associations
+SET association_status = 'historical'
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND association_status = 'current'
+  AND session_id != sqlc.arg(session_id);
+
+-- name: DesignateBranchCurrentSessionWorkflowNodeAssociation :exec
 INSERT INTO session_workflow_node_associations (
+    task_id,
     session_id,
     node_id,
     transition_branch_key,
+    association_status,
+    source_session_id,
     associated_at_unix_ms
 ) VALUES (
+    sqlc.arg(task_id),
     sqlc.arg(session_id),
     sqlc.arg(node_id),
     sqlc.arg(transition_branch_key),
+    'current',
+    sqlc.arg(source_session_id),
     sqlc.arg(associated_at_unix_ms)
 )
 ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_key IS NOT NULL DO UPDATE SET
+    task_id = excluded.task_id,
+    association_status = 'current',
+    source_session_id = excluded.source_session_id,
     associated_at_unix_ms = excluded.associated_at_unix_ms;
 
 -- name: CountTaskSessions :one
@@ -2362,32 +2406,52 @@ SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
 WHERE task_id = sqlc.arg(task_id);
 
--- name: GetLatestSerialTaskSessionAssociationForNode :one
+-- name: GetCurrentSerialTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
     association.node_id,
+    association.source_session_id,
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
-JOIN sessions session ON session.id = association.session_id
-WHERE session.task_id = sqlc.arg(task_id)
+WHERE association.task_id = sqlc.arg(task_id)
   AND association.node_id = sqlc.arg(node_id)
   AND association.transition_branch_key IS NULL
-ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+  AND association.association_status = 'current'
 LIMIT 1;
 
--- name: GetLatestBranchTaskSessionAssociationForNode :one
+-- name: GetCurrentBranchTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
     association.node_id,
     association.transition_branch_key,
+    association.source_session_id,
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
-JOIN sessions session ON session.id = association.session_id
-WHERE session.task_id = sqlc.arg(task_id)
+WHERE association.task_id = sqlc.arg(task_id)
   AND association.node_id = sqlc.arg(node_id)
   AND association.transition_branch_key = sqlc.arg(transition_branch_key)
-ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
+  AND association.association_status = 'current'
 LIMIT 1;
+
+-- name: HasHistoricalSerialTaskSessionAssociationForNode :one
+SELECT EXISTS (
+    SELECT 1
+    FROM session_workflow_node_associations association
+    WHERE association.task_id = sqlc.arg(task_id)
+      AND association.node_id = sqlc.arg(node_id)
+      AND association.transition_branch_key IS NULL
+      AND association.association_status = 'historical'
+) AS has_historical;
+
+-- name: HasHistoricalBranchTaskSessionAssociationForNode :one
+SELECT EXISTS (
+    SELECT 1
+    FROM session_workflow_node_associations association
+    WHERE association.task_id = sqlc.arg(task_id)
+      AND association.node_id = sqlc.arg(node_id)
+      AND association.transition_branch_key = sqlc.arg(transition_branch_key)
+      AND association.association_status = 'historical'
+) AS has_historical;
 
 -- name: RetargetSessionWorkspaceProject :execrows
 UPDATE sessions
@@ -2698,6 +2762,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2722,6 +2789,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2876,6 +2946,9 @@ INSERT INTO task_current_nodes (
     current_input_values_json,
     prior_node_values_json,
     session_id,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized,
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -2891,6 +2964,9 @@ INSERT INTO task_current_nodes (
     sqlc.arg(current_input_values_json),
     sqlc.arg(prior_node_values_json),
     sqlc.arg(session_id),
+    sqlc.narg(continuation_source_kind),
+    sqlc.narg(continuation_source_session_id),
+    sqlc.arg(legacy_materialized),
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
@@ -2928,12 +3004,18 @@ INSERT INTO task_active_fanout_branches (
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(transition_branch_key),
     'pending',
-    NULL
+    NULL,
+    sqlc.narg(continuation_source_kind),
+    sqlc.narg(continuation_source_session_id),
+    sqlc.arg(legacy_materialized)
 );
 
 -- name: UpdateTaskActiveFanoutBranchArrival :execrows
@@ -3017,7 +3099,10 @@ SELECT
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 FROM task_active_fanout_branches
 WHERE task_id = sqlc.arg(task_id)
 ORDER BY transition_branch_key;
@@ -3447,6 +3532,33 @@ JOIN task_search_documents document
   ON document.document_id = task_search_fts.rowid
 WHERE task_search_fts MATCH sqlc.arg(fts5_expression)
 LIMIT 1;
+
+{{define "workflowSessionDependencyInvalidation"}}
+UPDATE session_workflow_node_associations
+SET association_status = 'historical'
+WHERE task_id = ?1
+  AND association_status = 'current'
+  AND session_id IN (
+      WITH RECURSIVE dependent_sessions(session_id) AS (
+          SELECT association.session_id
+          FROM session_workflow_node_associations association
+          WHERE association.task_id = ?1
+            AND association.association_status = 'current'
+            AND association.source_session_id = ?2
+            AND association.session_id != ?3
+          UNION
+          SELECT association.session_id
+          FROM session_workflow_node_associations association
+          JOIN dependent_sessions dependency
+            ON association.source_session_id = dependency.session_id
+          WHERE association.task_id = ?1
+            AND association.association_status = 'current'
+            AND association.session_id != ?3
+      )
+      SELECT session_id
+      FROM dependent_sessions
+  );
+{{end}}
 
 {{define "taskSearchSchemaContract"}}
 WITH

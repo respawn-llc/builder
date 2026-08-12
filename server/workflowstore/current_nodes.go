@@ -171,9 +171,15 @@ func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, entered
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, nil, workflow.MaterializedPriorValues{}, nil, &workflow.CurrentNodeScheduling{
-		State: workflow.CurrentNodeSchedulingReady,
-	}, selection)
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedSource(
+		reference,
+		nil,
+		workflow.MaterializedPriorValues{},
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+		&workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		selection,
+	)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -216,11 +222,27 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
+	continuationSource, err := materializedContinuationSourceFromColumns(
+		row.ContinuationSourceKind,
+		row.ContinuationSourceSessionID,
+		row.LegacyMaterialized,
+	)
+	if err != nil {
+		return workflow.CurrentNode{}, fmt.Errorf("decode current node continuation source: %w", err)
+	}
 	selection, err := currentNodeExecutionSelectionFromRow(row)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, currentInputValues, priorValues, sessionID, scheduling, selection)
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedSource(
+		reference,
+		currentInputValues,
+		priorValues,
+		sessionID,
+		continuationSource,
+		scheduling,
+		selection,
+	)
 	if err != nil {
 		return workflow.CurrentNode{}, fmt.Errorf("decode current node: %w", err)
 	}
@@ -629,6 +651,13 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		EffectiveThinking:      sql.NullString{},
 		AssigneeOrigin:         sql.NullString{},
 	}
+	sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(currentNode.ContinuationSource)
+	if err != nil {
+		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node continuation source: %w", err)
+	}
+	params.ContinuationSourceKind = sourceKind
+	params.ContinuationSourceSessionID = sourceSessionID
+	params.LegacyMaterialized = legacyMaterialized
 	if branchKey, ok := currentNode.Reference.TransitionBranchKey(); ok {
 		params.TransitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
 	}
@@ -675,4 +704,74 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		Valid: true,
 	}
 	return params, nil
+}
+
+func materializedContinuationSourceColumns(
+	source workflow.MaterializedContinuationSource,
+) (sql.NullString, sql.NullString, int64, error) {
+	if err := source.Validate(); err != nil {
+		return sql.NullString{}, sql.NullString{}, 0, err
+	}
+	switch source.Kind() {
+	case workflow.MaterializedContinuationSourceExact:
+		sessionID, ok := source.ExactSessionID()
+		if !ok {
+			return sql.NullString{}, sql.NullString{}, 0, errors.New("exact continuation source omitted Session ID")
+		}
+		return sql.NullString{String: "exact", Valid: true},
+			sql.NullString{String: sessionID.String(), Valid: true},
+			0,
+			nil
+	case workflow.MaterializedContinuationSourceDeferredSelf:
+		return sql.NullString{String: "deferred_self", Valid: true}, sql.NullString{}, 0, nil
+	case workflow.MaterializedContinuationSourceAbsent:
+		return sql.NullString{String: "absent", Valid: true}, sql.NullString{}, 0, nil
+	case workflow.MaterializedContinuationSourceLegacy:
+		return sql.NullString{}, sql.NullString{}, 1, nil
+	default:
+		return sql.NullString{}, sql.NullString{}, 0, fmt.Errorf("unsupported continuation source kind %q", source.Kind())
+	}
+}
+
+func materializedContinuationSourceFromColumns(
+	kind sql.NullString,
+	sessionID sql.NullString,
+	legacyMaterialized int64,
+) (workflow.MaterializedContinuationSource, error) {
+	switch legacyMaterialized {
+	case 1:
+		if kind.Valid || sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("legacy continuation source cannot carry exact source fields")
+		}
+		return workflow.LegacyMaterializedContinuationSource(), nil
+	case 0:
+	default:
+		return workflow.MaterializedContinuationSource{}, fmt.Errorf("legacy materialized value %d is invalid", legacyMaterialized)
+	}
+	if !kind.Valid {
+		return workflow.MaterializedContinuationSource{}, errors.New("continuation source kind is required")
+	}
+	switch kind.String {
+	case "exact":
+		if !sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("exact continuation source Session ID is required")
+		}
+		parsed, err := runtimeids.ParseSessionID(sessionID.String)
+		if err != nil {
+			return workflow.MaterializedContinuationSource{}, err
+		}
+		return workflow.NewExactMaterializedContinuationSource(parsed)
+	case "deferred_self":
+		if sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("deferred self continuation source cannot carry a Session ID")
+		}
+		return workflow.DeferredSelfMaterializedContinuationSource(), nil
+	case "absent":
+		if sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("absent continuation source cannot carry a Session ID")
+		}
+		return workflow.AbsentMaterializedContinuationSource(), nil
+	default:
+		return workflow.MaterializedContinuationSource{}, fmt.Errorf("continuation source kind %q is invalid", kind.String)
+	}
 }

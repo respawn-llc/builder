@@ -183,9 +183,12 @@ type SessionPromptHistoryEntry struct {
 }
 
 type SessionWorkflowNodeAssociation struct {
+	TaskID              string
 	SessionID           string
 	NodeID              string
 	TransitionBranchKey sql.NullString
+	AssociationStatus   string
+	SourceSessionID     sql.NullString
 	AssociatedAtUnixMs  int64
 }
 
@@ -222,10 +225,13 @@ type TaskActiveFanout struct {
 }
 
 type TaskActiveFanoutBranch struct {
-	TaskID              string
-	TransitionBranchKey string
-	ArrivalState        string
-	ArrivalValuesJson   sql.NullString
+	TaskID                      string
+	TransitionBranchKey         string
+	ArrivalState                string
+	ArrivalValuesJson           sql.NullString
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
 }
 
 type TaskComment struct {
@@ -239,20 +245,23 @@ type TaskComment struct {
 }
 
 type TaskCurrentNode struct {
-	TaskID                 string
-	NodeID                 string
-	TransitionBranchKey    sql.NullString
-	CurrentInputValuesJson string
-	PriorNodeValuesJson    string
-	SessionID              sql.NullString
-	SchedulingState        sql.NullString
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson sql.NullString
-	InterruptedAtUnixMs    sql.NullInt64
-	EnteredByEdgeID        sql.NullString
-	EffectiveAssignee      sql.NullString
-	EffectiveThinking      sql.NullString
-	AssigneeOrigin         sql.NullString
+	TaskID                      string
+	NodeID                      string
+	TransitionBranchKey         sql.NullString
+	CurrentInputValuesJson      string
+	PriorNodeValuesJson         string
+	SessionID                   sql.NullString
+	SchedulingState             sql.NullString
+	InterruptionReason          sql.NullString
+	InterruptionDetailJson      sql.NullString
+	InterruptedAtUnixMs         sql.NullInt64
+	EnteredByEdgeID             sql.NullString
+	EffectiveAssignee           sql.NullString
+	EffectiveThinking           sql.NullString
+	AssigneeOrigin              sql.NullString
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
 }
 
 type TaskDependency struct {

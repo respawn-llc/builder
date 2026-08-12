@@ -1038,12 +1038,27 @@ func associateTaskSessionForTest(
 	if err != nil {
 		t.Fatalf("ParseSessionID: %v", err)
 	}
-	if _, err := store.AssociateTaskSession(ctx, TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  currentNode,
-		AssociatedAt: associatedAt,
-	}); err != nil {
-		t.Fatalf("AssociateTaskSession: %v", err)
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET task_id = ? WHERE id = ? AND task_id IS NULL`,
+		string(currentNode.TaskID),
+		sessionID.String(),
+	); err != nil {
+		t.Fatalf("bind historical fixture Session to Task: %v", err)
+	}
+	branchKey, branchScoped := currentNode.TransitionBranchKey()
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, ?, 'historical', NULL, ?)`,
+		string(currentNode.TaskID),
+		sessionID.String(),
+		string(currentNode.NodeID),
+		sql.NullString{String: string(branchKey), Valid: branchScoped},
+		associatedAt.UnixMilli(),
+	); err != nil {
+		t.Fatalf("insert historical Task Session fixture: %v", err)
 	}
 	return sessionID
 }

@@ -419,8 +419,8 @@ func retainedSessionNodeProvenanceRelation(
 	for name, relation := range model.relations {
 		_, hasNodeIdentity := relation.columns["node_id"]
 		if name == currentName ||
-			foreignKeyTo(relation, sessionsName) == nil ||
-			foreignKeyTo(relation, "tasks") != nil ||
+			foreignKeyForColumn(relation, sessionsName, "session_id") == nil ||
+			foreignKeyTo(relation, "tasks") == nil ||
 			(!hasNodeIdentity && len(primaryColumns(relation)) != 0) {
 			continue
 		}
@@ -437,12 +437,18 @@ func retainedSessionNodeProvenanceRelation(
 	const (
 		nodeColumn   = "node_id"
 		branchColumn = "transition_branch_key"
+		taskColumn   = "task_id"
+		sourceColumn = "source_session_id"
+		statusColumn = "association_status"
 	)
 	name := candidates[0]
 	relation := model.relations[name]
-	sessionForeignKey := foreignKeyTo(relation, sessionsName)
+	sessionForeignKey := foreignKeyForColumn(relation, sessionsName, "session_id")
 	node, hasNode := relation.columns[nodeColumn]
 	branch, hasBranch := relation.columns[branchColumn]
+	task, hasTask := relation.columns[taskColumn]
+	source, hasSource := relation.columns[sourceColumn]
+	status, hasStatus := relation.columns[statusColumn]
 	var findings []currentNodePersistenceFinding
 	sessionColumn := ""
 	if sessionForeignKey != nil && len(sessionForeignKey.localColumns) == 1 {
@@ -455,6 +461,15 @@ func retainedSessionNodeProvenanceRelation(
 	}
 	if !hasNode || !node.notNull {
 		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must store one non-null node identity"))
+	}
+	if !hasTask || !task.notNull || foreignKeyForColumn(relation, "tasks", taskColumn) == nil {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must store one direct non-null Task owner"))
+	}
+	if !hasSource || source.notNull || foreignKeyForColumn(relation, sessionsName, sourceColumn) == nil {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must store optional exact source Session proof"))
+	}
+	if !hasStatus || !status.notNull {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must distinguish current and historical authority"))
 	}
 	if foreignKeyTo(relation, "workflow_nodes") != nil {
 		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must not own Workflow Node lifetime"))
@@ -470,6 +485,10 @@ func retainedSessionNodeProvenanceRelation(
 		!hasUniquePartialIndex(relation, []string{sessionColumn, nodeColumn}) ||
 		!hasUniquePartialIndex(relation, []string{sessionColumn, nodeColumn, branchColumn}) {
 		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must enforce serial and branch natural uniqueness"))
+	}
+	if !hasUniquePartialIndex(relation, []string{taskColumn, nodeColumn}) ||
+		!hasUniquePartialIndex(relation, []string{taskColumn, nodeColumn, branchColumn}) {
+		findings = append(findings, malformedPersistenceFinding(name, "retained Session-node provenance must enforce one current serial or branch authority"))
 	}
 	for _, operation := range []string{"insert", "update"} {
 		if !hasOwnerValidationTrigger(relation, operation, sessionsName) {
@@ -551,6 +570,21 @@ func foreignKeyTo(relation *persistenceRelation, target string) *persistenceFore
 	for index := range relation.foreignKeys {
 		if relation.foreignKeys[index].targetTable == target {
 			return &relation.foreignKeys[index]
+		}
+	}
+	return nil
+}
+
+func foreignKeyForColumn(relation *persistenceRelation, target string, localColumn string) *persistenceForeignKey {
+	if relation == nil {
+		return nil
+	}
+	for index := range relation.foreignKeys {
+		foreignKey := &relation.foreignKeys[index]
+		if foreignKey.targetTable == target &&
+			len(foreignKey.localColumns) == 1 &&
+			foreignKey.localColumns[0] == localColumn {
+			return foreignKey
 		}
 	}
 	return nil
