@@ -1103,9 +1103,6 @@ func TestSessionDomainOwnsGoalFacts(t *testing.T) {
 		Mode:      parser.ImportsOnly,
 		Selection: allRepositoryGoSources{},
 	}, func(source parsedGoSource) {
-		if filepath.Base(source.RelPath) == "event_message_v1.go" {
-			return
-		}
 		for _, imported := range source.File.Imports {
 			if strings.Trim(imported.Path.Value, "\"") == "core/shared/clientui" {
 				violations = append(violations, source.RelPath)

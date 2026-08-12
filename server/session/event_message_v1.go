@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/transcript"
 )
 
@@ -34,7 +33,7 @@ const (
 	MessageTypeWorktreeModeExit               MessageType = "worktree_mode_exit"
 	MessageTypeGoal                           MessageType = "goal"
 	MessageTypeActiveGoalContinuation         MessageType = "active_goal_continuation"
-	MessageTypeAgentSteer                     MessageType = MessageType(clientui.MessageTypeAgentSteer)
+	MessageTypeAgentSteer                     MessageType = "agent_steer"
 )
 
 type MessagePhase string
