@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -255,6 +256,55 @@ func TestWorkflowGraphSaveBlockersUsePendingApprovalSnapshots(t *testing.T) {
 	}
 	targetNodeID := workflow.NodeIDOf(nodeByKind(t, def, workflow.NodeKindTerminal))
 	approvalEdge := edgeByKey(t, def, "done")
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_pending_approval_branches
+SET target_snapshot_json = json_remove(target_snapshot_json, '$.entered_by_edge_id')
+WHERE approval_id = ?`,
+		completed.PendingApproval.ID.String(),
+	); err != nil {
+		t.Fatalf("remove optional pending-Approval entering Branch identity: %v", err)
+	}
+	assertNoEdgeReferences := func(label string) {
+		t.Helper()
+		if count, err := store.queries.CountTaskEdgeReferences(ctx, string(approvalEdge.ID)); err != nil || count != 0 {
+			t.Fatalf("%s CountTaskEdgeReferences = %d, %v; want 0, nil", label, count, err)
+		}
+		if count, err := store.queries.CountAllTaskEdgeReferences(ctx, string(approvalEdge.ID)); err != nil || count != 0 {
+			t.Fatalf("%s CountAllTaskEdgeReferences = %d, %v; want 0, nil", label, count, err)
+		}
+		policyImpact, err := store.queries.GetWorkflowEdgeParameterEditPolicyImpact(ctx, sqlitegen.GetWorkflowEdgeParameterEditPolicyImpactParams{
+			WorkflowID: workflowID,
+			EdgeID:     string(approvalEdge.ID),
+		})
+		if err != nil {
+			t.Fatalf("%s GetWorkflowEdgeParameterEditPolicyImpact: %v", label, err)
+		}
+		if policyImpact.PendingApprovalCount != 0 {
+			t.Fatalf("%s pending-Approval Branch references = %d, want 0", label, policyImpact.PendingApprovalCount)
+		}
+	}
+	assertNoEdgeReferences("absent entering Branch identity")
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_pending_approval_branches
+SET target_snapshot_json = json_set(target_snapshot_json, '$.entered_by_edge_id', 7)
+WHERE approval_id = ?`,
+		completed.PendingApproval.ID.String(),
+	); err != nil {
+		t.Fatalf("set non-text pending-Approval entering Branch identity: %v", err)
+	}
+	assertNoEdgeReferences("non-text entering Branch identity")
+	if _, err := store.db.ExecContext(
+		ctx,
+		`UPDATE task_pending_approval_branches
+SET target_snapshot_json = json_set(target_snapshot_json, '$.entered_by_edge_id', NULL)
+WHERE approval_id = ?`,
+		completed.PendingApproval.ID.String(),
+	); err != nil {
+		t.Fatalf("set null pending-Approval entering Branch identity: %v", err)
+	}
+	assertNoEdgeReferences("null entering Branch identity")
 	req := workflowGraphSaveRequestFromDefinition(workflowID, record.Version, false, def)
 	req.Nodes = removeWorkflowGraphSaveNode(req.Nodes, targetNodeID)
 	req.Edges = removeWorkflowGraphSaveEdge(req.Edges, approvalEdge.ID)
@@ -271,12 +321,8 @@ func TestWorkflowGraphSaveBlockersUsePendingApprovalSnapshots(t *testing.T) {
 	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "node_task_references"); !slices.Equal(got, wantNode) {
 		t.Fatalf("pending-Approval Node blocker entities = %+v, want %+v", got, wantNode)
 	}
-	wantEdge := []WorkflowGraphEntityReference{{
-		EntityType: WorkflowGraphEntityTypeEdge,
-		EntityID:   string(approvalEdge.ID),
-	}}
-	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "edge_task_references"); !slices.Equal(got, wantEdge) {
-		t.Fatalf("pending-Approval Branch blocker entities = %+v, want %+v", got, wantEdge)
+	if got := workflowGraphSaveBlockerEntities(preview.Blockers, "edge_task_references"); len(got) != 0 {
+		t.Fatalf("pending-Approval Branch blocker entities = %+v, want none", got)
 	}
 }
 

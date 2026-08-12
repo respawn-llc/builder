@@ -169,9 +169,9 @@ func deriveWiring(
 		derived.inputBindingsByEdge[edge.ID] = inputBindingsForFields(requiredFields)
 		derived.addRequiredProvisionFields(edge.ID, edge.TransitionGroupID, requiredFields)
 		derived.addPossibleProvisionFields(group.SourceNodeID, requiredFields, ValidationError{
-			NodeID:            NodeIDPointer(group.SourceNodeID),
-			EdgeID:            EdgeIDPointer(edge.ID),
-			TransitionGroupID: TransitionGroupIDPointer(edge.TransitionGroupID),
+			NodeID:            &group.SourceNodeID,
+			EdgeID:            &edge.ID,
+			TransitionGroupID: &edge.TransitionGroupID,
 		})
 	}
 	for _, node := range def.Nodes {
@@ -277,12 +277,12 @@ func TransitionOutputFieldsForTargetNode(def Definition, derived DerivedWiring, 
 
 func (w *DerivedWiring) addRequiredProvisionFields(edgeID EdgeID, groupID TransitionGroupID, fields []OutputField) {
 	edgeMerged, edgeDiagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByEdge[edgeID], fields, ValidationError{
-		EdgeID:            EdgeIDPointer(edgeID),
-		TransitionGroupID: TransitionGroupIDPointer(groupID),
+		EdgeID:            &edgeID,
+		TransitionGroupID: &groupID,
 	})
 	w.requiredProvisionFieldsByEdge[edgeID] = edgeMerged
 	merged, diagnostics := appendCompatibleOutputFields(w.requiredProvisionFieldsByGroup[groupID], fields, ValidationError{
-		TransitionGroupID: TransitionGroupIDPointer(groupID),
+		TransitionGroupID: &groupID,
 	})
 	w.requiredProvisionFieldsByGroup[groupID] = merged
 	w.Diagnostics = append(w.Diagnostics, edgeDiagnostics...)
@@ -329,10 +329,11 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(
 		if len(fields) == 0 {
 			continue
 		}
+		joinID := NodeIDOf(join)
 		ref := ValidationError{
-			NodeID:            NodeIDPointer(NodeIDOf(join)),
-			EdgeID:            EdgeIDPointer(edge.ID),
-			TransitionGroupID: TransitionGroupIDPointer(edge.TransitionGroupID),
+			NodeID:            &joinID,
+			EdgeID:            &edge.ID,
+			TransitionGroupID: &edge.TransitionGroupID,
 		}
 		w.addRequiredProviderFields(edge.ID, fields, ref)
 		if !seenGroup[edge.TransitionGroupID] {
@@ -353,10 +354,11 @@ func (w *DerivedWiring) deriveJoinAggregateParameters(
 				continue
 			}
 			if owner, exists := ownerByField[name]; exists && owner != groupID {
+				joinID := NodeIDOf(join)
 				w.addDiagnostic(CodeProvisionFieldOverlap, fmt.Sprintf("%s: join aggregate parameter %s is produced by multiple transitions", fmt.Sprintf("Node %s", nodeDisplayName(join)), name), ValidationError{
-					NodeID:            NodeIDPointer(NodeIDOf(join)),
+					NodeID:            &joinID,
 					FieldName:         name,
-					TransitionGroupID: TransitionGroupIDPointer(groupID),
+					TransitionGroupID: &groupID,
 				})
 				continue
 			}

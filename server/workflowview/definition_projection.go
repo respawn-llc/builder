@@ -9,19 +9,12 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type DefinitionProjection struct {
 	store   *workflowstore.Store
 	catalog workflow.TargetAgentCatalog
-}
-
-func cloneStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
 }
 
 type definitionSnapshot struct {
@@ -135,7 +128,7 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			Key:                string(identity.Key),
 			Kind:               string(node.Kind()),
 			DisplayName:        identity.DisplayName,
-			GroupID:            cloneStringPointer(identity.GroupID),
+			GroupID:            textutil.Pointer(identity.GroupID),
 			GroupKey:           groupKey,
 			SubagentRole:       workflow.NodeSubagentRole(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),

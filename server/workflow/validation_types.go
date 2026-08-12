@@ -151,30 +151,6 @@ type ValidationError struct {
 	BlocksContext     bool
 }
 
-func NodeIDPointer(value NodeID) *NodeID {
-	if value == "" {
-		return nil
-	}
-	copy := value
-	return &copy
-}
-
-func TransitionGroupIDPointer(value TransitionGroupID) *TransitionGroupID {
-	if value == "" {
-		return nil
-	}
-	copy := value
-	return &copy
-}
-
-func EdgeIDPointer(value EdgeID) *EdgeID {
-	if value == "" {
-		return nil
-	}
-	copy := value
-	return &copy
-}
-
 func (e ValidationError) withRelatedEntity(entityType workflowcontract.WorkflowGraphEntityType, entityID string) ValidationError {
 	e.RelatedEntities = append(e.RelatedEntities, workflowcontract.WorkflowGraphEntityReference{EntityType: entityType, EntityID: entityID})
 	return e

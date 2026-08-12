@@ -27,11 +27,12 @@ func definitionScriptPathErrors(def workflow.Definition, rootPath *string) []wor
 			RawPath:  workflow.NodeScriptPath(node).String(),
 			RootPath: rootPath,
 		}) {
+			nodeID := workflow.NodeIDOf(node)
 			errors = append(errors, workflow.ValidationError{
 				Code:          workflow.ValidationErrorCode(diagnostic.Code),
 				Message:       diagnostic.Message,
 				WorkflowID:    workflow.WorkflowIDPointer(def.ID),
-				NodeID:        workflow.NodeIDPointer(workflow.NodeIDOf(node)),
+				NodeID:        &nodeID,
 				BlocksContext: diagnostic.Blocking,
 			})
 		}

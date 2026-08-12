@@ -507,9 +507,13 @@ FROM (
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE kent_graph_entity_id_blob_v1(
-        json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
-    ) = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
+    WHERE CASE
+        WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+        THEN kent_graph_entity_id_blob_v1(
+            json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+        )
+        ELSE NULL
+    END = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
@@ -791,9 +795,13 @@ FROM (
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE kent_graph_entity_id_blob_v1(
-        json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
-    ) = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
+    WHERE CASE
+        WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+        THEN kent_graph_entity_id_blob_v1(
+            json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+        )
+        ELSE NULL
+    END = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
@@ -2462,9 +2470,13 @@ SELECT
         JOIN task_records task ON task.id = approval.source_task_id
         JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
         WHERE task.workflow_id = ?1
-          AND kent_graph_entity_id_blob_v1(
-              json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
-          ) = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
+          AND CASE
+              WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+              THEN kent_graph_entity_id_blob_v1(
+                  json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+              )
+              ELSE NULL
+          END = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
     ) AS pending_approval_count
 `
 
@@ -2529,13 +2541,10 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    NULLIF(
-        CASE
-            WHEN group_id IS NULL THEN NULL
-            ELSE CAST(kent_graph_entity_id_text_v1(group_id) AS TEXT)
-        END,
-        ''
-    ) AS group_id,
+    CASE
+        WHEN group_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(group_id)
+    END AS group_id,
     sort_order
 FROM workflow_nodes
 WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
@@ -5729,13 +5738,10 @@ SELECT
     current_node.task_id,
     CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
     current_node.transition_branch_key,
-    NULLIF(
-        CASE
-            WHEN current_node.entered_by_edge_id IS NULL THEN NULL
-            ELSE CAST(kent_graph_entity_id_text_v1(current_node.entered_by_edge_id) AS TEXT)
-        END,
-        ''
-    ) AS entered_by_edge_id,
+    CASE
+        WHEN current_node.entered_by_edge_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(current_node.entered_by_edge_id)
+    END AS entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
@@ -5818,13 +5824,10 @@ SELECT
     current_node.task_id,
     CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
     current_node.transition_branch_key,
-    NULLIF(
-        CASE
-            WHEN current_node.entered_by_edge_id IS NULL THEN NULL
-            ELSE CAST(kent_graph_entity_id_text_v1(current_node.entered_by_edge_id) AS TEXT)
-        END,
-        ''
-    ) AS entered_by_edge_id,
+    CASE
+        WHEN current_node.entered_by_edge_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(current_node.entered_by_edge_id)
+    END AS entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
@@ -6931,13 +6934,10 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    NULLIF(
-        CASE
-            WHEN group_id IS NULL THEN NULL
-            ELSE CAST(kent_graph_entity_id_text_v1(group_id) AS TEXT)
-        END,
-        ''
-    ) AS group_id,
+    CASE
+        WHEN group_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(group_id)
+    END AS group_id,
     sort_order
 FROM workflow_nodes
 WHERE workflow_id = ?1

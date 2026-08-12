@@ -15,6 +15,7 @@ import (
 	"core/server/workflow"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"github.com/google/uuid"
 )
 
@@ -158,14 +159,6 @@ type NodeRecord struct {
 	SortOrder          int64
 }
 
-func cloneStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
 func workflowNodeFromRecord(node NodeRecord) (workflow.Node, error) {
 	return workflow.NewNode(
 		workflow.NodeIdentity{
@@ -173,7 +166,7 @@ func workflowNodeFromRecord(node NodeRecord) (workflow.Node, error) {
 			ID:          node.ID,
 			Key:         node.Key,
 			DisplayName: node.DisplayName,
-			GroupID:     cloneStringPointer(node.GroupID),
+			GroupID:     textutil.Pointer(node.GroupID),
 		},
 		node.Kind,
 		workflow.NodeFields{

@@ -136,6 +136,45 @@ func TestDefinitionRejectsMissingChildWorkflowIDs(t *testing.T) {
 	}
 }
 
+func TestDefinitionValidationPreservesPresentBlankGraphIdentities(t *testing.T) {
+	def := validWorkflow(t)
+	updateNodeAt(&def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
+		identity.ID = ""
+	})
+	def.TransitionGroups[0].ID = ""
+	def.Edges[0].ID = ""
+
+	result := workflow.ValidateDefinition(def, workflow.ValidationOptions{})
+
+	var blankNodeID, blankTransitionGroupID, blankEdgeID bool
+	for _, validationError := range result.Errors {
+		if validationError.Code == workflow.CodeMissingNodeID &&
+			validationError.NodeID != nil &&
+			*validationError.NodeID == "" {
+			blankNodeID = true
+		}
+		if validationError.Code == workflow.CodeMissingTransitionGroupID &&
+			validationError.TransitionGroupID != nil &&
+			*validationError.TransitionGroupID == "" {
+			blankTransitionGroupID = true
+		}
+		if validationError.Code == workflow.CodeMissingEdgeID &&
+			validationError.EdgeID != nil &&
+			*validationError.EdgeID == "" {
+			blankEdgeID = true
+		}
+	}
+	if !blankNodeID || !blankTransitionGroupID || !blankEdgeID {
+		t.Fatalf(
+			"blank identity presence = node:%t transition:%t edge:%t; errors: %+v",
+			blankNodeID,
+			blankTransitionGroupID,
+			blankEdgeID,
+			result.Errors,
+		)
+	}
+}
+
 func TestTransitionInvocationContractsContextAndRoles(t *testing.T) {
 	tests := []struct {
 		name string
