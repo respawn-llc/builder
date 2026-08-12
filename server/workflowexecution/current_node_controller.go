@@ -394,13 +394,12 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 		if completed.PostCompletionEligible {
 			return nil
 		}
-		classified, assignmentErr := c.classifyPreparedAutomaticStarts(
+		_, assignmentErr := c.classifyPreparedAutomaticStarts(
 			ctx,
 			prepared,
 			true,
 			&req.ScopeID,
 		)
-		c.deliverClassifiedStarts(classified, &req.ScopeID)
 		return assignmentErr
 	})
 	if err != nil {
@@ -558,8 +557,7 @@ func (c *CurrentNodeController) CompleteIdleCurrentNode(
 		if intentErr != nil {
 			return completed, intentErr
 		}
-		starts, startErr := c.classifyAutomaticStarts(ctx, automaticQueuedStarts(intents), nil)
-		c.deliverClassifiedStarts(starts, nil)
+		_, startErr := c.classifyAutomaticStarts(ctx, automaticQueuedStarts(intents), nil)
 		return completed, startErr
 	})
 }
