@@ -156,14 +156,9 @@ type targetSessionIntentWire struct {
 	Kind      TargetSessionIntentKind `json:"kind"`
 	SessionID *runtimeids.SessionID   `json:"session_id,omitempty"`
 }
-type RetainedTargetStateKind string
+type RetainedTargetStateKind uint8
 
-const (
-	retainedTargetStateCurrent        RetainedTargetStateKind = "current"
-	retainedTargetStateHistoricalOnly RetainedTargetStateKind = "historical_only"
-	retainedTargetStateUnavailable    RetainedTargetStateKind = "unavailable"
-	retainedTargetStateInvalidCurrent RetainedTargetStateKind = "invalid_current"
-)
+const retainedTargetStateCurrent, retainedTargetStateHistoricalOnly, retainedTargetStateUnavailable, retainedTargetStateInvalidCurrent RetainedTargetStateKind = 1, 2, 3, 4
 
 type RetainedTargetState struct {
 	kind            RetainedTargetStateKind
@@ -188,13 +183,9 @@ func NewInvalidCurrentRetainedTarget(
 	default:
 		return RetainedTargetState{}, fmt.Errorf("invalid current retained target reason %q is not supported", reason)
 	}
-	var rejected *runtimeids.SessionID
-	if rejectedSessionID != nil {
-		if rejectedSessionID.IsZero() {
-			return RetainedTargetState{}, fmt.Errorf("rejected retained Session ID must be non-zero when present")
-		}
-		value := *rejectedSessionID
-		rejected = &value
+	rejected := cloneSessionID(rejectedSessionID)
+	if rejected != nil && rejected.IsZero() {
+		return RetainedTargetState{}, fmt.Errorf("rejected retained Session ID must be non-zero when present")
 	}
 	return RetainedTargetState{kind: retainedTargetStateInvalidCurrent, rejectedSession: rejected, invariantReason: reason}, nil
 }
