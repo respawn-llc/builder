@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 
-import { RpcError, type ProjectEdit, type WorkspaceCatalogPage } from "@/api";
+import { RpcError, rpcErrorCodes, type ProjectEdit, type WorkspaceCatalogPage } from "@/api";
 import { ProjectEditRoute } from "./ProjectEditRoute";
 
 interface MetadataState {
@@ -59,9 +59,7 @@ const catalogState = vi.hoisted((): CatalogState => ({
   isPending: false,
   refetch: vi.fn(async () => undefined),
 }));
-const selectDirectory = vi.hoisted(() =>
-  vi.fn<() => Promise<{ path: string } | null>>(async () => null),
-);
+const selectDirectory = vi.hoisted(() => vi.fn<() => Promise<{ path: string } | null>>(async () => null));
 const attachMutation = vi.hoisted(() => ({
   isPending: false,
   mutateAsync: vi.fn(),
@@ -233,6 +231,8 @@ describe("ProjectEditRoute sidebar header composition", () => {
     catalogState.isFetchPreviousPageError = false;
     catalogState.isPending = false;
     catalogState.refetch.mockClear();
+    catalogState.fetchNextPage.mockClear();
+    catalogState.fetchPreviousPage.mockClear();
     sidebarBackWhen.mockClear();
     renderedList.hasPreviousPage = false;
     renderedList.onLoadPrevious = undefined;
@@ -308,7 +308,11 @@ describe("ProjectEditRoute sidebar header composition", () => {
   });
 
   it("treats catalog missing Project as Back", () => {
-    catalogState.error = new RpcError({ code: -32014, message: "gone", method: "project.workspace.list" });
+    catalogState.error = new RpcError({
+      code: rpcErrorCodes.projectNotFound,
+      message: "gone",
+      method: "project.workspace.list",
+    });
     catalogState.isError = true;
     const navigator = {
       back: vi.fn(() => "accepted" as const),

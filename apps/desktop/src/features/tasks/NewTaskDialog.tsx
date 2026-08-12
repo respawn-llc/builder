@@ -197,12 +197,7 @@ function NewTaskFormContent({
   const { t } = useTranslation();
   const { api } = useAppServices();
   const connection = useConnectionSnapshot();
-  const workspaceCatalog = useNewTaskWorkspaceCatalog(
-    api,
-    projectID,
-    initialSourceWorkspaceID,
-    t,
-  );
+  const workspaceCatalog = useNewTaskWorkspaceCatalog(api, projectID, initialSourceWorkspaceID, t);
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
@@ -223,8 +218,7 @@ function NewTaskFormContent({
     const availableLabelIDs = new Set(catalog.data.labels.map((label) => label.id));
     return selectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID));
   }, [catalog.data, selectedLabelIDs]);
-  const { selectedWorkspace, workspaceItems, workspaceProjection, workspaceSelection } =
-    workspaceCatalog;
+  const { selectedWorkspace, workspaceItems, workspaceProjection, workspaceSelection } = workspaceCatalog;
   const form = useForm<NewTaskFormValues>({
     resolver: zodResolver(newTaskSchema),
     defaultValues: {
@@ -400,8 +394,13 @@ function useNewTaskWorkspaceCatalog(
     }),
   );
   const catalogRestartedRef = useRef(false);
+  const restartedProjectRef = useRef<string | undefined>(undefined);
   const firstRetainedOffset = workspaces.data?.pages[0]?.offset;
   useEffect(() => {
+    if (restartedProjectRef.current !== projectID) {
+      restartedProjectRef.current = projectID;
+      catalogRestartedRef.current = false;
+    }
     if (firstRetainedOffset !== undefined && firstRetainedOffset > 0 && !catalogRestartedRef.current) {
       catalogRestartedRef.current = true;
       void queryClient.resetQueries({
@@ -410,9 +409,7 @@ function useNewTaskWorkspaceCatalog(
       });
     }
   }, [firstRetainedOffset, projectID, queryClient]);
-  const defaultWorkspace = workspaces.data?.pages[0]?.workspaces.find(
-    (workspace) => workspace.isDefault,
-  );
+  const defaultWorkspace = workspaces.data?.pages[0]?.workspaces.find((workspace) => workspace.isDefault);
   useEffect(() => {
     if (defaultWorkspace !== undefined) {
       dispatchWorkspaceSelection({ type: "catalog-loaded", defaultWorkspace });

@@ -9,6 +9,7 @@ import type {
   WorkspaceCatalogPage,
   WorkspaceUnlinkResponse,
 } from "./models";
+import { workspaceCatalogPageSize } from "./models";
 import { parseCatalogInput, parseCatalogResponse, requireCatalogProject } from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import { canonicalProjectIDSchema, workspaceOffsetSchema } from "./schemas/catalog";
@@ -36,18 +37,14 @@ export async function listWorkspaces(
     canonicalProjectIDSchema,
     projectID,
   );
-  const validatedOffset = parseCatalogInput(
-    "project.workspace.list offset",
-    workspaceOffsetSchema,
-    offset,
-  );
+  const validatedOffset = parseCatalogInput("project.workspace.list offset", workspaceOffsetSchema, offset);
   const response = parseCatalogResponse(
     "project.workspace.list",
     workspaceCatalogPageSchema,
     await transport.call("project.workspace.list", {
       project_id: validatedProjectID,
       offset: validatedOffset,
-      limit: 100,
+      limit: workspaceCatalogPageSize,
     }),
   );
   requireCatalogProject("project.workspace.list", validatedProjectID, response.projectID);
@@ -61,12 +58,13 @@ export async function listWorkspaces(
   }
   if (
     response.nextOffset !== null &&
-    (response.workspaces.length !== 100 || response.nextOffset !== validatedOffset + 100)
+    (response.workspaces.length !== workspaceCatalogPageSize ||
+      response.nextOffset !== validatedOffset + workspaceCatalogPageSize)
   ) {
     throw CatalogContractError.malformedResponse(
       "project.workspace.list",
       new ContractError(
-        `Response next offset ${String(response.nextOffset)} does not continue offset ${String(validatedOffset)} with limit 100.`,
+        `Response next offset ${String(response.nextOffset)} does not continue offset ${String(validatedOffset)} with limit ${String(workspaceCatalogPageSize)}.`,
       ),
     );
   }
@@ -96,10 +94,7 @@ export async function getProjectWorkspace(
   return response.result;
 }
 
-export async function getProjectEdit(
-  transport: RpcTransport,
-  projectID: string,
-): Promise<ProjectEdit> {
+export async function getProjectEdit(transport: RpcTransport, projectID: string): Promise<ProjectEdit> {
   const validatedProjectID = parseCatalogInput(
     "project.edit.get project ID",
     canonicalProjectIDSchema,

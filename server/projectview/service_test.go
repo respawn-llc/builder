@@ -332,12 +332,15 @@ func TestMetadataServiceRepeatedAttachReturnsTypedAlreadyAttachedOutcome(t *test
 	}
 	root := t.TempDir()
 
-	_, err = svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
+	firstAttach, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
 		ProjectID:     binding.ProjectID,
 		WorkspaceRoot: root,
 	})
 	if err != nil {
 		t.Fatalf("first AttachWorkspaceToProject: %v", err)
+	}
+	if firstAttach.Outcome != serverapi.ProjectWorkspaceAttachOutcomeAttached {
+		t.Fatalf("first attach outcome = %q, want attached", firstAttach.Outcome)
 	}
 	repeated, err := svc.AttachWorkspaceToProject(context.Background(), serverapi.ProjectAttachWorkspaceRequest{
 		ProjectID:     binding.ProjectID,

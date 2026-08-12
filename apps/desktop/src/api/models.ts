@@ -107,8 +107,7 @@ export type WorkspaceCatalogPage = Readonly<{
 }>;
 
 export type ProjectWorkspaceResult =
-  | Readonly<{ kind: "attached"; workspace: WorkspaceCatalogRow }>
-  | Readonly<{ kind: "not_attached" }>;
+  Readonly<{ kind: "attached"; workspace: WorkspaceCatalogRow }> | Readonly<{ kind: "not_attached" }>;
 
 export type ProjectWorkspaceAttachOutcome = "attached" | "already_attached";
 
@@ -117,6 +116,7 @@ export type ProjectWorkspaceAttachResponse = Readonly<{
   outcome: ProjectWorkspaceAttachOutcome;
 }>;
 
+export const workspaceCatalogPageSize = 100;
 export type SessionCategory = "main" | "subagent";
 
 export const sessionCatalogPageSize = 50;

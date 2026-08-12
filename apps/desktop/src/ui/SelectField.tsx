@@ -158,7 +158,9 @@ function SelectFieldControl({
           selectedOption={selectedOption}
         />
       </DropdownMenuTrigger>
-      {name === undefined || interactiveDisabled ? null : <input name={name} type="hidden" value={value} />}
+      {name === undefined || interactiveDisabled ? null : (
+        <input name={name} type="hidden" value={value ?? ""} />
+      )}
       {interactiveDisabled ? null : (
         <SelectOptionsList
           menuId={menuId}

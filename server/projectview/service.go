@@ -244,7 +244,7 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	if s == nil {
 		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
 	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
+	project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.ProjectEditGetResponse{}, err
 	}

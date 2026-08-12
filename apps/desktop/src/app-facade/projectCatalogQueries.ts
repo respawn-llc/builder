@@ -4,13 +4,9 @@ import {
   type InfiniteData,
   type QueryClient,
 } from "@tanstack/react-query";
-import type {
-  ApiService,
-  SessionCatalogPage,
-  SessionCategory,
-  WorkspaceCatalogPage,
-} from "@/api";
+import type { ApiService, SessionCatalogPage, SessionCategory, WorkspaceCatalogPage } from "@/api";
 import { sessionCatalogPageSize } from "@/api";
+import { workspaceCatalogPageSize } from "@/api";
 import { queryKeys } from "./queryKeys";
 
 const sessionCatalogMaxPages = 10;
@@ -41,7 +37,7 @@ export function workspaceCatalogInfiniteQueryOptions(api: WorkspaceCatalogApi, p
     initialPageParam: 0,
     getNextPageParam: (lastPage: WorkspaceCatalogPage) => lastPage.nextOffset ?? undefined,
     getPreviousPageParam: (firstPage: WorkspaceCatalogPage) =>
-      firstPage.offset === 0 ? undefined : Math.max(0, firstPage.offset - 100),
+      firstPage.offset === 0 ? undefined : Math.max(0, firstPage.offset - workspaceCatalogPageSize),
     maxPages: workspaceCatalogMaxPages,
   });
 }

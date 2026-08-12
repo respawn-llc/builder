@@ -37,6 +37,7 @@ export {
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
   sessionCatalogPageSize,
+  workspaceCatalogPageSize,
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
