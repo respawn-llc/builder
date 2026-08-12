@@ -46,10 +46,7 @@ import { WorkflowDraftDetails } from "./WorkflowDraftInspector";
 import { WorkflowDeleteButton } from "./WorkflowDeleteButton";
 import { WorkflowEditorEmbeddedInspector } from "./WorkflowEditorEmbeddedInspector";
 import { WorkflowEditorLegendIsland } from "./WorkflowEditorLegendIsland";
-import {
-  WorkflowEditorSaveActions,
-  WorkflowEditorStatusIsland,
-} from "./WorkflowEditorStatusIsland";
+import { WorkflowEditorStatusIsland } from "./WorkflowEditorStatusIsland";
 import type { WorkflowGraphSelection } from "./workflowGraphSelection";
 import type { WorkflowGraphLayout } from "./workflowGraphLayout";
 import type { WorkflowEditorDraftAction } from "./workflowEditorDraft";
@@ -60,6 +57,9 @@ export type WorkflowEditorRouteProps = Readonly<{
   surface?: "route" | "settings" | "sidebar" | undefined;
   workflowID: string;
 }>;
+
+type WorkflowGraphEditorRouteProps = Omit<WorkflowEditorRouteProps, "surface"> &
+  Readonly<{ surface?: "route" | "sidebar" | undefined }>;
 
 type WorkflowEditorEmbeddedInspectorSelection = Readonly<{
   initialFocus?: WorkflowInspectorInitialFocus | undefined;
@@ -85,13 +85,82 @@ type WorkflowEditorReadyViewProps = Readonly<{
 }>;
 
 export function WorkflowEditorRoute(props: WorkflowEditorRouteProps) {
-  if (props.surface === "sidebar" || props.surface === "settings") {
-    return <WorkflowEditorRouteContent {...props} openSidebar={null} />;
+  if (props.surface === "settings") {
+    return <WorkflowSettingsRoute {...props} />;
   }
-  return <SidebarRootOwner><OwnedWorkflowEditorRoute {...props} /></SidebarRootOwner>;
+  if (props.surface === "sidebar") {
+    return <WorkflowEditorRouteContent {...props} surface="sidebar" openSidebar={null} />;
+  }
+  return (
+    <SidebarRootOwner>
+      <OwnedWorkflowEditorRoute {...props} surface="route" />
+    </SidebarRootOwner>
+  );
 }
 
-function OwnedWorkflowEditorRoute(props: WorkflowEditorRouteProps) {
+function WorkflowSettingsRoute({ navigator, projectID, workflowID }: WorkflowEditorRouteProps) {
+  const { t } = useTranslation();
+  const data = useWorkflowEditorData(projectID, workflowID);
+  const [draftState, dispatch] = useReducer(workflowEditorDraftStateReducer, null);
+  const dirty = useMemo(
+    () =>
+      draftState === null
+        ? { dirty: false, graphDirty: false, metadataDirty: false }
+        : workflowEditorDirtyState(draftState),
+    [draftState],
+  );
+  const save = useWorkflowEditorSave({ data, dispatch, draftState, projectID, workflowID });
+  useWorkflowEditorDraftSync({ data, dirty: dirty.dirty, dispatch, draftState });
+  const fallbackDraftState = draftState ?? initializeWorkflowEditorDraft(emptyWorkflowDefinition(workflowID));
+  const controller = useMemo<WorkflowEditorDraftController>(
+    () => ({
+      dispatch,
+      dirty,
+      draft: fallbackDraftState.draft,
+      derivedWiring: fallbackDraftState.draft.derivedWiring,
+      draftValidation: null,
+      executionValidation: data.validationQuery.data ?? null,
+      save() {
+        void save.saveWorkflowDraft();
+      },
+      saveBlockers: save.saveBlockers,
+      saveError: save.saveError,
+      saveValidation:
+        save.saveValidation !== null && save.saveValidation.version === fallbackDraftState.version
+          ? save.saveValidation.results
+          : null,
+      saving: save.saving,
+      state: fallbackDraftState,
+      workflowID,
+    }),
+    [data.validationQuery.data, dirty, fallbackDraftState, save, workflowID],
+  );
+
+  if (data.workflowQuery.isPending || draftState === null) {
+    return <LoadingState appearanceDelayMs={0} title={t("workflowEditor.loadingTitle")} />;
+  }
+  if (data.workflowQuery.isError) {
+    return (
+      <ErrorState
+        body={errorMessage(data.workflowQuery.error)}
+        onRetry={() => void data.workflowQuery.refetch()}
+        retryLabel={t("app.retry")}
+        title={t("workflowEditor.loadFailed")}
+      />
+    );
+  }
+  return (
+    <WorkflowSettingsSurface
+      controller={controller}
+      dispatch={dispatch}
+      navigator={navigator}
+      save={save}
+      workflowID={workflowID}
+    />
+  );
+}
+
+function OwnedWorkflowEditorRoute(props: WorkflowGraphEditorRouteProps) {
   const { open } = useOwnedSidebarRoots();
   return <WorkflowEditorRouteContent {...props} openSidebar={open} />;
 }
@@ -102,14 +171,11 @@ function WorkflowEditorRouteContent({
   projectID,
   surface = "route",
   workflowID,
-}: WorkflowEditorRouteProps & Readonly<{ openSidebar: SidebarRootController["open"] | null }>) {
+}: WorkflowGraphEditorRouteProps & Readonly<{ openSidebar: SidebarRootController["open"] | null }>) {
   const { t } = useTranslation();
   const { push: pushStatus } = useStatusController();
   const data = useWorkflowEditorData(projectID, workflowID);
-  useSidebarBackWhen(
-    data.linksQuery.isError && isProjectMissingError(data.linksQuery.error),
-    navigator,
-  );
+  useSidebarBackWhen(data.linksQuery.isError && isProjectMissingError(data.linksQuery.error), navigator);
   const workflow = data.workflowQuery.data?.workflow;
   const [draftState, dispatch] = useReducer(workflowEditorDraftStateReducer, null);
   const dirty = useMemo(
@@ -202,32 +268,6 @@ function WorkflowEditorRouteContent({
     workflowID,
   });
 
-  if (surface === "settings") {
-    if (data.workflowQuery.isPending || draftState === null) {
-      return <LoadingState appearanceDelayMs={0} title={t("workflowEditor.loadingTitle")} />;
-    }
-    if (data.workflowQuery.isError) {
-      return (
-        <ErrorState
-          body={errorMessage(data.workflowQuery.error)}
-          onRetry={() => void data.workflowQuery.refetch()}
-          retryLabel={t("app.retry")}
-          title={t("workflowEditor.loadFailed")}
-        />
-      );
-    }
-    return (
-      <WorkflowSettingsSurface
-        controller={controller}
-        deleteConfirmationDialog={deleteConfirmation.dialog}
-        dispatch={dispatch}
-        navigator={navigator}
-        save={save}
-        workflowID={workflowID}
-      />
-    );
-  }
-
   const viewState = workflowEditorViewState(data, layoutQuery, graphState.projectedGraph);
   const activeEmbeddedInspector = embeddedInspectorForWorkflow(
     embeddedInspectorSelection,
@@ -281,7 +321,7 @@ function useWorkflowGraphInspector({
 }: Readonly<{
   openSidebar: SidebarRootController["open"] | null;
   setEmbeddedInspectorSelection: Dispatch<SetStateAction<WorkflowEditorEmbeddedInspectorSelection | null>>;
-  surface: "route" | "settings" | "sidebar";
+  surface: "route" | "sidebar";
   workflowID: string;
 }>): (selection: WorkflowInspectorSelection, initialFocus?: WorkflowInspectorInitialFocus) => void {
   return useCallback(
@@ -377,14 +417,12 @@ function WorkflowEditorReadyView(props: WorkflowEditorReadyViewProps) {
 
 function WorkflowSettingsSurface({
   controller,
-  deleteConfirmationDialog,
   dispatch,
   navigator,
   save,
   workflowID,
 }: Readonly<{
   controller: WorkflowEditorDraftController;
-  deleteConfirmationDialog: ReactNode;
   dispatch: (action: WorkflowEditorDraftAction) => void;
   navigator?: SidebarPageNavigator | undefined;
   save: WorkflowEditorSave;
@@ -394,28 +432,26 @@ function WorkflowSettingsSurface({
     <WorkflowDeleteButton onDeleted={navigator?.close} workflowID={workflowID} />,
   );
   return (
-    <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto]">
+    <div className="relative h-full min-h-0">
       <div className="min-h-0 overflow-y-auto p-[var(--space-3)]">
         <WorkflowDraftDetails controller={controller} />
       </div>
-      <div className="border-t border-[var(--color-outline)] p-[var(--space-3)]">
-        <WorkflowEditorSaveActions
-          confirmationPreview={save.saveConfirmationPreview}
-          controller={controller}
-          onCancelConfirmation={() => {
-            save.setSaveConfirmationPreview(null);
-          }}
-          onConfirmSave={() => {
-            if (save.saveConfirmationPreview !== null) {
-              void save.saveWorkflowDraft(save.saveConfirmationPreview);
-            }
-          }}
-          onDiscard={() => {
-            dispatch({ source: controller.state.source, type: "reset" });
-          }}
-        />
-      </div>
-      {deleteConfirmationDialog}
+      <WorkflowEditorStatusIsland
+        confirmationPreview={save.saveConfirmationPreview}
+        controller={controller}
+        onCancelConfirmation={() => {
+          save.setSaveConfirmationPreview(null);
+        }}
+        onConfirmSave={() => {
+          if (save.saveConfirmationPreview !== null) {
+            void save.saveWorkflowDraft(save.saveConfirmationPreview);
+          }
+        }}
+        onDiscard={() => {
+          dispatch({ source: controller.state.source, type: "reset" });
+        }}
+        positionStrategy="absolute"
+      />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { Check, Pencil } from "lucide-react";
 import type { ProjectSummary } from "@/api";
 import { formatHomeRelativePath } from "@/app-facade";
 import { useAppNavigation } from "@/app-facade";
+import type { SidebarMode } from "@/app-facade";
 import { useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { cx } from "@/ui";
@@ -12,10 +13,12 @@ export function ProjectRow({
   onSelect,
   project,
   selected = false,
+  sidebarMode = "overlay",
 }: Readonly<{
   onSelect?: (() => void) | undefined;
   project: ProjectSummary;
   selected?: boolean | undefined;
+  sidebarMode?: SidebarMode | undefined;
 }>) {
   const navigation = useAppNavigation();
   const { open } = useOwnedSidebarRoots();
@@ -70,7 +73,7 @@ export function ProjectRow({
           aria-label={editLabel}
           className="pointer-events-auto absolute right-[calc(var(--space-3)/2)] top-[var(--space-1)] z-10 grid h-10 w-10 place-items-center justify-items-end rounded-full text-[var(--color-muted)] hover:text-[var(--color-on-island)]"
           onClick={() => {
-            open({ kind: "projectEdit", mode: "overlay", projectID: project.id });
+            open({ kind: "projectEdit", mode: sidebarMode, projectID: project.id });
           }}
           type="button"
         >

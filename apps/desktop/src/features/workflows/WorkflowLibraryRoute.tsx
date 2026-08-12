@@ -7,7 +7,7 @@ import { errorMessage } from "@/api";
 import { useAppNavigation } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
-import { WorkflowCard, useWorkflowPages } from "@/shared/workflow-library";
+import { WorkflowRow, useWorkflowPages } from "@/shared/workflow-library";
 import { Button, EmptyState, ErrorState, LoadingState, VirtualizedInfiniteList } from "@/ui";
 
 const workflowLibraryItemMaxWidthClassName = "[&>*]:max-w-[1280px]";
@@ -87,10 +87,10 @@ function WorkflowLibraryCard({ workflow }: Readonly<{ workflow: WorkflowRecord }
   const { open } = useOwnedSidebarRoots();
 
   return (
-    <WorkflowCard
+    <WorkflowRow
       contextActions={{
         onEdit: () => {
-          open({ kind: "workflowEditor", mode: "overlay", workflowID: workflow.id });
+          open({ kind: "workflowSettings", mode: "overlay", workflowID: workflow.id });
         },
       }}
       onOpen={() => {

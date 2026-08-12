@@ -398,6 +398,18 @@
   }
 }
 
+@keyframes sidebar-shift-slot-in {
+  from {
+    width: 0;
+  }
+}
+
+@keyframes sidebar-shift-slot-out {
+  to {
+    width: 0;
+  }
+}
+
 @layer base {
   * {
     box-sizing: border-box;
@@ -551,11 +563,26 @@
 }
 
 .app-sidebar-panel {
-  will-change: opacity, transform, max-width;
+  will-change: opacity, transform;
 }
 
 .app-sidebar-panel-overlay {
   animation: sidebar-slide-in var(--motion-fast) both;
+}
+
+.app-sidebar-shift-slot {
+  width: calc(var(--app-sidebar-width) + var(--app-sidebar-inset));
+  animation: sidebar-shift-slot-in var(--motion-fast) both;
+  transition: width var(--motion-fast);
+  will-change: width;
+}
+
+.app-sidebar-shift-slot-closing {
+  animation: sidebar-shift-slot-out var(--motion-fast) both;
+}
+
+.app-sidebar-shift-slot-resizing {
+  transition: none;
 }
 
 .app-sidebar-panel-shift {
