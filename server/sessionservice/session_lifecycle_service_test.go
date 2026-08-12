@@ -694,6 +694,8 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 	runtimeService := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{})
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
+	activateSettings.ThinkingLevel = "medium"
+	activateSettings.Reviewer.Frequency = "off"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"
 	activateSettings.Shell.PostprocessingMode = config.ShellPostprocessingModeBuiltin
 	activation, err := runtimeService.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{

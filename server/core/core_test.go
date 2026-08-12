@@ -520,11 +520,11 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
 	list := func() serverapi.SessionPageResponse {
+		limit := 20
 		page, listErr := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 			ProjectID: binding.ProjectID,
 			Category:  sessioncontract.SessionCategoryMain,
-			PageSize:  20,
-			Position:  serverapi.NewestSessionPagePosition(),
+			Limit:     &limit,
 		})
 		if listErr != nil {
 			t.Fatalf("ListSessionPage: %v", listErr)
@@ -744,11 +744,13 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if firstRun.Result != "ok" || secondRun.Result != "ok" {
 		t.Fatalf("results = (%q, %q), want both ok", firstRun.Result, secondRun.Result)
 	}
+	offset := 0
+	limit := 20
 	page, err := appCore.ProjectViewClient().ListSessionPage(context.Background(), serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategorySubagent,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    &offset,
+		Limit:     &limit,
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)

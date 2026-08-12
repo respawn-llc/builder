@@ -12,13 +12,13 @@ func (c uiInputController) handleRuntimeCtrlC(closeSurface func() tea.Cmd) (tea.
 	if closeSurface != nil {
 		closeCmd = closeSurface()
 	}
+	if runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
+		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
+	}
 	if m.hasPendingInterrupt() {
 		m.exitAction = UIActionExit
 		m.forcedLocalExit = true
 		return m, sequenceCmds(closeCmd, tea.Quit)
-	}
-	if runtimeActivityAllowsOrdinaryInterrupt(m.runtimeActivityProjection) {
-		return m, sequenceCmds(closeCmd, c.interruptBusyRuntime())
 	}
 	m.exitAction = UIActionExit
 	return m, sequenceCmds(closeCmd, tea.Quit)

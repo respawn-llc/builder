@@ -125,8 +125,8 @@ function MarkdownFieldCore({
   const showEditor = editing && !disabled;
 
   return (
-    <div className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]">
-      <div className="min-h-0 min-w-0">
+    <div className="grid h-full w-full min-h-0 min-w-0 max-w-full grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]">
+      <div className="min-h-0 min-w-0 max-w-full">
         {showEditor ? (
           <MarkdownFieldEditor
             describedBy={errorText === undefined ? undefined : errorID}
@@ -287,15 +287,15 @@ function MarkdownFieldReadViewport({
   const expandLabel = readPresentation.kind === "collapsible" ? readPresentation.expandLabel : undefined;
 
   return (
-    <div className={cx("relative min-h-0 min-w-0", !collapsed && "h-full")}>
+    <div className={cx("relative w-full min-h-0 min-w-0 max-w-full", !collapsed && "h-full")}>
       <div
         aria-label={label}
         aria-readonly
         className={cx(
           fieldIslandInputClassName(1, surfaceRadius),
-          "relative block h-full min-h-0 min-w-0 p-[var(--space-2)]",
+          "relative block h-full min-h-0 min-w-0 max-w-full p-[var(--space-2)]",
           !disabled && "cursor-text",
-          collapsed ? "overflow-hidden" : "overflow-visible",
+          collapsed ? "overflow-hidden" : "overflow-clip",
         )}
         onKeyDown={(event) => {
           activateFromKeyboard(event, disabled, onEdit);
@@ -308,7 +308,7 @@ function MarkdownFieldReadViewport({
         style={surfaceStyle}
         tabIndex={disabled ? -1 : 0}
       >
-        <div ref={contentRef}>
+        <div className="min-w-0 max-w-full" ref={contentRef}>
           {value.trim().length > 0 ? (
             <StaticMarkdown disabled={disabled} {...(taskListProps ?? {})} value={value} />
           ) : (

@@ -252,8 +252,7 @@ func materializedSessionPage(t *testing.T, store *Store, projectID string) serve
 	page, err := store.ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 		ProjectID: projectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     textutil.Value(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)

@@ -483,6 +483,29 @@ func TestMetadataServiceWorkspaceSelectorUsesExactRootFallbackWhenCanonicalizati
 	}
 }
 
+func TestServiceListsSessionPageWithOffsetWindow(t *testing.T) {
+	store, _, binding := newProjectViewMetadataStore(t)
+	svc := newProjectViewMetadataService(t, store)
+	offset := 0
+	limit := 50
+
+	response, err := svc.ListSessionPage(context.Background(), serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		Offset:    &offset,
+		Limit:     &limit,
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage: %v", err)
+	}
+	if response.ProjectID != binding.ProjectID ||
+		response.Category != sessioncontract.SessionCategoryMain ||
+		len(response.Sessions) != 0 ||
+		response.NextOffset != nil {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
 func TestMetadataServiceUnlinksOnlySelectedProjectBindingByPath(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
 	second, err := store.CreateProjectForWorkspace(context.Background(), t.TempDir(), "Second project")

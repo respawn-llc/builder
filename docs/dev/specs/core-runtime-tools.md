@@ -59,6 +59,10 @@
 - Except in `none` and `raw` modes, generic command-output sanitization runs before built-ins and the optional hook. Built-ins run before the hook; a built-in halt stops only later built-ins. A user hook receives JSON on stdin containing the original sanitized and current processed output, and returns JSON on stdout. Hook failures do not change the model-facing output envelope.
 - `/ps` can show and operate on background processes from other sessions in the same app instance.
 - Background process IDs are unique for one server lifetime. Their Session association controls notices and history, not access.
+- Kent exposes at most 1,000 completed background processes per server lifetime. Completing another process removes the least recently directly accessed completed process from `/ps` and process controls.
+- Direct process access refreshes completed-process recency. Listing `/ps` does not refresh recency.
+- The completed-process retention limit never removes a running process.
+- Accessing an unknown or removed process returns the same shell-result-unavailable error.
 
 ## Patch And Image Tools
 

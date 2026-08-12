@@ -790,7 +790,7 @@ func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompa
 	_, err := memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.compactions, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
-		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		commandErr := s.withRuntime(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, compactErr := engine.CompactContextWithAcceptance(runCtx, req.Args, attempt.Accept)
 			return compactErr
 		})

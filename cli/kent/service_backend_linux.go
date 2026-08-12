@@ -251,24 +251,12 @@ func systemdUnitPath() (string, error) {
 }
 
 func renderSystemdUnit(spec serviceSpec) string {
-	lines := []string{
-		"[Unit]",
-		"Description=" + brand.Product + " server background service",
-		"After=network-online.target",
-		"",
-		"[Service]",
-		"Type=simple",
-		"ExecStart=" + systemdCommand(serviceCommand(spec)),
-		"Restart=always",
-		"RestartSec=2",
-		"StandardOutput=append:" + systemdEscapeSpecifiers(spec.StdoutLogPath),
-		"StandardError=append:" + systemdEscapeSpecifiers(spec.StderrLogPath),
-		"",
-		"[Install]",
-		"WantedBy=default.target",
-		"",
-	}
-	return strings.Join(lines, "\n")
+	return renderSystemdUnitText(
+		brand.Product+" server background service",
+		systemdCommand(serviceCommand(spec)),
+		systemdEscapeSpecifiers(spec.StdoutLogPath),
+		systemdEscapeSpecifiers(spec.StderrLogPath),
+	)
 }
 
 func systemdCommand(args []string) string {

@@ -119,7 +119,10 @@ type injectedQueueDiscardDoneMsg struct {
 }
 
 type compactDoneMsg struct {
-	err error
+	submittedText string
+	origin        uiCompactionOrigin
+	invoked       bool
+	err           error
 }
 
 type activeSubmitOrigin uint8

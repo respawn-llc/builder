@@ -867,20 +867,6 @@ func (q *Queries) CountTasksMissingSourceWorkspaceSnapshot(ctx context.Context, 
 	return task_count, err
 }
 
-const countWorkflowNodesByGroup = `-- name: CountWorkflowNodesByGroup :one
-SELECT CAST(COUNT(*) AS INTEGER) AS node_count
-FROM workflow_nodes
-WHERE group_id = ?1
-`
-
-func (q *Queries) CountWorkflowNodesByGroup(ctx context.Context, groupID sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countWorkflowNodesByGroup, groupID)
-	var node_count int64
-	err := recordQueryError(ctx, row.Scan(&node_count), countWorkflowNodesByGroup, 1)
-
-	return node_count, err
-}
-
 const countWorktreesByWorkspace = `-- name: CountWorktreesByWorkspace :one
 SELECT CAST(COUNT(*) AS INTEGER) AS worktree_count
 FROM worktrees
@@ -2335,75 +2321,6 @@ func (q *Queries) GetWorkflowDeleteImpact(ctx context.Context, workflowID runtim
 	return i, err
 }
 
-const getWorkflowEdge = `-- name: GetWorkflowEdge :one
-SELECT
-    e.id,
-    source.workflow_id AS workflow_id,
-    e.transition_group_id,
-    e.edge_key,
-    e.target_node_id,
-    e.assignee_selection,
-    e.thinking_selection,
-    e.requires_approval,
-    e.context_mode,
-    e.context_source_kind,
-    e.context_source_node_key,
-    e.prompt_template,
-    e.parameters_json,
-    e.input_bindings_json,
-    e.output_requirements_json,
-    e.sort_order
-FROM workflow_edges e
-JOIN workflow_transition_groups tg ON tg.id = e.transition_group_id
-JOIN workflow_nodes source ON source.id = tg.source_node_id
-WHERE e.id = ?1
-LIMIT 1
-`
-
-type GetWorkflowEdgeRow struct {
-	ID                     string
-	WorkflowID             runtimeids.WorkflowID
-	TransitionGroupID      string
-	EdgeKey                string
-	TargetNodeID           string
-	AssigneeSelection      string
-	ThinkingSelection      string
-	RequiresApproval       int64
-	ContextMode            string
-	ContextSourceKind      string
-	ContextSourceNodeKey   string
-	PromptTemplate         string
-	ParametersJson         string
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	SortOrder              int64
-}
-
-func (q *Queries) GetWorkflowEdge(ctx context.Context, id string) (GetWorkflowEdgeRow, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowEdge, id)
-	var i GetWorkflowEdgeRow
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.WorkflowID,
-		&i.TransitionGroupID,
-		&i.EdgeKey,
-		&i.TargetNodeID,
-		&i.AssigneeSelection,
-		&i.ThinkingSelection,
-		&i.RequiresApproval,
-		&i.ContextMode,
-		&i.ContextSourceKind,
-		&i.ContextSourceNodeKey,
-		&i.PromptTemplate,
-		&i.ParametersJson,
-		&i.InputBindingsJson,
-		&i.OutputRequirementsJson,
-		&i.SortOrder,
-	), getWorkflowEdge, 1)
-
-	return i, err
-}
-
 const getWorkflowEdgeParameterEditPolicyImpact = `-- name: GetWorkflowEdgeParameterEditPolicyImpact :one
 SELECT
     (
@@ -2535,80 +2452,6 @@ func (q *Queries) GetWorkflowNode(ctx context.Context, id string) (GetWorkflowNo
 	), getWorkflowNode, 1)
 
 	return i, err
-}
-
-const getWorkflowNodeGroupByID = `-- name: GetWorkflowNodeGroupByID :one
-SELECT
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-FROM workflow_node_groups
-WHERE id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetWorkflowNodeGroupByID(ctx context.Context, id string) (WorkflowNodeGroup, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowNodeGroupByID, id)
-	var i WorkflowNodeGroup
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.WorkflowID,
-		&i.GroupKey,
-		&i.DisplayName,
-		&i.SortOrder,
-	), getWorkflowNodeGroupByID, 1)
-
-	return i, err
-}
-
-const getWorkflowNodeGroupByKey = `-- name: GetWorkflowNodeGroupByKey :one
-SELECT
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-FROM workflow_node_groups
-WHERE workflow_id = ?1
-  AND group_key = ?2
-LIMIT 1
-`
-
-type GetWorkflowNodeGroupByKeyParams struct {
-	WorkflowID runtimeids.WorkflowID
-	GroupKey   string
-}
-
-func (q *Queries) GetWorkflowNodeGroupByKey(ctx context.Context, arg GetWorkflowNodeGroupByKeyParams) (WorkflowNodeGroup, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowNodeGroupByKey, arg.WorkflowID, arg.GroupKey)
-	var i WorkflowNodeGroup
-	err := recordQueryError(ctx, row.Scan(
-		&i.ID,
-		&i.WorkflowID,
-		&i.GroupKey,
-		&i.DisplayName,
-		&i.SortOrder,
-	), getWorkflowNodeGroupByKey, 2)
-
-	return i, err
-}
-
-const getWorkflowTransitionGroupWorkflowID = `-- name: GetWorkflowTransitionGroupWorkflowID :one
-SELECT source.workflow_id
-FROM workflow_transition_groups tg
-JOIN workflow_nodes source ON source.id = tg.source_node_id
-WHERE tg.id = ?1
-LIMIT 1
-`
-
-func (q *Queries) GetWorkflowTransitionGroupWorkflowID(ctx context.Context, id string) (runtimeids.WorkflowID, error) {
-	row := q.db.QueryRowContext(ctx, getWorkflowTransitionGroupWorkflowID, id)
-	var workflow_id runtimeids.WorkflowID
-	err := recordQueryError(ctx, row.Scan(&workflow_id), getWorkflowTransitionGroupWorkflowID, 1)
-
-	return workflow_id, err
 }
 
 const getWorkspaceBindingByID = `-- name: GetWorkspaceBindingByID :one
@@ -3424,83 +3267,6 @@ func (q *Queries) InsertWorkflow(ctx context.Context, arg InsertWorkflowParams) 
 	return err
 }
 
-const insertWorkflowEdge = `-- name: InsertWorkflowEdge :exec
-INSERT INTO workflow_edges (
-    id,
-    transition_group_id,
-    edge_key,
-    target_node_id,
-    assignee_selection,
-    thinking_selection,
-    requires_approval,
-    context_mode,
-    context_source_kind,
-    context_source_node_key,
-    prompt_template,
-    parameters_json,
-    input_bindings_json,
-    output_requirements_json,
-    sort_order
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6,
-    ?7,
-    ?8,
-    ?9,
-    ?10,
-    ?11,
-    ?12,
-    ?13,
-    ?14,
-    ?15
-)
-`
-
-type InsertWorkflowEdgeParams struct {
-	ID                     string
-	TransitionGroupID      string
-	EdgeKey                string
-	TargetNodeID           string
-	AssigneeSelection      string
-	ThinkingSelection      string
-	RequiresApproval       int64
-	ContextMode            string
-	ContextSourceKind      string
-	ContextSourceNodeKey   string
-	PromptTemplate         string
-	ParametersJson         string
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	SortOrder              int64
-}
-
-func (q *Queries) InsertWorkflowEdge(ctx context.Context, arg InsertWorkflowEdgeParams) error {
-	_, err := q.db.ExecContext(ctx, insertWorkflowEdge,
-		arg.ID,
-		arg.TransitionGroupID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.AssigneeSelection,
-		arg.ThinkingSelection,
-		arg.RequiresApproval,
-		arg.ContextMode,
-		arg.ContextSourceKind,
-		arg.ContextSourceNodeKey,
-		arg.PromptTemplate,
-		arg.ParametersJson,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.SortOrder,
-	)
-	err = recordQueryError(ctx, err, insertWorkflowEdge, 15)
-
-	return err
-}
-
 const insertWorkflowNode = `-- name: InsertWorkflowNode :exec
 INSERT INTO workflow_nodes (
     id,
@@ -3558,84 +3324,6 @@ func (q *Queries) InsertWorkflowNode(ctx context.Context, arg InsertWorkflowNode
 		arg.SortOrder,
 	)
 	err = recordQueryError(ctx, err, insertWorkflowNode, 11)
-
-	return err
-}
-
-const insertWorkflowNodeGroup = `-- name: InsertWorkflowNodeGroup :exec
-INSERT INTO workflow_node_groups (
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5
-)
-`
-
-type InsertWorkflowNodeGroupParams struct {
-	ID          string
-	WorkflowID  runtimeids.WorkflowID
-	GroupKey    string
-	DisplayName string
-	SortOrder   int64
-}
-
-func (q *Queries) InsertWorkflowNodeGroup(ctx context.Context, arg InsertWorkflowNodeGroupParams) error {
-	_, err := q.db.ExecContext(ctx, insertWorkflowNodeGroup,
-		arg.ID,
-		arg.WorkflowID,
-		arg.GroupKey,
-		arg.DisplayName,
-		arg.SortOrder,
-	)
-	err = recordQueryError(ctx, err, insertWorkflowNodeGroup, 5)
-
-	return err
-}
-
-const insertWorkflowTransitionGroup = `-- name: InsertWorkflowTransitionGroup :exec
-INSERT INTO workflow_transition_groups (
-    id,
-    source_node_id,
-    transition_id,
-    display_name,
-    description,
-    sort_order
-) VALUES (
-    ?1,
-    ?2,
-    ?3,
-    ?4,
-    ?5,
-    ?6
-)
-`
-
-type InsertWorkflowTransitionGroupParams struct {
-	ID           string
-	SourceNodeID string
-	TransitionID string
-	DisplayName  string
-	Description  string
-	SortOrder    int64
-}
-
-func (q *Queries) InsertWorkflowTransitionGroup(ctx context.Context, arg InsertWorkflowTransitionGroupParams) error {
-	_, err := q.db.ExecContext(ctx, insertWorkflowTransitionGroup,
-		arg.ID,
-		arg.SourceNodeID,
-		arg.TransitionID,
-		arg.DisplayName,
-		arg.Description,
-		arg.SortOrder,
-	)
-	err = recordQueryError(ctx, err, insertWorkflowTransitionGroup, 6)
 
 	return err
 }
@@ -4371,215 +4059,6 @@ func (q *Queries) ListMetadataSchemaDefinitions(ctx context.Context) ([]ListMeta
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listMetadataSchemaDefinitions, 0); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listNewerSessionPage = `-- name: ListNewerSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = ?1
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = ?2
-  AND (
-      updated_at_unix_ms > ?3
-      OR (
-          updated_at_unix_ms = ?3
-          AND id > ?4
-      )
-  )
-ORDER BY updated_at_unix_ms ASC, id ASC
-LIMIT ?5
-`
-
-type ListNewerSessionPageParams struct {
-	ProjectID               string
-	Category                sql.NullString
-	BoundaryUpdatedAtUnixMs int64
-	BoundarySessionID       string
-	PageLimit               int64
-}
-
-type ListNewerSessionPageRow struct {
-	ID                 string
-	Name               string
-	FirstPromptPreview string
-	Category           string
-	UpdatedAtUnixMs    int64
-}
-
-func (q *Queries) ListNewerSessionPage(ctx context.Context, arg ListNewerSessionPageParams) ([]ListNewerSessionPageRow, error) {
-	rows, err := q.db.QueryContext(ctx, listNewerSessionPage,
-		arg.ProjectID,
-		arg.Category,
-		arg.BoundaryUpdatedAtUnixMs,
-		arg.BoundarySessionID,
-		arg.PageLimit,
-	)
-	err = recordQueryError(ctx, err, listNewerSessionPage, 5)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListNewerSessionPageRow
-	for rows.Next() {
-		var i ListNewerSessionPageRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.FirstPromptPreview,
-			&i.Category,
-			&i.UpdatedAtUnixMs,
-		), listNewerSessionPage, 5); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listNewerSessionPage, 5); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listNewerSessionPage, 5); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listNewestSessionPage = `-- name: ListNewestSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = ?1
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = ?2
-ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT ?3
-`
-
-type ListNewestSessionPageParams struct {
-	ProjectID string
-	Category  sql.NullString
-	PageLimit int64
-}
-
-type ListNewestSessionPageRow struct {
-	ID                 string
-	Name               string
-	FirstPromptPreview string
-	Category           string
-	UpdatedAtUnixMs    int64
-}
-
-func (q *Queries) ListNewestSessionPage(ctx context.Context, arg ListNewestSessionPageParams) ([]ListNewestSessionPageRow, error) {
-	rows, err := q.db.QueryContext(ctx, listNewestSessionPage, arg.ProjectID, arg.Category, arg.PageLimit)
-	err = recordQueryError(ctx, err, listNewestSessionPage, 3)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListNewestSessionPageRow
-	for rows.Next() {
-		var i ListNewestSessionPageRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.FirstPromptPreview,
-			&i.Category,
-			&i.UpdatedAtUnixMs,
-		), listNewestSessionPage, 3); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listNewestSessionPage, 3); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listNewestSessionPage, 3); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listOlderSessionPage = `-- name: ListOlderSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = ?1
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = ?2
-  AND (
-      updated_at_unix_ms < ?3
-      OR (
-          updated_at_unix_ms = ?3
-          AND id < ?4
-      )
-  )
-ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT ?5
-`
-
-type ListOlderSessionPageParams struct {
-	ProjectID               string
-	Category                sql.NullString
-	BoundaryUpdatedAtUnixMs int64
-	BoundarySessionID       string
-	PageLimit               int64
-}
-
-type ListOlderSessionPageRow struct {
-	ID                 string
-	Name               string
-	FirstPromptPreview string
-	Category           string
-	UpdatedAtUnixMs    int64
-}
-
-func (q *Queries) ListOlderSessionPage(ctx context.Context, arg ListOlderSessionPageParams) ([]ListOlderSessionPageRow, error) {
-	rows, err := q.db.QueryContext(ctx, listOlderSessionPage,
-		arg.ProjectID,
-		arg.Category,
-		arg.BoundaryUpdatedAtUnixMs,
-		arg.BoundarySessionID,
-		arg.PageLimit,
-	)
-	err = recordQueryError(ctx, err, listOlderSessionPage, 5)
-
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListOlderSessionPageRow
-	for rows.Next() {
-		var i ListOlderSessionPageRow
-		if err := recordQueryError(ctx, rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.FirstPromptPreview,
-			&i.Category,
-			&i.UpdatedAtUnixMs,
-		), listOlderSessionPage, 5); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := recordQueryError(ctx, rows.Close(), listOlderSessionPage, 5); err != nil {
-		return nil, err
-	}
-	if err := recordQueryError(ctx, rows.Err(), listOlderSessionPage, 5); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5347,6 +4826,73 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), query, 1); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionPage = `-- name: ListSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = ?1
+  AND launch_visible <> 0
+  AND COALESCE(category, 'main') = ?2
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT ?4
+OFFSET ?3
+`
+
+type ListSessionPageParams struct {
+	ProjectID  string
+	Category   sql.NullString
+	PageOffset int64
+	PageLimit  int64
+}
+
+type ListSessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListSessionPage(ctx context.Context, arg ListSessionPageParams) ([]ListSessionPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionPage,
+		arg.ProjectID,
+		arg.Category,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	err = recordQueryError(ctx, err, listSessionPage, 4)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionPageRow
+	for rows.Next() {
+		var i ListSessionPageRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.FirstPromptPreview,
+			&i.Category,
+			&i.UpdatedAtUnixMs,
+		), listSessionPage, 4); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listSessionPage, 4); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listSessionPage, 4); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -9009,85 +8555,6 @@ func (q *Queries) UpdateTaskManagedWorktree(ctx context.Context, arg UpdateTaskM
 	return result.RowsAffected()
 }
 
-const updateWorkflowEdge = `-- name: UpdateWorkflowEdge :execrows
-UPDATE workflow_edges
-SET
-    transition_group_id = ?1,
-    edge_key = ?2,
-    target_node_id = ?3,
-    assignee_selection = ?4,
-    thinking_selection = ?5,
-    requires_approval = ?6,
-    context_mode = ?7,
-    context_source_kind = ?8,
-    context_source_node_key = ?9,
-    prompt_template = ?10,
-    parameters_json = ?11,
-    input_bindings_json = ?12,
-    output_requirements_json = ?13
-WHERE workflow_edges.id = ?14
-  AND (
-      SELECT source.workflow_id
-      FROM workflow_edges existing
-      JOIN workflow_transition_groups tg ON tg.id = existing.transition_group_id
-      JOIN workflow_nodes source ON source.id = tg.source_node_id
-      WHERE existing.id = ?14
-  ) = ?15
-  AND EXISTS (
-      SELECT 1
-      FROM workflow_transition_groups new_tg
-      JOIN workflow_nodes new_source ON new_source.id = new_tg.source_node_id
-      JOIN workflow_nodes target ON target.id = ?3
-      WHERE new_tg.id = ?1
-        AND new_source.workflow_id = ?15
-        AND target.workflow_id = ?15
-  )
-`
-
-type UpdateWorkflowEdgeParams struct {
-	TransitionGroupID      string
-	EdgeKey                string
-	TargetNodeID           string
-	AssigneeSelection      string
-	ThinkingSelection      string
-	RequiresApproval       int64
-	ContextMode            string
-	ContextSourceKind      string
-	ContextSourceNodeKey   string
-	PromptTemplate         string
-	ParametersJson         string
-	InputBindingsJson      string
-	OutputRequirementsJson string
-	EdgeID                 string
-	WorkflowID             runtimeids.WorkflowID
-}
-
-func (q *Queries) UpdateWorkflowEdge(ctx context.Context, arg UpdateWorkflowEdgeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateWorkflowEdge,
-		arg.TransitionGroupID,
-		arg.EdgeKey,
-		arg.TargetNodeID,
-		arg.AssigneeSelection,
-		arg.ThinkingSelection,
-		arg.RequiresApproval,
-		arg.ContextMode,
-		arg.ContextSourceKind,
-		arg.ContextSourceNodeKey,
-		arg.PromptTemplate,
-		arg.ParametersJson,
-		arg.InputBindingsJson,
-		arg.OutputRequirementsJson,
-		arg.EdgeID,
-		arg.WorkflowID,
-	)
-	err = recordQueryError(ctx, err, updateWorkflowEdge, 15)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const updateWorkflowInfo = `-- name: UpdateWorkflowInfo :execrows
 UPDATE workflows
 SET
@@ -9219,137 +8686,6 @@ func (q *Queries) UpdateWorkflowMetadataWithoutVersion(ctx context.Context, arg 
 		arg.ID,
 	)
 	err = recordQueryError(ctx, err, updateWorkflowMetadataWithoutVersion, 6)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateWorkflowNode = `-- name: UpdateWorkflowNode :execrows
-UPDATE workflow_nodes
-SET
-    node_key = ?1,
-    kind = ?2,
-    display_name = ?3,
-    subagent_role = ?4,
-    completion_mode = ?5,
-    script_path = ?6,
-    join_input_providers_json = ?7,
-    group_id = ?8
-WHERE id = ?9
-  AND workflow_id = ?10
-`
-
-type UpdateWorkflowNodeParams struct {
-	NodeKey                string
-	Kind                   string
-	DisplayName            string
-	SubagentRole           string
-	CompletionMode         string
-	ScriptPath             sql.NullString
-	JoinInputProvidersJson string
-	GroupID                sql.NullString
-	ID                     string
-	WorkflowID             runtimeids.WorkflowID
-}
-
-func (q *Queries) UpdateWorkflowNode(ctx context.Context, arg UpdateWorkflowNodeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateWorkflowNode,
-		arg.NodeKey,
-		arg.Kind,
-		arg.DisplayName,
-		arg.SubagentRole,
-		arg.CompletionMode,
-		arg.ScriptPath,
-		arg.JoinInputProvidersJson,
-		arg.GroupID,
-		arg.ID,
-		arg.WorkflowID,
-	)
-	err = recordQueryError(ctx, err, updateWorkflowNode, 10)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateWorkflowNodeGroup = `-- name: UpdateWorkflowNodeGroup :execrows
-UPDATE workflow_node_groups
-SET
-    group_key = ?1,
-    display_name = ?2,
-    sort_order = ?3
-WHERE id = ?4
-  AND workflow_id = ?5
-`
-
-type UpdateWorkflowNodeGroupParams struct {
-	GroupKey    string
-	DisplayName string
-	SortOrder   int64
-	ID          string
-	WorkflowID  runtimeids.WorkflowID
-}
-
-func (q *Queries) UpdateWorkflowNodeGroup(ctx context.Context, arg UpdateWorkflowNodeGroupParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateWorkflowNodeGroup,
-		arg.GroupKey,
-		arg.DisplayName,
-		arg.SortOrder,
-		arg.ID,
-		arg.WorkflowID,
-	)
-	err = recordQueryError(ctx, err, updateWorkflowNodeGroup, 5)
-
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const updateWorkflowTransitionGroup = `-- name: UpdateWorkflowTransitionGroup :execrows
-UPDATE workflow_transition_groups
-SET
-    source_node_id = ?1,
-    transition_id = ?2,
-    display_name = ?3,
-    description = ?4
-WHERE workflow_transition_groups.id = ?5
-  AND (
-      SELECT source.workflow_id
-      FROM workflow_transition_groups existing
-      JOIN workflow_nodes source ON source.id = existing.source_node_id
-      WHERE existing.id = ?5
-  ) = ?6
-  AND EXISTS (
-      SELECT 1
-      FROM workflow_nodes new_source
-      WHERE new_source.id = ?1
-        AND new_source.workflow_id = ?6
-  )
-`
-
-type UpdateWorkflowTransitionGroupParams struct {
-	SourceNodeID      string
-	TransitionID      string
-	DisplayName       string
-	Description       string
-	TransitionGroupID string
-	WorkflowID        runtimeids.WorkflowID
-}
-
-func (q *Queries) UpdateWorkflowTransitionGroup(ctx context.Context, arg UpdateWorkflowTransitionGroupParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updateWorkflowTransitionGroup,
-		arg.SourceNodeID,
-		arg.TransitionID,
-		arg.DisplayName,
-		arg.Description,
-		arg.TransitionGroupID,
-		arg.WorkflowID,
-	)
-	err = recordQueryError(ctx, err, updateWorkflowTransitionGroup, 6)
 
 	if err != nil {
 		return 0, err

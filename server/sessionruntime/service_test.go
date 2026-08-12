@@ -230,6 +230,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
+			ThinkingLevel:      "medium",
 			ModelContextWindow: 200000,
 			Reviewer:           config.ReviewerSettings{Frequency: "off"},
 			Timeouts:           config.Timeouts{ModelRequestSeconds: 1},
@@ -520,6 +521,7 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
+			ThinkingLevel:      "medium",
 			ModelContextWindow: 200000,
 			AllowNonCwdEdits:   false,
 			Reviewer:           config.ReviewerSettings{Frequency: "off"},
@@ -652,7 +654,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
 		QuestionsEnabled: textutil.Value(true), AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
-			Model: "gpt-5", ModelContextWindow: 200000,
+			Model: "gpt-5", ThinkingLevel: "medium", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
 			Shell: config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},
 		},
@@ -741,7 +743,7 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 		QuestionsEnabled:      textutil.Value(true),
 		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
-			Model: "gpt-5", ModelContextWindow: 200000,
+			Model: "gpt-5", ThinkingLevel: "medium", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
 			Timeouts: config.Timeouts{ModelRequestSeconds: 1},
 			Shell:    config.ShellSettings{PostprocessingMode: config.ShellPostprocessingModeBuiltin},

@@ -112,7 +112,7 @@ func TestEnsureLockedWithSystemPromptAndTranscriptWorkingDirDoesNotDeadlock(t *t
 		if got.locked.SystemPrompt != "deadlock guard" {
 			t.Fatalf("system prompt = %q, want deadlock guard", got.locked.SystemPrompt)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("ensureLocked deadlocked while resolving SYSTEM.md from TranscriptWorkingDir")
 	}
 }
@@ -162,7 +162,7 @@ func TestBuildSystemPromptSnapshotForRootDoesNotUseMutexTakingWorkspaceAccessor(
 		if got.prompt != "locked helper guard" {
 			t.Fatalf("prompt = %q, want locked helper guard", got.prompt)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		eng.mu.Unlock()
 		t.Fatal("buildSystemPromptSnapshotForRoot called a mutex-taking workspace accessor")
 	}
@@ -764,7 +764,7 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
 	changed, enabled := eng.SetAutoCompactionEnabled(false)
