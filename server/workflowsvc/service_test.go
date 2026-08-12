@@ -2984,6 +2984,60 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 	}
 }
 
+func TestServiceWorkflowGraphPreviewDoesNotWaitForUnrelatedMutation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+
+	permitStarted := make(chan struct{})
+	releasePermit := make(chan struct{})
+	permitDone := make(chan error, 1)
+	go func() {
+		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
+			close(permitStarted)
+			<-releasePermit
+			return nil
+		})
+	}()
+	<-permitStarted
+
+	previewDone := make(chan struct {
+		response serverapi.WorkflowGraphSavePreviewResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+			WorkflowID:      workflowID,
+			ExpectedVersion: current.Definition.Workflow.Version,
+			Graph:           serverapi.WorkflowGraphDraftFromDefinition(current.Definition),
+		})
+		previewDone <- struct {
+			response serverapi.WorkflowGraphSavePreviewResponse
+			err      error
+		}{response: response, err: err}
+	}()
+
+	select {
+	case outcome := <-previewDone:
+		if outcome.err != nil {
+			t.Fatalf("PreviewWorkflowGraphSave: %v", outcome.err)
+		}
+		if outcome.response.Changed {
+			t.Fatalf("preview = %+v, want unchanged", outcome.response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("PreviewWorkflowGraphSave waited for the global mutation permit")
+	}
+
+	close(releasePermit)
+	if err := <-permitDone; err != nil {
+		t.Fatalf("release workflow mutation permit: %v", err)
+	}
+}
+
 func workflowServiceHasGraphSaveBlocker(blockers []serverapi.WorkflowGraphSaveBlocker, code string) bool {
 	for _, blocker := range blockers {
 		if blocker.Code == code {

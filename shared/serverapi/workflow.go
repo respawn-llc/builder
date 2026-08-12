@@ -3249,8 +3249,8 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 	if err := validateRequired("node_id", r.NodeID); err != nil {
 		return err
 	}
-	if _, err := runtimeids.GraphEntityIDBlob(r.NodeID); err != nil {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "node_id", "node_id must be canonical UUIDv4 text")
+	if err := validateGraphEntityID("node_id", r.NodeID); err != nil {
+		return err
 	}
 	if r.PageSize < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidMode, "page_size", "page_size must be non-negative")
