@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -69,6 +70,17 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 	provider := t.Provider
 	if provider == "" {
 		provider = ProviderOpenAI
+	}
+	if mode.IsOAuth && t.BaseURLExplicit {
+		registration, ok := lookupProviderVariantContract("openai-compatible")
+		if !ok {
+			return ProviderVariantContract{}, llmerrors.NewProviderContractError(
+				"openai-compatible",
+				0,
+				errors.New("openai-compatible provider variant is not registered"),
+			)
+		}
+		return registration.Variant, nil
 	}
 	variant, err := resolveProviderTransportVariant(provider, t.BaseURL, mode)
 	if err != nil {
