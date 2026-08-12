@@ -74,7 +74,7 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			}
 		}
 		s.mu.Lock()
-		needLaunch := s.child == nil || s.child.session != session
+		needLaunch := s.child == nil || (s.child.session != session && !s.child.retained)
 		s.mu.Unlock()
 		if needLaunch {
 			if s.stopChild().Complete {
@@ -112,6 +112,9 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			s.stopChild()
 			return
 		case <-s.wake:
+			if child.retained {
+				continue
+			}
 			if routeManagedChildWake(child.session, s.wanted.Load(), func() managedChildSettlementDecision {
 				return settleManagedChild(s.settlementTarget(child), child.terminate(s.spec))
 			}).Complete {
@@ -155,7 +158,7 @@ func (s *serverSupervisor) stopChild() managedChildSettlementDecision {
 }
 
 func (s *serverSupervisor) settlementTarget(child *managedChild) managedChildSettlementTarget {
-	return managedChildSettlementTarget{func() serviceTerminationObservation { return child.terminate(s.spec) }, func() { child.release(); s.setChild(nil); s.clearPID() }, func() { s.setChild(child); s.writePID(child.pid); select {} }}
+	return managedChildSettlementTarget{func() serviceTerminationObservation { return child.terminate(s.spec) }, func() { child.release(); s.setChild(nil); s.clearPID() }, func() { child.retained = true; s.setChild(child); s.writePID(child.pid) }}
 }
 func (s *serverSupervisor) setChild(child *managedChild) { s.mu.Lock(); s.child = child; s.mu.Unlock() }
 func (s *serverSupervisor) writePID(pid uint32) {
@@ -258,6 +261,7 @@ type managedChild struct {
 	shutdown windows.Handle
 	job      windows.Handle
 	observed chan serviceTerminationObservation
+	retained bool
 	released sync.Once
 }
 

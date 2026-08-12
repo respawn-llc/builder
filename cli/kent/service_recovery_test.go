@@ -99,6 +99,7 @@ func assertDecision(t *testing.T, got managedChildSettlementDecision, replace, c
 }
 
 func assertCleanStop(t *testing.T, decision managedChildSettlementDecision) {
+	assertDecision(t, decision, false, true)
 	if specific, code := serviceCompletionStatus(); specific || code != 0 {
 		t.Fatalf("SCM completion = (%t, %d), want (false, 0)", specific, code)
 	}
