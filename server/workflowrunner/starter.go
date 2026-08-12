@@ -384,7 +384,8 @@ func (s *Starter) startCurrentNodeAgent(
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
-		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true, Client: prepared.client,
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true,
+		QuestionsEnabled: textutil.Value(prepared.plan.QuestionsEnabled), AutoCompactionEnabled: textutil.Value(prepared.plan.AutoCompactionEnabled), Client: prepared.client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
 		StartLogLines: []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, prepared.plan.Descriptor.SessionID(), input.Node.ID, prepared.root.EffectiveRoot(), prepared.plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
@@ -527,9 +528,18 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.EnsureDurable() }); err != nil {
+	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+		if err := store.EnsureDurable(); err != nil {
+			return err
+		}
+		_, err := store.MutateChatSettings(session.ChatSettingsMutation{
+			AutoCompaction: textutil.Value(true),
+		})
+		return err
+	}); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
+	plan.AutoCompactionEnabled = true
 	if input.ContextMode == workflow.ContextModeCompactAndContinueSession && !sessionPrepared {
 		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 			return store.ResetLockedContractForCompactionBoundary()

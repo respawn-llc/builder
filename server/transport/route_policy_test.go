@@ -329,6 +329,10 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err != nil {
 		t.Fatalf("project workspace with attached project: %v", err)
 	}
+	materializationRoute := routeForTest(t, protocol.MethodSessionWorkspaceChatMaterialize)
+	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err != nil {
+		t.Fatalf("workspace Chat materialization with attached project: %v", err)
+	}
 	workspaceListRoute := routeForTest(t, protocol.MethodWorktreeWorkspaceList)
 	if err := executor.authorizeScope(
 		ctx,
@@ -359,6 +363,9 @@ func TestRoutePolicyAuthorizesAttachmentAndProjectWorkspaceScopesWithoutWebSocke
 	}
 	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, projectWorkspaceRoute, serverapi.SessionPlanRequest{}); err == nil {
 		t.Fatal("project workspace without active project unexpectedly allowed")
+	}
+	if err := newRoutePolicyExecutor(unboundGateway).authorizeScope(ctx, &connectionState{}, materializationRoute, serverapi.WorkspaceChatMaterializeRequest{}); err == nil {
+		t.Fatal("workspace Chat materialization without active project unexpectedly allowed")
 	}
 }
 

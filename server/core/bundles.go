@@ -12,7 +12,6 @@ import (
 	"core/server/processview"
 	"core/server/promptcontrol"
 	"core/server/registry"
-	"core/server/runtime"
 	"core/server/runtimecontrol"
 	"core/server/serverstatus"
 	"core/server/sessionlaunch"
@@ -81,7 +80,6 @@ type PromptBundle struct {
 }
 
 type RuntimeBundle struct {
-	fastModeState       *runtime.FastModeState
 	background          *shelltool.Manager
 	runtimeRegistry     *registry.RuntimeRegistry
 	runtimeAuthority    *sessionruntime.Authority
@@ -302,7 +300,6 @@ func newPromptBundle(askService *promptcontrol.AskViewService, approvalService *
 
 func newRuntimeBundle(runtimeSupport serverbootstrap.RuntimeSupport, runtimeRegistry *registry.RuntimeRegistry, runtimeAuthority *sessionruntime.Authority, runtimeControlService *runtimecontrol.Service, sessionRuntimeAPI *sessionruntime.API) *RuntimeBundle {
 	return &RuntimeBundle{
-		fastModeState:       runtimeSupport.FastModeState,
 		background:          runtimeSupport.Background,
 		runtimeRegistry:     runtimeRegistry,
 		runtimeAuthority:    runtimeAuthority,

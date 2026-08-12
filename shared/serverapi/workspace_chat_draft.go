@@ -13,7 +13,6 @@ const (
 	WorkspaceChatDraftReadMessage   WorkspaceChatDraftOperationKind = "read_message"
 	WorkspaceChatDraftUpdateMessage WorkspaceChatDraftOperationKind = "update_message"
 	WorkspaceChatDraftClear         WorkspaceChatDraftOperationKind = "clear"
-	WorkspaceChatDraftConsume       WorkspaceChatDraftOperationKind = "consume"
 )
 
 type WorkspaceChatDraftOperation struct {
@@ -23,7 +22,7 @@ type WorkspaceChatDraftOperation struct {
 
 func (o WorkspaceChatDraftOperation) Validate() error {
 	switch o.Kind {
-	case WorkspaceChatDraftReadMessage, WorkspaceChatDraftClear, WorkspaceChatDraftConsume:
+	case WorkspaceChatDraftReadMessage, WorkspaceChatDraftClear:
 		if o.Message != nil {
 			return fmt.Errorf("%s operation must not contain message", o.Kind)
 		}

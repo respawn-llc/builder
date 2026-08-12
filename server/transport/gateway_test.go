@@ -33,6 +33,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func gatewaySessionExecutionTarget(t *testing.T, conn *websocket.Conn, requestID, sessionID string) clientui.SessionExecutionTarget {
@@ -367,11 +368,13 @@ func activateGatewayController(t *testing.T, appCore *core.Core, sessionID strin
 		settings.ProviderOverride = "openai"
 	}
 	response, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: "activate-" + strings.TrimSpace(sessionID),
-		SessionID:       strings.TrimSpace(sessionID),
-		OwnerID:         "gateway-test-owner",
-		ActiveSettings:  settings,
-		Source:          appCore.Config().Source,
+		ClientRequestID:       "activate-" + strings.TrimSpace(sessionID),
+		SessionID:             strings.TrimSpace(sessionID),
+		OwnerID:               "gateway-test-owner",
+		ActiveSettings:        settings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Source:                appCore.Config().Source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
@@ -402,10 +405,12 @@ func gatewayRuntimeActivateRequest(appCore *core.Core, sessionID string, request
 		settings.ProviderOverride = "openai"
 	}
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: strings.TrimSpace(requestID),
-		SessionID:       strings.TrimSpace(sessionID),
-		ActiveSettings:  settings,
-		Source:          appCore.Config().Source,
+		ClientRequestID:       strings.TrimSpace(requestID),
+		SessionID:             strings.TrimSpace(sessionID),
+		ActiveSettings:        settings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Source:                appCore.Config().Source,
 	}
 }
 

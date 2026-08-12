@@ -2,12 +2,16 @@ package workflowrunner
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"core/internal/testharness/workflowfixture"
+	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -44,6 +48,35 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	f, input := newMaterializedRoleSelectionStart(t)
 	input.ContextMode = workflow.ContextModeCompactAndContinueSession
 	input.EnteringEdge.ContextMode = workflow.ContextModeCompactAndContinueSession
+	store, err := session.Create(
+		filepath.Join(f.cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions"),
+		"sessions",
+		f.workspace,
+		sessioncontract.SessionCategoryMain,
+		f.starter.storeOptions...,
+	)
+	if err != nil {
+		t.Fatalf("create retained Session: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		AgentRole: textutil.Value("reviewer"),
+	}); err != nil {
+		t.Fatalf("set retained Session Agent: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist retained Session: %v", err)
+	}
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		AutoCompaction: textutil.Value(false),
+	}); err != nil {
+		t.Fatalf("disable retained Session Auto-compaction: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse retained Session ID: %v", err)
+	}
+	input.CurrentNode.SessionID = &sessionID
+	input.SourceSessionID = &sessionID
 	if input.ExecutionRoot == nil {
 		t.Fatal("current node start context omitted execution root")
 	}
@@ -68,6 +101,20 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	}
 	if !containsTool(plan.EnabledTools, toolspec.ToolAskQuestion) {
 		t.Fatalf("compact planned tools = %+v, want forced ask_question", plan.EnabledTools)
+	}
+	if !plan.AutoCompactionEnabled {
+		t.Fatal("compact planned Auto-compaction = false, want required true")
+	}
+	reopened, err := session.OpenByID(
+		filepath.Join(f.cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions"),
+		plan.Descriptor.SessionID().String(),
+		f.starter.storeOptions...,
+	)
+	if err != nil {
+		t.Fatalf("reopen admitted Workflow Session: %v", err)
+	}
+	if got := reopened.Meta().ChatSettings; got == nil || got.AutoCompaction == nil || !*got.AutoCompaction {
+		t.Fatalf("persisted Workflow Auto-compaction = %+v, want true", got)
 	}
 }
 

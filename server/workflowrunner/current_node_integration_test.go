@@ -1449,11 +1449,13 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		t.Fatalf("workflow runtime roots = %+v, want sibling %q", interactiveFilesystemContext.Access.ProjectWorkspace.Roots, canonicalSiblingWorkspace)
 	}
 	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:          initialRuntime.ActiveSettings,
-		EnabledTools:      initialRuntime.EnabledTools,
-		FilesystemContext: interactiveFilesystemContext,
-		Sources:           initialRuntime.Sources,
-		Client:            f.client,
+		Settings:              initialRuntime.ActiveSettings,
+		EnabledTools:          initialRuntime.EnabledTools,
+		FilesystemContext:     interactiveFilesystemContext,
+		Sources:               initialRuntime.Sources,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                f.client,
 	})
 	if err != nil {
 		t.Fatalf("build attached Session runtime: %v", err)

@@ -45,6 +45,25 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func requiredRuntimeWireTestOptions(options RuntimeWiringOptions) RuntimeWiringOptions {
+	options.QuestionsEnabled = textutil.Value(true)
+	options.AutoCompactionEnabled = textutil.Value(true)
+	return options
+}
+
+func TestRuntimeWiringRequiresEffectiveSessionSettings(t *testing.T) {
+	for name, options := range map[string]RuntimeWiringOptions{
+		"Questions":       {AutoCompactionEnabled: textutil.Value(true)},
+		"Auto-compaction": {QuestionsEnabled: textutil.Value(true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewRuntimeWiringWithBackground(nil, session.MaterializedEventLog{}, config.Settings{}, nil, nil, nil, nil, options); err == nil {
+				t.Fatalf("runtime wiring accepted missing effective %s setting", name)
+			}
+		})
+	}
+}
+
 type mismatchedDeletionPresentationHandler struct{}
 
 func (mismatchedDeletionPresentationHandler) Call(_ context.Context, call tools.Call) (tools.Result, error) {
@@ -101,7 +120,7 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: client},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: client}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -1215,7 +1234,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveBuiltinInsteadOfBootstrapNone(t *t
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Client: &runtimewireCaptureClient{}}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -1252,7 +1271,7 @@ func TestRuntimeWiringExecCommandUsesEffectiveHookAcrossWorkspaceRebind(t *testi
 		nil,
 		nil,
 		background,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, rootA), Client: &runtimewireCaptureClient{}},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, rootA), Client: &runtimewireCaptureClient{}}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -1508,7 +1527,7 @@ func TestNewRuntimeWiringRejectsEmptyModelAfterBypassingConfigDefaults(t *testin
 		auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, nil),
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root)},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root)}),
 	)
 	if !errors.Is(err, runtime.ErrModelRequired) {
 		t.Fatalf("expected runtime.ErrModelRequired, got %v", err)
