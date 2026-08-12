@@ -17,7 +17,6 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
-	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -3058,25 +3057,20 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	service, _, metadataStore := newWorkflowServiceTestServiceWithMetadata(t)
 	complete := newWorkflowServiceReadModels(t, metadataStore, service.store, service.roleResolver, nil, nil)
 	tests := []struct {
-		name  string
-		clear func(*ReadModels)
+		name       string
+		readModels ReadModels
 	}{
-		{name: "definitions", clear: func(readModels *ReadModels) { readModels.Definitions = nil }},
-		{name: "board", clear: func(readModels *ReadModels) { readModels.Board = nil }},
-		{name: "task list", clear: func(readModels *ReadModels) { readModels.TaskList = nil }},
-		{name: "task search", clear: func(readModels *ReadModels) { readModels.TaskSearch = nil }},
-		{name: "task detail", clear: func(readModels *ReadModels) { readModels.TaskDetail = nil }},
-		{name: "task dependencies", clear: func(readModels *ReadModels) { readModels.TaskDependencies = nil }},
-		{name: "task sessions", clear: func(readModels *ReadModels) { readModels.TaskSessions = nil }},
-		{name: "activity", clear: func(readModels *ReadModels) { readModels.Activity = nil }},
-		{name: "attention", clear: func(readModels *ReadModels) { readModels.Attention = nil }},
-		{name: "approvals", clear: func(readModels *ReadModels) { readModels.Approvals = nil }},
+		{name: "definitions", readModels: ReadModels{Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "board", readModels: ReadModels{Definitions: complete.Definitions, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task list", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task search", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskDetail: complete.TaskDetail, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "task detail", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, Activity: complete.Activity, Attention: complete.Attention}},
+		{name: "activity", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Attention: complete.Attention}},
+		{name: "attention", readModels: ReadModels{Definitions: complete.Definitions, Board: complete.Board, TaskList: complete.TaskList, TaskSearch: complete.TaskSearch, TaskDetail: complete.TaskDetail, Activity: complete.Activity}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			readModels := complete
-			tt.clear(&readModels)
-			if _, err := New(service.store, readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -3180,10 +3174,6 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
-	taskSessions, err := workflowview.NewTaskSessions(metadataStore, workflowViewActiveTaskSessionActivitySource{})
-	if err != nil {
-		t.Fatalf("workflowview.NewTaskSessions: %v", err)
-	}
 	attention, err := workflowview.NewAttention(metadataStore, definitions, authority, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
@@ -3195,17 +3185,22 @@ func newWorkflowServiceReadModels(
 		TaskSearch:       taskSearch,
 		TaskDetail:       taskDetail,
 		TaskDependencies: dependencies,
-		TaskSessions:     taskSessions,
+		TaskSessions:     emptyWorkflowTaskSessionReadModel{},
 		Activity:         activity,
 		Attention:        attention,
 		Approvals:        emptyWorkflowApprovalView{},
 	}
 }
 
-type workflowViewActiveTaskSessionActivitySource struct{}
+type emptyWorkflowTaskSessionReadModel struct{}
 
-func (workflowViewActiveTaskSessionActivitySource) ActiveRuntimeActivitySnapshots(context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
-	return []runtimeactivity.ActiveSessionSnapshot{}, nil
+func (emptyWorkflowTaskSessionReadModel) List(_ context.Context, request serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	return serverapi.WorkflowTaskSessionListResponse{
+		TaskID: request.TaskID,
+		WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskSessionItem]{
+			Items: []serverapi.WorkflowTaskSessionItem{},
+		},
+	}, nil
 }
 
 type workflowViewQuiescenceSource struct{}

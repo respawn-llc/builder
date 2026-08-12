@@ -2,8 +2,6 @@ package sqlitegen
 
 import (
 	"testing"
-
-	queryplantest "core/internal/testharness/databaseseed"
 )
 
 func TestListBoardColumnTaskCountsUsesLabelIndexes(t *testing.T) {
@@ -60,6 +58,6 @@ CREATE INDEX task_label_assignments_label_task_idx
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
-	queryplantest.RequireUsesIndex(t, db, listBoardColumnTaskCounts, "sqlite_autoindex_task_label_assignments_1", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
-	queryplantest.RequireUsesIndex(t, db, listBoardColumnTaskCounts, "task_label_assignments_label_task_idx", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "sqlite_autoindex_task_label_assignments_1", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "task_label_assignments_label_task_idx", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
 }

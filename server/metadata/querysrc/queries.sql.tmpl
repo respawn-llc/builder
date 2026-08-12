@@ -37,6 +37,7 @@ LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
         FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
         WHERE candidate.session_id = session.id
         ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
         LIMIT 1
@@ -2589,7 +2590,7 @@ WHERE task_id = sqlc.arg(task_id);
 
 -- name: ListIdleWorkflowTaskSessions :many
 {{template "taskSessionProjectionFields" .}}
-FROM sessions session
+FROM sessions session INDEXED BY sessions_task_activity_idx
 {{template "taskSessionProjectionJoins" .}}
 WHERE session.task_id = sqlc.arg(task_id)
   AND NOT EXISTS (
@@ -2607,6 +2608,7 @@ OFFSET sqlc.arg(page_offset);
 {{template "taskSessionProjectionFields" .}}
 FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
 CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
     ON session.id = CAST(active.value AS TEXT)
 {{template "taskSessionProjectionJoins" .}}
 WHERE session.task_id = sqlc.arg(task_id);

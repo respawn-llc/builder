@@ -3,13 +3,11 @@ package workflowview
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"testing"
 	"time"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/runtimeactivity"
-	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/clientui"
@@ -30,399 +28,151 @@ func (s taskSessionActivitySource) ActiveRuntimeActivitySnapshots(context.Contex
 	return append([]runtimeactivity.ActiveSessionSnapshot(nil), s.snapshots...), nil
 }
 
-func TestTaskSessionsListsRetainedIdleSession(t *testing.T) {
+func TestTaskSessionsProjectsActiveParallelOrdinaryAndIdleMetadata(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Task Session listing")
-	sessionID := fixture.bindCurrentNodeSession(t, started)
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
+	started := fixture.startTask(t, "Task Session projection")
+	namedIdleID := fixture.bindCurrentNodeSession(t, started)
+	runningID := associateTaskSessionForViewTest(t, fixture, started, "running")
+	questionID := associateTaskSessionForViewTest(t, fixture, started, "question")
+	ordinaryID := associateTaskSessionForViewTest(t, fixture, started, "")
+	registeredIdleID := insertRetainedTaskSessionForViewTest(t, fixture, started, 2_000)
+	missingNodeID := insertRetainedTaskSessionForViewTest(t, fixture, started, 1_000)
+	if _, err := fixture.metadata.DB().ExecContext(
+		fixture.ctx,
+		`DELETE FROM session_workflow_node_associations WHERE session_id = ?`,
+		missingNodeID.String(),
+	); err != nil {
+		t.Fatalf("delete Session Node association: %v", err)
 	}
+	fixture.setSessionCreatedAt(t, namedIdleID, 3_000)
+	fixture.setSessionCreatedAt(t, runningID, 4_000)
+	fixture.setSessionCreatedAt(t, questionID, 6_000)
+	fixture.setSessionCreatedAt(t, ordinaryID, 5_000)
 
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 1 {
-		t.Fatalf("items = %+v, want one retained Session", response.Items)
-	}
-	item := response.Items[0]
-	if item.SessionID != sessionID.String() ||
-		item.SessionName == nil || *item.SessionName != "Current Node session" ||
-		item.NodeName == nil || *item.NodeName != "Agent" ||
-		item.AgentRole != workflow.DefaultAgentRole ||
-		item.Status != serverapi.WorkflowTaskSessionStatusIdle {
-		t.Fatalf("item = %+v", item)
-	}
-}
-
-func TestTaskSessionsOrdersIdleSessionsNewestFirstAndProjectsNamedRole(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Ordered Task Sessions")
-	olderID := fixture.bindCurrentNodeSession(t, started)
-	newerID := fixture.newCurrentNodeViewSession(t)
-	namedRole := "reviewer"
-	newerStore, err := session.OpenByID(
-		fixture.cfg.PersistenceRoot,
-		newerID.String(),
-		fixture.metadata.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("OpenByID: %v", err)
-	}
-	if err := newerStore.SetName("Review Session"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-	if err := newerStore.SetContinuationContext(session.ContinuationContext{AgentRole: &namedRole}); err != nil {
-		t.Fatalf("SetContinuationContext: %v", err)
-	}
-	if _, err := fixture.store.AssociateTaskSession(fixture.ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID:    newerID,
-		CurrentNode:  started.currentNode,
-		AssociatedAt: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("AssociateTaskSession: %v", err)
-	}
-	fixture.setSessionCreatedAt(t, olderID, 1_000)
-	fixture.setSessionCreatedAt(t, newerID, 2_000)
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
-	}
-
-	limit := 2
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 2 ||
-		response.Items[0].SessionID != newerID.String() ||
-		response.Items[0].AgentRole != namedRole ||
-		response.Items[1].SessionID != olderID.String() ||
-		response.Items[1].AgentRole != workflow.DefaultAgentRole {
-		t.Fatalf("items = %+v", response.Items)
-	}
-}
-
-func TestTaskSessionsProjectsRunningFromActiveRuntimeActivity(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Running Task Session")
-	sessionID := fixture.bindCurrentNodeSession(t, started)
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{
-		snapshots: []runtimeactivity.ActiveSessionSnapshot{{
-			SessionID: sessionID.String(),
-			Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityRunning),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
-	}
-
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID != sessionID.String() ||
-		response.Items[0].Status != serverapi.WorkflowTaskSessionStatusRunning {
-		t.Fatalf("items = %+v", response.Items)
-	}
-}
-
-func TestTaskSessionsProjectsQuestionFromAwaitingPrompt(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Question Task Session")
-	sessionID := fixture.bindCurrentNodeSession(t, started)
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{
-		snapshots: []runtimeactivity.ActiveSessionSnapshot{{
-			SessionID: sessionID.String(),
-			Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityAwaitingPrompt),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
-	}
-
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID != sessionID.String() ||
-		response.Items[0].Status != serverapi.WorkflowTaskSessionStatusQuestion {
-		t.Fatalf("items = %+v", response.Items)
-	}
-}
-
-func TestTaskSessionsListsParallelAgentSessionsRunningBeforeQuestion(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Parallel Task Sessions")
-	runningID := associateTaskSessionForViewTest(t, fixture, started, "branch-running")
-	questionID := associateTaskSessionForViewTest(t, fixture, started, "branch-question")
-	fixture.setSessionCreatedAt(t, runningID, 1_000)
-	fixture.setSessionCreatedAt(t, questionID, 2_000)
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{
+	readModel := newTaskSessionsForTest(t, fixture, taskSessionActivitySource{
 		snapshots: []runtimeactivity.ActiveSessionSnapshot{
-			{
-				SessionID: questionID.String(),
-				Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityAwaitingPrompt),
-			},
-			{
-				SessionID: runningID.String(),
-				Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityRunning),
-			},
+			taskSessionSnapshot(t, questionID, clientui.RuntimeActivityAwaitingPrompt),
+			taskSessionSnapshot(t, registeredIdleID, clientui.RuntimeActivityRegisteredIdle),
+			taskSessionSnapshot(t, runningID, clientui.RuntimeActivityRunning),
+			taskSessionSnapshot(t, ordinaryID, clientui.RuntimeActivityRunning),
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
+	response := listTaskSessionsForTest(t, readModel, string(started.task.ID), 0, 10)
+	if len(response.Items) != 6 {
+		t.Fatalf("items = %+v, want six retained Sessions", response.Items)
 	}
-
-	limit := 2
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	want := []struct {
+		id     runtimeids.SessionID
+		status serverapi.WorkflowTaskSessionStatus
+	}{
+		{id: ordinaryID, status: serverapi.WorkflowTaskSessionStatusRunning},
+		{id: runningID, status: serverapi.WorkflowTaskSessionStatusRunning},
+		{id: questionID, status: serverapi.WorkflowTaskSessionStatusQuestion},
+		{id: namedIdleID, status: serverapi.WorkflowTaskSessionStatusIdle},
+		{id: registeredIdleID, status: serverapi.WorkflowTaskSessionStatusIdle},
+		{id: missingNodeID, status: serverapi.WorkflowTaskSessionStatusIdle},
 	}
-	if len(response.Items) != 2 ||
-		response.Items[0].SessionID != runningID.String() ||
-		response.Items[0].Status != serverapi.WorkflowTaskSessionStatusRunning ||
-		response.Items[1].SessionID != questionID.String() ||
-		response.Items[1].Status != serverapi.WorkflowTaskSessionStatusQuestion {
-		t.Fatalf("items = %+v", response.Items)
+	for index, expected := range want {
+		item := response.Items[index]
+		if item.SessionID != expected.id.String() || item.Status != expected.status {
+			t.Fatalf("item %d = %+v, want Session %s status %s", index, item, expected.id, expected.status)
+		}
 	}
-}
-
-func TestTaskSessionsProjectsOrdinaryContinuedTaskSessionAsRunning(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Ordinary continued Task Session")
-	sessionID := associateTaskSessionForViewTest(t, fixture, started, "")
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{
-		snapshots: []runtimeactivity.ActiveSessionSnapshot{{
-			SessionID: sessionID.String(),
-			Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityRunning),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
+	namedIdle := response.Items[3]
+	if namedIdle.SessionName == nil || *namedIdle.SessionName != "Current Node session" ||
+		namedIdle.NodeName == nil || *namedIdle.NodeName != "Agent" ||
+		namedIdle.AgentRole != workflow.DefaultAgentRole {
+		t.Fatalf("named Idle metadata = %+v", namedIdle)
 	}
-
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID != sessionID.String() ||
-		response.Items[0].Status != serverapi.WorkflowTaskSessionStatusRunning {
-		t.Fatalf("items = %+v", response.Items)
+	if response.Items[4].AgentRole != workflow.DefaultAgentRole || response.Items[5].NodeName != nil {
+		t.Fatalf("fallback metadata = %+v, %+v", response.Items[4], response.Items[5])
 	}
 }
 
-func TestTaskSessionsPagesActiveSetLargerThanRequestedLimit(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Large active Task Session set")
-	sessionIDs := []runtimeids.SessionID{
-		associateTaskSessionForViewTest(t, fixture, started, "branch-a"),
-		associateTaskSessionForViewTest(t, fixture, started, "branch-b"),
-		associateTaskSessionForViewTest(t, fixture, started, "branch-c"),
-	}
-	snapshots := make([]runtimeactivity.ActiveSessionSnapshot, 0, len(sessionIDs))
-	for index, sessionID := range sessionIDs {
-		fixture.setSessionCreatedAt(t, sessionID, int64(index+1)*1_000)
-		snapshots = append(snapshots, runtimeactivity.ActiveSessionSnapshot{
-			SessionID: sessionID.String(),
-			Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityRunning),
-		})
-	}
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{snapshots: snapshots})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
-	}
-
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Limit:  &limit,
-	})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID != sessionIDs[2].String() ||
-		response.NextOffset == nil || *response.NextOffset != 1 {
-		t.Fatalf("response = %+v", response)
-	}
-}
-
-func TestTaskSessionsPaginatesActiveThenLargeIdleHistory(t *testing.T) {
+func TestTaskSessionsPaginatesActiveThenLargeIdleHistoryBoundedly(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Paginated Task Sessions")
 	runningID := insertRetainedTaskSessionForViewTest(t, fixture, started, 2_000)
 	questionID := insertRetainedTaskSessionForViewTest(t, fixture, started, 3_000)
 	idleIDs := make([]runtimeids.SessionID, 0, 105)
 	for index := range 105 {
-		idleIDs = append(idleIDs, insertRetainedTaskSessionForViewTest(
-			t,
-			fixture,
-			started,
-			int64(1_000+index),
-		))
+		idleIDs = append(idleIDs, insertRetainedTaskSessionForViewTest(t, fixture, started, int64(1_000+index)))
 	}
 	activityCalls := 0
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{
+	readModel := newTaskSessionsForTest(t, fixture, taskSessionActivitySource{
 		calls: &activityCalls,
 		snapshots: []runtimeactivity.ActiveSessionSnapshot{
-			{
-				SessionID: questionID.String(),
-				Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityAwaitingPrompt),
-			},
-			{
-				SessionID: runningID.String(),
-				Activity:  taskSessionRuntimeActivity(t, clientui.RuntimeActivityRunning),
-			},
+			taskSessionSnapshot(t, questionID, clientui.RuntimeActivityAwaitingPrompt),
+			taskSessionSnapshot(t, runningID, clientui.RuntimeActivityRunning),
 		},
 	})
-	if err != nil {
-		t.Fatalf("NewTaskSessions: %v", err)
-	}
-	expectedActivityCalls := 0
 
-	one := 1
-	offsetOne := 1
-	expectedActivityCalls++
-	withinActive, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Offset: &offsetOne,
-		Limit:  &one,
-	})
-	if err != nil {
-		t.Fatalf("List within active: %v", err)
+	tests := []struct {
+		name      string
+		offset    int
+		limit     int
+		wantFirst runtimeids.SessionID
+		wantCount int
+		wantNext  *int
+	}{
+		{name: "active page", offset: 0, limit: 1, wantFirst: runningID, wantCount: 1, wantNext: intPointer(1)},
+		{name: "active offset", offset: 1, limit: 1, wantFirst: questionID, wantCount: 1, wantNext: intPointer(2)},
+		{name: "spill into Idle", offset: 2, limit: 3, wantFirst: idleIDs[104], wantCount: 3, wantNext: intPointer(5)},
+		{name: "past one hundred", offset: 100, limit: 5, wantFirst: idleIDs[6], wantCount: 5, wantNext: intPointer(105)},
+		{name: "beyond end", offset: 117, limit: 5},
 	}
-	if len(withinActive.Items) != 1 ||
-		withinActive.Items[0].SessionID != questionID.String() ||
-		withinActive.NextOffset == nil || *withinActive.NextOffset != 2 {
-		t.Fatalf("within active = %+v", withinActive)
-	}
-
-	three := 3
-	offsetTwo := 2
-	expectedActivityCalls++
-	spill, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Offset: &offsetTwo,
-		Limit:  &three,
-	})
-	if err != nil {
-		t.Fatalf("List spill: %v", err)
-	}
-	if len(spill.Items) != 3 ||
-		spill.Items[0].SessionID != idleIDs[len(idleIDs)-1].String() ||
-		spill.Items[1].SessionID != idleIDs[len(idleIDs)-2].String() ||
-		spill.Items[2].SessionID != idleIDs[len(idleIDs)-3].String() ||
-		spill.NextOffset == nil || *spill.NextOffset != 5 {
-		t.Fatalf("spill = %+v", spill)
-	}
-
-	pageLimit := 19
-	offset := 0
-	walked := make([]string, 0, len(idleIDs)+2)
-	for {
-		pageOffset := offset
-		expectedActivityCalls++
-		page, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-			TaskID: string(started.task.ID),
-			Offset: &pageOffset,
-			Limit:  &pageLimit,
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := listTaskSessionsForTest(t, readModel, string(started.task.ID), test.offset, test.limit)
+			if len(response.Items) != test.wantCount {
+				t.Fatalf("items = %+v, want %d", response.Items, test.wantCount)
+			}
+			if test.wantCount > 0 && response.Items[0].SessionID != test.wantFirst.String() {
+				t.Fatalf("first item = %s, want %s", response.Items[0].SessionID, test.wantFirst)
+			}
+			if !equalOptionalInt(response.NextOffset, test.wantNext) {
+				t.Fatalf("next offset = %v, want %v", response.NextOffset, test.wantNext)
+			}
 		})
-		if err != nil {
-			t.Fatalf("List walk offset %d: %v", offset, err)
-		}
-		if len(page.Items) > pageLimit {
-			t.Fatalf("page at offset %d contains %d items, limit %d", offset, len(page.Items), pageLimit)
-		}
-		for _, item := range page.Items {
-			walked = append(walked, item.SessionID)
-		}
-		if page.NextOffset == nil {
-			break
-		}
-		offset = *page.NextOffset
 	}
-	want := []string{runningID.String(), questionID.String()}
-	for index := len(idleIDs) - 1; index >= 0; index-- {
-		want = append(want, idleIDs[index].String())
-	}
-	if fmt.Sprint(walked) != fmt.Sprint(want) {
-		t.Fatalf("walked %d Sessions in the wrong order", len(walked))
-	}
-
-	beyondOffset := len(want) + 10
-	expectedActivityCalls++
-	beyond, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
-		Offset: &beyondOffset,
-		Limit:  &pageLimit,
-	})
-	if err != nil {
-		t.Fatalf("List beyond end: %v", err)
-	}
-	if len(beyond.Items) != 0 || beyond.NextOffset != nil {
-		t.Fatalf("beyond end = %+v", beyond)
-	}
-	if activityCalls != expectedActivityCalls {
-		t.Fatalf("active snapshot calls = %d, want %d requests independent of %d Idle Sessions", activityCalls, expectedActivityCalls, len(idleIDs))
+	if activityCalls != len(tests) {
+		t.Fatalf("active snapshot calls = %d, want one per request independent of %d Idle Sessions", activityCalls, len(idleIDs))
 	}
 }
 
-func TestTaskSessionsKeepsDeletedNodeNameAbsent(t *testing.T) {
-	fixture := newCurrentNodeViewFixture(t, false)
-	started := fixture.startTask(t, "Deleted Node Task Session")
-	sessionID := insertRetainedTaskSessionForViewTest(t, fixture, started, 1_000)
-	if _, err := fixture.metadata.DB().ExecContext(
-		fixture.ctx,
-		`DELETE FROM session_workflow_node_associations WHERE session_id = ?`,
-		sessionID.String(),
-	); err != nil {
-		t.Fatalf("delete Session Node association: %v", err)
-	}
-	readModel, err := NewTaskSessions(fixture.metadata, taskSessionActivitySource{})
+func newTaskSessionsForTest(
+	t *testing.T,
+	fixture currentNodeViewFixture,
+	activities taskSessionActivitySource,
+) *TaskSessions {
+	t.Helper()
+	readModel, err := NewTaskSessions(fixture.metadata, activities)
 	if err != nil {
 		t.Fatalf("NewTaskSessions: %v", err)
 	}
+	return readModel
+}
 
-	limit := 1
-	response, err := readModel.List(fixture.ctx, serverapi.WorkflowTaskOffsetPageRequest{
-		TaskID: string(started.task.ID),
+func listTaskSessionsForTest(
+	t *testing.T,
+	readModel *TaskSessions,
+	taskID string,
+	offset int,
+	limit int,
+) serverapi.WorkflowTaskSessionListResponse {
+	t.Helper()
+	response, err := readModel.List(t.Context(), serverapi.WorkflowTaskOffsetPageRequest{
+		TaskID: taskID,
+		Offset: &offset,
 		Limit:  &limit,
 	})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("List Task Sessions: %v", err)
 	}
-	if len(response.Items) != 1 ||
-		response.Items[0].SessionID != sessionID.String() ||
-		response.Items[0].NodeName != nil {
-		t.Fatalf("items = %+v", response.Items)
+	if len(response.Items) > limit {
+		t.Fatalf("page contains %d items, limit %d", len(response.Items), limit)
 	}
+	return response
 }
 
 func insertRetainedTaskSessionForViewTest(
@@ -451,9 +201,7 @@ func insertRetainedTaskSessionForViewTest(
 		t.Fatalf("UpsertSession: %v", err)
 	}
 	if _, err := fixture.store.AssociateTaskSession(fixture.ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  started.currentNode,
-		AssociatedAt: time.UnixMilli(createdAtUnixMs).UTC(),
+		SessionID: sessionID, CurrentNode: started.currentNode, AssociatedAt: time.UnixMilli(createdAtUnixMs).UTC(),
 	}); err != nil {
 		t.Fatalf("AssociateTaskSession: %v", err)
 	}
@@ -478,17 +226,30 @@ func associateTaskSessionForViewTest(
 		}
 	}
 	if _, err := fixture.store.AssociateTaskSession(fixture.ctx, workflowstore.TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  reference,
-		AssociatedAt: time.Now().UTC(),
+		SessionID: sessionID, CurrentNode: reference, AssociatedAt: time.Now().UTC(),
 	}); err != nil {
 		t.Fatalf("AssociateTaskSession: %v", err)
 	}
 	return sessionID
 }
 
+func taskSessionSnapshot(
+	t *testing.T,
+	sessionID runtimeids.SessionID,
+	state clientui.RuntimeActivityState,
+) runtimeactivity.ActiveSessionSnapshot {
+	t.Helper()
+	return runtimeactivity.ActiveSessionSnapshot{
+		SessionID: sessionID.String(),
+		Activity:  taskSessionRuntimeActivity(t, state),
+	}
+}
+
 func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityState) clientui.RuntimeActivity {
 	t.Helper()
+	if !(clientui.RuntimeActivity{State: state}).ActiveForControl() {
+		return clientui.RuntimeActivity{State: state, QueueAccepting: state == clientui.RuntimeActivityRegisteredIdle}
+	}
 	runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")
 	if err != nil {
 		t.Fatalf("ParseRunID: %v", err)
@@ -500,10 +261,15 @@ func taskSessionRuntimeActivity(t *testing.T, state clientui.RuntimeActivityStat
 	return clientui.RuntimeActivity{
 		State: state,
 		ActiveStep: &clientui.RuntimeActiveStep{
-			RunID:      runID,
-			StepID:     stepID,
-			ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn,
+			RunID: runID, StepID: stepID, ActiveKind: clientui.RuntimeActivityActiveKindWorkflowTurn,
 		},
 		QueueAccepting: true,
 	}
+}
+
+func equalOptionalInt(left *int, right *int) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }

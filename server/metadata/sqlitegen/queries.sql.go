@@ -3844,12 +3844,14 @@ SELECT
 
 FROM json_each(CAST(?1 AS TEXT)) active
 CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
     ON session.id = CAST(active.value AS TEXT)
 
 LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
         FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
         WHERE candidate.session_id = session.id
         ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
         LIMIT 1
@@ -4375,12 +4377,13 @@ SELECT
     session.continuation_json,
     session.created_at_unix_ms
 
-FROM sessions session
+FROM sessions session INDEXED BY sessions_task_activity_idx
 
 LEFT JOIN session_workflow_node_associations association
     ON association.rowid = (
         SELECT candidate.rowid
         FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
         WHERE candidate.session_id = session.id
         ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
         LIMIT 1

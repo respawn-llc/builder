@@ -4,8 +4,6 @@ import (
 	"context"
 	"reflect"
 	"testing"
-
-	queryplantest "core/internal/testharness/databaseseed"
 )
 
 func TestListTaskAssignedLabelIDsByTasksUsesBoundedTaskAssignmentIndex(t *testing.T) {
@@ -25,14 +23,14 @@ CREATE TABLE task_label_assignments (
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
-	queryplantest.RequireUsesIndex(
+	requireQueryUsesIndex(
 		t,
 		db,
 		listTaskAssignedLabelIDsByTasks,
 		"sqlite_autoindex_task_label_assignments_1",
 		"task-selected",
 	)
-	queryplantest.RequireUsesIndex(
+	requireQueryUsesIndex(
 		t,
 		db,
 		listTaskAssignedLabelIDsByTasks,
