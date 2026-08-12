@@ -37,12 +37,16 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	}
 	assert(CurrentGoalSet{Objective: "start", Actor: session.GoalActorUser}, 0, true, CurrentGoalRetainedOnly)
 	_, _ = engine.SetGoal("existing", session.GoalActorUser)
-	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalRetainedOnly)
+	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
+	assert(CurrentGoalStatus{Status: session.GoalStatusActive, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
+	if !engine.GoalLoopRunning() {
+		t.Fatal("direct exact Resume did not start Goal loop")
+	}
+	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	assert(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	if !engine.GoalLoopRunning() {
 		t.Fatal("direct exact Set did not start Goal loop")
 	}
-	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
 	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)

@@ -322,6 +322,9 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
 	case goalRuntimePause, goalRuntimeResume, goalRuntimeComplete:
+		if msg.mutationSerial != m.goalRuntimeMutationSerial {
+			return followUpCmd
+		}
 		m.goal.pending = nil
 		if goal := goalCoreFromMutationResult(msg.mutation); goal != nil {
 			m.goal.goal = goal

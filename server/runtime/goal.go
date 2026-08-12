@@ -153,7 +153,11 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
 		}
 		if ownership == CurrentGoalExactExecution {
-			return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
+			result, err := e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor)
+			if err == nil && status == session.GoalStatusActive && result.MetadataReceipt.Committed {
+				err = e.StartGoalLoop()
+			}
+			return currentGoalHandled(result, err)
 		}
 		if status == session.GoalStatusActive {
 			return currentGoalExecutionRequired()
