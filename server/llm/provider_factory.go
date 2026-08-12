@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"core/server/httpcompression"
 )
 
 var ErrUnsupportedProvider = errors.New("unsupported llm provider")
@@ -41,6 +43,7 @@ type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) 
 
 type ProviderVariantContract struct {
 	ProviderID               string
+	RequestCompression       httpcompression.RequestContentCoding
 	Capabilities             ProviderCapabilities
 	RemoteCompactionProtocol remoteCompactionProtocol
 	NewErrorReducer          ProviderErrorReducerFactory
@@ -92,7 +95,8 @@ func providerContracts() []ProviderContract {
 			NewClient: newUnsupportedProviderClientFactory(ProviderAnthropic),
 			ProviderVariants: []ProviderVariantContract{
 				{
-					ProviderID: "anthropic",
+					ProviderID:         "anthropic",
+					RequestCompression: httpcompression.ContentCodingIdentity,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "anthropic",
 						SupportsResponsesAPI:           false,
@@ -116,6 +120,7 @@ func providerContracts() []ProviderContract {
 			ProviderVariants: []ProviderVariantContract{
 				{
 					ProviderID:               "openai",
+					RequestCompression:       httpcompression.ContentCodingIdentity,
 					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "openai",
@@ -132,7 +137,8 @@ func providerContracts() []ProviderContract {
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},
 				{
-					ProviderID: "openai-compatible",
+					ProviderID:         "openai-compatible",
+					RequestCompression: httpcompression.ContentCodingIdentity,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "openai-compatible",
 						SupportsResponsesAPI:           true,
@@ -149,6 +155,7 @@ func providerContracts() []ProviderContract {
 				},
 				{
 					ProviderID:               "chatgpt-codex",
+					RequestCompression:       httpcompression.ContentCodingZstd,
 					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                     "chatgpt-codex",

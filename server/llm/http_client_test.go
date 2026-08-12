@@ -17,16 +17,12 @@ func TestNewHTTPClientSharesTransport(t *testing.T) {
 	second := NewHTTPClient(10 * time.Second)
 
 	if first.Transport == nil {
-		t.Fatal("expected transport to be set")
+		t.Fatal("expected compressed transport to be set")
 	}
 	if first.Transport != second.Transport {
-		t.Fatal("expected shared transport instance")
+		t.Fatal("expected shared compressed transport instance")
 	}
-
-	transport, ok := first.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("transport type = %T, want *http.Transport", first.Transport)
-	}
+	transport := sharedHTTPTransport
 	if transport.MaxIdleConns < sharedHTTPTransportMaxIdleConns {
 		t.Fatalf("MaxIdleConns = %d, want >= %d", transport.MaxIdleConns, sharedHTTPTransportMaxIdleConns)
 	}
@@ -47,6 +43,18 @@ func TestNewHTTPClientPreservesTimeout(t *testing.T) {
 	withoutTimeout := NewHTTPClient(0)
 	if withoutTimeout.Timeout != 0 {
 		t.Fatalf("Timeout = %v, want 0", withoutTimeout.Timeout)
+	}
+}
+
+func TestNewProviderHTTPClientKeepsLoopbackTransportUncompressed(t *testing.T) {
+	local := NewProviderHTTPClient("http://127.0.0.1:11434/v1", 0)
+	if local.Transport != sharedHTTPTransport {
+		t.Fatalf("loopback transport = %T, want shared local transport", local.Transport)
+	}
+
+	remote := NewProviderHTTPClient("https://api.openai.com/v1", 0)
+	if remote.Transport != sharedCompressedHTTPTransport {
+		t.Fatalf("remote transport = %T, want shared compressed transport", remote.Transport)
 	}
 }
 

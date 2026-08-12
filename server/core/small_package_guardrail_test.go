@@ -114,6 +114,7 @@ var allowedSmallPackages = map[string]string{
 	"internal/testharness/runtimewirefixture": "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"internal/testharness/workflowfixture":    "one-file Store graph-save fixture shared across Core, Workflow Runner, Workflow View, and Worktree tests; merging into testsetup creates a workflowstore test import cycle",
 	"server/bootstrap":                        "composition support boundary shared by core and startup; merging into startup creates a cycle",
+	"server/httpcompression":                  "shared backend outbound HTTP compression adapter kept separate from provider and service owners to preserve one provider-neutral transport boundary",
 	"server/attentionnotify":                  "transient attention notification broker and batch tracker owner kept separate from registry/workflow packages to avoid making them notification state owners",
 	"server/metadata/lifecyclegen":            "repo-owned generator command for the narrow SQLite lifecycle generated seam",
 	"server/metadata/sqlitelifecyclegen":      "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",

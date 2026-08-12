@@ -14,6 +14,7 @@ require (
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/invopop/jsonschema v0.14.0
+	github.com/klauspost/compress v1.19.1
 	github.com/lxzan/gws v1.10.1
 	github.com/mattn/go-runewidth v0.0.27
 	github.com/muesli/termenv v0.16.0
@@ -62,7 +63,6 @@ require (
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/go-quicktest/qt v1.102.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/klauspost/compress v1.19.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.1 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect

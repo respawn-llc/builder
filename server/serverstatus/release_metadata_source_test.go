@@ -1,6 +1,8 @@
 package serverstatus
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"net/http"
@@ -21,6 +23,31 @@ func TestGitHubReleaseMetadataSourceReturnsValidatedRelease(t *testing.T) {
 	}
 	if metadata.Version != "1.2.3" {
 		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	}
+}
+
+func TestDefaultGitHubReleaseMetadataSourceNegotiatesAndDecodesCompressedResponse(t *testing.T) {
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		_, _ = writer.Write([]byte(`{"tag_name":"v1.2.3"}`))
+		_ = writer.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed.Bytes())
+	}))
+	defer server.Close()
+
+	metadata, err := newGitHubReleaseMetadataSource(nil, server.URL).LatestRelease(context.Background())
+	if err != nil {
+		t.Fatalf("LatestRelease: %v", err)
+	}
+	if metadata.Version != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	}
+	if acceptEncoding != "zstd,gzip" {
+		t.Fatalf("Accept-Encoding = %q, want zstd,gzip", acceptEncoding)
 	}
 }
 

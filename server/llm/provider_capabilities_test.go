@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/auth"
+	"core/server/httpcompression"
 	"core/server/session"
 	"core/shared/config"
 )
@@ -52,6 +53,30 @@ func TestRemoteCompactionProtocolsAreProviderOwned(t *testing.T) {
 	compatible, ok := lookupProviderVariantContract("openai-compatible")
 	if !ok || compatible.Variant.RemoteCompactionProtocol != remoteCompactionUnsupported {
 		t.Fatalf("openai-compatible compaction protocol = %v, want unsupported", compatible.Variant.RemoteCompactionProtocol)
+	}
+}
+
+func TestProviderVariantRequestCompressionDefaults(t *testing.T) {
+	tests := []struct {
+		providerID string
+		want       httpcompression.RequestContentCoding
+	}{
+		{providerID: "chatgpt-codex", want: httpcompression.ContentCodingZstd},
+		{providerID: "openai", want: httpcompression.ContentCodingIdentity},
+		{providerID: "openai-compatible", want: httpcompression.ContentCodingIdentity},
+		{providerID: "anthropic", want: httpcompression.ContentCodingIdentity},
+	}
+
+	for _, test := range tests {
+		t.Run(test.providerID, func(t *testing.T) {
+			registration, ok := lookupProviderVariantContract(test.providerID)
+			if !ok {
+				t.Fatalf("missing provider variant %q", test.providerID)
+			}
+			if registration.Variant.RequestCompression != test.want {
+				t.Fatalf("request compression = %q, want %q", registration.Variant.RequestCompression, test.want)
+			}
+		})
 	}
 }
 

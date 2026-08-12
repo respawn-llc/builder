@@ -96,6 +96,10 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	compressionOption, err := t.requestCompressionOption(mode)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
@@ -108,6 +112,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -158,6 +163,10 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	compressionOption, err := t.requestCompressionOption(mode)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
@@ -170,6 +179,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -317,12 +327,17 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
+	compressionOption, err := t.requestCompressionOption(mode)
+	if err != nil {
+		return OpenAICompactionResponse{}, err
+	}
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)

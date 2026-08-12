@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/httpcompression"
 	"core/server/llm"
 	servicecontract "core/shared/apicontract"
 	"core/shared/authstatus"
@@ -233,7 +234,7 @@ func fetchUsagePayload(ctx context.Context, baseURL string, state auth.State) (u
 			request.Header.Set("ChatGPT-Account-Id", accountID)
 		}
 	}
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(request)
+	response, err := httpcompression.NewClient(&http.Client{Timeout: 10 * time.Second}).Do(request)
 	if err != nil {
 		return usagePayload{}, err
 	}

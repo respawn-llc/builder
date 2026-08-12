@@ -155,6 +155,9 @@
 - `max_subagent_depth` is a root-level TOML setting with normal global-then-workspace precedence. It defaults to `2`, accepts `0` through `30`, and is checked when a child is launched. `0` disables model-originated child launches; other invalid values fail configuration validation. Values above `30` explain that Kent does not support recursion chains that deep.
 - OpenAI Responses `store` is configurable and defaults to `false`.
 - `provider_identifier` defaults to `kent`, must be a non-empty HTTP product token, and supplies the OpenAI-family `originator` header and `<provider_identifier>/<Kent version>` user agent for main, reviewer, Workflow, and subagent model requests. It takes effect after restart for resumed Sessions. OAuth bootstrap, subscription status, and update checks do not use it.
+- Backend HTTP clients advertise and decode zstd and gzip responses from third-party services. A supported compressed response is decoded even when the request supplied its own `Accept-Encoding` value. Local server-to-client communication does not use HTTP content compression.
+- A model-provider request body is compressed only when its hardcoded provider contract selects a content coding, its uncompressed length is known and at least 1,024 bytes, and the body is replayable. Nil, empty, unknown-length, and non-replayable bodies are not compressed. ChatGPT Codex requests through OpenAI OAuth use zstd level 3. OpenAI API-key, OpenAI-compatible, and Anthropic requests do not use request compression.
+- Kent preserves an explicitly supplied `Accept-Encoding` or `Content-Encoding` header and does not stack another content coding. Kent does not retry a rejected request without compression.
 - `tools.web_search` defaults to enabled; `web_search` is `native` or `off`. `tools.view_image` defaults to enabled and is advertised only to multimodal-capable models.
 
 ## Model Requests And Cache Continuity

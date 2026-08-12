@@ -7,12 +7,21 @@ import (
 	"strconv"
 	"strings"
 
+	"core/server/httpcompression"
 	"core/shared/llmerrors"
 	"core/shared/textutil"
 
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
+
+func (t *HTTPTransport) requestCompressionOption(mode OpenAIAuthMode) (option.RequestOption, error) {
+	variant, err := t.providerVariantForMode(mode)
+	if err != nil {
+		return nil, err
+	}
+	return option.WithMiddleware(httpcompression.Middleware(variant.RequestCompression)), nil
+}
 
 func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 	if mode.IsOAuth && !t.BaseURLExplicit {
