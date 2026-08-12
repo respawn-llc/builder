@@ -2,6 +2,7 @@ import {
   activityPageSchema,
   boardNodeCardsPageSchema,
   pendingAskListSchema,
+  taskListPageSchema,
   taskMovePreviewResponseSchema,
   workflowBoardSchema,
 } from "./workflowBoard";
@@ -71,6 +72,16 @@ const card = {
 };
 
 describe("workflow board schemas", () => {
+  it("rejects invalid task-list groups", () => {
+    const input = {
+      scope: { project_id: "project-1" },
+      matching_workflow_cardinality: "none",
+      generated_at_unix_ms: 1,
+      tasks: [],
+    };
+    expect(() => taskListPageSchema.parse({ ...input, group: "future" })).toThrow();
+  });
+
   it("preserves explicit nullable Node Group membership", () => {
     const column = {
       node: {

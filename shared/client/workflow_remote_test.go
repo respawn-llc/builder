@@ -395,10 +395,23 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 			handlerErr <- fmt.Errorf("task list method = %q", req.Method)
 			return
 		}
+		workflowName := "Delivery"
 		response := serverapi.WorkflowTaskListResponse{
 			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: projectID, WorkflowID: &workflowID},
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
-			Tasks:                       []serverapi.WorkflowTaskListItem{{TaskID: "task-1", WorkflowID: workflowID}},
+			Tasks: []serverapi.WorkflowTaskListItem{{
+				TaskID:       "task-1",
+				WorkflowID:   workflowID,
+				WorkflowName: &workflowName,
+				Labels: []serverapi.WorkflowProjectLabel{{
+					ID:   "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
+					Name: "Priority",
+				}},
+				DependencyProgress: &serverapi.WorkflowTaskDependencyProgress{
+					SatisfiedCount: 1,
+					TotalCount:     2,
+				},
+			}},
 		}
 		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, response)); err != nil {
 			handlerErr <- fmt.Errorf("send task list response: %w", err)
@@ -413,9 +426,11 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
+	group := serverapi.WorkflowTaskGroupActive
 	response, err := remote.ListWorkflowTasks(context.Background(), serverapi.WorkflowTaskListRequest{
 		ProjectID:   &projectID,
 		WorkflowID:  &workflowID,
+		Group:       &group,
 		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
 	})
 	if err != nil {
@@ -426,6 +441,14 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 	}
 	if len(response.Tasks) != 1 || response.Tasks[0].WorkflowID != workflowID {
 		t.Fatalf("response tasks = %+v, want one workflow task", response.Tasks)
+	}
+	if response.Tasks[0].WorkflowName == nil ||
+		*response.Tasks[0].WorkflowName != "Delivery" ||
+		len(response.Tasks[0].Labels) != 1 ||
+		response.Tasks[0].Labels[0].Name != "Priority" ||
+		response.Tasks[0].DependencyProgress == nil ||
+		response.Tasks[0].DependencyProgress.TotalCount != 2 {
+		t.Fatalf("response task = %+v, want enriched task-list row", response.Tasks[0])
 	}
 	if err := <-handlerErr; err != nil {
 		t.Fatal(err)

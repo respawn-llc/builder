@@ -36,11 +36,11 @@
 - Home opens on Inbox unless a valid previously open Project or Workflow destination can be restored. Back and forward use available navigation history; otherwise Back returns Home.
 - Home has compact navigation and content side by side when both remain usable, otherwise navigation stacks above content. It has no resizable splitter or temporary navigation drawer.
 - Navigation pins global Inbox above the infinite-scrolling Projects list. Inbox is not a Project and has no required attention badge.
-- Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace, whose `Workflows` and `Sessions` tabs share one window-local last-used selection while moving between Projects; relaunch defaults to `Workflows`.
+- Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace with `Tasks`, `Sessions`, and `Subagents` tabs. `Tasks` is the default. The selected tab remains local to the mounted Project workspace and resets when that workspace remounts.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
 - An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
 - Home opens sidebars by shifting content when the available layout width exceeds 1000 pixels and as an overlay otherwise. Shift-mode sidebar opening, closing, and resizing keep the sidebar and Home content movement synchronized.
-- The sticky Project workspace header shows Project name and key, the two tabs, and `Link workflow` or `New Session` as appropriate.
+- The sticky Project workspace header shows Project name and key, the three tabs, and `Link workflow` or `New Session` as appropriate.
 - Workflow links are an infinite-scrolling list. Each shows reusable Workflow identity, Project-default state, and validation state. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.
 - Board actions and Workflow selection use a non-modal menu that may be pinned. An unpinned menu closes when it loses hover; opening and closing respects reduced motion. Desktop has no default browser-style hover effects beyond explicitly designed interaction feedback.
@@ -64,7 +64,55 @@
 - A Workspace-catalog first-page failure leaves Project name and Project Key editable and saveable, keeps Attach available, and gives the Workspace area its own Retry state.
 - A recoverable Project-metadata failure gives the metadata area its own Retry state while loaded Workspace attach, default, and unlink actions remain available. A missing Project retains the Back behavior.
 - Unlink confirmation explains that files remain on disk, retained Sessions remain readable, and active work blocks removal. It requires no typed confirmation.
-- A Project without a linked default Workflow shows a blocker and disables New Task while directing the operator to configure a Workflow. An invalid linked Workflow remains visible and permits Backlog Task creation.
+- Project-scoped New Task uses the only linked Workflow when exactly one is linked, regardless of whether it is the Project default. With two or more linked Workflows, it uses the linked default Workflow. With no linked Workflow, or with two or more and no linked default, New Task is unavailable and directs the operator to Link Workflow. An invalid selected Workflow remains visible and permits Backlog Task creation.
+
+## Project Task List
+
+- The Project Task list is the unified Project-wide view of Tasks across every linked Workflow. The Home Project workspace's `Tasks` tab and the standalone Project Tasks destination use the same surface.
+- The Workflow chip strip remains above the list and includes every linked Workflow and `Link Workflow`. Selecting a Workflow opens its board.
+- The Workflow chip strip and Task list share one initial loading and error boundary. If linked Workflows cannot load, the whole Tasks surface uses the standard retryable error state.
+- The Task list occupies one large island. It begins with its column header and has no repeated title, action strip, search, filter, or sort controls.
+- The fixed column order is Status, Dependencies, ID, Title, Workflow, and Labels. Users cannot resize, reorder, add, or remove columns.
+- Every Task is one compact, single-line row with subtle horizontal dividers, standard hover feedback, and no zebra striping.
+- Status and Dependencies use fixed-size icon columns. Title gives up width first. If the fixed columns no longer fit at a usable width, the island scrolls horizontally instead of hiding columns.
+- ID shows the complete Task Short ID when it fits. When space is constrained, start ellipsis preserves its numeric suffix. Its complete value remains available in a tooltip and to assistive technology.
+- Title, Workflow name, and Labels do not wrap. Workflow name uses end ellipsis.
+- Labels use the same fitting-chip and `+N` overflow presentation as board cards.
+- A Task with direct Blocker Tasks shows the board's dependency-progress chip. A Task without direct Blocker Tasks leaves the Dependencies cell empty.
+- The server supplies dependency progress and assigned Label display data in each bounded Task-list row. Desktop does not derive dependency progress or load a separate Project Label catalog to render rows.
+- The Status and Dependencies column headers use icons with accessible names. The Status tooltip groups the canonical state icons and descriptions under `Active`, `Backlog`, and `Done`; its accessible name is `Status`.
+- Rows are grouped in the order `Active`, `Backlog`, and `Done`. Active contains Waiting for question, Waiting for approval, Interrupted, Running, Queued, and Active. Backlog contains Backlog. Done contains Done.
+- Active and Backlog start expanded. Done starts collapsed. Disclosure state remains local while the Project workspace stays mounted and resets when it remounts.
+- A group with zero Tasks is hidden. Each visible group header shows the server-supplied exact count, including while collapsed.
+- The complete group-header row is one disclosure control containing its chevron, name, and exact count.
+- The column header remains sticky inside the list island. Group headers scroll normally.
+- The list is one virtualized scroll area. Each expanded group paginates independently, uses infinite scroll, and retains only a bounded nearby page window.
+- Collapsing a group unmounts its Task rows and releases its loaded pages. Expanding it starts loading its first bounded page again. Collapsed groups do not load Task rows.
+- Each group requests Updated-descending order from the server and preserves the server's deterministic order for equal Updated timestamps. Desktop does not sort rows.
+- The island frame and sticky column header render while exact counts load, with the standard loading state in the row area. Once counts arrive, all non-empty group headers appear together and expanded groups load progressively.
+- An expanded group's first-page loading or failure boundary appears beneath that group header and retries only that group. Later page failures preserve loaded rows and use the standard retry boundary at the affected paging edge.
+- During refresh, each group header retains its last exact count and loaded rows remain visible. Counts and rows may briefly disagree while separate bounded requests converge.
+- Project updates refresh exact counts and retained bounded pages, move Tasks between groups, and restore Updated-descending order without a manual refresh action.
+- Live refresh preserves the leading visible Task and its screen position when possible. If that Task becomes hidden, the list retains the nearest visible position and does not expand a group.
+- An open Task Detail remains open when its Task moves off-screen or into a collapsed group. Live reordering does not scroll to keep the selected Task visible.
+- The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. A horizontal scrollbar remains visible when columns overflow.
+- A compact floating Up and Down pair appears at the island's bottom-right only while the list overflows. Up jumps to the absolute top.
+- Down jumps to the lowest visible group header when that group is collapsed. When it is expanded, Down requests only its final bounded page and jumps to the final Task. It never expands a group or loads skipped pages.
+- Up and Down are unavailable at their respective endpoints and have tooltips and accessible names.
+- Activating Status, Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
+- Activating Labels opens the existing Task Label assignment chooser without opening Task Detail. Successful assignment updates the row; pending and failure behavior follows the existing assignment flow.
+- An open Task Detail or Label chooser gives its Task row the selected treatment. Only the most recently opened interaction shows selection. Closing a Label chooser restores an already-open Task Detail's selection when its row is visible.
+- Task Detail uses the containing destination's sidebar mode. Home shifts content when its available layout width exceeds 1000 pixels and overlays otherwise. An open sidebar keeps the mode chosen when it opened until it closes.
+- Opening Task Detail adds no route or browser-history entry. Closing it clears its selected treatment.
+- The Task table exposes accessible grid, row, column-header, grid-cell, disclosure, selection, tooltip, and loading/error labels. This release uses ordinary browser focus and activation behavior and adds no table-specific keyboard-navigation model.
+- Leaving and returning to the Tasks tab while the same Project workspace remains mounted restores vertical and horizontal pixel offsets. It does not load special pages or reconcile the former position by Task identity. Remounting resets this state.
+- When exact counts show no Tasks, the island replaces the column header and groups with an empty state.
+- With no linked Workflows, the empty state's primary action is `Link Workflow`.
+- With linked Workflows but no Tasks, the empty state says `No tasks yet`. Its primary action is `New Task` when exactly one Workflow is linked or when multiple are linked with a default; otherwise it is `Link Workflow`.
+- A successful Link Workflow action opened from the Tasks empty state returns to Tasks rather than opening the Workflow board. Cancel uses the existing close behavior. Failure keeps the linking page open with its entered state and existing error behavior.
+- A successful New Task action closes creation and refreshes the list. If Backlog is expanded, the created Task is revealed. If Backlog was manually collapsed, it stays collapsed. Task Detail does not open automatically.
+- Canceling New Task uses the existing close behavior. Creation failure keeps the form open with its Draft and existing error behavior.
+- The Project Task list has no persistent New Task action outside its empty state.
 
 ## Workflow Boards
 

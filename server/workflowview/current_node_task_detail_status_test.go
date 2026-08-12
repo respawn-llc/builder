@@ -448,7 +448,7 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 	if len(one.Tasks) != 1 ||
 		one.Tasks[0].TaskID != string(task.ID) ||
 		one.Tasks[0].WorkflowID != fixture.workflowID ||
-		one.Tasks[0].WorkflowName != nil ||
+		one.Tasks[0].WorkflowName == nil ||
 		one.Tasks[0].ColumnKeys != nil ||
 		one.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
 		t.Fatalf("one-workflow project-wide page = %+v", one)
@@ -531,6 +531,35 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 		activeItem.ColumnKeys == nil ||
 		!slices.Equal(*activeItem.ColumnKeys, []string{"agent"}) {
 		t.Fatalf("Workflow-narrowed active Task = %+v, want ordered Current Node column", activeItem)
+	}
+}
+
+func TestProjectTaskGroupCountsObserveLiveStatusesAcrossLinkedWorkflows(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	active := fixture.startTask(t, "Active")
+	fixture.createBacklogTask(t, "Backlog")
+	secondWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second workflow: %v", err)
+	}
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &secondWorkflowID,
+		Title:      "Second backlog",
+	}); err != nil {
+		t.Fatalf("CreateTask second workflow: %v", err)
+	}
+	fixture.quiescence.blocked[active.task.ID] = true
+
+	counts, err := fixture.tasks.CountGroups(fixture.ctx, serverapi.WorkflowProjectTaskGroupCountsRequest{
+		ProjectID:   fixture.binding.ProjectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+	})
+	if err != nil {
+		t.Fatalf("CountGroups: %v", err)
+	}
+	if counts.Counts.Active != 1 || counts.Counts.Backlog != 2 || counts.Counts.Done != 0 {
+		t.Fatalf("counts = %+v, want active=1 backlog=2 done=0", counts.Counts)
 	}
 }
 

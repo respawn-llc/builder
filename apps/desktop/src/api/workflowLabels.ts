@@ -1,4 +1,4 @@
-import type { TaskStatus } from "./models";
+import type { TaskDependencyProgress, TaskStatus } from "./models";
 
 export type ProjectLabel = Readonly<{
   id: string;
@@ -87,7 +87,8 @@ export type TaskListItem = Readonly<{
   updatedAt: number;
   columnKeys: readonly string[] | null;
   status: TaskStatus;
-  labelIDs: readonly string[];
+  labels: readonly ProjectLabel[];
+  dependencyProgress: TaskDependencyProgress | null;
 }>;
 
 export type TaskListPage = Readonly<{
@@ -99,4 +100,14 @@ export type TaskListPage = Readonly<{
   nextOffset: number | null;
   generatedAt: number;
   tasks: readonly TaskListItem[];
+}>;
+
+export type ProjectTaskGroupCounts = Readonly<{
+  projectID: string;
+  counts: Readonly<{
+    active: number;
+    backlog: number;
+    done: number;
+  }>;
+  generatedAt: number;
 }>;

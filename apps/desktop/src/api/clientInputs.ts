@@ -30,6 +30,7 @@ export type TaskDependencyCreateIntent = Readonly<{
 export type TaskListInput = Readonly<{
   projectID: string;
   workflowID?: string | undefined;
+  group?: "active" | "backlog" | "done" | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
   attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
@@ -37,6 +38,13 @@ export type TaskListInput = Readonly<{
   sort?: readonly WorkflowTaskListSort[] | undefined;
   offset?: number | undefined;
   limit?: number | undefined;
+}>;
+
+export type ProjectTaskGroupCountsInput = Readonly<{
+  projectID: string;
+  statusKinds?: readonly TaskStatusKind[] | undefined;
+  attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
+  labelFilter: TaskLabelFilter;
 }>;
 
 export type BoardNodeCardsInput = Readonly<{

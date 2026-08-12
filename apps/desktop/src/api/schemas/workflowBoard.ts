@@ -21,7 +21,7 @@ import type {
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
-import type { TaskListPage } from "../workflowLabels";
+import type { ProjectTaskGroupCounts, TaskListPage } from "../workflowLabels";
 import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "../worktreeSetup";
 import {
   attentionItemSchema,
@@ -41,7 +41,7 @@ import {
 } from "./common";
 import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
-import { labelIDListSchema } from "./workflowLabels";
+import { labelIDListSchema, projectLabelSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
 export {
   taskDependenciesSchema,
@@ -106,7 +106,15 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
           updated_at_unix_ms: z.number(),
           column_keys: z.array(z.string()).optional(),
           status: taskStatusSchema,
-          label_ids: labelIDListSchema,
+          labels: z.array(projectLabelSchema),
+          dependency_progress: z
+            .object({
+              satisfied_count: z.number().int().nonnegative(),
+              total_count: z.number().int().positive(),
+            })
+            .strict()
+            .refine((value) => value.satisfied_count <= value.total_count)
+            .optional(),
         })
         .strict()
         .transform((value) => ({
@@ -119,7 +127,14 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
           updatedAt: value.updated_at_unix_ms,
           columnKeys: value.column_keys ?? null,
           status: value.status,
-          labelIDs: value.label_ids,
+          labels: value.labels,
+          dependencyProgress:
+            value.dependency_progress === undefined
+              ? null
+              : {
+                  satisfiedCount: value.dependency_progress.satisfied_count,
+                  totalCount: value.dependency_progress.total_count,
+                },
         })),
     ),
   })
@@ -133,6 +148,25 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
     nextOffset: value.next_offset ?? null,
     generatedAt: value.generated_at_unix_ms,
     tasks: value.tasks,
+  }));
+
+export const projectTaskGroupCountsSchema: z.ZodType<ProjectTaskGroupCounts> = z
+  .object({
+    project_id: z.string().min(1),
+    counts: z
+      .object({
+        active: z.number().int().nonnegative(),
+        backlog: z.number().int().nonnegative(),
+        done: z.number().int().nonnegative(),
+      })
+      .strict(),
+    generated_at_unix_ms: z.number(),
+  })
+  .strict()
+  .transform((value) => ({
+    projectID: value.project_id,
+    counts: value.counts,
+    generatedAt: value.generated_at_unix_ms,
   }));
 
 const unavailableCauseSchema = z.enum([

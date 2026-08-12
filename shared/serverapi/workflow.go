@@ -1246,9 +1246,18 @@ type WorkflowTaskListSort struct {
 	Direction WorkflowTaskListSortDirection `json:"direction"`
 }
 
+type WorkflowTaskGroup string
+
+const (
+	WorkflowTaskGroupActive  WorkflowTaskGroup = "active"
+	WorkflowTaskGroupBacklog WorkflowTaskGroup = "backlog"
+	WorkflowTaskGroupDone    WorkflowTaskGroup = "done"
+)
+
 type WorkflowTaskListRequest struct {
 	ProjectID        *string                     `json:"project_id,omitempty"`
 	WorkflowID       *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
+	Group            *WorkflowTaskGroup          `json:"group,omitempty"`
 	ColumnKeys       []string                    `json:"column_keys,omitempty"`
 	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
 	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
@@ -1280,17 +1289,38 @@ type WorkflowTaskListResponse struct {
 	Tasks                       []WorkflowTaskListItem                      `json:"tasks"`
 }
 
+type WorkflowProjectTaskGroupCountsRequest struct {
+	ProjectID        string                      `json:"project_id"`
+	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
+	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
+	LabelFilter      WorkflowTaskLabelFilter     `json:"label_filter"`
+	DependencyFilter *bool                       `json:"dependency_filter,omitempty"`
+}
+
+type WorkflowProjectTaskGroupCounts struct {
+	Active  int `json:"active"`
+	Backlog int `json:"backlog"`
+	Done    int `json:"done"`
+}
+
+type WorkflowProjectTaskGroupCountsResponse struct {
+	ProjectID         string                         `json:"project_id"`
+	Counts            WorkflowProjectTaskGroupCounts `json:"counts"`
+	GeneratedAtUnixMs int64                          `json:"generated_at_unix_ms"`
+}
+
 type WorkflowTaskListItem struct {
-	TaskID          string                `json:"task_id"`
-	ShortID         string                `json:"short_id"`
-	WorkflowID      runtimeids.WorkflowID `json:"workflow_id"`
-	WorkflowName    *string               `json:"workflow_name,omitempty"`
-	Title           string                `json:"title"`
-	CreatedAtUnixMs int64                 `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs int64                 `json:"updated_at_unix_ms"`
-	ColumnKeys      *[]string             `json:"column_keys,omitempty"`
-	Status          WorkflowTaskStatus    `json:"status"`
-	LabelIDs        []string              `json:"label_ids"`
+	TaskID             string                          `json:"task_id"`
+	ShortID            string                          `json:"short_id"`
+	WorkflowID         runtimeids.WorkflowID           `json:"workflow_id"`
+	WorkflowName       *string                         `json:"workflow_name,omitempty"`
+	Title              string                          `json:"title"`
+	CreatedAtUnixMs    int64                           `json:"created_at_unix_ms"`
+	UpdatedAtUnixMs    int64                           `json:"updated_at_unix_ms"`
+	ColumnKeys         *[]string                       `json:"column_keys,omitempty"`
+	Status             WorkflowTaskStatus              `json:"status"`
+	Labels             []WorkflowProjectLabel          `json:"labels"`
+	DependencyProgress *WorkflowTaskDependencyProgress `json:"dependency_progress,omitempty"`
 }
 
 type WorkflowTaskListScopeErrorReason string
@@ -2520,7 +2550,13 @@ func (r WorkflowTaskListItem) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return validateLabelIDs("label_ids", r.LabelIDs)
+	if err := validateProjectLabels("labels", r.Labels); err != nil {
+		return err
+	}
+	if r.DependencyProgress != nil {
+		return r.DependencyProgress.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskCreateRequest) ValidateRPC() error {
@@ -2534,6 +2570,57 @@ func (r WorkflowTaskListResponse) Validate() error {
 	for index, task := range r.Tasks {
 		if err := task.Validate(); err != nil {
 			return prefixWorkflowProjectionValidationField("tasks", index, err)
+		}
+	}
+	return nil
+}
+
+func (r WorkflowProjectTaskGroupCountsRequest) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	if err := r.LabelFilter.Validate(); err != nil {
+		return err
+	}
+	for index, status := range r.StatusKinds {
+		if _, valid := status.NativeState(); !valid {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
+		}
+	}
+	for index, attention := range r.AttentionKinds {
+		switch attention {
+		case WorkflowTaskAttentionKindQuestion, WorkflowTaskAttentionKindApproval, WorkflowTaskAttentionKindInterrupted:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("attention_kinds[%d]", index), "attention kind is invalid")
+		}
+	}
+	return nil
+}
+
+func (r WorkflowProjectTaskGroupCountsRequest) ValidateRPC() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	if err := r.LabelFilter.ValidateRPC(); err != nil {
+		return err
+	}
+	return r.Validate()
+}
+
+func (r WorkflowProjectTaskGroupCountsResponse) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	for _, count := range []struct {
+		field string
+		value int
+	}{
+		{field: "counts.active", value: r.Counts.Active},
+		{field: "counts.backlog", value: r.Counts.Backlog},
+		{field: "counts.done", value: r.Counts.Done},
+	} {
+		if count.value < 0 {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, count.field, count.field+" must not be negative")
 		}
 	}
 	return nil
@@ -3177,6 +3264,13 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 	}
 	if err := validateOptionalWorkflowID(r.WorkflowID); err != nil {
 		return err
+	}
+	if r.Group != nil {
+		switch *r.Group {
+		case WorkflowTaskGroupActive, WorkflowTaskGroupBacklog, WorkflowTaskGroupDone:
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "group", "group must be active, backlog, or done")
+		}
 	}
 	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
 		return err

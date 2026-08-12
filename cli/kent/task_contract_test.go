@@ -11,6 +11,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -255,6 +256,78 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTaskListProjectionPreservesCLIShapeFromEnrichedRows(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	workflowName := "Delivery"
+	response := serverapi.WorkflowTaskListResponse{
+		Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		Tasks: []serverapi.WorkflowTaskListItem{{
+			TaskID:       "task-1",
+			ShortID:      "KNT-1",
+			WorkflowID:   workflowID,
+			WorkflowName: &workflowName,
+			Title:        "Ship list",
+			Status: serverapi.WorkflowTaskStatus{
+				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
+				NativeState: serverapi.WorkflowTaskNativeStateActive,
+			},
+			Labels: []serverapi.WorkflowProjectLabel{
+				{ID: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf", Name: "Priority"},
+				{ID: "2d40537d-307f-4351-b659-363538189fac", Name: "Urgent"},
+			},
+			DependencyProgress: &serverapi.WorkflowTaskDependencyProgress{SatisfiedCount: 1, TotalCount: 2},
+		}},
+	}
+	projection, err := taskListProjectionFromResponse(response, taskListExpectedScope{
+		ProjectID:     "project-1",
+		WorkflowOwner: taskListExpectedWorkflowFromRequest,
+	})
+	if err != nil {
+		t.Fatalf("projection: %v", err)
+	}
+	data, err := json.Marshal(projection.Output)
+	if err != nil {
+		t.Fatalf("marshal CLI output: %v", err)
+	}
+	var shape map[string]any
+	if err := json.Unmarshal(data, &shape); err != nil {
+		t.Fatalf("decode CLI output: %v", err)
+	}
+	tasks := shape["tasks"].([]any)
+	task := tasks[0].(map[string]any)
+	if _, exists := task["labels"]; exists {
+		t.Fatalf("CLI JSON exposes named labels: %s", data)
+	}
+	if _, exists := task["dependency_progress"]; exists {
+		t.Fatalf("CLI JSON exposes dependency progress: %s", data)
+	}
+	if !slices.Equal(task["label_ids"].([]any), []any{
+		"f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
+		"2d40537d-307f-4351-b659-363538189fac",
+	}) {
+		t.Fatalf("CLI label_ids = %#v", task["label_ids"])
+	}
+	if task["workflow_id"] != workflowID.String() {
+		t.Fatalf("CLI workflow_id = %#v, want %q", task["workflow_id"], workflowID)
+	}
+	if projection.Rows[0].ShowWorkflow {
+		t.Fatal("single-workflow human row exposes Workflow name")
+	}
+
+	response.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
+	projection, err = taskListProjectionFromResponse(response, taskListExpectedScope{
+		ProjectID:     "project-1",
+		WorkflowOwner: taskListExpectedWorkflowFromRequest,
+	})
+	if err != nil {
+		t.Fatalf("multiple-workflow projection: %v", err)
+	}
+	if !projection.Rows[0].ShowWorkflow || projection.Rows[0].WorkflowName != workflowName {
+		t.Fatalf("multiple-workflow human row = %+v, want Workflow name", projection.Rows[0])
 	}
 }
 

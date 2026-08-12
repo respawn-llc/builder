@@ -1,4 +1,4 @@
-import type { TaskListInput, TaskMutationInput } from "./clientInputs";
+import type { ProjectTaskGroupCountsInput, TaskListInput, TaskMutationInput } from "./clientInputs";
 import { parseRpcResponse as parse } from "./clientParse";
 import { compactJsonObject, type JsonObject } from "./json";
 import {
@@ -7,13 +7,18 @@ import {
   projectLabelMutationSchema,
   taskLabelAssignmentSchema,
 } from "./schemas/workflowLabels";
-import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflowBoard";
+import {
+  projectTaskGroupCountsSchema,
+  taskCreateResponseSchema,
+  taskListPageSchema,
+} from "./schemas/workflowBoard";
 import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import { canonicalTaskLabelFilter } from "./workflowLabels";
 import type {
   ProjectLabel,
   ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
   TaskLabelAssignment,
   TaskLabelFilter,
   TaskListPage,
@@ -169,6 +174,7 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
         project_id: input.projectID,
         workflow_id:
           input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+        group: input.group,
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],
@@ -178,5 +184,21 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
         limit: input.limit ?? 40,
       }),
     ),
+  );
+}
+
+export async function getProjectTaskGroupCounts(
+  transport: RpcTransport,
+  input: ProjectTaskGroupCountsInput,
+): Promise<ProjectTaskGroupCounts> {
+  return parse(
+    "workflow.task.groupCounts",
+    projectTaskGroupCountsSchema,
+    await transport.call("workflow.task.groupCounts", {
+      project_id: input.projectID,
+      status_kinds: input.statusKinds ?? [],
+      attention_kinds: input.attentionKinds ?? [],
+      label_filter: taskLabelFilterPayload(input.labelFilter),
+    }),
   );
 }

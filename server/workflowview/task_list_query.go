@@ -35,6 +35,7 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 type workflowTaskListQueryRequest struct {
 	projectID          string
 	narrowed           *workflowTaskListNarrowedQueryFacts
+	group              *serverapi.WorkflowTaskGroup
 	statusKinds        []serverapi.WorkflowTaskStatusKind
 	attentionKinds     []serverapi.WorkflowTaskAttentionKind
 	labelFilter        workflowTaskLabelFilterFacts
@@ -86,8 +87,9 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
 	}
-	statusKinds := make([]string, 0, len(req.statusKinds))
-	for _, kind := range req.statusKinds {
+	effectiveStatusKinds := mergeWorkflowTaskListStatusKinds(req.statusKinds, req.group)
+	statusKinds := make([]string, 0, len(effectiveStatusKinds))
+	for _, kind := range effectiveStatusKinds {
 		statusKinds = append(statusKinds, string(kind))
 	}
 	statusKindsJSON, err := json.Marshal(statusKinds)
@@ -112,7 +114,7 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		VisibleColumnsJson:   visibleColumnsJSON,
 		ColumnFilterSet:      boolInt64(columnFilterSet),
 		ColumnKeysJson:       columnKeysJSON,
-		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
+		StatusFilterSet:      boolInt64(len(statusKinds) > 0),
 		StatusKindsJson:      string(statusKindsJSON),
 		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
 		AttentionKindsJson:   string(attentionKindsJSON),
@@ -209,6 +211,77 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		})
 	}
 	return result, nil
+}
+
+func workflowTaskGroupStatusKinds(group *serverapi.WorkflowTaskGroup) []serverapi.WorkflowTaskStatusKind {
+	if group == nil {
+		return nil
+	}
+	switch *group {
+	case serverapi.WorkflowTaskGroupActive:
+		return []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindWaitingQuestion,
+			serverapi.WorkflowTaskStatusKindWaitingApproval,
+			serverapi.WorkflowTaskStatusKindInterrupted,
+			serverapi.WorkflowTaskStatusKindRunning,
+			serverapi.WorkflowTaskStatusKindQueued,
+			serverapi.WorkflowTaskStatusKindActive,
+		}
+	case serverapi.WorkflowTaskGroupBacklog:
+		return []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}
+	case serverapi.WorkflowTaskGroupDone:
+		return []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone}
+	default:
+		return nil
+	}
+}
+
+func workflowTaskStatusKindsJSON(kinds []serverapi.WorkflowTaskStatusKind) (string, error) {
+	values := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		values = append(values, string(kind))
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func workflowTaskAttentionKindsJSON(kinds []serverapi.WorkflowTaskAttentionKind) (string, error) {
+	values := make([]string, 0, len(kinds))
+	for _, kind := range kinds {
+		values = append(values, string(kind))
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func mergeWorkflowTaskListStatusKinds(
+	explicit []serverapi.WorkflowTaskStatusKind,
+	group *serverapi.WorkflowTaskGroup,
+) []serverapi.WorkflowTaskStatusKind {
+	groupKinds := workflowTaskGroupStatusKinds(group)
+	if len(groupKinds) == 0 {
+		return append([]serverapi.WorkflowTaskStatusKind(nil), explicit...)
+	}
+	if len(explicit) == 0 {
+		return groupKinds
+	}
+	allowed := make(map[serverapi.WorkflowTaskStatusKind]bool, len(groupKinds))
+	for _, kind := range groupKinds {
+		allowed[kind] = true
+	}
+	merged := make([]serverapi.WorkflowTaskStatusKind, 0, len(explicit))
+	for _, kind := range explicit {
+		if allowed[kind] {
+			merged = append(merged, kind)
+		}
+	}
+	return merged
 }
 
 func workflowTaskListMatchingWorkflowCardinality(count int) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {

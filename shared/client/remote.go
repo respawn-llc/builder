@@ -696,6 +696,11 @@ func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTa
 	return validateWorkflowResponse("list workflow tasks", response, err)
 }
 
+func (c *Remote) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectTaskGroupCountsRequest, serverapi.WorkflowProjectTaskGroupCountsResponse](c, ctx, protocol.MethodWorkflowProjectTaskGroupCounts, req)
+	return validateWorkflowResponse("get workflow project task group counts", response, err)
+}
+
 func (c *Remote) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
 	response, err := callDedicatedRPC[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](
 		c,

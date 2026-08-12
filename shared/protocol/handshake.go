@@ -85,6 +85,7 @@ const (
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
 	MethodWorkflowTaskSessionList                       = "workflow.task.session.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
+	MethodWorkflowProjectTaskGroupCounts                = "workflow.task.groupCounts"
 	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
 	MethodWorkflowBoardNodeCardsList                    = "workflow.board.nodeCards.list"

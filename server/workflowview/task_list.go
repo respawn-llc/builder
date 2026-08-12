@@ -95,6 +95,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	page, err := l.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:          projectID,
 		narrowed:           narrowedQuery,
+		group:              req.Group,
 		statusKinds:        req.StatusKinds,
 		attentionKinds:     req.AttentionKinds,
 		labelFilter:        labelFilter,
@@ -120,17 +121,31 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	for _, row := range pageItems {
 		pageTaskIDs = append(pageTaskIDs, row.item.TaskID)
 	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, l.queries, pageTaskIDs)
+	labelsByTask, err := loadTaskLabelsByTask(ctx, l.queries, pageTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	dependencyRows, err := l.queries.ListTaskDependencyProgressByTasks(ctx, pageTaskIDs)
+	if err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	progressRows := make([]taskDependencyProgressRow, 0, len(dependencyRows))
+	for _, row := range dependencyRows {
+		progressRows = append(progressRows, taskDependencyProgressRow{
+			taskID:         row.TaskID,
+			satisfiedCount: row.DependencySatisfiedCount,
+			totalCount:     row.DependencyTotalCount,
+		})
+	}
+	dependencyProgressByTask, err := projectTaskDependencyProgress(progressRows)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	responseItems := make([]serverapi.WorkflowTaskListItem, 0, len(pageItems))
 	for _, row := range pageItems {
 		item := row.item
-		item.LabelIDs = labelIDsByTask[item.TaskID]
-		if matchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
-			item.WorkflowName = nil
-		}
+		item.Labels = labelsByTask[item.TaskID]
+		item.DependencyProgress = dependencyProgressByTask[item.TaskID]
 		responseItems = append(responseItems, item)
 	}
 	var nextOffset *int
@@ -147,6 +162,63 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 		NextOffset:                  nextOffset,
 		GeneratedAtUnixMs:           time.Now().UTC().UnixMilli(),
 		Tasks:                       responseItems,
+	}, nil
+}
+
+func (l *TaskList) CountGroups(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	if l == nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, errors.New("task list is required")
+	}
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	if _, err := l.metadata.GetProjectOverview(ctx, req.ProjectID); err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	labelFilter, err := resolveWorkflowTaskLabelFilter(ctx, l.queries, req.ProjectID, req.LabelFilter)
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	labelFilterArgs, err := labelFilter.queryArgs()
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	statusKindsJSON, err := workflowTaskStatusKindsJSON(req.StatusKinds)
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	attentionKindsJSON, err := workflowTaskAttentionKindsJSON(req.AttentionKinds)
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	observation, err := l.projection.Observe(nil)
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	counts, err := l.queries.CountProjectTaskGroups(ctx, sqlitegen.CountProjectTaskGroupsParams{
+		ProjectID:            req.ProjectID,
+		StatusFilterSet:      boolInt64(len(req.StatusKinds) > 0),
+		StatusKindsJson:      statusKindsJSON,
+		AttentionFilterSet:   boolInt64(len(req.AttentionKinds) > 0),
+		AttentionKindsJson:   attentionKindsJSON,
+		LabelFilterKind:      labelFilterArgs.kind,
+		LabelFilterMode:      labelFilterArgs.mode,
+		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
+		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
+		DependencyFilter:     workflowTaskDependencyFilterQueryArg(req.DependencyFilter),
+		LiveTaskStatesJson:   observation.LiveTaskStatesJSON,
+	})
+	if err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	return serverapi.WorkflowProjectTaskGroupCountsResponse{
+		ProjectID: req.ProjectID,
+		Counts: serverapi.WorkflowProjectTaskGroupCounts{
+			Active:  int(counts.ActiveCount),
+			Backlog: int(counts.BacklogCount),
+			Done:    int(counts.DoneCount),
+		},
+		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
 	}, nil
 }
 

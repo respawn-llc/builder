@@ -8,6 +8,42 @@ const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
 
 describe("ApiClient workflow labels", () => {
+  it("loads exact Project task-group counts without pagination fields", async () => {
+    const transport = new FakeRpcTransport([
+      {
+        method: "workflow.task.groupCounts",
+        result: {
+          project_id: "project-1",
+          counts: { active: 3, backlog: 2, done: 1 },
+          generated_at_unix_ms: 7,
+        },
+      },
+    ]);
+    const client = new ApiClient(transport);
+
+    await expect(
+      client.getProjectTaskGroupCounts({
+        projectID: "project-1",
+        labelFilter: { kind: "none" },
+      }),
+    ).resolves.toEqual({
+      projectID: "project-1",
+      counts: { active: 3, backlog: 2, done: 1 },
+      generatedAt: 7,
+    });
+    expect(transport.calls).toEqual([
+      {
+        method: "workflow.task.groupCounts",
+        params: {
+          project_id: "project-1",
+          status_kinds: [],
+          attention_kinds: [],
+          label_filter: { kind: "none" },
+        },
+      },
+    ]);
+  });
+
   it("reorders a Project label catalog and preserves the authoritative response order", async () => {
     const transport = new FakeRpcTransport([
       {
@@ -286,7 +322,7 @@ describe("ApiClient workflow labels", () => {
     expect(transport.calls).toEqual([]);
   });
 
-  it("lists label-filtered task projections with label IDs", async () => {
+  it("lists grouped task projections with ordered label display data and dependency progress", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.list",
@@ -311,7 +347,11 @@ describe("ApiClient workflow labels", () => {
                 node_ids: ["node-1"],
                 attention_types: [],
               },
-              label_ids: [priorityID],
+              labels: [
+                { id: urgentID, name: "Urgent" },
+                { id: priorityID, name: "Priority" },
+              ],
+              dependency_progress: { satisfied_count: 1, total_count: 2 },
             },
           ],
         },
@@ -323,6 +363,7 @@ describe("ApiClient workflow labels", () => {
       client.listTasks({
         projectID: "project-1",
         workflowID: "11111111-1111-4111-8111-111111111111",
+        group: "active",
         labelFilter: {
           kind: "named",
           mode: "any",
@@ -334,7 +375,16 @@ describe("ApiClient workflow labels", () => {
     ).resolves.toMatchObject({
       scope: { projectID: "project-1", workflowID: "11111111-1111-4111-8111-111111111111" },
       matchingWorkflowCardinality: "one",
-      tasks: [{ id: "task-1", labelIDs: [priorityID] }],
+      tasks: [
+        {
+          id: "task-1",
+          labels: [
+            { id: urgentID, name: "Urgent" },
+            { id: priorityID, name: "Priority" },
+          ],
+          dependencyProgress: { satisfiedCount: 1, totalCount: 2 },
+        },
+      ],
     });
     expect(transport.calls).toEqual([
       {
@@ -342,6 +392,7 @@ describe("ApiClient workflow labels", () => {
         params: {
           project_id: "project-1",
           workflow_id: "11111111-1111-4111-8111-111111111111",
+          group: "active",
           column_keys: [],
           status_kinds: [],
           attention_kinds: [],
