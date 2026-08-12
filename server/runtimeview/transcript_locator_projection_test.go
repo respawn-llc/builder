@@ -60,6 +60,35 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 	}
 }
 
+func TestCommittedTimeCopiesToUserAndAssistantClientRows(t *testing.T) {
+	const stepID = "22222222-2222-4222-8222-222222222222"
+	committedAt := transcript.CommittedAtUnixMs(42)
+	provenance := &runtime.TranscriptCommittedRowProvenance{
+		EventSequence:     9,
+		CommittedAtUnixMs: &committedAt,
+	}
+	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
+		{StepID: stepID, Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: "user", CommittedProvenance: provenance},
+		{StepID: stepID, Visibility: transcript.EntryVisibilityOngoing, Role: "assistant", Text: "assistant", Phase: llm.MessagePhaseFinal, CommittedProvenance: provenance},
+	}}
+	page, err := TranscriptPageFromSegment("12345678-1234-4234-8234-123456789012", "session", clientui.ConversationFreshness(0), runtime.TranscriptSegmentPage{Snapshot: snapshot})
+	if err != nil {
+		t.Fatalf("project page: %v", err)
+	}
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
+	})
+	if len(page.Entries) != 2 || len(hydration.CommittedRows) != 2 {
+		t.Fatalf("projected rows page=%d hydration=%d", len(page.Entries), len(hydration.CommittedRows))
+	}
+	if page.Entries[0].User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
+		page.Entries[1].Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
+		hydration.CommittedRows[0].User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
+		hydration.CommittedRows[1].Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+		t.Fatalf("client timestamp projection lost committed time: page=%+v hydration=%+v", page.Entries, hydration.CommittedRows)
+	}
+}
+
 func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {
 	const stepID = "22222222-2222-4222-8222-222222222222"
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 23}

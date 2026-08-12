@@ -166,3 +166,62 @@ func TestReplayPreservesEligibleAbsentCommittedTime(t *testing.T) {
 		t.Fatalf("child replay records=%d time=%v", len(records), records[0].CommittedAtUnixMs())
 	}
 }
+
+func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testing.T) {
+	parent := newSessionTestStore(t)
+	log := mustMaterializeSessionTestEventLog(t, parent)
+	present := transcript.CommittedAtUnixMs(123)
+	user, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("old")}, &present)
+	if err != nil {
+		t.Fatalf("create source user: %v", err)
+	}
+	replacement, err := newEventRecord(2, nil, HistoryReplacementRecord{
+		Engine: "local",
+		Mode:   CompactionModeAuto,
+		Items: []ProviderHistoryItem{{
+			Type:    ProviderHistoryItemTypeMessage,
+			Role:    messageRolePointer(MessageRoleAssistant),
+			Content: stringPointer("replacement"),
+			Raw:     []byte(`{"type":"message","role":"assistant","content":"replacement"}`),
+		}},
+	}, &present)
+	if err != nil {
+		t.Fatalf("create source replacement: %v", err)
+	}
+	if _, err := log.AppendReplayRecords([]EventRecord{user, replacement}); err != nil {
+		t.Fatalf("replay source records: %v", err)
+	}
+	target, _, err := log.AppendRecord(nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("target")})
+	if err != nil {
+		t.Fatalf("append target: %v", err)
+	}
+	forked, _, err := ForkAtUserMessage(log, target.Seq(), "fork", testSessionCategory)
+	if err != nil {
+		t.Fatalf("fork source records: %v", err)
+	}
+	cloned, err := CloneSession(log, "clone", testSessionCategory)
+	if err != nil {
+		t.Fatalf("clone source records: %v", err)
+	}
+	for name, store := range map[string]*Store{"fork": forked, "clone": cloned} {
+		var records []EventRecord
+		if err := mustMaterializeSessionTestEventLog(t, store).WalkRecords(func(record EventRecord) error {
+			records = append(records, record)
+			return nil
+		}); err != nil {
+			t.Fatalf("%s walk: %v", name, err)
+		}
+		if len(records) < 2 {
+			t.Fatalf("%s records=%d", name, len(records))
+		}
+		for _, record := range records[:2] {
+			if record.CommittedAtUnixMs() == nil || record.CommittedAtUnixMs().UnixMs() != present.UnixMs() {
+				t.Fatalf("%s record timestamp=%v want=%d", name, record.CommittedAtUnixMs(), present.UnixMs())
+			}
+		}
+	}
+}
+
+func messageRolePointer(value MessageRole) *MessageRole {
+	return &value
+}
