@@ -103,7 +103,50 @@ type WorkflowGraphSavePlan struct {
 	ValidationResults map[workflow.ValidationContext]workflow.ValidationResult
 }
 
+type workflowGraphSaveLaneContext struct {
+	store      *Store
+	workflowID runtimeids.WorkflowID
+}
+
+type workflowGraphSaveLaneContextKey struct{}
+
+func (s *Store) RunWorkflowGraphSaveOperation(
+	ctx context.Context,
+	workflowID runtimeids.WorkflowID,
+	operation func(context.Context) (WorkflowGraphSaveResult, error),
+) (WorkflowGraphSaveResult, error) {
+	if workflowID.IsZero() {
+		return WorkflowGraphSaveResult{}, ErrWorkflowIDRequired
+	}
+	if operation == nil {
+		return WorkflowGraphSaveResult{}, errors.New("workflow graph save operation is required")
+	}
+	if active, ok := ctx.Value(workflowGraphSaveLaneContextKey{}).(workflowGraphSaveLaneContext); ok &&
+		active.store == s &&
+		active.workflowID == workflowID {
+		return operation(ctx)
+	}
+	if s.graphSaves == nil {
+		return WorkflowGraphSaveResult{}, errors.New("workflow graph save lanes are required")
+	}
+	lease, err := s.graphSaves.Acquire(ctx, workflowID)
+	if err != nil {
+		return WorkflowGraphSaveResult{}, err
+	}
+	defer lease.Release()
+	return operation(context.WithValue(ctx, workflowGraphSaveLaneContextKey{}, workflowGraphSaveLaneContext{
+		store:      s,
+		workflowID: workflowID,
+	}))
+}
+
 func (s *Store) PreviewWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
+	return s.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (WorkflowGraphSaveResult, error) {
+		return s.previewWorkflowGraphSave(ctx, req)
+	})
+}
+
+func (s *Store) previewWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
 	plan, err := s.prepareWorkflowGraphSave(ctx, req)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
@@ -228,19 +271,13 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 }
 
 func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
-	workflowID := req.WorkflowID
-	if workflowID.IsZero() {
-		return WorkflowGraphSaveResult{}, ErrWorkflowIDRequired
-	}
-	if s.graphSaves == nil {
-		return WorkflowGraphSaveResult{}, errors.New("workflow graph save lanes are required")
-	}
-	lease, err := s.graphSaves.Acquire(ctx, workflowID)
-	if err != nil {
-		return WorkflowGraphSaveResult{}, err
-	}
-	defer lease.Release()
+	return s.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (WorkflowGraphSaveResult, error) {
+		return s.saveWorkflowGraph(ctx, req)
+	})
+}
 
+func (s *Store) saveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
+	workflowID := req.WorkflowID
 	plan, err := s.prepareWorkflowGraphSave(ctx, req)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err

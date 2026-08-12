@@ -1,6 +1,10 @@
 package workflowscript
 
-import "core/server/workflow"
+import (
+	"strings"
+
+	"core/server/workflow"
+)
 
 func EvaluateDefinition(def workflow.Definition, contexts []workflow.ValidationContext, resolver workflow.RoleResolver, scriptRoot *string) map[workflow.ValidationContext]workflow.ValidationResult {
 	results := make(map[workflow.ValidationContext]workflow.ValidationResult, len(contexts))
@@ -28,13 +32,16 @@ func definitionScriptPathErrors(def workflow.Definition, rootPath *string) []wor
 			RootPath: rootPath,
 		}) {
 			nodeID := workflow.NodeIDOf(node)
-			errors = append(errors, workflow.ValidationError{
+			validationError := workflow.ValidationError{
 				Code:          workflow.ValidationErrorCode(diagnostic.Code),
 				Message:       diagnostic.Message,
 				WorkflowID:    workflow.WorkflowIDPointer(def.ID),
-				NodeID:        &nodeID,
 				BlocksContext: diagnostic.Blocking,
-			})
+			}
+			if strings.TrimSpace(string(nodeID)) != "" {
+				validationError.NodeID = &nodeID
+			}
+			errors = append(errors, validationError)
 		}
 	}
 	return errors
