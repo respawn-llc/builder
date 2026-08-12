@@ -369,6 +369,56 @@ func TestActivateSessionRuntimeUsesLatestPersistedQuestionAndAutoCompactionSetti
 	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "stale-planned-session-settings")
 }
 
+func TestActivateSessionRuntimeUsesLatestPersistedCompleteChatSettings(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
+		Supervisor:     textutil.Value("all"),
+		Thinking:       textutil.Value("high"),
+		Fast:           textutil.Value(true),
+		Questions:      textutil.Value(false),
+		AutoCompaction: textutil.Value(false),
+	}); err != nil {
+		t.Fatalf("persist latest Session settings: %v", err)
+	}
+	stale := sessionRuntimeFastSettings(false)
+	stale.Reviewer.Frequency = "off"
+	stale.ThinkingLevel = "low"
+
+	response, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "stale-complete-session-settings",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "stale-complete-session-settings",
+		ActiveSettings:        stale,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Source:                config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	engine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
+	if engine.ReviewerFrequency() != "all" ||
+		engine.ThinkingLevel() != "high" ||
+		!engine.FastModeEnabled() ||
+		engine.QuestionsEnabled() ||
+		engine.AutoCompactionEnabled() {
+		t.Fatalf(
+			"runtime settings = supervisor %q thinking %q fast %t questions %t auto-compaction %t",
+			engine.ReviewerFrequency(),
+			engine.ThinkingLevel(),
+			engine.FastModeEnabled(),
+			engine.QuestionsEnabled(),
+			engine.AutoCompactionEnabled(),
+		)
+	}
+	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "stale-complete-session-settings")
+}
+
 func sessionRuntimeFastSettings(enabled bool) config.Settings {
 	settings := config.DefaultOnboardingSettings()
 	settings.Model = "gpt-5"

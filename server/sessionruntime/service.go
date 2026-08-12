@@ -14,6 +14,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -87,16 +88,32 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		SessionID: sessionID,
 		OwnerID:   ownerID,
 	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
-		questions := *req.QuestionsEnabled
-		autoCompaction := *req.AutoCompactionEnabled
-		if overrides := store.Meta().ChatSettings; overrides != nil {
-			if overrides.Questions != nil {
-				questions = *overrides.Questions
-			}
-			if overrides.AutoCompaction != nil {
-				autoCompaction = *overrides.AutoCompaction
-			}
+		current := &session.ChatSettingsOverrides{
+			Supervisor:     textutil.Value(req.ActiveSettings.Reviewer.Frequency),
+			Thinking:       textutil.Value(req.ActiveSettings.ThinkingLevel),
+			Fast:           textutil.Value(req.ActiveSettings.PriorityRequestMode),
+			Questions:      req.QuestionsEnabled,
+			AutoCompaction: req.AutoCompactionEnabled,
 		}
+		effective, resolveErr := session.ResolveEffectiveChatSettings(
+			store.Meta().ChatSettings,
+			current,
+			session.ChatSettings{
+				Supervisor:     req.ActiveSettings.Reviewer.Frequency,
+				Thinking:       req.ActiveSettings.ThinkingLevel,
+				Fast:           req.ActiveSettings.PriorityRequestMode,
+				Questions:      *req.QuestionsEnabled,
+				AutoCompaction: *req.AutoCompactionEnabled,
+			},
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		req.ActiveSettings.Reviewer.Frequency = effective.Supervisor
+		req.ActiveSettings.ThinkingLevel = effective.Thinking
+		req.ActiveSettings.PriorityRequestMode = effective.Fast
+		questions := effective.Questions
+		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
 		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())

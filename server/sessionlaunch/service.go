@@ -461,7 +461,7 @@ func (s *Service) planExistingSessionWithStore(
 				return launch.SessionPlan{}, nil, err
 			}
 			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{
-				AgentSelectionPersisted: roleOverride.Present,
+				AgentSelectionPersisted: roleOverride.Present && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
 			})
 		},
 	)
