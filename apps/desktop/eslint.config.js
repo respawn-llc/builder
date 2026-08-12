@@ -95,7 +95,7 @@ export default tseslint.config(
     // React Compiler. This is an inherent library boundary (the windowing layer owns its own
     // mutable state), so the compiler-compatibility check is scoped off here at the single
     // dedicated windowing component instead of suppressed inline.
-    files: ["src/ui/VirtualizedInfiniteList.tsx"],
+    files: ["src/ui/VirtualizedFrame.tsx"],
     rules: {
       "react-hooks/incompatible-library": "off",
     },

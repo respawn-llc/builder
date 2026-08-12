@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 
 import { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+import { VirtualizedFrame } from "./VirtualizedFrame";
 import {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
@@ -25,6 +26,18 @@ const virtualizer = vi.hoisted(() => ({
   scrollToOffset: vi.fn(),
   shouldAdjustScrollPositionOnItemSizeChange: undefined,
 }));
+const virtualizerOptions = vi.hoisted<{
+  current:
+    | Readonly<{
+        count: number;
+        getItemKey: (index: number) => string;
+      }>
+    | undefined;
+  useCount: number;
+}>(() => ({
+  current: undefined,
+  useCount: 0,
+}));
 const testEstimateSize = () => 40;
 const testGetItemKey = (item: string) => item;
 const testRenderItem = (item: string) => item;
@@ -32,7 +45,11 @@ const testRenderItem = (item: string) => item;
 vi.mock("@tanstack/react-virtual", () => ({
   defaultRangeExtractor: ({ startIndex, endIndex }: Readonly<{ startIndex: number; endIndex: number }>) =>
     Array.from({ length: endIndex - startIndex + 1 }, (_value, index) => startIndex + index),
-  useVirtualizer: () => virtualizer,
+  useVirtualizer: (options: Readonly<{ count: number; getItemKey: (index: number) => string }>) => {
+    virtualizerOptions.current = options;
+    virtualizerOptions.useCount += 1;
+    return virtualizer;
+  },
 }));
 
 function List({
@@ -91,6 +108,84 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     virtualizer.getVirtualItems.mockReturnValue([]);
     virtualizer.getOffsetForIndex.mockClear();
     virtualizer.scrollToOffset.mockClear();
+    virtualizerOptions.current = undefined;
+    virtualizerOptions.useCount = 0;
+  });
+
+  it("preserves list semantics and stable keys for every single-stream row kind", () => {
+    render(
+      <VirtualizedInfiniteList
+        empty="No items"
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        header="Header"
+        isFetchingNextPage={false}
+        items={[]}
+        loadingLabel="Loading"
+        nextBoundary={{ state: "loading", label: "Loading next" }}
+        onLoadMore={() => undefined}
+        previousBoundary={{ state: "loading", label: "Loading previous" }}
+        renderItem={testRenderItem}
+      />,
+    );
+
+    expect(screen.getByRole("list")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(4);
+    expect(virtualizerOptions.current?.count).toBe(4);
+    expect(
+      Array.from({ length: virtualizerOptions.current?.count ?? 0 }, (_value, index) =>
+        virtualizerOptions.current?.getItemKey(index),
+      ),
+    ).toEqual(["boundary-previous", "header", "empty", "boundary-next"]);
+  });
+
+  it("preserves listbox presentation rows and creates only one virtualizer", () => {
+    render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["a", "b"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={(item) => <div role="option">{item}</div>}
+        role="listbox"
+      />,
+    );
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getAllByRole("presentation")).toHaveLength(2);
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(virtualizerOptions.useCount).toBe(1);
+    expect(virtualizerOptions.current?.getItemKey(0)).toBe("a");
+    expect(virtualizerOptions.current?.getItemKey(1)).toBe("b");
+  });
+
+  it("lets a shared frame adapter supply grid and row semantics without another virtualizer", () => {
+    render(
+      <VirtualizedFrame
+        canApplyPixelOffset={false}
+        entries={[
+          {
+            key: "row-a",
+            render: () => <div role="gridcell">A</div>,
+          },
+        ]}
+        estimateSize={testEstimateSize}
+        initialScrollAlign="start"
+        paddingEnd={0}
+        paddingStart={0}
+        role="grid"
+        rowRole="row"
+        rowSpacing="tight"
+      />,
+    );
+
+    expect(screen.getByRole("grid")).toBeInTheDocument();
+    expect(screen.getByRole("row")).toContainElement(screen.getByRole("gridcell"));
+    expect(virtualizerOptions.useCount).toBe(1);
   });
 
   it("applies each valid request key once through the virtualizer after rows mount", () => {
