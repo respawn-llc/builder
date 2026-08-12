@@ -14,6 +14,7 @@ import (
 type completionSchemaProperty struct {
 	Type  any                        `json:"type"`
 	Enum  []string                   `json:"enum,omitempty"`
+	AnyOf []completionSchemaProperty `json:"anyOf,omitempty"`
 	OneOf []completionSchemaProperty `json:"oneOf,omitempty"`
 }
 
@@ -95,6 +96,11 @@ func TestCompletionJSONSchemaUsesAdvertisedCompletionContract(t *testing.T) {
 	}
 	for _, field := range []string{"commentary", "risk", "summary"} {
 		assertNullableStringProperty(t, schema.Properties[field])
+	}
+	for _, field := range []string{"commentary", "risk", "summary"} {
+		if len(schema.Properties[field].OneOf) != 0 {
+			t.Fatalf("structured output property %q uses unsupported oneOf", field)
+		}
 	}
 }
 
@@ -360,9 +366,9 @@ func TestDecodeUnstructuredCompletionAcceptsOnlyRawJSONObject(t *testing.T) {
 
 func assertNullableStringProperty(t *testing.T, property completionSchemaProperty) {
 	t.Helper()
-	if len(property.OneOf) != 2 ||
-		property.OneOf[0].Type != "string" ||
-		property.OneOf[1].Type != "null" {
+	if len(property.AnyOf) != 2 ||
+		property.AnyOf[0].Type != "string" ||
+		property.AnyOf[1].Type != "null" {
 		t.Fatalf("property = %#v, want string/null union", property)
 	}
 }

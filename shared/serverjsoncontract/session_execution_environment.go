@@ -57,20 +57,23 @@ func (sessionExecutionModelFieldContractSource) JSONSchema() *invjsonschema.Sche
 	]()
 }
 
-type sessionExecutionEnvironmentContractSource struct {
-	SessionID string                                       `json:"session_id"`
-	Workspace sessionExecutionWorkspaceFieldContractSource `json:"workspace"`
-	Branch    sessionExecutionBranchFieldContractSource    `json:"branch"`
-	Auth      sessionExecutionAuthFieldContractSource      `json:"auth"`
-	Model     sessionExecutionModelFieldContractSource     `json:"model"`
-}
-
-type sessionExecutionEnvironmentResponseContractSource struct {
-	Environment sessionExecutionEnvironmentContractSource `json:"environment"`
-}
-
 type sessionExecutionEnvironmentRequestContractSource struct {
 	SessionID string `json:"session_id"`
+}
+
+type sessionExecutionEnvironmentResponseContractSource struct{}
+
+func (sessionExecutionEnvironmentResponseContractSource) JSONSchema() *invjsonschema.Schema {
+	type environmentSource = serverapi.SessionExecutionEnvironmentWire[
+		sessionExecutionWorkspaceFieldContractSource,
+		sessionExecutionBranchFieldContractSource,
+		sessionExecutionAuthFieldContractSource,
+		sessionExecutionModelFieldContractSource,
+	]
+	return (&invjsonschema.Reflector{
+		Anonymous:      true,
+		DoNotReference: true,
+	}).Reflect(serverapi.SessionExecutionEnvironmentResponseWire[environmentSource]{})
 }
 
 type SessionExecutionEnvironmentRequest struct {
@@ -109,7 +112,10 @@ type SessionExecutionEnvironmentResponse struct {
 }
 
 func PrepareSessionExecutionEnvironmentResponse(preparer jsoncontract.Preparer) (SessionExecutionEnvironmentResponse, error) {
-	schema, err := preparer.Internal("Session execution environment response", sessionExecutionEnvironmentResponseContractSource{})
+	schema, err := preparer.Internal(
+		"Session execution environment response",
+		sessionExecutionEnvironmentResponseContractSource{},
+	)
 	if err != nil {
 		return SessionExecutionEnvironmentResponse{}, err
 	}
@@ -120,27 +126,25 @@ func (c SessionExecutionEnvironmentResponse) Decode(raw []byte) (serverapi.Sessi
 	if err := c.schema.Validate(raw); err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	var source struct {
-		Environment struct {
-			SessionID string `json:"session_id"`
-			Workspace serverapi.SessionExecutionFieldWire[
-				serverapi.SessionExecutionWorkspace,
-				serverapi.SessionExecutionWorkspaceUnavailableReason,
-			] `json:"workspace"`
-			Branch serverapi.SessionExecutionFieldWire[
-				serverapi.SessionExecutionBranch,
-				serverapi.SessionExecutionBranchUnavailableReason,
-			] `json:"branch"`
-			Auth serverapi.SessionExecutionFieldWire[
-				serverapi.SessionExecutionAuth,
-				serverapi.SessionExecutionAuthUnavailableReason,
-			] `json:"auth"`
-			Model serverapi.SessionExecutionFieldWire[
-				serverapi.SessionExecutionModel,
-				serverapi.SessionExecutionModelUnavailableReason,
-			] `json:"model"`
-		} `json:"environment"`
-	}
+	type environmentWire = serverapi.SessionExecutionEnvironmentWire[
+		serverapi.SessionExecutionFieldWire[
+			serverapi.SessionExecutionWorkspace,
+			serverapi.SessionExecutionWorkspaceUnavailableReason,
+		],
+		serverapi.SessionExecutionFieldWire[
+			serverapi.SessionExecutionBranch,
+			serverapi.SessionExecutionBranchUnavailableReason,
+		],
+		serverapi.SessionExecutionFieldWire[
+			serverapi.SessionExecutionAuth,
+			serverapi.SessionExecutionAuthUnavailableReason,
+		],
+		serverapi.SessionExecutionFieldWire[
+			serverapi.SessionExecutionModel,
+			serverapi.SessionExecutionModelUnavailableReason,
+		],
+	]
+	var source serverapi.SessionExecutionEnvironmentResponseWire[environmentWire]
 	if err := json.Unmarshal(raw, &source); err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}

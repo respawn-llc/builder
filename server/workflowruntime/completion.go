@@ -344,6 +344,9 @@ func completionSchemaCustomizer(
 			schema.Required = removeString(schema.Required, "transition")
 		}
 		if profile == completionSchemaStructured {
+			schema.Properties.Set("commentary", completionNullableStringSchema(
+				"Brief explanation of what was completed and why this transition was selected.",
+			))
 			schema.Required = appendUnique(schema.Required, "commentary")
 		}
 		for _, parameter := range schemaParameters(transitions) {
@@ -391,8 +394,12 @@ func completionParameterSchema(
 	} else {
 		description += " Set to null when this parameter does not belong to the selected transition."
 	}
+	return completionNullableStringSchema(description)
+}
+
+func completionNullableStringSchema(description string) *invjsonschema.Schema {
 	return &invjsonschema.Schema{
-		OneOf: []*invjsonschema.Schema{
+		AnyOf: []*invjsonschema.Schema{
 			{Type: "string"},
 			{Type: "null"},
 		},

@@ -467,6 +467,18 @@ type SessionExecutionEnvironment struct {
 	Model     SessionExecutionModelField     `json:"model"`
 }
 
+type SessionExecutionEnvironmentWire[W, B, A, M any] struct {
+	SessionID string `json:"session_id"`
+	Workspace W      `json:"workspace"`
+	Branch    B      `json:"branch"`
+	Auth      A      `json:"auth"`
+	Model     M      `json:"model"`
+}
+
+type SessionExecutionEnvironmentResponseWire[E any] struct {
+	Environment E `json:"environment"`
+}
+
 func (e SessionExecutionEnvironment) Validate() error {
 	if e.SessionID.IsZero() {
 		return errors.New("session execution environment session_id is required")
@@ -487,8 +499,18 @@ func (e SessionExecutionEnvironment) MarshalJSON() ([]byte, error) {
 	if err := e.Validate(); err != nil {
 		return nil, err
 	}
-	type wire SessionExecutionEnvironment
-	return json.Marshal(wire(e))
+	return json.Marshal(SessionExecutionEnvironmentWire[
+		SessionExecutionWorkspaceField,
+		SessionExecutionBranchField,
+		SessionExecutionAuthField,
+		SessionExecutionModelField,
+	]{
+		SessionID: e.SessionID.String(),
+		Workspace: e.Workspace,
+		Branch:    e.Branch,
+		Auth:      e.Auth,
+		Model:     e.Model,
+	})
 }
 
 type SessionExecutionEnvironmentRequest struct {
@@ -502,8 +524,9 @@ func (r SessionExecutionEnvironmentResponse) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	type wire SessionExecutionEnvironmentResponse
-	return json.Marshal(wire(r))
+	return json.Marshal(SessionExecutionEnvironmentResponseWire[SessionExecutionEnvironment]{
+		Environment: r.Environment,
+	})
 }
 
 func (r SessionExecutionEnvironmentRequest) Validate() error {
