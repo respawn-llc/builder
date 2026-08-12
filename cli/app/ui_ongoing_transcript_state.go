@@ -51,6 +51,7 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageContextUsage:
 		m.applyTranscriptContextUsage(message.Payload().(clientui.TranscriptContextUsage))
 	case clientui.TranscriptMessageGoalStatus:
+		m.goalRuntimeMutationSerial = nextNonZeroToken(m.goalRuntimeMutationSerial)
 		if m.goal.open {
 			m.goal.goal = goalCoreFromRuntimeGoal(admission.view.Status.Goal)
 			m.goal.pending = nil

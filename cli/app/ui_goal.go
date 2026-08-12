@@ -212,11 +212,11 @@ func (m *uiModel) goalRuntimeCommand(operation goalRuntimeOperation, objective s
 	client := m.runtimeClient()
 	objective = strings.TrimSpace(objective)
 	sessionID := strings.TrimSpace(m.sessionID)
-	mutationSerial := m.goalRuntimeMutationSerial
 	token, shouldStart := m.beginGoalRuntimeMutation(operation, sessionID, objective)
 	if !shouldStart {
 		return nil
 	}
+	mutationSerial := m.goalRuntimeMutationSerial
 	if client == nil {
 		return func() tea.Msg {
 			return goalRuntimeDoneMsg{token: token, mutationSerial: mutationSerial, operation: operation, objective: objective}
@@ -306,6 +306,9 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
+		if msg.mutation.Pending != nil && msg.mutationSerial != m.goalRuntimeMutationSerial {
+			return followUpCmd
+		}
 		m.goal.goal = goalCoreFromMutationResult(msg.mutation)
 		m.goal.pending = msg.mutation.Pending
 		overlayCmd := tea.Cmd(nil)
