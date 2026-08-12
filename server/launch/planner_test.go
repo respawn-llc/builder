@@ -1059,6 +1059,61 @@ func TestApplyRunPromptOverridesPreservesExplicitThinkingOverSessionSetting(t *t
 	}
 }
 
+func TestApplyRunPromptOverridesRejectsPersistedThinkingUnsupportedByModelOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	loaded.Settings.Model = "gpt-5.6-sol"
+	loaded.Settings.ThinkingLevel = "high"
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking: textutil.Value("ultra"),
+	}); err != nil {
+		t.Fatalf("persist Session Thinking: %v", err)
+	}
+
+	_, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{Model: "gpt-5"},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
+	if err == nil {
+		t.Fatal("ApplyRunPromptOverridesWithStore accepted persisted ultra Thinking for gpt-5")
+	}
+}
+
+func TestApplyRunPromptOverridesValidatesExplicitThinkingInsteadOfPersistedThinking(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	loaded.Settings.Model = "gpt-5.6-sol"
+	loaded.Settings.ThinkingLevel = "high"
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking: textutil.Value("ultra"),
+	}); err != nil {
+		t.Fatalf("persist Session Thinking: %v", err)
+	}
+
+	updated, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{Model: "gpt-5", ThinkingLevel: "high"},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
+	if err != nil {
+		t.Fatalf("ApplyRunPromptOverridesWithStore: %v", err)
+	}
+	if updated.ActiveSettings.ThinkingLevel != "high" {
+		t.Fatalf("thinking level = %q, want explicit high", updated.ActiveSettings.ThinkingLevel)
+	}
+}
+
 func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)

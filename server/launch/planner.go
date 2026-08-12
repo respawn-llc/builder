@@ -931,15 +931,15 @@ func applySessionChatSettingsWithRunOverrides(
 	active config.Settings,
 	overrides serverapi.RunPromptOverrides,
 ) (config.Settings, session.ChatSettings, error) {
-	explicitThinking := active.ThinkingLevel
-	active, settings, err := applySessionChatSettings(meta, active)
+	settings, err := ResolveSessionChatSettings(meta, active)
 	if err != nil {
 		return config.Settings{}, session.ChatSettings{}, err
 	}
+	var thinkingOverride *string
 	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
-		active.ThinkingLevel = explicitThinking
+		thinkingOverride = textutil.Value(active.ThinkingLevel)
 	}
-	return active, settings, nil
+	return applyResolvedSessionChatSettings(active, settings, thinkingOverride)
 }
 
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

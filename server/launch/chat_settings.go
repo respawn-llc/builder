@@ -157,8 +157,27 @@ func applySessionChatSettings(meta session.Meta, active config.Settings) (config
 	if err != nil {
 		return config.Settings{}, session.ChatSettings{}, err
 	}
+	return applyResolvedSessionChatSettings(active, settings, nil)
+}
+
+func applyResolvedSessionChatSettings(
+	active config.Settings,
+	settings session.ChatSettings,
+	thinkingOverride *string,
+) (config.Settings, session.ChatSettings, error) {
+	thinking := settings.Thinking
+	if thinkingOverride != nil {
+		thinking = *thinkingOverride
+	}
+	if !slices.Contains(supportedChatThinkingValues(active.Model, thinking), thinking) {
+		return config.Settings{}, session.ChatSettings{}, fmt.Errorf(
+			"Session Chat Thinking %q is unsupported by model %q",
+			thinking,
+			active.Model,
+		)
+	}
 	active.Reviewer.Frequency = settings.Supervisor
-	active.ThinkingLevel = settings.Thinking
+	active.ThinkingLevel = thinking
 	active.PriorityRequestMode = settings.Fast
 	return active, settings, nil
 }

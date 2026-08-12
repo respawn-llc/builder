@@ -527,9 +527,18 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.EnsureDurable() }); err != nil {
+	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+		if err := store.EnsureDurable(); err != nil {
+			return err
+		}
+		_, err := store.MutateChatSettings(session.ChatSettingsMutation{
+			AutoCompaction: textutil.Value(true),
+		})
+		return err
+	}); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
+	plan.AutoCompactionEnabled = true
 	if input.ContextMode == workflow.ContextModeCompactAndContinueSession && !sessionPrepared {
 		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 			return store.ResetLockedContractForCompactionBoundary()
