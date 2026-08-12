@@ -210,10 +210,12 @@ func resolveRetainedTargetTransitionContext(
 		return transitionContextResolution{}, err
 	}
 	targetState := workflow.UnavailableRetainedTarget()
+	targetHasProvenance := false
 	var selected *TaskSessionAssociation
 	association, err := currentTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, targetReference)
 	switch {
 	case err == nil:
+		targetHasProvenance = true
 		targetState, err = workflow.NewCurrentRetainedTarget(association.SessionID, association.SourceSessionID)
 		if err != nil {
 			return transitionContextResolution{}, err
@@ -227,6 +229,7 @@ func resolveRetainedTargetTransitionContext(
 			return transitionContextResolution{}, err
 		}
 		if historical {
+			targetHasProvenance = true
 			targetState = workflow.HistoricalRetainedTarget()
 		}
 	}
@@ -262,7 +265,7 @@ func resolveRetainedTargetTransitionContext(
 			}
 		}
 	}
-	if unboundManualMoveSourceWithoutHistory {
+	if unboundManualMoveSourceWithoutHistory && targetHasProvenance {
 		return transitionContextResolution{
 			TargetSession: workflow.CreateTargetSessionIntent(),
 			ActiveSource:  workflow.DeferredSelfMaterializedContinuationSource(),

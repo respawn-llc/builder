@@ -1011,6 +1011,70 @@ WHERE task_id = ?
 	}
 }
 
+func TestManualMoveStrictRetainedTargetWithoutHistoryFailsForUnboundSource(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	review := nodeByKey(t, definition, "review")
+	audit := nodeByKey(t, definition, "audit")
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
+		appendManualMoveRetainedReviewEdge(
+			req,
+			workflowID,
+			audit,
+			review,
+			"unbound-strict-no-target-history",
+			workflow.ContextSourcePreviousTarget,
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	replaceSerialCurrentNodeBindingFixture(
+		t,
+		ctx,
+		store,
+		started,
+		workflow.NodeIDOf(audit),
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+	)
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET entered_by_edge_id = ?
+WHERE task_id = ?
+  AND transition_branch_key IS NULL`,
+		testGraphEntityBlob(t, string(edgeByKey(t, definition, "audit").ID)),
+		string(task.ID),
+	); err != nil {
+		t.Fatalf("set unbound Audit entering Edge: %v", err)
+	}
+
+	transitionKey := workflow.TransitionID("rework")
+	_, err = store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"audit": {"summary": "audit"},
+		},
+	})
+	var unavailable workflow.RetainedTargetUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("PrepareManualMove error = %T %v, want RetainedTargetUnavailableError", err, err)
+	}
+	currentNodes, listErr := store.ListCurrentNodes(ctx, task.ID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Reference.NodeID != workflow.NodeIDOf(audit) {
+		t.Fatalf("Current Nodes after strict failure = %+v, want unchanged Audit", currentNodes)
+	}
+}
+
 func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWithoutInvariant(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
