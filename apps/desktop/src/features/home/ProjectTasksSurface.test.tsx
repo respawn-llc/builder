@@ -1,9 +1,16 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  QueryClient,
+  QueryClientProvider,
+} from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
 import { canonicalBoardFilter, type ProjectTaskGroupCounts, type TaskListItem } from "@/api";
-import { queryKeys } from "@/app-facade";
+import {
+  queryKeys,
+  type SidebarDestination,
+  type SidebarRootController,
+} from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
@@ -32,7 +39,8 @@ const fixture = vi.hoisted<{
     refetch: ReturnType<typeof vi.fn>;
   };
   counts: ProjectTaskGroupCounts["counts"];
-  open: ReturnType<typeof vi.fn>;
+  invalidations: unknown[];
+  open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
   assignmentRequests: number;
 }>(() => ({
@@ -61,7 +69,11 @@ const fixture = vi.hoisted<{
     refetch: vi.fn(),
   },
   counts: { active: 2, backlog: 1, done: 1 },
-  open: vi.fn(),
+  invalidations: [],
+  open: vi.fn<SidebarRootController["open"]>(() => ({
+    lifecycle: Promise.resolve("closed"),
+    release: vi.fn(),
+  })),
   labelCatalogRequests: 0,
   assignmentRequests: 0,
 }));
@@ -137,6 +149,7 @@ describe("ProjectTasksSurface", () => {
     fixture.counts = { active: 2, backlog: 1, done: 1 };
     fixture.activeDestination = null;
     fixture.open.mockReset();
+    fixture.invalidations = [];
     fixture.labelCatalogRequests = 0;
     fixture.assignmentRequests = 0;
     mockedActiveTasks = undefined;
@@ -172,12 +185,15 @@ describe("ProjectTasksSurface", () => {
     expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
     expect(screen.getByText("No tasks yet")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "New Task" }));
-    expect(fixture.open).toHaveBeenCalledWith({
+    const destination = openedDestination();
+    expect(destination).toMatchObject({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
       mode: "shift",
       projectID: "project-1",
     });
+    if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
+    expect(destination.onCreated).toEqual(expect.any(Function));
 
     fixture.counts = { active: 2, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface()));
@@ -202,11 +218,14 @@ describe("ProjectTasksSurface", () => {
       throw new Error("Expected the no-Task empty state Link Workflow action.");
     }
     fireEvent.click(emptyStateLinkAction);
-    expect(fixture.open).toHaveBeenCalledWith({
+    const destination = openedDestination();
+    expect(destination).toMatchObject({
       kind: "linkWorkflow",
       mode: "shift",
       projectID: "project-1",
     });
+    if (destination.kind !== "linkWorkflow") throw new Error("Expected Link Workflow destination.");
+    expect(destination.onCompleted).toEqual(expect.any(Function));
     expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
   });
 
@@ -225,12 +244,88 @@ describe("ProjectTasksSurface", () => {
 
     renderSurface();
     fireEvent.click(screen.getByRole("button", { name: "New Task" }));
-    expect(fixture.open).toHaveBeenCalledWith({
+    const destination = openedDestination();
+    expect(destination).toMatchObject({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
       mode: "shift",
       projectID: "project-1",
     });
+    if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
+    expect(destination.onCreated).toEqual(expect.any(Function));
+  });
+
+  it("keeps Tasks-origin Link Workflow on Tasks and refreshes its authoritative projections", async () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    renderSurface();
+    const linkActions = screen.getAllByRole("button", { name: "Link workflow" });
+    const linkAction = linkActions.at(-1);
+    if (linkAction === undefined) throw new Error("Expected a Link Workflow action.");
+    fireEvent.click(linkAction);
+    const destination = openedDestination();
+    if (destination.kind !== "linkWorkflow") throw new Error("Expected Link Workflow destination.");
+
+    await act(async () => {
+      await destination.onCompleted({ kind: "linked", workflowID: "workflow-3" });
+    });
+
+    expect(fixture.invalidations).toEqual(
+      expect.arrayContaining([
+        {
+          queryKey: queryKeys.projectBoardsRoot("project-1"),
+          refetchType: "active",
+        },
+        {
+          queryKey: queryKeys.projectTaskListsRoot("project-1"),
+          refetchType: "active",
+        },
+      ]),
+    );
+  });
+
+  it("reveals authoritative Backlog after New Task success without opening Task Detail", async () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    const memory = createProjectTasksViewMemory();
+    memory.setAnchors({ active: 0, backlog: 80, done: 0 });
+    renderSurface(memory);
+    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    const destination = openedDestination();
+    if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
+    fixture.open.mockClear();
+
+    await act(async () => {
+      await destination.onCreated?.("task-created");
+    });
+
+    expect(memory.read().anchors.backlog).toBe(0);
+    expect(memory.read().disclosure.backlog).toBe(true);
+    expect(fixture.invalidations).toContainEqual({
+      queryKey: queryKeys.projectTaskListsRoot("project-1"),
+      refetchType: "active",
+    });
+    expect(fixture.open).not.toHaveBeenCalled();
+  });
+
+  it("preserves collapsed Backlog after New Task success and exposes no persistent New Task action", async () => {
+    fixture.counts = { active: 0, backlog: 0, done: 0 };
+    const memory = createProjectTasksViewMemory();
+    memory.setDisclosure({ active: true, backlog: false, done: false });
+    memory.setAnchors({ active: 0, backlog: 80, done: 0 });
+    const view = renderSurface(memory);
+    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    const destination = openedDestination();
+    if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
+
+    await act(async () => {
+      await destination.onCreated?.("task-created");
+    });
+
+    expect(memory.read().disclosure.backlog).toBe(false);
+    expect(memory.read().anchors.backlog).toBe(80);
+
+    fixture.counts = { active: 1, backlog: 0, done: 0 };
+    view.rerender(withQueryClient(surface(memory)));
+    expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
   });
 
   it("retains disclosure in workspace view memory", () => {
@@ -377,11 +472,20 @@ function withQueryClient(children: React.ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters, options) => {
+    fixture.invalidations.push(filters);
+  });
   queryClient.setQueryData(
     queryKeys.board("project-1", undefined, canonicalBoardFilter({ kind: "none" })),
     fixture.board.data,
   );
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+}
+
+function openedDestination(): SidebarDestination {
+  const destination = fixture.open.mock.lastCall?.[0];
+  if (destination === undefined) throw new Error("Expected a Sidebar destination to open.");
+  return destination;
 }
 
 function countsQuery(counts: ProjectTaskGroupCounts["counts"]) {

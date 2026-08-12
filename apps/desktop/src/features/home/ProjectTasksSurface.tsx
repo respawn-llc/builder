@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -45,6 +45,7 @@ export function ProjectTasksSurface({
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
+  const queryClient = useQueryClient();
   const { open } = useOwnedSidebarRoots();
   const { activeDestination } = useSidebarShell();
   const initialMemory = viewMemory.read();
@@ -89,13 +90,41 @@ export function ProjectTasksSurface({
   });
   const workflows = query.data?.workflows ?? [];
   const openLinkWorkflow = () => {
-    open({ kind: "linkWorkflow", mode: sidebarMode, projectID });
+    open({
+      kind: "linkWorkflow",
+      mode: sidebarMode,
+      onCompleted: async () => {
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.projectBoardsRoot(projectID),
+            refetchType: "active",
+          }),
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.projectTaskListsRoot(projectID),
+            refetchType: "active",
+          }),
+        ]);
+      },
+      projectID,
+    });
   };
   const openNewTask = () => {
     open({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
       mode: sidebarMode,
+      onCreated: async () => {
+        const memory = viewMemory.read();
+        if (memory.disclosure.backlog) {
+          const nextAnchors = { ...memory.anchors, backlog: 0 };
+          viewMemory.setAnchors(nextAnchors);
+          setAnchors(nextAnchors);
+        }
+        await queryClient.invalidateQueries({
+          queryKey: queryKeys.projectTaskListsRoot(projectID),
+          refetchType: "active",
+        });
+      },
       projectID,
     });
   };

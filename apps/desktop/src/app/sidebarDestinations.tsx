@@ -160,7 +160,9 @@ function NewTaskDestination({
     onPendingChange: setPending,
     onProjectMissing: navigator.back,
     onSubmitted: (taskID: string) => {
-      if (destination.pendingRelationship === undefined) navigator.close();
+      if (destination.pendingRelationship === undefined) {
+        if (navigator.close() === "accepted") void destination.onCreated?.(taskID);
+      }
       else
         navigator.replace({
           kind: "taskDetail",
@@ -211,21 +213,16 @@ function LinkWorkflowDestinationView({
       <LinkWorkflowCreateHeaderButton destination={destination} navigator={navigator} />
     ),
   );
-  const navigation = useAppNavigation();
-  const follow = (action: () => Promise<void>) => {
-    if (navigator.close() === "accepted") void action();
+  const complete = (completion: Parameters<typeof destination.onCompleted>[0]) => {
+    if (navigator.close() === "accepted") void destination.onCompleted(completion);
   };
   return (
     <LinkWorkflowSidebar
       onCreated={(workflowID) => {
-        follow(async () => {
-          await navigation.openWorkflowEditor({ projectID: destination.projectID, workflowID });
-        });
+        complete({ kind: "created", workflowID });
       }}
       onLinked={(workflowID) => {
-        follow(async () => {
-          await navigation.openProject(destination.projectID, workflowID);
-        });
+        complete({ kind: "linked", workflowID });
       }}
       creating={destination.creating === true}
       navigator={navigator}

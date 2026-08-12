@@ -22,11 +22,16 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
 
+export type LinkWorkflowCompletion =
+  | Readonly<{ kind: "created"; workflowID: string }>
+  | Readonly<{ kind: "linked"; workflowID: string }>;
+
 export type SidebarDestination =
   | (Readonly<{
       kind: "newTask";
       mode?: SidebarMode;
       initialSourceWorkspaceID?: string | undefined;
+      onCreated?: ((taskID: string) => void | Promise<void>) | undefined;
       projectID: string;
     }> &
       (
@@ -63,6 +68,7 @@ export type SidebarDestination =
       kind: "linkWorkflow";
       mode?: SidebarMode;
       creating?: boolean | undefined;
+      onCompleted: (completion: LinkWorkflowCompletion) => void | Promise<void>;
       projectID: string;
       selectedWorkflowID?: string | undefined;
     }>

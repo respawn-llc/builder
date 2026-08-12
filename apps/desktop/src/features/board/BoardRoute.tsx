@@ -522,6 +522,16 @@ function BoardContent({
     open({
       kind: "linkWorkflow",
       mode: "overlay",
+      onCompleted: async (completion) => {
+        if (completion.kind === "created") {
+          await navigation.openWorkflowEditor({
+            projectID: board.projectID,
+            workflowID: completion.workflowID,
+          });
+          return;
+        }
+        await navigation.openProject(board.projectID, completion.workflowID);
+      },
       projectID: board.projectID,
       selectedWorkflowID: board.selectedWorkflow.id,
     });

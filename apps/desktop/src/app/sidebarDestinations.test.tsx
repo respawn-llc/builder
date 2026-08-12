@@ -193,9 +193,11 @@ describe("Sidebar destination completion ownership", () => {
     expect(pageNavigator.close).toHaveBeenCalledOnce();
   });
   it("passes omitted Workflow only through a Project-scoped New Task destination", () => {
+    const onCreated = vi.fn();
     const pageNavigator = mountDestination({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
+      onCreated,
       projectID: "project-1",
     });
 
@@ -209,9 +211,14 @@ describe("Sidebar destination completion ownership", () => {
     expect(fixture.newTaskFormProps.mock.lastCall?.[0]).not.toHaveProperty("pendingRelationship");
     fireEvent.click(screen.getByTestId("new-task-success"));
     expect(pageNavigator.close).toHaveBeenCalledOnce();
+    expect(onCreated).toHaveBeenCalledWith("task-created");
   });
   it("publishes Link Workflow creation through scoped replace", () => {
-    const destination = { kind: "linkWorkflow", projectID: "project-1" } as const;
+    const destination = {
+      kind: "linkWorkflow",
+      onCompleted: vi.fn(),
+      projectID: "project-1",
+    } as const;
     const navigator = mountDestination(destination);
     const action = headerAction.mock.lastCall?.[0];
     if (!isValidElement(action)) throw new Error("Expected the Link Workflow header action.");
@@ -229,13 +236,20 @@ describe("Sidebar destination completion ownership", () => {
       destination: {
         kind: "linkWorkflow",
         creating: true,
+        onCompleted: async () => {
+          await fixture.openWorkflowEditor();
+        },
         projectID: "project-1",
       } satisfies SidebarDestination,
       trigger: "workflow-created",
       follow: () => fixture.openWorkflowEditor,
     },
     {
-      destination: { kind: "linkWorkflow", projectID: "project-1" } satisfies SidebarDestination,
+      destination: {
+        kind: "linkWorkflow",
+        onCompleted: fixture.openProject,
+        projectID: "project-1",
+      } satisfies SidebarDestination,
       trigger: "workflow-linked",
       follow: () => fixture.openProject,
     },
@@ -252,6 +266,24 @@ describe("Sidebar destination completion ownership", () => {
     fireEvent.click(staleTrigger);
     expect(stale.close).toHaveBeenCalledOnce();
     expect(follow()).toHaveBeenCalledOnce();
+  });
+
+  it("runs caller-owned Link Workflow completion without global navigation", () => {
+    const onCompleted = vi.fn();
+    const navigator = mountDestination({
+      kind: "linkWorkflow",
+      onCompleted,
+      projectID: "project-1",
+    });
+
+    fireEvent.click(screen.getByTestId("workflow-linked"));
+
+    expect(navigator.close).toHaveBeenCalledOnce();
+    expect(onCompleted).toHaveBeenCalledWith({
+      kind: "linked",
+      workflowID: "workflow-linked",
+    });
+    expect(fixture.openProject).not.toHaveBeenCalled();
   });
 
   it("closes Workflow Inspector through its scoped navigator when the selected node is missing", () => {

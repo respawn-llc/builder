@@ -1,11 +1,16 @@
 import { useTranslation } from "react-i18next";
 
-import { useConnectionSnapshot, useOwnedSidebarRoots } from "@/app-facade";
+import {
+  useAppNavigation,
+  useConnectionSnapshot,
+  useOwnedSidebarRoots,
+} from "@/app-facade";
 import { Button, EmptyState } from "@/ui";
 
 export function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string }>) {
   const { t } = useTranslation();
   const { open } = useOwnedSidebarRoots();
+  const navigation = useAppNavigation();
   const connection = useConnectionSnapshot();
   const actionsDisabled = connection.phase !== "connected";
   return (
@@ -15,7 +20,21 @@ export function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string
           <Button
             disabled={actionsDisabled}
             onClick={() => {
-              open({ kind: "linkWorkflow", mode: "overlay", projectID });
+              open({
+                kind: "linkWorkflow",
+                mode: "overlay",
+                onCompleted: async (completion) => {
+                  if (completion.kind === "created") {
+                    await navigation.openWorkflowEditor({
+                      projectID,
+                      workflowID: completion.workflowID,
+                    });
+                    return;
+                  }
+                  await navigation.openProject(projectID, completion.workflowID);
+                },
+                projectID,
+              });
             }}
           >
             {t("workflowLibrary.linkWorkflow")}
