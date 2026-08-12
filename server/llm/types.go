@@ -702,10 +702,11 @@ type Response struct {
 }
 
 type CompactionRequest struct {
-	Model        string
-	Instructions string
-	SessionID    string
-	InputItems   []ResponseItem
+	Model          string
+	Instructions   string
+	PromptCacheKey string
+	SessionID      string
+	InputItems     []ResponseItem
 }
 
 type CompactionResponse struct {

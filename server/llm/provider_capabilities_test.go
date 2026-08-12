@@ -40,6 +40,21 @@ func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	}
 }
 
+func TestRemoteCompactionProtocolsAreProviderOwned(t *testing.T) {
+	openAI, ok := lookupProviderVariantContract("openai")
+	if !ok || openAI.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
+		t.Fatalf("openai compaction protocol = %v, want Responses-trigger V2", openAI.Variant.RemoteCompactionProtocol)
+	}
+	codex, ok := lookupProviderVariantContract("chatgpt-codex")
+	if !ok || codex.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
+		t.Fatalf("chatgpt-codex compaction protocol = %v, want Responses-trigger V2", codex.Variant.RemoteCompactionProtocol)
+	}
+	compatible, ok := lookupProviderVariantContract("openai-compatible")
+	if !ok || compatible.Variant.RemoteCompactionProtocol != remoteCompactionUnsupported {
+		t.Fatalf("openai-compatible compaction protocol = %v, want unsupported", compatible.Variant.RemoteCompactionProtocol)
+	}
+}
+
 func TestInferProviderCapabilities_UnknownProviderFailsExplicitly(t *testing.T) {
 	_, err := InferProviderCapabilities("custom-provider")
 	if !errors.Is(err, ErrUnsupportedProvider) {

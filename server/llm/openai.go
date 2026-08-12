@@ -65,10 +65,11 @@ type OpenAIResponse struct {
 }
 
 type OpenAICompactionRequest struct {
-	Model        string
-	Instructions string
-	SessionID    string
-	InputItems   []ResponseItem
+	Model          string
+	Instructions   string
+	PromptCacheKey string
+	SessionID      string
+	InputItems     []ResponseItem
 }
 
 type OpenAICompactionResponse struct {
@@ -238,10 +239,11 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	}
 
 	providerReq := OpenAICompactionRequest{
-		Model:        request.Model,
-		Instructions: request.Instructions,
-		SessionID:    request.SessionID,
-		InputItems:   CloneResponseItems(request.InputItems),
+		Model:          request.Model,
+		Instructions:   request.Instructions,
+		PromptCacheKey: request.PromptCacheKey,
+		SessionID:      request.SessionID,
+		InputItems:     CloneResponseItems(request.InputItems),
 	}
 	providerResp, err := c.transport.Compact(ctx, providerReq)
 	if err != nil {

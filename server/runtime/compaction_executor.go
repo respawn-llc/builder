@@ -36,6 +36,9 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		SessionID:    e.store.Meta().SessionID,
 		InputItems:   requestItems,
 	}
+	if e.supportsPromptCacheKey(ctx) {
+		baseRequest.PromptCacheKey = e.conversationPromptCacheKey(e.SessionID())
+	}
 
 	resp, _, repairStats, err := e.compactWithContextRepairRetry(ctx, stepID, compactor, baseRequest)
 	if err != nil {

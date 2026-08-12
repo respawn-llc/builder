@@ -71,8 +71,12 @@ func (operation RequiredOperation) Validate() error {
 	if operation.DeveloperMessageCount != nil && *operation.DeveloperMessageCount < 0 {
 		return errors.New("developer message count must be nonnegative")
 	}
-	if operation.Route != RouteResponses && (operation.Probe != nil || operation.DeveloperMessageCount != nil || operation.Output != nil || operation.ResponsePhase != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
-		return errors.New("only responses operations may declare input shape, output, response phase, session cache key, stream, or hold outcome")
+	inputBearingRoute := operation.Route == RouteResponses || operation.Route == RouteCompact
+	if !inputBearingRoute && (operation.Probe != nil || operation.DeveloperMessageCount != nil || operation.SessionCacheKey || operation.Outcome == OutcomeStream || operation.Outcome == OutcomeHoldSSE) {
+		return errors.New("only responses and compaction operations may declare input shape, session cache key, stream, or hold outcome")
+	}
+	if operation.Route != RouteResponses && (operation.Output != nil || operation.ResponsePhase != nil) {
+		return errors.New("only responses operations may declare assistant output or response phase")
 	}
 	emitsAssistantMessage := operation.Route == RouteResponses && (operation.Output != nil || operation.Outcome == OutcomeStream)
 	if emitsAssistantMessage {
