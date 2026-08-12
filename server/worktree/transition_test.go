@@ -155,8 +155,10 @@ func TestScheduledEnterRebindsActiveRuntimeAtNextAgentStepBoundary(t *testing.T)
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand},
+		Settings:              settings,
+		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
+		QuestionsEnabled:      textutil.Value(runtime.DefaultQuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(runtime.DefaultAutoCompactionEnabled),
 		FilesystemContext: func() tools.FilesystemContext {
 			filesystemContext, contextErr := runtimewire.NewFilesystemContext(
 				env.workspaceRoot,
