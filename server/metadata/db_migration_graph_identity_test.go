@@ -53,6 +53,13 @@ ORDER BY json_each.key`)
 
 	assertGraphMigrationVersion(t, provider, 80)
 	assertGraphMigrationStorage(t, db)
+	var workflowVersion int64
+	if err := db.QueryRow(`SELECT version FROM workflows WHERE id = ?`, graphMigrationWorkflowBlob(t)).Scan(&workflowVersion); err != nil {
+		t.Fatalf("read migrated Workflow Version: %v", err)
+	}
+	if workflowVersion != 2 {
+		t.Fatalf("migrated Workflow Version = %d, want 2 after legacy identity remap", workflowVersion)
+	}
 	if got := graphMigrationOrder(t, db); !equalGraphMigrationStrings(got, beforeOrder) {
 		t.Fatalf("graph order after migration = %v, want %v", got, beforeOrder)
 	}

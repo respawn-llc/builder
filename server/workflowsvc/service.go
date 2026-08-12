@@ -571,28 +571,23 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
-	}
-	if currentVersion != req.ExpectedVersion {
-		resp := workflowGraphSavePreviewResponse(
-			workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion),
-			map[serverapi.WorkflowValidationMode]serverapi.WorkflowValidateResponse{},
-		)
-		if err := resp.Validate(); err != nil {
-			return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
+	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
 		}
-		return resp, nil
-	}
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
-	}
-	storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
-	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
-	}
-	result, err := s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+		if currentVersion != req.ExpectedVersion {
+			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+		}
+		if err := req.Validate(); err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		return s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+	})
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
 	}

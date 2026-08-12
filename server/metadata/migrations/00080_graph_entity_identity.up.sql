@@ -1057,6 +1057,33 @@ SELECT
 FROM task_records task
 JOIN status_inputs input ON input.task_id = task.id;
 
+UPDATE workflows
+SET version = version + 1
+WHERE id IN (
+    SELECT DISTINCT groups.workflow_id
+    FROM workflow_node_groups groups
+    JOIN migration_graph_node_group_ids map ON map.new_id = groups.id
+    WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
+    UNION
+    SELECT DISTINCT nodes.workflow_id
+    FROM workflow_nodes nodes
+    JOIN migration_graph_node_ids map ON map.new_id = nodes.id
+    WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
+    UNION
+    SELECT DISTINCT nodes.workflow_id
+    FROM workflow_transition_groups groups
+    JOIN workflow_nodes nodes ON nodes.id = groups.source_node_id
+    JOIN migration_graph_transition_ids map ON map.new_id = groups.id
+    WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
+    UNION
+    SELECT DISTINCT nodes.workflow_id
+    FROM workflow_edges edges
+    JOIN workflow_transition_groups groups ON groups.id = edges.transition_group_id
+    JOIN workflow_nodes nodes ON nodes.id = groups.source_node_id
+    JOIN migration_graph_edge_ids map ON map.new_id = edges.id
+    WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
+);
+
 INSERT INTO migration_graph_identity_postcondition (value)
 SELECT 1
 WHERE EXISTS (
