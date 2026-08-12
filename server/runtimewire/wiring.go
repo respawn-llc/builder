@@ -114,6 +114,7 @@ func NewRuntimeWiringWithBackground(
 		Background:               background,
 		ShellPostprocessor:       shellPostprocessor,
 		GlobalConfigDir:          opts.GlobalConfigDir,
+		Debug:                    active.Debug,
 		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {
 			if eng == nil {

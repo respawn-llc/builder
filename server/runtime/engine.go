@@ -15,6 +15,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -153,11 +154,13 @@ type Engine struct {
 	lifecycleClosed bool
 	closed          atomic.Bool
 
-	store    *session.Store
-	eventLog session.MaterializedEventLog
-	llm      llm.Client
-	registry *tools.Registry
-	cfg      Config
+	store                       *session.Store
+	eventLog                    session.MaterializedEventLog
+	llm                         llm.Client
+	registry                    *tools.Registry
+	cfg                         Config
+	reviewerSuggestionsContract jsoncontract.Structured
+	workflowPromptContract      *workflowruntime.CompletionContract
 	// controlMutationMu serializes multi-step control mutations that need to
 	// persist transcript feedback before applying in-memory runtime state.
 	controlMutationMu sync.Mutex
@@ -266,32 +269,55 @@ func New(
 		}
 	}
 	if cfg.CurrentNodeExecution != nil {
+		cloned := *cfg.CurrentNodeExecution
+		prepared, err := cloned.Contract.Prepare()
+		if err != nil {
+			return nil, fmt.Errorf("prepare runtime current node completion contract: %w", err)
+		}
+		cloned.Contract = prepared
+		cfg.CurrentNodeExecution = &cloned
 		if err := validateCurrentNodeExecutionConfig(cfg.CurrentNodeExecution); err != nil {
 			return nil, fmt.Errorf("runtime current node execution: %w", err)
 		}
 	}
+	var workflowPromptContract *workflowruntime.CompletionContract
+	if cfg.WorkflowPrompt != nil {
+		prepared, err := newWorkflowPromptCompletionContract(cfg.WorkflowPrompt)
+		if err != nil {
+			return nil, fmt.Errorf("prepare runtime workflow prompt completion contract: %w", err)
+		}
+		workflowPromptContract = &prepared
+	}
 	if !cfg.ModelCapabilities.SupportsReasoningEffort && !cfg.ModelCapabilities.SupportsVisionInputs {
 		cfg.ModelCapabilities = llm.LockedModelCapabilitiesForModel(cfg.Model)
 	}
+	reviewerSuggestionsContract, err := prepareReviewerSuggestionsContract(
+		jsoncontract.NewPreparer(cfg.Debug),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare reviewer suggestions contract: %w", err)
+	}
 	eng := &Engine{
-		store:                store,
-		eventLog:             eventLog,
-		llm:                  client,
-		registry:             registry,
-		cfg:                  cfg,
-		diagnostics:          newDiagnosticDedupeStore(),
-		toolCallStarts:       newPendingToolCallStartStore(),
-		usageState:           newUsageTrackingState(),
-		goalLoop:             newGoalLoopState(),
-		compactionState:      newCompactionRuntimeState(),
-		handoffState:         newHandoffRuntimeState(),
-		phaseState:           newPhaseProtocolState(),
-		reviewerState:        newReviewerRuntimeState(cfg.Reviewer.Client),
-		transcriptState:      newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
-		lockedState:          newLockedContractState(),
-		modelRequestsState:   newModelRequestRuntimeState(),
-		currentNodeExecution: newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
-		compactionPlanner:    newCompactionPlanner(),
+		store:                       store,
+		eventLog:                    eventLog,
+		llm:                         client,
+		registry:                    registry,
+		cfg:                         cfg,
+		reviewerSuggestionsContract: reviewerSuggestionsContract,
+		workflowPromptContract:      workflowPromptContract,
+		diagnostics:                 newDiagnosticDedupeStore(),
+		toolCallStarts:              newPendingToolCallStartStore(),
+		usageState:                  newUsageTrackingState(),
+		goalLoop:                    newGoalLoopState(),
+		compactionState:             newCompactionRuntimeState(),
+		handoffState:                newHandoffRuntimeState(),
+		phaseState:                  newPhaseProtocolState(),
+		reviewerState:               newReviewerRuntimeState(cfg.Reviewer.Client),
+		transcriptState:             newTranscriptRuntimeState(transcriptWorkingDir(cfg.TranscriptWorkingDir, store.Meta().WorkspaceRoot)),
+		lockedState:                 newLockedContractState(),
+		modelRequestsState:          newModelRequestRuntimeState(),
+		currentNodeExecution:        newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
+		compactionPlanner:           newCompactionPlanner(),
 	}
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {

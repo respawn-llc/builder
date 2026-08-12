@@ -15,6 +15,7 @@ import (
 
 	"core/server/tools"
 	"core/shared/imagefileio"
+	"core/shared/toolspec"
 )
 
 const maxFileSizeBytes int64 = 800 << 10
@@ -71,8 +72,12 @@ func WithOutsideWorkspaceAuditLogger(logger OutsideWorkspaceAuditLogger) Option 
 }
 
 type input struct {
-	Path string `json:"path"`
-	Raw  bool   `json:"raw,omitempty"`
+	Path string `json:"path" jsonschema_description:"Local filesystem path to a PNG, JPEG, still GIF, or PDF file. Relative paths resolve from the workspace root."`
+	Raw  bool   `json:"raw,omitempty" jsonschema_description:"Whether to disable image optimization, keep on unless facing issues. Defaults to false."`
+}
+
+func StaticContractSource() tools.StaticContractSource {
+	return tools.StaticContractSource{ID: toolspec.ToolViewImage, Input: input{}}
 }
 
 type contentItem struct {

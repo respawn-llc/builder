@@ -94,7 +94,7 @@ function WorkflowNodeContextMenuShell({
         </Tooltip>
       )}
       <ContextMenuContent level={3}>
-        {workflowBranchNodeKind(data.kind) && data.groupID.length === 0 ? (
+        {workflowBranchNodeKind(data.kind) && data.groupID === null ? (
           <ContextMenuItem
             onSelect={() => {
               onCreateNodeGroup?.(data.entityID);
@@ -103,7 +103,7 @@ function WorkflowNodeContextMenuShell({
             {t("workflowEditor.createNodeGroup")}
           </ContextMenuItem>
         ) : null}
-        {workflowBranchNodeKind(data.kind) && data.groupID.length > 0 ? (
+        {workflowBranchNodeKind(data.kind) && data.groupID !== null ? (
           <ContextMenuItem
             onSelect={() => {
               onRemoveNodeFromGroup?.(data.entityID);

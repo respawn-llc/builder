@@ -25,7 +25,7 @@ func TestCommittedLocalEntrySteeringSerializesPersistProjectEmitOrder(t *testing
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -88,7 +88,7 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -169,7 +169,7 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -248,7 +248,7 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 	replacementEventEntered := make(chan struct{})
 	releaseReplacementEvent := make(chan struct{})
 	var replacementOnce sync.Once
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.Kind == EventLocalEntryAdded && evt.LocalEntry != nil && evt.LocalEntry.Text == "summary" {
@@ -300,7 +300,7 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 16)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -327,7 +327,7 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -370,7 +370,7 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 8)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -435,7 +435,7 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 		},
 	}}
 	events := make([]Event, 0, 16)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
@@ -490,7 +490,7 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 		Usage: llm.Usage{WindowTokens: 200000},
 	}}}
 	events := make([]Event, 0, 8)
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{
@@ -560,7 +560,7 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 		t.Fatalf("append message after provider-empty assistant: %v", err)
 	}
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	var hydration TranscriptHydrationSnapshot
 	if err := eng.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -587,7 +587,7 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	events := make([]Event, 0, 4)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})

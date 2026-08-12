@@ -286,6 +286,7 @@
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
 - Normal assistant final answers are invalid in `tool` and `shell_command` modes. Kent explains the invalid completion and continues until the agent completes correctly, asks a Question, is interrupted, reaches the invalid-attempt limit, or encounters an error.
 - A completion payload contains only optional `transition`, optional `commentary`, and possible Transition Parameters as top-level properties. It never exposes `next_node`.
+- If a completion payload reaches Kent with another top-level property, Kent ignores that property. A misspelled required Transition Parameter still leaves the required Parameter absent.
 - Transition Parameter outputs are strings. Kent converts non-string JSON values to strings before binding them. A later Node never receives a structured Parameter value.
 - Possible Transition Parameters are optional until Kent knows which Transition the agent selected. The selected Transition then determines which Parameters are required.
 - Each required Transition Parameter must become a non-empty string after leading and trailing whitespace is removed.
@@ -315,7 +316,11 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
-- Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
+- Every Agent Current Node entered through a Node Transition must receive exactly one target assignment in its target Session before its Exact Execution Scope begins.
+- An automatic successor that receives its target assignment must remain eligible to start exactly once even when Kent later reports a diagnostic for that assignment.
+- An automatic successor that does not receive its target assignment must become interrupted without interrupting or delaying a sibling successor that can start.
+- Caller cancellation while Kent is delivering an automatic successor's target assignment must not strand that successor. The successor must later either become eligible to start with that assignment or become interrupted with an actionable reason.
+- Initial Task Start proceeds only when its assignment commits without a diagnostic.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.
 - Resume must not steer or append a Current Node assignment.
@@ -446,6 +451,8 @@
 - Branches are ordinary workflow nodes, not subtasks.
 - The GUI saves Node Groups only as execution-shaped parallel groups. A Node Group contains branch Nodes and one Join. One Fan-Out Transition targets its branches.
 - A Task may have several Current Nodes only when the graph explicitly fans out.
+- Kent handles every executable successor created by completion, Fan-Out, or final Join independently.
+- One successor's assignment or start failure must not suppress, undo, or interrupt a healthy sibling.
 - Joins wait for all required inputs. Kent does not support racing or first-success parallel branches.
 - Fan-out topology must have exactly one unambiguous nearest common join reachable from every branch.
 - Branch paths before that join may not terminate, enter nested fan-out, or contain cycles.
@@ -471,6 +478,7 @@
 - Resume does not wait for Execution Target restoration, Session setup, or agent or Script startup.
 - Only an actively executing Exact Execution Scope proves that an agent or Script is live and interruptible. Current Nodes, Automatic Intents, Session relations, waiting Questions, Task status, transcript entries, and Goals do not prove liveness.
 - Start and Resume admit selected parallel branches independently. A failed branch does not undo or block a sibling that started successfully.
+- Completion, Fan-Out, and final Join disposition every executable successor independently. A failed successor becomes interrupted without suppressing, undoing, or interrupting a healthy sibling.
 - Resume starts a fresh Exact Execution Scope only after the previous scope has fully stopped. Steering remains within the current scope.
 - Restart does not restore live Questions, live Approvals, Automatic Intents, Runtime Gates, or Exact Execution Scopes. Kent marks each affected executable Current Node interrupted with a restart reason.
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
@@ -481,6 +489,14 @@
 - Saved state without matching live execution never becomes interruptible as a fallback. Kent must prevent the mismatch, surface the lifecycle failure, or convert the affected Current Node to interrupted during restart recovery.
 - Completion can change a Task only from the matching Exact Execution Scope or from one unambiguous idle executable Current Node. A stopped scope and a non-current Node cannot change Task state.
 - Completion replaces source Current Nodes, materializes target inputs, and adds target Current Nodes as one atomic change.
+- A Task-event delivery failure after completion commits is a diagnostic. Kent records the error with the affected Task and Current Nodes at that post-commit boundary, preserves the committed Transition result and its successor actions, and does not retry or reclassify them.
+- Kent must not surface that completion Task-event delivery diagnostic as the completion operation's error.
+- A Task-event delivery failure after interruption commits leaves the Current Node interrupted and resumable.
+- Kent does not retry or reclassify a committed interruption because of its Task-event delivery diagnostic.
+- When a committed completion or Approval outcome carries a later assignment or interruption diagnostic, Kent consumes the committed outcome and performs its required attention and action projection before surfacing the diagnostic.
+- A committed interruption Task-event delivery diagnostic is not interruption-persistence loss and must not terminate the server.
+- When an automatic Agent or Script successor fails assignment or start and Kent cannot durably interrupt that successor, the server process must terminate with the operation, Task, exact Current Node, expected scheduling state, original failure, and interruption-persistence failure.
+- Initial Task Start, explicit Resume, user Interrupt, task-preparation failure, protocol-violation interruption, live-scope failure, outcome-less finalization, and post-commit interruption Task-event delivery diagnostics remain nonfatal.
 - Runtime failures, crashes, interruptions, and fixable start-validation blockers leave the affected Current Node interrupted with a reason.
 - `failed` is reserved for unrecoverable corrupted Workflow state.
 - Kent retains no completed execution or Workflow-movement history.
@@ -641,6 +657,9 @@
   after approval or a superseding manual move. Kent has no public Transition
   Approval Reject action.
 - A retained Session identifies its Workflow Node and, during parallel work, its Transition Branch Key.
+- Every retained Agent Current Node atomically records the Session's Task ownership and exact Workflow Node and Transition Branch provenance when that Current Node materializes.
+- Cancellation or failure while materializing a retained Agent Current Node must not commit that Current Node without matching Session Task ownership and exact provenance.
+- A pending Approval must not publish target Session provenance before Approval materializes the target Current Node.
 - Project Workflow Links represent active membership only. Unlinking removes an unused link completely.
 - A Project cannot unlink a Workflow while Tasks use that link. The error reports blockers with counts and references.
 - Deleting a Workflow is the only way to retire it. Workflows and Nodes have no archive state.
@@ -680,3 +699,7 @@
 - Task Comments retain their author identity when available.
 - Session listings retain the first prompt preview.
 - Sessions retain unsent input drafts for recovery.
+- As temporary compatibility behavior, before explicit user Resume changes an interrupted retained Agent Current Node's scheduling, Kent repairs a missing or stale exact Session association only when that Current Node carries the Session and the Session has exactly one direct ownership relation to the same Task.
+- Missing, contradictory, or multiple direct Session ownership must fail without changing scheduling.
+- An already-current exact association requires no change.
+- This compatibility repair must be removed after a one-time migration backfills every directly consistent association through the oldest supported upgrade path and reports every row that cannot be repaired without guessing.

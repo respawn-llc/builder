@@ -21,6 +21,10 @@ type PendingApprovalApplyResult struct {
 	TaskAttentionResolution
 }
 
+func (r PendingApprovalApplyResult) Committed() bool {
+	return len(r.Mutation.Removed) != 0
+}
+
 type pendingApprovalTransitionSnapshot struct {
 	WorkflowID        runtimeids.WorkflowID      `json:"workflow_id"`
 	ID                workflow.TransitionGroupID `json:"id"`
@@ -66,6 +70,70 @@ type pendingApprovalContextSourceResolutionSnapshot struct {
 	SessionID *string `json:"session_id,omitempty"`
 }
 
+type pendingApprovalRecord struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJSON    string
+	MaterializedValuesJSON    string
+	CreatedAtUnixMs           int64
+}
+
+func pendingApprovalRecordFromListRow(row sqlitegen.ListTaskPendingApprovalsRow) pendingApprovalRecord {
+	return pendingApprovalRecordFromValues(
+		row.ID,
+		row.SourceTaskID,
+		row.SourceNodeID,
+		row.SourceTransitionBranchKey,
+		row.SourceSessionID,
+		row.WorkflowVersion,
+		row.TransitionSnapshotJson,
+		row.MaterializedValuesJson,
+		row.CreatedAtUnixMs,
+	)
+}
+
+func pendingApprovalRecordFromGetRow(row sqlitegen.GetTaskPendingApprovalRow) pendingApprovalRecord {
+	return pendingApprovalRecordFromValues(
+		row.ID,
+		row.SourceTaskID,
+		row.SourceNodeID,
+		row.SourceTransitionBranchKey,
+		row.SourceSessionID,
+		row.WorkflowVersion,
+		row.TransitionSnapshotJson,
+		row.MaterializedValuesJson,
+		row.CreatedAtUnixMs,
+	)
+}
+
+func pendingApprovalRecordFromValues(
+	id string,
+	sourceTaskID string,
+	sourceNodeID string,
+	sourceTransitionBranchKey sql.NullString,
+	sourceSessionID sql.NullString,
+	workflowVersion int64,
+	transitionSnapshotJSON string,
+	materializedValuesJSON string,
+	createdAtUnixMs int64,
+) pendingApprovalRecord {
+	return pendingApprovalRecord{
+		ID:                        id,
+		SourceTaskID:              sourceTaskID,
+		SourceNodeID:              sourceNodeID,
+		SourceTransitionBranchKey: sourceTransitionBranchKey,
+		SourceSessionID:           sourceSessionID,
+		WorkflowVersion:           workflowVersion,
+		TransitionSnapshotJSON:    transitionSnapshotJSON,
+		MaterializedValuesJSON:    materializedValuesJSON,
+		CreatedAtUnixMs:           createdAtUnixMs,
+	}
+}
+
 func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID) ([]workflow.PendingApproval, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, errors.New("task id is required")
@@ -76,7 +144,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, taskID workflow.TaskID
 	}
 	approvals := make([]workflow.PendingApproval, 0, len(rows))
 	for _, row := range rows {
-		approval, err := pendingApprovalFromRow(ctx, s.queries, row)
+		approval, err := pendingApprovalFromRow(ctx, s.queries, pendingApprovalRecordFromListRow(row))
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +162,7 @@ func (s *Store) PendingApproval(ctx context.Context, approvalID workflow.Approva
 }
 
 func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference workflow.CurrentNodeReference) (bool, error) {
-	if _, err := currentNodeForReference(ctx, s.queries, reference); err != nil {
+	if _, err := s.currentNodeForReference(ctx, s.queries, reference); err != nil {
 		return false, err
 	}
 	_, pending, err := currentNodePendingApprovalID(ctx, s.queries, reference)
@@ -121,6 +189,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	nowTime := s.now().UTC()
 	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
@@ -132,7 +201,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	if !found {
 		return PendingApprovalApplyResult{}, fmt.Errorf("pending approval %q disappeared during attention resolution", normalizedID)
 	}
-	if _, err := currentNodeForReference(ctx, q, approval.Source); err != nil {
+	if _, err := s.currentNodeForReference(ctx, q, approval.Source); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	targets := make([]workflow.CurrentNode, 0, len(approval.Branches))
@@ -168,13 +237,13 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
-		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
+		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind, nowTime); err != nil {
 			return PendingApprovalApplyResult{}, err
 		}
-	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
+	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets, nowTime); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
-	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
+	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), nowTime.UnixMilli()); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -208,7 +277,7 @@ func pendingApprovalByID(
 	if err != nil {
 		return workflow.PendingApproval{}, err
 	}
-	return pendingApprovalFromRow(ctx, q, row)
+	return pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromGetRow(row))
 }
 
 func pendingApprovalHandoff(approval workflow.PendingApproval) CompletionHandoff {
@@ -459,7 +528,7 @@ func insertPendingApprovalBranch(ctx context.Context, q *sqlitegen.Queries, appr
 	})
 }
 
-func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlitegen.TaskPendingApproval) (workflow.PendingApproval, error) {
+func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row pendingApprovalRecord) (workflow.PendingApproval, error) {
 	approvalID, err := workflow.ParseApprovalID(row.ID)
 	if err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval id: %w", err)
@@ -482,14 +551,14 @@ func pendingApprovalFromRow(ctx context.Context, q *sqlitegen.Queries, row sqlit
 		sourceSessionID = &parsed
 	}
 	var transitionSnapshot pendingApprovalTransitionSnapshot
-	if err := workflow.UnmarshalString(row.TransitionSnapshotJson, &transitionSnapshot); err != nil {
+	if err := workflow.UnmarshalString(row.TransitionSnapshotJSON, &transitionSnapshot); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval transition snapshot: %w", err)
 	}
 	if strings.TrimSpace(string(transitionSnapshot.ID)) == "" || strings.TrimSpace(string(transitionSnapshot.TransitionID)) == "" || strings.TrimSpace(transitionSnapshot.SourceDisplayName) == "" {
 		return workflow.PendingApproval{}, errors.New("pending approval transition snapshot is invalid")
 	}
 	outputValues := map[string]string{}
-	if err := workflow.UnmarshalString(row.MaterializedValuesJson, &outputValues); err != nil {
+	if err := workflow.UnmarshalString(row.MaterializedValuesJSON, &outputValues); err != nil {
 		return workflow.PendingApproval{}, fmt.Errorf("decode pending approval materialized values: %w", err)
 	}
 	if outputValues == nil {

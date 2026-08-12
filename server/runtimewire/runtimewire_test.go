@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimewire/toolcontracts"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -28,6 +30,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
 	"core/shared/imagefileio"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -123,10 +126,12 @@ func TestRuntimeWiringSnapshotsActiveDebugSettingForToolCompletionMismatch(t *te
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
 	}
 	t.Cleanup(func() { _ = wiring.Close() })
-	wiring.LocalTools.Registry().ReplaceHandlers(tools.HandlerRegistration{
+	if err := wiring.LocalTools.Registry().ReplaceHandlers(tools.HandlerRegistration{
 		ID:      toolspec.ToolPatch,
 		Handler: mismatchedDeletionPresentationHandler{},
-	})
+	}); err != nil {
+		t.Fatalf("ReplaceHandlers: %v", err)
+	}
 
 	_, _ = wiring.Engine.SubmitUserMessage(context.Background(), "delete target")
 }
@@ -153,6 +158,142 @@ func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *tes
 	}
 	if defs[0].ID != toolspec.ToolExecCommand {
 		t.Fatalf("expected exec_command runtime tool definition, got %+v", defs[0])
+	}
+}
+
+func TestRuntimeWirePreparesExactlyEightOrdinaryStaticContracts(t *testing.T) {
+	contracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare static tool contracts: %v", err)
+	}
+	ids := toolspec.CatalogIDs()
+	registrations := make([]tools.HandlerRegistration, 0, len(ids))
+	for _, id := range ids {
+		if id == toolspec.ToolCompleteNode {
+			continue
+		}
+		registrations = append(registrations, tools.HandlerRegistration{
+			ID:      id,
+			Handler: mismatchedDeletionPresentationHandler{},
+		})
+	}
+	registry, err := tools.NewStaticToolRegistry(contracts, registrations...)
+	if err != nil {
+		t.Fatalf("create static registry: %v", err)
+	}
+	definitions := registry.Definitions()
+	if len(definitions) != 8 {
+		t.Fatalf("static definition count = %d, want 8", len(definitions))
+	}
+	for _, definition := range definitions {
+		var schema map[string]any
+		if err := json.Unmarshal(definition.Schema.JSON(), &schema); err != nil {
+			t.Fatalf("decode %s schema: %v", definition.ID, err)
+		}
+		if schema["additionalProperties"] != false {
+			t.Fatalf("%s schema is not closed: %#v", definition.ID, schema)
+		}
+		if _, ok := schema["$defs"]; ok {
+			t.Fatalf("%s schema contains provider-incompatible references", definition.ID)
+		}
+	}
+}
+
+func TestRegistryPrepareInputPreservesAliasesAndCanonicalPrecedence(t *testing.T) {
+	registry, _ := newRuntimeWireToolRegistry(
+		t,
+		t.TempDir(),
+		toolspec.ToolExecCommand,
+		toolspec.ToolEdit,
+		toolspec.ToolAskQuestion,
+	)
+	tests := []struct {
+		name    string
+		id      toolspec.ID
+		raw     string
+		want    map[string]any
+		wantErr bool
+	}{
+		{
+			name: "canonical wins over wrong typed alias",
+			id:   toolspec.ToolExecCommand,
+			raw:  `{"cmd":"canonical","command":7}`,
+			want: map[string]any{"cmd": "canonical"},
+		},
+		{
+			name: "alias only",
+			id:   toolspec.ToolExecCommand,
+			raw:  `{"command":"alias"}`,
+			want: map[string]any{"cmd": "alias"},
+		},
+		{
+			name: "edit aliases and unknown field",
+			id:   toolspec.ToolEdit,
+			raw:  `{"filePath":"a.go","oldText":"old","newText":"new","replaceAll":true,"unknown":1}`,
+			want: map[string]any{
+				"path":        "a.go",
+				"old_string":  "old",
+				"new_string":  "new",
+				"replace_all": true,
+			},
+		},
+		{
+			name: "edit canonical wins over aliases",
+			id:   toolspec.ToolEdit,
+			raw:  `{"path":"a.go","filePath":7,"old_string":"old","oldText":null,"new_string":"new","newText":[]}`,
+			want: map[string]any{"path": "a.go", "old_string": "old", "new_string": "new"},
+		},
+		{
+			name: "legacy ask fields are ignored",
+			id:   toolspec.ToolAskQuestion,
+			raw:  `{"question":"Continue?","action":"legacy","approval":true,"approval_options":[]}`,
+			want: map[string]any{"question": "Continue?"},
+		},
+		{
+			name:    "wrong canonical type",
+			id:      toolspec.ToolEdit,
+			raw:     `{"path":7,"old_string":"old","new_string":"new"}`,
+			wantErr: true,
+		},
+		{
+			name:    "null optional array",
+			id:      toolspec.ToolAskQuestion,
+			raw:     `{"question":"Continue?","suggestions":null}`,
+			wantErr: true,
+		},
+		{
+			name:    "missing required",
+			id:      toolspec.ToolExecCommand,
+			raw:     `{"workdir":"."}`,
+			wantErr: true,
+		},
+		{
+			name:    "input must be object",
+			id:      toolspec.ToolExecCommand,
+			raw:     `null`,
+			wantErr: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := registry.PrepareInput(test.id, json.RawMessage(test.raw))
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("PrepareInput(%s) unexpectedly succeeded: %s", test.id, prepared)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PrepareInput(%s): %v", test.id, err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(prepared, &got); err != nil {
+				t.Fatalf("decode prepared input: %v", err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("prepared input = %#v, want %#v", got, test.want)
+			}
+		})
 	}
 }
 

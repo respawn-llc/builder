@@ -56,11 +56,16 @@ func (e *Engine) BindCurrentNodeExecution(
 	if err := validateCurrentNodeExecutionConfig(config); err != nil {
 		return nil, err
 	}
+	preparedContract, err := config.Contract.Prepare()
+	if err != nil {
+		return nil, fmt.Errorf("prepare current node completion contract: %w", err)
+	}
 	state := e.currentNodeExecution
 	if state == nil {
 		return nil, errors.New("current node execution state is unavailable")
 	}
 	cloned := cloneCurrentNodeExecutionConfig(config)
+	cloned.Contract = preparedContract
 	state.mu.Lock()
 	if state.owner != nil {
 		current := state.config

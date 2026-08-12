@@ -294,7 +294,8 @@ func TestUnlinkProjectWorkspaceBlocksReferencedWorkspaceDependencies(t *testing.
 VALUES ('session-executable-workspace', ?, ?, 'projects/project/sessions/session-executable-workspace', ?, ?)`,
 			binding.ProjectID, attached.WorkspaceID, now, now)
 		execSeed(t, store.db, "current node", `INSERT INTO task_current_nodes (task_id, node_id, current_input_values_json, prior_node_values_json, session_id)
-VALUES ('task-executable-workspace', 'node-agent', '{}', '{"transition_parameters":{}}', 'session-executable-workspace')`)
+VALUES ('task-executable-workspace', ?, '{}', '{"transition_parameters":{}}', 'session-executable-workspace')`,
+			workflowGraphSeedID(t, store.db, "node-agent"))
 
 		blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 		if err != nil {
@@ -480,7 +481,7 @@ func TestWorkspaceUnlinkCommitPrefersAuthoritativeBlockersOverChangedSessionSet(
 			}
 			mutated := make(chan error, 1)
 			go func() {
-				mutated <- addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "unlink-race", attached.CanonicalRoot, attached.WorkspaceID)
+				mutated <- addMetadataRaceSessionAndActiveTask(t, ctx, otherStore, cfg, binding, "unlink-race", attached.CanonicalRoot, attached.WorkspaceID)
 			}()
 			if err := <-mutated; err != nil {
 				return nil, nil, err
@@ -545,7 +546,7 @@ func TestWorkspaceUnlinkCommitCombinesStaticAndRuntimeBlockers(t *testing.T) {
 				if len(preparedSessionIDs) != 0 {
 					return nil, nil, fmt.Errorf("prepared session IDs = %v, want none", preparedSessionIDs)
 				}
-				if err := addMetadataRaceSessionAndActiveTask(ctx, otherStore, cfg, binding, "commit-runtime-blocker", attached.CanonicalRoot, attached.WorkspaceID); err != nil {
+				if err := addMetadataRaceSessionAndActiveTask(t, ctx, otherStore, cfg, binding, "commit-runtime-blocker", attached.CanonicalRoot, attached.WorkspaceID); err != nil {
 					return nil, nil, err
 				}
 				return nil, func() {}, nil
@@ -748,6 +749,7 @@ func assertNoWorkspaceUnlinkBlocker(t *testing.T, blockers []serverapi.ProjectWo
 }
 
 func addMetadataRaceSessionAndActiveTask(
+	t *testing.T,
 	ctx context.Context,
 	store *Store,
 	cfg config.App,
@@ -771,7 +773,7 @@ func addMetadataRaceSessionAndActiveTask(
 	if _, err := store.db.ExecContext(ctx, workflowSeedTaskSQL, taskID, "link-1", 1, "BLD-1", now, now); err != nil {
 		return fmt.Errorf("create concurrent task: %w", err)
 	}
-	if _, err := store.db.ExecContext(ctx, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(taskID, "node-agent", nil)...); err != nil {
+	if _, err := store.db.ExecContext(ctx, insertTaskCurrentNodeSQL, taskCurrentNodeArgs(t, store.db, taskID, "node-agent", nil)...); err != nil {
 		return fmt.Errorf("create concurrent task current node: %w", err)
 	}
 	if strings.TrimSpace(sourceWorkspaceID) == "" {

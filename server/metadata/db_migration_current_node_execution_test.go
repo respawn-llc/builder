@@ -69,7 +69,7 @@ INSERT INTO task_runs (
 	var sessionID sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    node_id,
+    `+graphEntityIDTextFunction+`(node_id),
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -86,7 +86,7 @@ WHERE task_id = 'task-active-script-migration'`).Scan(
 	); err != nil {
 		t.Fatalf("query projected active script current node: %v", err)
 	}
-	if nodeID != "node-agent" ||
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
 		schedulingState != "interrupted" ||
 		interruptionReason != "server_restart" ||
 		interruptionDetail != `{"code":"workflow.execution.restarted","fields":{"operation":"recovery"}}` ||

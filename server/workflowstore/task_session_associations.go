@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/metadata/sqlitegen"
+	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -302,7 +303,7 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	if taskID == nil || *taskID != reference.TaskID {
 		return ErrSessionNotCurrentWorkflowNode
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotCurrentWorkflowNode
 	}
@@ -325,6 +326,112 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	return nil
 }
 
+// RepairCurrentNodeSessionProvenanceForResume is the temporary KENT-534
+// compatibility path for directly consistent retained Current Nodes created
+// before provenance became atomic with insertion.
+func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
+	ctx context.Context,
+	currentNode workflow.CurrentNode,
+) error {
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	if currentNode.AgentExecutionSelection == nil {
+		return errors.New("retained Resume Current Node must be an Agent")
+	}
+	if currentNode.Scheduling == nil ||
+		currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		return errors.New("retained Resume Current Node must be interrupted")
+	}
+	connection, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = connection.Close() }()
+	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
+		return err
+	}
+	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
+	if err := lifecycle.BeginImmediate(ctx); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = lifecycle.Rollback(context.Background())
+		}
+	}()
+	q := sqlitegen.New(connection)
+	persisted, err := s.currentNodeForReference(ctx, q, currentNode.Reference)
+	if err != nil {
+		return err
+	}
+	if persisted.SessionID == nil ||
+		*persisted.SessionID != *currentNode.SessionID ||
+		persisted.AgentExecutionSelection == nil ||
+		persisted.Scheduling == nil ||
+		persisted.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
+	if err != nil {
+		return err
+	}
+	sessionOwners := 0
+	for _, candidate := range currentNodes {
+		if candidate.SessionID != nil && *candidate.SessionID == *currentNode.SessionID {
+			sessionOwners++
+			if !candidate.Reference.Equal(currentNode.Reference) {
+				return ErrSessionNotCurrentWorkflowNode
+			}
+		}
+	}
+	if sessionOwners != 1 {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	taskIDs, err := q.ListSessionWorkflowTaskIDs(ctx, currentNode.SessionID.String())
+	if err != nil {
+		return err
+	}
+	if len(taskIDs) != 1 ||
+		!taskIDs[0].Valid ||
+		workflow.TaskID(taskIDs[0].String) != currentNode.Reference.TaskID {
+		return ErrSessionNotCurrentWorkflowNode
+	}
+	association, err := latestTaskSessionForNode(
+		sqlitegen.WithExpectedNoRows(ctx),
+		q,
+		currentNode.Reference,
+	)
+	if err == nil && association.SessionID == *currentNode.SessionID {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	associatedAt := s.now().UTC()
+	if err == nil && !associatedAt.After(association.AssociatedAt) {
+		associatedAt = association.AssociatedAt.Add(time.Millisecond)
+	}
+	normalized, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+		SessionID:    *currentNode.SessionID,
+		CurrentNode:  currentNode.Reference,
+		AssociatedAt: associatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := upsertTaskSessionAssociation(ctx, q, normalized); err != nil {
+		return err
+	}
+	if err := lifecycle.Commit(ctx); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
 // ResolveCurrentNodeStartContext prepares an admitted executable Current Node
 // from its own materialized values and the latest definition. It never
 // reconstructs discarded execution history.
@@ -332,7 +439,7 @@ func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference wo
 	if err := reference.Validate(); err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
@@ -547,13 +654,18 @@ func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
 	if path := workflow.NodeScriptPath(node); path.IsPresent() {
 		scriptPath = path.String()
 	}
+	groupID, hasGroup := workflow.NodeGroupID(node)
+	var groupIDPointer *string
+	if hasGroup {
+		groupIDPointer = &groupID
+	}
 	return NodeRecord{
 		ID:                 workflow.NodeIDOf(node),
 		WorkflowID:         *workflowID,
 		Key:                workflow.NodeKey(node),
 		Kind:               node.Kind(),
 		DisplayName:        workflow.NodeDisplayName(node),
-		GroupID:            workflow.NodeGroupID(node),
+		GroupID:            groupIDPointer,
 		SubagentRole:       workflow.NodeSubagentRole(node),
 		CompletionMode:     workflow.NodeCompletionMode(node),
 		ScriptPath:         scriptPath,

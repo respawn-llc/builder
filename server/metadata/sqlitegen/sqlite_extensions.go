@@ -7,6 +7,7 @@ import (
 
 	"core/server/workflow/label"
 	"core/shared/labelcontract"
+	"core/shared/runtimeids"
 	"core/shared/tasksearchtext"
 
 	sqlitedriver "modernc.org/sqlite"
@@ -15,6 +16,8 @@ import (
 const LabelCollationName = "kent_label_casefold_v1"
 const LabelFoldFunctionName = "kent_label_casefold_v1_fold"
 const LiteralOccurrenceCountFunctionName = "kent_task_search_occurrence_count_v1"
+const GraphEntityIDBlobFunctionName = "kent_graph_entity_id_blob_v1"
+const GraphEntityIDTextFunctionName = "kent_graph_entity_id_text_v1"
 
 type RegistrationError struct {
 	ExtensionName string
@@ -66,9 +69,50 @@ func RegisterSQLiteExtensions() error {
 				ExtensionName: LiteralOccurrenceCountFunctionName,
 				Cause:         err,
 			}
+			return
+		}
+		if err := sqlitedriver.RegisterDeterministicScalarFunction(
+			GraphEntityIDBlobFunctionName,
+			1,
+			graphEntityIDBlob,
+		); err != nil {
+			registrationErr = &RegistrationError{
+				ExtensionName: GraphEntityIDBlobFunctionName,
+				Cause:         err,
+			}
+			return
+		}
+		if err := sqlitedriver.RegisterDeterministicScalarFunction(
+			GraphEntityIDTextFunctionName,
+			1,
+			graphEntityIDText,
+		); err != nil {
+			registrationErr = &RegistrationError{
+				ExtensionName: GraphEntityIDTextFunctionName,
+				Cause:         err,
+			}
 		}
 	})
 	return registrationErr
+}
+
+func graphEntityIDBlob(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+	raw, err := textArgument(arguments, 0, "graph entity ID")
+	if err != nil {
+		return nil, err
+	}
+	return runtimeids.GraphEntityIDBlob(raw)
+}
+
+func graphEntityIDText(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+	if len(arguments) != 1 {
+		return nil, fmt.Errorf("SQLite graph entity ID BLOB argument count = %d, want 1", len(arguments))
+	}
+	raw, ok := arguments[0].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("SQLite graph entity ID BLOB argument has type %T, want BLOB", arguments[0])
+	}
+	return runtimeids.GraphEntityIDText(raw)
 }
 
 func labelFold(_ *sqlitedriver.FunctionContext, arguments []driver.Value) (driver.Value, error) {

@@ -101,7 +101,7 @@ func (s *Starter) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignment *workflowexecution.CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -126,7 +126,7 @@ func (s *Starter) StartCurrentNode(
 		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignment, lease, controller)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
@@ -343,11 +343,11 @@ func (s *Starter) startCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignment *workflowexecution.CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
-	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
+	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignment)
 	if err != nil {
 		return err
 	}
@@ -458,18 +458,26 @@ func (s *Starter) startCurrentNodeAgent(
 func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	classified *workflowexecution.CurrentNodeClassifiedAssignment,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
-	if assignmentSteer == nil {
+	if classified == nil {
 		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
-	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
+	if !classified.Reference().Equal(input.CurrentNode.Reference) {
+		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
+			"classified current node assignment %v does not match start %v",
+			classified.Reference(),
+			input.CurrentNode.Reference,
+		)
+	}
+	preparedAssignment := classified.PreparedAssignment()
+	assignment, ok := preparedAssignment.(*currentNodeAgentAssignmentSteer)
 	if !ok {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
 			"current node %v received incompatible assignment steer %T",
 			input.CurrentNode.Reference,
-			assignmentSteer,
+			preparedAssignment,
 		)
 	}
 	if !assignment.reference.Equal(input.CurrentNode.Reference) {
@@ -478,13 +486,6 @@ func (s *Starter) currentNodeAgentSessionForStart(
 			assignment.reference,
 			input.CurrentNode.Reference,
 		)
-	}
-	receipt, err := assignment.Wait(ctx)
-	if err != nil {
-		return preparedCurrentNodeAgentSession{}, nil, err
-	}
-	if !receipt.Committed {
-		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
 	if assignment.retainSourceRuntime {
 		return assignment.prepared, sessionruntime.CurrentAgentResource{}, nil

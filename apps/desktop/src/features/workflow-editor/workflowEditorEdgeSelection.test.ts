@@ -20,7 +20,7 @@ function definitionWithEdge(edge: WorkflowDefinition["edges"][number]): Workflow
     nodes: [
       {
         completionMode: "",
-        groupID: "",
+        groupID: null,
         groupKey: "",
         id: "source",
         joinInputProviders: [],
@@ -33,7 +33,7 @@ function definitionWithEdge(edge: WorkflowDefinition["edges"][number]): Workflow
       },
       {
         completionMode: "",
-        groupID: "",
+        groupID: null,
         groupKey: "",
         id: "target",
         joinInputProviders: [],
@@ -73,9 +73,7 @@ const edge = {
   inputBindings: [],
   key: "edge",
   outputRequirements: [],
-  parameters: [
-    { description: "ordinary", key: "ordinary", purpose: "ordinary" as const },
-  ],
+  parameters: [{ description: "ordinary", key: "ordinary", purpose: "ordinary" as const }],
   promptTemplate: "",
   requiresApproval: false,
   targetNodeID: "target",
@@ -110,9 +108,9 @@ describe("workflow editor Edge-owned selectors", () => {
       type: "setEdgeAssigneeSelection",
     });
     expect(disabled.draft.edges[0]?.assigneeSelection).toBe("configured");
-    expect(disabled.draft.edges[0]?.parameters.some((parameter) => parameter.purpose === "target_assignee")).toBe(
-      true,
-    );
+    expect(
+      disabled.draft.edges[0]?.parameters.some((parameter) => parameter.purpose === "target_assignee"),
+    ).toBe(true);
   });
 
   it("rejects protected parameter deletion while preserving ordinary deletion", () => {
@@ -177,6 +175,8 @@ describe("workflow editor Edge-owned selectors", () => {
       parameters: [{ description: "", key: "agent_role", purpose: "target_assignee" }],
     });
     expect(workflowGraphsEqual(left, right)).toBe(false);
-    expect(workflowGraphsEqual(left, workflowDefinitionFromDraft(draftDefinitionFromSource(left)))).toBe(true);
+    expect(workflowGraphsEqual(left, workflowDefinitionFromDraft(draftDefinitionFromSource(left)))).toBe(
+      true,
+    );
   });
 });

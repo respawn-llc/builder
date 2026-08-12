@@ -166,6 +166,57 @@ func TestPrepareManualMoveDryRunsTargetValueAndContextMaterialization(t *testing
 	}
 }
 
+func TestManualMoveRetainedAgentCommitsExactSessionProvenance(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, source.Reference)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "manual plan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+		Snapshot: ExecutionTargetSnapshot{
+			Mode:       workflow.ExecutionTargetModeNone,
+			Provenance: ExecutionTargetProvenanceResolved,
+		},
+		Root: ExecutionRoot{
+			SourceWorkspaceID:   binding.WorkspaceID,
+			SourceWorkspaceRoot: binding.CanonicalRoot,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyManualMove: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID != sessionID {
+		t.Fatalf("retained manual move result = %+v, want Session %q", moved, sessionID)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(
+		ctx,
+		sessionID,
+		moved.Mutation.Created[0].Reference,
+	); err != nil {
+		t.Fatalf("retained manual move exact Session provenance: %v", err)
+	}
+}
+
 func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")

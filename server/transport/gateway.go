@@ -18,11 +18,13 @@ import (
 	"core/server/metadata"
 	"core/shared/apicontract"
 	"core/shared/invariant"
+	"core/shared/jsoncontract"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 
 	"github.com/google/uuid"
 )
@@ -37,9 +39,11 @@ var ErrGatewayDependenciesRequired = errors.New("gateway dependencies are requir
 const canceledByClientMessage = "request canceled by client"
 
 type Gateway struct {
-	deps     GatewayDependencies
-	identity protocol.ServerIdentity
-	debug    bool
+	deps                              GatewayDependencies
+	identity                          protocol.ServerIdentity
+	onboardingFinalizeRequestContract serverjsoncontract.OnboardingFinalizeRequest
+	sessionExecutionRequestContract   serverjsoncontract.SessionExecutionEnvironmentRequest
+	debug                             bool
 }
 
 type GatewayDependencies interface {
@@ -162,6 +166,10 @@ type gatewayRequestPanicDiagnostic struct {
 	Stack     string
 }
 
+type processFatalGatewayPanic interface {
+	ProcessFatalPanic()
+}
+
 func (p gatewayRequestPanicDiagnostic) Error() string {
 	return fmt.Sprintf(
 		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
@@ -261,7 +269,22 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if debugDeps, ok := deps.(interface{ DebugEnabled() bool }); ok {
 		debugMode = debugMode || debugDeps.DebugEnabled()
 	}
-	return &Gateway{deps: deps, identity: identity, debug: debugMode}, nil
+	preparer := jsoncontract.NewPreparer(debugMode)
+	onboardingFinalizeRequestContract, err := serverjsoncontract.PrepareOnboardingFinalizeRequest(preparer)
+	if err != nil {
+		return nil, err
+	}
+	sessionExecutionRequestContract, err := serverjsoncontract.PrepareSessionExecutionEnvironmentRequest(preparer)
+	if err != nil {
+		return nil, err
+	}
+	return &Gateway{
+		deps:                              deps,
+		identity:                          identity,
+		onboardingFinalizeRequestContract: onboardingFinalizeRequestContract,
+		sessionExecutionRequestContract:   sessionExecutionRequestContract,
+		debug:                             debugMode,
+	}, nil
 }
 
 func isNilGatewayDependencies(deps GatewayDependencies) bool {
@@ -384,6 +407,9 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			if _, processFatal := recovered.(processFatalGatewayPanic); processFatal {
+				panic(recovered)
+			}
 			stack := string(debug.Stack())
 			slog.Error(
 				"gateway request handler panicked",
