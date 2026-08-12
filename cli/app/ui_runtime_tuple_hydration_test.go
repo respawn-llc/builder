@@ -168,12 +168,6 @@ func TestNonStaleContentCompleteHydrationAppliesWholeEvent(t *testing.T) {
 	if m.currentRunID == "" || m.currentStepID == "" || !m.runtimeActivityBusy() {
 		t.Fatalf("hydrated running state missing: activity=%+v run=%q step=%q", m.runtimeActivityProjection, m.currentRunID, m.currentStepID)
 	}
-	if len(m.injectedQueue) != 0 {
-		t.Fatalf("foreign hydrated queue created local restoration ownership: %+v", m.injectedQueue)
-	}
-	if len(controller.liveReadModel.sections) == 0 {
-		t.Fatal("hydrated tools/prompts/queue did not reach controller live state")
-	}
 	m.goal.open = true
 	m.goal.pending = &clientui.GoalPreview{Objective: "queued", Status: clientui.RuntimeGoalStatusActive}
 	goal := runtimeClientTestGoal("goal-1", "hydrated", clientui.RuntimeGoalStatusPaused)

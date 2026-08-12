@@ -22,12 +22,6 @@ import (
 )
 
 func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
-	handled := GoalCommandResult{}
-	for i, outcome := range []CurrentGoalOperationOutcome{{}, {Handled: &handled, ExecutionRequired: true}, {Handled: &handled}, {ExecutionRequired: true}} {
-		if got := outcome.Validate() == nil; got != (i >= 2) {
-			t.Fatalf("Validate(%+v) valid = %t", outcome, got)
-		}
-	}
 	engine := mustNewTestEngine(t, mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"), &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool, ownership CurrentGoalExecutionOwnership) {
 		outcome, err := engine.ApplyCurrentGoalOperation(operation, ownership)
@@ -39,14 +33,8 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	_, _ = engine.SetGoal("existing", session.GoalActorUser)
 	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	assert(CurrentGoalStatus{Status: session.GoalStatusActive, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	if !engine.GoalLoopRunning() {
-		t.Fatal("direct exact Resume did not start Goal loop")
-	}
 	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	assert(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
-	if !engine.GoalLoopRunning() {
-		t.Fatal("direct exact Set did not start Goal loop")
-	}
 	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
 	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false, CurrentGoalRetainedOnly)

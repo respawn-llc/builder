@@ -470,6 +470,7 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 			},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
+		GoalStatus:    &clientui.TranscriptGoalStatus{Availability: func() *clientui.GoalAvailability { value := clientui.GoalAvailabilityAvailable; return &value }()},
 	}))
 
 }
