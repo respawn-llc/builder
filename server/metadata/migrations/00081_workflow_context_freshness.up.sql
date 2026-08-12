@@ -1,9 +1,7 @@
 -- +goose Up
-
 DROP TRIGGER IF EXISTS sessions_task_owner_clear_associations;
 DROP TRIGGER IF EXISTS session_workflow_node_associations_owner_insert;
 DROP TRIGGER IF EXISTS session_workflow_node_associations_owner_update;
-
 CREATE TABLE session_workflow_node_associations_rebuilt (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -18,7 +16,6 @@ CREATE TABLE session_workflow_node_associations_rebuilt (
         OR association_status = 'historical'
     )
 );
-
 INSERT INTO session_workflow_node_associations_rebuilt (
     task_id,
     session_id,
@@ -38,32 +35,24 @@ SELECT
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
 JOIN sessions session ON session.id = association.session_id;
-
 DROP TABLE session_workflow_node_associations;
-
 ALTER TABLE session_workflow_node_associations_rebuilt
 RENAME TO session_workflow_node_associations;
-
 CREATE UNIQUE INDEX session_workflow_node_associations_serial_unique_idx
     ON session_workflow_node_associations(session_id, node_id)
     WHERE transition_branch_key IS NULL;
-
 CREATE UNIQUE INDEX session_workflow_node_associations_branch_unique_idx
     ON session_workflow_node_associations(session_id, node_id, transition_branch_key)
     WHERE transition_branch_key IS NOT NULL;
-
 CREATE UNIQUE INDEX session_workflow_node_associations_current_serial_unique_idx
     ON session_workflow_node_associations(task_id, node_id)
     WHERE association_status = 'current' AND transition_branch_key IS NULL;
-
 CREATE UNIQUE INDEX session_workflow_node_associations_current_branch_unique_idx
     ON session_workflow_node_associations(task_id, node_id, transition_branch_key)
     WHERE association_status = 'current' AND transition_branch_key IS NOT NULL;
-
 CREATE INDEX session_workflow_node_associations_history_lookup_idx
     ON session_workflow_node_associations(task_id, node_id, transition_branch_key)
     WHERE association_status = 'historical';
-
 -- +goose StatementBegin
 CREATE TRIGGER sessions_task_owner_clear_associations
 AFTER UPDATE OF task_id ON sessions
@@ -75,7 +64,6 @@ BEGIN
        OR source_session_id = NEW.id;
 END;
 -- +goose StatementEnd
-
 -- +goose StatementBegin
 CREATE TRIGGER session_workflow_node_associations_owner_insert
 BEFORE INSERT ON session_workflow_node_associations
@@ -102,7 +90,6 @@ BEGIN
     SELECT RAISE(ABORT, 'session node association must belong to one task workflow');
 END;
 -- +goose StatementEnd
-
 -- +goose StatementBegin
 CREATE TRIGGER session_workflow_node_associations_owner_update
 BEFORE UPDATE OF task_id, session_id, node_id, source_session_id ON session_workflow_node_associations
@@ -129,7 +116,6 @@ BEGIN
     SELECT RAISE(ABORT, 'session node association must belong to one task workflow');
 END;
 -- +goose StatementEnd
-
 ALTER TABLE task_current_nodes
 ADD COLUMN continuation_source_kind TEXT
     CHECK (continuation_source_kind IS NULL OR continuation_source_kind IN (
@@ -137,14 +123,11 @@ ADD COLUMN continuation_source_kind TEXT
         'deferred_self',
         'absent'
     ));
-
 ALTER TABLE task_current_nodes
 ADD COLUMN continuation_source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT;
-
 ALTER TABLE task_current_nodes
 ADD COLUMN legacy_materialized INTEGER NOT NULL DEFAULT 1
     CHECK (legacy_materialized IN (0, 1));
-
 UPDATE task_current_nodes
 SET
     continuation_source_kind = CASE
@@ -180,7 +163,6 @@ SET
         THEN 1
         ELSE 0
     END;
-
 -- +goose StatementBegin
 CREATE TRIGGER task_current_nodes_continuation_source_insert
 BEFORE INSERT ON task_current_nodes
@@ -218,7 +200,6 @@ BEGIN
     SELECT RAISE(ABORT, 'current node continuation source is invalid');
 END;
 -- +goose StatementEnd
-
 -- +goose StatementBegin
 CREATE TRIGGER task_current_nodes_continuation_source_update
 BEFORE UPDATE OF task_id, continuation_source_kind, continuation_source_session_id, legacy_materialized ON task_current_nodes
@@ -256,7 +237,6 @@ BEGIN
     SELECT RAISE(ABORT, 'current node continuation source is invalid');
 END;
 -- +goose StatementEnd
-
 UPDATE task_pending_approval_branches
 SET context_source_resolution_json = (
     SELECT json_object(
@@ -289,7 +269,6 @@ SET context_source_resolution_json = (
     FROM workflow_nodes node
     WHERE node.id = json_extract(task_pending_approval_branches.target_snapshot_json, '$.node_id')
 );
-
 ALTER TABLE task_active_fanout_branches
 ADD COLUMN continuation_source_kind TEXT
     CHECK (continuation_source_kind IS NULL OR continuation_source_kind IN (
@@ -297,20 +276,16 @@ ADD COLUMN continuation_source_kind TEXT
         'deferred_self',
         'absent'
     ));
-
 ALTER TABLE task_active_fanout_branches
 ADD COLUMN continuation_source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT;
-
 ALTER TABLE task_active_fanout_branches
 ADD COLUMN legacy_materialized INTEGER NOT NULL DEFAULT 1
     CHECK (legacy_materialized IN (0, 1));
-
 UPDATE task_active_fanout_branches
 SET
     continuation_source_kind = NULL,
     continuation_source_session_id = NULL,
     legacy_materialized = 1;
-
 -- +goose StatementBegin
 CREATE TRIGGER task_active_fanout_branches_continuation_source_insert
 BEFORE INSERT ON task_active_fanout_branches
@@ -345,7 +320,6 @@ BEGIN
     SELECT RAISE(ABORT, 'Fan-Out branch continuation source is invalid');
 END;
 -- +goose StatementEnd
-
 -- +goose StatementBegin
 CREATE TRIGGER task_active_fanout_branches_continuation_source_update
 BEFORE UPDATE OF task_id, continuation_source_kind, continuation_source_session_id, legacy_materialized ON task_active_fanout_branches

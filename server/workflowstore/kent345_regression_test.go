@@ -2,17 +2,16 @@ package workflowstore
 
 import (
 	"context"
+	"core/server/metadata"
+	"core/server/workflow"
+	"core/shared/config"
+	"core/shared/runtimeids"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"core/server/metadata"
-	"core/server/workflow"
-	"core/shared/config"
-	"core/shared/runtimeids"
 )
 
 func TestKENT345StaleReviewIsNeverRevived(t *testing.T) {
@@ -60,7 +59,6 @@ func TestKENT345StaleReviewIsNeverRevived(t *testing.T) {
 			}
 		})
 	}
-
 	t.Run("interruption and resume preserve fresh target", func(t *testing.T) {
 		fixture := newKENT345Fixture(t, workflow.ContextSourcePreviousTargetOrNew)
 		staleReviewSessionID, implementationBSessionID := fixture.supersedeImplementation(t)
@@ -104,7 +102,6 @@ func TestKENT345StaleReviewIsNeverRevived(t *testing.T) {
 			t.Fatalf("resumed Review = %+v", current)
 		}
 	})
-
 	t.Run("pending Approval freezes fresh target", func(t *testing.T) {
 		fixture := newKENT345Fixture(t, workflow.ContextSourcePreviousTargetOrNew)
 		staleReviewSessionID, implementationBSessionID := fixture.supersedeImplementation(t)
@@ -196,7 +193,6 @@ func newKENT345Fixture(t *testing.T, contextSource workflow.ContextSourceKind) k
 		firstReview: firstReview, implementationA: implementationA,
 	}
 }
-
 func (f *kent345Fixture) supersedeImplementation(t *testing.T) (runtimeids.SessionID, runtimeids.SessionID) {
 	t.Helper()
 	reimplementation, err := f.store.CompleteCurrentNode(f.ctx, CurrentNodeCompletionRequest{
@@ -214,7 +210,6 @@ func (f *kent345Fixture) supersedeImplementation(t *testing.T) (runtimeids.Sessi
 	}
 	return f.implementationA, implementationB
 }
-
 func createKENT345Workflow(
 	t *testing.T,
 	ctx context.Context,
@@ -271,7 +266,6 @@ func createKENT345Workflow(
 	})
 	return created.ID
 }
-
 func kent345Edge(
 	workflowID runtimeids.WorkflowID,
 	id workflow.EdgeID,

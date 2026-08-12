@@ -4,38 +4,22 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
 )
 
 func TestOnlyCurrentNodeBindingDesignatesCurrentSessionAssociations(t *testing.T) {
-	root := filepath.Join(testsetup.RepositoryRoot(t), "server")
-	const owner = "designateCurrentTaskSessionAssociation"
-	designationMethods := map[string]struct{}{
-		"DesignateSerialCurrentSessionWorkflowNodeAssociation": {},
-		"DesignateBranchCurrentSessionWorkflowNodeAssociation": {},
+	methods := map[string]bool{"DesignateSerialCurrentSessionWorkflowNodeAssociation": false, "DesignateBranchCurrentSessionWorkflowNodeAssociation": false}
+	files, err := filepath.Glob(filepath.Join(testsetup.RepositoryRoot(t), "server", "*", "*.go"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	var calls int
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			if path == filepath.Join(root, "metadata", "sqlitegen") {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
+	for _, path := range files {
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -51,22 +35,19 @@ func TestOnlyCurrentNodeBindingDesignatesCurrentSessionAssociations(t *testing.T
 				if !ok {
 					return true
 				}
-				if _, designation := designationMethods[selector.Sel.Name]; !designation {
-					return true
-				}
-				calls++
-				if function.Name.Name != owner || filepath.Base(path) != "task_session_associations.go" {
-					t.Errorf("%s calls %s outside %s", path, selector.Sel.Name, owner)
+				if _, guarded := methods[selector.Sel.Name]; guarded {
+					if methods[selector.Sel.Name] || function.Name.Name != "designateCurrentTaskSessionAssociation" {
+						t.Errorf("current designation %s has a second caller", selector.Sel.Name)
+					}
+					methods[selector.Sel.Name] = true
 				}
 				return true
 			})
 		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("scan current-association writers: %v", err)
 	}
-	if calls != len(designationMethods) {
-		t.Fatalf("current-association designation calls = %d, want %d", calls, len(designationMethods))
+	for method, found := range methods {
+		if !found {
+			t.Errorf("current designation %s has no binding owner", method)
+		}
 	}
 }

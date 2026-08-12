@@ -9,7 +9,6 @@ import (
 
 func TestWorkflowContextFreshnessMigrationBackfillsHistoricalAssociationOwnershipWithoutChoosingCurrent(t *testing.T) {
 	t.Parallel()
-
 	const (
 		projectID = "project-context-freshness"
 		taskID    = "task-context-freshness"
@@ -21,14 +20,12 @@ func TestWorkflowContextFreshnessMigrationBackfillsHistoricalAssociationOwnershi
 		t.Fatalf("open version 80 metadata database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES (?, 'Context freshness', ?, ?, '{}')`, projectID, now, now)
 	seedWorkflowGraph(t, db, projectID, now)
 	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "CTX-1", now, now)
-
 	sessions := []struct {
 		id           string
 		workspaceID  string
@@ -46,7 +43,6 @@ INSERT INTO session_workflow_node_associations (
     session_id, node_id, transition_branch_key, associated_at_unix_ms
 ) VALUES (?, 'node-agent', NULL, ?)`, session.id, session.associatedAt)
 	}
-
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
@@ -54,7 +50,6 @@ INSERT INTO session_workflow_node_associations (
 	if _, err := provider.UpTo(t.Context(), 81); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
-
 	rows, err := db.Query(`
 SELECT session_id, task_id, association_status, source_session_id
 FROM session_workflow_node_associations
@@ -88,7 +83,6 @@ ORDER BY session_id`)
 	if count != len(sessions) {
 		t.Fatalf("migrated associations = %d, want %d", count, len(sessions))
 	}
-
 	var currentCount int
 	if err := db.QueryRow(`
 SELECT COUNT(*)
@@ -100,10 +94,8 @@ WHERE association_status = 'current'`).Scan(&currentCount); err != nil {
 		t.Fatalf("migration designated %d current associations, want zero", currentCount)
 	}
 }
-
 func TestWorkflowContextFreshnessMigrationAppliesCurrentNodeKindMatrix(t *testing.T) {
 	t.Parallel()
-
 	const projectID = "project-context-source-matrix"
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
@@ -112,7 +104,6 @@ func TestWorkflowContextFreshnessMigrationAppliesCurrentNodeKindMatrix(t *testin
 		t.Fatalf("open version 80 metadata database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
@@ -128,7 +119,6 @@ INSERT INTO workflow_nodes (
 		workflowID,
 		workflowID,
 	)
-
 	type matrixCase struct {
 		name       string
 		taskID     string
@@ -167,7 +157,6 @@ INSERT INTO task_current_nodes (
 			sql.NullString{String: test.sessionID, Valid: test.sessionID != ""},
 		)
 	}
-
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
@@ -175,7 +164,6 @@ INSERT INTO task_current_nodes (
 	if _, err := provider.UpTo(t.Context(), 81); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
-
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			var sourceKind, sourceSessionID sql.NullString
@@ -203,10 +191,8 @@ WHERE task_id = ?`, test.taskID).Scan(
 		})
 	}
 }
-
 func TestWorkflowContextFreshnessMigrationAppliesPendingApprovalTargetKindMatrix(t *testing.T) {
 	t.Parallel()
-
 	const projectID = "project-approval-source-matrix"
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "db", "main.sqlite3")
@@ -215,7 +201,6 @@ func TestWorkflowContextFreshnessMigrationAppliesPendingApprovalTargetKindMatrix
 		t.Fatalf("open version 80 metadata database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
@@ -231,7 +216,6 @@ INSERT INTO workflow_nodes (
 		workflowID,
 		workflowID,
 	)
-
 	type matrixCase struct {
 		name             string
 		targetNodeID     string
@@ -295,7 +279,6 @@ INSERT INTO task_pending_approval_branches (
 			sql.NullString{String: test.targetSessionID, Valid: test.targetSessionID != ""},
 		)
 	}
-
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
@@ -303,7 +286,6 @@ INSERT INTO task_pending_approval_branches (
 	if _, err := provider.UpTo(t.Context(), 81); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
-
 	for index, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			approvalID := "approval-matrix-" + string(rune('a'+index))
@@ -339,10 +321,8 @@ WHERE approval_id = ?`, approvalID).Scan(
 		})
 	}
 }
-
 func TestWorkflowContextFreshnessMigrationMarksPendingAndArrivedFanoutBranchesLegacy(t *testing.T) {
 	t.Parallel()
-
 	const (
 		projectID = "project-fanout-source-migration"
 		taskID    = "task-fanout-source-migration"
@@ -354,7 +334,6 @@ func TestWorkflowContextFreshnessMigrationMarksPendingAndArrivedFanoutBranchesLe
 		t.Fatalf("open version 80 metadata database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
 	now := time.Now().UTC().UnixMilli()
 	execSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
@@ -370,7 +349,6 @@ INSERT INTO task_active_fanout_branches (
     (?, 'pending', 'pending', NULL),
     (?, 'arrived', 'arrived', '{}')`, taskID, taskID)
 	execSeed(t, db, "pending branch Current Node", insertTaskCurrentNodeSQL, taskID, "node-agent", "pending")
-
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
@@ -378,7 +356,6 @@ INSERT INTO task_active_fanout_branches (
 	if _, err := provider.UpTo(t.Context(), 81); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
-
 	rows, err := db.Query(`
 SELECT
     transition_branch_key,

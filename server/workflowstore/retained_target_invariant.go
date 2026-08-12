@@ -1,11 +1,10 @@
 package workflowstore
 
 import (
-	"errors"
-	"log/slog"
-
 	"core/server/workflow"
 	"core/shared/invariant"
+	"errors"
+	"log/slog"
 )
 
 const retainedTargetInvariantOperation = "workflow.retained_target.resolve"
@@ -21,25 +20,21 @@ func (workflowInvariantSlogSink) RecordInvariantDiagnostic(diagnostic invariant.
 	attributes = append(attributes, "stack", diagnostic.Stack)
 	slog.Error("workflow invariant violation", attributes...)
 }
-
 func retainedTargetInvariantPolicy() invariant.Policy {
 	return invariant.NewPolicy(invariant.WithSink(workflowInvariantSlogSink{}))
 }
-
 func checkRetainedTargetInvariantBeforeMutation(detail workflow.RetainedTargetInvariantDetail) {
 	policy := retainedTargetInvariantPolicy()
 	if policy.Mode() == invariant.ModePanic {
 		policy.Check(false, retainedTargetInvariantDiagnostic(detail))
 	}
 }
-
 func reportRetainedTargetInvariantAfterCommit(detail workflow.RetainedTargetInvariantDetail) {
 	policy := retainedTargetInvariantPolicy()
 	if policy.Mode() == invariant.ModeDiagnostic {
 		policy.Check(false, retainedTargetInvariantDiagnostic(detail))
 	}
 }
-
 func retainedTargetInvariantDiagnostic(detail workflow.RetainedTargetInvariantDetail) invariant.Diagnostic {
 	fields := map[invariant.Field]string{
 		invariant.FieldOperation:    retainedTargetInvariantOperation,
@@ -59,7 +54,6 @@ func retainedTargetInvariantDiagnostic(detail workflow.RetainedTargetInvariantDe
 		Fields: fields,
 	}
 }
-
 func reportRetainedTargetInvariantError(err error) {
 	var invariantErr workflow.RetainedTargetInvariantError
 	if errors.As(err, &invariantErr) {

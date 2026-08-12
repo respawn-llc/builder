@@ -194,10 +194,10 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 		transition, ok := analyzer.applyEdge(initial, edge)
 		if ok {
 			if fanout, exists := analyzer.staticFanouts[edge.TransitionGroupID]; exists {
+				invocationID := uint64(1)
 				transition.target.staticInvocation = staticFanoutInvocation{
 					groupID: edge.TransitionGroupID, incomingBranch: initial.branch,
-					entrySessionID: initial.activeSourceSessionID, entryKnown: initial.activeSourceKnown,
-					sibling: TransitionBranchKey(edge.Key), joinID: fanout.joinID,
+					invocationID: invocationID, sibling: TransitionBranchKey(edge.Key), joinID: fanout.joinID,
 				}
 				transition.target.joinMode = reuseJoinComplete
 			}
@@ -545,6 +545,16 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 	}
 	queue := make([]int, 0, len(initial))
 	queued := make(map[int]struct{}, len(initial))
+	var invocationID uint64
+	for _, transition := range initial {
+		if transition.target.staticInvocation.invocationID > invocationID {
+			invocationID = transition.target.staticInvocation.invocationID
+		}
+	}
+	nextInvocationID := func() uint64 {
+		invocationID++
+		return invocationID
+	}
 	enqueue := func(stateID int) {
 		if _, exists := queued[stateID]; exists {
 			return
@@ -567,7 +577,7 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 			continue
 		}
 		processed[stateID] = true
-		groups := a.stateGroups(graph.states[stateID])
+		groups := a.stateGroups(graph.states[stateID], nextInvocationID)
 		if groups == nil {
 			groups = []reuseGroup{}
 		}
@@ -620,7 +630,7 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 	return graph
 }
 
-func (a sessionReuseAnalyzer) stateGroups(state reusePathState) []reuseGroup {
+func (a sessionReuseAnalyzer) stateGroups(state reusePathState, nextInvocationID func() uint64) []reuseGroup {
 	groups := a.groupsBySource[state.nodeID]
 	if len(groups) == 0 {
 		return nil
@@ -629,15 +639,20 @@ func (a sessionReuseAnalyzer) stateGroups(state reusePathState) []reuseGroup {
 	for _, group := range groups {
 		edges := a.edgesByGroup[group.ID]
 		transitions := make([]reuseTransition, 0, len(edges))
+		invocationID := uint64(0)
+		fanout, completeFanout := a.staticFanouts[group.ID]
+		if completeFanout {
+			invocationID = nextInvocationID()
+		}
 		for _, edge := range edges {
 			transition, ok := a.applyEdge(state, edge)
 			if ok {
-				if fanout, exists := a.staticFanouts[group.ID]; exists {
+				if completeFanout {
 					transition.target.staticInvocation = staticFanoutInvocation{
 						groupID: group.ID, incomingBranch: state.branch,
 						entry: state.staticSource, sibling: TransitionBranchKey(edge.Key),
-						entrySessionID: state.activeSourceSessionID, entryKnown: state.activeSourceKnown,
-						joinID: fanout.joinID,
+						invocationID: invocationID,
+						joinID:       fanout.joinID,
 					}
 					transition.target.joinMode = reuseJoinComplete
 				} else {
@@ -873,8 +888,7 @@ type staticFanoutInvocation struct {
 	groupID        TransitionGroupID
 	incomingBranch reuseBranch
 	entry          staticContinuationSource
-	entrySessionID runtimeids.SessionID
-	entryKnown     bool
+	invocationID   uint64
 	sibling        TransitionBranchKey
 	joinID         NodeID
 }
@@ -891,7 +905,11 @@ func validateStaticContinuationSources(def Definition, start NodeID) []EdgeID {
 		staticSource: staticContinuationSource{kind: staticContinuationSourceAbsent},
 	}
 	transitions := make([]reuseTransition, 0, len(analyzer.groupsBySource[start]))
-	for _, group := range analyzer.stateGroups(initial) {
+	var invocationID uint64
+	for _, group := range analyzer.stateGroups(initial, func() uint64 {
+		invocationID++
+		return invocationID
+	}) {
 		transitions = append(transitions, group.transitions...)
 	}
 	analyzer.buildGraph(transitions)
