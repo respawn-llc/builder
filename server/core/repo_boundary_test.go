@@ -218,7 +218,7 @@ func TestSharedClientUIRemainsDTOOnly(t *testing.T) {
 		"TranscriptMessage.UnmarshalJSON":                         {},
 		"TranscriptUserRow.UnmarshalJSON":                         {},
 		"TranscriptAssistantRow.UnmarshalJSON":                    {},
-		"decodeTranscriptMessageRow":                               {},
+		"decodeTranscriptMessageRow":                              {},
 		"unmarshalTranscriptEvent":                                {},
 		"decodeTranscriptPayload":                                 {},
 		"CompactionLifecycle.IsRunning":                           {},
