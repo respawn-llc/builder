@@ -16,6 +16,32 @@ import (
 	"core/shared/serverapi"
 )
 
+// CurrentNodeInterruptionPostCommitDiagnostic reports that interruption
+// scheduling committed but its Task event could not be delivered.
+type CurrentNodeInterruptionPostCommitDiagnostic struct {
+	Reference workflow.CurrentNodeReference
+}
+
+func (e *CurrentNodeInterruptionPostCommitDiagnostic) Error() string {
+	if e == nil {
+		return "current node interruption committed with a Task event diagnostic"
+	}
+	return fmt.Sprintf("current node interruption %v committed with a Task event diagnostic", e.Reference)
+}
+
+func currentNodeInterruptionPostCommitDiagnostic(
+	reference workflow.CurrentNodeReference,
+	cause error,
+) error {
+	if cause == nil {
+		return nil
+	}
+	return errors.Join(
+		&CurrentNodeInterruptionPostCommitDiagnostic{Reference: reference},
+		cause,
+	)
+}
+
 func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, fmt.Errorf("task id is required")
@@ -313,12 +339,17 @@ func currentNodeSchedulingFromRow(row sqlitegen.ListTaskCurrentNodesRow) (*workf
 	return scheduling, nil
 }
 
-func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNode) error {
+func insertTaskCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+	associatedAt time.Time,
+) error {
 	node, err := q.GetWorkflowNode(ctx, string(currentNode.Reference.NodeID))
 	if err != nil {
 		return fmt.Errorf("resolve current node kind: %w", err)
 	}
-	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind))
+	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind), associatedAt)
 }
 
 func insertTaskCurrentNodeWithKind(
@@ -326,6 +357,7 @@ func insertTaskCurrentNodeWithKind(
 	q *sqlitegen.Queries,
 	currentNode workflow.CurrentNode,
 	nodeKind workflow.NodeKind,
+	associatedAt time.Time,
 ) error {
 	switch nodeKind {
 	case workflow.NodeKindAgent:
@@ -343,7 +375,27 @@ func insertTaskCurrentNodeWithKind(
 	if err != nil {
 		return err
 	}
-	return q.InsertTaskCurrentNode(ctx, params)
+	if currentNode.SessionID != nil && nodeKind != workflow.NodeKindAgent {
+		return fmt.Errorf("%s current node cannot retain a Session", nodeKind)
+	}
+	if err := q.InsertTaskCurrentNode(ctx, params); err != nil {
+		return err
+	}
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+		SessionID:    *currentNode.SessionID,
+		CurrentNode:  currentNode.Reference,
+		AssociatedAt: associatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := bindSessionToTask(ctx, q, association); err != nil {
+		return err
+	}
+	return upsertTaskSessionAssociation(ctx, q, association)
 }
 
 func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {
@@ -518,7 +570,10 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
 }
 
 // InterruptCurrentNode records an interruption for ready or admitted
@@ -549,7 +604,46 @@ func (s *Store) InterruptCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
+}
+
+func (s *Store) ReplaceUserInterruptionWithAssignmentFailure(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	detail workflow.CurrentNodeInterruptionDetail,
+) error {
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("encode current node interruption detail: %w", err)
+	}
+	now := s.now().UTC().UnixMilli()
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	replaced, err := s.queries.ReplaceUserInterruptionWithAssignmentFailure(
+		ctx,
+		sqlitegen.ReplaceUserInterruptionWithAssignmentFailureParams{
+			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: branchScoped},
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if replaced != 1 {
+		return sql.ErrNoRows
+	}
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -595,7 +689,7 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		}
 		seenTasks[reference.TaskID] = struct{}{}
 		if err := s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted); err != nil {
-			return references, err
+			return references, currentNodeInterruptionPostCommitDiagnostic(reference, err)
 		}
 	}
 	return references, nil

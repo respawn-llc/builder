@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -40,6 +41,10 @@ type CurrentNodeCompletionResult struct {
 	PostCompletionEligible bool
 }
 
+func (r CurrentNodeCompletionResult) Committed() bool {
+	return r.PendingApproval != nil || len(r.Mutation.Removed) != 0
+}
+
 // ErrCurrentNodeCompletionSelectorAmbiguous means a completion selector
 // matches several Current Nodes. Callers must choose a narrower Session or
 // Task selector; Current Nodes are intentionally not external completion
@@ -49,6 +54,29 @@ var ErrCurrentNodeCompletionSelectorAmbiguous = errors.New("current node complet
 type IdleCurrentNodeSelector struct {
 	TaskID    *workflow.TaskID
 	SessionID *runtimeids.SessionID
+}
+
+func (s *Store) publishCommittedCurrentNodeCompletionEvent(
+	ctx context.Context,
+	source workflow.CurrentNodeReference,
+) {
+	err := s.publishCurrentNodeTaskEvent(
+		ctx,
+		source.TaskID,
+		serverapi.WorkflowProjectEventActionCompleted,
+	)
+	if err == nil {
+		return
+	}
+	attrs := []any{
+		"task_id", source.TaskID,
+		"node_id", source.NodeID,
+		"error", err,
+	}
+	if branchKey, branchScoped := source.TransitionBranchKey(); branchScoped {
+		attrs = append(attrs, "transition_branch_key", branchKey)
+	}
+	slog.Warn("record committed Current Node completion event diagnostic", attrs...)
 }
 
 // ResolveIdleExecutableCurrentNode selects exactly one current executable node
@@ -225,9 +253,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if len(result.Mutation.Removed) > 0 {
-			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-				return CurrentNodeCompletionResult{}, err
-			}
+			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
 		}
 		return result, nil
 	}
@@ -242,6 +268,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			prepared.OutputValues,
 			s.roleResolver,
 			s.resolveRetainedSessionSelection,
+			nowTime,
 		)
 		if err != nil {
 			return CurrentNodeCompletionResult{}, err
@@ -255,9 +282,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
 		if len(result.Mutation.Removed) > 0 {
-			if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-				return CurrentNodeCompletionResult{}, err
-			}
+			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
 		}
 		return result, nil
 	}
@@ -320,7 +345,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if removed != 1 {
 		return CurrentNodeCompletionResult{}, sql.ErrNoRows
 	}
-	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode, nowTime); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(prepared.Source.TaskID), now); err != nil {
@@ -345,9 +370,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}
 		result.AutomaticIntents = []CurrentNodeAutomaticIntent{intent}
 	}
-	if err := s.publishCurrentNodeTaskEvent(ctx, prepared.Source.TaskID, serverapi.WorkflowProjectEventActionCompleted); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
+	s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
 	return result, nil
 }
 
