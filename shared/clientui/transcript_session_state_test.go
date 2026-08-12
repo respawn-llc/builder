@@ -3,13 +3,7 @@ package clientui
 import (
 	"testing"
 	"time"
-
-	"core/shared/textutil"
 )
-
-func goalFixture(s RuntimeGoalStatus) *Goal {
-	return &Goal{ID: "goal-1", Objective: "Ship it", Status: s, CreatedAt: time.Unix(1_700_000_000, 0), UpdatedAt: time.Unix(1_700_000_001, 0)}
-}
 
 func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T) {
 	cacheHit := 80
@@ -22,10 +16,10 @@ func TestTranscriptContextGoalAndCompactionFactsValidateTypedState(t *testing.T)
 		t.Fatalf("validate context usage: %v", err)
 	}
 
-	goal := TranscriptGoalStatus{
-		Goal:         &TranscriptGoal{Goal: goalFixture(RuntimeGoalStatusActive)},
-		Availability: textutil.Value(GoalAvailabilityAvailable),
-	}
+	goal := TranscriptGoalStatus{Goal: &TranscriptGoal{Goal: &Goal{
+		ID: "goal-1", Objective: "Ship it", Status: RuntimeGoalStatusActive,
+		CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0),
+	}}}
 	if err := goal.Validate(); err != nil {
 		t.Fatalf("validate goal status: %v", err)
 	}
@@ -49,13 +43,10 @@ func TestTranscriptContextGoalAndCompactionFactsRejectInvalidState(t *testing.T)
 	if err := (TranscriptContextUsage{WindowTokens: 0}).Validate(); err == nil {
 		t.Fatal("accepted context usage without a window")
 	}
-	if err := (TranscriptGoalStatus{
-		Goal: &TranscriptGoal{
-			Goal:      goalFixture(RuntimeGoalStatusComplete),
-			Suspended: true,
-		},
-		Availability: textutil.Value(GoalAvailabilityAvailable),
-	}).Validate(); err == nil {
+	if err := (TranscriptGoalStatus{Goal: &TranscriptGoal{
+		Goal:      &Goal{ID: "goal-1", Objective: "Ship it", Status: RuntimeGoalStatusComplete, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
+		Suspended: true,
+	}}).Validate(); err == nil {
 		t.Fatal("accepted suspended completed goal")
 	}
 	if err := (TranscriptCompactionStatus{

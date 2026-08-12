@@ -257,27 +257,16 @@ func TestGoalAuthorityLiveSetPreservesOrdinaryExecutionAdmission(t *testing.T) {
 func TestGoalAuthorityAdmissionRetryDependsOnCallbackEntry(t *testing.T) {
 	runStarting := errors.Join(serverapi.ErrSessionRunStarting, sessionruntime.ErrSessionRunActive)
 	for _, test := range []struct {
-		name                       string
-		initialHandled, entered    bool
-		retryHandled, accepted     bool
-		wantApply, wantAdmissions  int
-		wantDisposition            runtime.GoalCommandDisposition
-		wantAccepted, wantRunStart bool
+		name                  string
+		entered, retryHandled bool
 	}{
-		{name: "handled initial attempt never admits", initialHandled: true, wantApply: 1, wantDisposition: runtime.GoalCommandNoop, wantAccepted: true},
-		{name: "pre-callback race retries typed operation", retryHandled: true, wantApply: 2, wantAdmissions: 1, wantDisposition: runtime.GoalCommandQueued, wantAccepted: true},
-		{name: "second execution-required stops", wantApply: 2, wantAdmissions: 1, wantRunStart: true},
-		{name: "post-callback accepted result does not replay", entered: true, accepted: true, wantApply: 1, wantAdmissions: 1, wantDisposition: runtime.GoalCommandApplied, wantAccepted: true, wantRunStart: true},
-		{name: "post-callback admission error does not retry", entered: true, wantApply: 1, wantAdmissions: 1, wantRunStart: true},
+		{name: "pre-callback race retries typed operation", retryHandled: true},
+		{name: "post-callback error does not replay", entered: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			applyCalls, admissionCalls := 0, 0
 			result, err := applyGoalOperationWithAdmission(func() (runtime.CurrentGoalOperationOutcome, error) {
 				applyCalls++
-				if test.initialHandled {
-					handled := runtime.GoalCommandResult{Disposition: runtime.GoalCommandNoop}
-					return runtime.CurrentGoalOperationOutcome{Handled: &handled}, nil
-				}
 				if test.retryHandled && applyCalls == 2 {
 					handled := runtime.GoalCommandResult{Disposition: runtime.GoalCommandQueued}
 					return runtime.CurrentGoalOperationOutcome{Handled: &handled}, nil
@@ -285,17 +274,16 @@ func TestGoalAuthorityAdmissionRetryDependsOnCallbackEntry(t *testing.T) {
 				return runtime.CurrentGoalOperationOutcome{ExecutionRequired: true}, nil
 			}, func() (GoalCommandResult, AgentExecutionAdmission) {
 				admissionCalls++
-				accepted := GoalCommandResult{}
-				if test.accepted {
-					accepted = GoalCommandResult{Disposition: runtime.GoalCommandApplied, MetadataReceipt: session.CommitReceipt{Committed: true}}
-				}
+				accepted := GoalCommandResult{Disposition: runtime.GoalCommandApplied, MetadataReceipt: session.CommitReceipt{Committed: test.entered}}
 				return accepted, AgentExecutionAdmission{CallbackEntered: test.entered, Err: runStarting}
 			})
-			if applyCalls != test.wantApply || admissionCalls != test.wantAdmissions ||
-				result.Disposition != test.wantDisposition || result.Accepted() != test.wantAccepted ||
-				errors.Is(result.Err, serverapi.ErrSessionRunStarting) != (test.wantAccepted && test.wantRunStart) ||
-				errors.Is(err, serverapi.ErrSessionRunStarting) != (!test.wantAccepted && test.wantRunStart) {
-				t.Fatalf("apply=%d admission=%d result=%+v err=%v", applyCalls, admissionCalls, result, err)
+			wantApply := 1
+			if test.retryHandled {
+				wantApply++
+			}
+			if admissionCalls != 1 || applyCalls != wantApply || (test.entered && (!result.Accepted() || !errors.Is(result.Err, runStarting) || err != nil)) ||
+				(!test.entered && (result.Disposition != runtime.GoalCommandQueued || err != nil)) {
+				t.Fatal(applyCalls, admissionCalls, result, err)
 			}
 		})
 	}

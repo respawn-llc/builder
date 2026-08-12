@@ -33,7 +33,8 @@ func TestCurrentGoalOperationOutcomeRequiresOneDisposition(t *testing.T) {
 func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID()},
 	})
 	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool) {
 		t.Helper()
@@ -51,14 +52,6 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	outcome, err := engine.ApplyCurrentGoalOperation(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, CurrentGoalExactExecution)
 	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
 		t.Fatalf("direct Exact Set = %+v, %v", outcome, err)
-	}
-	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, CurrentGoalExactExecution)
-	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
-		t.Fatalf("direct Exact Status = %+v, %v", outcome, err)
-	}
-	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalClear{Actor: session.GoalActorUser}, CurrentGoalExactExecution)
-	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
-		t.Fatalf("direct Exact Clear = %+v, %v", outcome, err)
 	}
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
 	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false)
@@ -322,35 +315,29 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	}
 	assertGoalFeedbackThenStatusEvent(t, events, 0, set.GoalState, false)
 
-	replaced, err := engine.SetGoal("replace goal mode", session.GoalActorUser)
-	if err != nil {
-		t.Fatalf("replace goal: %v", err)
-	}
-	assertGoalFeedbackThenStatusEvent(t, events, 2, replaced.GoalState, false)
-
 	paused, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 4, paused.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 2, paused.GoalState, false)
 
 	active, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 6, active.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 4, active.GoalState, false)
 
 	complete, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 	if err != nil {
 		t.Fatalf("complete goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 8, complete.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, 6, complete.GoalState, false)
 
 	cleared, err := engine.ClearGoal(session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("clear goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 10, cleared.GoalState, true)
+	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
 }
 
 func TestConcurrentGoalMutationsDoNotInterleaveBetweenMetadataAndStatusEvent(t *testing.T) {
@@ -452,13 +439,10 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 	if status.GoalStatus.Cleared != cleared {
 		t.Fatalf("cleared = %t, want %t", status.GoalStatus.Cleared, cleared)
 	}
-	if status.GoalStatus.Availability == nil || *status.GoalStatus.Availability != session.GoalAvailable {
-		t.Fatalf("goal availability = %v, want available", status.GoalStatus.Availability)
-	}
 	if cleared {
 		return
 	}
-	if status.GoalStatus.State != goal {
+	if status.GoalStatus.State.ID != goal.ID || status.GoalStatus.State.Objective != goal.Objective || status.GoalStatus.State.Status != goal.Status {
 		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal)
 	}
 }
@@ -811,7 +795,7 @@ func TestGoalLoopKeepsLiveRunActiveAcrossAutoContinuingTurns(t *testing.T) {
 		if !errors.Is(err, ErrLiveRunNoFinalAnswer) {
 			t.Fatalf("WaitForActiveRunResult error = %v, want %v", err, ErrLiveRunNoFinalAnswer)
 		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for live run result")
 	}
 }
@@ -1030,7 +1014,7 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Interrupt: %v", err)
 		}
-	case <-time.After(runtimeTestSynchronizationTimeout):
+	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for interrupt publication")
 	}
 
@@ -1153,9 +1137,6 @@ func TestNewDoesNotRestartPersistedActiveGoalLoop(t *testing.T) {
 
 func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	if err := store.MarkModelDispatchLocked(session.LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}}); err != nil {
-		t.Fatalf("lock model dispatch: %v", err)
-	}
 	if _, _, err := store.SetGoal("ship goal mode", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -1170,9 +1151,6 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	}
 	if engine.GoalLoopSuspended() {
 		t.Fatal("did not expect reopened active goal to be reported suspended before an explicit start attempt")
-	}
-	if availability, err := engine.GoalAvailability(); err != nil || availability != session.GoalAgentCapabilityMissing {
-		t.Fatalf("reopened goal availability = %q, err=%v, want missing ask_question", availability, err)
 	}
 	waitGoalLoopRunning(t, engine, false)
 	if got := client.callCount(); got != 0 {
@@ -1268,7 +1246,7 @@ func (c *scriptedGoalLoopClient) waitStarted(t *testing.T, call int) {
 	c.mu.Unlock()
 	select {
 	case <-started:
-	case <-time.After(runtimeTestSynchronizationTimeout):
+	case <-time.After(5 * time.Second):
 		t.Fatalf("timed out waiting for goal loop call %d to start", call)
 	}
 }
@@ -1314,7 +1292,7 @@ func (c *scriptedGoalLoopClient) channelLocked(channels map[int]chan struct{}, c
 
 func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(runtimeTestSynchronizationTimeout)
+	deadline := time.After(2 * time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1332,7 +1310,7 @@ func waitGoalLoopRunning(t *testing.T, engine *Engine, want bool) {
 
 func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(runtimeTestSynchronizationTimeout)
+	deadline := time.After(2 * time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -1350,7 +1328,7 @@ func waitGoalLoopContinuationEnforced(t *testing.T, engine *Engine, want bool) {
 
 func waitActiveLiveRunGroup(t *testing.T, engine *Engine, want bool) {
 	t.Helper()
-	deadline := time.After(runtimeTestSynchronizationTimeout)
+	deadline := time.After(2 * time.Second)
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {

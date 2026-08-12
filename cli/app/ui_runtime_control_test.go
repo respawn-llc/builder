@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/shared/clientui"
@@ -136,36 +137,40 @@ func (f *runtimeControlFakeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 func (f *runtimeControlFakeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
 	f.setGoalArg = objective
-	f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: "active"}, Availability: textutil.Value(clientui.GoalAvailabilityAvailable)}
-	return clientui.GoalMutationResult{Goal: f.goal.Goal, Availability: f.goal.Availability}, f.err
+	f.goal = runtimeControlTestGoal(objective, clientui.RuntimeGoalStatusActive)
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
 func (f *runtimeControlFakeClient) PauseGoal() (clientui.GoalMutationResult, error) {
 	f.pauseGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: textutil.Value(clientui.GoalAvailabilityAvailable)}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "paused"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal, Availability: f.goal.Availability}, f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
 func (f *runtimeControlFakeClient) ResumeGoal() (clientui.GoalMutationResult, error) {
 	f.resumeGoalCalls++
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: textutil.Value(clientui.GoalAvailabilityAvailable)}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "active"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal, Availability: f.goal.Availability}, f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
 func (f *runtimeControlFakeClient) CompleteGoal() (clientui.GoalMutationResult, error) {
 	if f.goal == nil {
-		f.goal = &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: "objective"}, Availability: textutil.Value(clientui.GoalAvailabilityAvailable)}
+		f.goal = runtimeControlTestGoal("objective", clientui.RuntimeGoalStatusActive)
 	}
 	f.goal.Status = "complete"
-	return clientui.GoalMutationResult{Goal: f.goal.Goal, Availability: f.goal.Availability}, f.err
+	return clientui.GoalMutationResult{Goal: f.goal.Goal}, f.err
 }
 func (f *runtimeControlFakeClient) ClearGoal() (clientui.GoalMutationResult, error) {
 	f.clearGoalCalls++
 	f.goal = nil
-	return clientui.GoalMutationResult{Availability: textutil.Value(clientui.GoalAvailabilityAvailable)}, f.err
+	return clientui.GoalMutationResult{}, f.err
+}
+func runtimeControlTestGoal(objective string, status clientui.RuntimeGoalStatus) *clientui.RuntimeGoal {
+	now := time.Unix(1, 0)
+	return &clientui.RuntimeGoal{Goal: &clientui.Goal{ID: "goal-1", Objective: objective, Status: status, CreatedAt: now, UpdatedAt: now}}
 }
 func (f *runtimeControlFakeClient) AppendCommittedEntry(role, text string) error {
 	return f.AppendCommittedEntryWithNoticeID(role, text, "")

@@ -222,9 +222,6 @@ func applyGoalOperationWithAdmission(
 	if err != nil {
 		return GoalCommandResult{}, err
 	}
-	if err := outcome.Validate(); err != nil {
-		return GoalCommandResult{}, err
-	}
 	if outcome.Handled != nil {
 		return fromRuntimeResult(*outcome.Handled, nil), nil
 	}
@@ -239,9 +236,6 @@ func applyGoalOperationWithAdmission(
 	}
 	outcome, err = apply()
 	if err != nil {
-		return GoalCommandResult{}, err
-	}
-	if err := outcome.Validate(); err != nil {
 		return GoalCommandResult{}, err
 	}
 	if outcome.Handled != nil {

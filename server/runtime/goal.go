@@ -97,13 +97,7 @@ func currentGoalHandled(result GoalCommandResult, err error) (CurrentGoalOperati
 	if err != nil {
 		return CurrentGoalOperationOutcome{}, err
 	}
-	outcome := CurrentGoalOperationOutcome{Handled: &result}
-	return outcome, outcome.Validate()
-}
-
-func currentGoalExecutionRequired() (CurrentGoalOperationOutcome, error) {
-	outcome := CurrentGoalOperationOutcome{ExecutionRequired: true}
-	return outcome, outcome.Validate()
+	return CurrentGoalOperationOutcome{Handled: &result}, nil
 }
 
 func (e *Engine) currentGoalDisposition(disposition GoalCommandDisposition, goal session.GoalState, cleared bool) (CurrentGoalOperationOutcome, error) {
@@ -133,7 +127,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 				return CurrentGoalOperationOutcome{}, session.GoalAgentOverwriteBlockedError{Goal: *current}
 			}
 		}
-		return currentGoalExecutionRequired()
+		return CurrentGoalOperationOutcome{ExecutionRequired: true}, nil
 	case CurrentGoalStatus:
 		status := operation.Status
 		if current := e.Goal(); current != nil && current.Status == status {
@@ -152,7 +146,7 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 			return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
 		}
 		if status == session.GoalStatusActive {
-			return currentGoalExecutionRequired()
+			return CurrentGoalOperationOutcome{ExecutionRequired: true}, nil
 		}
 		return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
 	case CurrentGoalClear:

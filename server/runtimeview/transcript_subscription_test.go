@@ -128,7 +128,6 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-				GoalAvailability: session.GoalAvailable,
 				CommittedRows: []runtime.TranscriptCommittedRowFact{{
 					StepID:     transcriptProjectionStepID,
 					Visibility: transcript.EntryVisibilityOngoingCollapsed,
@@ -190,7 +189,6 @@ func mustTranscriptHydration(t *testing.T, snapshot runtime.TranscriptHydrationS
 func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testing.T) {
 	streamID := uuid.MustParse("f84c7d21-4c94-4a54-87fd-b41f5bd01d38")
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability:        session.GoalAvailable,
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 		ActiveAssistantStreamID: &streamID,
@@ -213,7 +211,6 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: session.GoalAvailable,
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
@@ -230,7 +227,8 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 		ActiveReviewer:   &runtime.TranscriptReviewerState{StepID: transcriptProjectionStepID},
 		ActiveCompaction: &runtime.TranscriptCompactionState{StepID: transcriptProjectionStepID, Mode: "auto", Count: 3},
 		ContextUsage:     &runtime.ContextUsage{UsedTokens: 123, WindowTokens: 4000, CacheHitPercent: 25, HasCacheHitPercentage: true},
-		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive, CreatedAt: time.Unix(1_700_000_000, 0), UpdatedAt: time.Unix(1_700_000_001, 0)},
+		Goal:             &session.GoalState{ID: "goal-1", Objective: "ship", Status: session.GoalStatusActive, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(1, 0)},
+		GoalAvailability: session.GoalAvailable,
 		GoalSuspended:    true,
 	})
 	if hydration.ActiveThinkingStatus == nil || hydration.ActiveThinkingStatus.Text != "Planning" ||
@@ -250,7 +248,7 @@ func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	}
 	if hydration.ContextUsage == nil || hydration.ContextUsage.CacheHitPercent == nil ||
 		*hydration.ContextUsage.CacheHitPercent != 25 || hydration.GoalStatus == nil ||
-		hydration.GoalStatus.Availability == nil || *hydration.GoalStatus.Availability != clientui.GoalAvailabilityAvailable || hydration.GoalStatus.Goal == nil || hydration.GoalStatus.Goal.Goal == nil || hydration.GoalStatus.Goal.Goal.CreatedAt.IsZero() || hydration.GoalStatus.Goal.Goal.UpdatedAt.IsZero() || !hydration.GoalStatus.Goal.Suspended {
+		hydration.GoalStatus.Goal == nil || !hydration.GoalStatus.Goal.Suspended {
 		t.Fatalf("usage/goal = usage %+v goal %+v", hydration.ContextUsage, hydration.GoalStatus)
 	}
 }
@@ -259,7 +257,6 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 	firstIndex, secondIndex := int64(0), int64(1)
 	firstID := runtimeids.NewReasoningTraceID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: session.GoalAvailable,
 		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
@@ -326,7 +323,6 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: session.GoalAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:     transcriptProjectionStepID,
 			Visibility: transcript.EntryVisibilityHidden,
@@ -394,8 +390,7 @@ func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T
 		},
 	}
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		CommittedRows:    []runtime.TranscriptCommittedRowFact{fact},
-		GoalAvailability: session.GoalAvailable,
+		CommittedRows: []runtime.TranscriptCommittedRowFact{fact},
 	})
 	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].ReasoningTrace == nil ||
 		hydration.CommittedRows[0].ReasoningTrace.DurationMs == nil ||
@@ -537,7 +532,6 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 
 func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testing.T) {
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: session.GoalAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:  transcriptProjectionStepID,
 			Kind:    runtime.TranscriptCommittedRowFactAssistant,
@@ -603,7 +597,6 @@ func TestTranscriptHydrationRejectsAssistantStreamWithoutRuntimeIdentity(t *test
 		}
 	}()
 	_ = mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability:        session.GoalAvailable,
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 	})

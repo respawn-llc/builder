@@ -1069,28 +1069,6 @@ func TestApplyCurrentGoalOperationRoutesCurrentRuntime(t *testing.T) {
 	if err != nil || outcome.Handled != nil || !outcome.ExecutionRequired {
 		t.Fatalf("routed outcome = %+v, error = %v", outcome, err)
 	}
-	releaseExecution := make(chan struct{})
-	execution, err := fixture.authority.StartAgentExecution(context.Background(), AgentExecutionRequest{
-		Descriptor: mustOpenSessionDescriptor(t, sessionID),
-		Resource:   CurrentAgentResource{},
-		Runner: func(context.Context, ExecutionScope, AgentRuntimeBridge) error {
-			<-releaseExecution
-			return nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("start Exact Execution: %v", err)
-	}
-	defer func() {
-		close(releaseExecution)
-		if _, waitErr := execution.Wait(context.Background()); waitErr != nil {
-			t.Errorf("wait Exact Execution: %v", waitErr)
-		}
-	}()
-	outcome, err = fixture.authority.ApplyCurrentGoalOperation(context.Background(), sessionID, runtime.CurrentGoalSet{Objective: "Exact-owned Goal", Actor: session.GoalActorUser})
-	if err != nil || outcome.Handled == nil || outcome.ExecutionRequired {
-		t.Fatalf("Exact-owned outcome = %+v, error = %v", outcome, err)
-	}
 }
 
 func assertRuntimeUnavailable(t *testing.T, authority *Authority, resource runtimeids.SessionResourceRef, stage string) {

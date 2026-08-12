@@ -6,77 +6,45 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
-	"core/shared/textutil"
 )
 
 func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {
-	controls := &reconnectRetryRuntimeControlClient{
-		setGoalResp: serverapi.RuntimeGoalMutationResponse{
-			Pending:      &clientui.GoalPreview{Objective: "queued objective", Status: clientui.RuntimeGoalStatusActive},
-			Availability: textutil.Value(clientui.GoalAvailabilityAvailable),
-		},
-	}
-	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	model := newProjectedTestUIModel(runtimeClient, WithUISessionID("session-1"))
+	preview := &clientui.GoalPreview{Objective: "queued objective", Status: clientui.RuntimeGoalStatusActive}
+	model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{
+		setGoalResp: serverapi.RuntimeGoalMutationResponse{Pending: preview},
+	}), WithUISessionID("session-1"))
 	model.openGoalOverlay(nil, nil)
 
-	message := model.goalRuntimeCommand(goalRuntimeSet, "queued objective")().(goalRuntimeDoneMsg)
-	if message.mutation.Goal != nil ||
-		message.mutation.Pending == nil ||
-		message.mutation.Pending.Objective != "queued objective" ||
-		message.mutation.Pending.Status != clientui.RuntimeGoalStatusActive {
-		t.Fatalf("Goal command result = %+v, want identity-less queued preview", message.mutation)
-	}
+	message := model.goalRuntimeCommand(goalRuntimeSet, preview.Objective)().(goalRuntimeDoneMsg)
 	updateUIModel(t, model, message)
 
-	if model.goal.pending == nil ||
-		model.goal.pending.Objective != message.mutation.Pending.Objective ||
-		model.goal.pending.Status != message.mutation.Pending.Status ||
-		model.goal.goal != nil {
-		t.Fatalf("TUI queued Goal = pending %+v goal %+v, want typed preview only", model.goal.pending, model.goal.goal)
+	if message.mutation.Goal != nil || model.goal.goal != nil || model.goal.pending == nil || *model.goal.pending != *preview {
+		t.Fatalf("queued Goal result=%+v presentation=%+v, want identity-less preview", message.mutation, model.goal)
 	}
 }
 
-func TestGoalMutationWithoutAvailabilityPreservesAcceptedGoalCore(t *testing.T) {
+func TestGoalMutationFeedbackPreservesApprovedStateBoundaries(t *testing.T) {
 	now := time.Now()
-	goal := &clientui.Goal{
-		ID:        "goal-1",
-		Objective: "accepted objective",
-		Status:    clientui.RuntimeGoalStatusActive,
-		CreatedAt: now,
-		UpdatedAt: now,
+	goal := &clientui.Goal{ID: "goal-1", Objective: "accepted objective", Status: clientui.RuntimeGoalStatusActive, CreatedAt: now, UpdatedAt: now}
+	tests := []struct {
+		name      string
+		operation goalRuntimeOperation
+		mutation  clientui.GoalMutationResult
+	}{
+		{name: "authoritative Goal without availability", operation: goalRuntimeSet, mutation: clientui.GoalMutationResult{Goal: goal}},
+		{name: "Clear acceptance waits for authoritative update", operation: goalRuntimeClear},
 	}
-	model := newProjectedTestUIModel(nil, WithUISessionID("session-1"))
-	model.openGoalOverlay(nil, nil)
-	model.goalRuntimePending = goalRuntimePendingState{token: 1, inFlight: true, inFlightOperation: goalRuntimeSet}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newProjectedTestUIModel(nil, WithUISessionID("session-1"))
+			model.openGoalOverlay(&clientui.RuntimeGoal{Goal: goal}, nil)
+			model.goalRuntimePending = goalRuntimePendingState{token: 1, inFlight: true, inFlightOperation: test.operation}
 
-	updateUIModel(t, model, goalRuntimeDoneMsg{
-		token:     1,
-		sessionID: "session-1",
-		operation: goalRuntimeSet,
-		mutation:  clientui.GoalMutationResult{Goal: goal},
-	})
+			updateUIModel(t, model, goalRuntimeDoneMsg{token: 1, sessionID: "session-1", operation: test.operation, mutation: test.mutation})
 
-	if model.goal.goal == nil || *model.goal.goal != *goal {
-		t.Fatalf("TUI Goal = %+v, want accepted Goal core %+v", model.goal.goal, goal)
-	}
-}
-
-func TestGoalClearAcceptanceWaitsForAuthoritativeUpdate(t *testing.T) {
-	now := time.Now()
-	goal := &clientui.Goal{ID: "goal-1", Objective: "current objective", Status: clientui.RuntimeGoalStatusActive, CreatedAt: now, UpdatedAt: now}
-	model := newProjectedTestUIModel(nil, WithUISessionID("session-1"))
-	model.openGoalOverlay(&clientui.RuntimeGoal{Goal: goal}, nil)
-	model.goalRuntimePending = goalRuntimePendingState{token: 1, inFlight: true, inFlightOperation: goalRuntimeClear}
-
-	updateUIModel(t, model, goalRuntimeDoneMsg{
-		token:     1,
-		sessionID: "session-1",
-		operation: goalRuntimeClear,
-		mutation:  clientui.GoalMutationResult{},
-	})
-
-	if model.goal.goal == nil || *model.goal.goal != *goal {
-		t.Fatalf("TUI Goal = %+v, want current authoritative Goal preserved", model.goal.goal)
+			if model.goal.goal == nil || *model.goal.goal != *goal {
+				t.Fatalf("Goal presentation=%+v, want authoritative Goal preserved", model.goal.goal)
+			}
+		})
 	}
 }
