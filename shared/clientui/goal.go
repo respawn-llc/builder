@@ -14,10 +14,12 @@ const (
 )
 
 func (a GoalAvailability) Validate() error {
-	if a != GoalAvailabilityAvailable && a != GoalAvailabilityAgentCapabilityMissing {
+	switch a {
+	case GoalAvailabilityAvailable, GoalAvailabilityAgentCapabilityMissing:
+		return nil
+	default:
 		return fmt.Errorf("unknown goal availability %q", a)
 	}
-	return nil
 }
 
 type Goal struct {
@@ -29,7 +31,7 @@ type Goal struct {
 }
 
 func (g Goal) Validate() error {
-	if strings.TrimSpace(g.ID) == "" || strings.TrimSpace(g.Objective) == "" || (g.Status != RuntimeGoalStatusActive && g.Status != RuntimeGoalStatusPaused && g.Status != RuntimeGoalStatusComplete) || g.CreatedAt.IsZero() || g.UpdatedAt.IsZero() {
+	if strings.TrimSpace(g.ID) == "" || strings.TrimSpace(g.Objective) == "" || !validGoalStatus(g.Status) || g.CreatedAt.IsZero() || g.UpdatedAt.IsZero() {
 		return fmt.Errorf("invalid goal fields")
 	}
 	return nil
@@ -50,12 +52,12 @@ type GoalMutationResult struct {
 	Availability *GoalAvailability `json:"availability,omitempty"`
 }
 
-func ProjectGoal(goal *Goal, availability GoalAvailability) GoalEnvelope {
-	return GoalEnvelope{Goal: goal, Availability: availability}
-}
 func (g GoalEnvelope) Validate() error {
-	if err := g.Availability.Validate(); err != nil || g.Goal == nil {
+	if err := g.Availability.Validate(); err != nil {
 		return err
+	}
+	if g.Goal == nil {
+		return nil
 	}
 	return g.Goal.Validate()
 }
@@ -72,10 +74,12 @@ func (r GoalMutationResult) Validate() error {
 	if r.Goal != nil {
 		return r.Goal.Validate()
 	}
-	if r.Pending != nil {
-		if strings.TrimSpace(r.Pending.Objective) == "" || (r.Pending.Status != RuntimeGoalStatusActive && r.Pending.Status != RuntimeGoalStatusPaused && r.Pending.Status != RuntimeGoalStatusComplete) {
-			return fmt.Errorf("invalid goal preview fields")
-		}
+	if r.Pending != nil && (strings.TrimSpace(r.Pending.Objective) == "" || !validGoalStatus(r.Pending.Status)) {
+		return fmt.Errorf("invalid goal preview fields")
 	}
 	return nil
+}
+
+func validGoalStatus(status RuntimeGoalStatus) bool {
+	return status == RuntimeGoalStatusActive || status == RuntimeGoalStatusPaused || status == RuntimeGoalStatusComplete
 }

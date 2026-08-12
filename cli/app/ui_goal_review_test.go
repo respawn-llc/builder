@@ -61,3 +61,22 @@ func TestGoalMutationWithoutAvailabilityPreservesAcceptedGoalCore(t *testing.T) 
 		t.Fatalf("TUI Goal = %+v, want accepted Goal core %+v", model.goal.goal, goal)
 	}
 }
+
+func TestGoalClearAcceptanceWaitsForAuthoritativeUpdate(t *testing.T) {
+	now := time.Now()
+	goal := &clientui.Goal{ID: "goal-1", Objective: "current objective", Status: clientui.RuntimeGoalStatusActive, CreatedAt: now, UpdatedAt: now}
+	model := newProjectedTestUIModel(nil, WithUISessionID("session-1"))
+	model.openGoalOverlay(&clientui.RuntimeGoal{Goal: goal}, nil)
+	model.goalRuntimePending = goalRuntimePendingState{token: 1, inFlight: true, inFlightOperation: goalRuntimeClear}
+
+	updateUIModel(t, model, goalRuntimeDoneMsg{
+		token:     1,
+		sessionID: "session-1",
+		operation: goalRuntimeClear,
+		mutation:  clientui.GoalMutationResult{},
+	})
+
+	if model.goal.goal == nil || *model.goal.goal != *goal {
+		t.Fatalf("TUI Goal = %+v, want current authoritative Goal preserved", model.goal.goal)
+	}
+}

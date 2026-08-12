@@ -338,9 +338,7 @@ func writeGoalMutationText(stdout io.Writer, response serverapi.RuntimeGoalMutat
 	}
 	if response.Pending != nil {
 		fmt.Fprintf(stdout, "Goal: %s\nStatus: %s\n", response.Pending.Objective, response.Pending.Status)
-		return
 	}
-	fmt.Fprintln(stdout, "No goal")
 }
 
 func goalMutationCommandError(sessionID string, err error) error {

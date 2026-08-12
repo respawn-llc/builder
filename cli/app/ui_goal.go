@@ -313,26 +313,13 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 			overlayCmd = m.inputController().stopGoalFlowCmd()
 		}
 		return sequenceCmds(overlayCmd, followUpCmd)
-	case goalRuntimePause:
-		m.goal.pending = nil
-		if goal := goalCoreFromMutationResult(msg.mutation); goal != nil {
-			m.goal.goal = goal
-		}
-		return followUpCmd
-	case goalRuntimeResume:
-		m.goal.pending = nil
-		if goal := goalCoreFromMutationResult(msg.mutation); goal != nil {
-			m.goal.goal = goal
-		}
-		return followUpCmd
-	case goalRuntimeComplete:
+	case goalRuntimePause, goalRuntimeResume, goalRuntimeComplete:
 		m.goal.pending = nil
 		if goal := goalCoreFromMutationResult(msg.mutation); goal != nil {
 			m.goal.goal = goal
 		}
 		return followUpCmd
 	case goalRuntimeClear:
-		m.goal.goal = nil
 		m.goal.pending = nil
 		overlayCmd := tea.Cmd(nil)
 		if m.goal.open && strings.TrimSpace(m.goal.confirmMode) != "" {
@@ -547,17 +534,20 @@ func goalDisplay(goal *clientui.Goal, pending *clientui.GoalPreview) (clientui.R
 }
 
 func goalCoreFromMutationResult(result clientui.GoalMutationResult) *clientui.Goal {
-	if result.Goal == nil {
-		return nil
-	}
-	goal := *result.Goal
-	return &goal
+	return cloneGoalCore(result.Goal)
 }
 
 func goalCoreFromRuntimeGoal(runtimeGoal *clientui.RuntimeGoal) *clientui.Goal {
-	if runtimeGoal == nil || runtimeGoal.Goal == nil {
+	if runtimeGoal == nil {
 		return nil
 	}
-	goal := *runtimeGoal.Goal
+	return cloneGoalCore(runtimeGoal.Goal)
+}
+
+func cloneGoalCore(source *clientui.Goal) *clientui.Goal {
+	if source == nil {
+		return nil
+	}
+	goal := *source
 	return &goal
 }
