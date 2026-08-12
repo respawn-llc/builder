@@ -65,7 +65,8 @@ export function RootRoute() {
 
 function RoutePersistence() {
   const navigate = rootRouteApi.useNavigate();
-  const isHomeRoute = useMatch({ from: "/", shouldThrow: false }) !== undefined;
+  const homeMatch = useMatch({ from: "/", shouldThrow: false });
+  const isUnselectedHomeRoute = homeMatch !== undefined && homeMatch.search.projectId === undefined;
   const projectMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const projectId = projectMatch?.params.projectId ?? null;
   const workflowId = projectMatch?.search.workflowId;
@@ -73,7 +74,7 @@ function RoutePersistence() {
   useEffect(() => {
     if (claimRouteRestoreCheck()) {
       const restored = readLastProjectRoute();
-      if (isHomeRoute && restored !== null) {
+      if (isUnselectedHomeRoute && restored !== null) {
         // Session restore is startup state hydration, not a user-initiated destination change, so it
         // intentionally bypasses the animated app navigation API.
         void navigate({
@@ -87,7 +88,7 @@ function RoutePersistence() {
     if (projectId !== null) {
       writeLastProjectRoute({ projectId, workflowId });
     }
-  }, [isHomeRoute, projectId, workflowId, navigate]);
+  }, [isUnselectedHomeRoute, projectId, workflowId, navigate]);
 
   return null;
 }

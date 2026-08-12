@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 
-import type { ProjectSummary, SessionCatalogSummary } from "@/api";
+import type { SessionCatalogSummary } from "@/api";
 import { errorMessage } from "@/api";
 import {
   formatRelativeTime,
@@ -25,21 +25,21 @@ import { ProjectTasksSurface } from "./ProjectTasksSurface";
 type ProjectPrototypeTab = "tasks" | "sessions" | "subagents";
 
 export function ProjectPrototypeDetail({
-  project,
+  projectID,
   sidebarMode,
 }: Readonly<{
-  project: ProjectSummary;
+  projectID: string;
   sidebarMode: SidebarMode;
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
   const [tab, setTab] = useState<ProjectPrototypeTab>("tasks");
   const mainSessionsQuery = useInfiniteQuery({
-    ...mainSessionCatalogInfiniteQueryOptions(api, project.id),
+    ...mainSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "sessions",
   });
   const subagentSessionsQuery = useInfiniteQuery({
-    ...subagentSessionCatalogInfiniteQueryOptions(api, project.id),
+    ...subagentSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "subagents",
   });
 
@@ -62,7 +62,7 @@ export function ProjectPrototypeDetail({
       </div>
       <div className="min-h-0 flex-1">
         {tab === "tasks" ? (
-          <ProjectTasksSurface projectID={project.id} sidebarMode={sidebarMode} />
+          <ProjectTasksSurface projectID={projectID} sidebarMode={sidebarMode} />
         ) : (
           <SessionPrototypeList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
         )}

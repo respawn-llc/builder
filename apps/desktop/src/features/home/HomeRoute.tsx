@@ -178,11 +178,8 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
   useProjectCreationEvents(handleNativeProjectCreated);
 
   if (desktopChatEnabled) {
-    const selectedProject =
-      selectedProjectID === null
-        ? null
-        : (projectItems.find((project) => project.id === selectedProjectID) ?? null);
-    const detailKey = selectedProject !== null ? `project:${selectedProject.id}` : "inbox";
+    const selectedCategory = selectedProjectID === null ? prototypeCategory : "projects";
+    const detailKey = selectedProjectID === null ? "inbox" : `project:${selectedProjectID}`;
     return (
       <div className="h-full min-h-0" data-testid="home-route-root">
         {projectCreationDialog.fallback}
@@ -209,7 +206,7 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
                 void navigation.selectHomeProject(null);
               }
             }}
-            selectedCategory={prototypeCategory}
+            selectedCategory={selectedCategory}
             projectItems={projectItems}
             projectsQuery={projects}
             sidebarMode={sidebarMode}
@@ -217,10 +214,10 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
           />
           <section className="island-glass my-[var(--space-2)] mr-[var(--space-2)] min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
             <OverlappingCrossfade contentKey={detailKey}>
-              {selectedProject !== null ? (
+              {selectedProjectID !== null ? (
                 <ProjectPrototypeDetail
-                  key={selectedProject.id}
-                  project={selectedProject}
+                  key={selectedProjectID}
+                  projectID={selectedProjectID}
                   sidebarMode={sidebarMode}
                 />
               ) : (
