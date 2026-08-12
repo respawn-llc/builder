@@ -8310,6 +8310,45 @@ func (q *Queries) ReplacePendingInitialManagedBranchName(ctx context.Context, ar
 	return result.RowsAffected()
 }
 
+const replaceUserInterruptionWithAssignmentFailure = `-- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
+UPDATE task_current_nodes
+SET interruption_reason = 'workflow_runtime_start_failed',
+    interruption_detail_json = ?1,
+    interrupted_at_unix_ms = ?2
+WHERE task_id = ?3
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?4 AS TEXT))
+  AND (
+      (?5 IS NULL AND transition_branch_key IS NULL)
+      OR transition_branch_key = ?5
+  )
+  AND scheduling_state = 'interrupted'
+  AND interruption_reason = 'user_interrupt'
+`
+
+type ReplaceUserInterruptionWithAssignmentFailureParams struct {
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    interface{}
+}
+
+func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Context, arg ReplaceUserInterruptionWithAssignmentFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUserInterruptionWithAssignmentFailure,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, replaceUserInterruptionWithAssignmentFailure, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
 UPDATE workspaces
 SET chat_draft_json = ?1

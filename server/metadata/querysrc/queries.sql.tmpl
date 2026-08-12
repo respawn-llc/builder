@@ -2889,6 +2889,20 @@ WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state IN ('ready', 'admitted');
 
+-- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
+UPDATE task_current_nodes
+SET interruption_reason = 'workflow_runtime_start_failed',
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(sqlc.arg(node_id) AS TEXT))
+  AND (
+      (sqlc.narg(transition_branch_key) IS NULL AND transition_branch_key IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted'
+  AND interruption_reason = 'user_interrupt';
+
 -- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',

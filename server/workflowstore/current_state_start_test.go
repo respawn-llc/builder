@@ -11,6 +11,16 @@ import (
 	"core/shared/runtimeids"
 )
 
+type recordingCurrentNodeEventPublisher struct {
+	events []WorkflowEventRecord
+	err    error
+}
+
+func (p *recordingCurrentNodeEventPublisher) PublishWorkflowEvent(_ context.Context, event WorkflowEventRecord) error {
+	p.events = append(p.events, event)
+	return p.err
+}
+
 func TestTaskStartReplacesBacklogCurrentNodeWithFirstExecutableCurrentNode(t *testing.T) {
 	type fixture struct {
 		store      *Store
@@ -153,6 +163,31 @@ func TestAdmitCurrentNodeMovesReadyNodeToRestartMarker(t *testing.T) {
 	}
 }
 
+func TestReplaceUserInterruptionWithAssignmentFailure(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	reference := startTask(t, ctx, store, task.ID).Mutation.Created[0].Reference
+	if err := store.InterruptCurrentNode(ctx, reference, workflow.CurrentNodeInterruptionReasonUserInterrupt, workflow.CurrentNodeInterruptionDetail{}); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	detail := workflow.NewCurrentNodeInterruptionDetail("workflow_runtime_start_failed", errors.New("assignment failed"))
+	if err := store.ReplaceUserInterruptionWithAssignmentFailure(ctx, reference, detail); err != nil {
+		t.Fatalf("ReplaceUserInterruptionWithAssignmentFailure: %v", err)
+	}
+	nodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil ||
+		len(nodes) != 1 ||
+		nodes[0].Scheduling == nil ||
+		nodes[0].Scheduling.Interruption == nil ||
+		nodes[0].Scheduling.Interruption.Reason != "workflow_runtime_start_failed" {
+		t.Fatalf("Current Nodes after assignment failure = %+v, %v", nodes, err)
+	}
+	if err := store.ReplaceUserInterruptionWithAssignmentFailure(ctx, reference, detail); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("second replacement error = %v, want stale user-interruption absence", err)
+	}
+}
+
 func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesApprovalSources(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	createLinkedValidWorkflow(t, ctx, store, binding.ProjectID)
@@ -194,9 +229,13 @@ func TestRecoverExecutableCurrentNodesInterruptsReadyAndAdmittedButPreservesAppr
 	}
 
 	reason := workflow.CurrentNodeInterruptionReason("workflow_startup_recovery")
+	deliveryErr := errors.New("recovery event delivery unavailable")
+	publisher := &recordingCurrentNodeEventPublisher{err: deliveryErr}
+	store.SetWorkflowEventPublisher(publisher)
 	recovered, err := store.RecoverExecutableCurrentNodes(ctx, reason, workflow.CurrentNodeInterruptionDetail{Code: string(reason)})
-	if err != nil {
-		t.Fatalf("RecoverExecutableCurrentNodes: %v", err)
+	var diagnostic *CurrentNodeInterruptionPostCommitDiagnostic
+	if !errors.As(err, &diagnostic) || !errors.Is(err, deliveryErr) {
+		t.Fatalf("RecoverExecutableCurrentNodes error = %v, want committed diagnostic wrapping %v", err, deliveryErr)
 	}
 	if len(recovered) != 2 {
 		t.Fatalf("recovered current nodes = %d, want ready and admitted nodes only", len(recovered))

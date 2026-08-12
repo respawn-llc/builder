@@ -26,6 +26,7 @@ import (
 type fakeWorkflowController struct {
 	completed                           atomic.Int64
 	completeErr                         error
+	completeResult                      *workflowruntime.CompletionResult
 	violations                          atomic.Int64
 	protocolBudgetResets                atomic.Int64
 	protocolBudgetResetErr              error
@@ -41,6 +42,13 @@ func (c *fakeWorkflowController) CompleteCurrentNode(_ context.Context, req work
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
+	if c.completeResult != nil {
+		result := *c.completeResult
+		if result.IsApplied() {
+			c.completed.Add(1)
+		}
+		return result, c.completeErr
+	}
 	if c.completeErr != nil {
 		return workflowruntime.CompletionResult{}, c.completeErr
 	}
@@ -79,6 +87,17 @@ func (c *fakeWorkflowController) completionRequests() []workflowruntime.Completi
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]workflowruntime.CompletionRequest(nil), c.requests...)
+}
+
+func newAppliedDiagnosticWorkflowController(diagnostic error) *fakeWorkflowController {
+	applied := workflowruntime.CompletionResult{
+		TransitionID: "transition-applied",
+		State:        workflowruntime.CompletionStateApplied,
+	}
+	return &fakeWorkflowController{
+		completeErr:    diagnostic,
+		completeResult: &applied,
+	}
 }
 
 type fakeTaskAwarenessSource struct {
@@ -899,12 +918,16 @@ func TestWorkflowDuplicateCompleteNodePreflightSkipsSideEffects(t *testing.T) {
 func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
+	var events []Event
+	diagnostic := errors.New("successor assignment observer failed")
+	controller := newAppliedDiagnosticWorkflowController(diagnostic)
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeStructuredOutput), Config{
+		OnEvent: func(event Event) { events = append(events, event) },
+	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -916,17 +939,22 @@ func TestWorkflowStructuredCompletionStopsWithoutAnotherTurn(t *testing.T) {
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceStructuredOutput {
 		t.Fatalf("terminal state = %+v, want structured completion", terminal)
 	}
+	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 }
 
 func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	controller := &fakeWorkflowController{}
+	var events []Event
+	diagnostic := errors.New("successor assignment observer failed")
+	controller := newAppliedDiagnosticWorkflowController(diagnostic)
 	client := &fakeClient{responses: []llm.Response{
 		structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{})
+	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeUnstructured), Config{
+		OnEvent: func(event Event) { events = append(events, event) },
+	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
 		t.Fatalf("submit: %v", err)
 	}
@@ -948,6 +976,7 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	if !terminal.Completed || terminal.Source != WorkflowCompletionSourceUnstructured {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
 	}
+	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 }
 
 func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {

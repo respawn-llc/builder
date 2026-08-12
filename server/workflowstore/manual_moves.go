@@ -125,6 +125,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	nowTime := s.now().UTC()
 	locked, err := q.AcquireManualMoveTaskWriteLock(ctx, string(prepared.request.TaskID))
 	if err != nil {
 		return ManualMoveResult{}, err
@@ -192,7 +193,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-		if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, s.now().UnixMilli()); err != nil {
+		if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, nowTime.UnixMilli()); err != nil {
 			return ManualMoveResult{}, err
 		}
 	} else {
@@ -230,13 +231,13 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		return ManualMoveResult{}, err
 	}
 	if len(targets) == 1 {
-		if err := insertTaskCurrentNode(ctx, q, targets[0]); err != nil {
+		if err := insertTaskCurrentNode(ctx, q, targets[0], nowTime); err != nil {
 			return ManualMoveResult{}, err
 		}
-	} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets); err != nil {
+	} else if err := insertTaskFanoutTargets(ctx, q, prepared.request.TaskID, targets, nowTime); err != nil {
 		return ManualMoveResult{}, err
 	}
-	if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), s.now().UnixMilli()); err != nil {
+	if err := touchTaskUpdatedAt(ctx, q, string(prepared.request.TaskID), nowTime.UnixMilli()); err != nil {
 		return ManualMoveResult{}, err
 	}
 	if err := tx.Commit(); err != nil {

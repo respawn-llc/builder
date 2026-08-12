@@ -52,6 +52,7 @@ type currentNodeRunnerFixture struct {
 	workspace       string
 	client          currentNodeRunnerClient
 	persistenceGate *sessiontest.PersistenceGate
+	controllerClose error
 
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
@@ -61,6 +62,39 @@ type currentNodeRunnerFixture struct {
 type currentNodeRunnerClient interface {
 	llm.Client
 	Requests() []llm.Request
+}
+
+type currentNodeAssignmentSteererFactory func(*Starter) workflowexecution.CurrentNodeAssignmentSteerer
+
+type committedDiagnosticCurrentNodeAssignmentSteerer struct {
+	delegate   *Starter
+	call       atomic.Int64
+	targetCall int64
+	diagnostic error
+	matched    atomic.Bool
+}
+
+func (s *committedDiagnosticCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	prepared, err := s.delegate.SteerCurrentNodeAssignment(ctx, reference)
+	if err != nil {
+		return nil, err
+	}
+	if s.call.Add(1) != s.targetCall {
+		return prepared, nil
+	}
+	agent, ok := prepared.(*currentNodeAgentAssignmentSteer)
+	if !ok {
+		return nil, fmt.Errorf("prepared target assignment has type %T, want Agent assignment", prepared)
+	}
+	agent.completion = agentruntime.CompletedWorkflowAssignmentSteer(
+		session.CommitReceipt{Committed: true},
+		s.diagnostic,
+	)
+	s.matched.Store(true)
+	return agent, nil
 }
 
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
@@ -135,20 +169,29 @@ func newCurrentNodeRunnerFixture(t *testing.T, steps ...ScriptedRuntimeStep) *cu
 }
 
 func newCurrentNodeRunnerFixtureWithClient(t *testing.T, client currentNodeRunnerClient) *currentNodeRunnerFixture {
-	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, false)
+	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, false, nil)
 }
 
 func newCurrentNodeRunnerFixtureWithPersistenceGate(
 	t *testing.T,
 	client currentNodeRunnerClient,
 ) *currentNodeRunnerFixture {
-	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, true)
+	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, true, nil)
+}
+
+func newCurrentNodeRunnerFixtureWithAssignmentSteerer(
+	t *testing.T,
+	client currentNodeRunnerClient,
+	factory currentNodeAssignmentSteererFactory,
+) *currentNodeRunnerFixture {
+	return newCurrentNodeRunnerFixtureWithClientAndPersistence(t, client, false, factory)
 }
 
 func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	t *testing.T,
 	client currentNodeRunnerClient,
 	withPersistenceGate bool,
+	assignmentSteererFactory currentNodeAssignmentSteererFactory,
 ) *currentNodeRunnerFixture {
 	t.Helper()
 	home := t.TempDir()
@@ -211,10 +254,21 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	}
 	fixture.runtimes = registry.NewRuntimeRegistry()
 	var controller *workflowexecution.CurrentNodeController
+	var finalizationMu sync.Mutex
+	var finalizationWG sync.WaitGroup
+	finalizationClosed := false
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			finalizationMu.Lock()
+			if finalizationClosed {
+				finalizationMu.Unlock()
+				return
+			}
+			finalizationWG.Add(1)
+			finalizationMu.Unlock()
+			defer finalizationWG.Done()
 			controller.ExecutionFinalized(scope)
 		}),
 		PromptFeed: fixture.runtimes,
@@ -225,11 +279,19 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: fixture.runtimes},
 	})
 	t.Cleanup(func() {
+		finalizationMu.Lock()
+		finalizationClosed = true
+		finalizationMu.Unlock()
 		if fixture.controller != nil {
-			if err := fixture.controller.Close(); err != nil {
+			if err := fixture.controller.Close(); fixture.controllerClose != nil {
+				if !errors.Is(err, fixture.controllerClose) {
+					t.Errorf("close current node controller error = %v, want %v", err, fixture.controllerClose)
+				}
+			} else if err != nil {
 				t.Errorf("close current node controller: %v", err)
 			}
 		}
+		finalizationWG.Wait()
 		if fixture.starter != nil {
 			if err := fixture.starter.Close(); err != nil {
 				t.Errorf("close workflow starter: %v", err)
@@ -263,9 +325,13 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		t.Fatalf("new starter: %v", err)
 	}
 	fixture.starter = starter
+	var assignmentSteerer workflowexecution.CurrentNodeAssignmentSteerer = starter
+	if assignmentSteererFactory != nil {
+		assignmentSteerer = assignmentSteererFactory(starter)
+	}
 	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
-		AssignmentSteerer: starter,
+		AssignmentSteerer: assignmentSteerer,
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -1649,6 +1715,104 @@ func TestCurrentNodeContinuationModesReuseTheRetainedSession(t *testing.T) {
 	}
 	if requests := f.client.Requests(); len(requests) != 2 {
 		t.Fatalf("model requests = %d, want one turn for each Current Node", len(requests))
+	}
+}
+
+func TestAutomaticCommittedAssignmentDiagnosticStartsRealAgentExactlyOnce(t *testing.T) {
+	sourceResponseStarted := make(chan struct{})
+	sourceResponseRelease := make(chan struct{})
+	var releaseSource sync.Once
+	t.Cleanup(func() {
+		releaseSource.Do(func() { close(sourceResponseRelease) })
+	})
+	client := NewScriptedClient(
+		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(sourceResponseStarted)
+				select {
+				case <-sourceResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer(`{"transition":"next","commentary":"source complete"}`).Response,
+		},
+		ScriptedFinalAnswer(`{"commentary":"target complete"}`),
+	)
+	diagnostic := errors.New("target assignment observer diagnostic")
+	assignmentSteerer := &committedDiagnosticCurrentNodeAssignmentSteerer{
+		targetCall: 2,
+		diagnostic: diagnostic,
+	}
+	f := newCurrentNodeRunnerFixtureWithAssignmentSteerer(
+		t,
+		client,
+		func(starter *Starter) workflowexecution.CurrentNodeAssignmentSteerer {
+			assignmentSteerer.delegate = starter
+			return assignmentSteerer
+		},
+	)
+	f.controllerClose = diagnostic
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Automatic committed assignment diagnostic",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete the source."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Complete the target."},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	select {
+	case <-sourceResponseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("source Current Node did not reach its model response")
+	}
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
+	})
+
+	releaseSource.Do(func() { close(sourceResponseRelease) })
+	f.waitForModelRequestsWithin(t, 2, 3*time.Second)
+	if !assignmentSteerer.matched.Load() {
+		t.Fatal("target assignment observer diagnostic was not exercised")
+	}
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
+	})
+	if requests := client.Requests(); len(requests) != 2 {
+		t.Fatalf("model requests = %d, want one source and one target execution", len(requests))
+	}
+}
+
+func TestInitialStartCommittedAssignmentDiagnosticInterruptsWithoutStartingRuntime(t *testing.T) {
+	diagnostic := errors.New("initial assignment observer diagnostic")
+	var diagnosticMatched atomic.Bool
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, NewScriptedClient(
+		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+	))
+	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		if snapshot.Meta.LastSequence < 2 {
+			return false
+		}
+		return !diagnosticMatched.Swap(true)
+	}, diagnostic)
+	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
+	})
+	if !diagnosticMatched.Load() {
+		t.Fatal("initial assignment observer diagnostic was not exercised")
+	}
+	if requests := f.client.Requests(); len(requests) != 0 {
+		t.Fatalf("model requests = %d, want no Runtime start", len(requests))
 	}
 }
 

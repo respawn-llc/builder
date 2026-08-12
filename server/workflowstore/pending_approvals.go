@@ -21,6 +21,10 @@ type PendingApprovalApplyResult struct {
 	TaskAttentionResolution
 }
 
+func (r PendingApprovalApplyResult) Committed() bool {
+	return len(r.Mutation.Removed) != 0
+}
+
 type pendingApprovalTransitionSnapshot struct {
 	WorkflowID        runtimeids.WorkflowID      `json:"workflow_id"`
 	ID                workflow.TransitionGroupID `json:"id"`
@@ -185,6 +189,7 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
+	nowTime := s.now().UTC()
 	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
@@ -232,13 +237,13 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
-		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
+		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind, nowTime); err != nil {
 			return PendingApprovalApplyResult{}, err
 		}
-	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets); err != nil {
+	} else if err := replaceCurrentNodeWithFanout(ctx, q, approval.Source, fanoutTargets, nowTime); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
-	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), s.now().UnixMilli()); err != nil {
+	if err := touchTaskUpdatedAt(ctx, q, string(approval.Source.TaskID), nowTime.UnixMilli()); err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
