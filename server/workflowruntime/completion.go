@@ -256,19 +256,9 @@ func ParseCompletionMode(raw string) (CompletionMode, error) {
 	return sessioncontract.ParseWorkflowCompletionMode(raw)
 }
 
-type completionFunctionShape struct {
+type completionPayloadShape struct {
 	Transition *string `json:"transition,omitempty" jsonschema_description:"Transition to take. Required when multiple outgoing transitions are available."`
 	Commentary *string `json:"commentary,omitempty" jsonschema:"nullable" jsonschema_description:"Brief explanation of what was completed and why this transition was selected."`
-}
-
-type completionStructuredShape struct {
-	Transition *string `json:"transition,omitempty" jsonschema_description:"Transition to take. Required when multiple outgoing transitions are available."`
-	Commentary *string `json:"commentary" jsonschema:"nullable" jsonschema_description:"Brief explanation of what was completed and why this transition was selected."`
-}
-
-type completionAcceptedShape struct {
-	Transition *string `json:"transition,omitempty"`
-	Commentary *string `json:"commentary,omitempty" jsonschema:"nullable"`
 }
 
 type completionSchemaProfile uint8
@@ -291,7 +281,7 @@ func (c CompletionContract) Prepare() (CompletionContract, error) {
 	preparer := jsoncontract.NewPreparer(false)
 	function, err := preparer.Function(
 		"workflow completion function",
-		completionFunctionShape{},
+		completionPayloadShape{},
 		completionSchemaCustomizer(transitions, completionSchemaFunction),
 	)
 	if err != nil {
@@ -299,7 +289,7 @@ func (c CompletionContract) Prepare() (CompletionContract, error) {
 	}
 	structured, err := preparer.Structured(
 		"workflow completion structured output",
-		completionStructuredShape{},
+		completionPayloadShape{},
 		completionSchemaCustomizer(transitions, completionSchemaStructured),
 	)
 	if err != nil {
@@ -307,7 +297,7 @@ func (c CompletionContract) Prepare() (CompletionContract, error) {
 	}
 	accepted, err := preparer.Function(
 		"workflow completion accepted input",
-		completionAcceptedShape{},
+		completionPayloadShape{},
 		completionSchemaCustomizer(transitions, completionSchemaAccepted),
 	)
 	if err != nil {
