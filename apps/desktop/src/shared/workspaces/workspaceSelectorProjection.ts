@@ -62,12 +62,12 @@ export function updateWorkspaceSelection(
   event: WorkspaceSelectionEvent,
 ): WorkspaceSelectionState {
   const updated = applyWorkspaceSelectionEvent(state, event);
-  if (updated.selection.state === "committed") {
+  if (updated.selection.state === "committed" && updated.selection.owner === "user") {
     return updated;
   }
   const automaticRow = automaticWorkspaceSelection(updated);
   return automaticRow === undefined
-    ? updated
+    ? { ...updated, selection: { state: "uncommitted" } }
     : {
         ...updated,
         selection: { state: "committed", row: automaticRow, owner: "automatic" },

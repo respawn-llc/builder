@@ -115,6 +115,27 @@ describe("New Task Workspace selection ownership", () => {
     },
   );
 
+  it("replaces an automatic initiating selection when the authoritative read reports detachment", () => {
+    const fallback = workspace("default", "Default", true);
+    let state = updateWorkspaceSelection(initial({ state: "pending" }), {
+      type: "catalog-loaded",
+      defaultWorkspace: fallback,
+    });
+    state = updateWorkspaceSelection(state, {
+      type: "initiating-attached",
+      row: workspace("source"),
+    });
+    expect(state.selection).toEqual({
+      state: "committed",
+      row: workspace("source"),
+      owner: "automatic",
+    });
+
+    state = updateWorkspaceSelection(state, { type: "initiating-not-attached" });
+
+    expect(state.selection).toEqual({ state: "committed", row: fallback, owner: "automatic" });
+  });
+
   it("allows user selection while the initiating read is failed and preserves it on retry", () => {
     const chosen = workspace("chosen");
     let state = updateWorkspaceSelection(initial({ state: "failed", error: new Error("failed") }), {
