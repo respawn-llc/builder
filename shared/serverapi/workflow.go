@@ -1982,19 +1982,26 @@ func (r WorkflowNodeAddRequest) Validate() error {
 	if err := validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders); err != nil {
 		return err
 	}
-	for _, provider := range r.JoinInputProviders {
-		if err := validateGraphEntityID("join_input_provider.provider_edge_id", provider.ProviderEdgeID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return validateWorkflowJoinInputProviderIDs(r.JoinInputProviders)
 }
 
 func (r WorkflowNodeUpdateRequest) Validate() error {
 	if err := validateRequired("node_id", r.NodeID); err != nil {
 		return err
 	}
-	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
+	if err := validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders); err != nil {
+		return err
+	}
+	return validateWorkflowJoinInputProviderIDs(r.JoinInputProviders)
+}
+
+func validateWorkflowJoinInputProviderIDs(providers []WorkflowJoinInputProvider) error {
+	for _, provider := range providers {
+		if err := validateGraphEntityID("join_input_provider.provider_edge_id", provider.ProviderEdgeID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateWorkflowNodeFields(workflowID runtimeids.WorkflowID, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, joinInputProviders []WorkflowJoinInputProvider) error {

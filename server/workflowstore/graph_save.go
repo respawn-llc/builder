@@ -171,6 +171,9 @@ func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries,
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
+	if err := validateWorkflowGraphAdditionIdentityOwnership(currentGraph, prepared); err != nil {
+		return WorkflowGraphSavePlan{}, err
+	}
 	graphChanged := !workflowGraphSavePreparedEqual(currentGraph, prepared)
 	structural := describeWorkflowGraphSave(currentGraph, prepared)
 	plan = WorkflowGraphSavePlan{
@@ -557,6 +560,53 @@ func describeWorkflowGraphSave(current preparedWorkflowGraphSave, next preparedW
 		Removed:    removed,
 		EditPolicy: describeWorkflowGraphEditPolicy(current, next),
 	}
+}
+
+func validateWorkflowGraphAdditionIdentityOwnership(current preparedWorkflowGraphSave, next preparedWorkflowGraphSave) error {
+	currentTypes := make(map[string]map[workflowcontract.WorkflowGraphEntityType]bool)
+	indexCurrent := func(entityType workflowcontract.WorkflowGraphEntityType, ids []string) {
+		for _, id := range ids {
+			if currentTypes[id] == nil {
+				currentTypes[id] = make(map[workflowcontract.WorkflowGraphEntityType]bool)
+			}
+			currentTypes[id][entityType] = true
+		}
+	}
+	indexCurrent(WorkflowGraphEntityTypeNodeGroup, workflowGraphRecordIDs(current.nodeGroups, func(group NodeGroupRecord) string { return group.ID }))
+	indexCurrent(WorkflowGraphEntityTypeNode, workflowGraphRecordIDs(current.nodes, func(node NodeRecord) string { return string(node.ID) }))
+	indexCurrent(WorkflowGraphEntityTypeTransitionGroup, workflowGraphRecordIDs(current.transitionGroups, func(group TransitionGroupRecord) string { return string(group.ID) }))
+	indexCurrent(WorkflowGraphEntityTypeEdge, workflowGraphRecordIDs(current.edges, func(edge EdgeRecord) string { return string(edge.ID) }))
+
+	collections := []struct {
+		name       string
+		entityType workflowcontract.WorkflowGraphEntityType
+		ids        []string
+	}{
+		{"graph.node_groups", WorkflowGraphEntityTypeNodeGroup, workflowGraphRecordIDs(next.nodeGroups, func(group NodeGroupRecord) string { return group.ID })},
+		{"graph.nodes", WorkflowGraphEntityTypeNode, workflowGraphRecordIDs(next.nodes, func(node NodeRecord) string { return string(node.ID) })},
+		{"graph.transition_groups", WorkflowGraphEntityTypeTransitionGroup, workflowGraphRecordIDs(next.transitionGroups, func(group TransitionGroupRecord) string { return string(group.ID) })},
+		{"graph.edges", WorkflowGraphEntityTypeEdge, workflowGraphRecordIDs(next.edges, func(edge EdgeRecord) string { return string(edge.ID) })},
+	}
+	for _, collection := range collections {
+		for index, id := range collection.ids {
+			if currentTypes[id][collection.entityType] || len(currentTypes[id]) == 0 {
+				continue
+			}
+			return WorkflowGraphIdentityOwnershipError{
+				Field:    fmt.Sprintf("%s[%d].id", collection.name, index),
+				Identity: id,
+			}
+		}
+	}
+	return nil
+}
+
+func workflowGraphRecordIDs[T any](entities []T, id func(T) string) []string {
+	ids := make([]string, 0, len(entities))
+	for _, entity := range entities {
+		ids = append(ids, id(entity))
+	}
+	return ids
 }
 
 func workflowGraphSaveBlockers(req WorkflowGraphSaveRequest, evaluation workflowGraphSaveDynamicImpact) []WorkflowGraphSaveBlocker {

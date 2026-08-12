@@ -765,7 +765,7 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	}
 	result, err := s.store.PreviewWorkflowGraphSave(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil))
 	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
 	}
 	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
 	if err := resp.Validate(); err != nil {
@@ -792,7 +792,7 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return s.store.SaveWorkflowGraph(ctx, workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation))
 	})
 	if err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, err
+		return serverapi.WorkflowGraphSaveResponse{}, workflowGraphSaveError(err)
 	}
 	resp := workflowGraphSaveResponse(result, workflowGraphSaveValidationResponses(result))
 	if result.Saved {
@@ -815,6 +815,18 @@ func (s *Service) workflowGraphSaveCurrentVersion(ctx context.Context, workflowI
 		return 0, err
 	}
 	return record.Version, nil
+}
+
+func workflowGraphSaveError(err error) error {
+	var ownershipErr workflowstore.WorkflowGraphIdentityOwnershipError
+	if errors.As(err, &ownershipErr) {
+		return serverapi.WorkflowRequestValidationError{
+			Code:    serverapi.WorkflowRequestErrorInvalidValue,
+			Field:   ownershipErr.Field,
+			Message: ownershipErr.Error(),
+		}
+	}
+	return err
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {

@@ -1566,6 +1566,48 @@ func TestWorkflowGraphSaveKeepsAuthoredCollectionOrderSignificant(t *testing.T) 
 	}
 }
 
+func TestWorkflowGraphSaveRejectsAdditionIdentityOwnedByCurrentEntityOfAnotherType(t *testing.T) {
+	f := newGraphSaveFixture(t, createValidWorkflow)
+	currentNodeID := string(workflow.NodeIDOf(f.def.Nodes[0]))
+	req := f.request(f.record.Version, false, f.def)
+	req.NodeGroups = append(req.NodeGroups, NodeGroupRecord{
+		ID:          currentNodeID,
+		WorkflowID:  f.workflowID,
+		Key:         "conflicting_identity",
+		DisplayName: "Conflicting Identity",
+	})
+
+	for _, operation := range []struct {
+		name string
+		call func(WorkflowGraphSaveRequest) error
+	}{
+		{
+			name: "preview",
+			call: func(req WorkflowGraphSaveRequest) error {
+				_, err := f.store.PreviewWorkflowGraphSave(f.ctx, req)
+				return err
+			},
+		},
+		{
+			name: "save",
+			call: func(req WorkflowGraphSaveRequest) error {
+				_, err := f.store.SaveWorkflowGraph(f.ctx, req)
+				return err
+			},
+		},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			if err := operation.call(req); err == nil {
+				t.Fatalf("%s accepted Node Group identity %q already owned by a Node", operation.name, currentNodeID)
+			}
+			_, record := f.current(t)
+			if record.Version != f.record.Version {
+				t.Fatalf("%s changed Workflow Version to %d, want %d", operation.name, record.Version, f.record.Version)
+			}
+		})
+	}
+}
+
 func TestWorkflowGraphSavePreservesNodeGroupOrderAndAllUniquenessKeySwaps(t *testing.T) {
 	f := newGraphSaveFixture(t, createValidWorkflow)
 	for _, group := range []NodeGroupRecord{

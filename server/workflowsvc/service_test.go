@@ -2877,6 +2877,109 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 	}
 }
 
+func TestServiceWorkflowGraphSaveRejectsAdditionIdentityOwnedByCurrentEntityOfAnotherType(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	graph := workflowGraphDraftFromDefinition(current.Definition)
+	currentNodeID := current.Definition.Nodes[0].ID
+	conflictingGroupIndex := len(graph.NodeGroups)
+	graph.NodeGroups = append(graph.NodeGroups, serverapi.WorkflowGraphDraftNodeGroup{
+		ID:          currentNodeID,
+		Key:         "conflicting_identity",
+		DisplayName: "Conflicting Identity",
+	})
+
+	for _, operation := range []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "preview",
+			call: func() error {
+				_, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+					WorkflowID:      workflowID,
+					ExpectedVersion: current.Definition.Workflow.Version,
+					Graph:           graph,
+				})
+				return err
+			},
+		},
+		{
+			name: "save",
+			call: func() error {
+				_, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+					WorkflowID:      workflowID,
+					ExpectedVersion: current.Definition.Workflow.Version,
+					Graph:           graph,
+				})
+				return err
+			},
+		},
+	} {
+		t.Run(operation.name, func(t *testing.T) {
+			wantField := fmt.Sprintf("graph.node_groups[%d].id", conflictingGroupIndex)
+			if err := operation.call(); !isWorkflowServiceRequestFieldError(err, wantField) {
+				t.Fatalf("%s error = %#v, want typed cross-type identity rejection", operation.name, err)
+			}
+		})
+	}
+
+	reloaded, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow reloaded: %v", err)
+	}
+	if reloaded.Definition.Workflow.Version != current.Definition.Workflow.Version {
+		t.Fatalf("Workflow Version = %d, want %d", reloaded.Definition.Workflow.Version, current.Definition.Workflow.Version)
+	}
+}
+
+func TestServiceWorkflowNodeUpdateRejectsNoncanonicalJoinProviderIdentityWithoutMutation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+	var nodeToUpdate serverapi.WorkflowNode
+	for _, node := range current.Definition.Nodes {
+		if node.Kind == string(serverapi.WorkflowNodeKindAgent) {
+			nodeToUpdate = node
+			break
+		}
+	}
+	if nodeToUpdate.ID == "" {
+		t.Fatal("valid Workflow fixture has no Agent Node")
+	}
+
+	_, err = service.UpdateWorkflowNode(ctx, serverapi.WorkflowNodeUpdateRequest{
+		WorkflowID:     workflowID,
+		NodeID:         nodeToUpdate.ID,
+		Key:            nodeToUpdate.Key,
+		Kind:           nodeToUpdate.Kind,
+		DisplayName:    nodeToUpdate.DisplayName,
+		CompletionMode: nodeToUpdate.CompletionMode,
+		JoinInputProviders: []serverapi.WorkflowJoinInputProvider{{
+			InputName:      "result",
+			ProviderEdgeID: "edge-prefixed",
+		}},
+	})
+	if !isWorkflowServiceRequestFieldError(err, "join_input_provider.provider_edge_id") {
+		t.Fatalf("UpdateWorkflowNode error = %#v, want provider identity validation", err)
+	}
+
+	reloaded, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow reloaded: %v", err)
+	}
+	if reloaded.Definition.Workflow.Version != current.Definition.Workflow.Version {
+		t.Fatalf("Workflow Version = %d, want %d", reloaded.Definition.Workflow.Version, current.Definition.Workflow.Version)
+	}
+}
+
 func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
