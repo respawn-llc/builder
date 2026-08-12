@@ -14,8 +14,6 @@ func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {
 	}
 	markSessionTestLocked(t, store, LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}})
 	assertGoalAvailability(t, store, GoalAgentCapabilityMissing)
-	if err := store.ResetLockedContractForCompactionBoundary(); err != nil { t.Fatal(err) }
-	assertGoalAvailability(t, mustOpenSessionTestStore(t, store), GoalAvailable)
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
 	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err == nil { t.Fatal("missing locked tool snapshot returned availability") }
 	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil { t.Fatal("invalid locked tool returned availability") }

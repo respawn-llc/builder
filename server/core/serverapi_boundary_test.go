@@ -475,6 +475,9 @@ func isRouteMethod(signature *types.Signature) bool {
 }
 
 func isServerAPIType(typ types.Type) bool {
+	if alias, ok := typ.(*types.Alias); ok {
+		return alias.Obj().Pkg() != nil && alias.Obj().Pkg().Path() == "core/shared/serverapi"
+	}
 	switch typed := types.Unalias(typ).(type) {
 	case *types.Named:
 		return typed.Obj().Pkg() != nil && typed.Obj().Pkg().Path() == "core/shared/serverapi"

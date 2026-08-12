@@ -452,6 +452,7 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 		t.Fatal("workspace cache key ignored workspace identity")
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	message := "new"
 	go func() {
 		_, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
 			close(entered)
@@ -476,13 +477,11 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	message := "updated"
-	response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}})
-	if err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
+	if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}}); err != nil || response.GoalAvailability != clientui.GoalAvailabilityAvailable {
 		t.Fatalf("update response=%+v err=%v", response, err)
 	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
-	if err != nil || got.Draft.Message != "updated" || !got.Draft.Fast {
+	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast {
 		t.Fatalf("aggregate=%+v err=%v", got.Draft, err)
 	}
 }
