@@ -947,6 +947,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task interrupt did not enter durable successor disposition")
 	}
+	controller.finishTaskInterruptAdmission(successor, false)
 	preflightCtx, cancelPreflight := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancelPreflight()
 	preflightErr := controller.EnsureTaskResumeEligible(

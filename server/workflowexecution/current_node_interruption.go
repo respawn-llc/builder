@@ -648,7 +648,13 @@ func interruptCurrentNodeReferences(
 	return interrupted, errors.Join(interruptErrs...)
 }
 
-func (c *CurrentNodeController) finishTaskInterruptAdmission(reference workflow.CurrentNodeReference) {
+func (c *CurrentNodeController) finishTaskInterruptAdmission(
+	reference workflow.CurrentNodeReference,
+	ownsWorker bool,
+) {
+	if !ownsWorker {
+		return
+	}
 	key, err := reference.Key()
 	if err != nil {
 		panic(fmt.Sprintf("finish task interrupt admission: %v", err))

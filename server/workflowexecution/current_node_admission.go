@@ -717,7 +717,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	ownsWorker := true
 	defer c.admissionWG.Done()
 	defer close(start.done)
-	defer c.finishTaskInterruptAdmission(start.reference)
+	defer func() { c.finishTaskInterruptAdmission(start.reference, ownsWorker) }()
 	defer func() {
 		if !ownsWorker {
 			return
