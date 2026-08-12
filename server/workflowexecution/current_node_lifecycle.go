@@ -399,25 +399,20 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		var applied workflowstore.PendingApprovalApplyResult
 		var starts []currentNodeQueuedStart
-		var prepared []currentNodePreparedAssignment
+		var prepared *currentNodeAssignmentBatch
 		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			var applyErr error
 			applied, starts, applyErr = apply()
 			if applyErr != nil {
 				return applyErr
 			}
-			prepared = c.prepareCurrentNodeAssignments(ctx, starts)
+			prepared = c.prepareCurrentNodeAssignments(ctx, starts, true, &sourceScopeID)
 			return nil
 		})
 		if err != nil {
 			return applied, err
 		}
-		_, assignmentErr := c.classifyPreparedAutomaticStarts(
-			ctx,
-			prepared,
-			true,
-			&sourceScopeID,
-		)
+		_, assignmentErr := c.classifyPreparedAutomaticStarts(prepared)
 		return applied, assignmentErr
 	})
 }

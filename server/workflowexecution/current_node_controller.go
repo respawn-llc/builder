@@ -307,7 +307,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	var completed workflowstore.CurrentNodeCompletionResult
 	var committed bool
 	var starts []currentNodeQueuedStart
-	var prepared []currentNodePreparedAssignment
+	var prepared *currentNodeAssignmentBatch
 	err := c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
 		live, exists := c.live[req.ScopeID]
@@ -386,7 +386,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 				c.mu.Unlock()
 				return nil
 			}
-			prepared = c.prepareCurrentNodeAssignments(ctx, starts)
+			prepared = c.prepareCurrentNodeAssignments(ctx, starts, true, &req.ScopeID)
 			return nil
 		}); err != nil {
 			return err
@@ -394,12 +394,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 		if completed.PostCompletionEligible {
 			return nil
 		}
-		_, assignmentErr := c.classifyPreparedAutomaticStarts(
-			ctx,
-			prepared,
-			true,
-			&req.ScopeID,
-		)
+		_, assignmentErr := c.classifyPreparedAutomaticStarts(prepared)
 		return assignmentErr
 	})
 	if err != nil {

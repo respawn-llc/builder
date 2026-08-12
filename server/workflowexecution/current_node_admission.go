@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -360,10 +361,15 @@ func (c *CurrentNodeController) enqueueAutomaticIntents(intents []CurrentNodeAut
 	c.enqueueStarts(automaticQueuedStarts(intents))
 }
 
-type currentNodePreparedAssignment struct {
-	start       currentNodeQueuedStart
-	prepared    CurrentNodeAssignmentSteer
-	preparation error
+type currentNodeAssignmentOutcome struct {
+	accepted   *currentNodeQueuedStart
+	diagnostic error
+}
+
+type currentNodeAssignmentBatch struct {
+	preparations sync.WaitGroup
+	classifiers  sync.WaitGroup
+	outcomes     []currentNodeAssignmentOutcome
 }
 
 type currentNodeAssignmentUncommittedError struct {
@@ -409,17 +415,32 @@ func classifyCurrentNodeAssignment(
 func (c *CurrentNodeController) prepareCurrentNodeAssignments(
 	ctx context.Context,
 	starts []currentNodeQueuedStart,
-) []currentNodePreparedAssignment {
-	prepared := make([]currentNodePreparedAssignment, 0, len(starts))
-	for _, start := range starts {
-		assignment, err := c.steerAssignment(ctx, start.reference)
-		prepared = append(prepared, currentNodePreparedAssignment{
-			start:       start,
-			prepared:    assignment,
-			preparation: err,
-		})
+	transferUnresolved bool,
+	holdFor *runtimeids.ExecutionScopeID,
+) *currentNodeAssignmentBatch {
+	batch := &currentNodeAssignmentBatch{
+		outcomes: make([]currentNodeAssignmentOutcome, len(starts)),
 	}
-	return prepared
+	batch.preparations.Add(len(starts))
+	batch.classifiers.Add(len(starts))
+	for index := range starts {
+		go func(index int) {
+			defer batch.classifiers.Done()
+			start := starts[index]
+			assignment, err := c.steerAssignment(ctx, start.reference)
+			batch.preparations.Done()
+			batch.outcomes[index] = c.classifyPreparedAutomaticStart(
+				ctx,
+				start,
+				assignment,
+				err,
+				transferUnresolved,
+				holdFor,
+			)
+		}(index)
+	}
+	batch.preparations.Wait()
+	return batch
 }
 
 func (c *CurrentNodeController) classifyAutomaticStarts(
@@ -428,81 +449,78 @@ func (c *CurrentNodeController) classifyAutomaticStarts(
 	holdFor *runtimeids.ExecutionScopeID,
 ) ([]currentNodeQueuedStart, error) {
 	return c.classifyPreparedAutomaticStarts(
-		ctx,
-		c.prepareCurrentNodeAssignments(ctx, starts),
-		true,
-		holdFor,
+		c.prepareCurrentNodeAssignments(ctx, starts, true, holdFor),
 	)
 }
 
 func (c *CurrentNodeController) classifyPreparedAutomaticStarts(
-	ctx context.Context,
-	prepared []currentNodePreparedAssignment,
-	transferUnresolved bool,
-	holdFor *runtimeids.ExecutionScopeID,
+	batch *currentNodeAssignmentBatch,
 ) ([]currentNodeQueuedStart, error) {
-	accepted := make([]currentNodeQueuedStart, 0, len(prepared))
-	failed := make([]currentNodePreparedAssignment, 0, len(prepared))
-	pending := make([]currentNodePreparedAssignment, 0, len(prepared))
+	if batch == nil {
+		return nil, nil
+	}
+	batch.classifiers.Wait()
+	accepted := make([]currentNodeQueuedStart, 0, len(batch.outcomes))
 	var diagnostics []error
-	for _, candidate := range prepared {
-		if candidate.preparation != nil {
-			failed = append(failed, candidate)
-			continue
+	for _, outcome := range batch.outcomes {
+		if outcome.accepted != nil {
+			accepted = append(accepted, *outcome.accepted)
 		}
-		decision := classifyCurrentNodeAssignment(
-			ctx,
-			candidate.start.reference,
-			candidate.prepared,
-		)
-		if decision.assignment == nil {
-			if cancellation := context.Cause(ctx); transferUnresolved &&
-				cancellation != nil &&
-				errors.Is(decision.diagnostic, cancellation) {
-				pending = append(pending, candidate)
-				diagnostics = append(diagnostics, fmt.Errorf(
-					"wait for current node assignment %v: %w",
-					candidate.start.reference,
-					decision.diagnostic,
-				))
-				continue
-			}
+		if outcome.diagnostic != nil {
+			diagnostics = append(diagnostics, outcome.diagnostic)
 		}
-		if decision.assignment != nil {
-			candidate.start.assignment = decision.assignment
-			accepted = append(accepted, candidate.start)
-			if decision.diagnostic != nil {
-				diagnostics = append(diagnostics, fmt.Errorf(
-					"wait for current node assignment %v: %w",
-					candidate.start.reference,
-					decision.diagnostic,
-				))
-			}
-			continue
-		}
-		candidate.preparation = decision.diagnostic
-		failed = append(failed, candidate)
-	}
-	if len(pending) != 0 {
-		c.continueCurrentNodeAssignmentStarts(pending, holdFor)
-	}
-	c.deliverClassifiedStarts(accepted, holdFor)
-	for _, failure := range failed {
-		cause := failure.preparation
-		diagnostic := cause
-		if failure.prepared != nil {
-			diagnostic = fmt.Errorf(
-				"wait for current node assignment %v: %w",
-				failure.start.reference,
-				cause,
-			)
-		}
-		diagnostics = append(diagnostics, errors.Join(
-			diagnostic,
-			c.interruptUncommittedAutomaticStart(ctx, failure.start, cause),
-		))
 	}
 	return accepted, errors.Join(diagnostics...)
+}
+
+func (c *CurrentNodeController) classifyPreparedAutomaticStart(
+	ctx context.Context,
+	start currentNodeQueuedStart,
+	prepared CurrentNodeAssignmentSteer,
+	preparation error,
+	transferUnresolved bool,
+	holdFor *runtimeids.ExecutionScopeID,
+) currentNodeAssignmentOutcome {
+	if preparation != nil {
+		return currentNodeAssignmentOutcome{diagnostic: errors.Join(
+			preparation,
+			c.interruptUncommittedAutomaticStart(ctx, start, preparation),
+		)}
+	}
+	decision := classifyCurrentNodeAssignment(ctx, start.reference, prepared)
+	if decision.assignment == nil {
+		if cancellation := context.Cause(ctx); transferUnresolved &&
+			cancellation != nil &&
+			errors.Is(decision.diagnostic, cancellation) {
+			start.assignmentWait = prepared
+			start.holdFor = holdFor
+			c.enqueueStarts([]currentNodeQueuedStart{start})
+			return currentNodeAssignmentOutcome{diagnostic: fmt.Errorf(
+				"wait for current node assignment %v: %w",
+				start.reference,
+				decision.diagnostic,
+			)}
+		}
+		return currentNodeAssignmentOutcome{diagnostic: errors.Join(
+			fmt.Errorf(
+				"wait for current node assignment %v: %w",
+				start.reference,
+				decision.diagnostic,
+			),
+			c.interruptUncommittedAutomaticStart(ctx, start, decision.diagnostic),
+		)}
+	}
+	start.assignment = decision.assignment
+	c.deliverClassifiedStarts([]currentNodeQueuedStart{start}, holdFor)
+	outcome := currentNodeAssignmentOutcome{accepted: &start}
+	if decision.diagnostic != nil {
+		outcome.diagnostic = fmt.Errorf(
+			"wait for current node assignment %v: %w",
+			start.reference,
+			decision.diagnostic,
+		)
+	}
+	return outcome
 }
 
 func (c *CurrentNodeController) interruptUncommittedAutomaticStart(
@@ -537,26 +555,6 @@ func (c *CurrentNodeController) steerAssignment(
 		return nil, fmt.Errorf("steer current node assignment %v returned no completion", reference)
 	}
 	return assignment, nil
-}
-
-func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
-	prepared []currentNodePreparedAssignment,
-	holdFor *runtimeids.ExecutionScopeID,
-) {
-	if len(prepared) == 0 {
-		return
-	}
-	starts := make([]currentNodeQueuedStart, 0, len(prepared))
-	for _, candidate := range prepared {
-		if candidate.preparation != nil || candidate.prepared == nil {
-			panic("transferred Current Node assignment requires a prepared wait")
-		}
-		start := candidate.start
-		start.assignmentWait = candidate.prepared
-		start.holdFor = holdFor
-		starts = append(starts, start)
-	}
-	c.enqueueStarts(starts)
 }
 
 func (c *CurrentNodeController) deliverClassifiedStarts(

@@ -164,31 +164,32 @@ func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (sessio
 	}
 }
 
-type lateFirstCurrentNodeAssignmentSteerer struct {
-	mu      sync.Mutex
-	calls   int
-	release <-chan struct{}
-	started chan struct{}
-	receipt session.CommitReceipt
-	err     error
+type blockingCurrentNodeAssignmentSteerer struct {
+	blocked         workflow.CurrentNodeReference
+	release         <-chan struct{}
+	started         chan struct{}
+	siblingPrepared chan struct{}
+	receipt         session.CommitReceipt
+	err             error
 }
 
-func (s *lateFirstCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
+func (s blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 ) (CurrentNodeAssignmentSteer, error) {
-	s.mu.Lock()
-	s.calls++
-	call := s.calls
-	s.mu.Unlock()
-	if call == 1 {
-		return &lateCommitCurrentNodeAssignmentSteer{
-			release: s.release,
-			started: s.started,
+	if reference.Equal(s.blocked) {
+		close(s.started)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return nil, context.Cause(ctx)
+		}
+		return completedCurrentNodeAssignmentSteer{
 			receipt: s.receipt,
 			err:     s.err,
 		}, nil
 	}
+	close(s.siblingPrepared)
 	return completedCurrentNodeAssignmentSteer{
 		receipt: session.CommitReceipt{Committed: true},
 	}, nil
@@ -197,6 +198,7 @@ func (s *lateFirstCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference
+	byReference map[workflow.CurrentNodeReferenceKey]currentNodeAssignmentSteerOutcome
 	outcomes    []currentNodeAssignmentSteerOutcome
 	err         error
 	waitReceipt session.CommitReceipt
@@ -213,6 +215,17 @@ func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ con
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.steered = append(s.steered, reference)
+	if key, err := reference.Key(); err == nil {
+		if outcome, exists := s.byReference[key]; exists {
+			if outcome.steerErr != nil {
+				return nil, outcome.steerErr
+			}
+			return completedCurrentNodeAssignmentSteer{
+				receipt: outcome.receipt,
+				err:     outcome.waitErr,
+			}, nil
+		}
+	}
 	index := len(s.steered) - 1
 	if index < len(s.outcomes) {
 		outcome := s.outcomes[index]
