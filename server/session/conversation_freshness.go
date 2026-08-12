@@ -1,6 +1,6 @@
 package session
 
-import "core/shared/transcript"
+import "strings"
 
 type ConversationFreshness uint8
 
@@ -42,17 +42,35 @@ func hasVisibleUserMessageRecord(record EventRecord) (bool, error) {
 func eventPayloadEligibleForCommittedTime(payload EventRecordPayload) (bool, error) {
 	switch payload := payload.(type) {
 	case MessageRecord:
-		return classifyCommittedMessageRecord(payload).TimestampEligible, nil
+		if payload.Content == nil || strings.TrimSpace(*payload.Content) == "" {
+			return false, nil
+		}
+		switch payload.Role {
+		case MessageRoleUser:
+			return payload.MessageType == nil ||
+				*payload.MessageType != MessageTypeCompactionSummary, nil
+		case MessageRoleAssistant:
+			return true, nil
+		default:
+			return false, nil
+		}
 	case HistoryReplacementRecord:
 		for _, item := range payload.Items {
-			if item.Type != ProviderHistoryItemTypeMessage {
+			if item.Type != ProviderHistoryItemTypeMessage ||
+				item.Content == nil ||
+				strings.TrimSpace(*item.Content) == "" {
 				continue
 			}
 			role := MessageRoleUser
 			if item.Role != nil {
 				role = *item.Role
 			}
-			if classifyCommittedHistoryItem(role, item).TimestampEligible {
+			switch role {
+			case MessageRoleUser:
+				if item.MessageType != nil && *item.MessageType != MessageTypeCompactionSummary {
+					return true, nil
+				}
+			case MessageRoleAssistant:
 				return true, nil
 			}
 		}
@@ -60,47 +78,6 @@ func eventPayloadEligibleForCommittedTime(payload EventRecordPayload) (bool, err
 	default:
 		return false, nil
 	}
-}
-
-func classifyCommittedMessageRecord(payload MessageRecord) transcript.CommittedMessageProjection {
-	return classifyCommittedMessage(
-		payload.Role,
-		true,
-		payload.MessageType,
-		payload.Content,
-		transcript.CommittedMessageSourceEvent,
-	)
-}
-
-func classifyCommittedHistoryItem(role MessageRole, item ProviderHistoryItem) transcript.CommittedMessageProjection {
-	return classifyCommittedMessage(
-		role,
-		item.Role != nil,
-		item.MessageType,
-		item.Content,
-		transcript.CommittedMessageSourceHistoryReplacement,
-	)
-}
-
-func classifyCommittedMessage(
-	role MessageRole,
-	rolePresent bool,
-	messageType *MessageType,
-	content *string,
-	source transcript.CommittedMessageSource,
-) transcript.CommittedMessageProjection {
-	var sharedMessageType *string
-	if messageType != nil {
-		value := string(*messageType)
-		sharedMessageType = &value
-	}
-	return transcript.ClassifyCommittedMessageProjection(transcript.CommittedMessageProjectionInput{
-		Role:        string(role),
-		RolePresent: rolePresent,
-		MessageType: sharedMessageType,
-		Content:     content,
-		Source:      source,
-	})
 }
 
 func hasVisibleUserMessageFields(

@@ -23,7 +23,7 @@ func visibleChatEntriesFromMessage(msg llm.Message, completions map[string]tools
 			entries = append(entries, entry)
 		}
 	case llm.RoleAssistant:
-		if classifyCommittedLLMMessage(msg).Kind == transcript.CommittedMessageRowAssistant {
+		if msg.Content != nil && strings.TrimSpace(*msg.Content) != "" && !isBlankFinalAnswer(msg) {
 			phase, _ := textutil.OptionalValue(msg.Phase)
 			entries = append(entries, ChatEntry{
 				Visibility: assistantTranscriptVisibility(phase),

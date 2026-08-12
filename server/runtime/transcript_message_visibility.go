@@ -23,25 +23,7 @@ func visibleUserTranscriptEntry(msg llm.Message) (ChatEntry, bool) {
 	if messageType == llm.MessageTypeCompactionSummary {
 		return compactionSummaryChatEntry(msg), true
 	}
-	if classifyCommittedLLMMessage(msg).Kind != transcript.CommittedMessageRowUser {
-		return ChatEntry{}, false
-	}
 	return ChatEntry{Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: *msg.Content, MessageType: messageType, SourcePath: sourcePath, CompactLabel: compactLabelForMessage(msg)}, true
-}
-
-func classifyCommittedLLMMessage(msg llm.Message) transcript.CommittedMessageProjection {
-	var messageType *string
-	if msg.MessageType != nil {
-		value := string(*msg.MessageType)
-		messageType = &value
-	}
-	return transcript.ClassifyCommittedMessageProjection(transcript.CommittedMessageProjectionInput{
-		Role:        string(msg.Role),
-		RolePresent: true,
-		MessageType: messageType,
-		Content:     msg.Content,
-		Source:      transcript.CommittedMessageSourceEvent,
-	})
 }
 
 func isRollbackCandidateMessage(msg llm.Message) bool {
