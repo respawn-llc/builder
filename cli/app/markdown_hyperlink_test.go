@@ -286,7 +286,7 @@ func TestGoalMarkdownLinksStayBoundedAndDoNotReachPadding(t *testing.T) {
 					WithUIMarkdownLinkPresentation(presentation.links),
 				)
 				m.theme = theme
-				m.goal.goal = goalCoreFromRuntimeGoal(runtimeGoalFixture("", "[PR #456](https://github.com/org/repo/pull/456)", clientui.RuntimeGoalStatusActive, false))
+				m.goal.goal = goalCoreFromRuntimeGoal(runtimeClientTestRuntimeGoal(runtimeClientTestGoal("", "[PR #456](https://github.com/org/repo/pull/456)", clientui.RuntimeGoalStatusActive), false))
 
 				var linked strings.Builder
 				for _, line := range m.layout().goalOverlayContentLines(12) {
