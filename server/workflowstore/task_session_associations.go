@@ -72,12 +72,33 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 	if req.ExpectedCurrentSessionID != nil && req.ExpectedCurrentSessionID.IsZero() {
 		return CurrentNodeSessionBindingAuthority{}, errors.New("expected current Session id is invalid")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	connection, err := s.db.Conn(ctx)
 	if err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer func() { _ = connection.Close() }()
+	lifecycle := sqlitelifecyclegen.New(connection)
+	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
+	if err := lifecycle.BeginImmediate(ctx); err != nil {
+		return CurrentNodeSessionBindingAuthority{}, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = lifecycle.Rollback(context.Background())
+		}
+	}()
+	commit := func() error {
+		if err := lifecycle.Commit(ctx); err != nil {
+			return err
+		}
+		committed = true
+		return nil
+	}
+	q := sqlitegen.New(connection)
 	currentNode, err := s.currentNodeForReference(ctx, q, normalized.CurrentNode)
 	if err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
@@ -85,11 +106,11 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 	if currentNode.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
 		return bindLegacySessionToCurrentNode(
 			ctx,
-			tx,
 			q,
 			currentNode,
 			normalized,
 			req.ExpectedCurrentSessionID,
+			commit,
 		)
 	}
 	previousAssociation, hasPreviousAssociation, err := currentTaskSessionAssociationBeforeBinding(ctx, q, normalized.CurrentNode)
@@ -125,7 +146,7 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 	if err := designateCurrentTaskSessionAssociation(ctx, q, normalized, sourceSessionID); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commit(); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	association := taskSessionAssociationFromRequest(normalized, sourceSessionID)
@@ -137,11 +158,11 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 
 func bindLegacySessionToCurrentNode(
 	ctx context.Context,
-	tx *sql.Tx,
 	q *sqlitegen.Queries,
 	currentNode workflow.CurrentNode,
 	req TaskSessionAssociationRequest,
 	expectedCurrentSessionID *runtimeids.SessionID,
+	commit func() error,
 ) (CurrentNodeSessionBindingAuthority, error) {
 	if err := bindSessionToTask(ctx, q, req); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
@@ -152,7 +173,7 @@ func bindLegacySessionToCurrentNode(
 	if err := appendLegacyTaskSessionHistory(ctx, q, req); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
-	if err := tx.Commit(); err != nil {
+	if err := commit(); err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
 	return CurrentNodeSessionBindingAuthority{
