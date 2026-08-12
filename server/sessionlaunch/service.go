@@ -521,7 +521,7 @@ func applyPreparedAgentChatSettings(
 		if target == nil {
 			return false, fmt.Errorf("prepared Chat Agent %q target is required", targetAgent)
 		}
-		prepared, err = launch.PrepareChatSettingsForTarget(authState, *target)
+		prepared, err = launch.PrepareChatSettingsForPreparedTarget(*target, preparedOverrides.FastAvailable)
 	} else {
 		prepared, err = launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
 	}

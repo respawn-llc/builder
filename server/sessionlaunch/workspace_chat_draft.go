@@ -267,7 +267,7 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if input.SkipProviderReadinessValidation {
 			preparedSettings, err = launch.PrepareChatSettingsForTargetWithoutProviderReadiness(*target)
 		} else {
-			preparedSettings, err = launch.PrepareChatSettingsForTarget(input.AuthState, *target)
+			preparedSettings, err = launch.PrepareChatSettingsForPreparedTarget(*target, prepared.FastAvailable)
 		}
 		if err != nil {
 			return nil, err

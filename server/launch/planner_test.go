@@ -1173,6 +1173,39 @@ func TestApplyPreparedRunPromptOverridesRejectsPersistedFastUnsupportedByActiveP
 	}
 }
 
+func TestApplyPreparedRunPromptOverridesRejectsPersistedThinkingUnsupportedAfterConfigModelChange(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	loaded.Settings.Model = "gpt-5.6-sol"
+	loaded.Settings.ThinkingLevel = "high"
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking: textutil.Value("ultra"),
+	}); err != nil {
+		t.Fatalf("persist Session Thinking: %v", err)
+	}
+
+	reloaded := loaded
+	reloaded.Settings.Model = "gpt-5"
+	prepared, err := PrepareRunPromptOverrides(reloaded, serverapi.RunPromptOverrides{}, auth.EmptyState())
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverrides: %v", err)
+	}
+	plan.ActiveSettings = reloaded.Settings
+	_, _, err = (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyPreparedRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{},
+		prepared,
+		RunPromptOverrideOptions{},
+	)
+	if err == nil {
+		t.Fatal("ApplyPreparedRunPromptOverridesWithStore accepted persisted ultra Thinking after config changed to gpt-5")
+	}
+}
+
 func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)

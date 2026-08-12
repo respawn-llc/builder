@@ -971,7 +971,7 @@ func applySessionChatSettingsWithRunOverrides(
 		active,
 		settings,
 		thinkingOverride,
-		strings.TrimSpace(overrides.Model) != "",
+		fastAvailable != nil,
 		fastAvailable,
 	)
 }

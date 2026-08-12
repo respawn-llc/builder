@@ -697,7 +697,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 		IsOpenAIFirstParty:   true,
 	}
 	workerSettings.Reviewer.Frequency = "all"
-	workerSettings.ThinkingLevel = "  custom-depth  "
+	workerSettings.ThinkingLevel = "  high  "
 	workerSettings.PriorityRequestMode = true
 	workerSettings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
@@ -731,7 +731,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 		Agent: "worker",
 		Settings: &session.ChatSettingsOverrides{
 			Supervisor:     sessionLaunchStringPtr("all"),
-			Thinking:       sessionLaunchStringPtr("custom-depth"),
+			Thinking:       sessionLaunchStringPtr("high"),
 			Fast:           textutil.Value(true),
 			Questions:      textutil.Value(true),
 			AutoCompaction: textutil.Value(true),
@@ -753,7 +753,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	if err != nil {
 		t.Fatalf("PlanSession observe worker: %v", err)
 	}
-	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "custom-depth" ||
+	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "high" ||
 		second.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
 		!second.Plan.ActiveSettings.PriorityRequestMode ||
 		second.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
@@ -772,7 +772,7 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 		Agent: removed,
 		Baseline: session.ChatSettings{
 			Supervisor:     "all",
-			Thinking:       "stale-custom",
+			Thinking:       "high",
 			Fast:           true,
 			Questions:      false,
 			AutoCompaction: false,
@@ -789,7 +789,7 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
 	cfg.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
 	cfg.Settings.Reviewer.Frequency = "edits"
-	cfg.Settings.ThinkingLevel = "default-custom"
+	cfg.Settings.ThinkingLevel = "medium"
 	cfg.Settings.PriorityRequestMode = false
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	service := newSessionLaunchTestService(cfg, containerDir)
@@ -806,7 +806,7 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 		Agent: config.DefaultSubagentRole,
 		Settings: &session.ChatSettingsOverrides{
 			Supervisor:     sessionLaunchStringPtr("edits"),
-			Thinking:       sessionLaunchStringPtr("default-custom"),
+			Thinking:       sessionLaunchStringPtr("medium"),
 			Fast:           textutil.Value(false),
 			Questions:      textutil.Value(true),
 			AutoCompaction: textutil.Value(true),
@@ -831,7 +831,7 @@ func TestServicePlanSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
 	setSessionLaunchChatSettings(t, store, session.ChatSettings{
 		Supervisor:     "off",
-		Thinking:       "custom-depth",
+		Thinking:       "medium",
 		Fast:           false,
 		Questions:      false,
 		AutoCompaction: false,
@@ -852,7 +852,7 @@ func TestServicePlanSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
 		t.Fatalf("PlanSession: %v", err)
 	}
 	if response.Plan.ActiveSettings.Reviewer.Frequency != "off" ||
-		response.Plan.ActiveSettings.ThinkingLevel != "custom-depth" ||
+		response.Plan.ActiveSettings.ThinkingLevel != "medium" ||
 		response.Plan.ActiveSettings.PriorityRequestMode ||
 		response.Plan.QuestionsEnabled ||
 		response.Plan.AutoCompactionEnabled {

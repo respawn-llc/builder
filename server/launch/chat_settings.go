@@ -23,19 +23,19 @@ type PreparedChatSettings struct {
 }
 
 func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent string) (PreparedChatSettings, error) {
-	target, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	target, fastAvailable, err := prepareChatSettingsTargetForAgent(app, authState, agent)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	return PrepareChatSettingsForTarget(authState, target)
+	return PrepareChatSettingsForPreparedTarget(target, fastAvailable)
 }
 
 func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacing PreparedBaseTarget) (PreparedChatSettings, error) {
-	baselineTarget, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	baselineTarget, fastAvailable, err := prepareChatSettingsTargetForAgent(app, authState, agent)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	baseline, err := PrepareChatSettingsForTarget(authState, baselineTarget)
+	baseline, err := PrepareChatSettingsForPreparedTarget(baselineTarget, fastAvailable)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
@@ -51,11 +51,11 @@ func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, ag
 	return baseline, nil
 }
 
-func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, agent string) (PreparedBaseTarget, error) {
+func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, agent string) (PreparedBaseTarget, bool, error) {
 	var valid bool
 	agent, valid = session.NormalizeChatAgent(agent)
 	if !valid {
-		return PreparedBaseTarget{}, errors.New("Chat Agent is required")
+		return PreparedBaseTarget{}, false, errors.New("Chat Agent is required")
 	}
 	prepared, err := PrepareRunPromptOverridesWithContext(
 		app,
@@ -64,7 +64,7 @@ func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, age
 		RunPromptPreparationContext{},
 	)
 	if err != nil {
-		return PreparedBaseTarget{}, err
+		return PreparedBaseTarget{}, false, err
 	}
 	target := prepared.BaseTarget
 	if agent != config.DefaultSubagentRole {
@@ -78,9 +78,9 @@ func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, age
 		}
 	}
 	if target == nil {
-		return PreparedBaseTarget{}, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
+		return PreparedBaseTarget{}, false, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
 	}
-	return *target, nil
+	return *target, prepared.FastAvailable, nil
 }
 
 func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarget) (PreparedChatSettings, error) {
@@ -88,14 +88,14 @@ func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarge
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	return prepareChatSettingsForTarget(target, llm.SupportsFastModeProvider(capabilities))
+	return PrepareChatSettingsForPreparedTarget(target, llm.SupportsFastModeProvider(capabilities))
 }
 
 func PrepareChatSettingsForTargetWithoutProviderReadiness(target PreparedBaseTarget) (PreparedChatSettings, error) {
-	return prepareChatSettingsForTarget(target, true)
+	return PrepareChatSettingsForPreparedTarget(target, true)
 }
 
-func prepareChatSettingsForTarget(target PreparedBaseTarget, fastAvailable bool) (PreparedChatSettings, error) {
+func PrepareChatSettingsForPreparedTarget(target PreparedBaseTarget, fastAvailable bool) (PreparedChatSettings, error) {
 	supervisor, valid := runtime.NormalizeReviewerFrequency(target.Settings.Reviewer.Frequency)
 	thinking := strings.TrimSpace(target.Settings.ThinkingLevel)
 	if !valid || thinking == "" {
