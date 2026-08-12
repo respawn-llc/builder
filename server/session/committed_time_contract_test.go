@@ -221,7 +221,6 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 		}
 	}
 }
-
 func messageRolePointer(value MessageRole) *MessageRole {
 	return &value
 }

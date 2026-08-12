@@ -88,7 +88,6 @@ func TestCommittedTimeCopiesToUserAndAssistantClientRows(t *testing.T) {
 		t.Fatalf("client timestamp projection lost committed time: page=%+v hydration=%+v", page.Entries, hydration.CommittedRows)
 	}
 }
-
 func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {
 	const stepID = "22222222-2222-4222-8222-222222222222"
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 23}
