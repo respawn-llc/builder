@@ -390,8 +390,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			if err != nil {
 				return workflowstore.PendingApprovalApplyResult{}, err
 			}
-			starts, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
-			c.deliverClassifiedStarts(starts, nil)
+			_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
 			return applied, assignmentErr
 		}
 		handle, live := c.authority.ExecutionByScope(sourceScopeID)
@@ -413,13 +412,12 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		if err != nil {
 			return applied, err
 		}
-		classified, assignmentErr := c.classifyPreparedAutomaticStarts(
+		_, assignmentErr := c.classifyPreparedAutomaticStarts(
 			ctx,
 			prepared,
 			true,
 			&sourceScopeID,
 		)
-		c.deliverClassifiedStarts(classified, &sourceScopeID)
 		return applied, assignmentErr
 	})
 }
@@ -451,8 +449,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		starts, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
-		c.deliverClassifiedStarts(starts, nil)
+		_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
 		return moved, assignmentErr
 	})
 }

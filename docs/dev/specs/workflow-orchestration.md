@@ -312,11 +312,10 @@
 ## Workflow Prompting
 
 - Workflow-controlled agent Sessions use dedicated workflow-mode developer instructions.
-- Every Node Transition into an Agent Current Node must steer exactly one target assignment into the target Session before its Exact Execution Scope begins.
-- Kent decides each Transition assignment's durable outcome once before execution admission consumes it.
-- An automatic successor whose assignment commits must be accepted exactly once even when later assignment-observer work reports a diagnostic.
-- An uncommitted automatic assignment must interrupt only its own successor.
-- Caller cancellation while an automatic assignment outcome remains unresolved must not decide that outcome. Kent must finish the unresolved decision and apply the same committed or uncommitted rule.
+- Every Agent Current Node entered through a Node Transition must receive exactly one target assignment in its target Session before its Exact Execution Scope begins.
+- An automatic successor that receives its target assignment must remain eligible to start exactly once even when Kent later reports a diagnostic for that assignment.
+- An automatic successor that does not receive its target assignment must become interrupted without interrupting or delaying a sibling successor that can start.
+- Caller cancellation while Kent is delivering an automatic successor's target assignment must not strand that successor. The successor must later either become eligible to start with that assignment or become interrupted with an actionable reason.
 - Initial Task Start proceeds only when its assignment commits without a diagnostic.
 - Context-Preservation Mode selects the target Session and assignment template. It does not change the Transition's ownership of assignment delivery.
 - When a Node Transition continues a Session during an active model or tool turn, the target assignment must follow the source turn's durable tool result.

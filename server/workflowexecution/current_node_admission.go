@@ -442,15 +442,12 @@ func (c *CurrentNodeController) classifyPreparedAutomaticStarts(
 	holdFor *runtimeids.ExecutionScopeID,
 ) ([]currentNodeQueuedStart, error) {
 	accepted := make([]currentNodeQueuedStart, 0, len(prepared))
+	failed := make([]currentNodePreparedAssignment, 0, len(prepared))
 	pending := make([]currentNodePreparedAssignment, 0, len(prepared))
 	var diagnostics []error
 	for _, candidate := range prepared {
 		if candidate.preparation != nil {
-			cause := candidate.preparation
-			diagnostics = append(diagnostics, errors.Join(
-				cause,
-				c.interruptUncommittedAutomaticStart(ctx, candidate.start, cause),
-			))
+			failed = append(failed, candidate)
 			continue
 		}
 		decision := classifyCurrentNodeAssignment(
@@ -483,18 +480,27 @@ func (c *CurrentNodeController) classifyPreparedAutomaticStarts(
 			}
 			continue
 		}
-		cause := decision.diagnostic
-		diagnostics = append(diagnostics, errors.Join(
-			fmt.Errorf(
-				"wait for current node assignment %v: %w",
-				candidate.start.reference,
-				cause,
-			),
-			c.interruptUncommittedAutomaticStart(ctx, candidate.start, cause),
-		))
+		candidate.preparation = decision.diagnostic
+		failed = append(failed, candidate)
 	}
 	if len(pending) != 0 {
 		c.continueCurrentNodeAssignmentStarts(pending, holdFor)
+	}
+	c.deliverClassifiedStarts(accepted, holdFor)
+	for _, failure := range failed {
+		cause := failure.preparation
+		diagnostic := cause
+		if failure.prepared != nil {
+			diagnostic = fmt.Errorf(
+				"wait for current node assignment %v: %w",
+				failure.start.reference,
+				cause,
+			)
+		}
+		diagnostics = append(diagnostics, errors.Join(
+			diagnostic,
+			c.interruptUncommittedAutomaticStart(ctx, failure.start, cause),
+		))
 	}
 	return accepted, errors.Join(diagnostics...)
 }
