@@ -1,10 +1,14 @@
 package jsoncontract
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+
+	validator "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 type Value struct {
@@ -14,6 +18,14 @@ type Value struct {
 type NamedValue struct {
 	Name  string
 	Value Value
+}
+
+func DecodeValue(raw []byte) (Value, error) {
+	value, err := validator.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return Value{}, err
+	}
+	return Value{value: value}, nil
 }
 
 func (v Value) Field(name string) (Value, bool) {
@@ -75,6 +87,40 @@ func (v Value) ProjectObject(fields []ObjectField) (Value, error) {
 func (v Value) String() (string, bool) {
 	value, ok := v.value.(string)
 	return value, ok
+}
+
+func (v Value) Bool() (bool, bool) {
+	value, ok := v.value.(bool)
+	return value, ok
+}
+
+func (v Value) NumberText() (string, bool) {
+	value, ok := v.value.(json.Number)
+	if !ok {
+		return "", false
+	}
+	return value.String(), true
+}
+
+func (v Value) Int() (int, bool) {
+	text, ok := v.NumberText()
+	if !ok {
+		return 0, false
+	}
+	value, err := strconv.Atoi(text)
+	return value, err == nil
+}
+
+func (v Value) ArrayItems() ([]Value, error) {
+	values, ok := v.value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("JSON value is not an array")
+	}
+	items := make([]Value, len(values))
+	for index, value := range values {
+		items[index] = Value{value: value}
+	}
+	return items, nil
 }
 
 func (v Value) IsNull() bool {

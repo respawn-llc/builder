@@ -256,20 +256,6 @@ func carry(raw []byte) json.RawMessage {
 `,
 		},
 		{
-			name:    "presentation projection",
-			relPath: "server/tools/transcript_contracts.go",
-			source: `package tools
-
-import "encoding/json"
-
-func format(raw []byte) any {
-	var decoded map[string]any
-	_ = json.Unmarshal(raw, &decoded)
-	return decoded["output"]
-}
-`,
-		},
-		{
 			name:    "dependency value projection",
 			relPath: "shared/jsoncontract/value.go",
 			source: `package jsoncontract
@@ -666,8 +652,6 @@ func jsonContractArchitectureAllowedGenericInspection(packagePath string, relPat
 		return true
 	}
 	switch relPath {
-	case "server/tools/transcript_contracts.go":
-		return true
 	case "server/tools/model_warning.go":
 		return functionName == "MaterializeModelWarnings"
 	}

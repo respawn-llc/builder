@@ -189,6 +189,44 @@ func TestValidatedValuesExposeReadOnlyObjectFields(t *testing.T) {
 	}
 }
 
+func TestDecodeValueExposesDependencyDecodedJSONWithoutSchema(t *testing.T) {
+	value, err := DecodeValue([]byte(`{"count":7,"enabled":true,"items":["a",2]}`))
+	if err != nil {
+		t.Fatalf("DecodeValue: %v", err)
+	}
+	count, ok := value.Field("count")
+	if !ok {
+		t.Fatal("count field is absent")
+	}
+	if got, ok := count.Int(); !ok || got != 7 {
+		t.Fatalf("count = %d, %t, want 7, true", got, ok)
+	}
+	enabled, ok := value.Field("enabled")
+	if !ok {
+		t.Fatal("enabled field is absent")
+	}
+	if got, ok := enabled.Bool(); !ok || !got {
+		t.Fatalf("enabled = %t, %t, want true, true", got, ok)
+	}
+	items, ok := value.Field("items")
+	if !ok {
+		t.Fatal("items field is absent")
+	}
+	values, err := items.ArrayItems()
+	if err != nil {
+		t.Fatalf("ArrayItems: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("items length = %d, want 2", len(values))
+	}
+	if got, ok := values[0].String(); !ok || got != "a" {
+		t.Fatalf("first item = %q, %t, want a, true", got, ok)
+	}
+	if got, ok := values[1].NumberText(); !ok || got != "2" {
+		t.Fatalf("second item = %q, %t, want 2, true", got, ok)
+	}
+}
+
 func TestPreparedSchemaJSONIsImmutableToCallers(t *testing.T) {
 	preparer := NewPreparer(false)
 	contract, err := preparer.Function("immutable fixture", functionProfileFixture{})
