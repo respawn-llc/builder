@@ -30,15 +30,25 @@ func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent str
 	return PrepareChatSettingsForTarget(authState, target)
 }
 
-func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacingProvider config.Settings) (PreparedChatSettings, error) {
-	target, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacing PreparedBaseTarget) (PreparedChatSettings, error) {
+	baselineTarget, err := prepareChatSettingsTargetForAgent(app, authState, agent)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	target.Settings.OpenAIBaseURL = promptFacingProvider.OpenAIBaseURL
-	target.Settings.ProviderOverride = promptFacingProvider.ProviderOverride
-	target.Settings.ProviderCapabilities = promptFacingProvider.ProviderCapabilities
-	return PrepareChatSettingsForTarget(authState, target)
+	baseline, err := PrepareChatSettingsForTarget(authState, baselineTarget)
+	if err != nil {
+		return PreparedChatSettings{}, err
+	}
+	capabilities, err := PrepareChatSettingsForTarget(authState, promptFacing)
+	if err != nil {
+		return PreparedChatSettings{}, err
+	}
+	baseline.SupportedThinkingValues = capabilities.SupportedThinkingValues
+	baseline.FastAvailable = capabilities.FastAvailable
+	baseline.QuestionsAvailable = capabilities.QuestionsAvailable
+	baseline.Baseline.Fast = baseline.Baseline.Fast && capabilities.FastAvailable
+	baseline.Baseline.Questions = baseline.Baseline.Questions && capabilities.QuestionsAvailable
+	return baseline, nil
 }
 
 func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, agent string) (PreparedBaseTarget, error) {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"testing"
 
 	modelstub "core/internal/testharness/pty/blackbox"
@@ -746,6 +747,55 @@ func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *test
 	}
 	if prepared.FastAvailable || prepared.Baseline.Fast {
 		t.Fatalf("prepared Fast = available:%t enabled:%t, want unavailable and disabled for compatible endpoint", prepared.FastAvailable, prepared.Baseline.Fast)
+	}
+}
+
+func TestSessionChatSettingsPreparationUsesLockedPromptFacingModelCapabilities(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   brand.LoadOptions{ConfigRoot: persistenceRoot},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	resolved.Config.Settings.Model = "gpt-5.6-sol"
+	binding, err := metadata.RegisterBinding(t.Context(), persistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	client, err := appCore.SessionLaunchClientForProjectWorkspace(t.Context(), binding.ProjectID, workspace)
+	if err != nil {
+		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
+	}
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+	}
+	store, err := session.OpenByID(
+		persistenceRoot,
+		materialized.SessionID.String(),
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("OpenByID: %v", err)
+	}
+	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "gpt-5"}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+
+	prepared, err := (sessionChatSettingsPreparationResolver{
+		metadataStore:   appCore.MetadataStore(),
+		authManager:     appCore.AuthManager(),
+		persistenceRoot: persistenceRoot,
+	}).PrepareSessionChatSettings(t.Context(), store, brand.DefaultSubagentRole)
+	if err != nil {
+		t.Fatalf("PrepareSessionChatSettings: %v", err)
+	}
+	if slices.Contains(prepared.SupportedThinkingValues, "ultra") {
+		t.Fatalf("locked gpt-5 Thinking values = %v, want no ultra", prepared.SupportedThinkingValues)
 	}
 }
 
