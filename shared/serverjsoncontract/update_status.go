@@ -10,36 +10,15 @@ import (
 	invjsonschema "github.com/invopop/jsonschema"
 )
 
-type updateStatusCurrentResultSource struct {
-	Kind           serverapi.UpdateStatusResultKind `json:"kind" jsonschema:"enum=current"`
-	CurrentVersion string                           `json:"current_version"`
-	LatestVersion  string                           `json:"latest_version"`
-}
-
-type updateStatusAvailableResultSource struct {
-	Kind           serverapi.UpdateStatusResultKind `json:"kind" jsonschema:"enum=available"`
-	CurrentVersion string                           `json:"current_version"`
-	LatestVersion  string                           `json:"latest_version"`
-}
-
-type updateStatusCheckUnavailableResultSource struct {
-	Kind serverapi.UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_unavailable"`
-}
-
-type updateStatusCheckFailedResultSource struct {
-	Kind  serverapi.UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_failed"`
-	Cause string                           `json:"cause"`
-}
-
 type updateStatusResultContractSource struct{}
 
 func (updateStatusResultContractSource) JSONSchema() *invjsonschema.Schema {
 	reflector := invjsonschema.Reflector{Anonymous: true, DoNotReference: true}
 	variants := []*invjsonschema.Schema{
-		reflector.Reflect(updateStatusCurrentResultSource{}),
-		reflector.Reflect(updateStatusAvailableResultSource{}),
-		reflector.Reflect(updateStatusCheckUnavailableResultSource{}),
-		reflector.Reflect(updateStatusCheckFailedResultSource{}),
+		reflector.Reflect(serverapi.CurrentUpdateStatusResultWire{}),
+		reflector.Reflect(serverapi.AvailableUpdateStatusResultWire{}),
+		reflector.Reflect(serverapi.CheckUnavailableUpdateStatusResultWire{}),
+		reflector.Reflect(serverapi.CheckFailedUpdateStatusResultWire{}),
 	}
 	for _, variant := range variants {
 		variant.Version = ""
@@ -79,7 +58,7 @@ func (c UpdateStatusResponse) Decode(raw []byte) (serverapi.UpdateStatusResponse
 	switch discriminator.Result.Kind {
 	case serverapi.UpdateStatusCurrent:
 		var source struct {
-			Result updateStatusCurrentResultSource `json:"result"`
+			Result serverapi.CurrentUpdateStatusResultWire `json:"result"`
 		}
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err
@@ -87,7 +66,7 @@ func (c UpdateStatusResponse) Decode(raw []byte) (serverapi.UpdateStatusResponse
 		result = serverapi.CurrentUpdateStatusResult(source.Result.CurrentVersion, source.Result.LatestVersion)
 	case serverapi.UpdateStatusAvailable:
 		var source struct {
-			Result updateStatusAvailableResultSource `json:"result"`
+			Result serverapi.AvailableUpdateStatusResultWire `json:"result"`
 		}
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err
@@ -97,7 +76,7 @@ func (c UpdateStatusResponse) Decode(raw []byte) (serverapi.UpdateStatusResponse
 		result = serverapi.CheckUnavailableUpdateStatusResult()
 	case serverapi.UpdateStatusCheckFailed:
 		var source struct {
-			Result updateStatusCheckFailedResultSource `json:"result"`
+			Result serverapi.CheckFailedUpdateStatusResultWire `json:"result"`
 		}
 		if err := json.Unmarshal(raw, &source); err != nil {
 			return serverapi.UpdateStatusResponse{}, err

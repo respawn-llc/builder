@@ -260,11 +260,26 @@ func (f SessionExecutionField[T, R, S]) validate() error {
 	return validateSessionExecutionField(f.state, shape)
 }
 
-type sessionExecutionFieldWire[T any, R ~string] struct {
+type SessionExecutionFieldWire[T any, R ~string] struct {
 	Kind   SessionExecutionFieldKind   `json:"kind"`
 	Value  *T                          `json:"value,omitempty"`
 	Reason *R                          `json:"reason,omitempty"`
 	Error  *SessionExecutionFieldError `json:"error,omitempty"`
+}
+
+type AvailableSessionExecutionFieldWire[T any] struct {
+	Kind  SessionExecutionFieldKind `json:"kind" jsonschema:"enum=available"`
+	Value T                         `json:"value"`
+}
+
+type UnavailableSessionExecutionFieldWire[R ~string] struct {
+	Kind   SessionExecutionFieldKind `json:"kind" jsonschema:"enum=unavailable"`
+	Reason R                         `json:"reason"`
+}
+
+type FailedSessionExecutionFieldWire struct {
+	Kind  SessionExecutionFieldKind  `json:"kind" jsonschema:"enum=failed"`
+	Error SessionExecutionFieldError `json:"error"`
 }
 
 func (f SessionExecutionField[T, R, S]) MarshalJSON() ([]byte, error) {
@@ -273,28 +288,37 @@ func (f SessionExecutionField[T, R, S]) MarshalJSON() ([]byte, error) {
 	}
 	var shape S
 	label := shape.Label()
-	wire := sessionExecutionFieldWire[T, R]{Kind: f.Kind()}
-	switch wire.Kind {
+	switch f.Kind() {
 	case SessionExecutionFieldAvailable:
 		value, ok := f.Value()
 		if !ok {
 			panic(fmt.Sprintf("%s available field has no value", label))
 		}
-		wire.Value = &value
+		return json.Marshal(AvailableSessionExecutionFieldWire[T]{
+			Kind:  SessionExecutionFieldAvailable,
+			Value: value,
+		})
 	case SessionExecutionFieldUnavailable:
 		reason, ok := f.UnavailableReason()
 		if !ok {
 			panic(fmt.Sprintf("%s unavailable field has no reason", label))
 		}
-		wire.Reason = &reason
+		return json.Marshal(UnavailableSessionExecutionFieldWire[R]{
+			Kind:   SessionExecutionFieldUnavailable,
+			Reason: reason,
+		})
 	case SessionExecutionFieldFailed:
 		failure, ok := f.Failure()
 		if !ok {
 			panic(fmt.Sprintf("%s failed field has no failure", label))
 		}
-		wire.Error = &failure
+		return json.Marshal(FailedSessionExecutionFieldWire{
+			Kind:  SessionExecutionFieldFailed,
+			Error: failure,
+		})
+	default:
+		panic(fmt.Sprintf("unknown %s field kind %q", label, f.Kind()))
 	}
-	return json.Marshal(wire)
 }
 
 func validateSessionExecutionField[T any, R ~string](

@@ -11,34 +11,12 @@ import (
 	invjsonschema "github.com/invopop/jsonschema"
 )
 
-type sessionExecutionFieldWire[T any, R ~string] struct {
-	Kind   serverapi.SessionExecutionFieldKind   `json:"kind"`
-	Value  *T                                    `json:"value,omitempty"`
-	Reason *R                                    `json:"reason,omitempty"`
-	Error  *serverapi.SessionExecutionFieldError `json:"error,omitempty"`
-}
-
-type sessionExecutionAvailableFieldSource[T any] struct {
-	Kind  serverapi.SessionExecutionFieldKind `json:"kind" jsonschema:"enum=available"`
-	Value T                                   `json:"value"`
-}
-
-type sessionExecutionUnavailableFieldSource[R ~string] struct {
-	Kind   serverapi.SessionExecutionFieldKind `json:"kind" jsonschema:"enum=unavailable"`
-	Reason R                                   `json:"reason"`
-}
-
-type sessionExecutionFailedFieldSource struct {
-	Kind  serverapi.SessionExecutionFieldKind  `json:"kind" jsonschema:"enum=failed"`
-	Error serverapi.SessionExecutionFieldError `json:"error"`
-}
-
 func sessionExecutionFieldContractSchema[T any, R ~string]() *invjsonschema.Schema {
 	reflector := invjsonschema.Reflector{Anonymous: true, DoNotReference: true}
 	variants := []*invjsonschema.Schema{
-		reflector.Reflect(sessionExecutionAvailableFieldSource[T]{}),
-		reflector.Reflect(sessionExecutionUnavailableFieldSource[R]{}),
-		reflector.Reflect(sessionExecutionFailedFieldSource{}),
+		reflector.Reflect(serverapi.AvailableSessionExecutionFieldWire[T]{}),
+		reflector.Reflect(serverapi.UnavailableSessionExecutionFieldWire[R]{}),
+		reflector.Reflect(serverapi.FailedSessionExecutionFieldWire{}),
 	}
 	for _, variant := range variants {
 		variant.Version = ""
@@ -145,19 +123,19 @@ func (c SessionExecutionEnvironmentResponse) Decode(raw []byte) (serverapi.Sessi
 	var source struct {
 		Environment struct {
 			SessionID string `json:"session_id"`
-			Workspace sessionExecutionFieldWire[
+			Workspace serverapi.SessionExecutionFieldWire[
 				serverapi.SessionExecutionWorkspace,
 				serverapi.SessionExecutionWorkspaceUnavailableReason,
 			] `json:"workspace"`
-			Branch sessionExecutionFieldWire[
+			Branch serverapi.SessionExecutionFieldWire[
 				serverapi.SessionExecutionBranch,
 				serverapi.SessionExecutionBranchUnavailableReason,
 			] `json:"branch"`
-			Auth sessionExecutionFieldWire[
+			Auth serverapi.SessionExecutionFieldWire[
 				serverapi.SessionExecutionAuth,
 				serverapi.SessionExecutionAuthUnavailableReason,
 			] `json:"auth"`
-			Model sessionExecutionFieldWire[
+			Model serverapi.SessionExecutionFieldWire[
 				serverapi.SessionExecutionModel,
 				serverapi.SessionExecutionModelUnavailableReason,
 			] `json:"model"`
@@ -226,7 +204,7 @@ func (c SessionExecutionEnvironmentResponse) Decode(raw []byte) (serverapi.Sessi
 }
 
 func decodeSessionExecutionField[T any, R ~string, F any](
-	source sessionExecutionFieldWire[T, R],
+	source serverapi.SessionExecutionFieldWire[T, R],
 	available func(T) F,
 	unavailable func(R) F,
 	failed func(serverapi.SessionExecutionFieldError) F,

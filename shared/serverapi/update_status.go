@@ -150,23 +150,61 @@ func validateUpdateVersion(field string, version string) error {
 	return nil
 }
 
-type updateStatusResultWire struct {
+type UpdateStatusResultWire struct {
 	Kind           UpdateStatusResultKind `json:"kind"`
 	CurrentVersion *string                `json:"current_version,omitempty"`
 	LatestVersion  *string                `json:"latest_version,omitempty"`
 	Cause          *string                `json:"cause,omitempty"`
 }
 
+type CurrentUpdateStatusResultWire struct {
+	Kind           UpdateStatusResultKind `json:"kind" jsonschema:"enum=current"`
+	CurrentVersion string                 `json:"current_version"`
+	LatestVersion  string                 `json:"latest_version"`
+}
+
+type AvailableUpdateStatusResultWire struct {
+	Kind           UpdateStatusResultKind `json:"kind" jsonschema:"enum=available"`
+	CurrentVersion string                 `json:"current_version"`
+	LatestVersion  string                 `json:"latest_version"`
+}
+
+type CheckUnavailableUpdateStatusResultWire struct {
+	Kind UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_unavailable"`
+}
+
+type CheckFailedUpdateStatusResultWire struct {
+	Kind  UpdateStatusResultKind `json:"kind" jsonschema:"enum=check_failed"`
+	Cause string                 `json:"cause"`
+}
+
 func (r UpdateStatusResult) MarshalJSON() ([]byte, error) {
 	if err := r.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(updateStatusResultWire{
-		Kind:           r.kind,
-		CurrentVersion: r.currentVersion,
-		LatestVersion:  r.latestVersion,
-		Cause:          r.failureCause,
-	})
+	switch r.kind {
+	case UpdateStatusCurrent:
+		return json.Marshal(CurrentUpdateStatusResultWire{
+			Kind:           r.kind,
+			CurrentVersion: *r.currentVersion,
+			LatestVersion:  *r.latestVersion,
+		})
+	case UpdateStatusAvailable:
+		return json.Marshal(AvailableUpdateStatusResultWire{
+			Kind:           r.kind,
+			CurrentVersion: *r.currentVersion,
+			LatestVersion:  *r.latestVersion,
+		})
+	case UpdateStatusCheckUnavailable:
+		return json.Marshal(CheckUnavailableUpdateStatusResultWire{Kind: r.kind})
+	case UpdateStatusCheckFailed:
+		return json.Marshal(CheckFailedUpdateStatusResultWire{
+			Kind:  r.kind,
+			Cause: *r.failureCause,
+		})
+	default:
+		panic(fmt.Sprintf("unknown update status kind %q", r.kind))
+	}
 }
 
 type UpdateStatusResponse struct {
