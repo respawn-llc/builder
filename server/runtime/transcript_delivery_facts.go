@@ -299,14 +299,17 @@ func transcriptCommittedRowFactsFromMessage(
 	}
 	for index := range facts {
 		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
-		if facts[index].User != nil {
-			if provenance != nil {
-				facts[index].User.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
-			}
-		}
-		if facts[index].Assistant != nil {
-			if provenance != nil {
-				facts[index].Assistant.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
+		if provenance != nil {
+			projection := classifyCommittedLLMMessage(msg)
+			switch projection.Kind {
+			case transcript.CommittedMessageRowUser:
+				if projection.TimestampEligible && facts[index].User != nil {
+					facts[index].User.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
+				}
+			case transcript.CommittedMessageRowAssistant:
+				if projection.TimestampEligible && facts[index].Assistant != nil {
+					facts[index].Assistant.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
+				}
 			}
 		}
 		if facts[index].Tool != nil && completionProvenance != nil {
