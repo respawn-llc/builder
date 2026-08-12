@@ -1,10 +1,9 @@
 package app
 
 import (
-	"testing"
-
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"testing"
 )
 
 func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {

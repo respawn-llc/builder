@@ -2,10 +2,9 @@ package main
 
 import (
 	"bytes"
-	"testing"
-
 	"core/shared/clientui"
 	"core/shared/serverapi"
+	"testing"
 )
 
 func TestWriteGoalMutationTextRendersPendingPreview(t *testing.T) {

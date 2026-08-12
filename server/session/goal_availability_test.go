@@ -1,9 +1,8 @@
 package session
 
 import (
-	"testing"
-
 	"core/shared/toolspec"
+	"testing"
 )
 
 func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {

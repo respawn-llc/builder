@@ -21,22 +21,15 @@ import (
 	"core/shared/transcript"
 )
 
-func TestCurrentGoalOperationOutcomeRequiresOneDisposition(t *testing.T) {
+func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	handled := GoalCommandResult{}
 	for i, outcome := range []CurrentGoalOperationOutcome{{}, {Handled: &handled, ExecutionRequired: true}, {Handled: &handled}, {ExecutionRequired: true}} {
 		if got := outcome.Validate() == nil; got != (i >= 2) {
 			t.Fatalf("Validate(%+v) valid = %t", outcome, got)
 		}
 	}
-}
-
-func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
-	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
-	})
+	engine := mustNewTestEngine(t, mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x"), &fakeClient{}, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool, ownership CurrentGoalExecutionOwnership) {
-		t.Helper()
 		outcome, err := engine.ApplyCurrentGoalOperation(operation, ownership)
 		if err != nil || outcome.ExecutionRequired != execution || !execution && (outcome.Handled == nil || outcome.Handled.Disposition != want) {
 			t.Fatalf("ApplyCurrentGoalOperation(%T) = %+v, %v", operation, outcome, err)

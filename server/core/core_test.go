@@ -481,12 +481,10 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	for _, operation := range []struct {
-		request serverapi.WorkspaceChatDraftOperation
-		want    clientui.GoalAvailability
-	}{{serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}, clientui.GoalAvailabilityAvailable}, {serverapi.WorkspaceChatDraftOperation{Kind: serverapi.WorkspaceChatDraftClear}, clientui.GoalAvailabilityAgentCapabilityMissing}} {
-		if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: operation.request}); err != nil || response.GoalAvailability != operation.want {
-			t.Fatalf("%s response=%+v err=%v", operation.request.Kind, response, err)
+	operations := []serverapi.WorkspaceChatDraftOperation{{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}, {Kind: serverapi.WorkspaceChatDraftClear}}
+	for i, operation := range operations {
+		if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: operation}); err != nil || response.GoalAvailability != []clientui.GoalAvailability{clientui.GoalAvailabilityAvailable, clientui.GoalAvailabilityAgentCapabilityMissing}[i] {
+			t.Fatalf("%s response=%+v err=%v", operation.Kind, response, err)
 		}
 	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
