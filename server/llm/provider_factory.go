@@ -277,6 +277,9 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.BaseURL = normalizedBaseURL
 		transport.BaseURLExplicit = !IsOpenAIFirstPartyBaseURL(normalizedBaseURL)
 	}
+	if opts.HTTPClient == nil {
+		transport.Client = NewProviderHTTPClient(transport.BaseURL, 120*time.Second)
+	}
 	transport.ModelVerbosity = strings.ToLower(strings.TrimSpace(opts.ModelVerbosity))
 	if opts.ProviderIdentifier != nil {
 		transport.ProviderIdentifier = *opts.ProviderIdentifier

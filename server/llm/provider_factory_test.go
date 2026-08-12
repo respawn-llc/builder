@@ -210,6 +210,18 @@ func TestNewProviderClient_DefaultOpenAIBaseURLDoesNotStayExplicit(t *testing.T)
 	}
 }
 
+func TestNewProviderClient_LocalBaseURLUsesUncompressedTransportByDefault(t *testing.T) {
+	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
+		Model:         "vendor-custom-model",
+		Auth:          providerTestMissingAuth{},
+		OpenAIBaseURL: "http://127.0.0.1:11434/v1",
+	})
+	transport := httpTransportFromOpenAIClient(t, openAIClient)
+	if transport.Client.Transport != sharedHTTPTransport {
+		t.Fatalf("local provider transport = %T, want shared uncompressed transport", transport.Client.Transport)
+	}
+}
+
 func TestProviderErrorReducerForUnknownIDFailsFast(t *testing.T) {
 	_, err := providerErrorReducerForID("custom-provider-id")
 	if err == nil {
