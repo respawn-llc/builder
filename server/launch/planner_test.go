@@ -1114,6 +1114,65 @@ func TestApplyRunPromptOverridesValidatesExplicitThinkingInsteadOfPersistedThink
 	}
 }
 
+func TestApplyRunPromptOverridesRejectsPersistedFastUnsupportedByProviderOverride(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Fast: textutil.Value(true),
+	}); err != nil {
+		t.Fatalf("persist Session Fast: %v", err)
+	}
+
+	_, _, err := (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{
+			ProviderOverride: "openai",
+			OpenAIBaseURL:    "https://example.test/v1",
+		},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
+	if err == nil {
+		t.Fatal("ApplyRunPromptOverridesWithStore accepted persisted Fast for third-party provider")
+	}
+}
+
+func TestApplyPreparedRunPromptOverridesRejectsPersistedFastUnsupportedByActiveProvider(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	loaded := loadLaunchConfig(t, workspace,
+		"model = \"gpt-5.6-sol\"",
+		"provider_override = \"openai\"",
+		"openai_base_url = \"https://example.test/v1\"",
+	)
+	plan := newLoadedConfigPlan(t, workspace, loaded)
+	store := testStoreForPlan(t, plan)
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Fast: textutil.Value(true),
+	}); err != nil {
+		t.Fatalf("persist Session Fast: %v", err)
+	}
+	prepared, err := PrepareRunPromptOverrides(loaded, serverapi.RunPromptOverrides{}, auth.EmptyState())
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverrides: %v", err)
+	}
+
+	_, _, err = (Planner{ContainerDir: filepath.Dir(store.Dir())}).ApplyPreparedRunPromptOverridesWithStore(
+		plan,
+		store,
+		serverapi.RunPromptOverrides{},
+		prepared,
+		RunPromptOverrideOptions{},
+	)
+	if err == nil {
+		t.Fatal("ApplyPreparedRunPromptOverridesWithStore accepted persisted Fast for third-party provider")
+	}
+}
+
 func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)

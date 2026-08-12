@@ -184,10 +184,12 @@ func optionalSessionName(name string) (*string, error) {
 // RunPrompt override. Session launch prepares it before any new session is
 // materialized; applying it later must not reload config or look up a role.
 type PreparedRunPromptOverrides struct {
-	OverrideConfig config.App
-	AgentRole      serverapi.RunPromptAgentRoleOverride
-	BaseTarget     *PreparedBaseTarget
-	NamedTarget    *PreparedSubagentTarget
+	OverrideConfig             config.App
+	AgentRole                  serverapi.RunPromptAgentRoleOverride
+	BaseTarget                 *PreparedBaseTarget
+	NamedTarget                *PreparedSubagentTarget
+	FastAvailable              bool
+	ProviderReadinessValidated bool
 }
 
 type PreparedBaseTarget struct {
@@ -589,11 +591,17 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
+	capabilities, err := llm.ProviderCapabilitiesForSettings(authState, next.ActiveSettings)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	fastAvailable := llm.SupportsFastModeProvider(capabilities)
 	var chatSettings session.ChatSettings
 	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
 		store.Meta(),
 		next.ActiveSettings,
 		overrides,
+		&fastAvailable,
 	)
 	if err != nil {
 		return SessionPlan{}, nil, err
@@ -737,6 +745,14 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 			}
 			prepared.BaseTarget = &target
 		}
+		if !preparation.SkipProviderReadinessValidation && prepared.BaseTarget != nil {
+			capabilities, capabilityErr := llm.ProviderCapabilitiesForSettings(authState, prepared.BaseTarget.Settings)
+			if capabilityErr != nil {
+				return PreparedRunPromptOverrides{}, capabilityErr
+			}
+			prepared.FastAvailable = llm.SupportsFastModeProvider(capabilities)
+			prepared.ProviderReadinessValidated = true
+		}
 		return prepared, nil
 	}
 	lookup := config.LookupSubagentRole(app.Settings, roleOverride.Role)
@@ -752,12 +768,14 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.Subagents = nil
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	providerID := persistedRoleProviderID(providerSettings)
+	fastAvailable := false
 	if !preparation.SkipProviderReadinessValidation {
 		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
 		if err != nil {
 			return PreparedRunPromptOverrides{}, err
 		}
 		providerID = strings.TrimSpace(providerCaps.ProviderID)
+		fastAvailable = llm.SupportsFastModeProvider(providerCaps)
 	}
 	target, err := prepareNamedTarget(
 		app,
@@ -775,6 +793,10 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		return PreparedRunPromptOverrides{}, err
 	}
 	prepared.NamedTarget = &target
+	if !preparation.SkipProviderReadinessValidation {
+		prepared.FastAvailable = fastAvailable
+		prepared.ProviderReadinessValidated = true
+	}
 	return prepared, nil
 }
 
@@ -912,10 +934,15 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 		return SessionPlan{}, nil, err
 	}
 	var chatSettings session.ChatSettings
+	var fastAvailable *bool
+	if prepared.ProviderReadinessValidated {
+		fastAvailable = &prepared.FastAvailable
+	}
 	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
 		store.Meta(),
 		next.ActiveSettings,
 		overrides,
+		fastAvailable,
 	)
 	if err != nil {
 		return SessionPlan{}, nil, err
@@ -930,6 +957,7 @@ func applySessionChatSettingsWithRunOverrides(
 	meta session.Meta,
 	active config.Settings,
 	overrides serverapi.RunPromptOverrides,
+	fastAvailable *bool,
 ) (config.Settings, session.ChatSettings, error) {
 	settings, err := ResolveSessionChatSettings(meta, active)
 	if err != nil {
@@ -939,7 +967,13 @@ func applySessionChatSettingsWithRunOverrides(
 	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
 		thinkingOverride = textutil.Value(active.ThinkingLevel)
 	}
-	return applyResolvedSessionChatSettings(active, settings, thinkingOverride)
+	return applyResolvedSessionChatSettings(
+		active,
+		settings,
+		thinkingOverride,
+		strings.TrimSpace(overrides.Model) != "",
+		fastAvailable,
+	)
 }
 
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

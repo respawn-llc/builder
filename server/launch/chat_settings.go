@@ -157,23 +157,30 @@ func applySessionChatSettings(meta session.Meta, active config.Settings) (config
 	if err != nil {
 		return config.Settings{}, session.ChatSettings{}, err
 	}
-	return applyResolvedSessionChatSettings(active, settings, nil)
+	return applyResolvedSessionChatSettings(active, settings, nil, false, nil)
 }
 
 func applyResolvedSessionChatSettings(
 	active config.Settings,
 	settings session.ChatSettings,
 	thinkingOverride *string,
+	validateThinking bool,
+	fastAvailable *bool,
 ) (config.Settings, session.ChatSettings, error) {
 	thinking := settings.Thinking
 	if thinkingOverride != nil {
 		thinking = *thinkingOverride
 	}
-	if !slices.Contains(supportedChatThinkingValues(active.Model, thinking), thinking) {
+	if validateThinking && !slices.Contains(supportedChatThinkingValues(active.Model, thinking), thinking) {
 		return config.Settings{}, session.ChatSettings{}, fmt.Errorf(
 			"Session Chat Thinking %q is unsupported by model %q",
 			thinking,
 			active.Model,
+		)
+	}
+	if settings.Fast && fastAvailable != nil && !*fastAvailable {
+		return config.Settings{}, session.ChatSettings{}, errors.New(
+			"Session Chat Fast mode is unsupported by the active provider",
 		)
 	}
 	active.Reviewer.Frequency = settings.Supervisor
