@@ -227,6 +227,27 @@ func TestDecodeValueExposesDependencyDecodedJSONWithoutSchema(t *testing.T) {
 	}
 }
 
+func TestValueWithStringFieldReturnsUpdatedObjectWithoutMutatingSource(t *testing.T) {
+	value, err := DecodeValue([]byte(`{"ok":true}`))
+	if err != nil {
+		t.Fatalf("DecodeValue: %v", err)
+	}
+	updated, err := value.WithStringField("warning", "check this")
+	if err != nil {
+		t.Fatalf("WithStringField: %v", err)
+	}
+	raw, err := updated.CompactJSON()
+	if err != nil {
+		t.Fatalf("compact updated value: %v", err)
+	}
+	if string(raw) != `{"ok":true,"warning":"check this"}` {
+		t.Fatalf("updated value = %s", raw)
+	}
+	if _, present := value.Field("warning"); present {
+		t.Fatal("WithStringField mutated the source value")
+	}
+}
+
 func TestPreparedSchemaJSONIsImmutableToCallers(t *testing.T) {
 	preparer := NewPreparer(false)
 	contract, err := preparer.Function("immutable fixture", functionProfileFixture{})

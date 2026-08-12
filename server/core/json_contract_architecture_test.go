@@ -651,10 +651,6 @@ func jsonContractArchitectureAllowedGenericInspection(packagePath string, relPat
 	if packagePath == "core/shared/jsoncontract" {
 		return true
 	}
-	switch relPath {
-	case "server/tools/model_warning.go":
-		return functionName == "MaterializeModelWarnings"
-	}
 	return jsonContractArchitectureExactProviderExclusion(packagePath, functionName)
 }
 

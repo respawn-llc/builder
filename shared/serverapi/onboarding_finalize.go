@@ -102,6 +102,62 @@ type OnboardingFinalizeRequest struct {
 	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
 }
 
+type OnboardingFinalizeRequestWire struct {
+	Theme               *OnboardingTheme               `json:"theme,omitempty" jsonschema:"nullable"`
+	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty" jsonschema:"nullable"`
+	Model               *OnboardingModelChoice         `json:"model,omitempty" jsonschema:"nullable"`
+	ContextWindow       *OnboardingContextWindowChoice `json:"context_window,omitempty" jsonschema:"nullable"`
+	Thinking            *OnboardingThinkingChoice      `json:"thinking,omitempty" jsonschema:"nullable"`
+	Verbosity           *OnboardingVerbosity           `json:"verbosity,omitempty" jsonschema:"nullable"`
+	ModelTimeoutSeconds *int                           `json:"model_timeout_seconds,omitempty" jsonschema:"nullable"`
+	AskQuestion         *bool                          `json:"ask_question,omitempty" jsonschema:"nullable"`
+	ToolOverrides       []OnboardingToolOverride       `json:"tool_overrides,omitempty" jsonschema:"nullable"`
+	Supervisor          *OnboardingSupervisorChoice    `json:"supervisor,omitempty" jsonschema:"nullable"`
+	Compaction          *OnboardingCompactionMode      `json:"compaction,omitempty" jsonschema:"nullable"`
+	SkillsImport        *OnboardingImportSelectionWire `json:"skills_import,omitempty" jsonschema:"nullable"`
+	CommandsImport      *OnboardingImportSelectionWire `json:"commands_import,omitempty" jsonschema:"nullable"`
+	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty" jsonschema:"nullable"`
+}
+
+type OnboardingImportSelectionWire struct {
+	Mode             OnboardingImportMode `json:"mode"`
+	ProviderUUID     *string              `json:"provider_uuid,omitempty" jsonschema:"nullable"`
+	ImportProviderID *string              `json:"import_provider_id,omitempty" jsonschema:"nullable"`
+	SourceRootPath   *string              `json:"source_root_path,omitempty" jsonschema:"nullable"`
+}
+
+func (w OnboardingFinalizeRequestWire) Request() OnboardingFinalizeRequest {
+	return OnboardingFinalizeRequest{
+		Theme:               w.Theme,
+		MainProvider:        w.MainProvider,
+		Model:               w.Model,
+		ContextWindow:       w.ContextWindow,
+		Thinking:            w.Thinking,
+		Verbosity:           w.Verbosity,
+		ModelTimeoutSeconds: w.ModelTimeoutSeconds,
+		AskQuestion:         w.AskQuestion,
+		ToolOverrides:       w.ToolOverrides,
+		Supervisor:          w.Supervisor,
+		Compaction:          w.Compaction,
+		SkillsImport:        w.SkillsImport.Selection(),
+		CommandsImport:      w.CommandsImport.Selection(),
+		DisabledSkillNames:  w.DisabledSkillNames,
+	}
+}
+
+func (w *OnboardingImportSelectionWire) Selection() *OnboardingImportSelection {
+	if w == nil {
+		return nil
+	}
+	selection := OnboardingImportSelectionFromWire(
+		w.Mode,
+		w.ProviderUUID,
+		w.ImportProviderID,
+		w.SourceRootPath,
+	)
+	return &selection
+}
+
 type OnboardingModelChoice struct {
 	Kind    OnboardingModelKind `json:"kind"`
 	ModelID string              `json:"model_id,omitempty"`

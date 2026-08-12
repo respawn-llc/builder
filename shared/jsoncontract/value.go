@@ -56,6 +56,16 @@ func (v Value) ObjectFields() ([]NamedValue, error) {
 	return fields, nil
 }
 
+func (v Value) WithStringField(name string, value string) (Value, error) {
+	object, ok := v.value.(map[string]any)
+	if !ok {
+		return Value{}, fmt.Errorf("JSON value is not an object")
+	}
+	updated := maps.Clone(object)
+	updated[name] = value
+	return Value{value: updated}, nil
+}
+
 type ObjectField struct {
 	Name    string
 	Aliases []string
