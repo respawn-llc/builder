@@ -1590,7 +1590,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 		}
 	}
 	approved, err := s.currentNodeExecution.ApplyPendingApproval(ctx, approvalID)
-	if err != nil {
+	if err != nil && !approved.Committed() {
 		return serverapi.WorkflowTaskApproveResponse{}, err
 	}
 	s.finalizeTaskAttentionResolution(approved.TaskAttentionResolution)
@@ -1604,7 +1604,7 @@ func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.Workflo
 			TaskID:       taskID,
 			CurrentNodes: workflowview.ProjectCurrentNodes(approved.Mutation.Created),
 		},
-	}, nil
+	}, err
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
@@ -1931,7 +1931,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		}
 		completed, err = s.currentNodeExecution.CompleteIdleCurrentNode(ctx, selector, req.TransitionID, req.OutputValues, req.Commentary)
 	}
-	if err != nil {
+	if err != nil && !completed.Committed() {
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
 			return serverapi.WorkflowTaskCompleteResponse{}, serverapi.ErrWorkflowTaskCompleteTargetNotFound
 		}
@@ -1965,7 +1965,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 			s.attentionFinalizer.PublishPendingApproval(finalizeCtx, completed.PendingApproval.ID)
 		}
 	}
-	return response, nil
+	return response, err
 }
 
 func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskDeleteRequest) error {
