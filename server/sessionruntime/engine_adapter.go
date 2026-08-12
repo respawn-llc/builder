@@ -104,6 +104,11 @@ type authorityRuntimeOptions struct {
 	stepLifecycle     AgentResourceStepLifecycle
 }
 
+type runtimeStoreAdmission struct {
+	store              *session.Store
+	durabilityObserver *runlog.DurabilityObserver
+}
+
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
 	return authorityRuntimeOptions{
 		persistenceRoot:   options.PersistenceRoot,
@@ -116,11 +121,10 @@ func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOption
 	}
 }
 
-func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
+func (a *Authority) materializeRuntimeStore(descriptor session.SessionDescriptor) (*runtimeStoreAdmission, error) {
 	if a.options.persistenceRoot == "" {
 		return nil, errors.New("authority persistence root is required")
 	}
-	sessionID := descriptor.SessionID()
 	durabilityObserver := runlog.NewDurabilityObserver()
 	storeOptions := append(
 		append([]session.StoreOption(nil), a.options.storeOptions...),
@@ -130,6 +134,25 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	if err != nil {
 		return nil, err
 	}
+	return &runtimeStoreAdmission{store: store, durabilityObserver: durabilityObserver}, nil
+}
+
+func (a *Authority) buildAgentResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	admittedStore *runtimeStoreAdmission,
+) (*agentResource, error) {
+	sessionID := descriptor.SessionID()
+	if admittedStore == nil {
+		var err error
+		admittedStore, err = a.materializeRuntimeStore(descriptor)
+		if err != nil {
+			return nil, err
+		}
+	}
+	store := admittedStore.store
+	durabilityObserver := admittedStore.durabilityObserver
 	if err := store.EnsureDurable(); err != nil {
 		return nil, err
 	}

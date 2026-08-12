@@ -530,12 +530,13 @@ func (a *Authority) openRuntime(
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
+	var admittedStore *runtimeStoreAdmission
 	if resolvePlan != nil {
-		store, materializeErr := session.MaterializeSessionDescriptor(a.options.persistenceRoot, descriptor, a.options.storeOptions...)
-		if materializeErr != nil {
-			return RuntimeAttachment{}, materializeErr
+		admittedStore, err = a.materializeRuntimeStore(descriptor)
+		if err != nil {
+			return RuntimeAttachment{}, err
 		}
-		request.Runtime, err = resolvePlan(ctx, store)
+		request.Runtime, err = resolvePlan(ctx, admittedStore.store)
 		if err != nil {
 			return RuntimeAttachment{}, err
 		}
@@ -543,7 +544,7 @@ func (a *Authority) openRuntime(
 			return RuntimeAttachment{}, errors.New("resolved runtime plan is required")
 		}
 	}
-	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID)
+	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
@@ -1143,7 +1144,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		}
 		return resource, false, nil
 	case OpenAgentResource:
-		resource, err := a.openResource(ctx, descriptor, plan, nil)
+		resource, err := a.openResource(ctx, descriptor, plan, nil, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
 		resource, err := a.replaceResource(ctx, descriptor, plan)
@@ -1153,7 +1154,13 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 	}
 }
 
-func (a *Authority) openResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan, ownerID *string) (*agentResource, error) {
+func (a *Authority) openResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	ownerID *string,
+	admittedStore *runtimeStoreAdmission,
+) (*agentResource, error) {
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	if a.closed {
@@ -1165,7 +1172,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	created := false
 	if resource == nil {
 		var err error
-		resource, err = a.buildAgentResource(ctx, descriptor, plan)
+		resource, err = a.buildAgentResource(ctx, descriptor, plan, admittedStore)
 		if err != nil {
 			return nil, err
 		}
@@ -1223,7 +1230,7 @@ func (a *Authority) replaceResource(ctx context.Context, descriptor session.Sess
 			return nil, err
 		}
 	}
-	return a.openResource(ctx, descriptor, plan, nil)
+	return a.openResource(ctx, descriptor, plan, nil, nil)
 }
 
 func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {
