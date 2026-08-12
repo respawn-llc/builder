@@ -455,7 +455,8 @@ func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExec
 		t.Fatalf("create runtime-control Current Node reference: %v", err)
 	}
 	return &workflowruntime.CurrentNodeExecutionConfig{
-		ScopeID: runtimeids.NewExecutionScopeID(),
+		ScopeID:        runtimeids.NewExecutionScopeID(),
+		CompletionMode: workflowruntime.CompletionModeUnstructuredOutput,
 		Instructions: workflowruntime.TaskInstructions{
 			CurrentNode: reference,
 		},
@@ -1256,7 +1257,7 @@ func TestServiceShowGoalReturnsCommittedStateAroundQueuedGoalDrain(t *testing.T)
 	}
 }
 
-func TestServiceWorkflowRuntimePreservesOrdinaryGoalAdmission(t *testing.T) {
+func verifyWorkflowExecutionStartingGoalRejection(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
@@ -1269,38 +1270,22 @@ func TestServiceWorkflowRuntimePreservesOrdinaryGoalAdmission(t *testing.T) {
 		Actor:           "user",
 	})
 	if !errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
-		t.Fatalf("SetGoal in retained workflow runtime error = %v, want ordinary admission rejection", err)
+		t.Fatalf("SetGoal in workflow run = %v, want retained activation rejection", err)
 	}
-	if resp.Goal != nil || resp.Pending != nil {
-		t.Fatalf("rejected Goal response = %+v, want no mutation result", resp)
+	if resp.Goal != nil || resp.Pending != nil || engine.Goal() != nil {
+		t.Fatalf("rejected Goal mutation changed response=%+v engine=%+v", resp, engine.Goal())
 	}
-	if goal := engine.Goal(); goal != nil {
-		t.Fatalf("rejected Goal mutation changed engine Goal: %+v", goal)
+	if _, err := engine.SetGoal("existing", session.GoalActorUser); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestServiceWorkflowAgentStepGoalSetDoesNotBypassStepQueue(t *testing.T) {
-	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
-		CurrentNodeExecution: runtimeControlExactExecution(t),
-		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
-	})
-
-	_, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
-		ClientRequestID: "req-agent-step-goal",
-		SessionID:       store.Meta().SessionID,
-		Objective:       "queued by shell",
-		Actor:           string(session.GoalActorAgent),
-		StepID:          "step-from-shell",
-	})
-	if err == nil {
-		t.Fatal("agent step-scoped workflow goal set mutated directly without an active step")
-	}
-	if goal := engine.Goal(); goal != nil {
-		t.Fatalf("agent step-scoped workflow goal set bypassed queue and mutated goal: %+v", goal)
+	if _, err := service.SetGoal(context.Background(), serverapi.RuntimeGoalSetRequest{
+		ClientRequestID: "replace", SessionID: store.Meta().SessionID, Objective: "replacement", Actor: "user",
+	}); !errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		t.Fatalf("replacement error = %v", err)
 	}
 }
 
-func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T) {
+func verifyWorkflowInactiveStepRejected(t *testing.T) {
 	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
 		CurrentNodeExecution: runtimeControlExactExecution(t),
 		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
@@ -1308,6 +1293,9 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 	sessionID := store.Meta().SessionID
 	if _, err := engine.SetGoal("workflow goal", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
+	}
+	if _, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "active-noop", SessionID: sessionID, Actor: "user"}); err != nil {
+		t.Fatalf("active ResumeGoal no-op: %v", err)
 	}
 
 	_, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{
@@ -1321,6 +1309,145 @@ func TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue(t *testing.T
 	}
 	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusActive {
 		t.Fatalf("agent step-scoped workflow goal complete bypassed queue; goal = %+v, want active", goal)
+	}
+}
+
+func verifyWorkflowNonStartingGoalOperations(t *testing.T) {
+	store, engine, service := newRuntimeControlTestService(t, nil, nil, runtime.Config{
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	sessionID := store.Meta().SessionID
+	if _, err := engine.SetGoal("workflow goal", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if _, err := service.PauseGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "pause", SessionID: sessionID, Actor: "user"}); err != nil {
+		t.Fatalf("PauseGoal: %v", err)
+	}
+	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusPaused {
+		t.Fatalf("goal after pause = %+v, want paused", goal)
+	}
+	engine.SetQuestionsEnabled(false)
+	if _, err := service.ResumeGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "resume", SessionID: sessionID, Actor: "user"}); !errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		t.Fatalf("ResumeGoal error = %v, want retained activation rejection", err)
+	}
+	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "complete", SessionID: sessionID, Actor: "user"}); err != nil {
+		t.Fatalf("CompleteGoal: %v", err)
+	}
+	if goal := engine.Goal(); goal == nil || goal.Status != session.GoalStatusComplete {
+		t.Fatalf("goal after complete = %+v, want complete", goal)
+	}
+	if _, err := service.CompleteGoal(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: "complete-noop", SessionID: sessionID, Actor: "user"}); err != nil {
+		t.Fatalf("CompleteGoal no-op: %v", err)
+	}
+	if resp, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{ClientRequestID: "clear", SessionID: sessionID, Actor: "user"}); err != nil || resp.Goal != nil || resp.Pending != nil {
+		t.Fatalf("ClearGoal = %+v, %v", resp, err)
+	}
+}
+
+func verifyWorkflowExactStepGoalAuthority(t *testing.T) {
+	client := newCancelObservingRuntimeControlClient()
+	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		CurrentNodeExecution: runtimeControlExactExecution(t),
+		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
+	})
+	sessionID, _ := runtimeids.ParseSessionID(store.Meta().SessionID)
+	descriptor, _ := session.NewOpenSessionDescriptor(sessionID)
+	workflowID, _ := runtimeids.ParseWorkflowID("550e8400-e29b-41d4-a716-446655440201")
+	lease, _ := service.authority.NewWorkflowExecutionLease(sessionruntime.WorkflowExecutionRef{
+		ProjectID: "test", WorkflowID: workflowID, CurrentNode: runtimeControlExactExecution(t).Instructions.CurrentNode,
+	})
+	lease.Release()
+	betweenSteps, startStep := make(chan struct{}), make(chan struct{})
+	handle, err := service.authority.StartAgentExecution(context.Background(), sessionruntime.AgentExecutionRequest{
+		Descriptor: descriptor, Workflow: &lease, Resource: sessionruntime.CurrentAgentResource{},
+		Runner: func(ctx context.Context, _ sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
+			return bridge.WithEngine(ctx, func(_ context.Context, current *runtime.Engine) error {
+				close(betweenSteps)
+				<-startStep
+				_, err := current.SubmitUserMessage(ctx, "work")
+				return err
+			})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-betweenSteps:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting between exact steps")
+	}
+	if engine.ActiveStepSnapshot() != nil {
+		t.Fatal("between-step Exact execution has an active model step")
+	}
+	directSet := serverapi.RuntimeGoalSetRequest{ClientRequestID: "direct-set", SessionID: store.Meta().SessionID, Objective: "direct", Actor: "user"}
+	if _, err := service.SetGoal(context.Background(), directSet); err != nil {
+		t.Fatalf("between-step SetGoal: %v", err)
+	}
+	directSet.ClientRequestID, directSet.Objective = "direct-replace", "direct replacement"
+	if _, err := service.SetGoal(context.Background(), directSet); err != nil {
+		t.Fatalf("between-step replacement: %v", err)
+	}
+	for _, call := range []func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error){service.PauseGoal, service.ResumeGoal, service.CompleteGoal} {
+		if _, err := call(context.Background(), serverapi.RuntimeGoalStatusRequest{ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(), SessionID: store.Meta().SessionID, Actor: "user"}); err != nil {
+			t.Fatalf("between-step status Goal: %v", err)
+		}
+	}
+	if _, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{ClientRequestID: "direct-clear", SessionID: store.Meta().SessionID, Actor: "user"}); err != nil {
+		t.Fatalf("between-step ClearGoal: %v", err)
+	}
+	if _, err := service.SetGoal(context.Background(), directSet); err != nil {
+		t.Fatalf("seed active-step Goal: %v", err)
+	}
+	close(startStep)
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for exact step")
+	}
+	active := engine.ActiveStepSnapshot()
+	if active == nil {
+		t.Fatal("exact step missing")
+	}
+	identity := func(req *serverapi.RuntimeGoalStatusRequest) {
+		req.Actor, req.RunID, req.StepID = "agent", active.RunID, active.StepID
+	}
+	set := serverapi.RuntimeGoalSetRequest{ClientRequestID: "set-exact", SessionID: store.Meta().SessionID, Objective: "exact-owned", Actor: "agent", RunID: active.RunID, StepID: active.StepID}
+	if _, err := service.SetGoal(context.Background(), set); err != nil {
+		t.Fatalf("exact SetGoal: %v", err)
+	}
+	set.ClientRequestID, set.Objective, set.Actor, set.RunID, set.StepID = "replace-exact", "exact replacement", "user", "", ""
+	if resp, err := service.SetGoal(context.Background(), set); err != nil || resp.Pending == nil {
+		t.Fatalf("exact replacement = %+v, %v", resp, err)
+	}
+	for _, call := range []func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error){service.PauseGoal, service.ResumeGoal, service.CompleteGoal} {
+		req := serverapi.RuntimeGoalStatusRequest{ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(), SessionID: store.Meta().SessionID}
+		identity(&req)
+		if _, err := call(context.Background(), req); err != nil {
+			t.Fatalf("exact status Goal: %v", err)
+		}
+	}
+	if _, err := service.ClearGoal(context.Background(), serverapi.RuntimeGoalClearRequest{ClientRequestID: "clear-exact", SessionID: store.Meta().SessionID, Actor: "user"}); err != nil {
+		t.Fatalf("exact ClearGoal: %v", err)
+	}
+	close(client.release)
+	if _, err := handle.Wait(context.Background()); err != nil {
+		t.Fatalf("exact turn: %v", err)
+	}
+}
+
+func TestServiceRetainedWorkflowGoalMatrix(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"execution-starting Set and replacement reject", verifyWorkflowExecutionStartingGoalRejection},
+		{"non-starting, no-op, and Clear accept", verifyWorkflowNonStartingGoalOperations},
+		{"inactive Exact step rejects", verifyWorkflowInactiveStepRejected},
+		{"active Exact execution accepts direct and queued operations", verifyWorkflowExactStepGoalAuthority},
+	} {
+		t.Run(test.name, test.run)
 	}
 }
 
