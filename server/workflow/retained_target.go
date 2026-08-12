@@ -156,8 +156,17 @@ type targetSessionIntentWire struct {
 	Kind      TargetSessionIntentKind `json:"kind"`
 	SessionID *runtimeids.SessionID   `json:"session_id,omitempty"`
 }
+type RetainedTargetStateKind string
+
+const (
+	retainedTargetStateCurrent        RetainedTargetStateKind = "current"
+	retainedTargetStateHistoricalOnly RetainedTargetStateKind = "historical_only"
+	retainedTargetStateUnavailable    RetainedTargetStateKind = "unavailable"
+	retainedTargetStateInvalidCurrent RetainedTargetStateKind = "invalid_current"
+)
+
 type RetainedTargetState struct {
-	kind            string
+	kind            RetainedTargetStateKind
 	retainedSession runtimeids.SessionID
 	sourceSession   runtimeids.SessionID
 	rejectedSession *runtimeids.SessionID
@@ -165,9 +174,11 @@ type RetainedTargetState struct {
 }
 
 func HistoricalRetainedTarget() RetainedTargetState {
-	return RetainedTargetState{kind: "historical_only"}
+	return RetainedTargetState{kind: retainedTargetStateHistoricalOnly}
 }
-func UnavailableRetainedTarget() RetainedTargetState { return RetainedTargetState{kind: "unavailable"} }
+func UnavailableRetainedTarget() RetainedTargetState {
+	return RetainedTargetState{kind: retainedTargetStateUnavailable}
+}
 func NewInvalidCurrentRetainedTarget(
 	rejectedSessionID *runtimeids.SessionID,
 	reason RetainedTargetInvariantReason,
@@ -185,7 +196,7 @@ func NewInvalidCurrentRetainedTarget(
 		value := *rejectedSessionID
 		rejected = &value
 	}
-	return RetainedTargetState{kind: "invalid_current", rejectedSession: rejected, invariantReason: reason}, nil
+	return RetainedTargetState{kind: retainedTargetStateInvalidCurrent, rejectedSession: rejected, invariantReason: reason}, nil
 }
 func NewCurrentRetainedTarget(retainedSessionID, sourceSessionID runtimeids.SessionID) (RetainedTargetState, error) {
 	if retainedSessionID.IsZero() {
@@ -194,7 +205,7 @@ func NewCurrentRetainedTarget(retainedSessionID, sourceSessionID runtimeids.Sess
 	if sourceSessionID.IsZero() {
 		return RetainedTargetState{}, fmt.Errorf("retained target source Session ID is required")
 	}
-	return RetainedTargetState{kind: "current", retainedSession: retainedSessionID, sourceSession: sourceSessionID}, nil
+	return RetainedTargetState{kind: retainedTargetStateCurrent, retainedSession: retainedSessionID, sourceSession: sourceSessionID}, nil
 }
 
 type RetainedTargetEvaluationRequest struct {
@@ -268,7 +279,7 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 	if err := request.ActiveSource.Validate(); err != nil {
 		return RetainedTargetDecision{}, fmt.Errorf("retained target active source: %w", err)
 	}
-	if request.Target.kind == "unavailable" {
+	if request.Target.kind == retainedTargetStateUnavailable {
 		if contextSource.Kind == ContextSourcePreviousTargetOrNew {
 			return RetainedTargetDecision{TargetSession: CreateTargetSessionIntent(), ActiveSource: request.ActiveSource}, nil
 		}
@@ -281,7 +292,7 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 		return RetainedTargetDecision{}, RetainedTargetInvariantError{Detail: detail}
 	}
 	switch request.Target.kind {
-	case "invalid_current":
+	case retainedTargetStateInvalidCurrent:
 		detail := RetainedTargetInvariantDetail{TaskID: request.TaskID, SourceNodeID: request.SourceNodeID, TargetNodeID: request.TargetNodeID,
 			ActiveSourceSessionID: cloneSessionID(&activeSourceID), RejectedRetainedSessionID: cloneSessionID(request.Target.rejectedSession),
 			Reason: request.Target.invariantReason}
@@ -291,9 +302,9 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 			}, nil
 		}
 		return RetainedTargetDecision{}, RetainedTargetInvariantError{Detail: detail}
-	case "historical_only":
+	case retainedTargetStateHistoricalOnly:
 		return RetainedTargetDecision{TargetSession: CreateTargetSessionIntent(), ActiveSource: request.ActiveSource}, nil
-	case "current":
+	case retainedTargetStateCurrent:
 	default:
 		return RetainedTargetDecision{}, fmt.Errorf("retained target state is invalid")
 	}
@@ -308,9 +319,9 @@ func EvaluateRetainedTarget(request RetainedTargetEvaluationRequest) (RetainedTa
 }
 func retainedTargetRejectedSessionID(target RetainedTargetState) *runtimeids.SessionID {
 	switch target.kind {
-	case "current":
+	case retainedTargetStateCurrent:
 		return cloneSessionID(&target.retainedSession)
-	case "invalid_current":
+	case retainedTargetStateInvalidCurrent:
 		return cloneSessionID(target.rejectedSession)
 	default:
 		return nil
