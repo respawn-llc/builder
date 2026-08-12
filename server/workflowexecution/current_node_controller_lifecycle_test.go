@@ -607,7 +607,7 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 		t.Run(test.name, func(t *testing.T) {
 			source := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-source")
 			agent := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-agent")
-			script := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-script")
+			healthyAgent := currentNodeReferenceForControllerTest(t, "task-idle-completion-transferred", "node-healthy-agent")
 			sourceNode := workflow.CurrentNode{
 				Reference:  source,
 				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
@@ -617,13 +617,18 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 				completion: workflowstore.CurrentNodeCompletionResult{
 					AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{
 						{CurrentNode: agent, NodeKind: workflow.NodeKindAgent},
-						{CurrentNode: script, NodeKind: workflow.NodeKindScript},
+						{CurrentNode: healthyAgent, NodeKind: workflow.NodeKindAgent},
 					},
 				},
 			}
 			release := make(chan struct{})
 			waitStarted := make(chan struct{})
-			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			var controller *CurrentNodeController
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+				ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+					controller.ExecutionFinalized(scope)
+				}),
+			})
 			runner := &recordingScriptRunner{
 				authority: authority,
 				command: sessionruntime.ScriptCommand{
@@ -632,7 +637,7 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 				},
 				started: make(chan workflow.CurrentNodeReference, 2),
 			}
-			controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+			controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
 				AgentConcurrency: 1,
 				AssignmentSteerer: &lateFirstCurrentNodeAssignmentSteerer{
 					release: release,
@@ -676,28 +681,42 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 			case <-time.After(3 * time.Second):
 				t.Fatal("CompleteIdleCurrentNode did not return after caller cancellation")
 			}
-			close(release)
-
-			started := make(map[workflow.CurrentNodeReference]bool, 2)
-			wantStarts := 1
-			if test.wantAgentStarted {
-				wantStarts = 2
-			}
-			for len(started) < wantStarts {
-				select {
-				case reference := <-runner.started:
-					started[reference] = true
-				case <-time.After(3 * time.Second):
-					t.Fatalf("started successors = %+v, want Agent started = %t and Script started", started, test.wantAgentStarted)
+			select {
+			case started := <-runner.started:
+				if !started.Equal(healthyAgent) {
+					t.Fatalf("first successor started = %v, want healthy Agent %v", started, healthyAgent)
 				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("healthy Agent sibling was stranded behind unresolved assignment")
 			}
-			if started[agent] != test.wantAgentStarted {
-				t.Fatalf("Agent started = %t, want %t", started[agent], test.wantAgentStarted)
+			waitForRunningCurrentNode(t, authority, healthyAgent)
+			if interruption, interrupted := store.interruption(healthyAgent); interrupted {
+				t.Fatalf("healthy Agent was interrupted before capacity handoff: %+v", interruption)
 			}
-			if !started[script] {
-				t.Fatal("healthy Script sibling did not start")
-			}
-			if !test.wantAgentStarted {
+			close(release)
+			if test.wantAgentStarted {
+				select {
+				case started := <-runner.started:
+					t.Fatalf("transferred Agent started while healthy sibling owned capacity: %v", started)
+				case <-time.After(100 * time.Millisecond):
+				}
+				healthyScope := singleLiveScope(t, authority, healthyAgent)
+				healthyHandle, live := authority.ExecutionByScope(healthyScope)
+				if !live {
+					t.Fatal("healthy Agent scope retired before stop")
+				}
+				if err := healthyHandle.Stop(context.Background()); err != nil {
+					t.Fatalf("stop healthy Agent: %v", err)
+				}
+				select {
+				case started := <-runner.started:
+					if !started.Equal(agent) {
+						t.Fatalf("successor after capacity release = %v, want transferred Agent %v", started, agent)
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("transferred Agent did not start after capacity became available")
+				}
+			} else {
 				testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 					_, interrupted := store.interruption(agent)
 					return interrupted
@@ -707,8 +726,8 @@ func TestCompleteIdleCurrentNodeClassifiesTransferredAssignmentsIndependently(t 
 			if agentInterrupted == test.wantAgentStarted {
 				t.Fatalf("Agent interrupted = %t, want %t", agentInterrupted, !test.wantAgentStarted)
 			}
-			if interruption, interrupted := store.interruption(script); interrupted {
-				t.Fatalf("healthy Script was interrupted: %+v", interruption)
+			if interruption, interrupted := store.interruption(healthyAgent); interrupted && !test.wantAgentStarted {
+				t.Fatalf("healthy Agent was interrupted: %+v", interruption)
 			}
 		})
 	}
@@ -819,6 +838,11 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-successor")
+	releaseAssignment := make(chan struct{})
+	assignmentStarted := make(chan struct{})
+	assignmentResumed := make(chan struct{})
+	interruptStarted := make(chan struct{})
+	interruptRelease := make(chan struct{})
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
 			Mutation: workflow.CurrentNodeMutationResult{
@@ -829,9 +853,9 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 				NodeKind:    workflow.NodeKindAgent,
 			}},
 		},
+		interruptStarted: interruptStarted,
+		interruptRelease: interruptRelease,
 	}
-	releaseAssignment := make(chan struct{})
-	assignmentStarted := make(chan struct{})
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
@@ -878,6 +902,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	controller.steerer = lateCommitCurrentNodeAssignmentSteerer{
 		release: releaseAssignment,
 		started: assignmentStarted,
+		resumed: assignmentResumed,
 	}
 
 	sourceScope := singleLiveScope(t, authority, source)
@@ -898,28 +923,17 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	cancelCompletion()
 	select {
 	case completeErr := <-completionDone:
-		if completeErr != nil {
-			t.Fatalf("CompleteCurrentNode committed diagnostic = %v, want controller-consumed diagnostic", completeErr)
+		if !errors.Is(completeErr, context.Canceled) {
+			t.Fatalf("CompleteCurrentNode diagnostic = %v, want caller cancellation", completeErr)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("CompleteCurrentNode did not transfer the canceled assignment wait")
 	}
-	controller.mu.Lock()
-	completionDiagnostic := controller.workerDiagnostics
-	controller.mu.Unlock()
-	if !errors.Is(completionDiagnostic, context.Canceled) {
-		t.Fatalf("controller background diagnostic = %v, want caller cancellation", completionDiagnostic)
+	select {
+	case <-assignmentResumed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("transferred successor did not resume its assignment wait")
 	}
-	successorKey, err := successor.Key()
-	if err != nil {
-		t.Fatalf("successor key: %v", err)
-	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		controller.mu.Lock()
-		defer controller.mu.Unlock()
-		_, waiting := controller.admissionWorkers[successorKey]
-		return waiting
-	}, "transferred successor did not enter the existing admission worker")
 
 	interruptDone := make(chan error, 1)
 	go func() {
@@ -929,6 +943,21 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		)
 	}()
 	select {
+	case <-interruptStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Task interrupt did not enter durable successor disposition")
+	}
+	preflightCtx, cancelPreflight := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelPreflight()
+	preflightErr := controller.EnsureTaskResumeEligible(
+		preflightCtx,
+		workflow.TaskID("task-unrelated-resume-preflight"),
+	)
+	if !errors.Is(preflightErr, context.DeadlineExceeded) {
+		t.Fatalf("unrelated lifecycle mutation crossed the active interruption write: %v", preflightErr)
+	}
+	close(interruptRelease)
+	select {
 	case interruptErr := <-interruptDone:
 		t.Fatalf("Task interrupt returned before transferred assignment resolved: %v", interruptErr)
 	case <-time.After(100 * time.Millisecond):
@@ -936,12 +965,6 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	close(releaseAssignment)
 	if interruptErr := <-interruptDone; interruptErr != nil {
 		t.Fatalf("Interrupt Task with transferred successor: %v", interruptErr)
-	}
-	store.mu.Lock()
-	interruptPermit := store.interruptPermit
-	store.mu.Unlock()
-	if interruptPermit != controller.permit {
-		t.Fatal("transferred successor interruption bypassed the workflow mutation permit")
 	}
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		_, interrupted := store.interruption(successor)

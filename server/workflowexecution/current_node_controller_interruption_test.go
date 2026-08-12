@@ -22,9 +22,11 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-deadline", "node-agent")
+	deliveryErr := errors.New("interruption event delivery unavailable")
 	store := &currentNodeControllerStore{
 		interruptStarted: make(chan struct{}),
 		interruptRelease: make(chan struct{}),
+		interruptErr:     currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -68,46 +70,14 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 	<-ctx.Done()
 	close(store.interruptRelease)
-	if err := <-result; err != nil {
-		t.Fatalf("interrupt current node after caller deadline: %v", err)
+	if err := <-result; !errors.Is(err, deliveryErr) {
+		t.Fatalf("interrupt current node diagnostic = %v, want %v", err, deliveryErr)
 	}
 	if interruption, interrupted := store.interruption(reference); !interrupted || interruption.reason != workflow.CurrentNodeInterruptionReasonUserInterrupt {
 		t.Fatalf("interruption = %+v, interrupted = %t, want durable user interruption", interruption, interrupted)
 	}
 	if hasLiveCurrentNode(authority, reference) {
 		t.Fatal("interrupted current node remains live")
-	}
-}
-
-func TestCurrentNodeControllerInterruptConsumesCommittedEventDiagnostic(t *testing.T) {
-	reference := currentNodeReferenceForControllerTest(t, "task-interrupt-event-diagnostic", "node-agent")
-	deliveryErr := errors.New("interruption event delivery unavailable")
-	store := &currentNodeControllerStore{
-		interruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
-	}
-	attention := &currentNodeAttentionRecorder{}
-	controller := &CurrentNodeController{
-		store:      store,
-		permit:     NewMutationPermit(),
-		attention:  attention,
-		interrupts: newCurrentNodeInterruptState(),
-	}
-	key, keyErr := reference.Key()
-	if keyErr != nil {
-		t.Fatalf("Current Node key: %v", keyErr)
-	}
-	done := make(chan struct{})
-	close(done)
-
-	err := controller.cleanupInterrupt(currentNodeInterruptCleanupState{
-		references:     []workflow.CurrentNodeReference{reference},
-		admissionWaits: []currentNodeAdmissionWait{{key: key, done: done}},
-	})
-	if !errors.Is(err, deliveryErr) {
-		t.Fatalf("cleanup interruption error = %v, want %v", err, deliveryErr)
-	}
-	if _, interrupted := store.interruption(reference); !interrupted {
-		t.Fatal("Current Node interruption was not committed")
 	}
 }
 
@@ -564,9 +534,20 @@ func TestCurrentNodeControllerTaskInterruptUserReasonWinsFinalizingScopeFailure(
 
 func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t *testing.T) {
 	reference := currentNodeReferenceForControllerTest(t, "task-scope-failure-worker-error", "node-script")
-	store := &currentNodeControllerStore{}
+	deliveryErr := errors.New("interruption event delivery unavailable")
+	store := &currentNodeControllerStore{
+		admittedInterruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
+	}
+	attention := &currentNodeAttentionRecorder{}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	controller := newCurrentNodeControllerWithAttentionForTest(
+		t,
+		store,
+		&countingCurrentNodeRunner{},
+		authority,
+		1,
+		attention,
+	)
 	t.Cleanup(func() {
 		controller.mu.Lock()
 		controller.workerErr = nil
@@ -597,73 +578,19 @@ func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t 
 	controller.workerErr = errors.New("unrelated admission persistence failed")
 	controller.mu.Unlock()
 
-	if err := controller.FailCurrentNodeScope(
-		context.Background(),
-		lease.ScopeID(),
-		"workflow_script_failed",
-		errors.New("script failed"),
-	); err != nil {
-		t.Fatalf("FailCurrentNodeScope: %v", err)
-	}
-	interruption, interrupted := store.interruption(reference)
-	if !interrupted || interruption.reason != "workflow_script_failed" {
-		t.Fatalf("scope failure interruption = %+v, interrupted = %t", interruption, interrupted)
-	}
-}
-
-func TestCurrentNodeControllerScopeFailureConsumesCommittedEventDiagnostic(t *testing.T) {
-	shellPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Skipf("sh executable unavailable: %v", err)
-	}
-	reference := currentNodeReferenceForControllerTest(t, "task-scope-event-diagnostic", "node-script")
-	deliveryErr := errors.New("interruption event delivery unavailable")
-	store := &currentNodeControllerStore{}
-	attention := &currentNodeAttentionRecorder{}
-	var controller *CurrentNodeController
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
-		}),
-	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 1),
-	}
-	controller = newCurrentNodeControllerWithAttentionForTest(t, store, runner, authority, 1, attention)
-	t.Cleanup(func() {
-		if err := controller.Close(); err != nil {
-			t.Errorf("close controller: %v", err)
-		}
-		if err := authority.Close(context.Background()); err != nil {
-			t.Errorf("close authority: %v", err)
-		}
-	})
-	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
-		t.Fatalf("start Current Node: %v", err)
-	}
-	<-runner.started
-	waitForRunningCurrentNode(t, authority, reference)
-	store.mu.Lock()
-	store.admittedInterruptErr = currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr)
-	store.mu.Unlock()
-
 	err = controller.FailCurrentNodeScope(
 		context.Background(),
-		singleLiveScope(t, authority, reference),
+		lease.ScopeID(),
 		"workflow_script_failed",
 		errors.New("script failed"),
 	)
 	if !errors.Is(err, deliveryErr) {
 		t.Fatalf("FailCurrentNodeScope error = %v, want %v", err, deliveryErr)
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		return !hasLiveCurrentNode(authority, reference)
-	}, "failed Current Node remained live")
+	interruption, interrupted := store.interruption(reference)
+	if !interrupted || interruption.reason != "workflow_script_failed" {
+		t.Fatalf("scope failure interruption = %+v, interrupted = %t", interruption, interrupted)
+	}
 	if attention.pendingCount() != 1 {
 		t.Fatalf("interruption attention = %d, want one", attention.pendingCount())
 	}

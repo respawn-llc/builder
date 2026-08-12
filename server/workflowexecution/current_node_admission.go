@@ -713,11 +713,18 @@ func (c *CurrentNodeController) runAdmissions() {
 }
 
 func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
+	key := start.referenceKey()
+	ownsWorker := true
 	defer c.admissionWG.Done()
 	defer close(start.done)
 	defer c.finishTaskInterruptAdmission(start.reference)
-	defer c.finishAdmissionWorker(start)
-	defer c.releaseReservation(start.referenceKey(), start.policy, start.agentCapacityLease)
+	defer func() {
+		if !ownsWorker {
+			return
+		}
+		c.releaseReservation(key, start.policy, start.agentCapacityLease)
+		c.finishAdmissionWorker(start)
+	}()
 	if start.assignmentWait != nil {
 		decision := classifyCurrentNodeAssignment(
 			c.workerContext,
@@ -761,6 +768,39 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			return
 		}
 		start.holdFor = nil
+	}
+	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
+		c.mu.Lock()
+		reservation, reserved := c.automaticReservations[key]
+		worker, working := c.admissionWorkers[key]
+		switch {
+		case c.closed || c.interrupts.currentNodeFenced(key):
+			c.mu.Unlock()
+			return
+		case !reserved || !working ||
+			reservation.done != start.done ||
+			worker.done != start.done:
+			c.mu.Unlock()
+			panic("transferred Agent admission lost its reservation owner")
+		case c.agentCapacityActive >= c.agentConcurrency:
+			delete(c.automaticReservations, key)
+			delete(c.admissionWorkers, key)
+			start.done = nil
+			c.automaticQueue.append(start)
+			c.queued[key] = struct{}{}
+			ownsWorker = false
+			c.mu.Unlock()
+			c.wakeAdmissionWorker()
+			return
+		default:
+			start.agentCapacityLease = &currentNodeAgentCapacityLease{
+				owner: currentNodeAgentCapacityReservation,
+			}
+			c.agentCapacityActive++
+			c.automaticReservations[key] = start
+			c.admissionWorkers[key] = start
+			c.mu.Unlock()
+		}
 	}
 	if err := c.admit(c.workerContext, start); err != nil {
 		key, keyErr := start.reference.Key()
@@ -831,7 +871,9 @@ func (c *CurrentNodeController) takeAutomaticIntent() (currentNodeQueuedStart, b
 	delete(c.queued, key)
 	start.taskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
 	start.done = make(chan struct{})
-	if start.policy.countsAgentCapacity() {
+	if start.policy.countsAgentCapacity() &&
+		start.assignmentWait == nil &&
+		start.holdFor == nil {
 		start.agentCapacityLease = &currentNodeAgentCapacityLease{
 			owner: currentNodeAgentCapacityReservation,
 		}

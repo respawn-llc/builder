@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,6 +114,7 @@ func (s *deadlineRecordingCurrentNodeAssignmentSteer) Wait(ctx context.Context) 
 type lateCommitCurrentNodeAssignmentSteerer struct {
 	release <-chan struct{}
 	started chan struct{}
+	resumed chan struct{}
 	receipt session.CommitReceipt
 	err     error
 }
@@ -124,21 +126,28 @@ func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 	return &lateCommitCurrentNodeAssignmentSteer{
 		release: s.release,
 		started: s.started,
+		resumed: s.resumed,
 		receipt: s.receipt,
 		err:     s.err,
 	}, nil
 }
 
 type lateCommitCurrentNodeAssignmentSteer struct {
-	release <-chan struct{}
-	started chan struct{}
-	receipt session.CommitReceipt
-	err     error
-	once    sync.Once
+	release    <-chan struct{}
+	started    chan struct{}
+	resumed    chan struct{}
+	receipt    session.CommitReceipt
+	err        error
+	startOnce  sync.Once
+	resumeOnce sync.Once
+	waits      atomic.Int32
 }
 
 func (s *lateCommitCurrentNodeAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
-	s.once.Do(func() { close(s.started) })
+	s.startOnce.Do(func() { close(s.started) })
+	if s.waits.Add(1) > 1 && s.resumed != nil {
+		s.resumeOnce.Do(func() { close(s.resumed) })
+	}
 	select {
 	case <-s.release:
 		receipt := s.receipt
@@ -355,7 +364,6 @@ type currentNodeControllerStore struct {
 	interruptStarted          chan struct{}
 	interruptRelease          chan struct{}
 	interruptOnce             sync.Once
-	interruptPermit           *MutationPermit
 	idleResolved              *workflow.CurrentNode
 }
 
@@ -534,7 +542,6 @@ func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Cont
 func (s *currentNodeControllerStore) InterruptCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
 	s.mu.Lock()
 	s.interruptAttempts++
-	s.interruptPermit, _ = ctx.Value(mutationPermitContextKey{}).(*MutationPermit)
 	err := s.interruptErr
 	s.mu.Unlock()
 	committed, diagnostic := classifyCurrentNodeInterruption(err)

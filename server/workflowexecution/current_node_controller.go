@@ -249,15 +249,10 @@ func (c *CurrentNodeController) CompleteCurrentNode(ctx context.Context, req wor
 		}
 	}
 	if committed {
-		if err != nil {
-			c.mu.Lock()
-			c.workerDiagnostics = errors.Join(c.workerDiagnostics, err)
-			c.mu.Unlock()
-		}
 		return workflowruntime.CompletionResult{
 			TransitionID: workflow.TransitionID(req.TransitionID),
-			State:        "applied",
-		}, nil
+			State:        workflowruntime.CompletionStateApplied,
+		}, err
 	}
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
