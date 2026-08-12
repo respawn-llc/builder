@@ -8,12 +8,14 @@ import { AnimatedBoardChipSummary } from "./BoardChipSummary";
 
 export function BoardWorkflowPicker({
   activeWorkflow,
+  canLinkWorkflow,
   onLinkWorkflow,
   onOpenTasks,
   onSelectWorkflow,
   workflows,
 }: Readonly<{
   activeWorkflow: WorkflowPickerItem;
+  canLinkWorkflow: boolean;
   onLinkWorkflow: () => void;
   onOpenTasks: () => void;
   onSelectWorkflow: (workflowID: string) => void;
@@ -58,7 +60,8 @@ export function BoardWorkflowPicker({
             </label>
           ))}
           <button
-            className="mt-[var(--space-1)] flex cursor-pointer items-center gap-[var(--space-2)] border-t border-[var(--color-outline)] px-[var(--space-2)] pt-[var(--space-3)] pb-[var(--space-2)] text-left hover:text-[var(--color-on-island)]"
+            className="mt-[var(--space-1)] flex cursor-pointer items-center gap-[var(--space-2)] border-t border-[var(--color-outline)] px-[var(--space-2)] pt-[var(--space-3)] pb-[var(--space-2)] text-left hover:text-[var(--color-on-island)] disabled:cursor-not-allowed disabled:opacity-45"
+            disabled={!canLinkWorkflow}
             onClick={() => {
               setOpen(false);
               onLinkWorkflow();

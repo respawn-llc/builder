@@ -40,6 +40,7 @@ export function BoardFilterRow({
           </InteractiveChip>
           <BoardWorkflowPicker
             activeWorkflow={activeWorkflow}
+            canLinkWorkflow={canCreateTask}
             onLinkWorkflow={onLinkWorkflow}
             onOpenTasks={onOpenTasks}
             onSelectWorkflow={onSelectWorkflow}
