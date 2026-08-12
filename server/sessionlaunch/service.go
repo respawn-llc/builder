@@ -268,10 +268,6 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		}
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(availability)}, nil
 	case serverapi.WorkspaceChatDraftClear:
-		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
-		if err != nil {
-			return serverapi.WorkspaceChatDraftResponse{}, err
-		}
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
@@ -279,7 +275,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		resolved, err = s.ResolveWorkspaceChatDraftAggregate(ctx)
+		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}

@@ -687,8 +687,7 @@ func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.Wor
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
-	var resp serverapi.SessionMainViewResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetMainView, req, &resp)
+	return callValidatedControlRPC[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](c, ctx, protocol.MethodSessionGetMainView, req)
 }
 
 func (c *Remote) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {

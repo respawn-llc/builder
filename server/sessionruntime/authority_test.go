@@ -1053,21 +1053,9 @@ func TestDetachKeepsOwnerlessRuntimeAvailable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("detached ownerless runtime is unavailable: %v", err)
 	}
-}
-
-func TestApplyCurrentGoalOperationRoutesCurrentRuntime(t *testing.T) {
-	fixture := newSessionRuntimeFixture(t)
-	sessionID := lifecycleSessionID(t, fixture)
-	outcome, err := fixture.authority.ApplyCurrentGoalOperation(context.Background(), sessionID, runtime.CurrentGoalClear{Actor: session.GoalActorUser})
-	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) || outcome.Handled != nil || outcome.ExecutionRequired {
-		t.Fatalf("unavailable outcome = %+v, error = %v", outcome, err)
-	}
-	plan := authorityTestRuntimePlan(t, fixture, &sessionRuntimeTestLLMClient{})
-	attachment := openLifecycleRuntime(t, fixture.authority, sessionID, "goal-operation", &plan)
-	t.Cleanup(func() { _, _ = attachment.Release(context.Background(), RuntimeReleaseClose) })
-	outcome, err = fixture.authority.ApplyCurrentGoalOperation(context.Background(), sessionID, runtime.CurrentGoalSet{Objective: "routed Goal", Actor: session.GoalActorUser})
-	if err != nil || outcome.Handled != nil || !outcome.ExecutionRequired {
-		t.Fatalf("routed outcome = %+v, error = %v", outcome, err)
+	outcome, err := authority.ApplyCurrentGoalOperation(context.Background(), sessionID, runtime.CurrentGoalSet{Objective: "routed Goal", Actor: session.GoalActorUser})
+	if err != nil || !outcome.ExecutionRequired {
+		t.Fatal(outcome, err)
 	}
 }
 

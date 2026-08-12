@@ -3,12 +3,17 @@ package serverapi
 import (
 	"errors"
 	"testing"
+
+	"core/shared/clientui"
 )
 
 func TestSessionMainViewRequestUsesSessionIdentityOnly(t *testing.T) {
 	req := SessionMainViewRequest{SessionID: "session-1"}
 	if err := req.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+	if err := (SessionMainViewResponse{MainView: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{}}}}).Validate(); err == nil {
+		t.Fatal("accepted main-view Goal without availability")
 	}
 }
 

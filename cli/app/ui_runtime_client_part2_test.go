@@ -411,16 +411,6 @@ func assertRuntimeClientGoalCached(t *testing.T, runtimeClient *sessionRuntimeCl
 	}
 }
 
-func assertRuntimeGoalConversionDropsAPITimestamps(t *testing.T, got *clientui.RuntimeGoal, source *serverapi.RuntimeGoal) {
-	t.Helper()
-	if source == nil || source.CreatedAt.IsZero() || source.UpdatedAt.IsZero() {
-		t.Fatal("test source goal must include timestamps")
-	}
-	if got == nil || got.ID != source.ID || got.Objective != source.Objective || got.Status != source.Status {
-		t.Fatalf("converted goal = %+v, source = %+v", got, source)
-	}
-}
-
 func TestRuntimeClientSubmitUserMessageRecoversNotAcceptedRuntimeUnavailableAndReusesRequestID(t *testing.T) {
 	controls := &reconnectRetryRuntimeControlClient{firstSubmitErr: serverapi.NewRuntimeCommandNotAcceptedError(serverapi.ErrRuntimeUnavailable)}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)

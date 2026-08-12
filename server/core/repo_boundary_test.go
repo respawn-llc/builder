@@ -39,6 +39,8 @@ func TestArchitectureBoundaries(t *testing.T) {
 			switch {
 			case strings.HasPrefix(importPath, "core/server/") && strings.HasPrefix(trimmedImport, "core/cli/"):
 				violations = append(violations, importPath+" must not import frontend package "+trimmedImport)
+			case importPath == "core/server/session" && trimmedImport == "core/shared/clientui":
+				violations = append(violations, importPath+" must not import client Goal DTOs")
 			case strings.HasPrefix(importPath, "core/shared/") && strings.HasPrefix(trimmedImport, "core/cli/"):
 				violations = append(violations, importPath+" must not import frontend package "+trimmedImport)
 			case strings.HasPrefix(importPath, "core/shared/") && strings.HasPrefix(trimmedImport, "core/server/"):
@@ -1092,25 +1094,6 @@ func walkRepositoryGoSources(t *testing.T, repoRoot string, scan repositoryGoSou
 		return nil
 	}); err != nil {
 		t.Fatalf("%s: %v", scan.Operation, err)
-	}
-}
-
-func TestSessionDomainOwnsGoalFacts(t *testing.T) {
-	violations := make([]string, 0)
-	walkRepositoryGoSources(t, findRepoRoot(t), repositoryGoSourceScan{
-		Operation: "scan session domain imports",
-		Root:      filepath.Join("server", "session"),
-		Mode:      parser.ImportsOnly,
-		Selection: allRepositoryGoSources{},
-	}, func(source parsedGoSource) {
-		for _, imported := range source.File.Imports {
-			if strings.Trim(imported.Path.Value, "\"") == "core/shared/clientui" {
-				violations = append(violations, source.RelPath)
-			}
-		}
-	})
-	if len(violations) > 0 {
-		t.Fatalf("session domain files must not expose client Goal DTOs:\n%s", strings.Join(violations, "\n"))
 	}
 }
 

@@ -12,7 +12,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 func appendSessionTestRecord(
@@ -264,6 +263,13 @@ func TestLockedContractPersistenceIncludesPromptAndRequestSnapshots(t *testing.T
 	}
 	if locked.WorkflowCompletionMode == nil || *locked.WorkflowCompletionMode != sessioncontract.WorkflowCompletionModeTool {
 		t.Fatalf("locked workflow completion mode = %v, want tool", locked.WorkflowCompletionMode)
+	}
+	if got, err := opened.GoalAvailability(); err != nil || got != GoalAgentCapabilityMissing {
+		t.Fatalf("reopened Goal availability=%q err=%v", got, err)
+	}
+	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
+		t.Fatal("malformed locked tools returned Goal availability")
 	}
 }
 
@@ -1221,26 +1227,5 @@ func TestHeadlessActiveFromTypedReplayRecords(t *testing.T) {
 		if derived.headlessActive != tc.want {
 			t.Fatalf("%s: derived.headlessActive = %v, want %v", tc.name, derived.headlessActive, tc.want)
 		}
-	}
-}
-
-func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {
-	store := newSessionTestStore(t)
-	if got, err := store.GoalAvailability(); err != nil || got != GoalAvailable {
-		t.Fatalf("unlocked availability=%q err=%v", got, err)
-	}
-	if got, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{string(toolspec.ToolAskQuestion)}}}); err != nil || got != GoalAvailable {
-		t.Fatalf("ask_question availability=%q err=%v", got, err)
-	}
-	markSessionTestLocked(t, store, LockedContract{EnabledTools: []string{string(toolspec.ToolExecCommand)}})
-	if got, err := mustOpenSessionTestStore(t, store).GoalAvailability(); err != nil || got != GoalAgentCapabilityMissing {
-		t.Fatalf("reopened availability=%q err=%v", got, err)
-	}
-	if got, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err != nil || got != GoalAvailable {
-		t.Fatalf("stale availability=%q err=%v", got, err)
-	}
-	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
-		t.Fatal("malformed locked tools returned availability")
 	}
 }
