@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -183,7 +184,10 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 		t.Skipf("sh executable unavailable: %v", err)
 	}
 	reference := currentNodeReferenceForControllerTest(t, "task-finalization-failure", "node-script")
-	store := &currentNodeControllerStore{}
+	deliveryErr := sql.ErrNoRows
+	store := &currentNodeControllerStore{
+		admittedInterruptErr: currentNodeInterruptionPostCommitDiagnosticForTest(reference, deliveryErr),
+	}
 	attention := &currentNodeAttentionRecorder{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -207,7 +211,7 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	}
 	t.Cleanup(func() {
 		releaseFinalizer()
-		if err := controller.Close(); err != nil {
+		if err := controller.Close(); err != nil && !errors.Is(err, deliveryErr) {
 			t.Errorf("close controller: %v", err)
 		}
 		if err := authority.Close(context.Background()); err != nil {
@@ -255,6 +259,9 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
 		return attention.pendingCount() == 1
 	}, "outcome-less finalization did not publish interrupted Current Node attention")
+	if err := controller.Close(); !errors.Is(err, deliveryErr) {
+		t.Fatalf("outcome-less finalization diagnostic = %v, want %v", err, deliveryErr)
+	}
 }
 
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {

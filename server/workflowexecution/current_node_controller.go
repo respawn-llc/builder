@@ -858,7 +858,7 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workf
 				diagnostic,
 			),
 		))
-		if errors.Is(diagnostic, sql.ErrNoRows) {
+		if !committed && errors.Is(diagnostic, sql.ErrNoRows) {
 			return false, nil
 		}
 		if !committed {
