@@ -92,11 +92,29 @@ export type ProjectPage = Readonly<{
   generatedAt: number;
 }>;
 
-export type WorkspaceList = Readonly<{
+export type WorkspaceCatalogRow = Readonly<{
+  id: string;
+  name: string;
+  rootPath: string;
+  isDefault: boolean;
+}>;
+
+export type WorkspaceCatalogPage = Readonly<{
   projectID: string;
-  workspaces: readonly WorkspaceSummary[];
-  defaultWorkspaceID: string;
-  nextPageToken: string | null;
+  offset: number;
+  workspaces: readonly WorkspaceCatalogRow[];
+  nextOffset: number | null;
+}>;
+
+export type ProjectWorkspaceResult =
+  | Readonly<{ kind: "attached"; workspace: WorkspaceCatalogRow }>
+  | Readonly<{ kind: "not_attached" }>;
+
+export type ProjectWorkspaceAttachOutcome = "attached" | "already_attached";
+
+export type ProjectWorkspaceAttachResponse = Readonly<{
+  binding: ProjectBinding;
+  outcome: ProjectWorkspaceAttachOutcome;
 }>;
 
 export type SessionCategory = "main" | "subagent";
@@ -120,9 +138,6 @@ export type ProjectEdit = Readonly<{
   projectID: string;
   projectKey: string;
   displayName: string;
-  defaultWorkspaceID: string;
-  workspaces: readonly WorkspaceSummary[];
-  nextPageToken: string;
 }>;
 
 export type ProjectMutationResponse = Readonly<{

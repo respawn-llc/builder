@@ -11,15 +11,13 @@ const workspaceRow = {
   workspace_id: "workspace-1",
   display_name: "Kent",
   root_path: "/workspace/kent",
-  availability: "available",
-  is_primary: true,
-  updated_at_unix_ms: 1,
+  is_default: true,
 } as const;
 const workspaceResponse = {
   project_id: "project-1",
+  offset: 0,
   workspaces: [workspaceRow],
-  default_workspace_id: "workspace-1",
-  next_page_token: "next-token",
+  next_offset: 100,
 } as const;
 describe("ApiClient catalog boundary", () => {
   it.each([{ category: "main" as const }, { category: "subagent" as const }])(
@@ -55,6 +53,18 @@ describe("ApiClient catalog boundary", () => {
     ).rejects.toBeInstanceOf(ContractError);
     expect(transport.calls).toHaveLength(0);
   });
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])("rejects invalid workspace offsets %j", async (offset) => {
+    const transport = new FakeRpcTransport([]);
+    await expect(new ApiClient(transport).listWorkspaces("project-1", offset)).rejects.toBeInstanceOf(ContractError);
+    expect(transport.calls).toHaveLength(0);
+  });
+  it.each(["", " ", " project-1", "project-1 "])("rejects invalid catalog Project IDs %j", async (projectID) => {
+    const transport = new FakeRpcTransport([]);
+    const client = new ApiClient(transport);
+    await expect(client.listSessionPage(projectID, "main", 0)).rejects.toBeInstanceOf(ContractError);
+    await expect(client.listWorkspaces(projectID, 0)).rejects.toBeInstanceOf(ContractError);
+    expect(transport.calls).toHaveLength(0);
+  });
   it.each([
     { name: "omitted", response: sessionResponse },
     { name: "null", response: { ...sessionResponse, next_offset: null } },
@@ -67,26 +77,6 @@ describe("ApiClient catalog boundary", () => {
       ),
     ).resolves.toMatchObject({ nextOffset: null });
   });
-  it.each(["", " ", " next-token", "next-token "])(
-    "rejects invalid workspace page tokens %j",
-    async (pageToken) => {
-      const transport = new FakeRpcTransport([]);
-      await expect(new ApiClient(transport).listWorkspaces("project-1", pageToken)).rejects.toBeInstanceOf(
-        ContractError,
-      );
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
-  it.each(["", " ", " project-1", "project-1 "])(
-    "rejects invalid catalog Project IDs %j",
-    async (projectID) => {
-      const transport = new FakeRpcTransport([]);
-      const client = new ApiClient(transport);
-      await expect(client.listSessionPage(projectID, "main", 0)).rejects.toBeInstanceOf(ContractError);
-      await expect(client.listWorkspaces(projectID)).rejects.toBeInstanceOf(ContractError);
-      expect(transport.calls).toHaveLength(0);
-    },
-  );
   it("validates Session page identity and preserves RPC failures", async () => {
     const projectMismatch = new ApiClient(
       new FakeRpcTransport([
@@ -112,18 +102,28 @@ describe("ApiClient catalog boundary", () => {
     const failed = new ApiClient(new FakeRpcTransport([{ method: "session.page", error: rpcError }]));
     await expect(failed.listSessionPage("project-1", "main", 0)).rejects.toBe(rpcError);
   });
-  it("validates the existing workspace page in place", async () => {
-    const transport = new FakeRpcTransport([{ method: "project.workspace.list", result: workspaceResponse }]);
+  it("validates the numeric-offset workspace page", async () => {
+    const fullWorkspaceResponse = {
+      ...workspaceResponse,
+      workspaces: Array.from({ length: 100 }, (_, index) => ({
+        ...workspaceRow,
+        workspace_id: `workspace-${String(index)}`,
+      })),
+    };
+    const transport = new FakeRpcTransport([
+      { method: "project.workspace.list", result: fullWorkspaceResponse },
+    ]);
     const client = new ApiClient(transport);
 
-    await expect(client.listWorkspaces("project-1")).resolves.toMatchObject({
+    await expect(client.listWorkspaces("project-1", 0)).resolves.toMatchObject({
       projectID: "project-1",
-      nextPageToken: "next-token",
+      offset: 0,
+      nextOffset: 100,
     });
     expect(transport.calls).toEqual([
       {
         method: "project.workspace.list",
-        params: { project_id: "project-1", page_size: 100 },
+        params: { project_id: "project-1", offset: 0, limit: 100 },
       },
     ]);
     await expect(
@@ -131,39 +131,36 @@ describe("ApiClient catalog boundary", () => {
         new FakeRpcTransport([
           { method: "project.workspace.list", result: { ...workspaceResponse, project_id: "project-2" } },
         ]),
-      ).listWorkspaces("project-1"),
+      ).listWorkspaces("project-1", 0),
     ).rejects.toMatchObject({
       reason: "project_mismatch",
       expectedProjectID: "project-1",
       actualProjectID: "project-2",
     });
   });
-  it("normalizes the existing workspace terminal continuation to null", async () => {
-    await expect(
-      new ApiClient(
-        new FakeRpcTransport([{ method: "project.workspace.list", result: { ...workspaceResponse } }]),
-      ).listWorkspaces("project-1"),
-    ).resolves.toMatchObject({ nextPageToken: "next-token" });
-    await expect(
-      new ApiClient(
-        new FakeRpcTransport([
-          {
-            method: "project.workspace.list",
-            result: { ...workspaceResponse, next_page_token: "" },
-          },
-        ]),
-      ).listWorkspaces("project-1"),
-    ).resolves.toMatchObject({ nextPageToken: null });
-    await expect(
-      new ApiClient(
-        new FakeRpcTransport([
-          {
-            method: "project.workspace.list",
-            result: { ...workspaceResponse, next_page_token: undefined },
-          },
-        ]),
-      ).listWorkspaces("project-1"),
-    ).resolves.toMatchObject({ nextPageToken: null });
+  it.each([
+    {
+      name: "short page continuation",
+      response: workspaceResponse,
+    },
+    {
+      name: "non-progressing continuation",
+      response: {
+        ...workspaceResponse,
+        workspaces: Array.from({ length: 100 }, (_, index) => ({
+          ...workspaceRow,
+          workspace_id: `workspace-${String(index)}`,
+        })),
+        next_offset: 50,
+      },
+    },
+  ])("rejects $name in a Workspace page", async ({ response }) => {
+    const client = new ApiClient(
+      new FakeRpcTransport([{ method: "project.workspace.list", result: response }]),
+    );
+    await expect(client.listWorkspaces("project-1", 0)).rejects.toMatchObject({
+      reason: "malformed_response",
+    });
   });
   it("reports malformed successful catalog payloads as typed errors", async () => {
     const client = new ApiClient(

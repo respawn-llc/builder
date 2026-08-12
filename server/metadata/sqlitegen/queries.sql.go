@@ -4796,6 +4796,76 @@ func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProj
 	return items, nil
 }
 
+const listProjectWorkspaceCatalogPage = `-- name: ListProjectWorkspaceCatalogPage :many
+WITH catalog_page AS (
+    SELECT
+        w.id AS workspace_id,
+        w.canonical_root_path AS canonical_root,
+        CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_default,
+        w.created_at_unix_ms
+    FROM projects p
+    JOIN workspaces w ON w.project_id = p.id
+    WHERE p.id = ?1
+    ORDER BY is_default DESC, w.created_at_unix_ms DESC, w.id ASC
+    LIMIT ?3
+    OFFSET ?2
+)
+SELECT
+    p.id AS project_id,
+    catalog_page.workspace_id,
+    catalog_page.canonical_root,
+    catalog_page.is_default
+FROM projects p
+LEFT JOIN catalog_page ON TRUE
+WHERE p.id = ?1
+ORDER BY
+    catalog_page.is_default DESC,
+    catalog_page.created_at_unix_ms DESC,
+    catalog_page.workspace_id ASC
+`
+
+type ListProjectWorkspaceCatalogPageParams struct {
+	ProjectID  string
+	OffsetRows int64
+	LimitRows  int64
+}
+
+type ListProjectWorkspaceCatalogPageRow struct {
+	ProjectID     string
+	WorkspaceID   sql.NullString
+	CanonicalRoot sql.NullString
+	IsDefault     sql.NullInt64
+}
+
+func (q *Queries) ListProjectWorkspaceCatalogPage(ctx context.Context, arg ListProjectWorkspaceCatalogPageParams) ([]ListProjectWorkspaceCatalogPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceCatalogPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
+	err = recordQueryError(ctx, err, listProjectWorkspaceCatalogPage, 3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectWorkspaceCatalogPageRow
+	for rows.Next() {
+		var i ListProjectWorkspaceCatalogPageRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.CanonicalRoot,
+			&i.IsDefault,
+		), listProjectWorkspaceCatalogPage, 3); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceCatalogPage, 3); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceCatalogPage, 3); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectWorkspaces = `-- name: ListProjectWorkspaces :many
 SELECT
     w.id,

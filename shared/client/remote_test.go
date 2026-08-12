@@ -1884,7 +1884,14 @@ func TestRemoteProjectViewCallsReuseInitialProjectAttach(t *testing.T) {
 			case protocol.MethodProjectCreate:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectCreateResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
 			case protocol.MethodProjectAttachWorkspace:
-				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectAttachWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1"}}))
+				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectAttachWorkspaceResponse{
+					Binding: serverapi.ProjectBinding{
+						ProjectID:     "project-1",
+						WorkspaceID:   "workspace-2",
+						CanonicalRoot: "/tmp/workspace-b",
+					},
+					Outcome: serverapi.ProjectWorkspaceAttachOutcomeAttached,
+				}))
 			case protocol.MethodProjectRebindWorkspace:
 				_ = websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.ProjectRebindWorkspaceResponse{Binding: serverapi.ProjectBinding{ProjectID: "project-1", WorkspaceID: "workspace-1"}}))
 			case protocol.MethodProjectGetOverview:

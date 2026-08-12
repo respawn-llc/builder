@@ -248,21 +248,10 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	if err != nil {
 		return serverapi.ProjectEditGetResponse{}, err
 	}
-	workspaces, err := s.ListProjectWorkspaces(ctx, serverapi.ProjectWorkspaceListRequest{
-		ProjectID: req.ProjectID,
-		PageSize:  req.PageSize,
-		PageToken: req.PageToken,
-	})
-	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
 	return serverapi.ProjectEditGetResponse{
-		ProjectID:          project.ProjectID,
-		ProjectKey:         project.ProjectKey,
-		DisplayName:        project.DisplayName,
-		DefaultWorkspaceID: workspaces.DefaultWorkspaceID,
-		Workspaces:         workspaces.Workspaces,
-		NextPageToken:      workspaces.NextPageToken,
+		ProjectID:   project.ProjectID,
+		ProjectKey:  project.ProjectKey,
+		DisplayName: project.DisplayName,
 	}, nil
 }
 
@@ -519,39 +508,55 @@ func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.Proje
 	if s == nil {
 		return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
 	}
-	pageSize := req.PageSize
-	if pageSize == 0 {
-		pageSize = defaultWorkspacePageSize
-	}
-	if pageSize > maxWorkspacePageSize {
-		pageSize = maxWorkspacePageSize
-	}
-	offset, err := parseProjectHomePageToken(req.PageToken)
+	page, err := s.metadata.ListProjectWorkspaceCatalogPage(ctx, req.ProjectID, req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	workspaces, err := s.metadata.ListProjectWorkspacesPage(ctx, req.ProjectID, pageSize+1, offset)
-	if err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
-	nextPageToken := ""
-	if len(workspaces) > pageSize {
-		workspaces = workspaces[:pageSize]
-		nextPageToken = strconv.Itoa(offset + pageSize)
 	}
 	response := serverapi.ProjectWorkspaceListResponse{
-		ProjectID:          strings.TrimSpace(req.ProjectID),
-		Workspaces:         make([]serverapi.ProjectWorkspaceSummary, 0, len(workspaces)),
-		DefaultWorkspaceID: project.PrimaryWorkspace.WorkspaceID,
-		NextPageToken:      nextPageToken,
+		ProjectID:  req.ProjectID,
+		Offset:     req.Offset,
+		Workspaces: make([]serverapi.ProjectWorkspaceCatalogRow, 0, len(page.Workspaces)),
+		NextOffset: page.NextOffset,
 	}
-	for _, workspace := range workspaces {
-		summary := projectWorkspaceSummaryFromClientUI(workspace)
-		response.Workspaces = append(response.Workspaces, summary)
+	for _, workspace := range page.Workspaces {
+		response.Workspaces = append(response.Workspaces, serverapi.ProjectWorkspaceCatalogRow{
+			WorkspaceID: workspace.WorkspaceID,
+			DisplayName: workspace.DisplayName,
+			RootPath:    workspace.CanonicalRoot,
+			IsDefault:   workspace.IsDefault,
+		})
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response: %w", err)
+	}
+	return response, nil
+}
+
+func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
+	}
+	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		return serverapi.ProjectWorkspaceGetResponse{
+			ProjectID: req.ProjectID,
+			Result:    serverapi.ProjectWorkspaceGetResultNotAttached,
+		}, nil
+	}
+	if err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	projected := projectWorkspaceCatalogRowFromMetadata(workspace)
+	response := serverapi.ProjectWorkspaceGetResponse{
+		ProjectID: req.ProjectID,
+		Result:    serverapi.ProjectWorkspaceGetResultAttached,
+		Workspace: &projected,
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response: %w", err)
 	}
 	return response, nil
 }
@@ -563,11 +568,22 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 	if s == nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
 	}
-	binding, err := s.metadata.AttachWorkspaceToProject(ctx, req.ProjectID, req.WorkspaceRoot)
+	result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectID, req.WorkspaceRoot)
 	if err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
 	}
-	return serverapi.ProjectAttachWorkspaceResponse{Binding: projectBindingFromMetadata(binding)}, nil
+	outcome := serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached
+	if result.Attached {
+		outcome = serverapi.ProjectWorkspaceAttachOutcomeAttached
+	}
+	response := serverapi.ProjectAttachWorkspaceResponse{
+		Binding: projectBindingFromMetadata(result.Binding),
+		Outcome: outcome,
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response: %w", err)
+	}
+	return response, nil
 }
 
 func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
@@ -644,14 +660,12 @@ func availabilityForProjectPath(path string) string {
 	return string(clientui.ProjectAvailabilityAvailable)
 }
 
-func projectWorkspaceSummaryFromClientUI(workspace clientui.ProjectWorkspaceSummary) serverapi.ProjectWorkspaceSummary {
-	return serverapi.ProjectWorkspaceSummary{
-		WorkspaceID:     workspace.WorkspaceID,
-		DisplayName:     workspace.DisplayName,
-		RootPath:        workspace.RootPath,
-		Availability:    string(workspace.Availability),
-		IsPrimary:       workspace.IsPrimary,
-		UpdatedAtUnixMs: workspace.UpdatedAt.UnixMilli(),
+func projectWorkspaceCatalogRowFromMetadata(workspace metadata.ProjectWorkspaceCatalogRow) serverapi.ProjectWorkspaceCatalogRow {
+	return serverapi.ProjectWorkspaceCatalogRow{
+		WorkspaceID: workspace.WorkspaceID,
+		DisplayName: workspace.DisplayName,
+		RootPath:    workspace.CanonicalRoot,
+		IsDefault:   workspace.IsDefault,
 	}
 }
 

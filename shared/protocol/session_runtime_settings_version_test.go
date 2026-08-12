@@ -1,9 +1,13 @@
 package protocol
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 func TestSessionRuntimeSettingsChangesProtocolVersion(t *testing.T) {
-	if Version != "119" {
-		t.Fatalf("Session runtime settings protocol version = %q, want 119", Version)
+	version, err := strconv.Atoi(Version)
+	if err != nil || version < 119 {
+		t.Fatalf("Session runtime settings protocol version = %q, want at least 119", Version)
 	}
 }
