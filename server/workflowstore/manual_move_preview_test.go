@@ -736,6 +736,13 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 		cfg,
 		firstReview.Reference,
 	)
+	auditResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source: firstReview.Reference, TransitionID: "audit",
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode Review: %v", err)
+	}
+	auditSessionID := associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, auditResult.Mutation.Created[0].Reference)
 	implementationBMove := applyManualMoveFixture(t, ctx, store, binding, ManualMoveRequest{
 		TaskID:       task.ID,
 		TargetNodeID: workflow.NodeIDOf(plan),
@@ -744,7 +751,7 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	if implementationB.SessionID != nil {
 		t.Fatalf("planned Implementation B = %+v, want unbound", implementationB)
 	}
-	implementationBSessionID := associateAndBindCurrentNodeSessionForTest(
+	associateAndBindCurrentNodeSessionForTest(
 		t,
 		ctx,
 		store,
@@ -781,13 +788,13 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 		)
 	}
 	sourceID, ok := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
-	if !ok || sourceID != implementationBSessionID {
-		t.Fatalf("manual Review source = %q, %v; want B %q", sourceID, ok, implementationBSessionID)
+	if !ok || sourceID != auditSessionID {
+		t.Fatalf("manual Review source = %q, %v; want selected Audit %q", sourceID, ok, auditSessionID)
 	}
 }
 
 func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWithoutInvariant(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
@@ -825,6 +832,7 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 		t.Fatalf("CompleteCurrentNode Review: %v", err)
 	}
 	origin := auditResult.Mutation.Created[0]
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, origin.Reference)
 	transitionKey := workflow.TransitionID("rework")
 	request := ManualMoveRequest{
 		TaskID:        task.ID,
@@ -885,8 +893,8 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	}
 	if len(moved.Mutation.Created) != 1 ||
 		moved.Mutation.Created[0].SessionID != nil ||
-		moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
-		t.Fatalf("fallback manual move = %+v, want fresh deferred-self target", moved)
+		moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceExact {
+		t.Fatalf("fallback manual move = %+v, want fresh target with selected-source proof", moved)
 	}
 	if diagnostics.Len() != 0 {
 		t.Fatalf("fallback ordinary unavailable diagnostics = %q, want none", diagnostics.String())
