@@ -830,7 +830,7 @@ func TestCurrentNodeControllerTaskInterruptDrainsAuthorityQueuedGateAlongsideRun
 	runner := &runningAndQueuedGateRunner{
 		authority:        authority,
 		shellPath:        shellPath,
-		running:          running,
+		queued:           queued,
 		runningStarted:   make(chan struct{}),
 		queuedRegistered: make(chan struct{}),
 		returnQueued:     make(chan struct{}),

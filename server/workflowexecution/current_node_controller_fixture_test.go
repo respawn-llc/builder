@@ -1022,7 +1022,7 @@ func (r *boundedExplicitAdmissionRunner) StartCurrentNode(
 type runningAndQueuedGateRunner struct {
 	authority        *sessionruntime.Authority
 	shellPath        string
-	running          workflow.CurrentNodeReference
+	queued           workflow.CurrentNodeReference
 	runningStarted   chan struct{}
 	queuedRegistered chan struct{}
 	returnQueued     chan struct{}
@@ -1127,7 +1127,7 @@ func (r *runningAndQueuedGateRunner) StartCurrentNode(
 	if err != nil {
 		return err
 	}
-	if reference.Equal(r.running) {
+	if !reference.Equal(r.queued) {
 		r.runningOnce.Do(func() {
 			close(r.runningStarted)
 		})

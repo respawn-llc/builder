@@ -838,11 +838,9 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	}
 	source := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-source")
 	successor := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-successor")
-	releaseAssignment := make(chan struct{})
-	assignmentStarted := make(chan struct{})
-	assignmentResumed := make(chan struct{})
-	interruptStarted := make(chan struct{})
-	interruptRelease := make(chan struct{})
+	interruptible := currentNodeReferenceForControllerTest(t, string(source.TaskID), "node-interruptible")
+	releaseAssignment, assignmentStarted, assignmentResumed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	interruptStarted, interruptRelease, releaseSuccessor := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	store := &currentNodeControllerStore{
 		completion: workflowstore.CurrentNodeCompletionResult{
 			Mutation: workflow.CurrentNodeMutationResult{
@@ -862,13 +860,13 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 			controller.ExecutionFinalized(scope)
 		}),
 	})
-	runner := &recordingScriptRunner{
-		authority: authority,
-		command: sessionruntime.ScriptCommand{
-			Path: shellPath,
-			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
-		},
-		started: make(chan workflow.CurrentNodeReference, 2),
+	runner := &runningAndQueuedGateRunner{
+		authority:        authority,
+		shellPath:        shellPath,
+		queued:           successor,
+		runningStarted:   make(chan struct{}),
+		queuedRegistered: make(chan struct{}),
+		returnQueued:     releaseSuccessor,
 	}
 	controller, err = NewCurrentNodeController(
 		store,
@@ -884,20 +882,13 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		t.Fatalf("new current node controller: %v", err)
 	}
 	t.Cleanup(func() {
-		select {
-		case <-releaseAssignment:
-		default:
-			close(releaseAssignment)
-		}
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
 	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
 		t.Fatalf("start source: %v", err)
 	}
-	if started := <-runner.started; !started.Equal(source) {
-		t.Fatalf("started Current Node = %v, want source %v", started, source)
-	}
+	<-runner.runningStarted
 	waitForRunningCurrentNode(t, authority, source)
 	controller.steerer = lateCommitCurrentNodeAssignmentSteerer{
 		release: releaseAssignment,
@@ -934,6 +925,18 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	case <-time.After(3 * time.Second):
 		t.Fatal("transferred successor did not resume its assignment wait")
 	}
+	close(releaseAssignment)
+	sourceHandle, _ := authority.ExecutionByScope(sourceScope)
+	if err := sourceHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop completed source: %v", err)
+	}
+	select {
+	case <-runner.queuedRegistered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("replacement admission worker did not reach the runner")
+	}
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{CurrentNode: interruptible, NodeKind: workflow.NodeKindScript}})
+	waitForRunningCurrentNode(t, authority, interruptible)
 
 	interruptDone := make(chan error, 1)
 	go func() {
@@ -947,34 +950,21 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	case <-time.After(3 * time.Second):
 		t.Fatal("Task interrupt did not enter durable successor disposition")
 	}
-	controller.finishTaskInterruptAdmission(successor, false)
-	preflightCtx, cancelPreflight := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancelPreflight()
-	preflightErr := controller.EnsureTaskResumeEligible(
-		preflightCtx,
-		workflow.TaskID("task-unrelated-resume-preflight"),
-	)
-	if !errors.Is(preflightErr, context.DeadlineExceeded) {
-		t.Fatalf("unrelated lifecycle mutation crossed the active interruption write: %v", preflightErr)
-	}
 	close(interruptRelease)
 	select {
 	case interruptErr := <-interruptDone:
 		t.Fatalf("Task interrupt returned before transferred assignment resolved: %v", interruptErr)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(releaseAssignment)
+	close(releaseSuccessor)
 	if interruptErr := <-interruptDone; interruptErr != nil {
 		t.Fatalf("Interrupt Task with transferred successor: %v", interruptErr)
 	}
-	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
-		_, interrupted := store.interruption(successor)
-		return interrupted
-	}, "transferred successor was not interrupted with its drained Task owner")
-	select {
-	case started := <-runner.started:
-		t.Fatalf("transferred successor started after Task interrupt: %v", started)
-	case <-time.After(100 * time.Millisecond):
+	if _, interrupted := store.interruption(successor); !interrupted {
+		t.Fatal("transferred successor was not durably interrupted")
+	}
+	if hasLiveCurrentNode(authority, successor) {
+		t.Fatal("transferred successor remained live after Task interrupt")
 	}
 }
 

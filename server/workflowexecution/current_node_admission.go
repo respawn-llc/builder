@@ -716,6 +716,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	key := start.referenceKey()
 	ownsWorker := true
 	defer c.admissionWG.Done()
+	defer c.wakeAdmissionWorker()
 	defer close(start.done)
 	defer func() { c.finishTaskInterruptAdmission(start.reference, ownsWorker) }()
 	defer func() {
@@ -790,7 +791,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			c.queued[key] = struct{}{}
 			ownsWorker = false
 			c.mu.Unlock()
-			c.wakeAdmissionWorker()
 			return
 		default:
 			start.agentCapacityLease = &currentNodeAgentCapacityLease{
