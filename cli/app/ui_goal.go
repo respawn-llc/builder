@@ -306,7 +306,7 @@ func (m *uiModel) applyGoalRuntimeDone(msg goalRuntimeDoneMsg) tea.Cmd {
 		}
 		return sequenceCmds(m.goalRuntimeCommand(goalRuntimeClear, ""), followUpCmd)
 	case goalRuntimeSet:
-		if msg.mutation.Pending != nil && msg.mutationSerial != m.goalRuntimeMutationSerial {
+		if msg.mutationSerial != m.goalRuntimeMutationSerial {
 			return followUpCmd
 		}
 		m.goal.goal = goalCoreFromMutationResult(msg.mutation)

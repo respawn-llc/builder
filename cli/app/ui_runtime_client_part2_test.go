@@ -706,13 +706,13 @@ func TestRuntimeClientReconnectWarningFailureDoesNotBlockSubmit(t *testing.T) {
 	}
 }
 
-func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {
-	preview := &clientui.GoalPreview{Objective: "queued objective", Status: clientui.RuntimeGoalStatusActive}
+func TestGoalSetCommandDoesNotOverrideAuthoritativeBroadcast(t *testing.T) {
+	stale := runtimeClientTestGoal("goal-1", "stale objective", clientui.RuntimeGoalStatusActive)
 	model := newProjectedTestUIModel(newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{
-		setGoalResp: serverapi.RuntimeGoalMutationResponse{Pending: preview},
+		setGoalResp: serverapi.RuntimeGoalMutationResponse{Goal: stale},
 	}), WithUISessionID("session-1"))
-	message := model.goalRuntimeCommand(goalRuntimeSet, preview.Objective)().(goalRuntimeDoneMsg)
-	goal := runtimeClientTestGoal("goal-1", "accepted objective", clientui.RuntimeGoalStatusActive)
+	message := model.goalRuntimeCommand(goalRuntimeSet, stale.Objective)().(goalRuntimeDoneMsg)
+	goal := runtimeClientTestGoal("goal-2", "authoritative objective", clientui.RuntimeGoalStatusPaused)
 	model.goal.open = true
 	model.applyAdmittedTranscriptMessageState(ongoingTranscriptMessage(1, clientui.TranscriptMessageGoalStatus), runtimeTupleMergeResult{view: clientui.RuntimeMainView{Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{Goal: goal}}}})
 	updateUIModel(t, model, message)
