@@ -191,7 +191,7 @@ func TestExclusiveStepLifecycleRejectsConcurrentRun(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for first exclusive step")
 	}
 
@@ -265,7 +265,7 @@ func TestExclusiveStepLifecycleBlocksSuccessorWhileTerminalPublicationPending(t 
 	close(releaseStep)
 	select {
 	case <-sink.endedStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for terminal publication")
 	}
 	if snapshot := lifecycle.Snapshot(); snapshot != nil {
@@ -321,12 +321,12 @@ func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testin
 	close(releaseStep)
 	select {
 	case <-sink.endedStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for terminal publication")
 	}
 	waitQueued := func(want int) {
 		t.Helper()
-		for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		for deadline := time.Now().Add(runtimeTestSynchronizationTimeout); time.Now().Before(deadline); {
 			lifecycle.mu.Lock()
 			got := len(lifecycle.nextWaiters)
 			lifecycle.mu.Unlock()
@@ -371,7 +371,7 @@ func TestRunNextPreservesOrderAcrossTerminalPublicationAndCancellation(t *testin
 		if got != "first" {
 			t.Fatalf("first admitted RunNext caller = %q, want first", got)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for first queued RunNext caller")
 	}
 	cancelFirst()
@@ -469,7 +469,7 @@ func TestExclusiveStepLifecycleSnapshotTracksActiveRun(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for run start")
 	}
 
@@ -574,7 +574,7 @@ func TestExclusiveStepLifecycleEmitsInterruptedRunStatePayloads(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for interruptible step")
 	}
 
@@ -680,7 +680,7 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 	}()
 	select {
 	case <-persistEntered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for Agent Turn interruption persistence")
 	}
 
@@ -720,12 +720,12 @@ func TestExclusiveStepLifecycleAgentTurnInterruptKeepsSuccessorBehindPersistence
 	}
 	select {
 	case <-terminalDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for terminal publication after interruption persistence")
 	}
 	select {
 	case <-successorStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for shell successor")
 	}
 	if err := <-successorDone; err != nil {
@@ -792,7 +792,7 @@ func TestRunNextRetriesWhenPublicationStartsAfterBoundarySignal(t *testing.T) {
 	}()
 
 	var waiter *exclusiveStepWaiter
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+	for deadline := time.Now().Add(runtimeTestSynchronizationTimeout); time.Now().Before(deadline); {
 		lifecycle.mu.Lock()
 		if len(lifecycle.nextWaiters) == 1 {
 			waiter = lifecycle.nextWaiters[0]
@@ -826,7 +826,7 @@ func TestRunNextRetriesWhenPublicationStartsAfterBoundarySignal(t *testing.T) {
 	lifecycle.mu.Unlock()
 	select {
 	case <-successorStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for successor after publication")
 	}
 	if err := <-successorDone; err != nil {
@@ -852,7 +852,7 @@ func TestExclusiveStepLifecycleInterruptPreservesPendingRecoveryUntilTerminalCle
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for interruptible step")
 	}
 
@@ -915,7 +915,7 @@ func TestExclusiveStepLifecycleDiscardsStreamingMessageOnInterrupt(t *testing.T)
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for streaming step")
 	}
 
@@ -1148,7 +1148,7 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	steps.setBusy(false)
 	scheduler.ScheduleIfIdle()
 
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(runtimeTestSynchronizationTimeout)
 	for {
 		client.mu.Lock()
 		callCount := len(client.calls)

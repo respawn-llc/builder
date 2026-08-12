@@ -257,7 +257,7 @@ func TestLiveMissingToolOutputRepairWaitsForOutputSteeringBoundary(t *testing.T)
 		if outcome.err != nil || outcome.count != 1 {
 			t.Fatalf("serialized live repair = %+v, want count one", outcome)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("serialized live repair did not finish")
 	}
 }

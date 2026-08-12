@@ -47,6 +47,11 @@
 - If Kent cannot create the queued message or Steer, the failed message returns to the composer and requires an explicit user action to send again. The failed message does not remain pending or retry automatically.
 - The restored text is the exact message Kent attempted to submit. If the composer already contains a newer draft, Kent keeps that draft first, inserts one blank line, appends the failed message, and places the cursor at the end.
 - The failure appears as a transient status-line error using the ordinary submission failure detail. It does not change the activity indicator. The TUI does not create a transcript feedback row for this failure.
+- Each `/compact` submission retains its exact submitted text and whether it was sent directly or drained from the post-turn Queue until that request completes.
+- If Kent does not accept a `/compact` request, the TUI restores that request's exact text through the ordinary creation-failure behavior. A post-turn Queue drain stops at that rejected request.
+- If Kent accepts a `/compact` request, success or a later failure consumes the command without restoration. A post-turn Queue drain continues only after that request completes.
+- Repeated `/compact` submissions remain independent requests. The TUI does not reject a submission because another compaction request is pending or running.
+- Server-published compaction lifecycle is the TUI's only compaction-activity authority. Dispatch and request completion do not change compaction activity locally.
 - If the failed message is Allow commentary, Kent delivers the Approval answer independently while the transient notice is active. Successful Allow commentary creation still precedes the Approval answer.
 
 ## Interrupts And Exit

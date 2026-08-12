@@ -64,7 +64,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
 
@@ -630,7 +630,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 
 	select {
 	case <-sequencer.firstStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for first ask_question call to start")
 	}
 	select {
@@ -641,7 +641,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 	close(sequencer.releaseFirst)
 	select {
 	case <-sequencer.secondStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for second ask_question call to start")
 	}
 	select {
@@ -652,7 +652,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 		if len(result.results) != 2 || result.results[0].CallID != "call-ask-1" || result.results[1].CallID != "call-ask-2" {
 			t.Fatalf("results = %+v, want declared ask order", result.results)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for ask_question tool calls to finish")
 	}
 }
@@ -686,7 +686,7 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 
 	select {
 	case <-sequencer.firstStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow prompt-capable tool to start")
 	}
 	select {
@@ -697,7 +697,7 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 	close(sequencer.releaseFirst)
 	select {
 	case <-sequencer.secondStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for ask_question to start")
 	}
 	select {
@@ -705,7 +705,7 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("execute tool calls: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for workflow prompt-capable tool calls to finish")
 	}
 }

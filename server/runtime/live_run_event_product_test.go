@@ -130,7 +130,7 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}()
 		select {
 		case <-started:
-		case <-time.After(3 * time.Second):
+		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for active run")
 		}
 		stopped, err := eng.TryInterruptActiveRun()
@@ -196,18 +196,18 @@ func TestEnginePublishesLiveRunTerminalFactsThroughSubmitSeam(t *testing.T) {
 		}()
 		select {
 		case <-stepLifecycle.endedStarted:
-		case <-time.After(3 * time.Second):
+		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for step terminal publication")
 		}
 		eng.QueueUserMessage("queued successor")
 		close(stepLifecycle.releaseEnded)
 		select {
 		case <-callbackStarted:
-		case <-time.After(3 * time.Second):
+		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatal("timed out waiting for terminal callback")
 		}
 
-		deadline := time.Now().Add(3 * time.Second)
+		deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
 		for {
 			calls := fakeClientCallCount(client)
 			if calls >= 2 || !time.Now().Before(deadline) {

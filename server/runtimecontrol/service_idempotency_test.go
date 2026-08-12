@@ -310,11 +310,11 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 		Args:            "compact now",
 	}
 	gate.FailNext(observerErr)
-	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
-		t.Fatalf("first compaction error = %v, want observer error", err)
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("first compaction error = %v, want accepted observer cause", err)
 	}
-	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
-		t.Fatalf("replayed compaction error = %v, want cached observer error", err)
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("replayed compaction error = %v, want cached accepted observer cause", err)
 	}
 	if client.compactionCalls != 1 {
 		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)

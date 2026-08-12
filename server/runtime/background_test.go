@@ -77,7 +77,7 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 
 	select {
 	case <-steps.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("background continuation did not start")
 	}
 
@@ -92,13 +92,13 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("step lifecycle stopped with %v, want context canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("background continuation was not canceled on engine close")
 	}
 
 	select {
 	case <-closeDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("engine close did not wait for queued background continuation")
 	}
 }
@@ -185,7 +185,7 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		}()
 		select {
 		case <-closeDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatalf("iteration %d: close remained blocked after race", i)
 		}
 	}

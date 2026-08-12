@@ -419,42 +419,6 @@ func (c *Remote) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetReque
 	return callUnscopedRPC[serverapi.WorkflowGetRequest, serverapi.WorkflowGetResponse](c, ctx, protocol.MethodWorkflowGet, req)
 }
 
-func (c *Remote) AddWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupAddRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeGroupAddRequest, serverapi.WorkflowNodeGroupResponse](c, ctx, protocol.MethodWorkflowNodeGroupAdd, req)
-}
-
-func (c *Remote) UpdateWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupUpdateRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeGroupUpdateRequest, serverapi.WorkflowNodeGroupResponse](c, ctx, protocol.MethodWorkflowNodeGroupUpdate, req)
-}
-
-func (c *Remote) DeleteWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupDeleteRequest) error {
-	return c.callUnscoped(ctx, protocol.MethodWorkflowNodeGroupDelete, req, &struct{}{})
-}
-
-func (c *Remote) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeAddRequest) (serverapi.WorkflowNodeAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeAddRequest, serverapi.WorkflowNodeAddResponse](c, ctx, protocol.MethodWorkflowAddNode, req)
-}
-
-func (c *Remote) UpdateWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeUpdateRequest) (serverapi.WorkflowNodeUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeUpdateRequest, serverapi.WorkflowNodeUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateNode, req)
-}
-
-func (c *Remote) AddWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupAddRequest) (serverapi.WorkflowTransitionGroupAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTransitionGroupAddRequest, serverapi.WorkflowTransitionGroupAddResponse](c, ctx, protocol.MethodWorkflowAddTransitionGroup, req)
-}
-
-func (c *Remote) UpdateWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupUpdateRequest) (serverapi.WorkflowTransitionGroupUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTransitionGroupUpdateRequest, serverapi.WorkflowTransitionGroupUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateTransitionGroup, req)
-}
-
-func (c *Remote) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeAddRequest) (serverapi.WorkflowEdgeAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowEdgeAddRequest, serverapi.WorkflowEdgeAddResponse](c, ctx, protocol.MethodWorkflowAddEdge, req)
-}
-
-func (c *Remote) UpdateWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeUpdateRequest) (serverapi.WorkflowEdgeUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowEdgeUpdateRequest, serverapi.WorkflowEdgeUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateEdge, req)
-}
-
 func (c *Remote) LinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowLinkProjectRequest, serverapi.WorkflowLinkProjectResponse](c, ctx, protocol.MethodWorkflowLinkProject, req)
 }

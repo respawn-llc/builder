@@ -167,7 +167,7 @@ func workflowGraphDocumentFromDefinition(definition serverapi.WorkflowDefinition
 	return workflowGraphDocumentFromDraft(
 		definition.Workflow.ID,
 		definition.Workflow.Version,
-		workflowGraphDraftFromDefinition(definition),
+		serverapi.WorkflowGraphDraftFromDefinition(definition),
 	)
 }
 

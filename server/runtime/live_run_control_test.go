@@ -137,7 +137,7 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	var stepCtx context.Context
 	select {
 	case stepCtx = <-stepCtxSeen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for compaction step")
 	}
 
@@ -150,7 +150,7 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	}
 	select {
 	case <-stepCtx.Done():
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("compaction step context was not canceled")
 	}
 	if err := <-done; !errors.Is(err, context.Canceled) {
@@ -197,7 +197,7 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 	var stepCtx context.Context
 	select {
 	case stepCtx = <-stepCtxSeen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for maintenance step")
 	}
 
@@ -260,7 +260,7 @@ func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 
 			select {
 			case <-started:
-			case <-time.After(3 * time.Second):
+			case <-time.After(runtimeTestSynchronizationTimeout):
 				t.Fatalf("timed out waiting for %s", test.waitMessage)
 			}
 			if active := eng.HasActiveLiveRunGroup(); active != test.wantActive {
@@ -320,7 +320,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 	}()
 	select {
 	case <-stepStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 
@@ -340,7 +340,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 	}()
 	select {
 	case <-beforeStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for beforeQueue")
 	}
 
@@ -377,7 +377,7 @@ func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for step")
 	}
 
@@ -416,7 +416,7 @@ func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutat
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 
@@ -441,7 +441,7 @@ func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutat
 	}()
 	select {
 	case <-beforeStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for beforeQueue")
 	}
 	stopped, err := eng.TryInterruptActiveRun()
@@ -465,7 +465,7 @@ func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutat
 	}()
 	select {
 	case <-replacementStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for replacement active step")
 	}
 
@@ -508,7 +508,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 
 	select {
 	case <-modelEntered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for model")
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
@@ -545,7 +545,7 @@ func TestWaitForActiveRunResultReturnsNoFinalAnswerForShellRun(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for shell run")
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
@@ -582,7 +582,7 @@ func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 	handle, err := eng.CaptureActiveRunResult(context.Background())
@@ -630,7 +630,7 @@ func TestTryInterruptActiveAgentTurnCancelsActiveStepAndRestoresTaggedQueue(t *t
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active Agent Turn")
 	}
 
@@ -688,7 +688,7 @@ func TestTryInterruptActiveAgentTurnPersistenceFailurePreservesLiveRunAndQueue(t
 	var stepCtx context.Context
 	select {
 	case stepCtx = <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active Agent Turn")
 	}
 	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "keep queued", liveRunTestRequestID(t), nil)
@@ -827,7 +827,7 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringWhileStepRuns(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 
@@ -876,7 +876,7 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringInTaggedQueueGap(t *testing.T
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 	item, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "do not drain", liveRunTestRequestID(t), nil)
@@ -931,7 +931,7 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for active step")
 	}
 
@@ -1084,7 +1084,7 @@ func TestCapturedActiveRunResultCompletesLateTaggedQueuedDrain(t *testing.T) {
 	if queueErr != nil {
 		t.Fatalf("queue auto-drain item: %v", queueErr)
 	}
-	waitCtx, cancelWait := context.WithTimeout(context.Background(), 3*time.Second)
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), runtimeTestSynchronizationTimeout)
 	defer cancelWait()
 	handle, err := eng.CaptureActiveRunResult(waitCtx)
 	if queued.ID == "" || err != nil {

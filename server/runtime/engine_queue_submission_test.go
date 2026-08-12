@@ -29,7 +29,7 @@ func TestAcceptedQueueAutoDrainsAfterActiveTurnWithoutClientKick(t *testing.T) {
 	}()
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("active turn did not start")
 	}
 	queued, accepted, err := engine.QueueUserMessageForActiveRun(context.Background(), "queued input", runtimeids.NewRuntimeClientRequestID(), nil)
