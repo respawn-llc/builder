@@ -4,7 +4,6 @@ import (
 	"context"
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/config"
 	"core/shared/sessioncontract"
@@ -443,7 +442,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		t.Fatalf("mark locked: %v", err)
 	}
 
-	firstEngine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	firstEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 272_000,
@@ -456,7 +455,7 @@ func TestLegacyLockedSessionBackfillsContextBudgetOnce(t *testing.T) {
 		t.Fatalf("first estimated tool calls = %d, want 185", got)
 	}
 
-	secondEngine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	secondEngine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model:               "gpt-5",
 		EnabledTools:        []toolspec.ID{toolspec.ToolExecCommand},
 		ContextWindowTokens: 400_000,
@@ -514,7 +513,7 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 			SupportsResponsesAPI: true,
 			IsOpenAIFirstParty:   false,
 		}},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -529,12 +528,12 @@ func TestRuntimeControlsRejectInvalidOrUnavailableChanges(t *testing.T) {
 		},
 	)
 
-	t.Run("invalid thinking level", func(t *testing.T) {
-		if err := eng.SetThinkingLevel("unsupported"); err == nil {
-			t.Fatal("expected invalid thinking level error")
+	t.Run("blank thinking level", func(t *testing.T) {
+		if err := eng.SetThinkingLevel(" "); err == nil {
+			t.Fatal("expected blank thinking level error")
 		}
 		if got := eng.ThinkingLevel(); got != "high" {
-			t.Fatalf("thinking level after invalid set = %q, want high", got)
+			t.Fatalf("thinking level after blank set = %q, want high", got)
 		}
 	})
 
@@ -574,10 +573,10 @@ func TestFastModeEnabledReportsFalseWhenProviderIsUnavailable(t *testing.T) {
 			SupportsResponsesAPI: true,
 			IsOpenAIFirstParty:   false,
 		}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
-			Model:         "gpt-5.3-codex",
-			FastModeState: NewFastModeState(true),
+			Model:           "gpt-5.3-codex",
+			FastModeEnabled: true,
 		},
 	)
 
@@ -597,7 +596,7 @@ func TestNewRejectsUnavailableProviderCapabilities(t *testing.T) {
 		store,
 		mustMaterializeTestEventLog(t, store),
 		&fakeClient{capsErr: capabilityErr},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	if !errors.Is(err, capabilityErr) {
@@ -704,96 +703,6 @@ func TestSetFastModeTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestFastModeSharedStateAppliesAcrossEngines(t *testing.T) {
-	dir := t.TempDir()
-	state := NewFastModeState(false)
-	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir)
-	engA := mustNewExecTestEngine(t, storeA, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-
-	changed, err := engA.SetFastModeEnabled(true)
-	if err != nil {
-		t.Fatalf("enable fast mode: %v", err)
-	}
-	if !changed || !state.Enabled() {
-		t.Fatalf("expected shared fast mode enabled, changed=%v enabled=%v", changed, state.Enabled())
-	}
-
-	storeB := mustCreateNamedTestSessionAt(t, dir, "ws-b", dir)
-	engB := mustNewExecTestEngine(t, storeB, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	if !engB.FastModeEnabled() {
-		t.Fatal("expected shared fast mode to carry into next engine")
-	}
-}
-
-func TestSharedFastModeCommittedFeedbackSerializesAcrossEngines(t *testing.T) {
-	dir := t.TempDir()
-	state := NewFastModeState(false)
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	storeA := mustCreateNamedTestSessionAt(t, dir, "ws-a", dir, session.WithPersistenceObserver(gate))
-	engA := mustNewExecTestEngine(t, storeA, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	storeB := mustCreateNamedTestSessionAt(t, dir, "ws-b", dir)
-	engB := mustNewExecTestEngine(t, storeB, &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}}, Config{
-		Model:         "gpt-5.3-codex",
-		FastModeState: state,
-	})
-	blockAppend, releaseAppend := gate.BlockNext()
-	feedback := func(changed bool) string {
-		if changed {
-			return "Fast mode enabled"
-		}
-		return "Fast mode already enabled"
-	}
-
-	type result struct {
-		changed bool
-		err     error
-	}
-	firstDone := make(chan result, 1)
-	go func() {
-		changed, _, err := engA.SetFastModeEnabledWithCommittedFeedback(true, feedback)
-		firstDone <- result{changed: changed, err: err}
-	}()
-	<-blockAppend
-
-	secondDone := make(chan result, 1)
-	go func() {
-		changed, _, err := engB.SetFastModeEnabledWithCommittedFeedback(true, feedback)
-		secondDone <- result{changed: changed, err: err}
-	}()
-	select {
-	case result := <-secondDone:
-		t.Fatalf("second shared-state mutation completed before first feedback persisted: %+v", result)
-	case <-time.After(25 * time.Millisecond):
-	}
-	releaseAppend()
-
-	first := <-firstDone
-	second := <-secondDone
-	if first.err != nil || second.err != nil {
-		t.Fatalf("shared fast mode committed feedback errors: first=%v second=%v", first.err, second.err)
-	}
-	if !first.changed || second.changed {
-		t.Fatalf("expected serialized changed values true,false; got %v,%v", first.changed, second.changed)
-	}
-	snapshotA := engA.ChatSnapshot()
-	snapshotB := engB.ChatSnapshot()
-	if len(snapshotA.Entries) != 1 || snapshotA.Entries[0].Text != "Fast mode enabled" {
-		t.Fatalf("expected first engine success feedback, got %+v", snapshotA.Entries)
-	}
-	if len(snapshotB.Entries) != 1 || snapshotB.Entries[0].Text != "Fast mode already enabled" {
-		t.Fatalf("expected second engine already-enabled feedback, got %+v", snapshotB.Entries)
-	}
-}
-
 func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	store := mustCreateTestSession(t)
 	cfg := Config{Model: "gpt-5"}
@@ -842,7 +751,7 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 
 	started := make(chan struct{})
 	release := make(chan struct{})
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 350000,
 	})
@@ -884,7 +793,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 			Client:        &fakeClient{},
 		},
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	changed, mode, err := eng.SetReviewerEnabled(true)
 	if err != nil {
 		t.Fatalf("enable reviewer: %v", err)
@@ -896,7 +805,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 		t.Fatalf("reviewer frequency = %q, want edits", got)
 	}
 
-	restarted := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
+	restarted := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), cfg)
 	if got := restarted.ReviewerFrequency(); got != "off" {
 		t.Fatalf("reviewer frequency after restart = %q, want off", got)
 	}
@@ -905,7 +814,7 @@ func TestSetReviewerEnabledTogglesRuntimeOnly(t *testing.T) {
 func TestSetReviewerEnabledLazyInitializesReviewerClient(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Frequency:     "off",

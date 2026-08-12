@@ -151,7 +151,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	approvalService := promptcontrol.NewApprovalViewService(runtimeRegistry)
 	processService := processview.NewProcessViewService(runtimeSupport.Background)
 	processOutputService := processview.NewProcessOutputService(runtimeSupport.Background, runtimeSupport.Background)
-	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeSupport.FastModeState, runtimeAuthority, sessionruntime.APIOptions{
+	sessionRuntimeAPI := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{
 		RuntimeClientFactory:   opts.RuntimeClientFactory,
 		ManagedWorktreeBaseDir: cfg.Settings.Worktrees.BaseDir,
 		RecoveredWarningProvider: func() (string, bool, error) {
@@ -183,6 +183,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithPromptHistoryStore(metadataStore).
 		WithWorkflowTaskSessionResolver(metadataStore).
 		WithPersistedSessionResolver(metadataStore).
+		WithChatSettingsPreparationResolver(sessionChatSettingsPreparationResolver{
+			metadataStore:   metadataStore,
+			authManager:     authSupport.AuthManager,
+			persistenceRoot: cfg.PersistenceRoot,
+		}).
 		WithLiveWatchPromptSources(askService, approvalService, runtimeRegistry)
 	runtimeControlService.WithPromptCommandResolver(promptCommandRuntimeResolver{
 		effectiveWorkspace: promptCommandEffectiveWorkspaceResolver{
@@ -331,6 +336,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
+	workflowTaskSessions, err := workflowview.NewTaskSessions(metadataStore, runtimeRegistry)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: Task Sessions: %w", err)
+	}
 	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions:      workflowDefinitions,
@@ -339,6 +349,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskSearch:       workflowTaskSearch,
 		TaskDetail:       workflowTaskDetail,
 		TaskDependencies: workflowTaskDependencies,
+		TaskSessions:     workflowTaskSessions,
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,

@@ -83,9 +83,9 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	agentID := workflow.NodeID("node-" + uuid.NewString())
-	startGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
-	doneGroupID := workflow.TransitionGroupID("group-" + uuid.NewString())
+	agentID := workflow.NodeID(uuid.NewString())
+	startGroupID := workflow.TransitionGroupID(uuid.NewString())
+	doneGroupID := workflow.TransitionGroupID(uuid.NewString())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		start := coreWorkflowNodeByKind(t, definition, workflow.NodeKindStart)
 		terminal := coreWorkflowNodeByKind(t, definition, workflow.NodeKindTerminal)
@@ -99,14 +99,14 @@ func createCoreStartupRecoveryTask(t *testing.T, store *workflowstore.Store, pro
 		)
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-" + uuid.NewString()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(uuid.NewString()), WorkflowID: created.ID,
 				TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID,
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession, PromptTemplate: "Do work.",
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-" + uuid.NewString()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(uuid.NewString()), WorkflowID: created.ID,
 				TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: workflow.NodeIDOf(terminal),
 				AssigneeSelection: workflow.AssigneeSelectionConfigured,
 				ThinkingSelection: workflow.ThinkingSelectionConfigured,

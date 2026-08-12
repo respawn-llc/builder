@@ -26,8 +26,7 @@ function nodesEqual(left: readonly WorkflowNode[], right: readonly WorkflowNode[
 
 function workflowNodesEqual(a: WorkflowNode, b: WorkflowNode): boolean {
   return (
-    workflowNodeMetadataEqual(a, b) &&
-    joinInputProvidersEqual(a.joinInputProviders, b.joinInputProviders)
+    workflowNodeMetadataEqual(a, b) && joinInputProvidersEqual(a.joinInputProviders, b.joinInputProviders)
   );
 }
 
@@ -39,7 +38,7 @@ function workflowNodeMetadataEqual(a: WorkflowNode, b: WorkflowNode): boolean {
   );
 }
 
-function workflowNodeMetadataValues(node: WorkflowNode): readonly string[] {
+function workflowNodeMetadataValues(node: WorkflowNode): readonly (string | null)[] {
   return [
     node.id,
     node.key,

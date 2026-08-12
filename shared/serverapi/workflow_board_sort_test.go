@@ -24,7 +24,7 @@ func TestWorkflowBoardNodeCardsListRequestAcceptsBoardSortFieldsAndDirections(t 
 			request := WorkflowBoardNodeCardsListRequest{
 				ProjectID:  projectID,
 				WorkflowID: workflowID,
-				NodeID:     "node-1",
+				NodeID:     runtimeids.NewGraphEntityID(),
 				LabelFilter: WorkflowTaskLabelFilter{
 					Kind: WorkflowTaskLabelFilterKindNone,
 				},
@@ -47,7 +47,7 @@ func TestWorkflowBoardNodeCardsListRequestRejectsUnsupportedSortAndOffset(t *tes
 	base := WorkflowBoardNodeCardsListRequest{
 		ProjectID:  projectID,
 		WorkflowID: workflowID,
-		NodeID:     "node-1",
+		NodeID:     runtimeids.NewGraphEntityID(),
 		LabelFilter: WorkflowTaskLabelFilter{
 			Kind: WorkflowTaskLabelFilterKindNone,
 		},
@@ -101,7 +101,7 @@ func TestWorkflowBoardNodeCardsListContractUsesOffsetAndNextOffset(t *testing.T)
 	request := WorkflowBoardNodeCardsListRequest{
 		ProjectID:  "project-1",
 		WorkflowID: runtimeids.NewWorkflowID(),
-		NodeID:     "node-1",
+		NodeID:     runtimeids.NewGraphEntityID(),
 		LabelFilter: WorkflowTaskLabelFilter{
 			Kind: WorkflowTaskLabelFilterKindNone,
 		},

@@ -20,6 +20,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -38,6 +39,10 @@ func createLaunchTestSession(t *testing.T, containerDir, name, workspace string)
 
 func (failingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
 	return auth.State{}, errors.New("auth unavailable")
+}
+
+func (failingAuthStateReader) StoredState(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
 }
 
 func sessionLaunchStringPtr(value string) *string {
@@ -629,6 +634,276 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	}
 	if got := reopened.Meta().Continuation; got != nil && got.AgentRole != nil {
 		t.Fatalf("continuation = %+v, want cleared agent role", got)
+	}
+}
+
+func TestServicePlanSessionExplicitCurrentAgentRefreshesContinuationEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		OpenAIBaseURL: textutil.Value("https://old.example/v1"),
+	}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://new.example/v1"
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID: "refresh-current-agent-continuation",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := resp.Plan.ActiveSettings.OpenAIBaseURL; got != cfg.Settings.OpenAIBaseURL {
+		t.Fatalf("planned base URL = %q, want %q", got, cfg.Settings.OpenAIBaseURL)
+	}
+	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen session: %v", err)
+	}
+	continuation := reopened.Meta().Continuation
+	if continuation == nil || continuation.OpenAIBaseURL == nil || *continuation.OpenAIBaseURL != cfg.Settings.OpenAIBaseURL {
+		t.Fatalf("persisted continuation = %+v, want refreshed base URL %q", continuation, cfg.Settings.OpenAIBaseURL)
+	}
+}
+
+func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	setSessionLaunchChatSettings(t, store, session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "low",
+		Fast:           false,
+		Questions:      false,
+		AutoCompaction: false,
+	})
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
+	workerSettings := cfg.Settings
+	workerSettings.ProviderOverride = "openai"
+	workerSettings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}
+	workerSettings.Reviewer.Frequency = "all"
+	workerSettings.ThinkingLevel = "  high  "
+	workerSettings.PriorityRequestMode = true
+	workerSettings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings: workerSettings,
+			Sources: map[string]string{
+				"reviewer.frequency":    "file",
+				"thinking_level":        "file",
+				"priority_request_mode": "file",
+				"tools.ask_question":    "file",
+			},
+		},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir)
+	worker := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		OpenAIBaseURL: textutil.Value("https://previous-agent.example/v1"),
+	}); err != nil {
+		t.Fatalf("seed previous Agent base URL: %v", err)
+	}
+
+	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "select-worker",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &worker},
+	}); err != nil {
+		t.Fatalf("PlanSession select worker: %v", err)
+	}
+	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
+		Agent: "worker",
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     sessionLaunchStringPtr("all"),
+			Thinking:       sessionLaunchStringPtr("high"),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(true),
+			AutoCompaction: textutil.Value(true),
+		},
+	})
+	selected, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen selected Agent Session: %v", err)
+	}
+	if continuation := selected.Meta().Continuation; continuation == nil || continuation.OpenAIBaseURL != nil {
+		t.Fatalf("selected Agent continuation = %+v, want previous base URL cleared", continuation)
+	}
+
+	second, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "observe-worker",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession observe worker: %v", err)
+	}
+	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "high" ||
+		second.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		!second.Plan.ActiveSettings.PriorityRequestMode ||
+		second.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("second plan active settings = %+v, want selected worker baseline", second.Plan.ActiveSettings)
+	}
+}
+
+func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	removed := "removed"
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{Agent: &session.ChatAgentSelection{
+		Agent: removed,
+		Baseline: session.ChatSettings{
+			Supervisor:     "all",
+			Thinking:       "high",
+			Fast:           true,
+			Questions:      false,
+			AutoCompaction: false,
+		},
+	}}); err != nil {
+		t.Fatalf("seed removed Agent: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		AgentRole:     &removed,
+		OpenAIBaseURL: textutil.Value("https://removed-agent.example/v1"),
+	}); err != nil {
+		t.Fatalf("seed removed Agent base URL: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
+	cfg.Settings.Reviewer.Frequency = "edits"
+	cfg.Settings.ThinkingLevel = "medium"
+	cfg.Settings.PriorityRequestMode = false
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	repaired, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "repair-removed",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession repair removed Agent: %v", err)
+	}
+	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
+		Agent: config.DefaultSubagentRole,
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     sessionLaunchStringPtr("edits"),
+			Thinking:       sessionLaunchStringPtr("medium"),
+			Fast:           textutil.Value(false),
+			Questions:      textutil.Value(true),
+			AutoCompaction: textutil.Value(true),
+		},
+	})
+	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen repaired Agent Session: %v", err)
+	}
+	if continuation := reopened.Meta().Continuation; continuation != nil {
+		t.Fatalf("repaired Agent continuation = %+v, want default Agent inheriting current config", continuation)
+	}
+	if repaired.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("repaired Agent base URL = %q, want current config", repaired.Plan.ActiveSettings.OpenAIBaseURL)
+	}
+}
+
+func TestServicePlanSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	setSessionLaunchChatSettings(t, store, session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "medium",
+		Fast:           false,
+		Questions:      false,
+		AutoCompaction: false,
+	})
+	cfg := loadSessionLaunchTestConfig(t, workspace, t.TempDir())
+	cfg.Settings.Reviewer.Frequency = "all"
+	cfg.Settings.ThinkingLevel = "high"
+	cfg.Settings.PriorityRequestMode = true
+	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	response, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "persisted-chat-settings",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if response.Plan.ActiveSettings.Reviewer.Frequency != "off" ||
+		response.Plan.ActiveSettings.ThinkingLevel != "medium" ||
+		response.Plan.ActiveSettings.PriorityRequestMode ||
+		response.Plan.QuestionsEnabled ||
+		response.Plan.AutoCompactionEnabled {
+		t.Fatalf("effective Session Chat settings = %+v questions=%t auto_compaction=%t", response.Plan.ActiveSettings, response.Plan.QuestionsEnabled, response.Plan.AutoCompactionEnabled)
+	}
+
+	withoutOverrides := createLaunchTestSession(t, containerDir, "workspace-b", workspace)
+	fallback, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "current-chat-settings",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, withoutOverrides.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession without overrides: %v", err)
+	}
+	if fallback.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
+		fallback.Plan.ActiveSettings.ThinkingLevel != "high" ||
+		!fallback.Plan.ActiveSettings.PriorityRequestMode ||
+		!fallback.Plan.QuestionsEnabled ||
+		!fallback.Plan.AutoCompactionEnabled {
+		t.Fatalf("fallback Session Chat settings = %+v questions=%t auto_compaction=%t", fallback.Plan.ActiveSettings, fallback.Plan.QuestionsEnabled, fallback.Plan.AutoCompactionEnabled)
+	}
+}
+
+func setSessionLaunchChatSettings(t *testing.T, store *session.Store, settings session.ChatSettings) {
+	t.Helper()
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Supervisor:     sessionLaunchStringPtr(settings.Supervisor),
+		Thinking:       sessionLaunchStringPtr(settings.Thinking),
+		Fast:           textutil.Value(settings.Fast),
+		Questions:      textutil.Value(settings.Questions),
+		AutoCompaction: textutil.Value(settings.AutoCompaction),
+	}); err != nil {
+		t.Fatalf("MutateChatSettings: %v", err)
+	}
+}
+
+func assertSessionLaunchChatSettings(t *testing.T, sessionDir string, want session.ChatSettingsState) {
+	t.Helper()
+	reopened, err := session.Open(sessionDir, serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen Session: %v", err)
+	}
+	got, err := session.ChatSettingsStateFromMeta(reopened.Meta())
+	if err != nil {
+		t.Fatalf("ChatSettingsStateFromMeta: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		gotJSON, _ := json.Marshal(got.Settings)
+		wantJSON, _ := json.Marshal(want.Settings)
+		t.Fatalf("Chat settings state = agent %q settings %s, want agent %q settings %s", got.Agent, gotJSON, want.Agent, wantJSON)
 	}
 }
 

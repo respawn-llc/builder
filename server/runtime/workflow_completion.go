@@ -14,6 +14,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 const (
@@ -22,6 +23,24 @@ const (
 	// by recording one durable violation and interrupting immediately.
 	workflowInvalidCompletionFailClosedMaxCount = 1
 )
+
+func workflowCompletionOperatorDiagnostic(
+	diagnostic error,
+	afterToolCallID *string,
+) storedLocalEntry {
+	if diagnostic == nil {
+		panic("workflow completion operator diagnostic requires an error")
+	}
+	if strings.TrimSpace(diagnostic.Error()) == "" {
+		panic("workflow completion operator diagnostic requires a non-blank error")
+	}
+	return storedLocalEntry{
+		Visibility:      transcript.EntryVisibilityAuto,
+		Role:            string(transcript.EntryRoleDeveloperErrorFeedback),
+		Text:            diagnostic.Error(),
+		AfterToolCallID: textutil.Pointer(afterToolCallID),
+	}
+}
 
 var workflowFinalAnswerNudge = strings.TrimSpace(prompts.WorkflowFinalAnswerNudgePrompt)
 

@@ -39,7 +39,7 @@ WHERE id = 'edge-done-1'`)
 	if err := db.QueryRow(`
 SELECT assignee_selection, thinking_selection, parameters_json
 FROM workflow_edges
-WHERE id = 'edge-done-1'`).Scan(&assigneeSelection, &thinkingSelection, &parametersJSON); err != nil {
+WHERE edge_key = 'done'`).Scan(&assigneeSelection, &thinkingSelection, &parametersJSON); err != nil {
 		t.Fatalf("read migrated edge: %v", err)
 	}
 	if assigneeSelection != "configured" || thinkingSelection != "configured" {

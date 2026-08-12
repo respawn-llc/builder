@@ -44,6 +44,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 func main() {
@@ -210,6 +211,8 @@ func captureSessionRequest(
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
+			QuestionsEnabled:                    textutil.Value(resolved.QuestionsEnabled),
+			AutoCompactionEnabled:               textutil.Value(resolved.AutoCompactionEnabled),
 			FilesystemContext:                   filesystemContext,
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},

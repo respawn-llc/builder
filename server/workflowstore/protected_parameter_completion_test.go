@@ -11,7 +11,7 @@ func TestCompletionContractsApplyProtectedParameterConsumptionPolicies(t *testin
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.PromptTemplate = "Audit {{.Params.role}}."
 		edge.Parameters = []workflow.Parameter{{
@@ -77,7 +77,7 @@ func TestAutomaticCompletionMaterializesSoleRoleWithoutProtectedValue(t *testing
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{
@@ -148,7 +148,7 @@ func TestAutomaticCompletionMaterializesFiniteThinkingSelection(t *testing.T) {
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:         "effort",
@@ -200,7 +200,7 @@ func TestAutomaticCompletionMaterializesOpenThinkingSelection(t *testing.T) {
 	}
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:         "effort",
@@ -237,7 +237,7 @@ func TestAutomaticCompletionRejectsInvalidSelectionBeforeMutation(t *testing.T) 
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.RequiresApproval = true
 		edge.Parameters = []workflow.Parameter{{
@@ -291,8 +291,8 @@ func TestAutomaticCompletionMaterializesSelectionFromScriptSource(t *testing.T) 
 		review.Kind = workflow.NodeKindScript
 		review.SubagentRole = ""
 		review.ScriptPath = "scripts/review"
-		workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-review-"+workflowID.String())).PromptTemplate = ""
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-review-"+workflowID.String())).PromptTemplate = ""
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -342,7 +342,7 @@ func TestCompletionContractsRejectDormantProtectedValuesAsUnknownOutputs(t *test
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.Parameters = []workflow.Parameter{{
 			Key:     "role",
 			Purpose: workflow.ParameterPurposeTargetAssignee,

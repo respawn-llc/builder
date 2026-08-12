@@ -115,6 +115,40 @@ func TestPromptCacheLineageExcludesToolChoiceMode(t *testing.T) {
 	}
 }
 
+func TestPromptCacheLineageSerializesPreparedProviderSchemas(t *testing.T) {
+	request := llm.Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+		Tools: []llm.Tool{{
+			Name:   "shell",
+			Schema: mustTestFunctionSchema(t),
+		}},
+		StructuredOutput: &llm.StructuredOutput{
+			Name:   "reviewer_suggestions",
+			Schema: mustReviewerSuggestionsContract(t),
+		},
+	}
+	chunks, err := promptCacheChunks(request)
+	if err != nil {
+		t.Fatalf("promptCacheChunks: %v", err)
+	}
+	if len(chunks) == 0 {
+		t.Fatal("prompt cache metadata chunk is missing")
+	}
+	var metadata promptCacheMetadata
+	if err := json.Unmarshal(chunks[0], &metadata); err != nil {
+		t.Fatalf("decode prompt cache metadata: %v", err)
+	}
+	if len(metadata.Tools) != 1 || metadata.Tools[0].Schema == "" {
+		t.Fatalf("prompt cache tool metadata omitted prepared schema: %+v", metadata.Tools)
+	}
+	if metadata.StructuredOutput == nil ||
+		metadata.StructuredOutput.Schema == "" ||
+		!metadata.StructuredOutput.Strict {
+		t.Fatalf("prompt cache structured output omitted prepared strict schema: %+v", metadata.StructuredOutput)
+	}
+}
+
 func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -129,7 +163,7 @@ func TestCacheWarningSteeringUsesCacheWarningModeVisibility(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			events := make([]Event, 0, 1)
 			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+			eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 				CacheWarningMode: tt.mode,
 				OnEvent: func(evt Event) {
 					events = append(events, evt)
@@ -160,7 +194,7 @@ func TestPromptCacheResponseAppliesLineageByCommitReceipt(t *testing.T) {
 	observerErr := errors.New("cache response observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:            "gpt-5",
 		CacheWarningMode: config.CacheWarningModeOff,
 	})
@@ -198,7 +232,7 @@ func (transportStaticAuth) AuthorizationHeader(context.Context) (string, error) 
 func newCacheWarningTestEngine(t *testing.T, client llm.Client, mode config.CacheWarningMode) (*session.Store, *Engine) {
 	t.Helper()
 	store := mustCreateTestSession(t)
-	return store, mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{CacheWarningMode: mode})
+	return store, mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{CacheWarningMode: mode})
 }
 
 func TestGenerateWithRetryClient_PersistsExactNonPostfixCacheWarningInDefaultMode(t *testing.T) {
@@ -274,7 +308,7 @@ func TestGenerateWithRetryClient_SuppressesExactNonPostfixWarningWithoutProvider
 func TestNew_RejectsInvalidCacheWarningMode(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	if _, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
+	if _, err := New(store, mustMaterializeTestEventLog(t, store), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningMode("bogus")}); err == nil {
 		t.Fatal("expected invalid cache_warning_mode to fail")
 	}
 }
@@ -364,7 +398,7 @@ func TestBuildRequest_SkipsPromptCacheKeyForUnsupportedProvider(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -381,7 +415,7 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -401,7 +435,7 @@ func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	eng.compactionRuntimeState().SetCount(1)
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
@@ -431,7 +465,7 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 		t.Fatalf("reopen store: %v", err)
 	}
 	client := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true}}
-	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	req, err := eng.buildRequestWithExtraItems(context.Background(), "", []llm.ResponseItem{{Type: llm.ResponseItemTypeMessage, Role: textutil.Value(llm.RoleUser), Content: textutil.Value("hello")}}, true)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -451,7 +485,7 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")}}},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolExecCommand}})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolExecCommand}})
 	eng.compactionRuntimeState().SetCount(1)
 	input := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("alpha")}, {Role: llm.RoleAssistant, Content: textutil.Value("beta")}})
 	instructionsInput, err := newCompactionInstructionsInput("keep API details")
@@ -537,7 +571,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
-	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	send := func(req llm.Request) capturedRequest {
 		t.Helper()
 		before := len(capturedRequests)
@@ -616,7 +650,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	reopenedEng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	reopenedEng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	reopenedMainReq, err := reopenedEng.buildRequestWithExtraItems(context.Background(), "", userExtra("reopened"), true)
 	if err != nil {
 		t.Fatalf("build reopened main request: %v", err)
@@ -647,7 +681,7 @@ func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testin
 	store := mustCreateTestSession(t)
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}}}
-	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
@@ -673,7 +707,7 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
-	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	eng.compactionRuntimeState().SetCount(1)
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
@@ -712,7 +746,7 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 		caps:      llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true, SupportsPromptCacheKey: true},
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
-	eng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
@@ -803,7 +837,7 @@ func TestGenerateWithRetryClient_RestoreIgnoresRequestObservationWithoutResponse
 		t.Fatalf("reopen store: %v", err)
 	}
 	client := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	eng := mustNewTestEngine(t, reopened, client, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeDefault})
+	eng := mustNewTestEngine(t, reopened, client, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeDefault})
 	if _, err := eng.generateWithRetryClient(context.Background(), "step-1", client, testPromptCacheRequest("cache-key-1", "alpha", "omega"), nil, nil, nil); err != nil {
 		t.Fatalf("generate after reopen: %v", err)
 	}
@@ -845,7 +879,7 @@ func TestGenerateWithRetryClient_RestorePreservesRotatedCompactionKeyWithoutWarn
 		t.Fatalf("reopen store: %v", err)
 	}
 	reopenedClient := &fakeClient{responses: []llm.Response{{Usage: llm.Usage{InputTokens: 12}}}}
-	reopenedEng := mustNewTestEngine(t, reopened, reopenedClient, tools.NewRegistry(), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
+	reopenedEng := mustNewTestEngine(t, reopened, reopenedClient, newTestToolRegistry(t), Config{Model: "gpt-5", CacheWarningMode: config.CacheWarningModeVerbose})
 
 	if _, err := reopenedEng.generateWithRetryClient(context.Background(), "step-2", reopenedClient, testPromptCacheRequest("cache-key-1/compact-1", "beta"), nil, nil, nil); err != nil {
 		t.Fatalf("generate after reopen: %v", err)

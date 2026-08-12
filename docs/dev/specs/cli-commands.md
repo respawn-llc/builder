@@ -314,6 +314,39 @@ To respond, run: kent run steer <source-session-id> "message"
 - Kent does not bind an offset to a previous query.
 - If items are inserted, removed, or reordered between offset requests, later results may repeat or skip items.
 
+### Task Session listing
+
+- `kent task sessions <task-short-id-or-task-id>` lists every retained agent Session associated with the selected Task.
+- A Task Short ID uses `--project`, which defaults to the Project attached to the current workspace.
+- Script Nodes do not produce Session rows.
+- Sessions from parallel branches are ordinary rows and receive no special grouping or treatment.
+- The command accepts `--offset`, `--limit`, and `--json`.
+- Human and JSON output use the common offset-pagination contract.
+- Kent may project the complete task-scoped active Session set because actual concurrent runtime work is already bounded by configured Workflow concurrency, finite live Workflow Nodes, and machine capacity; registered-idle resources are excluded from this set and it receives no duplicate pagination limit.
+- Reads through retained Idle Session history remain bounded by the requested limit and do not read Session transcript history.
+- A Session is `Running` when it has live runtime activity in startup, active work, draining, or closing.
+- A Session is `Question` while waiting on any runtime prompt, including an ordinary Question, an Approval, or both.
+- Every retained Session without live runtime activity is `Idle`.
+- A retained Task Session continued through the ordinary Session launch path uses the same live statuses even when it is not currently executing through a Workflow Node.
+- The command exposes no separate `Approval` Session status.
+- The command defines no durable `Completed` Session status.
+- `Running` Sessions precede `Question` Sessions, which precede `Idle` Sessions.
+- Within each status group, Sessions are ordered by creation time descending and then Session ID descending.
+- Human output chooses a label from Session name, the associated Node's current display name, then Assignee.
+- If the retained Node association does not resolve, human output continues directly to the Assignee fallback.
+- The command does not retain a historical Node-name snapshot.
+- A human row is `<label> (<session-id>): <status>`.
+- If the selected label equals the Session ID, the row is `<session-id>: <status>`.
+- Human output has no heading.
+- An empty human result writes nothing.
+- JSON output is one object with `task_id`, `items`, and optional `next_offset`.
+- Each JSON item has `session_id`, optional `session_name`, optional `node_name`, `agent_role`, and `status`.
+- JSON status is `running`, `question`, or `idle`.
+- JSON does not expose the human fallback label.
+- Concurrent Session startup or runtime-state changes may temporarily omit a just-starting Session or report a stale status.
+- Every retained Session remains eligible for a later listing after its durable Task association settles.
+- The command adds no retry, synchronization, or special error behavior.
+
 ### Workflow and Task mutation
 
 - Agents can build and edit complete Workflow definitions through high-level commands and graph inspect/apply.
@@ -322,13 +355,13 @@ To respond, run: kent run steer <source-session-id> "message"
 - Graph inspect preserves the authored order of every graph collection.
 - `kent workflow graph apply <path-or-dash>` reads graph editing JSON from the selected file. A selector of `-` reads standard input.
 - Graph apply changes the complete authored Workflow graph, including graph-owned configuration. `kent workflow update` remains the CLI authority for Workflow name, description, and Execution Target Policy.
-- Graph apply requires canonical bare UUID v4 text for each new Node, Node Group, Transition Group, and Transition Branch. It rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. It preserves existing graph entity identities and never assigns temporary or persistent identities.
+- Each new Node, Node Group, Transition Group, and Transition Branch in graph editing JSON must use canonical bare UUID v4 text. The server's authoritative graph-save operation rejects prefixed identities, other UUID versions, non-canonical spellings, and surrounding whitespace for additions. Graph apply preserves existing graph entity identities and never assigns temporary or persistent identities.
 - Node membership in graph editing JSON uses `group_id` only. Graph inspect never emits `group_key`, and graph apply rejects `group_key` rather than treating it as an alternate membership reference.
 - Graph apply ignores unknown JSON object fields. Unknown or misspelled authored fields are not preserved when Kent saves the complete submitted graph.
 - Graph apply uses the installed JSON library's duplicate-field semantics. It rejects trailing JSON values and missing required fields before it contacts the server.
-- Graph apply loads the current Workflow and compares Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
-- For a current-version document, graph apply preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities before save.
-- Graph apply submits the document to the server's graph-save operation. A non-destructive graph that has no blocker saves immediately.
+- The server's authoritative graph-save operation compares the expected Workflow Version before it classifies graph entity identities. A mismatch returns `blocked` with `version_changed`, including when a legacy identity in the stale document no longer exists or now belongs to another entity type.
+- For a current-version document, the server's authoritative graph-save operation preserves submitted identities that match existing graph entities of the same type, preserves submitted collection order, and rejects additions without canonical bare UUID v4 identities.
+- Graph apply submits the current Workflow Draft and expected Workflow Version to the server's authoritative graph-save operation without independently comparing Workflow Version or classifying graph entity identities. It surfaces the server's typed rejection. A non-destructive graph that has no blocker saves immediately.
 - When confirmation is required, an unconfirmed graph apply reports the impact and changes nothing. With `--confirm`, the command confirms the impact returned by that invocation and retries the save.
 - A Workflow Version or impact-count change before the confirmed save rejects the save and changes nothing.
 - Graph-save impact lists every removed graph entity by stable entity type and persistent identity. It reports Task references as aggregate counts and never materializes an unbounded Task-reference collection.

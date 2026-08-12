@@ -61,12 +61,12 @@ INSERT INTO task_runs (
 	var nodeID string
 	var schedulingState sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id, scheduling_state
+SELECT `+graphEntityIDTextFunction+`(node_id), scheduling_state
 FROM task_current_nodes
 WHERE task_id = 'task-canceled-done-migration'`).Scan(&nodeID, &schedulingState); err != nil {
 		t.Fatalf("query normalized canceled current node: %v", err)
 	}
-	if nodeID != "node-done" || schedulingState.Valid {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || schedulingState.Valid {
 		t.Fatalf("normalized canceled current node = node=%q scheduling=%+v", nodeID, schedulingState)
 	}
 
@@ -94,14 +94,14 @@ SELECT
 	var taskID, associationNodeID string
 	var associatedAt int64
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+SELECT session.task_id, `+graphEntityIDTextFunction+`(association.node_id), association.associated_at_unix_ms
 FROM sessions session
 JOIN session_workflow_node_associations association ON association.session_id = session.id
 WHERE session.id = '550e8400-e29b-41d4-a716-446655440008'`).Scan(&taskID, &associationNodeID, &associatedAt); err != nil {
 		t.Fatalf("query normalized canceled Session association: %v", err)
 	}
 	if taskID != "task-canceled-done-migration" ||
-		associationNodeID != "node-agent" ||
+		associationNodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
 		associatedAt != now+2 {
 		t.Fatalf(
 			"normalized canceled Session association = task=%q node=%q associated_at=%d",
@@ -205,7 +205,7 @@ INSERT INTO task_transition_edges (
 	var approvalCount, fanoutCount int
 	if err := store.db.QueryRowContext(t.Context(), `
 SELECT
-    (SELECT node_id FROM task_current_nodes WHERE task_id = 'task-canceled-approval-migration'),
+    (SELECT `+graphEntityIDTextFunction+`(node_id) FROM task_current_nodes WHERE task_id = 'task-canceled-approval-migration'),
     (SELECT COUNT(*) FROM task_pending_approvals WHERE source_task_id = 'task-canceled-approval-migration'),
     (SELECT COUNT(*) FROM task_active_fanouts WHERE task_id = 'task-canceled-approval-migration')`).Scan(
 		&nodeID,
@@ -214,7 +214,7 @@ SELECT
 	); err != nil {
 		t.Fatalf("query normalized canceled approval aggregate: %v", err)
 	}
-	if nodeID != "node-done" || approvalCount != 0 || fanoutCount != 0 {
+	if nodeID != workflowGraphSeedIDText(t, store.db, "node-done") || approvalCount != 0 || fanoutCount != 0 {
 		t.Fatalf("normalized canceled approval aggregate = node=%q approvals=%d fanouts=%d", nodeID, approvalCount, fanoutCount)
 	}
 }
@@ -254,13 +254,14 @@ WHERE id = 'task-canceled-terminal-migration'`, now+1)
 
 	var nodeID string
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id
+SELECT `+graphEntityIDTextFunction+`(node_id)
 FROM task_current_nodes
 WHERE task_id = 'task-canceled-terminal-migration'`).Scan(&nodeID); err != nil {
 		t.Fatalf("query normalized selected terminal current node: %v", err)
 	}
-	if nodeID != "node-done" {
-		t.Fatalf("normalized selected terminal current node = %q, want node-done", nodeID)
+	wantNodeID := graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "finished")
+	if nodeID != wantNodeID {
+		t.Fatalf("normalized selected terminal current node = %q, want %q", nodeID, wantNodeID)
 	}
 }
 
@@ -297,7 +298,7 @@ WHERE id = 'task-canceled-invalid-terminal-migration'`, now+1)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	assertMigratedCurrentNodeID(t, store, "task-canceled-invalid-terminal-migration", "node-done")
+	assertMigratedCurrentNodeID(t, store, "task-canceled-invalid-terminal-migration", "finished")
 }
 
 func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithoutLegacyCandidate(t *testing.T) {
@@ -332,7 +333,7 @@ WHERE id = 'task-canceled-missing-terminal-migration'`, now+1)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	assertMigratedCurrentNodeID(t, store, "task-canceled-missing-terminal-migration", "node-done")
+	assertMigratedCurrentNodeID(t, store, "task-canceled-missing-terminal-migration", "finished")
 }
 
 func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithAmbiguousLegacyCandidates(t *testing.T) {
@@ -379,7 +380,7 @@ VALUES
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	assertMigratedCurrentNodeID(t, store, "task-canceled-ambiguous-terminal-migration", "node-done")
+	assertMigratedCurrentNodeID(t, store, "task-canceled-ambiguous-terminal-migration", "finished")
 }
 
 func TestOpenProjectsCanceledTaskWithoutCanonicalDoneWithForeignLegacyCandidate(t *testing.T) {
@@ -428,19 +429,20 @@ VALUES (
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	assertMigratedCurrentNodeID(t, store, "task-canceled-foreign-terminal-migration", "node-done")
+	assertMigratedCurrentNodeID(t, store, "task-canceled-foreign-terminal-migration", "finished")
 }
 
-func assertMigratedCurrentNodeID(t *testing.T, store *Store, taskID, wantNodeID string) {
+func assertMigratedCurrentNodeID(t *testing.T, store *Store, taskID, wantNodeKey string) {
 	t.Helper()
 
 	var gotNodeID string
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id
+SELECT `+graphEntityIDTextFunction+`(node_id)
 FROM task_current_nodes
 WHERE task_id = ?`, taskID).Scan(&gotNodeID); err != nil {
 		t.Fatalf("query migrated current node for task %q: %v", taskID, err)
 	}
+	wantNodeID := graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", wantNodeKey)
 	if gotNodeID != wantNodeID {
 		t.Fatalf("migrated current node for task %q = %q, want %q", taskID, gotNodeID, wantNodeID)
 	}

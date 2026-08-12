@@ -2,6 +2,7 @@ package runtimewire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -42,7 +44,8 @@ type RuntimeWiringOptions struct {
 	Context                             context.Context
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
+	QuestionsEnabled                    *bool
+	AutoCompactionEnabled               *bool
 	Sources                             map[string]string
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
@@ -77,6 +80,12 @@ func NewRuntimeWiringWithBackground(
 	background *shelltool.Manager,
 	opts RuntimeWiringOptions,
 ) (*RuntimeWiring, error) {
+	if opts.QuestionsEnabled == nil {
+		return nil, errors.New("effective Session Questions setting is required")
+	}
+	if opts.AutoCompactionEnabled == nil {
+		return nil, errors.New("effective Session Auto-compaction setting is required")
+	}
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -105,6 +114,7 @@ func NewRuntimeWiringWithBackground(
 		Background:               background,
 		ShellPostprocessor:       shellPostprocessor,
 		GlobalConfigDir:          opts.GlobalConfigDir,
+		Debug:                    active.Debug,
 		TriggerHandoffController: func() triggerhandofftool.TriggerHandoffController { return eng },
 		QuestionsEnabledGetter: func() bool {
 			if eng == nil {
@@ -219,7 +229,6 @@ func NewRuntimeWiringWithBackground(
 		ThinkingLevel:                   active.ThinkingLevel,
 		ModelCapabilities:               llm.LockedModelCapabilitiesForConfig(active.Model, active.ModelCapabilities),
 		FastModeEnabled:                 active.PriorityRequestMode,
-		FastModeState:                   opts.FastMode,
 		WebSearchMode:                   active.WebSearch,
 		PromptFacingSnapshotReloader:    promptReloader,
 		ProviderCapabilitiesOverride:    providerCapabilitiesOverride,
@@ -234,8 +243,8 @@ func NewRuntimeWiringWithBackground(
 		LocalCompactionCarryoverLimit:   20_000,
 		CompactionMode:                  string(active.CompactionMode),
 		CacheWarningMode:                active.CacheWarningMode,
-		AutoCompactionEnabled:           boolRef(runtime.DefaultAutoCompactionEnabled),
-		QuestionsEnabled:                boolRef(runtime.DefaultQuestionsEnabled),
+		AutoCompactionEnabled:           textutil.Pointer(opts.AutoCompactionEnabled),
+		QuestionsEnabled:                textutil.Pointer(opts.QuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
 		CurrentNodeExecution:            opts.CurrentNodeExecution,
@@ -393,5 +402,3 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 	}
 	return &caps
 }
-
-func boolRef(v bool) *bool { return &v }

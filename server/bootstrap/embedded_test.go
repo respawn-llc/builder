@@ -41,7 +41,6 @@ func TestBuildAuthSupportUsesDefaultIssuerAndEnvClientID(t *testing.T) {
 
 func TestBuildRuntimeSupportUsesConfigSettings(t *testing.T) {
 	support, err := BuildRuntimeSupport(config.App{Settings: config.Settings{
-		PriorityRequestMode: true,
 		ShellOutputMaxChars: 321,
 		BGShellsOutput:      config.BGShellsOutputVerbose,
 		Shell: config.ShellSettings{
@@ -54,9 +53,6 @@ func TestBuildRuntimeSupportUsesConfigSettings(t *testing.T) {
 	t.Cleanup(func() {
 		_ = support.Background.Close()
 	})
-	if support.FastModeState == nil || !support.FastModeState.Enabled() {
-		t.Fatal("expected runtime support to carry enabled fast mode state")
-	}
 	if support.Background == nil {
 		t.Fatal("expected background manager")
 	}

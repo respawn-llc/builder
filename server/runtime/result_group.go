@@ -57,7 +57,8 @@ type resultGroupCallIdentity struct {
 }
 
 type resultGroupUnit struct {
-	result tools.Result
+	result                       tools.Result
+	workflowCompletionDiagnostic error
 }
 
 type resultGroupSlot struct {
@@ -389,7 +390,10 @@ func (c *resultGroupCollector) close() error {
 }
 
 func cloneResultGroupUnit(unit resultGroupUnit) resultGroupUnit {
-	return resultGroupUnit{result: cloneToolResult(unit.result)}
+	return resultGroupUnit{
+		result:                       cloneToolResult(unit.result),
+		workflowCompletionDiagnostic: unit.workflowCompletionDiagnostic,
+	}
 }
 
 type resultGroupPreparedUnit struct {
@@ -549,7 +553,19 @@ func (e *Engine) prepareResultGroupProjection(
 		if unit.result.CallID != slot.call.CallID {
 			return resultGroupProjectionPlan{}, fmt.Errorf("result group unit call %q does not match slot %q at ordinal %d", unit.result.CallID, slot.call.CallID, slot.ordinal)
 		}
-		completion, err := e.prepareFinalizedToolCompletion(e.finalizeLiveToolCompletion(unit.result))
+		finalized := e.finalizeLiveToolCompletion(unit.result)
+		if unit.workflowCompletionDiagnostic != nil {
+			if finalized.OperatorFeedback != nil {
+				panic("workflow completion diagnostic conflicts with existing tool operator feedback")
+			}
+			callID := finalized.Result.CallID
+			feedback := workflowCompletionOperatorDiagnostic(
+				unit.workflowCompletionDiagnostic,
+				&callID,
+			)
+			finalized.OperatorFeedback = &feedback
+		}
+		completion, err := e.prepareFinalizedToolCompletion(finalized)
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group completion %q: %w", slot.call.CallID, err)
 		}

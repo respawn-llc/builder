@@ -1,18 +1,17 @@
-import { useMemo, useRef, type Ref } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectSummary } from "@/api";
 import { errorMessage } from "@/api";
-import { useAppNavigation } from "@/app-facade";
-import { WorkflowCard, useWorkflowPages } from "@/shared/workflow-library";
+import { useAppNavigation, useOwnedSidebarRoots, type SidebarMode } from "@/app-facade";
+import { WorkflowRow, useWorkflowPages } from "@/shared/workflow-library";
 import {
   EmptyState,
   ErrorState,
   homeListCardListMaxWidthClassName,
   IslandTabs,
   LoadingState,
-  useElementHeight,
   VirtualizedInfiniteList,
 } from "@/ui";
 import { ProjectRow } from "./ProjectRow";
@@ -28,6 +27,7 @@ export type HomePrimaryPaneProps = Readonly<{
   onTabChange: (tab: HomePrimaryTab) => void;
   projectItems: readonly ProjectSummary[];
   projectsQuery: ReturnType<typeof useProjectPages>;
+  sidebarMode: SidebarMode;
 }>;
 
 export function HomePrimaryPane({
@@ -38,6 +38,7 @@ export function HomePrimaryPane({
   onTabChange,
   projectItems,
   projectsQuery,
+  sidebarMode,
 }: HomePrimaryPaneProps) {
   const { t } = useTranslation();
   const controlsRef = useRef<HTMLDivElement | null>(null);
@@ -58,9 +59,14 @@ export function HomePrimaryPane({
         </h2>
         <div className="route-transition-frame h-full min-h-0" data-testid="home-primary-scroll-layer">
           {activeTab === "projects" ? (
-            <ProjectList controlsHeight={controlsHeight} items={projectItems} query={projectsQuery} />
+            <ProjectList
+              controlsHeight={controlsHeight}
+              items={projectItems}
+              query={projectsQuery}
+              sidebarMode={sidebarMode}
+            />
           ) : (
-            <HomeWorkflowList controlsHeight={controlsHeight} />
+            <HomeWorkflowList controlsHeight={controlsHeight} sidebarMode={sidebarMode} />
           )}
         </div>
       </div>
@@ -124,10 +130,12 @@ function ProjectList({
   controlsHeight,
   items,
   query,
+  sidebarMode,
 }: Readonly<{
   controlsHeight: number;
   items: readonly ProjectSummary[];
   query: ReturnType<typeof useProjectPages>;
+  sidebarMode: SidebarMode;
 }>) {
   const { t } = useTranslation();
   if (query.isPending) {
@@ -149,14 +157,18 @@ function ProjectList({
       onLoadMore={() => void query.fetchNextPage()}
       paddingEnd={16}
       paddingStart={controlsHeight}
-      renderItem={(project) => <ProjectRow project={project} />}
+      renderItem={(project) => <ProjectRow project={project} sidebarMode={sidebarMode} />}
     />
   );
 }
 
-function HomeWorkflowList({ controlsHeight }: Readonly<{ controlsHeight: number }>) {
+function HomeWorkflowList({
+  controlsHeight,
+  sidebarMode,
+}: Readonly<{ controlsHeight: number; sidebarMode: SidebarMode }>) {
   const { t } = useTranslation();
   const navigation = useAppNavigation();
+  const { open } = useOwnedSidebarRoots();
   const workflowsQuery = useWorkflowPages();
   const workflows = useMemo(
     () => workflowsQuery.data?.pages.flatMap((page) => page.workflows) ?? [],
@@ -194,7 +206,12 @@ function HomeWorkflowList({ controlsHeight }: Readonly<{ controlsHeight: number 
       paddingEnd={16}
       paddingStart={controlsHeight}
       renderItem={(workflow) => (
-        <WorkflowCard
+        <WorkflowRow
+          contextActions={{
+            onEdit: () => {
+              open({ kind: "workflowSettings", mode: sidebarMode, workflowID: workflow.id });
+            },
+          }}
           onOpen={() => {
             void navigation.openWorkflowEditor({ workflowID: workflow.id });
           }}
@@ -203,6 +220,30 @@ function HomeWorkflowList({ controlsHeight }: Readonly<{ controlsHeight: number 
       )}
     />
   );
+}
+
+function useElementHeight(ref: Readonly<{ current: HTMLElement | null }>): number {
+  const [height, setHeight] = useState(0);
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (element === null) {
+      return;
+    }
+    const measure = () => {
+      const nextHeight = element.getBoundingClientRect().height;
+      setHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => {
+      observer.disconnect();
+    };
+  }, [ref]);
+  return height;
 }
 
 function HomeInlineEmptyState({ body }: Readonly<{ body: string }>) {

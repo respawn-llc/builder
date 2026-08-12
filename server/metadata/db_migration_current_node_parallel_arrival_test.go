@@ -72,12 +72,13 @@ ORDER BY transition_branch_key`)
 
 	var currentNodeID, currentBranchKey string
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id, transition_branch_key
+SELECT `+graphEntityIDTextFunction+`(node_id), transition_branch_key
 FROM task_current_nodes
 WHERE task_id = 'task-parallel-arrival-migration'`).Scan(&currentNodeID, &currentBranchKey); err != nil {
 		t.Fatalf("query remaining current branch: %v", err)
 	}
-	if currentNodeID != "node-branch-b" || currentBranchKey != "split_b" {
+	if currentNodeID != graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_b") ||
+		currentBranchKey != "split_b" {
 		t.Fatalf("remaining current branch = node=%q branch=%q", currentNodeID, currentBranchKey)
 	}
 }
@@ -322,12 +323,13 @@ INSERT INTO task_transition_edges (
 
 	var sourceNodeID, sourceBranchKey string
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT source_node_id, source_transition_branch_key
+SELECT `+graphEntityIDTextFunction+`(source_node_id), source_transition_branch_key
 FROM task_pending_approvals
 WHERE source_task_id = 'task-parallel-approval-migration'`).Scan(&sourceNodeID, &sourceBranchKey); err != nil {
 		t.Fatalf("query migrated parallel pending approval: %v", err)
 	}
-	if sourceNodeID != "node-branch-a" || sourceBranchKey != "split_a" {
+	if sourceNodeID != graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_a") ||
+		sourceBranchKey != "split_a" {
 		t.Fatalf("migrated parallel pending approval source = node=%q branch=%q", sourceNodeID, sourceBranchKey)
 	}
 
@@ -349,7 +351,7 @@ WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
 		t.Fatalf("query migrated parallel approval target: %v", err)
 	}
 	if targetBranchKey != "split_a" ||
-		targetEnteredByEdgeID != "edge-branch-a-done" ||
+		targetEnteredByEdgeID != graphEntityIDTextByKey(t, store.db, "workflow_edges", "edge_key", "done") ||
 		targetInputs != `{"summary":"approved branch"}` ||
 		targetPriorValues != `{"transition_parameters":{}}` {
 		t.Fatalf(
@@ -362,7 +364,7 @@ WHERE approval.source_task_id = 'task-parallel-approval-migration'`).Scan(
 	}
 
 	rows, err := store.db.QueryContext(t.Context(), `
-SELECT node_id, transition_branch_key, scheduling_state
+SELECT `+graphEntityIDTextFunction+`(node_id), transition_branch_key, scheduling_state
 FROM task_current_nodes
 WHERE task_id = 'task-parallel-approval-migration'
 ORDER BY transition_branch_key`)
@@ -386,10 +388,10 @@ ORDER BY transition_branch_key`)
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate migrated parallel approval current nodes: %v", err)
 	}
-	if branch := currentNodes["split_a"]; branch.nodeID != "node-branch-a" || branch.scheduling.Valid {
+	if branch := currentNodes["split_a"]; branch.nodeID != graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_a") || branch.scheduling.Valid {
 		t.Fatalf("pending approval branch current node = %+v", branch)
 	}
-	if branch := currentNodes["split_b"]; branch.nodeID != "node-branch-b" || !branch.scheduling.Valid || branch.scheduling.String != "interrupted" {
+	if branch := currentNodes["split_b"]; branch.nodeID != graphEntityIDTextByKey(t, store.db, "workflow_nodes", "node_key", "branch_b") || !branch.scheduling.Valid || branch.scheduling.String != "interrupted" {
 		t.Fatalf("sibling branch current node = %+v", branch)
 	}
 }

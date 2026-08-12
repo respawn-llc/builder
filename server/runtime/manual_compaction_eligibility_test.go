@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 	"core/shared/textutil"
 )
 
@@ -24,7 +23,7 @@ func TestManualCompactionRequiresToolCallSinceLatestCompaction(t *testing.T) {
 			},
 		}},
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
@@ -50,7 +49,7 @@ func TestManualCompactionAcceptsAfterAgentStepBoundary(t *testing.T) {
 			},
 		}},
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})

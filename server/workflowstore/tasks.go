@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
@@ -262,7 +263,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := insertTaskCurrentNode(ctx, q, currentNode); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, currentNode, time.UnixMilli(prepared.nowUnixMs).UTC()); err != nil {
 		return TaskRecord{}, fmt.Errorf("insert task start current node: %w", err)
 	}
 	for _, id := range prepared.labelIDs {
@@ -413,7 +414,7 @@ func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteT
 			return DeleteTaskResult{}, fmt.Errorf("touch task dependency neighbors affected %d rows, want %d", touched, len(neighbors))
 		}
 	}
-	resolution, err := taskAttentionResolution(ctx, q, taskID)
+	resolution, err := s.taskAttentionResolution(ctx, q, taskID)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
@@ -507,7 +508,8 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	now := s.now().UnixMilli()
+	nowTime := s.now().UTC()
+	now := nowTime.UnixMilli()
 	if requireTarget {
 		if err := applyPreparedExecutionTargetMutation(ctx, q, prepared.task, targetMutation, now); err != nil {
 			return StartTaskResult{}, err
@@ -520,7 +522,7 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	if removed != 1 {
 		return StartTaskResult{}, sql.ErrNoRows
 	}
-	if err := insertTaskCurrentNode(ctx, q, target); err != nil {
+	if err := insertTaskCurrentNode(ctx, q, target, nowTime); err != nil {
 		return StartTaskResult{}, err
 	}
 	if err := touchTaskUpdatedAt(ctx, q, string(taskID), now); err != nil {
@@ -565,7 +567,7 @@ func (s *Store) prepareTaskStart(ctx context.Context, taskID workflow.TaskID) (p
 	if err != nil {
 		return preparedTaskStart{}, err
 	}
-	current, err := currentNodeForReference(ctx, s.queries, reference)
+	current, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return preparedTaskStart{}, TaskStartConflictError{TaskID: taskID, Reason: TaskStartConflictAlreadyStarted}

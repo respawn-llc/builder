@@ -231,7 +231,7 @@ func TestCompleteCurrentNodeFanoutPendingApprovalCarriesCommentary(t *testing.T)
 }
 
 func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := edgeByKey(t, def, "join_a")
@@ -240,10 +240,26 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 			record.Parameters,
 			workflow.Parameter{Key: "agent_role", Purpose: workflow.ParameterPurposeTargetAssignee},
 		)
+		synth := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, def, "synth").ID)
+		synth.ContextMode = workflow.ContextModeContinueSession
+		synth.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	synthReference, err := workflow.NewCurrentNodeReference(
+		task.ID, workflow.NodeIDOf(nodeByKey(t, definition, "synth")), nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	synthSession := associateTaskSessionForTest(
+		t, ctx, store, binding, cfg, synthReference, time.UnixMilli(1_700_000_000_000).UTC(),
+	)
 
 	split, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       source.Reference,
@@ -282,6 +298,14 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	}
 	if joined.AutomaticIntents[0].NodeKind != workflow.NodeKindAgent {
 		t.Fatalf("join continuation automatic intent = %+v, want Agent Node kind", joined.AutomaticIntents[0])
+	}
+	if len(joined.Mutation.Created) != 1 ||
+		joined.Mutation.Created[0].SessionID == nil ||
+		*joined.Mutation.Created[0].SessionID != synthSession {
+		t.Fatalf("join continuation = %+v, want retained Session %q", joined.Mutation.Created, synthSession)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, synthSession, synthReference); err != nil {
+		t.Fatalf("join continuation exact Session provenance: %v", err)
 	}
 }
 
@@ -357,6 +381,9 @@ func TestCompleteCurrentNodeFanoutPreviousTargetOrNewRetainsBranchSessions(t *te
 		if currentNode.SessionID == nil || *currentNode.SessionID != expectedSessionID {
 			t.Fatalf("completion branch %q session = %v, want retained session %q", branchKey, currentNode.SessionID, expectedSessionID)
 		}
+		if err := store.ValidateCurrentNodeSessionBinding(ctx, expectedSessionID, currentNode.Reference); err != nil {
+			t.Fatalf("completion branch %q exact Session provenance: %v", branchKey, err)
+		}
 	}
 }
 
@@ -366,7 +393,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		source := nodeByKey(t, def, "plan")
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
+		groupID := testTransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -375,7 +402,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
+			ID:                testEdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -461,6 +488,9 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		branch.ContextSourceResolution.SessionID == nil ||
 		*branch.ContextSourceResolution.SessionID != sourceSessionID {
 		t.Fatalf("approval branch snapshot = %+v, want frozen immediate-source target session and values", branch)
+	}
+	if _, err := store.LatestTaskSessionForNode(ctx, branch.Target.CurrentNode.Reference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("pending Approval published target Session provenance before apply: %v", err)
 	}
 
 	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
@@ -550,6 +580,9 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		*target.SessionID != sourceSessionID ||
 		target.CurrentInputValues["summary"] != "frozen plan" {
 		t.Fatalf("applied target = %+v, want frozen context and materialized values", target)
+	}
+	if err := store.ValidateCurrentNodeSessionBinding(ctx, sourceSessionID, target.Reference); err != nil {
+		t.Fatalf("applied pending Approval target exact Session provenance: %v", err)
 	}
 	remaining, err := store.ListPendingApprovals(ctx, task.ID)
 	if err != nil {
@@ -720,6 +753,76 @@ func TestCompleteCurrentNodeContinueSessionUsesImmediateSourceSession(t *testing
 		completed.Mutation.Created[0].SessionID == nil ||
 		*completed.Mutation.Created[0].SessionID != fixture.sessionID {
 		t.Fatalf("continue-session target = %+v, want source session %q", completed.Mutation.Created, fixture.sessionID)
+	}
+	if err := fixture.store.ValidateCurrentNodeSessionBinding(
+		fixture.ctx,
+		fixture.sessionID,
+		completed.Mutation.Created[0].Reference,
+	); err != nil {
+		t.Fatalf("retained successor exact Session provenance: %v", err)
+	}
+}
+
+func TestRetainedSuccessorAssociationFailureRollsBackCurrentNodeAndSessionOwnership(t *testing.T) {
+	fixture := newImmediateContextCompletionFixture(t, workflow.ContextModeContinueSession)
+	scope, err := fixture.store.TaskExecutionScope(fixture.ctx, fixture.source.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("TaskExecutionScope: %v", err)
+	}
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, scope.WorkflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "review")
+	targetReference, err := workflow.NewCurrentNodeReference(
+		fixture.source.Reference.TaskID,
+		workflow.NodeIDOf(target),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	if _, err := fixture.store.db.ExecContext(
+		fixture.ctx,
+		`UPDATE sessions SET task_id = NULL WHERE id = ?`,
+		fixture.sessionID.String(),
+	); err != nil {
+		t.Fatalf("clear source Session Task owner: %v", err)
+	}
+	if _, err := fixture.store.db.ExecContext(
+		fixture.ctx,
+		`CREATE TRIGGER fail_retained_successor_association
+BEFORE INSERT ON session_workflow_node_associations
+BEGIN
+    SELECT RAISE(ABORT, 'injected retained successor association failure');
+END`,
+	); err != nil {
+		t.Fatalf("create retained successor association trigger: %v", err)
+	}
+
+	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "must roll back"},
+	}); err == nil {
+		t.Fatal("CompleteCurrentNode succeeded despite retained association failure")
+	}
+	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.source.Reference.TaskID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes after rollback: %v", err)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.source.Reference) {
+		t.Fatalf("Current Nodes after rollback = %+v, want source only", currentNodes)
+	}
+	owner, err := fixture.store.TaskIDForSession(fixture.ctx, fixture.sessionID)
+	if err != nil {
+		t.Fatalf("TaskIDForSession after rollback: %v", err)
+	}
+	if owner != nil {
+		t.Fatalf("Session owner after rollback = %q, want absent", *owner)
+	}
+	if _, err := fixture.store.LatestTaskSessionForNode(fixture.ctx, targetReference); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("target Session provenance after rollback = %v, want absent", err)
 	}
 }
 
@@ -913,7 +1016,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	}
 	audit := nodeByKey(t, definition, "audit")
 	review := nodeByKey(t, definition, "review")
-	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
+	reworkGroupID := testTransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           reworkGroupID,
@@ -923,7 +1026,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
+			ID:                testEdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",
@@ -969,6 +1072,8 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 type immediateContextCompletionFixture struct {
 	ctx       context.Context
 	store     *Store
+	binding   metadata.Binding
+	cfg       config.App
 	source    workflow.CurrentNode
 	sessionID runtimeids.SessionID
 }
@@ -995,6 +1100,8 @@ func newImmediateContextCompletionFixture(t *testing.T, contextMode workflow.Con
 	return immediateContextCompletionFixture{
 		ctx:       ctx,
 		store:     store,
+		binding:   binding,
+		cfg:       cfg,
 		source:    source,
 		sessionID: sessionID,
 	}
@@ -1017,7 +1124,7 @@ WHERE task_id = ?
   AND transition_branch_key IS NULL`,
 		sessionID.String(),
 		string(currentNode.TaskID),
-		string(currentNode.NodeID),
+		testGraphEntityBlob(t, string(currentNode.NodeID)),
 	); err != nil {
 		t.Fatalf("bind current node session: %v", err)
 	}

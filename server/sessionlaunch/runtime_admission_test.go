@@ -19,6 +19,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 type sessionLaunchRuntimeClient struct{}
@@ -87,6 +88,8 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 				PostprocessingMode: config.ShellPostprocessingModeNone,
 			},
 		},
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(workspace, workspace, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {
@@ -209,7 +212,7 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen session: %v", err)
 	}
-	if got := reopened.Meta().Continuation; got == nil || got.OpenAIBaseURL != "http://planning.example/v1" {
+	if got := reopened.Meta().Continuation; got == nil || got.OpenAIBaseURL == nil || *got.OpenAIBaseURL != "http://planning.example/v1" {
 		t.Fatalf("reopened continuation = %+v, want planning metadata", got)
 	}
 	eventLog, err := reopened.MaterializeEventLog()

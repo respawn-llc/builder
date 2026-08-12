@@ -2,12 +2,16 @@ package workflowrunner
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	"core/internal/testharness/workflowfixture"
+	"core/server/session"
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
+	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -44,6 +48,35 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	f, input := newMaterializedRoleSelectionStart(t)
 	input.ContextMode = workflow.ContextModeCompactAndContinueSession
 	input.EnteringEdge.ContextMode = workflow.ContextModeCompactAndContinueSession
+	store, err := session.Create(
+		filepath.Join(f.cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions"),
+		"sessions",
+		f.workspace,
+		sessioncontract.SessionCategoryMain,
+		f.starter.storeOptions...,
+	)
+	if err != nil {
+		t.Fatalf("create retained Session: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		AgentRole: textutil.Value("reviewer"),
+	}); err != nil {
+		t.Fatalf("set retained Session Agent: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist retained Session: %v", err)
+	}
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		AutoCompaction: textutil.Value(false),
+	}); err != nil {
+		t.Fatalf("disable retained Session Auto-compaction: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse retained Session ID: %v", err)
+	}
+	input.CurrentNode.SessionID = &sessionID
+	input.SourceSessionID = &sessionID
 	if input.ExecutionRoot == nil {
 		t.Fatal("current node start context omitted execution root")
 	}
@@ -68,6 +101,20 @@ func TestCurrentNodeStartUsesMaterializedSelectedRoleAtCompactionBoundary(t *tes
 	}
 	if !containsTool(plan.EnabledTools, toolspec.ToolAskQuestion) {
 		t.Fatalf("compact planned tools = %+v, want forced ask_question", plan.EnabledTools)
+	}
+	if !plan.AutoCompactionEnabled {
+		t.Fatal("compact planned Auto-compaction = false, want required true")
+	}
+	reopened, err := session.OpenByID(
+		filepath.Join(f.cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions"),
+		plan.Descriptor.SessionID().String(),
+		f.starter.storeOptions...,
+	)
+	if err != nil {
+		t.Fatalf("reopen admitted Workflow Session: %v", err)
+	}
+	if got := reopened.Meta().ChatSettings; got == nil || got.AutoCompaction == nil || !*got.AutoCompaction {
+		t.Fatalf("persisted Workflow Auto-compaction = %+v, want true", got)
 	}
 }
 
@@ -209,11 +256,11 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 	if err != nil {
 		t.Fatalf("CreateWorkflow: %v", err)
 	}
-	firstID := workflow.NodeID("node-first-" + created.ID.String())
-	secondID := workflow.NodeID("node-second-" + created.ID.String())
-	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	nextGroup := workflow.TransitionGroupID("group-next-" + created.ID.String())
-	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	firstID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	secondID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	nextGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		start := nodeByKindRunnerTest(t, definition, workflow.NodeKindStart)
 		done := nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal)
@@ -227,13 +274,13 @@ func createCurrentNodeRoleSelectionWorkflow(t *testing.T, store *workflowstore.S
 			workflowstore.TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: secondID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: firstID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "First."},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-next-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
+				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: nextGroup, Key: "next", TargetNodeID: secondID,
 				AssigneeSelection: workflow.AssigneeSelectionPreviousNode, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession,
 				PromptTemplate: "Second.", Parameters: []workflow.Parameter{{Key: "role", Purpose: workflow.ParameterPurposeTargetAssignee}},
 			},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID

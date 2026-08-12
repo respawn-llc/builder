@@ -17,7 +17,7 @@ const acquireCurrentNodeResumeWriteLock = `-- name: AcquireCurrentNodeResumeWrit
 UPDATE task_current_nodes
 SET scheduling_state = scheduling_state
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND (
       (transition_branch_key IS NULL AND ?3 IS NULL)
       OR transition_branch_key = ?3
@@ -182,7 +182,7 @@ const admitBranchCurrentNode = `-- name: AdmitBranchCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'admitted'
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND transition_branch_key = ?3
   AND scheduling_state = 'ready'
   AND NOT EXISTS (
@@ -213,7 +213,7 @@ const admitSerialCurrentNode = `-- name: AdmitSerialCurrentNode :execrows
 UPDATE task_current_nodes
 SET scheduling_state = 'admitted'
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND transition_branch_key IS NULL
   AND scheduling_state = 'ready'
   AND NOT EXISTS (
@@ -335,7 +335,7 @@ const bindSessionToBranchCurrentNode = `-- name: BindSessionToBranchCurrentNode 
 UPDATE task_current_nodes
 SET session_id = ?1
 WHERE task_id = ?2
-  AND node_id = ?3
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?3 AS TEXT))
   AND transition_branch_key = ?4
   AND (
       session_id = ?1
@@ -375,7 +375,7 @@ const bindSessionToSerialCurrentNode = `-- name: BindSessionToSerialCurrentNode 
 UPDATE task_current_nodes
 SET session_id = ?1
 WHERE task_id = ?2
-  AND node_id = ?3
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?3 AS TEXT))
   AND transition_branch_key IS NULL
   AND (
       session_id = ?1
@@ -503,15 +503,21 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = ?1
+    WHERE current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?1
+    WHERE CASE
+        WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+        THEN kent_graph_entity_id_blob_v1(
+            json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+        )
+        ELSE NULL
+    END = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
-func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
+func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, edgeID)
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countAllTaskEdgeReferences, 1)
@@ -524,15 +530,17 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.node_id = ?1
+    WHERE current_node.node_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
     SELECT approval.id
     FROM task_pending_approvals approval
-    WHERE approval.source_node_id = ?1
+    WHERE approval.source_node_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = ?1
+    WHERE kent_graph_entity_id_blob_v1(
+        json_extract(branch.target_snapshot_json, '$.node_id')
+    ) = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
@@ -783,15 +791,21 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = ?1
+    WHERE current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?1
+    WHERE CASE
+        WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+        THEN kent_graph_entity_id_blob_v1(
+            json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+        )
+        ELSE NULL
+    END = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
-func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
+func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countTaskEdgeReferences, edgeID)
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskEdgeReferences, 1)
@@ -802,13 +816,19 @@ func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID sql.NullSt
 const countTaskNodeReferences = `-- name: CountTaskNodeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
-    SELECT current_node.task_id FROM task_current_nodes current_node WHERE current_node.node_id = ?1
+    SELECT current_node.task_id
+    FROM task_current_nodes current_node
+    WHERE current_node.node_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
-    SELECT approval.id FROM task_pending_approvals approval WHERE approval.source_node_id = ?1
+    SELECT approval.id
+    FROM task_pending_approvals approval
+    WHERE approval.source_node_id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
-    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = ?1
+    WHERE kent_graph_entity_id_blob_v1(
+        json_extract(branch.target_snapshot_json, '$.node_id')
+    ) = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 )
 `
 
@@ -1016,7 +1036,7 @@ func (q *Queries) DeleteProjectWorkflowLinksByWorkflowID(ctx context.Context, wo
 const deleteSerialTaskCurrentNode = `-- name: DeleteSerialTaskCurrentNode :execrows
 DELETE FROM task_current_nodes
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND transition_branch_key IS NULL
 `
 
@@ -1107,7 +1127,7 @@ func (q *Queries) DeleteTaskCommentsByTask(ctx context.Context, taskID string) (
 const deleteTaskCurrentNode = `-- name: DeleteTaskCurrentNode :execrows
 DELETE FROM task_current_nodes
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND (
       (transition_branch_key IS NULL AND ?3 IS NULL)
       OR transition_branch_key = ?3
@@ -1256,7 +1276,7 @@ func (q *Queries) DeleteWorkflowByID(ctx context.Context, id runtimeids.Workflow
 
 const deleteWorkflowEdge = `-- name: DeleteWorkflowEdge :execrows
 DELETE FROM workflow_edges
-WHERE id = ?1
+WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
 func (q *Queries) DeleteWorkflowEdge(ctx context.Context, id string) (int64, error) {
@@ -1270,7 +1290,7 @@ func (q *Queries) DeleteWorkflowEdge(ctx context.Context, id string) (int64, err
 
 const deleteWorkflowNode = `-- name: DeleteWorkflowNode :execrows
 DELETE FROM workflow_nodes
-WHERE id = ?1
+WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
 func (q *Queries) DeleteWorkflowNode(ctx context.Context, id string) (int64, error) {
@@ -1284,7 +1304,7 @@ func (q *Queries) DeleteWorkflowNode(ctx context.Context, id string) (int64, err
 
 const deleteWorkflowNodeGroup = `-- name: DeleteWorkflowNodeGroup :execrows
 DELETE FROM workflow_node_groups
-WHERE id = ?1
+WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
   AND workflow_id = ?2
 `
 
@@ -1399,7 +1419,7 @@ func (q *Queries) DeleteWorkflowTasksByWorkflowID(ctx context.Context, workflowI
 
 const deleteWorkflowTransitionGroupByID = `-- name: DeleteWorkflowTransitionGroupByID :execrows
 DELETE FROM workflow_transition_groups
-WHERE id = ?1
+WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 `
 
 func (q *Queries) DeleteWorkflowTransitionGroupByID(ctx context.Context, id string) (int64, error) {
@@ -1511,13 +1531,13 @@ func (q *Queries) GetDefaultProjectWorkflowLink(ctx context.Context, projectID s
 const getLatestBranchTaskSessionAssociationForNode = `-- name: GetLatestBranchTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
-    association.node_id,
+    CAST(kent_graph_entity_id_text_v1(association.node_id) AS TEXT) AS node_id,
     association.transition_branch_key,
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
 JOIN sessions session ON session.id = association.session_id
 WHERE session.task_id = ?1
-  AND association.node_id = ?2
+  AND association.node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND association.transition_branch_key = ?3
 ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
 LIMIT 1
@@ -1529,9 +1549,16 @@ type GetLatestBranchTaskSessionAssociationForNodeParams struct {
 	TransitionBranchKey sql.NullString
 }
 
-func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Context, arg GetLatestBranchTaskSessionAssociationForNodeParams) (SessionWorkflowNodeAssociation, error) {
+type GetLatestBranchTaskSessionAssociationForNodeRow struct {
+	SessionID           string
+	NodeID              string
+	TransitionBranchKey sql.NullString
+	AssociatedAtUnixMs  int64
+}
+
+func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Context, arg GetLatestBranchTaskSessionAssociationForNodeParams) (GetLatestBranchTaskSessionAssociationForNodeRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestBranchTaskSessionAssociationForNode, arg.TaskID, arg.NodeID, arg.TransitionBranchKey)
-	var i SessionWorkflowNodeAssociation
+	var i GetLatestBranchTaskSessionAssociationForNodeRow
 	err := recordQueryError(ctx, row.Scan(
 		&i.SessionID,
 		&i.NodeID,
@@ -1545,12 +1572,12 @@ func (q *Queries) GetLatestBranchTaskSessionAssociationForNode(ctx context.Conte
 const getLatestSerialTaskSessionAssociationForNode = `-- name: GetLatestSerialTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
-    association.node_id,
+    CAST(kent_graph_entity_id_text_v1(association.node_id) AS TEXT) AS node_id,
     association.associated_at_unix_ms
 FROM session_workflow_node_associations association
 JOIN sessions session ON session.id = association.session_id
 WHERE session.task_id = ?1
-  AND association.node_id = ?2
+  AND association.node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND association.transition_branch_key IS NULL
 ORDER BY association.associated_at_unix_ms DESC, association.session_id DESC
 LIMIT 1
@@ -2128,7 +2155,7 @@ const getTaskPendingApproval = `-- name: GetTaskPendingApproval :one
 SELECT
     id,
     source_task_id,
-    source_node_id,
+    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -2139,9 +2166,21 @@ FROM task_pending_approvals
 WHERE id = ?1
 `
 
-func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPendingApproval, error) {
+type GetTaskPendingApprovalRow struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJson    string
+	MaterializedValuesJson    string
+	CreatedAtUnixMs           int64
+}
+
+func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (GetTaskPendingApprovalRow, error) {
 	row := q.db.QueryRowContext(ctx, getTaskPendingApproval, id)
-	var i TaskPendingApproval
+	var i GetTaskPendingApprovalRow
 	err := recordQueryError(ctx, row.Scan(
 		&i.ID,
 		&i.SourceTaskID,
@@ -2328,7 +2367,7 @@ SELECT
         FROM task_current_nodes current_node
         JOIN task_records task ON task.id = current_node.task_id
         WHERE task.workflow_id = ?1
-          AND current_node.entered_by_edge_id = ?2
+          AND current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
           AND (
               current_node.scheduling_state IS NULL
               OR current_node.scheduling_state != 'interrupted'
@@ -2339,7 +2378,7 @@ SELECT
         FROM task_current_nodes current_node
         JOIN task_records task ON task.id = current_node.task_id
         WHERE task.workflow_id = ?1
-          AND current_node.entered_by_edge_id = ?2
+          AND current_node.entered_by_edge_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
           AND current_node.transition_branch_key IS NOT NULL
     ) AS unresolved_parallel_branch_count,
     (
@@ -2348,13 +2387,19 @@ SELECT
         JOIN task_records task ON task.id = approval.source_task_id
         JOIN task_pending_approval_branches branch ON branch.approval_id = approval.id
         WHERE task.workflow_id = ?1
-          AND json_extract(branch.target_snapshot_json, '$.entered_by_edge_id') = ?2
+          AND CASE
+              WHEN json_type(branch.target_snapshot_json, '$.entered_by_edge_id') = 'text'
+              THEN kent_graph_entity_id_blob_v1(
+                  json_extract(branch.target_snapshot_json, '$.entered_by_edge_id')
+              )
+              ELSE NULL
+          END = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
     ) AS pending_approval_count
 `
 
 type GetWorkflowEdgeParameterEditPolicyImpactParams struct {
 	WorkflowID runtimeids.WorkflowID
-	EdgeID     sql.NullString
+	EdgeID     string
 }
 
 type GetWorkflowEdgeParameterEditPolicyImpactRow struct {
@@ -2404,7 +2449,7 @@ func (q *Queries) GetWorkflowGraphActiveWorkPolicyImpact(ctx context.Context, wo
 
 const getWorkflowNode = `-- name: GetWorkflowNode :one
 SELECT
-    id,
+    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
     workflow_id,
     node_key,
     kind,
@@ -2413,10 +2458,13 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    group_id,
+    CASE
+        WHEN group_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(group_id)
+    END AS group_id,
     sort_order
 FROM workflow_nodes
-WHERE id = ?1
+WHERE id = kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT))
 LIMIT 1
 `
 
@@ -2430,7 +2478,7 @@ type GetWorkflowNodeRow struct {
 	CompletionMode         string
 	ScriptPath             sql.NullString
 	JoinInputProvidersJson string
-	GroupID                sql.NullString
+	GroupID                interface{}
 	SortOrder              int64
 }
 
@@ -2687,7 +2735,7 @@ SELECT EXISTS (
     SELECT 1
     FROM task_pending_approvals
     WHERE source_task_id = ?1
-      AND source_node_id = ?2
+      AND source_node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
       AND (
           (source_transition_branch_key IS NULL AND ?3 IS NULL)
           OR source_transition_branch_key = ?3
@@ -3040,9 +3088,12 @@ INSERT INTO task_current_nodes (
     assignee_origin
 ) VALUES (
     ?1,
-    ?2,
+    kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT)),
     ?3,
-    ?4,
+    CASE
+        WHEN CAST(?4 AS TEXT) IS NULL THEN NULL
+        ELSE kent_graph_entity_id_blob_v1(CAST(?4 AS TEXT))
+    END,
     ?5,
     ?6,
     ?7,
@@ -3142,7 +3193,7 @@ INSERT INTO task_pending_approvals (
 ) VALUES (
     ?1,
     ?2,
-    ?3,
+    kent_graph_entity_id_blob_v1(CAST(?3 AS TEXT)),
     ?4,
     ?5,
     ?6,
@@ -3281,7 +3332,7 @@ INSERT INTO workflow_nodes (
     group_id,
     sort_order
 ) VALUES (
-    ?1,
+    kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT)),
     ?2,
     ?3,
     ?4,
@@ -3290,7 +3341,10 @@ INSERT INTO workflow_nodes (
     ?7,
     ?8,
     ?9,
-    ?10,
+    CASE
+        WHEN CAST(?10 AS TEXT) IS NULL THEN NULL
+        ELSE kent_graph_entity_id_blob_v1(CAST(?10 AS TEXT))
+    END,
     ?11
 )
 `
@@ -3380,7 +3434,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = ?2,
     interrupted_at_unix_ms = ?3
 WHERE task_id = ?4
-  AND node_id = ?5
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?5 AS TEXT))
   AND transition_branch_key = ?6
   AND scheduling_state = 'admitted'
 `
@@ -3418,7 +3472,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = ?2,
     interrupted_at_unix_ms = ?3
 WHERE task_id = ?4
-  AND node_id = ?5
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?5 AS TEXT))
   AND transition_branch_key = ?6
   AND scheduling_state IN ('ready', 'admitted')
 `
@@ -3456,7 +3510,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = ?2,
     interrupted_at_unix_ms = ?3
 WHERE task_id = ?4
-  AND node_id = ?5
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?5 AS TEXT))
   AND transition_branch_key IS NULL
   AND scheduling_state = 'admitted'
 `
@@ -3492,7 +3546,7 @@ SET scheduling_state = 'interrupted',
     interruption_detail_json = ?2,
     interrupted_at_unix_ms = ?3
 WHERE task_id = ?4
-  AND node_id = ?5
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?5 AS TEXT))
   AND transition_branch_key IS NULL
   AND scheduling_state IN ('ready', 'admitted')
 `
@@ -3521,6 +3575,77 @@ func (q *Queries) InterruptSerialCurrentNode(ctx context.Context, arg InterruptS
 	return result.RowsAffected()
 }
 
+const listActiveWorkflowTaskSessions = `-- name: ListActiveWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+
+FROM json_each(CAST(?1 AS TEXT)) active
+CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
+    ON session.id = CAST(active.value AS TEXT)
+
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?2
+`
+
+type ListActiveWorkflowTaskSessionsParams struct {
+	SessionIdsJson string
+	TaskID         sql.NullString
+}
+
+type ListActiveWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) ([]ListActiveWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.SessionIdsJson, arg.TaskID)
+	err = recordQueryError(ctx, err, listActiveWorkflowTaskSessions, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListActiveWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listActiveWorkflowTaskSessions, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listBoardColumnTaskCounts = `-- name: ListBoardColumnTaskCounts :many
 WITH
 label_filter_args AS (
@@ -3540,7 +3665,7 @@ effective_current_nodes AS (
       AND t.workflow_id = ?7
 )
 SELECT
-    node_id,
+    CAST(kent_graph_entity_id_text_v1(node_id) AS TEXT) AS node_id,
     CAST(COUNT(DISTINCT task_id) AS INTEGER) AS task_count
 FROM effective_current_nodes
 JOIN label_filter_args
@@ -3785,7 +3910,7 @@ WITH board_node_tasks AS (
               SELECT 1
               FROM task_current_nodes current_node
               WHERE current_node.task_id = t.id
-                AND current_node.node_id = ?8
+                AND current_node.node_id = kent_graph_entity_id_blob_v1(CAST(?8 AS TEXT))
           )
       )
 ),
@@ -3980,6 +4105,92 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 		return nil, err
 	}
 	if err := recordQueryError(ctx, rows.Err(), listBoardNodeTasks, 12); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIdleWorkflowTaskSessions = `-- name: ListIdleWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+
+FROM sessions session INDEXED BY sessions_task_activity_idx
+
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(?2 AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT ?4
+OFFSET ?3
+`
+
+type ListIdleWorkflowTaskSessionsParams struct {
+	TaskID                 sql.NullString
+	ExcludedSessionIdsJson string
+	PageOffset             int64
+	PageLimit              int64
+}
+
+type ListIdleWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdleWorkflowTaskSessionsParams) ([]ListIdleWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIdleWorkflowTaskSessions,
+		arg.TaskID,
+		arg.ExcludedSessionIdsJson,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	err = recordQueryError(ctx, err, listIdleWorkflowTaskSessions, 4)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIdleWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListIdleWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listIdleWorkflowTaskSessions, 4); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listIdleWorkflowTaskSessions, 4); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listIdleWorkflowTaskSessions, 4); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -5212,9 +5423,12 @@ func (q *Queries) ListTaskCommentsByIDs(ctx context.Context, ids []string) ([]Ta
 const listTaskCurrentNodes = `-- name: ListTaskCurrentNodes :many
 SELECT
     current_node.task_id,
-    current_node.node_id,
+    CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
     current_node.transition_branch_key,
-    current_node.entered_by_edge_id,
+    CASE
+        WHEN current_node.entered_by_edge_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(current_node.entered_by_edge_id)
+    END AS entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
@@ -5238,7 +5452,7 @@ type ListTaskCurrentNodesRow struct {
 	TaskID                 string
 	NodeID                 string
 	TransitionBranchKey    sql.NullString
-	EnteredByEdgeID        sql.NullString
+	EnteredByEdgeID        interface{}
 	CurrentInputValuesJson string
 	PriorNodeValuesJson    string
 	SessionID              sql.NullString
@@ -5295,9 +5509,12 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 const listTaskCurrentNodesByTasks = `-- name: ListTaskCurrentNodesByTasks :many
 SELECT
     current_node.task_id,
-    current_node.node_id,
+    CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
     current_node.transition_branch_key,
-    current_node.entered_by_edge_id,
+    CASE
+        WHEN current_node.entered_by_edge_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(current_node.entered_by_edge_id)
+    END AS entered_by_edge_id,
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
@@ -5322,7 +5539,7 @@ type ListTaskCurrentNodesByTasksRow struct {
 	TaskID                 string
 	NodeID                 string
 	TransitionBranchKey    sql.NullString
-	EnteredByEdgeID        sql.NullString
+	EnteredByEdgeID        interface{}
 	CurrentInputValuesJson string
 	PriorNodeValuesJson    string
 	SessionID              sql.NullString
@@ -5638,7 +5855,7 @@ const listTaskPendingApprovals = `-- name: ListTaskPendingApprovals :many
 SELECT
     id,
     source_task_id,
-    source_node_id,
+    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -5650,16 +5867,28 @@ WHERE source_task_id = ?1
 ORDER BY created_at_unix_ms, id
 `
 
-func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) ([]TaskPendingApproval, error) {
+type ListTaskPendingApprovalsRow struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJson    string
+	MaterializedValuesJson    string
+	CreatedAtUnixMs           int64
+}
+
+func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) ([]ListTaskPendingApprovalsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovals, taskID)
 	err = recordQueryError(ctx, err, listTaskPendingApprovals, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskPendingApproval
+	var items []ListTaskPendingApprovalsRow
 	for rows.Next() {
-		var i TaskPendingApproval
+		var i ListTaskPendingApprovalsRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.SourceTaskID,
@@ -5688,7 +5917,7 @@ const listTaskPendingApprovalsByTasks = `-- name: ListTaskPendingApprovalsByTask
 SELECT
     id,
     source_task_id,
-    source_node_id,
+    CAST(kent_graph_entity_id_text_v1(source_node_id) AS TEXT) AS source_node_id,
     source_transition_branch_key,
     source_session_id,
     workflow_version,
@@ -5703,16 +5932,28 @@ WHERE source_task_id IN (
 ORDER BY source_task_id, created_at_unix_ms, id
 `
 
-func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJson interface{}) ([]TaskPendingApproval, error) {
+type ListTaskPendingApprovalsByTasksRow struct {
+	ID                        string
+	SourceTaskID              string
+	SourceNodeID              string
+	SourceTransitionBranchKey sql.NullString
+	SourceSessionID           sql.NullString
+	WorkflowVersion           int64
+	TransitionSnapshotJson    string
+	MaterializedValuesJson    string
+	CreatedAtUnixMs           int64
+}
+
+func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJson interface{}) ([]ListTaskPendingApprovalsByTasksRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTaskPendingApprovalsByTasks, taskIdsJson)
 	err = recordQueryError(ctx, err, listTaskPendingApprovalsByTasks, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []TaskPendingApproval
+	var items []ListTaskPendingApprovalsByTasksRow
 	for rows.Next() {
-		var i TaskPendingApproval
+		var i ListTaskPendingApprovalsByTasksRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.SourceTaskID,
@@ -6099,7 +6340,7 @@ WITH durable_attention (
         'interrupted' AS kind,
         CAST('interrupted:' || json_object(
             'task_id', current_node.task_id,
-            'node_id', current_node.node_id,
+            'node_id', CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT),
             'transition_branch_key', current_node.transition_branch_key
         ) AS TEXT) AS id,
         task.project_id,
@@ -6108,7 +6349,7 @@ WITH durable_attention (
         task.short_id,
         task.title,
         CAST(NULL AS TEXT) AS approval_id,
-        CAST(current_node.node_id AS TEXT) AS node_id,
+        CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT) AS node_id,
         CAST(current_node.transition_branch_key AS TEXT) AS transition_branch_key,
         current_node.session_id,
         CAST(current_node.interruption_reason AS TEXT) AS interruption_reason,
@@ -6130,7 +6371,7 @@ WITH durable_attention (
               AND (
                   'interrupted:' || json_object(
                       'task_id', current_node.task_id,
-                      'node_id', current_node.node_id,
+                      'node_id', CAST(kent_graph_entity_id_text_v1(current_node.node_id) AS TEXT),
                       'transition_branch_key', current_node.transition_branch_key
                   )
               ) < ?5
@@ -6236,11 +6477,11 @@ func (q *Queries) ListWorkflowDurableAttentionCandidates(ctx context.Context, ar
 
 const listWorkflowEdges = `-- name: ListWorkflowEdges :many
 SELECT
-    e.id,
+    CAST(kent_graph_entity_id_text_v1(e.id) AS TEXT) AS id,
     source.workflow_id AS workflow_id,
-    e.transition_group_id,
+    CAST(kent_graph_entity_id_text_v1(e.transition_group_id) AS TEXT) AS transition_group_id,
     e.edge_key,
-    e.target_node_id,
+    CAST(kent_graph_entity_id_text_v1(e.target_node_id) AS TEXT) AS target_node_id,
     e.assignee_selection,
     e.thinking_selection,
     e.requires_approval,
@@ -6321,7 +6562,7 @@ func (q *Queries) ListWorkflowEdges(ctx context.Context, workflowID runtimeids.W
 
 const listWorkflowNodeGroups = `-- name: ListWorkflowNodeGroups :many
 SELECT
-    id,
+    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
     workflow_id,
     group_key,
     display_name,
@@ -6331,16 +6572,24 @@ WHERE workflow_id = ?1
 ORDER BY sort_order ASC, rowid ASC
 `
 
-func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtimeids.WorkflowID) ([]WorkflowNodeGroup, error) {
+type ListWorkflowNodeGroupsRow struct {
+	ID          string
+	WorkflowID  runtimeids.WorkflowID
+	GroupKey    string
+	DisplayName string
+	SortOrder   int64
+}
+
+func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtimeids.WorkflowID) ([]ListWorkflowNodeGroupsRow, error) {
 	rows, err := q.db.QueryContext(ctx, listWorkflowNodeGroups, workflowID)
 	err = recordQueryError(ctx, err, listWorkflowNodeGroups, 1)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []WorkflowNodeGroup
+	var items []ListWorkflowNodeGroupsRow
 	for rows.Next() {
-		var i WorkflowNodeGroup
+		var i ListWorkflowNodeGroupsRow
 		if err := recordQueryError(ctx, rows.Scan(
 			&i.ID,
 			&i.WorkflowID,
@@ -6363,7 +6612,7 @@ func (q *Queries) ListWorkflowNodeGroups(ctx context.Context, workflowID runtime
 
 const listWorkflowNodes = `-- name: ListWorkflowNodes :many
 SELECT
-    id,
+    CAST(kent_graph_entity_id_text_v1(id) AS TEXT) AS id,
     workflow_id,
     node_key,
     kind,
@@ -6372,7 +6621,10 @@ SELECT
     completion_mode,
     script_path,
     join_input_providers_json,
-    group_id,
+    CASE
+        WHEN group_id IS NULL THEN NULL
+        ELSE kent_graph_entity_id_text_v1(group_id)
+    END AS group_id,
     sort_order
 FROM workflow_nodes
 WHERE workflow_id = ?1
@@ -6389,7 +6641,7 @@ type ListWorkflowNodesRow struct {
 	CompletionMode         string
 	ScriptPath             sql.NullString
 	JoinInputProvidersJson string
-	GroupID                sql.NullString
+	GroupID                interface{}
 	SortOrder              int64
 }
 
@@ -6746,7 +6998,9 @@ args AS (
 ),
 visible_columns AS (
     SELECT
-        CAST(json_extract(value, '$.node_id') AS TEXT) AS node_id,
+        kent_graph_entity_id_blob_v1(
+            CAST(json_extract(value, '$.node_id') AS TEXT)
+        ) AS node_id,
         CAST(json_extract(value, '$.node_key') AS TEXT) AS node_key,
         CAST(json_extract(value, '$.node_kind') AS TEXT) AS node_kind,
         CAST(json_extract(value, '$.status_order') AS INTEGER) AS column_rank
@@ -7518,9 +7772,9 @@ func (q *Queries) ListWorkflowTaskStatusRecordsByTasks(ctx context.Context, task
 
 const listWorkflowTransitionGroups = `-- name: ListWorkflowTransitionGroups :many
 SELECT
-    tg.id,
+    CAST(kent_graph_entity_id_text_v1(tg.id) AS TEXT) AS id,
     source.workflow_id AS workflow_id,
-    tg.source_node_id,
+    CAST(kent_graph_entity_id_text_v1(tg.source_node_id) AS TEXT) AS source_node_id,
     tg.transition_id,
     tg.display_name,
     tg.description,
@@ -7947,7 +8201,10 @@ WHERE scheduling_state IN ('ready', 'admitted')
             OR approval.source_transition_branch_key = task_current_nodes.transition_branch_key
         )
   )
-RETURNING task_id, node_id, transition_branch_key
+RETURNING
+    task_id,
+    CAST(kent_graph_entity_id_text_v1(node_id) AS TEXT) AS node_id,
+    transition_branch_key
 `
 
 type RecoverExecutableCurrentNodesParams struct {
@@ -7958,7 +8215,7 @@ type RecoverExecutableCurrentNodesParams struct {
 
 type RecoverExecutableCurrentNodesRow struct {
 	TaskID              string
-	NodeID              string
+	Column2             string
 	TransitionBranchKey sql.NullString
 }
 
@@ -7972,7 +8229,7 @@ func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg Recover
 	var items []RecoverExecutableCurrentNodesRow
 	for rows.Next() {
 		var i RecoverExecutableCurrentNodesRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.NodeID, &i.TransitionBranchKey), recoverExecutableCurrentNodes, 3); err != nil {
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.Column2, &i.TransitionBranchKey), recoverExecutableCurrentNodes, 3); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -8053,6 +8310,45 @@ func (q *Queries) ReplacePendingInitialManagedBranchName(ctx context.Context, ar
 	return result.RowsAffected()
 }
 
+const replaceUserInterruptionWithAssignmentFailure = `-- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
+UPDATE task_current_nodes
+SET interruption_reason = 'workflow_runtime_start_failed',
+    interruption_detail_json = ?1,
+    interrupted_at_unix_ms = ?2
+WHERE task_id = ?3
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?4 AS TEXT))
+  AND (
+      (?5 IS NULL AND transition_branch_key IS NULL)
+      OR transition_branch_key = ?5
+  )
+  AND scheduling_state = 'interrupted'
+  AND interruption_reason = 'user_interrupt'
+`
+
+type ReplaceUserInterruptionWithAssignmentFailureParams struct {
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    interface{}
+}
+
+func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Context, arg ReplaceUserInterruptionWithAssignmentFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUserInterruptionWithAssignmentFailure,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, replaceUserInterruptionWithAssignmentFailure, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const replaceWorkspaceChatDraft = `-- name: ReplaceWorkspaceChatDraft :execrows
 UPDATE workspaces
 SET chat_draft_json = ?1
@@ -8080,7 +8376,7 @@ SET scheduling_state = 'ready',
     interruption_detail_json = NULL,
     interrupted_at_unix_ms = NULL
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND transition_branch_key = ?3
   AND scheduling_state = 'interrupted'
   AND NOT EXISTS (
@@ -8114,7 +8410,7 @@ SET scheduling_state = 'ready',
     interruption_detail_json = NULL,
     interrupted_at_unix_ms = NULL
 WHERE task_id = ?1
-  AND node_id = ?2
+  AND node_id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
   AND transition_branch_key IS NULL
   AND scheduling_state = 'interrupted'
   AND NOT EXISTS (
@@ -8747,7 +9043,7 @@ INSERT INTO session_workflow_node_associations (
     associated_at_unix_ms
 ) VALUES (
     ?1,
-    ?2,
+    kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT)),
     ?3,
     ?4
 )
@@ -8823,7 +9119,7 @@ INSERT INTO session_workflow_node_associations (
     associated_at_unix_ms
 ) VALUES (
     ?1,
-    ?2,
+    kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT)),
     NULL,
     ?3
 )
@@ -8965,10 +9261,10 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 const upsertWorkflowEdge = `-- name: UpsertWorkflowEdge :execrows
 INSERT INTO workflow_edges (id, transition_group_id, edge_key, target_node_id, assignee_selection, thinking_selection, requires_approval, context_mode, context_source_kind, context_source_node_key, prompt_template, parameters_json, input_bindings_json, output_requirements_json, sort_order)
 SELECT
-    ?1,
-    ?2,
+    kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT)),
+    kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT)),
     ?3,
-    ?4,
+    kent_graph_entity_id_blob_v1(CAST(?4 AS TEXT)),
     ?5,
     ?6,
     ?7,
@@ -8984,8 +9280,9 @@ WHERE EXISTS (
     SELECT 1
     FROM workflow_transition_groups tg
     JOIN workflow_nodes source ON source.id = tg.source_node_id
-    JOIN workflow_nodes target ON target.id = ?4
-    WHERE tg.id = ?2
+    JOIN workflow_nodes target
+        ON target.id = kent_graph_entity_id_blob_v1(CAST(?4 AS TEXT))
+    WHERE tg.id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
       AND source.workflow_id = ?16
       AND target.workflow_id = ?16
 )
@@ -9067,7 +9364,7 @@ func (q *Queries) UpsertWorkflowEdge(ctx context.Context, arg UpsertWorkflowEdge
 const upsertWorkflowNode = `-- name: UpsertWorkflowNode :execrows
 INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode, script_path, join_input_providers_json, group_id, sort_order)
 VALUES (
-    ?1,
+    kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT)),
     ?2,
     ?3,
     ?4,
@@ -9076,7 +9373,10 @@ VALUES (
     ?7,
     ?8,
     ?9,
-    ?10,
+    CASE
+        WHEN CAST(?10 AS TEXT) IS NULL THEN NULL
+        ELSE kent_graph_entity_id_blob_v1(CAST(?10 AS TEXT))
+    END,
     ?11
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -9131,7 +9431,7 @@ func (q *Queries) UpsertWorkflowNode(ctx context.Context, arg UpsertWorkflowNode
 const upsertWorkflowNodeGroup = `-- name: UpsertWorkflowNodeGroup :execrows
 INSERT INTO workflow_node_groups (id, workflow_id, group_key, display_name, sort_order)
 VALUES (
-    ?1,
+    kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT)),
     ?2,
     ?3,
     ?4,
@@ -9171,8 +9471,8 @@ func (q *Queries) UpsertWorkflowNodeGroup(ctx context.Context, arg UpsertWorkflo
 const upsertWorkflowTransitionGroup = `-- name: UpsertWorkflowTransitionGroup :execrows
 INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name, description, sort_order)
 SELECT
-    ?1,
-    ?2,
+    kent_graph_entity_id_blob_v1(CAST(?1 AS TEXT)),
+    kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT)),
     ?3,
     ?4,
     ?5,
@@ -9180,7 +9480,7 @@ SELECT
 WHERE EXISTS (
     SELECT 1
     FROM workflow_nodes source
-    WHERE source.id = ?2
+    WHERE source.id = kent_graph_entity_id_blob_v1(CAST(?2 AS TEXT))
       AND source.workflow_id = ?7
 )
 ON CONFLICT(id) DO UPDATE SET

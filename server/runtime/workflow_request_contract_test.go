@@ -25,8 +25,13 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		mustCreateTestSession(t),
 		&fakeClient{},
 		&workflowruntime.CurrentNodeExecutionConfig{
-			ScopeID:        scopeID,
-			Contract:       workflowruntime.CompletionContract{},
+			ScopeID: scopeID,
+			Contract: workflowruntime.CompletionContract{
+				Transitions: []workflowruntime.CompletionTransition{{
+					ID:         "done",
+					Parameters: []workflow.Parameter{{Key: "artifact"}},
+				}},
+			},
 			CompletionMode: workflowruntime.CompletionModeTool,
 			Controller:     &externallyCompletedWorkflowController{},
 		},
@@ -44,13 +49,13 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		t.Fatalf("workflow tool choice mode = %q, want required", request.ToolChoiceMode)
 	}
 
-	advertised := make(map[toolspec.ID]struct{}, len(request.Tools))
+	advertised := make(map[toolspec.ID]llm.Tool, len(request.Tools))
 	for _, tool := range request.Tools {
 		id, ok := toolspec.ParseID(tool.Name)
 		if !ok {
 			t.Fatalf("workflow request advertised unknown tool: %+v", tool)
 		}
-		advertised[id] = struct{}{}
+		advertised[id] = tool
 	}
 	if len(advertised) != 2 {
 		t.Fatalf("workflow request advertised tools = %v, want ask_question and complete_node", request.Tools)
@@ -59,6 +64,18 @@ func TestWorkflowToolModeAdvertisesCompleteNodeWithRequiredChoice(t *testing.T) 
 		if _, ok := advertised[id]; !ok {
 			t.Fatalf("workflow request omitted tool %q: %+v", id, request.Tools)
 		}
+	}
+	var completionSchema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(advertised[toolspec.ToolCompleteNode].Schema.JSON(), &completionSchema); err != nil {
+		t.Fatalf("decode complete_node schema: %v", err)
+	}
+	if _, ok := completionSchema.Properties["artifact"]; !ok {
+		t.Fatalf(
+			"complete_node schema omitted active contract parameter: %s",
+			advertised[toolspec.ToolCompleteNode].Schema.JSON(),
+		)
 	}
 }
 
@@ -173,7 +190,7 @@ func TestShellWorkflowRejectsRequiredChoiceWithoutEffectiveTools(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model: "gpt-5",
 			CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{
@@ -276,7 +293,7 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: sideEffect,
 		}),
@@ -377,7 +394,7 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 	if len(client.calls) != 1 {
 		t.Fatalf("structured workflow provider calls = %d, want one", len(client.calls))
 	}
-	if request := client.calls[0]; request.StructuredOutput == nil || !request.StructuredOutput.Strict {
+	if request := client.calls[0]; request.StructuredOutput == nil || !request.StructuredOutput.Schema.Strict() {
 		t.Fatalf("structured workflow request output = %+v, want strict structured output", request.StructuredOutput)
 	}
 	if got := controller.completions.Load(); got != 1 {
@@ -474,7 +491,10 @@ func TestRequestToolsRespectLockedVisionCapability(t *testing.T) {
 				t,
 				store,
 				&fakeClient{},
-				tools.NewRegistry(),
+				newTestToolRegistry(t, tools.HandlerRegistration{
+					ID:      toolspec.ToolViewImage,
+					Handler: fakeTool{name: toolspec.ToolViewImage},
+				}),
 				Config{
 					Model:             test.model,
 					ModelCapabilities: test.capabilities,
@@ -535,7 +555,7 @@ func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
 		t,
 		store,
 		&fakeClient{caps: activeCapabilities},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: fakeTool{name: toolspec.ToolPatch},
 		}),
@@ -560,7 +580,7 @@ func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
 	if patchTool.Custom != nil {
 		t.Fatalf("patch tool custom format = %+v, want schema format", patchTool.Custom)
 	}
-	if len(patchTool.Schema) == 0 {
+	if !patchTool.Schema.Prepared() {
 		t.Fatalf("patch tool schema is empty")
 	}
 }

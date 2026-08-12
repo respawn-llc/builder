@@ -44,6 +44,10 @@ type WorkflowActivityReadModel interface {
 	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
 }
 
+type WorkflowTaskSessionReadModel interface {
+	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error)
+}
+
 type WorkflowAttentionReadModel interface {
 	List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
 	ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error)
@@ -56,6 +60,7 @@ type ReadModels struct {
 	TaskSearch       WorkflowTaskSearchReadModel
 	TaskDetail       WorkflowTaskDetailReadModel
 	TaskDependencies WorkflowTaskDependencyReadModel
+	TaskSessions     WorkflowTaskSessionReadModel
 	Activity         WorkflowActivityReadModel
 	Attention        WorkflowAttentionReadModel
 	Approvals        apicontract.ApprovalViewService
@@ -75,6 +80,8 @@ func (r ReadModels) validate() error {
 		return errors.New("workflow task detail read model is required")
 	case r.TaskDependencies == nil:
 		return errors.New("workflow task dependency read model is required")
+	case r.TaskSessions == nil:
+		return errors.New("workflow Task Session read model is required")
 	case r.Activity == nil:
 		return errors.New("workflow activity read model is required")
 	case r.Attention == nil:

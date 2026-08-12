@@ -404,7 +404,7 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 	}
 	if len(r.steps) != 0 {
 		parent := r.steps[len(r.steps)-1]
-		if len(r.steps) != 1 || !allowsBoundaryCompactionStep(parent.activeKind, snapshot.ActiveKind) {
+		if len(r.steps) != 1 || !allowsBoundaryNestedStep(parent.activeKind, snapshot.ActiveKind) {
 			r.mu.Unlock()
 			panic(fmt.Sprintf(
 				"agent resource %s generation %d admitted overlapping engine steps: active step %q kind %q, incoming step %q kind %q",
@@ -439,7 +439,7 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	}
 	completing := r.steps[len(r.steps)-1]
 	if completing.stepID != snapshot.StepID || completing.activeKind != snapshot.ActiveKind {
-		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryCompactionStep(completing.activeKind, snapshot.ActiveKind) {
+		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryNestedStep(completing.activeKind, snapshot.ActiveKind) {
 			r.mu.Unlock()
 			return nil
 		}
@@ -473,8 +473,10 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 	return publishErr
 }
 
-func allowsBoundaryCompactionStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
-	if nested != runtime.ActiveKindCompaction {
+func allowsBoundaryNestedStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
+	switch nested {
+	case runtime.ActiveKindCompaction, runtime.ActiveKindRuntimeMaintenance:
+	default:
 		return false
 	}
 	switch parent {
@@ -494,6 +496,14 @@ func (r *agentResource) rejectsNewStepLocked() bool {
 }
 
 func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest) (RuntimeAttachment, error) {
+	return a.openRuntime(ctx, request, nil)
+}
+
+func (a *Authority) openRuntime(
+	ctx context.Context,
+	request RuntimeOpenRequest,
+	resolvePlan func(context.Context, *session.Store) (*AgentRuntimePlan, error),
+) (RuntimeAttachment, error) {
 	if a == nil {
 		return RuntimeAttachment{}, errors.New("session runtime authority is required")
 	}
@@ -520,7 +530,21 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
-	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID)
+	var admittedStore *runtimeStoreAdmission
+	if resolvePlan != nil {
+		admittedStore, err = a.materializeRuntimeStore(descriptor)
+		if err != nil {
+			return RuntimeAttachment{}, err
+		}
+		request.Runtime, err = resolvePlan(ctx, admittedStore.store)
+		if err != nil {
+			return RuntimeAttachment{}, err
+		}
+		if request.Runtime == nil {
+			return RuntimeAttachment{}, errors.New("resolved runtime plan is required")
+		}
+	}
+	resource, err := a.openResource(ctx, descriptor, request.Runtime, &ownerID, admittedStore)
 	if err != nil {
 		return RuntimeAttachment{}, err
 	}
@@ -1120,7 +1144,7 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 		}
 		return resource, false, nil
 	case OpenAgentResource:
-		resource, err := a.openResource(ctx, descriptor, plan, nil)
+		resource, err := a.openResource(ctx, descriptor, plan, nil, nil)
 		return resource, true, err
 	case ReplaceAgentResource:
 		resource, err := a.replaceResource(ctx, descriptor, plan)
@@ -1130,7 +1154,13 @@ func (a *Authority) selectResource(ctx context.Context, descriptor session.Sessi
 	}
 }
 
-func (a *Authority) openResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan, ownerID *string) (*agentResource, error) {
+func (a *Authority) openResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	ownerID *string,
+	admittedStore *runtimeStoreAdmission,
+) (*agentResource, error) {
 	sessionID := descriptor.SessionID()
 	a.mu.Lock()
 	if a.closed {
@@ -1142,7 +1172,7 @@ func (a *Authority) openResource(ctx context.Context, descriptor session.Session
 	created := false
 	if resource == nil {
 		var err error
-		resource, err = a.buildAgentResource(ctx, descriptor, plan)
+		resource, err = a.buildAgentResource(ctx, descriptor, plan, admittedStore)
 		if err != nil {
 			return nil, err
 		}
@@ -1200,7 +1230,7 @@ func (a *Authority) replaceResource(ctx context.Context, descriptor session.Sess
 			return nil, err
 		}
 	}
-	return a.openResource(ctx, descriptor, plan, nil)
+	return a.openResource(ctx, descriptor, plan, nil, nil)
 }
 
 func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *agentResource) error {

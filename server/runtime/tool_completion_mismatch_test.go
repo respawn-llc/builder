@@ -19,7 +19,7 @@ import (
 func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		Debug: true,
 	})
@@ -59,7 +59,7 @@ func TestToolCompletionDeletionMismatchPanicsBeforePersistenceInDebug(t *testing
 func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 	})
 	result := mismatchedDeletionCompletion(t, engine)
@@ -70,7 +70,7 @@ func TestToolCompletionDeletionMismatchReleaseFallbackPersistsRecovery(t *testin
 	assertDeletionMismatchFallback(t, engine, store, result)
 
 	reopened := mustOpenTestSession(t, store.Dir())
-	restored := mustNewTestEngine(t, reopened, &fakeClient{}, tools.NewRegistry(), Config{
+	restored := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 	})
 	assertDeletionMismatchFallback(t, restored, reopened, result)
@@ -80,7 +80,7 @@ func TestToolCompletionDeletionMismatchDoesNotApplyUncommittedFallback(t *testin
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	var emitted []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
@@ -122,7 +122,7 @@ func TestToolCompletionDeletionMismatchAppliesCommittedFallbackAfterObserverErro
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var emitted []Event
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { emitted = append(emitted, event) },
 	})
@@ -162,7 +162,7 @@ func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) 
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: mismatchedDeletionTool{},
 		}),

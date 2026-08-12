@@ -18,6 +18,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcriptdiag"
 )
@@ -28,7 +29,8 @@ type AgentRuntimePlanOptions struct {
 	FilesystemContext                   tools.FilesystemContext
 	Sources                             map[string]string
 	Headless                            bool
-	FastMode                            *runtime.FastModeState
+	QuestionsEnabled                    *bool
+	AutoCompactionEnabled               *bool
 	Client                              llm.Client
 	ClientFactory                       runtimewire.RuntimeClientFactory
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
@@ -48,6 +50,12 @@ type AgentRuntimePlan struct {
 }
 
 func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, error) {
+	if options.QuestionsEnabled == nil {
+		return AgentRuntimePlan{}, errors.New("effective Session Questions setting is required")
+	}
+	if options.AutoCompactionEnabled == nil {
+		return AgentRuntimePlan{}, errors.New("effective Session Auto-compaction setting is required")
+	}
 	if strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
 		strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.RealPath) == "" ||
 		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" ||
@@ -59,6 +67,8 @@ func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, err
 	options.Sources = maps.Clone(options.Sources)
 	options.StartLogLines = append([]string(nil), options.StartLogLines...)
 	options.FilesystemContext = options.FilesystemContext.Clone()
+	options.QuestionsEnabled = textutil.Pointer(options.QuestionsEnabled)
+	options.AutoCompactionEnabled = textutil.Pointer(options.AutoCompactionEnabled)
 	if options.ProviderCapabilitiesOverride != nil {
 		value := *options.ProviderCapabilitiesOverride
 		options.ProviderCapabilitiesOverride = &value
@@ -71,7 +81,7 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 	cloned.SystemPromptFiles = append([]config.SystemPromptFile(nil), settings.SystemPromptFiles...)
 	cloned.EnabledTools = maps.Clone(settings.EnabledTools)
 	cloned.SkillToggles = maps.Clone(settings.SkillToggles)
-	cloned.Shell.PostprocessHook = cloneStringPointer(settings.Shell.PostprocessHook)
+	cloned.Shell.PostprocessHook = textutil.Pointer(settings.Shell.PostprocessHook)
 	if settings.Subagents != nil {
 		cloned.Subagents = make(map[string]config.SubagentRole, len(settings.Subagents))
 		for name, role := range settings.Subagents {
@@ -84,14 +94,6 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 	return cloned
 }
 
-func cloneStringPointer(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
 type authorityRuntimeOptions struct {
 	persistenceRoot   string
 	authManager       *auth.Manager
@@ -100,6 +102,11 @@ type authorityRuntimeOptions struct {
 	eventFeed         AgentResourceEventFeed
 	resourceLifecycle AgentResourceLifecycle
 	stepLifecycle     AgentResourceStepLifecycle
+}
+
+type runtimeStoreAdmission struct {
+	store              *session.Store
+	durabilityObserver *runlog.DurabilityObserver
 }
 
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
@@ -114,11 +121,10 @@ func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOption
 	}
 }
 
-func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.SessionDescriptor, plan *AgentRuntimePlan) (*agentResource, error) {
+func (a *Authority) materializeRuntimeStore(descriptor session.SessionDescriptor) (*runtimeStoreAdmission, error) {
 	if a.options.persistenceRoot == "" {
 		return nil, errors.New("authority persistence root is required")
 	}
-	sessionID := descriptor.SessionID()
 	durabilityObserver := runlog.NewDurabilityObserver()
 	storeOptions := append(
 		append([]session.StoreOption(nil), a.options.storeOptions...),
@@ -128,6 +134,25 @@ func (a *Authority) buildAgentResource(ctx context.Context, descriptor session.S
 	if err != nil {
 		return nil, err
 	}
+	return &runtimeStoreAdmission{store: store, durabilityObserver: durabilityObserver}, nil
+}
+
+func (a *Authority) buildAgentResource(
+	ctx context.Context,
+	descriptor session.SessionDescriptor,
+	plan *AgentRuntimePlan,
+	admittedStore *runtimeStoreAdmission,
+) (*agentResource, error) {
+	sessionID := descriptor.SessionID()
+	if admittedStore == nil {
+		var err error
+		admittedStore, err = a.materializeRuntimeStore(descriptor)
+		if err != nil {
+			return nil, err
+		}
+	}
+	store := admittedStore.store
+	durabilityObserver := admittedStore.durabilityObserver
 	if err := store.EnsureDurable(); err != nil {
 		return nil, err
 	}
@@ -211,7 +236,8 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 	wiringOptions := runtimewire.RuntimeWiringOptions{
 		Context:                             resource.ctx,
 		Headless:                            options.Headless,
-		FastMode:                            options.FastMode,
+		QuestionsEnabled:                    options.QuestionsEnabled,
+		AutoCompactionEnabled:               options.AutoCompactionEnabled,
 		Sources:                             maps.Clone(options.Sources),
 		Client:                              options.Client,
 		ClientFactory:                       options.ClientFactory,

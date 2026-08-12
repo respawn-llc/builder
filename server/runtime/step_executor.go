@@ -666,6 +666,25 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			preflightRejection: rejection,
 		}, nil
 	}
+	preparedLocalCalls, err := prepareExecutorToolCalls(
+		e,
+		stepID,
+		activeRunIDForStep(e, stepID),
+		e.currentNodeExecutionActive(),
+		acceptedCalls.local,
+	)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
+	for index := range preparedLocalCalls {
+		if preparedLocalCalls[index].inputErr == nil {
+			acceptedCalls.local[index] = prepareRawToolCallForTranscript(
+				preparedLocalCalls[index].call,
+				preparedLocalCalls[index].executableCall,
+				e.transcriptWorkingDir(),
+			)
+		}
+	}
 	assistantMsg.ToolCalls = acceptedCalls.toolCalls()
 	phaseTurn.Assistant = assistantMsg
 
@@ -908,17 +927,28 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
 		return true, terminal, nudgeErr
 	}
-	if completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed); completeErr != nil {
+	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed)
+	if completeErr != nil && !completed.IsApplied() {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
 	e.setWorkflowTerminalState(source)
+	if completeErr != nil {
+		if err := e.steer(
+			stepID,
+			steerLocalEntryIntent(workflowCompletionOperatorDiagnostic(completeErr, nil)),
+		); err != nil {
+			return true, true, err
+		}
+	}
 	return true, true, nil
 }
 
-func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, parsed workflowruntime.ParsedCompletion) error {
-	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, parsed)
-	return completeErr
+func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(
+	ctx context.Context,
+	parsed workflowruntime.ParsedCompletion,
+) (workflowruntime.CompletionResult, error) {
+	return s.engine.completeWorkflowCurrentNode(ctx, parsed)
 }
 
 func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.Context, stepID string, err error) (bool, error) {

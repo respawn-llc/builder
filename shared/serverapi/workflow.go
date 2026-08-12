@@ -95,7 +95,7 @@ type WorkflowNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -339,7 +339,7 @@ func WorkflowGraphDraftFromDefinition(definition WorkflowDefinition) WorkflowGra
 	for _, node := range definition.Nodes {
 		graph.Nodes = append(graph.Nodes, WorkflowGraphDraftNode{
 			ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName,
-			GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey,
+			GroupID: textutil.Pointer(node.GroupID), GroupKey: node.GroupKey,
 			SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode,
 			ScriptPath:         textutil.Pointer(node.ScriptPath),
 			JoinInputProviders: slices.Clone(node.JoinInputProviders),
@@ -641,9 +641,9 @@ type WorkflowValidationError struct {
 	Code              string                          `json:"code"`
 	Message           string                          `json:"message"`
 	WorkflowID        *runtimeids.WorkflowID          `json:"workflow_id,omitempty"`
-	NodeID            string                          `json:"node_id,omitempty"`
-	TransitionGroupID string                          `json:"transition_group_id,omitempty"`
-	EdgeID            string                          `json:"edge_id,omitempty"`
+	NodeID            *string                         `json:"node_id"`
+	TransitionGroupID *string                         `json:"transition_group_id"`
+	EdgeID            *string                         `json:"edge_id"`
 	Details           *WorkflowValidationErrorDetails `json:"details,omitempty"`
 	RelatedIDs        []string                        `json:"related_ids,omitempty"`
 	BlocksContext     bool                            `json:"blocks_context"`
@@ -653,7 +653,7 @@ type WorkflowValidationErrorDetails struct {
 	FieldName      string  `json:"field_name,omitempty"`
 	InputName      string  `json:"input_name,omitempty"`
 	Placeholder    string  `json:"placeholder,omitempty"`
-	ProviderEdgeID string  `json:"provider_edge_id,omitempty"`
+	ProviderEdgeID *string `json:"provider_edge_id"`
 	Role           *string `json:"role,omitempty"`
 	RequiredTool   *string `json:"required_tool,omitempty"`
 }
@@ -1440,7 +1440,7 @@ type WorkflowBoardGroup struct {
 
 type WorkflowBoardColumn struct {
 	Node      WorkflowBoardNodeSummary `json:"node"`
-	GroupID   string                   `json:"group_id,omitempty"`
+	GroupID   *string                  `json:"group_id"`
 	SortOrder int                      `json:"sort_order"`
 	IsBacklog bool                     `json:"is_backlog"`
 	IsDone    bool                     `json:"is_done"`
@@ -1684,6 +1684,27 @@ type WorkflowTaskGetResponse struct {
 
 type WorkflowTaskActivityListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskActivityItem]
+}
+
+type WorkflowTaskSessionStatus string
+
+const (
+	WorkflowTaskSessionStatusRunning  WorkflowTaskSessionStatus = "running"
+	WorkflowTaskSessionStatusQuestion WorkflowTaskSessionStatus = "question"
+	WorkflowTaskSessionStatusIdle     WorkflowTaskSessionStatus = "idle"
+)
+
+type WorkflowTaskSessionItem struct {
+	SessionID   string                    `json:"session_id"`
+	SessionName *string                   `json:"session_name,omitempty"`
+	NodeName    *string                   `json:"node_name,omitempty"`
+	AgentRole   string                    `json:"agent_role"`
+	Status      WorkflowTaskSessionStatus `json:"status"`
+}
+
+type WorkflowTaskSessionListResponse struct {
+	TaskID string `json:"task_id"`
+	WorkflowOffsetPage[WorkflowTaskSessionItem]
 }
 
 type WorkflowTaskSummary struct {
@@ -2058,6 +2079,23 @@ func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewRequest) Validate() error {
+	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
+		return err
+	}
+	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
+		return err
+	}
+	return validateWorkflowGraphEntityIDs(r.Graph)
+}
+
+func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
+	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
+		return err
+	}
+	return validateWorkflowGraphDraftCollectionBounds(r.Graph)
+}
+
+func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -2067,26 +2105,37 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 	if r.ExpectedVersion < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "expected_version", "expected_version must be non-negative")
 	}
-	return validateWorkflowGraphDraftEnvelope(r.Graph)
+	return nil
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
 	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).Validate(); err != nil {
 		return err
 	}
-	if r.Confirmation == nil {
+	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
+}
+
+func (r WorkflowGraphSaveRequest) ValidateRPC() error {
+	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).ValidateRPC(); err != nil {
+		return err
+	}
+	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
+}
+
+func validateWorkflowGraphSaveConfirmation(confirmation *WorkflowGraphSaveConfirmation) error {
+	if confirmation == nil {
 		return nil
 	}
 	for _, field := range []struct {
 		name  string
 		value int64
 	}{
-		{"expected_removed_node_group_count", r.Confirmation.ExpectedRemovedNodeGroupCount},
-		{"expected_removed_node_count", r.Confirmation.ExpectedRemovedNodeCount},
-		{"expected_removed_transition_group_count", r.Confirmation.ExpectedRemovedTransitionGroupCount},
-		{"expected_removed_edge_count", r.Confirmation.ExpectedRemovedEdgeCount},
-		{"expected_node_task_reference_count", r.Confirmation.ExpectedNodeTaskReferenceCount},
-		{"expected_edge_task_reference_count", r.Confirmation.ExpectedEdgeTaskReferenceCount},
+		{"expected_removed_node_group_count", confirmation.ExpectedRemovedNodeGroupCount},
+		{"expected_removed_node_count", confirmation.ExpectedRemovedNodeCount},
+		{"expected_removed_transition_group_count", confirmation.ExpectedRemovedTransitionGroupCount},
+		{"expected_removed_edge_count", confirmation.ExpectedRemovedEdgeCount},
+		{"expected_node_task_reference_count", confirmation.ExpectedNodeTaskReferenceCount},
+		{"expected_edge_task_reference_count", confirmation.ExpectedEdgeTaskReferenceCount},
 	} {
 		if field.value < 0 {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, field.name, field.name+" must be non-negative")
@@ -2256,19 +2305,8 @@ func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error 
 }
 
 func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
-	for _, field := range []struct {
-		name  string
-		count int
-		limit int
-	}{
-		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
-		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
-		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
-		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
-	} {
-		if field.count > field.limit {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
-		}
+	if err := validateWorkflowGraphDraftCollectionBounds(graph); err != nil {
+		return err
 	}
 	for _, node := range graph.Nodes {
 		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
@@ -2301,6 +2339,78 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	for _, group := range graph.TransitionGroups {
 		if len([]rune(group.Description)) > 1000 {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
+		}
+	}
+	return nil
+}
+
+func validateWorkflowGraphDraftCollectionBounds(graph WorkflowGraphDraft) error {
+	for _, field := range []struct {
+		name  string
+		count int
+		limit int
+	}{
+		{"node_groups", len(graph.NodeGroups), WorkflowGraphDraftMaxNodeGroups},
+		{"nodes", len(graph.Nodes), WorkflowGraphDraftMaxNodes},
+		{"transition_groups", len(graph.TransitionGroups), WorkflowGraphDraftMaxTransitionGroups},
+		{"edges", len(graph.Edges), WorkflowGraphDraftMaxEdges},
+	} {
+		if field.count > field.limit {
+			return workflowRequestError(WorkflowRequestErrorTooLong, "graph."+field.name, fmt.Sprintf("%s must be <= %d", field.name, field.limit))
+		}
+	}
+	return nil
+}
+
+func validateGraphEntityID(field, value string) error {
+	if _, err := runtimeids.GraphEntityIDBlob(value); err != nil {
+		return workflowRequestError(
+			WorkflowRequestErrorInvalidValue,
+			field,
+			field+" must be canonical UUIDv4 text",
+		)
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityIDs(graph WorkflowGraphDraft) error {
+	for _, group := range graph.NodeGroups {
+		if err := validateGraphEntityID("graph.node_groups.id", group.ID); err != nil {
+			return err
+		}
+	}
+	for _, node := range graph.Nodes {
+		if err := validateGraphEntityID("graph.nodes.id", node.ID); err != nil {
+			return err
+		}
+		if node.GroupID != nil {
+			if err := validateGraphEntityID("graph.nodes.group_id", *node.GroupID); err != nil {
+				return err
+			}
+		}
+		for _, provider := range node.JoinInputProviders {
+			if err := validateGraphEntityID("graph.nodes.join_input_providers.provider_edge_id", provider.ProviderEdgeID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, group := range graph.TransitionGroups {
+		if err := validateGraphEntityID("graph.transition_groups.id", group.ID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID("graph.transition_groups.source_node_id", group.SourceNodeID); err != nil {
+			return err
+		}
+	}
+	for _, edge := range graph.Edges {
+		for _, field := range []struct{ name, value string }{
+			{"graph.edges.id", edge.ID},
+			{"graph.edges.transition_group_id", edge.TransitionGroupID},
+			{"graph.edges.target_node_id", edge.TargetNodeID},
+		} {
+			if err := validateGraphEntityID(field.name, field.value); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -3137,6 +3247,9 @@ func (r WorkflowBoardNodeCardsListRequest) validateScopeAndPage() error {
 		return err
 	}
 	if err := validateRequired("node_id", r.NodeID); err != nil {
+		return err
+	}
+	if err := validateGraphEntityID("node_id", r.NodeID); err != nil {
 		return err
 	}
 	if r.PageSize < 0 {

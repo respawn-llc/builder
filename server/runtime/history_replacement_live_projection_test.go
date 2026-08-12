@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -30,7 +29,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		},
 		Usage: llm.Usage{InputTokens: 100, WindowTokens: 200_000},
 	}}}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 		OnEvent:        func(event Event) { events = append(events, event) },
@@ -70,7 +69,7 @@ func TestRemoteCompactionReplacementOwnsExactlyOneTranscriptSummary(t *testing.T
 		t,
 		reopenedStore,
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
@@ -139,7 +138,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -238,7 +237,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		providerClient,
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	reopenedPage := mustEngineNewestSegmentPage(t, reopened)
