@@ -340,6 +340,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if removed != 1 {
 		return CurrentNodeCompletionResult{}, sql.ErrNoRows
 	}
+	if err := updateActiveFanoutBranchContinuationSource(ctx, q, prepared.Source, targetCurrentNode.ContinuationSource); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}

@@ -9104,6 +9104,41 @@ func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg U
 	return result.RowsAffected()
 }
 
+const updateTaskActiveFanoutBranchContinuationSource = `-- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = ?1,
+    continuation_source_session_id = ?2,
+    legacy_materialized = ?3
+WHERE task_id = ?4
+  AND transition_branch_key = ?5
+  AND arrival_state = 'pending'
+`
+
+type UpdateTaskActiveFanoutBranchContinuationSourceParams struct {
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
+	TaskID                      string
+	TransitionBranchKey         string
+}
+
+func (q *Queries) UpdateTaskActiveFanoutBranchContinuationSource(ctx context.Context, arg UpdateTaskActiveFanoutBranchContinuationSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchContinuationSource,
+		arg.ContinuationSourceKind,
+		arg.ContinuationSourceSessionID,
+		arg.LegacyMaterialized,
+		arg.TaskID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchContinuationSource, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateTaskCommentBody = `-- name: UpdateTaskCommentBody :execrows
 UPDATE task_comments
 SET

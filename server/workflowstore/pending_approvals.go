@@ -170,6 +170,9 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 		if removedCurrentNode != 1 {
 			return PendingApprovalApplyResult{}, sql.ErrNoRows
 		}
+		if err := updateActiveFanoutBranchContinuationSource(ctx, q, approval.Source, targets[0].ContinuationSource); err != nil {
+			return PendingApprovalApplyResult{}, err
+		}
 		if err := insertTaskCurrentNodeWithKind(ctx, q, targets[0], approval.Branches[0].Target.NodeKind); err != nil {
 			return PendingApprovalApplyResult{}, err
 		}

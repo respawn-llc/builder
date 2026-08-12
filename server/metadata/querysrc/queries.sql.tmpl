@@ -3123,6 +3123,16 @@ WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND arrival_state = 'pending';
 
+-- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = sqlc.narg(continuation_source_kind),
+    continuation_source_session_id = sqlc.narg(continuation_source_session_id),
+    legacy_materialized = sqlc.arg(legacy_materialized)
+WHERE task_id = sqlc.arg(task_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND arrival_state = 'pending';
+
 -- name: DeleteTaskActiveFanout :execrows
 DELETE FROM task_active_fanouts
 WHERE task_id = sqlc.arg(task_id);

@@ -170,6 +170,33 @@ func replaceCurrentNodeWithFanout(
 	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets)
 }
 
+func updateActiveFanoutBranchContinuationSource(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	source workflow.CurrentNodeReference,
+	continuationSource workflow.MaterializedContinuationSource,
+) error {
+	branchKey := currentNodeReferenceBranchKey(source)
+	if branchKey == nil {
+		return nil
+	}
+	sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(continuationSource)
+	if err != nil {
+		return err
+	}
+	updated, err := q.UpdateTaskActiveFanoutBranchContinuationSource(ctx, sqlitegen.UpdateTaskActiveFanoutBranchContinuationSourceParams{
+		TaskID: string(source.TaskID), TransitionBranchKey: string(*branchKey),
+		ContinuationSourceKind: sourceKind, ContinuationSourceSessionID: sourceSessionID, LegacyMaterialized: legacyMaterialized,
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return errors.New("active fan-out branch is no longer pending")
+	}
+	return nil
+}
+
 func validateFanoutTargets(taskID workflow.TaskID, targets []workflow.CurrentNode) error {
 	if len(targets) < 2 {
 		return errors.New("fan-out requires multiple target branches")
