@@ -3,9 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 
@@ -72,29 +70,10 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 	if provider == "" {
 		provider = ProviderOpenAI
 	}
-	if mode.IsOAuth && t.BaseURLExplicit {
-		if isChatGPTCodexEndpoint(t.BaseURL) {
-			registration, ok := lookupProviderVariantContract("chatgpt-codex")
-			if !ok {
-				return ProviderVariantContract{}, llmerrors.NewProviderContractError(
-					"chatgpt-codex",
-					0,
-					errors.New("chatgpt-codex provider variant is not registered"),
-				)
-			}
-			return registration.Variant, nil
-		}
-		registration, ok := lookupProviderVariantContract("openai-compatible")
-		if !ok {
-			return ProviderVariantContract{}, llmerrors.NewProviderContractError(
-				"openai-compatible",
-				0,
-				errors.New("openai-compatible provider variant is not registered"),
-			)
-		}
-		return registration.Variant, nil
-	}
-	variant, err := resolveProviderTransportVariant(provider, t.BaseURL, mode)
+	variant, err := resolveProviderTransportVariant(provider, ProviderTransportEndpoint{
+		BaseURL:  t.BaseURL,
+		Explicit: t.BaseURLExplicit,
+	}, mode)
 	if err != nil {
 		providerID := strings.TrimSpace(string(provider))
 		if providerID == "" {
@@ -103,15 +82,6 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 		return ProviderVariantContract{}, llmerrors.NewProviderContractError(providerID, 0, err)
 	}
 	return variant, nil
-}
-
-func isChatGPTCodexEndpoint(rawURL string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return false
-	}
-	path := strings.TrimSuffix(parsed.Path, "/")
-	return strings.HasSuffix(path, "/backend-api/codex")
 }
 
 func (t *HTTPTransport) providerCapabilitiesForMode(mode OpenAIAuthMode) (ProviderCapabilities, error) {

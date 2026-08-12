@@ -39,7 +39,12 @@ type ProviderErrorReducerFactory func(providerID string) ProviderErrorReducer
 
 type ProviderModelMatcher func(model string) bool
 
-type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
+type ProviderTransportEndpoint struct {
+	BaseURL  string
+	Explicit bool
+}
+
+type ProviderTransportVariantResolver func(endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
 	ProviderID               string

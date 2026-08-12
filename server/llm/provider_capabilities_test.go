@@ -117,6 +117,18 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 			wantID:   "chatgpt-codex",
 		},
 		{
+			name:     "oauth explicit compatible endpoint uses compatible capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://proxy.example/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
+			name:     "oauth explicit canonical codex endpoint uses codex capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://chatgpt.com/backend-api/codex"},
+			wantID:   "chatgpt-codex",
+		},
+		{
 			name:     "default provider is inferred from non openai model",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodNone}},
 			settings: config.Settings{Model: "claude-3-7-sonnet"},
@@ -179,23 +191,40 @@ func TestProviderCapabilitiesForSettingsRejectsUnsupportedProviderOverride(t *te
 }
 
 func TestResolveOpenAITransportProviderVariant_DefaultLoopbackAndRemoteCompatibleBaseURL(t *testing.T) {
-	if got, err := resolveOpenAITransportProviderVariant("", OpenAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{}, OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com/v1/", OpenAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "https://api.openai.com/v1/"}, OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected normalized default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com", OpenAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "https://api.openai.com"}, OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected bare api.openai.com base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "http://127.0.0.1:8080/v1", Explicit: true}, OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected loopback base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://example.openai.azure.com/openai/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "https://example.openai.azure.com/openai/v1", Explicit: true}, OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected remote compatible base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://ignored.example/v1", OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
-		t.Fatalf("expected oauth mode to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
+		t.Fatalf("expected implicit oauth mode to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "https://proxy.example/backend-api/codex", Explicit: true}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+		t.Fatalf("expected custom explicit oauth endpoint to resolve compatible variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "http://127.0.0.1/backend-api/codex", Explicit: true}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+		t.Fatalf("expected loopback explicit oauth endpoint to resolve compatible variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: "https://chatgpt.com/backend-api/codex", Explicit: true}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
+		t.Fatalf("expected canonical explicit oauth endpoint to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	}
+	for _, endpoint := range []string{
+		"https://chatgpt.com/backend-api/codex?proxy=true",
+		"https://user:secret@chatgpt.com/backend-api/codex",
+	} {
+		if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{BaseURL: endpoint, Explicit: true}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+			t.Fatalf("expected non-canonical explicit oauth endpoint %q to resolve compatible variant, got variant=%q err=%v", endpoint, got, err)
+		}
 	}
 }
 

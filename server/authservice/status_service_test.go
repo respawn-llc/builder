@@ -224,15 +224,14 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 	selection := authstatus.ProviderSelection(config.Settings{
 		OpenAIBaseURL: "https://session.example/v1",
 	})
-	provider := serverapi.OpenAIAuthProviderFacts()
 	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &selection})
 	if err != nil {
 		t.Fatalf("effective GetAuthStatus: %v", err)
 	}
 	if effective.Resolution.Facts == nil ||
-		!reflect.DeepEqual(effective.Resolution.Facts.Provider, provider) ||
-		!effective.Subscription.Applicable ||
-		effective.Subscription.Failure == nil {
+		effective.Resolution.Facts.Provider.Identifier != "openai-compatible" ||
+		effective.Resolution.Facts.Provider.Kind != serverapi.AuthProviderKindOpenAICompatible ||
+		effective.Subscription.Applicable {
 		t.Fatalf("effective subscription response = %+v", effective)
 	}
 }

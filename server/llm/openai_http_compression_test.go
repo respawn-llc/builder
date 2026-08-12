@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +33,7 @@ func TestGenerateChatGPTCodexCompressesLargeResponsesBodyWithZstd(t *testing.T) 
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newCompressionRewritingHTTPClient(t, server)
+	transport.Client = newRewritingHTTPClient(t, server)
 
 	response, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
@@ -106,7 +105,7 @@ func TestGenerateExplicitOAuthEndpointLeavesResponsesBodyUncompressed(t *testing
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newCompressionRewritingHTTPClient(t, server)
+	transport.Client = newRewritingHTTPClient(t, server)
 	transport.BaseURL = server.URL + "/explicit"
 	transport.BaseURLExplicit = true
 	if _, err := transport.Generate(context.Background(), OpenAIRequest{
@@ -133,7 +132,7 @@ func TestGenerateStreamChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newCompressionRewritingHTTPClient(t, server)
+	transport.Client = newRewritingHTTPClient(t, server)
 	transport.BaseURL = server.URL
 	transport.BaseURLExplicit = false
 	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
@@ -164,7 +163,7 @@ func TestCompactChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newCompressionRewritingHTTPClient(t, server)
+	transport.Client = newRewritingHTTPClient(t, server)
 	response, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5.6-sol",
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value(strings.Repeat("history ", 200))}}),
@@ -201,7 +200,7 @@ func TestGenerateLogicalRetrySendsCompressedSemanticEquivalents(t *testing.T) {
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newCompressionRewritingHTTPClient(t, server)
+	transport.Client = newRewritingHTTPClient(t, server)
 	request := OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
@@ -236,19 +235,4 @@ func TestGenerateLogicalRetrySendsCompressedSemanticEquivalents(t *testing.T) {
 	if string(requestBodies[0]) != string(requestBodies[1]) {
 		t.Fatal("retry request semantic bodies differ")
 	}
-}
-
-func newCompressionRewritingHTTPClient(t *testing.T, server *httptest.Server) *http.Client {
-	t.Helper()
-	target, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse test server URL: %v", err)
-	}
-	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		cloned := request.Clone(request.Context())
-		cloned.URL.Scheme = target.Scheme
-		cloned.URL.Host = target.Host
-		cloned.Host = target.Host
-		return server.Client().Transport.RoundTrip(cloned)
-	})}
 }

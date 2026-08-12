@@ -74,7 +74,7 @@ func LookupProviderCapabilityContract(providerID string) (ProviderCapabilities, 
 	return registration.Variant.Capabilities, true
 }
 
-func resolveProviderTransportVariant(provider Provider, baseURL string, mode OpenAIAuthMode) (ProviderVariantContract, error) {
+func resolveProviderTransportVariant(provider Provider, endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (ProviderVariantContract, error) {
 	contract, ok := globalProviderRegistry.contractsByProvider[provider]
 	if !ok {
 		return ProviderVariantContract{}, fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)
@@ -82,7 +82,7 @@ func resolveProviderTransportVariant(provider Provider, baseURL string, mode Ope
 	if contract.ResolveTransportVariant == nil {
 		return ProviderVariantContract{}, fmt.Errorf("%w: transport provider resolution is not implemented for %s", ErrUnsupportedProvider, provider)
 	}
-	providerID, err := contract.ResolveTransportVariant(baseURL, mode)
+	providerID, err := contract.ResolveTransportVariant(endpoint, mode)
 	if err != nil {
 		return ProviderVariantContract{}, err
 	}
@@ -96,18 +96,35 @@ func resolveProviderTransportVariant(provider Provider, baseURL string, mode Ope
 	return registration.Variant, nil
 }
 
-func resolveOpenAITransportProviderVariant(baseURL string, mode OpenAIAuthMode) (string, error) {
+func resolveOpenAITransportProviderVariant(endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (string, error) {
 	if mode.IsOAuth {
-		return "chatgpt-codex", nil
+		if !endpoint.Explicit || isChatGPTCodexEndpoint(endpoint.BaseURL) {
+			return "chatgpt-codex", nil
+		}
+		return "openai-compatible", nil
 	}
-	normalizedBaseURL := normalizeOpenAIBaseURL(baseURL)
+	normalizedBaseURL := normalizeOpenAIBaseURL(endpoint.BaseURL)
 	if normalizedBaseURL == normalizeOpenAIBaseURL(defaultOpenAIBaseURL) || IsOpenAIFirstPartyBaseURL(normalizedBaseURL) {
 		return "openai", nil
 	}
-	if strings.TrimSpace(baseURL) != "" {
+	if strings.TrimSpace(endpoint.BaseURL) != "" {
 		return "openai-compatible", nil
 	}
-	return "", fmt.Errorf("%w: openai base URL %q does not map to a registered provider contract", ErrUnsupportedProvider, strings.TrimSpace(baseURL))
+	return "", fmt.Errorf("%w: openai base URL %q does not map to a registered provider contract", ErrUnsupportedProvider, strings.TrimSpace(endpoint.BaseURL))
+}
+
+func isChatGPTCodexEndpoint(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+		!strings.EqualFold(parsed.Scheme, "https") ||
+		!strings.EqualFold(parsed.Hostname(), "chatgpt.com") ||
+		parsed.Port() != "" {
+		return false
+	}
+	return strings.TrimSuffix(parsed.EscapedPath(), "/") == "/backend-api/codex"
 }
 
 func normalizeOpenAIBaseURL(baseURL string) string {
