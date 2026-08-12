@@ -19,10 +19,9 @@ func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {
 		t.Fatalf("reopened availability=%q err=%v", got, err)
 	}
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err == nil {
-		t.Fatal("missing locked tool snapshot returned availability")
-	}
-	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
-		t.Fatal("invalid locked tool returned availability")
+	for _, meta := range []Meta{{Locked: &LockedContract{}}, {Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}} {
+		if _, err := GoalAvailabilityFromMeta(meta); err == nil {
+			t.Fatal("malformed locked tools returned availability")
+		}
 	}
 }

@@ -879,36 +879,37 @@ func (c *Remote) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeR
 }
 
 func (c *Remote) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return callControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](c, ctx, protocol.MethodRuntimeGoalShow, req)
 }
 
 func (c *Remote) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalSet, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalSet, req)
 }
 
 func (c *Remote) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalPause, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalPause, req)
 }
 
 func (c *Remote) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalResume, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalResume, req)
 }
 
 func (c *Remote) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalComplete, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalComplete, req)
 }
 
 func (c *Remote) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return callGoalMutationRPC(c, ctx, protocol.MethodRuntimeGoalClear, req)
+	return callValidatedControlRPC[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](c, ctx, protocol.MethodRuntimeGoalClear, req)
 }
 
-func callGoalMutationRPC[Request any](c *Remote, ctx context.Context, method string, req Request) (serverapi.RuntimeGoalMutationResponse, error) {
-	response, err := callControlRPC[Request, serverapi.RuntimeGoalMutationResponse](c, ctx, method, req)
+func callValidatedControlRPC[Request any, Response interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Request) (Response, error) {
+	response, err := callControlRPC[Request, Response](c, ctx, method, req)
 	if err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
+		return response, err
 	}
 	if err := response.Validate(); err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, invalidResponseError("runtime Goal mutation", err)
+		var zero Response
+		return zero, invalidResponseError(method, err)
 	}
 	return response, nil
 }
