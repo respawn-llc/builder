@@ -498,6 +498,10 @@ function BoardContent({
     void navigation.openProject(board.projectID, workflowID).catch(reportNavigationError);
   }
 
+  function openProjectTasks(): void {
+    void navigation.openProjectTasks(board.projectID).catch(reportNavigationError);
+  }
+
   function editWorkflow(workflowID: string): void {
     void navigation
       .openWorkflowEditor({ projectID: board.projectID, workflowID })
@@ -526,7 +530,17 @@ function BoardContent({
   return (
     <div className="relative flex h-full min-h-0 min-w-0 w-full flex-col">
       <div className="flex shrink-0 items-center gap-[var(--space-2)] px-[var(--space-2)] pt-[var(--space-2)]">
-        <BoardFilterRow onOpenTask={openTask} projectID={board.projectID} />
+        <BoardFilterRow
+          activeWorkflow={board.selectedWorkflow}
+          canCreateTask={connection.phase === "connected"}
+          onLinkWorkflow={openLinkWorkflow}
+          onNewTask={openNewTask}
+          onOpenTask={openTask}
+          onOpenTasks={openProjectTasks}
+          onSelectWorkflow={selectWorkflow}
+          projectID={board.projectID}
+          workflows={board.workflows}
+        />
       </div>
       <div className="relative min-h-0 min-w-0 flex-1">
         <div

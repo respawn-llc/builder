@@ -28,8 +28,6 @@ export function SidebarProvider({
   policy,
 }: Readonly<{ children: ReactNode; policy: SidebarDestinationPolicy }>) {
   const [view, setView] = useState<SidebarStackView>(emptySidebarStackView);
-  const [activeWidthProfile, setActiveWidthProfile] =
-    useState<SidebarWidthProfile>(defaultSidebarWidthProfile);
   const [sidebarWidths, setSidebarWidths] = useState<SidebarWidths>(() => [
     { profile: defaultSidebarWidthProfile, widthPx: defaultSidebarWidth() },
   ]);
@@ -37,7 +35,6 @@ export function SidebarProvider({
     const destination = next.entries.at(-1)?.destination;
     if (destination !== undefined) {
       const profile = sidebarWidthProfile(destination);
-      setActiveWidthProfile(profile);
       setSidebarWidths((current) =>
         sidebarWidthForProfile(current, profile) === undefined
           ? [...current, { profile, widthPx: defaultSidebarWidth(destination) }]
@@ -47,6 +44,12 @@ export function SidebarProvider({
     setView(next);
   }, []);
   const [stack] = useState(() => createSidebarStack(policy, publish));
+  const current = view.entries.at(-1);
+  const activeWidthProfile = useMemo(
+    () =>
+      current === undefined ? defaultSidebarWidthProfile : sidebarWidthProfile(current.destination),
+    [current],
+  );
   const resize = useCallback(
     (width: ResolvedSidebarWidth) => {
       setSidebarWidths((current) => setSidebarWidthForProfile(current, activeWidthProfile, width.px));
@@ -56,7 +59,6 @@ export function SidebarProvider({
 
   useEffect(() => stack.dispose, [stack]);
 
-  const current = view.entries.at(-1);
   const availability = current?.capability.availability;
   const rootValue = useMemo(() => ({ open: stack.open }), [stack]);
   const shellValue = useMemo(
@@ -131,6 +133,9 @@ function setSidebarWidthForProfile(
   const resolvedWidthPx = Math.max(0, Math.round(widthPx));
   if (sidebarWidthForProfile(widths, profile) === undefined) {
     return [...widths, { profile, widthPx: resolvedWidthPx }];
+  }
+  if (sidebarWidthForProfile(widths, profile) === resolvedWidthPx) {
+    return widths;
   }
   return widths.map((entry) =>
     sidebarWidthProfileEquals(entry.profile, profile) ? { ...entry, widthPx: resolvedWidthPx } : entry,

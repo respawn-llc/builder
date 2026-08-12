@@ -5,11 +5,7 @@ import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from 
 import { useTranslation } from "react-i18next";
 
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
-import {
-  TaskSearchGlobalTrigger,
-  TaskSearchHost,
-  TaskSearchProvider,
-} from "@/features/board";
+import { TaskSearchGlobalTrigger, TaskSearchHost, TaskSearchProvider } from "@/features/board";
 import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
 import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
@@ -93,6 +89,7 @@ function AppChromeContent({ children }: AppChromeProps) {
               void navigation.openHome();
             }
           }}
+          search={{}}
           to="/"
         >
           <Home aria-hidden="true" size={16} strokeWidth={1.125} />
@@ -183,7 +180,11 @@ function ProjectDeletionEventHandler() {
     nativeBridge,
     useCallback(
       (event) => {
-        const routeMatches = routeReferencesProject(location.pathname, event.projectID);
+        const routeMatches = routeReferencesProject(
+          location.pathname,
+          new URLSearchParams(location.searchStr).get("projectId"),
+          event.projectID,
+        );
         void completeProjectDeletion({
           navigateHome: routeMatches ? navigation.openHome : undefined,
           projectID: event.projectID,
@@ -197,13 +198,20 @@ function ProjectDeletionEventHandler() {
           queryClient,
         });
       },
-      [location.pathname, navigation.openHome, push, queryClient, t],
+      [location.pathname, location.searchStr, navigation.openHome, push, queryClient, t],
     ),
   );
   return null;
 }
 
-function routeReferencesProject(pathname: string, projectID: string): boolean {
+function routeReferencesProject(
+  pathname: string,
+  selectedHomeProjectID: string | null,
+  projectID: string,
+): boolean {
+  if (pathname === "/" && selectedHomeProjectID === projectID) {
+    return true;
+  }
   const segments = pathname.split("/").filter((segment) => segment.length > 0);
   return segments[0] === "projects" && segments[1] === projectID;
 }
