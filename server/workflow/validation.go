@@ -24,7 +24,6 @@ func ValidateDefinition(def Definition, opts ValidationOptions) ValidationResult
 	}
 	state.validateGraph()
 	state.validateFanouts()
-	state.validateContinuationSources()
 	state.validateDerivedWiring()
 	return ValidationResult{Context: context, Errors: state.errors}
 }
@@ -1139,31 +1138,6 @@ func (s *validationState) validateFanouts() {
 		if !s.fanoutHasValidJoin(group, edges) {
 			s.addSemantic(CodeInvalidFanoutJoinTopology, "fan-out transition group must have one unambiguous nearest common join without terminal, nested fan-out, or cycle before it", ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), TransitionGroupID: group.ID, NodeID: group.SourceNodeID})
 		}
-	}
-}
-
-func (s *validationState) validateContinuationSources() {
-	if len(s.startNodes) != 1 {
-		return
-	}
-	topology := newWorkflowTraversalTopology(s.def)
-	for _, edgeID := range validateStaticContinuationSources(
-		topology,
-		NodeIDOf(s.startNodes[0]),
-	) {
-		edge, exists := s.edgesByID[edgeID]
-		if !exists {
-			continue
-		}
-		s.addSemantic(
-			CodeInvalidContextSource,
-			"retained target context source requires one exact active source across every fan-out branch",
-			ValidationError{
-				WorkflowID:        WorkflowIDPointer(s.def.ID),
-				EdgeID:            edge.ID,
-				TransitionGroupID: edge.TransitionGroupID,
-			},
-		)
 	}
 }
 
