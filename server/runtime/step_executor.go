@@ -678,7 +678,11 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	}
 	for index := range preparedLocalCalls {
 		if preparedLocalCalls[index].inputErr == nil {
-			acceptedCalls.local[index] = preparedLocalCalls[index].call
+			acceptedCalls.local[index] = prepareRawToolCallForTranscript(
+				preparedLocalCalls[index].call,
+				preparedLocalCalls[index].executableCall,
+				e.transcriptWorkingDir(),
+			)
 		}
 	}
 	assistantMsg.ToolCalls = acceptedCalls.toolCalls()

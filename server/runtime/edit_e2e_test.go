@@ -104,8 +104,8 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	if persistedCall == nil {
 		t.Fatal("persisted assistant history omitted alias-only Edit call")
 	}
-	if string(persistedCall.Input) != `{"new_string":"new","old_string":"old","path":"a.txt"}` {
-		t.Fatalf("persisted Edit input = %s, want canonical aliases", persistedCall.Input)
+	if string(persistedCall.Input) != string(editInput) {
+		t.Fatalf("persisted Edit input = %s, want raw provider input %s", persistedCall.Input, editInput)
 	}
 	persistedMeta := transcriptToolCallMeta(*persistedCall, workspace)
 	if persistedMeta.PatchRender == nil || len(persistedMeta.PatchRender.Files) != 1 ||
