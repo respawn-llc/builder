@@ -304,3 +304,23 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 		}
 	}
 }
+
+func TestTranscriptMessageJSONRejectsExplicitNullCommittedTime(t *testing.T) {
+	var message TranscriptMessage
+	err := json.Unmarshal([]byte(`{
+		"sequence":2,
+		"kind":"committed_row",
+		"payload":{
+			"Visibility":"ongoing",
+			"Kind":"user",
+			"User":{
+				"StepID":"22222222-2222-4222-8222-222222222222",
+				"Text":"user",
+				"committed_at_unix_ms":null
+			}
+		}
+	}`), &message)
+	if err == nil {
+		t.Fatal("explicit null committed time was accepted")
+	}
+}
