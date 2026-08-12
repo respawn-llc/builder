@@ -461,7 +461,7 @@ func (s *Service) planExistingSessionWithStore(
 				return launch.SessionPlan{}, nil, err
 			}
 			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{
-				AgentSelectionPersisted: roleOverride.Present && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
+				AgentSelectionPersisted: agentSelectionResolved && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
 			})
 		},
 	)
@@ -534,7 +534,7 @@ func applyPreparedAgentChatSettings(
 	if result.Changed && maintenance != nil {
 		maintenance.RetireRuntime()
 	}
-	return true, err
+	return result.Changed, err
 }
 
 func preparePromptFacingTarget(

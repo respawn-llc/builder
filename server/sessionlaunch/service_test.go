@@ -637,6 +637,43 @@ func TestServicePlanSessionCanClearInvalidPersistedRoleBeforeValidation(t *testi
 	}
 }
 
+func TestServicePlanSessionExplicitCurrentAgentRefreshesContinuationEndpoint(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		OpenAIBaseURL: textutil.Value("https://old.example/v1"),
+	}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://new.example/v1"
+	service := newSessionLaunchTestService(cfg, containerDir)
+
+	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
+		ClientRequestID: "refresh-current-agent-continuation",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: sessionLaunchStringPtr(config.DefaultSubagentRole)},
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	if got := resp.Plan.ActiveSettings.OpenAIBaseURL; got != cfg.Settings.OpenAIBaseURL {
+		t.Fatalf("planned base URL = %q, want %q", got, cfg.Settings.OpenAIBaseURL)
+	}
+	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen session: %v", err)
+	}
+	continuation := reopened.Meta().Continuation
+	if continuation == nil || continuation.OpenAIBaseURL == nil || *continuation.OpenAIBaseURL != cfg.Settings.OpenAIBaseURL {
+		t.Fatalf("persisted continuation = %+v, want refreshed base URL %q", continuation, cfg.Settings.OpenAIBaseURL)
+	}
+}
+
 func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
