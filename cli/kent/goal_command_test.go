@@ -14,6 +14,9 @@ func TestWriteGoalMutationTextRendersPendingPreview(t *testing.T) {
 	if got := output.String(); got != "Goal: ship the queued goal\nStatus: active\n" {
 		t.Fatal(got)
 	}
-	output.Reset(); writeGoalMutationText(&output, serverapi.RuntimeGoalMutationResponse{})
-	if output.Len() != 0 { t.Fatal(output.String()) }
+	output.Reset()
+	writeGoalMutationText(&output, serverapi.RuntimeGoalMutationResponse{})
+	if output.Len() != 0 {
+		t.Fatal(output.String())
+	}
 }
