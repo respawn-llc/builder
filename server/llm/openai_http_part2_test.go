@@ -533,6 +533,24 @@ func TestOAuthCompactRequestRejectsCompletedStreamWithoutCompactionOutput(t *tes
 	}
 }
 
+func TestOAuthCompactRequestUsesStreamedCompactionWhenCompletedOutputIsEmpty(t *testing.T) {
+	server := newOAuthCompactStreamServer(t, []string{
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"compaction","id":"cmp_streamed","encrypted_content":"enc_streamed"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","id":"cmp_streamed","encrypted_content":"enc_streamed"}}`,
+		`{"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13},"output":[]}}`,
+	})
+	resp, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	if err != nil {
+		t.Fatalf("compact request failed: %v", err)
+	}
+	if len(resp.OutputItems) != 1 || optionalStringValue(resp.OutputItems[0].ID) != "cmp_streamed" || optionalStringValue(resp.OutputItems[0].EncryptedContent) != "enc_streamed" {
+		t.Fatalf("output items = %+v, want streamed compaction checkpoint", resp.OutputItems)
+	}
+	if resp.Usage.InputTokens != 9 || resp.Usage.OutputTokens != 4 {
+		t.Fatalf("usage = %+v, want terminal completed usage", resp.Usage)
+	}
+}
+
 func TestOAuthCompactRequestRejectsMultipleCompactionOutputs(t *testing.T) {
 	server := newOAuthCompactStreamServer(t, []string{
 		`{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"},{"type":"compaction","id":"cmp_2","encrypted_content":"enc_2"}]}}`,
