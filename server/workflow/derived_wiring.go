@@ -168,11 +168,17 @@ func deriveWiring(
 		}
 		derived.inputBindingsByEdge[edge.ID] = inputBindingsForFields(requiredFields)
 		derived.addRequiredProvisionFields(edge.ID, edge.TransitionGroupID, requiredFields)
-		derived.addPossibleProvisionFields(group.SourceNodeID, requiredFields, ValidationError{
-			NodeID:            &group.SourceNodeID,
-			EdgeID:            &edge.ID,
-			TransitionGroupID: &edge.TransitionGroupID,
-		})
+		ref := ValidationError{}
+		if strings.TrimSpace(string(group.SourceNodeID)) != "" {
+			ref.NodeID = &group.SourceNodeID
+		}
+		if strings.TrimSpace(string(edge.ID)) != "" {
+			ref.EdgeID = &edge.ID
+		}
+		if strings.TrimSpace(string(edge.TransitionGroupID)) != "" {
+			ref.TransitionGroupID = &edge.TransitionGroupID
+		}
+		derived.addPossibleProvisionFields(group.SourceNodeID, requiredFields, ref)
 	}
 	for _, node := range def.Nodes {
 		if node.Kind() == NodeKindJoin {

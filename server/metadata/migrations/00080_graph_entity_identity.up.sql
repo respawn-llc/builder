@@ -1082,6 +1082,12 @@ WHERE id IN (
     JOIN workflow_nodes nodes ON nodes.id = groups.source_node_id
     JOIN migration_graph_edge_ids map ON map.new_id = edges.id
     WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
+    UNION
+    SELECT DISTINCT nodes.workflow_id
+    FROM workflow_nodes nodes, json_each(nodes.join_input_providers_json) provider
+    JOIN migration_graph_edge_ids map
+      ON kent_graph_entity_id_text_v1(map.new_id) = json_extract(provider.value, '$.provider_edge_id')
+    WHERE map.old_id != kent_graph_entity_id_text_v1(map.new_id)
 );
 
 INSERT INTO migration_graph_identity_postcondition (value)

@@ -211,6 +211,50 @@ WHERE approval.id = 'approval-graph-migration'`).Scan(&transitionSnapshot, &targ
 	}
 }
 
+func TestGraphIdentityMigrationVersionsWorkflowForJoinOnlyBranchRemap(t *testing.T) {
+	t.Parallel()
+	db := openGraphIdentityVersion79Fixture(t)
+	workflowID := graphMigrationWorkflowBlob(t)
+	execGraphMigrationSeed(t, db, `INSERT INTO workflows (
+		id, name, description, version, execution_target_policy,
+		created_at_unix_ms, updated_at_unix_ms
+	) VALUES (?, 'Join-only remap', '', 1, 'head', 1, 1)`, workflowID)
+	execGraphMigrationSeed(t, db, `INSERT INTO workflow_nodes (
+		id, workflow_id, node_key, kind, display_name, subagent_role, group_id,
+		sort_order, join_input_providers_json, completion_mode, script_path
+	) VALUES (?, ?, 'join', 'join', 'Join', '', NULL, 0,
+		'[{"input_name":"result","provider_edge_id":"dangling-legacy-edge"}]', '', NULL)`,
+		graphMigrationCanonicalNode,
+		workflowID,
+	)
+
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 80); err != nil {
+		t.Fatalf("apply graph identity migration: %v", err)
+	}
+
+	var workflowVersion int64
+	if err := db.QueryRow(`SELECT version FROM workflows WHERE id = ?`, workflowID).Scan(&workflowVersion); err != nil {
+		t.Fatalf("read migrated Workflow Version: %v", err)
+	}
+	if workflowVersion != 2 {
+		t.Fatalf("migrated Workflow Version = %d, want 2 after Join-only Branch remap", workflowVersion)
+	}
+	var providerEdgeID string
+	if err := db.QueryRow(`
+SELECT json_extract(provider.value, '$.provider_edge_id')
+FROM workflow_nodes nodes, json_each(nodes.join_input_providers_json) provider
+WHERE nodes.node_key = 'join'`).Scan(&providerEdgeID); err != nil {
+		t.Fatalf("read migrated Join provider identity: %v", err)
+	}
+	if _, err := runtimeids.GraphEntityIDBlob(providerEdgeID); err != nil {
+		t.Fatalf("migrated Join provider identity %q is not canonical UUIDv4: %v", providerEdgeID, err)
+	}
+}
+
 func TestGraphIdentityMigrationRejectsInvalidVersion79IdentitiesWithoutMutation(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
