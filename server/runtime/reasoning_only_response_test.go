@@ -43,7 +43,7 @@ func TestWorkflowReasoningOnlyResponseContinuesWithoutFeedback(t *testing.T) {
 			Input: json.RawMessage(`{"cmd":"kent task complete"}`),
 		}),
 	}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{
@@ -102,7 +102,7 @@ func TestWorkflowEmptyFinalResponseUsesGenericEmptyFinalFeedback(t *testing.T) {
 			Input: json.RawMessage(`{"cmd":"kent task complete"}`),
 		}),
 	}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: completionTool,
 	}), Config{

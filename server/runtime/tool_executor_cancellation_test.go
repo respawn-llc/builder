@@ -24,7 +24,7 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand,
 			Handler: cancellationAwareTool{
 				started: started,
@@ -40,7 +40,7 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 		_, err := engine.executeToolCalls(ctx, "step", []llm.ToolCall{{
 			ID:    "canceled-call",
 			Name:  string(toolspec.ToolExecCommand),
-			Input: json.RawMessage(`{}`),
+			Input: json.RawMessage(`{"cmd":"true"}`),
 		}})
 		done <- err
 	}()
@@ -68,7 +68,7 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: handler,
 		}),

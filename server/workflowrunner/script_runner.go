@@ -72,7 +72,12 @@ func (s *Starter) startCurrentNodeScript(
 					scriptExecutionFailure(result, runErr),
 				)
 			}
-			contract := workflowruntime.CompletionContract{Transitions: workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs)}
+			contract, err := workflowruntime.NewCompletionContract(
+				workflowCompletionTransitions(input.TransitionOptions, input.TransitionIDs),
+			)
+			if err != nil {
+				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
+			}
 			parsed, err := workflowruntime.DecodeCompletion(json.RawMessage(result.Stdout), contract)
 			if err != nil {
 				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)

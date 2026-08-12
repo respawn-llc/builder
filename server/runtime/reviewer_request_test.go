@@ -10,7 +10,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -61,7 +60,7 @@ func TestReviewerSuggestions_ReusesStableMetaForPromptCachePrefix(t *testing.T) 
 			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
 		},
 	}
-	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 
 	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
 		t.Fatalf("first reviewer suggestions: %v", err)
@@ -86,7 +85,7 @@ func TestReviewerSuggestions_ReusesStableMetaForPromptCachePrefix(t *testing.T) 
 func TestBuildReviewerRequestUsesReviewerModelCapabilities(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		Reviewer: ReviewerConfig{
 			Model: "local-reviewer",
@@ -105,11 +104,48 @@ func TestBuildReviewerRequestUsesReviewerModelCapabilities(t *testing.T) {
 	}
 }
 
+func TestReviewerRequestAndResponseSharePreparedTypedContract(t *testing.T) {
+	store := mustCreateTestSession(t)
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		Model:    "gpt-5",
+		Reviewer: ReviewerConfig{Model: "gpt-5"},
+	})
+	req, err := eng.buildReviewerRequest(context.Background(), &fakeClient{})
+	if err != nil {
+		t.Fatalf("build reviewer request: %v", err)
+	}
+	if req.StructuredOutput == nil || !req.StructuredOutput.Schema.Strict() {
+		t.Fatalf("reviewer structured output = %+v, want strict contract", req.StructuredOutput)
+	}
+	if !req.StructuredOutput.Schema.Prepared() {
+		t.Fatal("reviewer structured output omitted prepared schema")
+	}
+
+	valid := parseReviewerSuggestionsObject(
+		eng.reviewerSuggestionsContract,
+		`{"suggestions":["  keep markdown  "," "]}`,
+	)
+	if !reflect.DeepEqual(valid, []string{"  keep markdown  "}) {
+		t.Fatalf("valid suggestions = %#v", valid)
+	}
+	for _, invalid := range []string{
+		`{}`,
+		`{"suggestions":null}`,
+		`{"suggestions":["ok"],"extra":true}`,
+		`{"suggestions":"ok"}`,
+		`not-json`,
+	} {
+		if suggestions := parseReviewerSuggestionsObject(eng.reviewerSuggestionsContract, invalid); len(suggestions) != 0 {
+			t.Fatalf("invalid reviewer payload %s produced %#v", invalid, suggestions)
+		}
+	}
+}
+
 func TestBuildReviewerRequestPreservesTranscriptBytes(t *testing.T) {
 	t.Parallel()
 	seedContent := "review raw \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
@@ -176,7 +212,7 @@ func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
 			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}, Usage: llm.Usage{InputTokens: 10}},
 		},
 	}
-	eng := mustNewTestEngine(t, store, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	t.Cleanup(func() { _ = eng.Close() })
 	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
@@ -192,7 +228,7 @@ func TestReviewerSuggestions_ReopenKeepsPromptCachePrefixStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	reopenedEng := mustNewTestEngine(t, reopened, engineClient, tools.NewRegistry(), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
+	reopenedEng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	t.Cleanup(func() { _ = reopenedEng.Close() })
 	if err := reopenedEng.steer("prep-2", steerMessagesWithPersistenceIntent(steeringPriorityUser, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("second request")}})); err != nil {
 		t.Fatalf("append second message: %v", err)

@@ -431,7 +431,7 @@ func newRuntimeControlTestEngine(t *testing.T, client llm.Client, registry *tool
 		client = &runtimeControlFakeClient{}
 	}
 	if registry == nil {
-		registry = tools.NewRegistry()
+		registry = newTestToolRegistry(t)
 	}
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
@@ -1730,7 +1730,7 @@ func TestServiceResumeGoalDuringInterruptSchedulesRestartWithReminder(t *testing
 }
 
 func TestServiceSetSessionNameDedupesSuccessfulRetry(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	if err := store.SetName("before"); err != nil {
 		t.Fatalf("persist initial session name: %v", err)
 	}
@@ -1897,7 +1897,7 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 }
 
 func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
@@ -1917,7 +1917,7 @@ func TestServiceSubmitUserShellCommandDedupesSuccessfulRetry(t *testing.T) {
 }
 
 func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
@@ -1933,7 +1933,7 @@ func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
 }
 
 func TestServiceSubmitUserShellCommandRejectsClientRequestIDPayloadMismatch(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	first := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 	if err := service.SubmitUserShellCommand(context.Background(), first); err != nil {
 		t.Fatalf("SubmitUserShellCommand first: %v", err)
@@ -1951,7 +1951,7 @@ func TestServiceSubmitUserShellCommandRejectsClientRequestIDPayloadMismatch(t *t
 func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
@@ -2018,7 +2018,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
@@ -2100,7 +2100,7 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 		t.Run(string(kind), func(t *testing.T) {
 			client := newSteeringDrainRuntimeControlClient()
 			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 1)
-			registry := tools.NewRegistry(tools.HandlerRegistration{
+			registry := newTestToolRegistry(t, tools.HandlerRegistration{
 				ID:      toolspec.ToolExecCommand,
 				Handler: fakeShellHandler{},
 			})
@@ -2286,7 +2286,7 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 	client := newSteeringDrainRuntimeControlClient()
 	defer close(client.releaseFirst)
 	defer close(client.releaseSecond)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})

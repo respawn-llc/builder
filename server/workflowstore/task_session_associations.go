@@ -302,7 +302,7 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	if taskID == nil || *taskID != reference.TaskID {
 		return ErrSessionNotCurrentWorkflowNode
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotCurrentWorkflowNode
 	}
@@ -332,7 +332,7 @@ func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference wo
 	if err := reference.Validate(); err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}

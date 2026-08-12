@@ -225,21 +225,27 @@ func buildFunctionToolParam(tool Tool) (responses.ToolUnionParam, error) {
 		}
 		return responses.ToolUnionParam{OfCustom: &custom}, nil
 	}
-	if len(tool.Schema) > 0 && !json.Valid(tool.Schema) {
-		return responses.ToolUnionParam{}, fmt.Errorf("invalid tool schema for %s", tool.Name)
+	if !tool.Schema.Prepared() {
+		return responses.ToolUnionParam{}, fmt.Errorf("tool schema is not prepared for %s", tool.Name)
 	}
-	params := map[string]any{"type": "object", "properties": map[string]any{}}
-	if len(tool.Schema) > 0 {
-		if err := json.Unmarshal(tool.Schema, &params); err != nil {
-			return responses.ToolUnionParam{}, fmt.Errorf("invalid tool schema for %s", tool.Name)
-		}
+	raw, err := json.Marshal(struct {
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Parameters  json.RawMessage `json:"parameters"`
+		Strict      bool            `json:"strict"`
+	}{
+		Type:        "function",
+		Name:        tool.Name,
+		Description: strings.TrimSpace(tool.Description),
+		Parameters:  json.RawMessage(tool.Schema.JSON()),
+		Strict:      tool.Schema.Strict(),
+	})
+	if err != nil {
+		return responses.ToolUnionParam{}, fmt.Errorf("serialize tool schema for %s: %w", tool.Name, err)
 	}
-	normalizeSchemaNode(params)
-	toolParam := responses.ToolParamOfFunction(tool.Name, params, false)
-	if description := strings.TrimSpace(tool.Description); description != "" && toolParam.OfFunction != nil {
-		toolParam.OfFunction.Description = openai.String(description)
-	}
-	return toolParam, nil
+	function := param.Override[responses.FunctionToolParam](json.RawMessage(raw))
+	return responses.ToolUnionParam{OfFunction: &function}, nil
 }
 
 func buildResponseTextConfig(output *StructuredOutput, verbosity string) (responses.ResponseTextConfigParam, bool, error) {
@@ -250,19 +256,14 @@ func buildResponseTextConfig(output *StructuredOutput, verbosity string) (respon
 	if output == nil {
 		return text, text.Verbosity != "", nil
 	}
-	schema, err := parseStructuredOutputSchema(output.Schema)
+	if !output.Schema.Prepared() {
+		return responses.ResponseTextConfigParam{}, false, errors.New("structured output schema is not prepared")
+	}
+	format, err := buildStructuredOutputFormat(output)
 	if err != nil {
 		return responses.ResponseTextConfigParam{}, false, err
 	}
-	text.Format = responses.ResponseFormatTextConfigParamOfJSONSchema(strings.TrimSpace(output.Name), schema)
-	if text.Format.OfJSONSchema != nil {
-		if output.Strict {
-			text.Format.OfJSONSchema.Strict = param.NewOpt(true)
-		}
-		if description := strings.TrimSpace(output.Description); description != "" {
-			text.Format.OfJSONSchema.Description = param.NewOpt(description)
-		}
-	}
+	text.Format = format
 	return text, true, nil
 }
 
@@ -274,28 +275,42 @@ func buildInputTokenCountTextConfig(output *StructuredOutput, verbosity string) 
 	if output == nil {
 		return text, text.Verbosity != "", nil
 	}
-	schema, err := parseStructuredOutputSchema(output.Schema)
+	if !output.Schema.Prepared() {
+		return responses.InputTokenCountParamsText{}, false, errors.New("structured output schema is not prepared")
+	}
+	format, err := buildStructuredOutputFormat(output)
 	if err != nil {
 		return responses.InputTokenCountParamsText{}, false, err
 	}
-	text.Format = responses.ResponseFormatTextConfigParamOfJSONSchema(strings.TrimSpace(output.Name), schema)
-	if text.Format.OfJSONSchema != nil {
-		if output.Strict {
-			text.Format.OfJSONSchema.Strict = param.NewOpt(true)
-		}
-		if description := strings.TrimSpace(output.Description); description != "" {
-			text.Format.OfJSONSchema.Description = param.NewOpt(description)
-		}
-	}
+	text.Format = format
 	return text, true, nil
 }
 
-func parseStructuredOutputSchema(raw json.RawMessage) (map[string]any, error) {
-	var schema map[string]any
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		return nil, fmt.Errorf("invalid structured output schema")
+func buildStructuredOutputFormat(
+	output *StructuredOutput,
+) (responses.ResponseFormatTextConfigUnionParam, error) {
+	raw, err := json.Marshal(struct {
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Schema      json.RawMessage `json:"schema"`
+		Strict      bool            `json:"strict"`
+		Description string          `json:"description,omitempty"`
+	}{
+		Type:        "json_schema",
+		Name:        strings.TrimSpace(output.Name),
+		Schema:      json.RawMessage(output.Schema.JSON()),
+		Strict:      output.Schema.Strict(),
+		Description: strings.TrimSpace(output.Description),
+	})
+	if err != nil {
+		return responses.ResponseFormatTextConfigUnionParam{}, fmt.Errorf(
+			"serialize structured output schema for %s: %w",
+			output.Name,
+			err,
+		)
 	}
-	return schema, nil
+	format := param.Override[responses.ResponseFormatTextJSONSchemaConfigParam](json.RawMessage(raw))
+	return responses.ResponseFormatTextConfigUnionParam{OfJSONSchema: &format}, nil
 }
 
 func shouldApplyReasoningEffort(contractSupport bool, model, effort string) bool {
@@ -334,72 +349,4 @@ func configuredTextVerbosity(model, configured string, providerCaps ProviderCapa
 		}
 	}
 	return ""
-}
-
-func normalizeSchemaNode(node any) {
-	obj, ok := node.(map[string]any)
-	if ok {
-		if isJSONObjectSchema(obj) {
-			if _, exists := obj["additionalProperties"]; !exists {
-				obj["additionalProperties"] = false
-			}
-		}
-		if props, ok := obj["properties"].(map[string]any); ok {
-			for _, prop := range props {
-				normalizeSchemaNode(prop)
-			}
-		}
-		if defs, ok := obj["$defs"].(map[string]any); ok {
-			for _, def := range defs {
-				normalizeSchemaNode(def)
-			}
-		}
-		if defs, ok := obj["definitions"].(map[string]any); ok {
-			for _, def := range defs {
-				normalizeSchemaNode(def)
-			}
-		}
-		if items, exists := obj["items"]; exists {
-			normalizeSchemaNode(items)
-		}
-		for _, key := range []string{"allOf", "anyOf", "oneOf"} {
-			if list, ok := obj[key].([]any); ok {
-				for _, item := range list {
-					normalizeSchemaNode(item)
-				}
-			}
-		}
-		for _, key := range []string{"not", "if", "then", "else"} {
-			if child, exists := obj[key]; exists {
-				normalizeSchemaNode(child)
-			}
-		}
-		return
-	}
-
-	if list, ok := node.([]any); ok {
-		for _, item := range list {
-			normalizeSchemaNode(item)
-		}
-	}
-}
-
-func isJSONObjectSchema(schema map[string]any) bool {
-	if len(schema) == 0 {
-		return false
-	}
-	if typeField, ok := schema["type"]; ok {
-		switch value := typeField.(type) {
-		case string:
-			return strings.TrimSpace(value) == "object"
-		case []any:
-			for _, item := range value {
-				if stringValue, ok := item.(string); ok && strings.TrimSpace(stringValue) == "object" {
-					return true
-				}
-			}
-		}
-	}
-	_, hasProps := schema["properties"]
-	return hasProps
 }

@@ -54,7 +54,7 @@ func TestCurrentNodeSelectionRoundTripsForAgentAndRejectsNonAgentAssignment(t *t
 	if err := insertTaskCurrentNode(ctx, store.queries, agentCurrentNode); err != nil {
 		t.Fatalf("insert agent current node: %v", err)
 	}
-	reloaded, err := currentNodeForReference(ctx, store.queries, agentReference)
+	reloaded, err := store.currentNodeForReference(ctx, store.queries, agentReference)
 	if err != nil {
 		t.Fatalf("currentNodeForReference agent: %v", err)
 	}

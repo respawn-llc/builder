@@ -9,7 +9,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 )
@@ -29,7 +28,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 			remoteCompactionReplacement(1_000, 100, 2_500),
 		},
 	}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:               "gpt-5",
 		CompactionMode:      "native",
 		ContextWindowTokens: 2_500,
@@ -167,7 +166,7 @@ func newRemoteCompactionFixture(
 			Usage: llm.Usage{InputTokens: 1_000, OutputTokens: 100, WindowTokens: 200_000},
 		}},
 	}
-	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:          "gpt-5",
 		CompactionMode: "native",
 	})

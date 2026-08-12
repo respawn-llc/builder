@@ -20,8 +20,7 @@ func TestBuildPayload_AppliesStructuredOutputJSONSchema(t *testing.T) {
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
 			Name:   "reviewer_suggestions",
-			Schema: json.RawMessage(`{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"],"additionalProperties":false}`),
-			Strict: true,
+			Schema: mustTestStructuredSchema(t, testReviewerStructuredOutput{}),
 		},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
@@ -48,40 +47,25 @@ func TestBuildPayload_AppliesStructuredOutputJSONSchema(t *testing.T) {
 	}
 }
 
-func TestBuildPayload_PreservesNullableStructuredOutputSchemaProperties(t *testing.T) {
+func TestBuildPayload_ForwardsPreparedStructuredOutputSchemaUnchanged(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
+	prepared := mustTestStructuredSchema(t, testWorkflowStructuredOutput{})
 	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
-			Name: "workflow_completion",
-			Schema: json.RawMessage(`{
-				"type": "object",
-				"additionalProperties": false,
-				"properties": {
-					"transition": {"type": "string", "enum": ["blocked", "done"]},
-					"commentary": {"type": "string"},
-					"risk": {"type": ["string", "null"]},
-					"summary": {"type": ["string", "null"]}
-				},
-				"required": ["transition", "commentary", "risk", "summary"]
-			}`),
-			Strict: true,
+			Name:   "workflow_completion",
+			Schema: prepared,
 		},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
 
-	schema := structuredOutputPayloadSchema(t, mustMarshalObject(t, payload))
-	if _, exists := schema["oneOf"]; exists {
-		t.Fatalf("payload schema should not include oneOf: %+v", schema)
+	got := structuredOutputPayloadSchema(t, mustMarshalObject(t, payload))
+	want := mustDecodeSchemaObject(t, prepared.JSON())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("structured output schema changed in transport\ngot=%#v\nwant=%#v", got, want)
 	}
-	properties, ok := schema["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("payload schema properties missing: %+v", schema)
-	}
-	assertNullablePayloadProperty(t, properties, "summary")
-	assertNullablePayloadProperty(t, properties, "risk")
 }
 
 func structuredOutputPayloadSchema(t *testing.T, jsonPayload map[string]any) map[string]any {
@@ -101,19 +85,13 @@ func structuredOutputPayloadSchema(t *testing.T, jsonPayload map[string]any) map
 	return schema
 }
 
-func assertNullablePayloadProperty(t *testing.T, properties map[string]any, name string) {
+func mustDecodeSchemaObject(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
-	property, ok := properties[name].(map[string]any)
-	if !ok {
-		t.Fatalf("payload property %s missing: %+v", name, properties)
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("decode prepared schema: %v", err)
 	}
-	values, ok := property["type"].([]any)
-	if !ok || len(values) != 2 {
-		t.Fatalf("payload property %s type = %+v, want nullable string", name, property["type"])
-	}
-	if values[0] != "string" || values[1] != "null" {
-		t.Fatalf("payload property %s type = %+v, want [string null]", name, values)
-	}
+	return schema
 }
 
 func TestBuildPayload_AppliesConfiguredModelVerbosityForSupportedModels(t *testing.T) {
@@ -141,8 +119,7 @@ func TestBuildPayload_MergesConfiguredModelVerbosityWithStructuredOutput(t *test
 		Model: "gpt-5",
 		StructuredOutput: &StructuredOutput{
 			Name:   "reviewer_suggestions",
-			Schema: json.RawMessage(`{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"],"additionalProperties":false}`),
-			Strict: true,
+			Schema: mustTestStructuredSchema(t, testReviewerStructuredOutput{}),
 		},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
@@ -260,14 +237,15 @@ func TestBuildResponsesInput_AssistantReasoningItemsUseEncryptedContentOnly(t *t
 	}
 }
 
-func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
+func TestBuildPayload_ForwardsPreparedFunctionSchemaUnchanged(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
+	prepared := mustTestFunctionSchema(t, testNestedFunctionInput{})
 	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5",
 		Tools: []Tool{
 			{
 				Name:   "ask_question",
-				Schema: json.RawMessage(`{"type":"object","required":["question"],"properties":{"question":{"type":"string"},"meta":{"type":"object","properties":{"foo":{"type":"string"}}}}}`),
+				Schema: prepared,
 			},
 		},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
@@ -287,24 +265,13 @@ func TestBuildPayload_AddsAdditionalPropertiesFalseToToolSchemas(t *testing.T) {
 	if strict, ok := tool["strict"].(bool); !ok || strict {
 		t.Fatalf("expected function tool strict=false, got %#v", tool["strict"])
 	}
-	params, ok := tool["parameters"].(map[string]any)
+	got, ok := tool["parameters"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected parameters object, got %#v", tool["parameters"])
 	}
-	if got, ok := params["additionalProperties"].(bool); !ok || got {
-		t.Fatalf("expected root additionalProperties=false, got %#v", params["additionalProperties"])
-	}
-
-	props, ok := params["properties"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected root properties object, got %#v", params["properties"])
-	}
-	meta, ok := props["meta"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected nested meta object schema, got %#v", props["meta"])
-	}
-	if got, ok := meta["additionalProperties"].(bool); !ok || got {
-		t.Fatalf("expected nested additionalProperties=false, got %#v", meta["additionalProperties"])
+	want := mustDecodeSchemaObject(t, prepared.JSON())
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("function schema changed in transport\ngot=%#v\nwant=%#v", got, want)
 	}
 }
 
@@ -559,8 +526,8 @@ func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *tes
 		ToolChoiceMode:        ToolChoiceModeRequired,
 		EnableNativeWebSearch: true,
 		Tools: []Tool{
-			{Name: "shell"},
-			{Name: "patch"},
+			{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})},
+			{Name: "patch", Schema: mustTestFunctionSchema(t, struct{}{})},
 		},
 	}
 	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
@@ -582,6 +549,37 @@ func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *tes
 	}
 	if countJSON["parallel_tool_calls"] != true {
 		t.Fatalf("count parallel_tool_calls = %#v, want true", countJSON["parallel_tool_calls"])
+	}
+}
+
+func TestBuildInputTokenCountForwardsPreparedStructuredOutputLikeGeneration(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	request := OpenAIRequest{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		StructuredOutput: &StructuredOutput{
+			Name:        "workflow_completion",
+			Description: "Complete the current workflow node.",
+			Schema:      mustTestStructuredSchema(t, testWorkflowStructuredOutput{}),
+		},
+	}
+	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
+	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
+	if err != nil {
+		t.Fatalf("build generation payload: %v", err)
+	}
+	count, err := transport.buildInputTokenCountParams(request, caps)
+	if err != nil {
+		t.Fatalf("build input-token-count payload: %v", err)
+	}
+	generationJSON := mustMarshalJSONMap(t, generation)
+	countJSON := mustMarshalJSONMap(t, count)
+	if !reflect.DeepEqual(generationJSON["text"], countJSON["text"]) {
+		t.Fatalf(
+			"structured output differs between generation and token count\ngeneration=%#v\ncount=%#v",
+			generationJSON["text"],
+			countJSON["text"],
+		)
 	}
 }
 

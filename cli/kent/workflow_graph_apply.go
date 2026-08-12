@@ -47,11 +47,20 @@ func workflowGraphApplySubcommand(args []string, stdin io.Reader, stdout io.Writ
 	if !ok {
 		return exitCode
 	}
+	contract, err := prepareWorkflowGraphDocumentContract()
+	if err != nil {
+		return writeWorkflowGraphApplyOutcome(
+			stdout,
+			stderr,
+			workflowGraphApplyFailure(workflowGraphApplyRequestFailed, nil, nil, err),
+			*jsonOut,
+		)
+	}
 	data, err := loadWorkflowGraphApplyInput(positionals[0], stdin)
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyRequestFailed, nil, nil, err), *jsonOut)
 	}
-	document, err := decodeWorkflowGraphDocument(data)
+	document, err := contract.Decode(data)
 	if err != nil {
 		return writeWorkflowGraphApplyOutcome(stdout, stderr, workflowGraphApplyFailure(workflowGraphApplyInvalidDocument, nil, nil, err), *jsonOut)
 	}

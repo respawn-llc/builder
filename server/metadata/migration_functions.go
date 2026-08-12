@@ -923,7 +923,7 @@ func migrationCurrentInputValues(_ *sqlitedriver.FunctionContext, args []driver.
 	if err != nil {
 		return nil, fmt.Errorf("current input migration failure: %s: %w", context, err)
 	}
-	bindings, err := decodeLegacyMigrationInputBindings(bindingsJSON)
+	bindings, err := decodeMigrationInputBindings(bindingsJSON)
 	if err != nil {
 		return nil, fmt.Errorf("current input migration failure: %s: %w", context, err)
 	}
@@ -983,16 +983,12 @@ func migrationCurrentInputValues(_ *sqlitedriver.FunctionContext, args []driver.
 	return string(encoded), nil
 }
 
-func decodeLegacyMigrationInputBindings(raw string) ([]workflow.InputBinding, error) {
-	bindings := []workflow.InputBinding{}
-	if err := json.Unmarshal([]byte(raw), &bindings); err == nil {
-		return bindings, nil
-	}
-	legacyEmpty := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(raw), &legacyEmpty); err != nil {
+func decodeMigrationInputBindings(raw string) ([]workflow.InputBinding, error) {
+	var bindings []workflow.InputBinding
+	if err := json.Unmarshal([]byte(raw), &bindings); err != nil {
 		return nil, fmt.Errorf("decode input bindings: %w", err)
 	}
-	if len(legacyEmpty) != 0 {
+	if bindings == nil {
 		return nil, errors.New("input bindings must be an array")
 	}
 	return bindings, nil

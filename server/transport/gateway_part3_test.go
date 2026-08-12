@@ -314,6 +314,27 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 	}
 }
 
+func TestGatewaySessionExecutionEnvironmentRejectsExtraRequestField(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	response := callGatewayRaw(
+		t,
+		conn,
+		"session-execution-extra",
+		protocol.MethodSessionGetExecutionEnvironment,
+		json.RawMessage(`{"session_id":"environment-session","extra":true}`),
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeInvalidParams {
+		t.Fatalf("Session execution response = %+v, want invalid params", response)
+	}
+}
+
 func TestGatewayRunPromptRejectsMixedTypedAndLegacyLaunchFields(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()
@@ -412,7 +433,7 @@ func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
 					ProjectID:  projectID,
 					WorkflowID: runtimeids.NewWorkflowID(),
-					NodeID:     "node-1",
+					NodeID:     runtimeids.NewGraphEntityID(),
 				})},
 				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
 					t.Fatal("invalid board-card filter reached handler")
