@@ -66,6 +66,7 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - An unregistered current directory offers new-Project creation first and an existing-Project picker below.
 - Creating a Project attaches the current workspace as its first workspace and main worktree.
 - Selecting an existing Project attaches the workspace to it.
+- The existing-Project Workspace picker uses the canonical Project Workspace catalog with infinite scroll. It preserves server order, shows Workspace name and path, and shows no activity timestamp.
 - Server-browsing mode can open existing Projects and workspaces but cannot create or attach them.
 - Kent supplies the Project-name suggestion from the workspace. The TUI does not inspect the filesystem to derive it.
 - An empty Project name shows an inline error.

@@ -37,6 +37,7 @@ export {
   emptyWorkflowDerivedWiring,
   hasSelectedWorkflow,
   sessionCatalogPageSize,
+  workspaceCatalogPageSize,
 } from "./models";
 export { boardNodeCardsPageSize, defaultBoardNodeCardsSort } from "./boardNodeCardsSorting";
 export {
@@ -104,6 +105,9 @@ export type {
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
+  ProjectWorkspaceAttachOutcome,
+  ProjectWorkspaceAttachResponse,
+  ProjectWorkspaceResult,
   ProjectWorkflowLink,
   ProjectSummary,
   SelectedWorkflowBoard,
@@ -182,7 +186,8 @@ export type {
   WorkflowValidation,
   WorkflowValidationError,
   WorkspaceSummary,
-  WorkspaceList,
+  WorkspaceCatalogPage,
+  WorkspaceCatalogRow,
   WorkspaceAvailability,
   WorkspaceUnlinkBlocker,
   WorkspaceUnlinkResponse,

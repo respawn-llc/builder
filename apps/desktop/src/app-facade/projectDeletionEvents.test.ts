@@ -14,9 +14,10 @@ import { queryKeys } from "./queryKeys";
 describe("Project deletion owner refresh", () => {
   it.each([
     ["Project Edit", queryKeys.projectEdit("project-1")],
-    ["New Task", queryKeys.workspaces("project-1")],
     ["Link Workflow", queryKeys.projectWorkflowLinks("project-1")],
     ["Project Workflow Editor", queryKeys.projectWorkflowLinks("project-1")],
+    ["Project Workspace catalog", queryKeys.projectWorkspaceCatalog("project-1")],
+    ["exact Project Workspace", queryKeys.projectWorkspace("project-1", "workspace-1")],
   ])("drives the native deletion event through a second %s owner read", async (_name, queryKey) => {
     const bridge = createBrowserNativeBridge();
     const services = createTestServices([], bridge);
@@ -58,4 +59,5 @@ describe("Project deletion owner refresh", () => {
     unsubscribe();
     queryClient.clear();
   });
+
 });

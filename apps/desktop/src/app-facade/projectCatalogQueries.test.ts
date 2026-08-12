@@ -1,7 +1,12 @@
 import { InfiniteQueryObserver, QueryClient } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { ApiService, SessionCatalogPage, SessionCategory, WorkspaceList } from "@/api";
+import type {
+  ApiService,
+  SessionCatalogPage,
+  SessionCategory,
+  WorkspaceCatalogPage,
+} from "@/api";
 import {
   invalidateProjectSessionCatalogs,
   mainSessionCatalogInfiniteQueryOptions,
@@ -18,7 +23,9 @@ describe("Project catalog query authority", () => {
     expect(queryKeys.projectSessionCatalog("project-1", "main")).not.toEqual(
       queryKeys.projectSessionCatalog("project-2", "main"),
     );
-    expect(queryKeys.projectWorkspaceCatalog("project-1")).not.toEqual(queryKeys.workspaces("project-1"));
+    expect(queryKeys.projectWorkspaceCatalog("project-1")).not.toEqual(
+      queryKeys.projectWorkspaceCatalog("project-2"),
+    );
   });
 
   it("retains ten Session pages and traverses from an evicted newest page back to offset zero", async () => {
@@ -65,22 +72,17 @@ describe("Project catalog query authority", () => {
     unsubscribe();
   });
 
-  it("keeps workspace traversal forward-only and retains fewer than the full collection", async () => {
-    const requests: (string | undefined)[] = [];
-    const pageByToken = new Map<string, number>();
+  it("bounds Workspace pages and can restore the default-first page after forward eviction", async () => {
+    const requests: number[] = [];
     const api: Pick<ApiService, "listWorkspaces"> = {
-      listWorkspaces: async (projectID: string, pageToken?: string): Promise<WorkspaceList> => {
+      listWorkspaces: async (projectID: string, offset: number): Promise<WorkspaceCatalogPage> => {
         expect(projectID).toBe("project-1");
-        requests.push(pageToken);
-        const page = pageToken === undefined ? 0 : pageByToken.get(pageToken);
-        if (page === undefined) throw new Error("fixture received an unknown continuation.");
-        const nextPageToken = `next-${String(page + 1)}`;
-        pageByToken.set(nextPageToken, page + 1);
+        requests.push(offset);
         return {
           projectID,
+          offset,
           workspaces: [],
-          defaultWorkspaceID: "workspace-1",
-          nextPageToken,
+          nextOffset: offset + 100,
         };
       },
     };
@@ -95,9 +97,14 @@ describe("Project catalog query authority", () => {
     for (let index = 0; index < 5; index += 1) {
       await observer.fetchNextPage();
     }
-    expect(requests).toEqual([undefined, "next-1", "next-2", "next-3", "next-4", "next-5"]);
+    expect(requests).toEqual([0, 100, 200, 300, 400, 500]);
     expect(observer.getCurrentResult().data?.pages).toHaveLength(4);
-    expect(observer.getCurrentResult().hasPreviousPage).toBe(false);
+    expect(observer.getCurrentResult().data?.pageParams).toEqual([200, 300, 400, 500]);
+
+    await observer.fetchPreviousPage();
+    await observer.fetchPreviousPage();
+    expect(requests.slice(-2)).toEqual([100, 0]);
+    expect(observer.getCurrentResult().data?.pageParams).toEqual([0, 100, 200, 300]);
     unsubscribe();
   });
 

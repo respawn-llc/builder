@@ -325,7 +325,21 @@ func (c *Remote) CreateProject(ctx context.Context, req serverapi.ProjectCreateR
 }
 
 func (c *Remote) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](c, ctx, protocol.MethodProjectEditGet, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectEditGetResponse{}, err
+	}
+	response, err := callUnscopedRPC[serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](c, ctx, protocol.MethodProjectEditGet, req)
+	if err != nil {
+		return serverapi.ProjectEditGetResponse{}, err
+	}
+	if strings.TrimSpace(response.ProjectID) != req.ProjectID {
+		return serverapi.ProjectEditGetResponse{}, fmt.Errorf(
+			"Project Settings response project %q does not match request project %q",
+			response.ProjectID,
+			req.ProjectID,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
@@ -344,7 +358,70 @@ func (c *Remote) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectD
 }
 
 func (c *Remote) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](c, ctx, protocol.MethodProjectWorkspaceList, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, err
+	}
+	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](c, ctx, protocol.MethodProjectWorkspaceList, req)
+	if err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response is invalid: %w", err)
+	}
+	if response.ProjectID != req.ProjectID {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+			"project workspace catalog response project %q does not match request project %q",
+			response.ProjectID,
+			req.ProjectID,
+		)
+	}
+	if response.Offset != req.Offset {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+			"project workspace catalog response offset %d does not match request offset %d",
+			response.Offset,
+			req.Offset,
+		)
+	}
+	if len(response.Workspaces) > req.Limit {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+			"project workspace catalog response returned %d rows for limit %d",
+			len(response.Workspaces),
+			req.Limit,
+		)
+	}
+	if response.NextOffset != nil {
+		expected := req.Offset + req.Limit
+		if len(response.Workspaces) != req.Limit || *response.NextOffset != expected {
+			return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf(
+				"project workspace catalog response next_offset %d does not continue request offset %d with limit %d",
+				*response.NextOffset,
+				req.Offset,
+				req.Limit,
+			)
+		}
+	}
+	return response, nil
+}
+
+func (c *Remote) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	response, err := callUnscopedRPC[serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](c, ctx, protocol.MethodProjectWorkspaceGet, req)
+	if err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response is invalid: %w", err)
+	}
+	if response.ProjectID != req.ProjectID {
+		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf(
+			"exact Project Workspace response project %q does not match request project %q",
+			response.ProjectID,
+			req.ProjectID,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
@@ -363,7 +440,24 @@ func (c *Remote) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteR
 }
 
 func (c *Remote) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	return callUnscopedRPC[serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](c, ctx, protocol.MethodProjectAttachWorkspace, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	response, err := callUnscopedRPC[serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](c, ctx, protocol.MethodProjectAttachWorkspace, req)
+	if err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response is invalid: %w", err)
+	}
+	if response.Binding.ProjectID != req.ProjectID {
+		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf(
+			"Project Workspace attach response project %q does not match request project %q",
+			response.Binding.ProjectID,
+			req.ProjectID,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {

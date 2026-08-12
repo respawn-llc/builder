@@ -11,6 +11,10 @@ func (*testProjectViewClient) GetProjectEdit(context.Context, serverapi.ProjectE
 	return serverapi.ProjectEditGetResponse{}, errors.New("unexpected GetProjectEdit call")
 }
 
+func (*testProjectViewClient) GetProjectWorkspace(context.Context, serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
+	return serverapi.ProjectWorkspaceGetResponse{}, errors.New("unexpected GetProjectWorkspace call")
+}
+
 func (*testProjectViewClient) UpdateProject(context.Context, serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
 	return serverapi.ProjectUpdateResponse{}, errors.New("unexpected UpdateProject call")
 }
