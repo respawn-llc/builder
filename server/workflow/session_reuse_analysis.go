@@ -361,6 +361,11 @@ func (a sessionReuseAnalyzer) targetContext(
 	targetBranch reuseBranch,
 ) (reuseLineage, runtimeids.SessionID, bool, bool) {
 	if target.Kind() != NodeKindAgent {
+		if edge.ContextMode == ContextModeContinueSession ||
+			edge.ContextMode == ContextModeCompactAndContinueSession {
+			_, sourceSessionID, sourceKnown, selected := a.resolveContextSource(state, edge.ContextSource, target, targetBranch)
+			return reuseLineageAbsent, sourceSessionID, sourceKnown, selected
+		}
 		return reuseLineageAbsent, state.activeSourceSessionID, state.activeSourceKnown, true
 	}
 	switch edge.ContextMode {
@@ -382,7 +387,14 @@ func (a sessionReuseAnalyzer) resolveContextSource(
 	canonical := CanonicalContextSource(source)
 	switch canonical.Kind {
 	case ContextSourceImmediateSource:
-		return state.currentLineage, state.activeSourceSessionID, state.activeSourceKnown, true
+		switch state.currentLineage {
+		case reuseLineageCompleted:
+			return state.currentLineage, a.completedSessionID, true, true
+		case reuseLineageAbsent:
+			return state.currentLineage, state.activeSourceSessionID, state.activeSourceKnown, true
+		default:
+			return state.currentLineage, runtimeids.SessionID{}, false, true
+		}
 	case ContextSourceSelectedNode:
 		nodeID, exists := a.nodeIDsByKey[canonical.NodeKey]
 		if !exists {

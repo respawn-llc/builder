@@ -473,7 +473,7 @@ func TestClassifyWorkflowSessionReuseFollowsTransitiveImmediateSourceAfterApprov
 	}
 
 	worker := testAgentNode(workflowID, "node_worker", "worker", "Worker", workflow.NodeFields{SubagentRole: "coder"})
-	review := testAgentNode(workflowID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "reviewer"})
+	review := testNode(workflowID, "node_review", "review", "Review", workflow.NodeKindScript, workflow.NodeFields{ScriptPath: workflow.MustPresentScriptPath("./review.sh")})
 	done := testTerminalNode(workflowID, "node_done", "done", "Done")
 	accepted := workflow.Edge{
 		WorkflowID:        workflowID,
@@ -492,7 +492,7 @@ func TestClassifyWorkflowSessionReuseFollowsTransitiveImmediateSourceAfterApprov
 		TransitionGroupID: "group_review",
 		TargetNodeID:      "node_worker",
 		ContextMode:       workflow.ContextModeContinueSession,
-		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
 	}
 	terminal := workflow.Edge{
 		WorkflowID:        workflowID,
@@ -517,7 +517,7 @@ func TestClassifyWorkflowSessionReuseFollowsTransitiveImmediateSourceAfterApprov
 		},
 		AcceptedBranches:     []workflow.Edge{accepted},
 		CompletedCurrentNode: completedNode,
-		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, CurrentNode: completedReference}},
+		RetainedAssociations: []workflow.SessionReuseAssociation{{SessionID: completedSessionID, SourceSessionID: completedSessionID, CurrentNode: completedReference}},
 	})
 
 	if classification != workflow.SessionReuseThresholdPossibleReuse {
