@@ -196,7 +196,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 		t.Fatalf("get dormant main view: %v", err)
 	}
 	goal := response.MainView.Status.Goal
-	if goal == nil || goal.Goal != nil || goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+	if goal == nil || goal.Goal != nil || goal.Availability == nil || *goal.Availability != clientui.GoalAvailabilityAgentCapabilityMissing {
 		t.Fatalf("dormant main-view Goal = %+v, want outer envelope with absent durable Goal and resolved availability", goal)
 	}
 }

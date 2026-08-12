@@ -452,7 +452,7 @@ func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, 
 	if status.GoalStatus.Cleared != cleared {
 		t.Fatalf("cleared = %t, want %t", status.GoalStatus.Cleared, cleared)
 	}
-	if status.GoalStatus.Availability == nil || *status.GoalStatus.Availability != clientui.GoalAvailabilityAvailable {
+	if status.GoalStatus.Availability == nil || *status.GoalStatus.Availability != session.GoalAvailable {
 		t.Fatalf("goal availability = %v, want available", status.GoalStatus.Availability)
 	}
 	if cleared {
@@ -1171,7 +1171,7 @@ func TestNewOpensPersistedActiveGoalWhenAskQuestionDisabled(t *testing.T) {
 	if engine.GoalLoopSuspended() {
 		t.Fatal("did not expect reopened active goal to be reported suspended before an explicit start attempt")
 	}
-	if availability, err := engine.GoalAvailability(); err != nil || availability != clientui.GoalAvailabilityAgentCapabilityMissing {
+	if availability, err := engine.GoalAvailability(); err != nil || availability != session.GoalAgentCapabilityMissing {
 		t.Fatalf("reopened goal availability = %q, err=%v, want missing ask_question", availability, err)
 	}
 	waitGoalLoopRunning(t, engine, false)

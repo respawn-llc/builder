@@ -13,7 +13,7 @@ import (
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/server/runtime"
-	"core/shared/clientui"
+	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/toolspec"
@@ -35,7 +35,7 @@ type workspaceChatDraftLimits struct {
 type WorkspaceChatDraftResolution struct {
 	Draft            WorkspaceChatDraft
 	Baselines        map[string]WorkspaceChatDraft
-	GoalAvailability clientui.GoalAvailability
+	GoalAvailability session.GoalAvailability
 	limits           map[string]workspaceChatDraftLimits
 }
 type workspaceChatDraftPersistence interface {
@@ -196,9 +196,9 @@ func workspaceChatDraftResolution(draft WorkspaceChatDraft, baselines map[string
 	if !ok {
 		return WorkspaceChatDraftResolution{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved capability", draft.Agent)
 	}
-	availability := clientui.GoalAvailabilityAgentCapabilityMissing
+	availability := session.GoalAgentCapabilityMissing
 	if limit.questions {
-		availability = clientui.GoalAvailabilityAvailable
+		availability = session.GoalAvailable
 	}
 	return WorkspaceChatDraftResolution{Draft: draft, Baselines: baselines, GoalAvailability: availability, limits: limits}, nil
 }

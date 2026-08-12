@@ -10,6 +10,7 @@ import (
 	"core/server/launch"
 	"core/server/requestmemo"
 	"core/server/runtime"
+	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/subagentpolicy"
@@ -145,7 +146,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: resolved.GoalAvailability}, nil
+		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
 		if _, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
@@ -159,7 +160,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: resolved.GoalAvailability}, nil
+		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {
@@ -172,7 +173,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: resolved.GoalAvailability}, nil
+		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	default:
 		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 	}

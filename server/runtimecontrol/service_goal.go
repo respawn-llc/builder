@@ -10,6 +10,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/runtime"
 	"core/server/runtimecommand"
+	"core/server/runtimeview"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
@@ -35,7 +36,7 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve Goal availability for session %q: %w", sessionID, err)
 	}
-	return serverapi.RuntimeGoalShowResponse{GoalEnvelope: clientui.ProjectGoal(session.GoalCoreFromState(record.Meta.Goal), availability)}, nil
+	return serverapi.RuntimeGoalShowResponse{GoalEnvelope: clientui.GoalEnvelope{Goal: runtimeview.GoalCoreFromSessionState(record.Meta.Goal), Availability: runtimeview.GoalAvailabilityFromSession(availability)}}, nil
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
@@ -166,22 +167,27 @@ func memoizedGoalMutation[Req any](
 }
 
 func goalMutationResponseFromCommand(result runtimecommand.GoalCommandResult, allowPendingPreview bool) (serverapi.RuntimeGoalMutationResponse, error) {
+	var availability *clientui.GoalAvailability
+	if result.Availability != nil {
+		projected := runtimeview.GoalAvailabilityFromSession(*result.Availability)
+		availability = &projected
+	}
 	if result.Cleared {
-		return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
+		return serverapi.RuntimeGoalMutationResponse{Availability: availability}, nil
 	}
 	if result.Disposition == runtime.GoalCommandQueued {
 		if !allowPendingPreview {
-			return serverapi.RuntimeGoalMutationResponse{Availability: result.Availability}, nil
+			return serverapi.RuntimeGoalMutationResponse{Availability: availability}, nil
 		}
 		if result.Goal == nil {
 			return serverapi.RuntimeGoalMutationResponse{}, errors.New("queued goal command is missing preview")
 		}
-		return serverapi.RuntimeGoalMutationResponse{Pending: &clientui.GoalPreview{Objective: result.Goal.Objective, Status: clientui.RuntimeGoalStatus(result.Goal.Status)}, Availability: result.Availability}, nil
+		return serverapi.RuntimeGoalMutationResponse{Pending: &clientui.GoalPreview{Objective: result.Goal.Objective, Status: clientui.RuntimeGoalStatus(result.Goal.Status)}, Availability: availability}, nil
 	}
 	if result.Goal == nil {
 		return serverapi.RuntimeGoalMutationResponse{}, errors.New("accepted goal command is missing projected goal")
 	}
-	return serverapi.RuntimeGoalMutationResponse{Goal: session.GoalCoreFromState(result.Goal), Availability: result.Availability}, nil
+	return serverapi.RuntimeGoalMutationResponse{Goal: runtimeview.GoalCoreFromSessionState(result.Goal), Availability: availability}, nil
 }
 
 // goalAgentOverwriteDeniedError preserves the agent-facing policy response while

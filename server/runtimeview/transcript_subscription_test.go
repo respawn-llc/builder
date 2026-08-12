@@ -128,7 +128,7 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-				GoalAvailability: clientui.GoalAvailabilityAvailable,
+				GoalAvailability: session.GoalAvailable,
 				CommittedRows: []runtime.TranscriptCommittedRowFact{{
 					StepID:     transcriptProjectionStepID,
 					Visibility: transcript.EntryVisibilityOngoingCollapsed,
@@ -190,7 +190,7 @@ func mustTranscriptHydration(t *testing.T, snapshot runtime.TranscriptHydrationS
 func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testing.T) {
 	streamID := uuid.MustParse("f84c7d21-4c94-4a54-87fd-b41f5bd01d38")
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability:        clientui.GoalAvailabilityAvailable,
+		GoalAvailability:        session.GoalAvailable,
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 		ActiveAssistantStreamID: &streamID,
@@ -213,7 +213,7 @@ func TestTranscriptHydrationCarriesRuntimeNativeAssistantStreamIdentity(t *testi
 func TestTranscriptHydrationProjectsRuntimeOwnedFacts(t *testing.T) {
 	clientRequestID, queueItemID := runtimeids.NewRuntimeClientRequestID(), runtimeids.NewQueueItemID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: clientui.GoalAvailabilityAvailable,
+		GoalAvailability: session.GoalAvailable,
 		ActiveThinkingStatus: &runtime.TranscriptThinkingStatusState{
 			StepID: transcriptProjectionStepID, Text: "Planning",
 		},
@@ -259,7 +259,7 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 	firstIndex, secondIndex := int64(0), int64(1)
 	firstID := runtimeids.NewReasoningTraceID()
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: clientui.GoalAvailabilityAvailable,
+		GoalAvailability: session.GoalAvailable,
 		ActiveReasoningTraces: []runtime.TranscriptReasoningTraceState{
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Kent: &firstID}, Text: "first"},
 			{StepID: transcriptProjectionStepID, Identity: runtime.TranscriptReasoningTraceIdentity{Provider: &llm.ReasoningItemIdentity{ItemID: "second", PartIndex: &secondIndex}}, Text: "second"},
@@ -326,7 +326,7 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: clientui.GoalAvailabilityAvailable,
+		GoalAvailability: session.GoalAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:     transcriptProjectionStepID,
 			Visibility: transcript.EntryVisibilityHidden,
@@ -395,7 +395,7 @@ func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T
 	}
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
 		CommittedRows:    []runtime.TranscriptCommittedRowFact{fact},
-		GoalAvailability: clientui.GoalAvailabilityAvailable,
+		GoalAvailability: session.GoalAvailable,
 	})
 	if len(hydration.CommittedRows) != 1 || hydration.CommittedRows[0].ReasoningTrace == nil ||
 		hydration.CommittedRows[0].ReasoningTrace.DurationMs == nil ||
@@ -537,7 +537,7 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 
 func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testing.T) {
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: clientui.GoalAvailabilityAvailable,
+		GoalAvailability: session.GoalAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			StepID:  transcriptProjectionStepID,
 			Kind:    runtime.TranscriptCommittedRowFactAssistant,
@@ -603,7 +603,7 @@ func TestTranscriptHydrationRejectsAssistantStreamWithoutRuntimeIdentity(t *test
 		}
 	}()
 	_ = mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
-		GoalAvailability:        clientui.GoalAvailabilityAvailable,
+		GoalAvailability:        session.GoalAvailable,
 		ActiveAssistantText:     "hello",
 		ActiveAssistantMetadata: &runtime.AssistantStreamMetadata{StepID: transcriptProjectionStepID},
 	})

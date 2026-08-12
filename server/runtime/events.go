@@ -4,7 +4,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
-	"core/shared/clientui"
 	"core/shared/transcript"
 	"time"
 
@@ -138,7 +137,7 @@ type Event struct {
 
 type GoalStatusUpdate struct {
 	State        session.GoalState
-	Availability *clientui.GoalAvailability
+	Availability *session.GoalAvailability
 	Cleared      bool
 }
 

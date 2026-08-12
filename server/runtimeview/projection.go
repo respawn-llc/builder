@@ -1,6 +1,8 @@
 package runtimeview
 
 import (
+	"strings"
+
 	"core/server/runtime"
 	"core/server/runtimeactivity"
 	"core/server/session"
@@ -129,9 +131,23 @@ func TranscriptSessionStatusFromRuntime(engine *runtime.Engine) (clientui.Transc
 	return status, nil
 }
 
-func GoalFromSessionState(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.RuntimeGoal {
-	projected := clientui.ProjectGoal(session.GoalCoreFromState(goal), availability)
-	return &clientui.RuntimeGoal{Goal: projected.Goal, Availability: &projected.Availability, Suspended: suspended}
+func GoalFromSessionState(goal *session.GoalState, availability session.GoalAvailability, suspended bool) *clientui.RuntimeGoal {
+	projected := GoalAvailabilityFromSession(availability)
+	return &clientui.RuntimeGoal{Goal: GoalCoreFromSessionState(goal), Availability: &projected, Suspended: suspended}
+}
+
+func GoalCoreFromSessionState(goal *session.GoalState) *clientui.Goal {
+	if goal == nil {
+		return nil
+	}
+	return &clientui.Goal{ID: strings.TrimSpace(goal.ID), Objective: goal.Objective, Status: clientui.RuntimeGoalStatus(goal.Status), CreatedAt: goal.CreatedAt, UpdatedAt: goal.UpdatedAt}
+}
+
+func GoalAvailabilityFromSession(availability session.GoalAvailability) clientui.GoalAvailability {
+	if availability == session.GoalAvailable {
+		return clientui.GoalAvailabilityAvailable
+	}
+	return clientui.GoalAvailabilityAgentCapabilityMissing
 }
 
 func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView, error) {

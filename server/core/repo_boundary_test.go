@@ -1095,6 +1095,28 @@ func walkRepositoryGoSources(t *testing.T, repoRoot string, scan repositoryGoSou
 	}
 }
 
+func TestSessionDomainOwnsGoalFacts(t *testing.T) {
+	violations := make([]string, 0)
+	walkRepositoryGoSources(t, findRepoRoot(t), repositoryGoSourceScan{
+		Operation: "scan session domain imports",
+		Root:      filepath.Join("server", "session"),
+		Mode:      parser.ImportsOnly,
+		Selection: allRepositoryGoSources{},
+	}, func(source parsedGoSource) {
+		if filepath.Base(source.RelPath) == "event_message_v1.go" {
+			return
+		}
+		for _, imported := range source.File.Imports {
+			if strings.Trim(imported.Path.Value, "\"") == "core/shared/clientui" {
+				violations = append(violations, source.RelPath)
+			}
+		}
+	})
+	if len(violations) > 0 {
+		t.Fatalf("session domain files must not expose client Goal DTOs:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
 func TestCLIAppSplitFilesDoNotImportServerPackages(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	files := []string{

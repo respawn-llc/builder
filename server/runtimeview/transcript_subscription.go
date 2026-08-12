@@ -135,7 +135,7 @@ func transcriptContextUsageFromRuntime(usage *runtime.ContextUsage) *clientui.Tr
 	return projected
 }
 
-func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clientui.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
+func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability session.GoalAvailability, suspended bool) *clientui.TranscriptGoalStatus {
 	projected := GoalFromSessionState(goal, availability, suspended)
 	if projected == nil || projected.Goal == nil {
 		return &clientui.TranscriptGoalStatus{Availability: projected.Availability}
@@ -146,10 +146,14 @@ func transcriptGoalStatusFromRuntime(goal *session.GoalState, availability clien
 	}, Availability: projected.Availability}
 }
 
-func transcriptGoalStatusFromUpdate(goal *session.GoalState, availability *clientui.GoalAvailability, suspended bool) clientui.TranscriptGoalStatus {
-	status := clientui.TranscriptGoalStatus{Availability: availability}
+func transcriptGoalStatusFromUpdate(goal *session.GoalState, availability *session.GoalAvailability, suspended bool) clientui.TranscriptGoalStatus {
+	status := clientui.TranscriptGoalStatus{}
+	if availability != nil {
+		projected := GoalAvailabilityFromSession(*availability)
+		status.Availability = &projected
+	}
 	if goal != nil {
-		status.Goal = &clientui.TranscriptGoal{Goal: session.GoalCoreFromState(goal), Suspended: suspended}
+		status.Goal = &clientui.TranscriptGoal{Goal: GoalCoreFromSessionState(goal), Suspended: suspended}
 	}
 	return status
 }

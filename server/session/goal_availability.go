@@ -3,50 +3,49 @@ package session
 import (
 	"errors"
 	"fmt"
-	"strings"
 
-	"core/shared/clientui"
 	"core/shared/invariant"
 	"core/shared/toolspec"
 )
 
-func GoalCoreFromState(goal *GoalState) *clientui.Goal {
-	if goal == nil {
-		return nil
-	}
-	return &clientui.Goal{ID: strings.TrimSpace(goal.ID), Objective: goal.Objective, Status: clientui.RuntimeGoalStatus(strings.TrimSpace(string(goal.Status))), CreatedAt: goal.CreatedAt, UpdatedAt: goal.UpdatedAt}
-}
-func (s *Store) GoalAvailability() (clientui.GoalAvailability, error) {
+type GoalAvailability uint8
+
+const (
+	GoalAvailable GoalAvailability = iota + 1
+	GoalAgentCapabilityMissing
+)
+
+func (s *Store) GoalAvailability() (GoalAvailability, error) {
 	if s == nil {
-		return "", errors.New("session store is required")
+		return 0, errors.New("session store is required")
 	}
 	return GoalAvailabilityFromMeta(s.Meta())
 }
-func (s *Store) GoalMutationAvailability() *clientui.GoalAvailability {
+func (s *Store) GoalMutationAvailability() *GoalAvailability {
 	availability, err := s.GoalAvailability()
 	if err != nil {
 		return nil
 	}
 	return &availability
 }
-func GoalAvailabilityFromMeta(meta Meta) (clientui.GoalAvailability, error) {
+func GoalAvailabilityFromMeta(meta Meta) (GoalAvailability, error) {
 	if meta.Locked == nil {
-		return clientui.GoalAvailabilityAvailable, nil
+		return GoalAvailable, nil
 	}
 	if !meta.Locked.HasEnabledTools {
-		return "", malformedGoalContract(meta, errors.New("enabled tool snapshot is absent"))
+		return 0, malformedGoalContract(meta, errors.New("enabled tool snapshot is absent"))
 	}
-	a := clientui.GoalAvailabilityAgentCapabilityMissing
+	availability := GoalAgentCapabilityMissing
 	for _, raw := range meta.Locked.EnabledTools {
 		tool, ok := toolspec.ParseID(raw)
 		if !ok {
-			return "", malformedGoalContract(meta, fmt.Errorf("enabled tool %q is invalid", raw))
+			return 0, malformedGoalContract(meta, fmt.Errorf("enabled tool %q is invalid", raw))
 		}
 		if tool == toolspec.ToolAskQuestion {
-			a = clientui.GoalAvailabilityAvailable
+			availability = GoalAvailable
 		}
 	}
-	return a, nil
+	return availability, nil
 }
 
 func malformedGoalContract(meta Meta, cause error) error {

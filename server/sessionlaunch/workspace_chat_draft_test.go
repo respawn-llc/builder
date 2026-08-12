@@ -7,6 +7,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/runtime"
+	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -30,7 +31,7 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	base := draftSettings("gpt-5.6-sol", "medium")
 	base.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	got, err := ResolveWorkspaceChatDraft(draftInput(base), nil)
-	if err != nil || got.Draft.Agent != "default" || got.Draft.Supervisor != "edits" || got.Draft.Thinking != "medium" || !got.Draft.Questions || !got.Draft.AutoCompaction || got.GoalAvailability != clientui.GoalAvailabilityAvailable {
+	if err != nil || got.Draft.Agent != "default" || got.Draft.Supervisor != "edits" || got.Draft.Thinking != "medium" || !got.Draft.Questions || !got.Draft.AutoCompaction || got.GoalAvailability != session.GoalAvailable {
 		t.Fatalf("defaults=%+v err=%v", got.Draft, err)
 	}
 	addWorker(&base, "high")

@@ -9,7 +9,6 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -51,7 +50,7 @@ func (GoalClearCommand) goalCommand() {}
 type GoalCommandResult struct {
 	Goal            *session.GoalState
 	Cleared         bool
-	Availability    *clientui.GoalAvailability
+	Availability    *session.GoalAvailability
 	Disposition     runtime.GoalCommandDisposition
 	MetadataReceipt session.CommitReceipt
 	NoticeReceipt   session.CommitReceipt
@@ -415,19 +414,19 @@ func fromRuntimeResult(result runtime.GoalCommandResult, err error) GoalCommandR
 	return out
 }
 
-func queuedGoalResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
+func queuedGoalResult(goal session.GoalState, availability *session.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, false, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result
 }
 
-func queuedClearResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
+func queuedClearResult(goal session.GoalState, availability *session.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, true, runtime.GoalCommandQueued, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result
 }
 
-func noopGoalResult(goal session.GoalState, availability *clientui.GoalAvailability) GoalCommandResult {
+func noopGoalResult(goal session.GoalState, availability *session.GoalAvailability) GoalCommandResult {
 	result := storedGoalResult(goal, false, runtime.GoalCommandNoop, session.CommitReceipt{}, session.CommitReceipt{}, nil)
 	result.Availability = availability
 	return result

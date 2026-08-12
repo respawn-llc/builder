@@ -10,7 +10,6 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/clientui"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -50,7 +49,7 @@ type GoalCommandResult struct {
 	session.GoalState
 	Disposition     GoalCommandDisposition
 	Cleared         bool
-	Availability    *clientui.GoalAvailability
+	Availability    *session.GoalAvailability
 	MetadataReceipt session.CommitReceipt
 	NoticeReceipt   session.CommitReceipt
 }
@@ -193,14 +192,14 @@ func (e *Engine) Goal() *session.GoalState {
 	return cloneRuntimeGoal(e.store.Meta().Goal)
 }
 
-func (e *Engine) GoalAvailability() (clientui.GoalAvailability, error) {
+func (e *Engine) GoalAvailability() (session.GoalAvailability, error) {
 	if e == nil || e.store == nil {
-		return "", errors.New("runtime session store is required")
+		return 0, errors.New("runtime session store is required")
 	}
 	return e.store.GoalAvailability()
 }
 
-func (e *Engine) GoalMutationAvailability() *clientui.GoalAvailability {
+func (e *Engine) GoalMutationAvailability() *session.GoalAvailability {
 	if e == nil || e.store == nil {
 		return nil
 	}
@@ -630,11 +629,11 @@ func (e *Engine) cascadeCompleteActiveGoalOnWorkflowCompletion() {
 	}
 }
 
-func goalStatusUpdateFromState(goal session.GoalState, availability *clientui.GoalAvailability) GoalStatusUpdate {
+func goalStatusUpdateFromState(goal session.GoalState, availability *session.GoalAvailability) GoalStatusUpdate {
 	return GoalStatusUpdate{State: goal, Availability: availability}
 }
 
-func goalStatusClearUpdate(availability *clientui.GoalAvailability) GoalStatusUpdate {
+func goalStatusClearUpdate(availability *session.GoalAvailability) GoalStatusUpdate {
 	return GoalStatusUpdate{Availability: availability, Cleared: true}
 }
 

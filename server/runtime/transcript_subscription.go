@@ -5,7 +5,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/clientui"
 	"core/shared/runtimeids"
 
 	"github.com/google/uuid"
@@ -26,7 +25,7 @@ type TranscriptHydrationSnapshot struct {
 	CompactionCount         int
 	ContextUsage            *ContextUsage
 	Goal                    *session.GoalState
-	GoalAvailability        clientui.GoalAvailability
+	GoalAvailability        session.GoalAvailability
 	GoalSuspended           bool
 }
 
