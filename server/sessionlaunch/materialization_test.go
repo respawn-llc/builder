@@ -80,6 +80,44 @@ func TestServiceMaterializationUsesStoredAuthWithoutRefreshingProviderCredential
 	}
 }
 
+func TestServiceMaterializationDoesNotValidateProviderReadiness(t *testing.T) {
+	service, metadataStore, cfg, binding := newWorkspaceChatMaterializationService(t)
+	cfg.Settings.ProviderOverride = "unsupported-provider"
+	cfg.Source.Sources["model"] = "file"
+	service.planner.Config = cfg
+	service.planner.ReloadConfig = func() (config.App, error) {
+		return cfg, nil
+	}
+	draft := metadata.WorkspaceChatDraftDocument{
+		Message:        "persist before provider validation",
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "medium",
+		Fast:           true,
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	if err := metadataStore.ReplaceWorkspaceChatDraft(t.Context(), binding.WorkspaceID, &draft); err != nil {
+		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
+	}
+
+	sessionID, err := service.materializeWorkspaceChatSession(t.Context())
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChatSession: %v", err)
+	}
+	record, err := metadataStore.ResolvePersistedSession(t.Context(), sessionID.String())
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	state, err := session.ChatDraftStateFromMeta(*record.Meta)
+	if err != nil {
+		t.Fatalf("ChatDraftStateFromMeta: %v", err)
+	}
+	if state.Message != draft.Message || state.Settings == nil || state.Settings.Fast == nil || !*state.Settings.Fast {
+		t.Fatalf("materialized draft = %+v, want provider-unvalidated draft %+v", state, draft)
+	}
+}
+
 func TestServiceMaterializationFailurePreservesDraftAndCleansFilesystemArtifact(t *testing.T) {
 	ctx := context.Background()
 	service, metadataStore, _, binding := newWorkspaceChatMaterializationService(t)

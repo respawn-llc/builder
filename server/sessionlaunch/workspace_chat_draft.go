@@ -17,9 +17,10 @@ import (
 
 type WorkspaceChatDraft = metadata.WorkspaceChatDraftDocument
 type WorkspaceChatDraftResolverInput struct {
-	Settings  config.Settings
-	Source    config.SourceReport
-	AuthState auth.State
+	Settings                        config.Settings
+	Source                          config.SourceReport
+	AuthState                       auth.State
+	SkipProviderReadinessValidation bool
 }
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
@@ -241,7 +242,14 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 			continue
 		}
 		role := selector
-		prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{Settings: input.Settings, Source: input.Source}, serverapi.RunPromptOverrides{AgentRole: &role}, input.AuthState, launch.RunPromptPreparationContext{})
+		prepared, err := launch.PrepareRunPromptOverridesWithContext(
+			config.App{Settings: input.Settings, Source: input.Source},
+			serverapi.RunPromptOverrides{AgentRole: &role},
+			input.AuthState,
+			launch.RunPromptPreparationContext{
+				SkipProviderReadinessValidation: input.SkipProviderReadinessValidation,
+			},
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -255,7 +263,12 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if target == nil {
 			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
 		}
-		preparedSettings, err := launch.PrepareChatSettingsForTarget(input.AuthState, *target)
+		var preparedSettings launch.PreparedChatSettings
+		if input.SkipProviderReadinessValidation {
+			preparedSettings, err = launch.PrepareChatSettingsForTargetWithoutProviderReadiness(*target)
+		} else {
+			preparedSettings, err = launch.PrepareChatSettingsForTarget(input.AuthState, *target)
+		}
 		if err != nil {
 			return nil, err
 		}

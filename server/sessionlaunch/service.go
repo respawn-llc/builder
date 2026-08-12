@@ -105,9 +105,18 @@ func (s *Service) materializeWorkspaceChatSession(ctx context.Context) (runtimei
 	return owner.MaterializeWorkspaceChat(
 		ctx,
 		workspaceID,
-		s.workspaceChatDraftResolverInput,
+		s.workspaceChatMaterializationResolverInput,
 		s.materializeResolvedWorkspaceChat,
 	)
+}
+
+func (s *Service) workspaceChatMaterializationResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
+	input, err := s.workspaceChatDraftResolverInput(ctx)
+	if err != nil {
+		return WorkspaceChatDraftResolverInput{}, err
+	}
+	input.SkipProviderReadinessValidation = true
+	return input, nil
 }
 
 func (s *Service) MaterializeWorkspaceChat(

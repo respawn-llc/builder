@@ -199,9 +199,10 @@ type PreparedBaseTarget struct {
 // RunPromptPreparationContext carries a selected session's immutable,
 // prompt-facing contract into pre-materialization target preparation.
 type RunPromptPreparationContext struct {
-	ModelLock     *session.LockedContract
-	ToolLock      *session.LockedContract
-	OmittedTarget *PreparedBaseTarget
+	ModelLock                       *session.LockedContract
+	ToolLock                        *session.LockedContract
+	OmittedTarget                   *PreparedBaseTarget
+	SkipProviderReadinessValidation bool
 }
 
 type PreparedSubagentTarget struct {
@@ -723,6 +724,12 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 				return PreparedRunPromptOverrides{}, targetErr
 			}
 			prepared.BaseTarget = &target
+		} else if preparation.SkipProviderReadinessValidation {
+			target, targetErr := prepareBaseTargetWithoutProviderReadiness(app, preparation.ModelLock, preparation.ToolLock)
+			if targetErr != nil {
+				return PreparedRunPromptOverrides{}, targetErr
+			}
+			prepared.BaseTarget = &target
 		} else {
 			target, targetErr := prepareBaseTarget(app, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
@@ -744,16 +751,45 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
 	providerSettings.Subagents = nil
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
-	providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
-	if err != nil {
-		return PreparedRunPromptOverrides{}, err
+	providerID := persistedRoleProviderID(providerSettings)
+	if !preparation.SkipProviderReadinessValidation {
+		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
+		if err != nil {
+			return PreparedRunPromptOverrides{}, err
+		}
+		providerID = strings.TrimSpace(providerCaps.ProviderID)
 	}
-	target, err := prepareNamedTarget(app, overrideConfig, overrides, *lookup.NormalizedSelector, lookup.Role, strings.TrimSpace(providerCaps.ProviderID), preparation.ModelLock, preparation.ToolLock, applyBudget)
+	target, err := prepareNamedTarget(
+		app,
+		overrideConfig,
+		overrides,
+		*lookup.NormalizedSelector,
+		lookup.Role,
+		providerID,
+		preparation.ModelLock,
+		preparation.ToolLock,
+		!preparation.SkipProviderReadinessValidation,
+		applyBudget,
+	)
 	if err != nil {
 		return PreparedRunPromptOverrides{}, err
 	}
 	prepared.NamedTarget = &target
 	return prepared, nil
+}
+
+func prepareBaseTargetWithoutProviderReadiness(app config.App, modelLock, toolLock *session.LockedContract) (PreparedBaseTarget, error) {
+	resolved := EffectiveSettings(app.Settings, modelLock)
+	source := app.Source
+	enabledTools, err := ActiveToolIDsForPlan(resolved, source, toolLock)
+	if err != nil {
+		return PreparedBaseTarget{}, err
+	}
+	return PreparedBaseTarget{
+		Settings:     resolved,
+		Source:       source,
+		EnabledTools: enabledTools,
+	}, nil
 }
 
 func prepareBaseTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (PreparedBaseTarget, error) {
@@ -784,7 +820,16 @@ func preparePreparedBaseTarget(target PreparedBaseTarget, overrideConfig config.
 	return PreparedBaseTarget{Settings: resolved, Source: source, EnabledTools: append([]toolspec.ID(nil), enabledTools...)}, nil
 }
 
-func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, selector string, role config.SubagentRole, providerID string, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (PreparedSubagentTarget, error) {
+func prepareNamedTarget(
+	app, overrideConfig config.App,
+	overrides serverapi.RunPromptOverrides,
+	selector string,
+	role config.SubagentRole,
+	providerID string,
+	modelLock, toolLock *session.LockedContract,
+	validate bool,
+	applyBudget modelContextBudgetApplier,
+) (PreparedSubagentTarget, error) {
 	input := preparedSubagentIdentity{Selector: selector, Role: role, ProviderID: providerID}
 	baseSettings := EffectiveSettings(app.Settings, modelLock)
 	resolved, source, warning, err := resolvePreparedSubagentSettings(baseSettings, app.Source, input, modelLock == nil, false)
@@ -799,9 +844,11 @@ func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunP
 	if err != nil {
 		return PreparedSubagentTarget{}, err
 	}
-	resolved, err = validateRunPromptOverrideSettings(resolved, source)
-	if err != nil {
-		return PreparedSubagentTarget{}, err
+	if validate {
+		resolved, err = validateRunPromptOverrideSettings(resolved, source)
+		if err != nil {
+			return PreparedSubagentTarget{}, err
+		}
 	}
 	return PreparedSubagentTarget{
 		Selector:     selector,

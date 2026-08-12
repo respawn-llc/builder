@@ -88,12 +88,19 @@ func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarge
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
+	return prepareChatSettingsForTarget(target, llm.SupportsFastModeProvider(capabilities))
+}
+
+func PrepareChatSettingsForTargetWithoutProviderReadiness(target PreparedBaseTarget) (PreparedChatSettings, error) {
+	return prepareChatSettingsForTarget(target, true)
+}
+
+func prepareChatSettingsForTarget(target PreparedBaseTarget, fastAvailable bool) (PreparedChatSettings, error) {
 	supervisor, valid := runtime.NormalizeReviewerFrequency(target.Settings.Reviewer.Frequency)
 	thinking := strings.TrimSpace(target.Settings.ThinkingLevel)
 	if !valid || thinking == "" {
 		return PreparedChatSettings{}, errors.New("prepared Chat settings are invalid")
 	}
-	fastAvailable := llm.SupportsFastModeProvider(capabilities)
 	questionsAvailable := slices.Contains(target.EnabledTools, toolspec.ToolAskQuestion)
 	return PreparedChatSettings{
 		Baseline: session.ChatSettings{
