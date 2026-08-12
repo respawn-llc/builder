@@ -196,6 +196,7 @@ func ClassifyWorkflowSessionReuse(input SessionReuseAnalysisInput) SessionReuseC
 			if fanout, exists := analyzer.staticFanouts[edge.TransitionGroupID]; exists {
 				transition.target.staticInvocation = staticFanoutInvocation{
 					groupID: edge.TransitionGroupID, incomingBranch: initial.branch,
+					entrySessionID: initial.activeSourceSessionID, entryKnown: initial.activeSourceKnown,
 					sibling: TransitionBranchKey(edge.Key), joinID: fanout.joinID,
 				}
 				transition.target.joinMode = reuseJoinComplete
@@ -588,6 +589,7 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 					if len(arrivals) != len(fanout.siblings) {
 						continue
 					}
+					delete(joinArrivals, invocation.withoutSibling())
 					source := staticContinuationSource{}
 					var reduced reusePathState
 					for index, sibling := range fanout.siblings {
@@ -634,6 +636,7 @@ func (a sessionReuseAnalyzer) stateGroups(state reusePathState) []reuseGroup {
 					transition.target.staticInvocation = staticFanoutInvocation{
 						groupID: group.ID, incomingBranch: state.branch,
 						entry: state.staticSource, sibling: TransitionBranchKey(edge.Key),
+						entrySessionID: state.activeSourceSessionID, entryKnown: state.activeSourceKnown,
 						joinID: fanout.joinID,
 					}
 					transition.target.joinMode = reuseJoinComplete
@@ -870,6 +873,8 @@ type staticFanoutInvocation struct {
 	groupID        TransitionGroupID
 	incomingBranch reuseBranch
 	entry          staticContinuationSource
+	entrySessionID runtimeids.SessionID
+	entryKnown     bool
 	sibling        TransitionBranchKey
 	joinID         NodeID
 }

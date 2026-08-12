@@ -897,11 +897,14 @@ func TestPostCommitDiagnosticPreservesApprovalAndCACBoundary(t *testing.T) {
 	))
 	f.startTask(t, task)
 	approval := f.waitForPendingApproval(t, task.ID)
+	f.waitForTaskQuiescence(t, task.ID)
+	if !observed.Load() {
+		t.Fatal("post-commit persistence diagnostic was not injected")
+	}
 	if pending, err := f.store.ListPendingApprovals(context.Background(), task.ID); err != nil ||
 		len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending Approval after diagnostic = %+v, err = %v", pending, err)
 	}
-	f.waitForTaskQuiescence(t, task.ID)
 	if _, err := f.controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
 		t.Fatalf("apply Approval after diagnostic: %v", err)
 	}
