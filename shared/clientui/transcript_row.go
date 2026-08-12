@@ -1,6 +1,8 @@
 package clientui
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -35,18 +37,56 @@ type TranscriptCommittedRow struct {
 }
 
 type TranscriptUserRow struct {
-	StepID           runtimeids.StepID
-	Text             string
-	CondensedText    *string
-	RollbackTargetID *string
+	StepID            runtimeids.StepID
+	Text              string
+	CondensedText     *string
+	RollbackTargetID  *string
+	CommittedAtUnixMs *int64 `json:"committed_at_unix_ms,omitempty"`
+}
+
+func (r *TranscriptUserRow) UnmarshalJSON(data []byte) error {
+	type rowAlias TranscriptUserRow
+	var decoded rowAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if value, present := fields["committed_at_unix_ms"]; present &&
+		bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return fmt.Errorf("committed_at_unix_ms must be omitted or an integer")
+	}
+	*r = TranscriptUserRow(decoded)
+	return nil
 }
 
 type TranscriptAssistantRow struct {
-	StepID        runtimeids.StepID
-	StreamID      *runtimeids.AssistantStreamID
-	Text          string
-	CondensedText *string
-	Phase         transcript.AssistantPhase
+	StepID            runtimeids.StepID
+	StreamID          *runtimeids.AssistantStreamID
+	Text              string
+	CondensedText     *string
+	Phase             transcript.AssistantPhase
+	CommittedAtUnixMs *int64 `json:"committed_at_unix_ms,omitempty"`
+}
+
+func (r *TranscriptAssistantRow) UnmarshalJSON(data []byte) error {
+	type rowAlias TranscriptAssistantRow
+	var decoded rowAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if value, present := fields["committed_at_unix_ms"]; present &&
+		bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return fmt.Errorf("committed_at_unix_ms must be omitted or an integer")
+	}
+	*r = TranscriptAssistantRow(decoded)
+	return nil
 }
 
 type TranscriptToolRow struct {
@@ -368,7 +408,7 @@ func (r TranscriptUserRow) Validate() error {
 	if err := validateOptionalNonEmptyString("transcript user row condensed text", r.CondensedText); err != nil {
 		return err
 	}
-	return nil
+	return transcript.ValidateCommittedAtUnixMs(r.CommittedAtUnixMs)
 }
 
 func (r TranscriptAssistantRow) Validate() error {
@@ -386,7 +426,7 @@ func (r TranscriptAssistantRow) Validate() error {
 	}
 	switch r.Phase {
 	case transcript.AssistantPhaseCommentary, transcript.AssistantPhaseFinal:
-		return nil
+		return transcript.ValidateCommittedAtUnixMs(r.CommittedAtUnixMs)
 	default:
 		return fmt.Errorf("unknown transcript assistant row phase %q", r.Phase)
 	}

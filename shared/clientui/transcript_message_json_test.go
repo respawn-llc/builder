@@ -1,12 +1,14 @@
 package clientui
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -200,6 +202,105 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		}
 		if decoded.Kind() != event.Kind() || reflect.TypeOf(decoded.Payload()) != reflect.TypeOf(event.Payload()) {
 			t.Fatalf("round-trip %q produced %T", event.Kind(), decoded.Payload())
+		}
+	}
+}
+
+func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T) {
+	stepID := transcriptTestStepID(t)
+	committedAt := int64(-1)
+	presentRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowUser,
+			User:       &TranscriptUserRow{StepID: stepID, Text: "user", CommittedAtUnixMs: &committedAt},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowAssistant,
+			Assistant: &TranscriptAssistantRow{
+				StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal,
+				CommittedAtUnixMs: &committedAt,
+			},
+		},
+	}
+	for _, row := range presentRows {
+		event := NewTranscriptEvent(row)
+		data, err := json.Marshal(NewTranscriptMessage(2, event))
+		if err != nil {
+			t.Fatalf("marshal %q: %v", event.Kind(), err)
+		}
+		var roundTrip TranscriptMessage
+		if err := json.Unmarshal(data, &roundTrip); err != nil {
+			t.Fatalf("unmarshal %q: %v", event.Kind(), err)
+		}
+		got := roundTrip.Payload().(TranscriptCommittedRow)
+		if got.Kind != row.Kind {
+			t.Fatalf("round-trip kind = %q, want %q", got.Kind, row.Kind)
+		}
+		switch got.Kind {
+		case TranscriptRowUser:
+			if got.User.CommittedAtUnixMs == nil || *got.User.CommittedAtUnixMs != committedAt {
+				t.Fatalf("round-trip user timestamp = %v, want %d", got.User.CommittedAtUnixMs, committedAt)
+			}
+		case TranscriptRowAssistant:
+			if got.Assistant.CommittedAtUnixMs == nil || *got.Assistant.CommittedAtUnixMs != committedAt {
+				t.Fatalf("round-trip assistant timestamp = %v, want %d", got.Assistant.CommittedAtUnixMs, committedAt)
+			}
+		}
+	}
+
+	absentRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowUser,
+			User:       &TranscriptUserRow{StepID: stepID, Text: "user"},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowAssistant,
+			Assistant:  &TranscriptAssistantRow{StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal},
+		},
+	}
+	for _, row := range absentRows {
+		data, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(row)))
+		if err != nil {
+			t.Fatalf("marshal absent %q: %v", row.Kind, err)
+		}
+		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+			t.Fatalf("absent %q row emitted timestamp: %s", row.Kind, data)
+		}
+	}
+
+	nonMessageRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityDetail,
+			Kind:       TranscriptRowTool,
+			Tool:       &TranscriptToolRow{StepID: stepID, ToolCallID: "call", ToolName: "shell"},
+		},
+		{
+			Visibility: transcript.EntryVisibilityDetail,
+			Kind:       TranscriptRowReasoningTrace,
+			ReasoningTrace: &TranscriptReasoningTraceRow{
+				StepID: stepID, CompactText: "reasoning", Text: "reasoning",
+			},
+		},
+		{
+			Visibility: transcript.EntryVisibilityHidden,
+			Kind:       TranscriptRowNotice,
+			Notice: &TranscriptNoticeRow{
+				Reason: transcript.NoticeReasonRuntimeDiagnostic, Severity: transcript.NoticeSeverityInfo,
+				LegacyText: textutil.Value("notice"),
+			},
+		},
+	}
+	for _, row := range nonMessageRows {
+		data, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(row)))
+		if err != nil {
+			t.Fatalf("marshal non-message %q: %v", row.Kind, err)
+		}
+		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+			t.Fatalf("non-message %q row emitted timestamp: %s", row.Kind, data)
 		}
 	}
 }

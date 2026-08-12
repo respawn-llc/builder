@@ -112,6 +112,43 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 	}
 }
 
+func TestValidateTranscriptCommittedRowRejectsInvalidTimestampBeforeIntegrityShortCircuit(t *testing.T) {
+	stepID, err := runtimeids.ParseStepID(uuid.NewString())
+	if err != nil {
+		t.Fatalf("parse step id: %v", err)
+	}
+	outOfRange := transcript.MaxCommittedAtUnixMs + 1
+	for _, integrity := range []transcript.RowIntegrity{
+		transcript.RowIntegrityValid,
+		transcript.RowIntegrityRecoverableMalformed,
+		transcript.RowIntegrityUnrecoverableMalformed,
+	} {
+		for _, row := range []clientui.TranscriptCommittedRow{
+			{
+				Visibility: transcript.EntryVisibilityOngoing,
+				Integrity:  integrity,
+				Kind:       clientui.TranscriptRowUser,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+				User:       &clientui.TranscriptUserRow{StepID: stepID, Text: "user", CommittedAtUnixMs: &outOfRange},
+			},
+			{
+				Visibility: transcript.EntryVisibilityOngoing,
+				Integrity:  integrity,
+				Kind:       clientui.TranscriptRowAssistant,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+				Assistant: &clientui.TranscriptAssistantRow{
+					StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal,
+					CommittedAtUnixMs: &outOfRange,
+				},
+			},
+		} {
+			if err := ValidateTranscriptCommittedRow(row); err == nil {
+				t.Fatalf("integrity %v accepted invalid timestamp: %#v", integrity, row)
+			}
+		}
+	}
+}
+
 func TestValidateTranscriptPage(t *testing.T) {
 	olderCursor := int64(10)
 	newerCursor := int64(20)

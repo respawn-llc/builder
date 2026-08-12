@@ -1,6 +1,8 @@
 package runtimeview
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"core/server/llm"
@@ -15,6 +17,8 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 		stepID    = "22222222-2222-4222-8222-222222222222"
 	)
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 17}
+	committedAt := int64(0)
+	provenance.CommittedAtUnixMs = &committedAt
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
 		StepID:              stepID,
 		Visibility:          transcript.EntryVisibilityOngoing,
@@ -55,8 +59,46 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 			liveRow.Locator,
 		)
 	}
+	if page.Entries[0].User == nil || page.Entries[0].User.CommittedAtUnixMs == nil ||
+		*page.Entries[0].User.CommittedAtUnixMs != committedAt ||
+		hydration.CommittedRows[0].User == nil || hydration.CommittedRows[0].User.CommittedAtUnixMs == nil ||
+		*hydration.CommittedRows[0].User.CommittedAtUnixMs != committedAt ||
+		liveRow.User == nil || liveRow.User.CommittedAtUnixMs == nil ||
+		*liveRow.User.CommittedAtUnixMs != committedAt {
+		t.Fatalf("committed time parity failed: page=%+v hydration=%+v live=%+v", page.Entries[0], hydration.CommittedRows[0], liveRow)
+	}
 	if err := page.Entries[0].Locator.Validate(); err != nil {
 		t.Fatalf("projected locator is invalid: %v", err)
+	}
+}
+
+func TestCommittedRowProjectionOmitsTimeForHistoricalAndNonMessageRows(t *testing.T) {
+	const stepID = "22222222-2222-4222-8222-222222222222"
+	committedAt := int64(123)
+	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 7, CommittedAtUnixMs: &committedAt}
+	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{
+		{StepID: stepID, Visibility: transcript.EntryVisibilityOngoing, Role: "user", Text: "historical", CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 6}},
+		{StepID: stepID, Visibility: transcript.EntryVisibilityDetail, Role: "tool_result_ok", Text: "tool", ToolCallID: "call", CommittedProvenance: provenance},
+		{StepID: stepID, Visibility: transcript.EntryVisibilityDetail, Role: string(transcript.EntryRoleReasoning), Text: "reasoning", CommittedProvenance: provenance},
+	}}
+	page, err := TranscriptPageFromSegment("12345678-1234-4234-8234-123456789012", "session", clientui.ConversationFreshness(0), runtime.TranscriptSegmentPage{Snapshot: snapshot})
+	if err != nil {
+		t.Fatalf("project historical/non-message page: %v", err)
+	}
+	if len(page.Entries) != 3 {
+		t.Fatalf("page rows = %d, want 3", len(page.Entries))
+	}
+	if page.Entries[0].User == nil || page.Entries[0].User.CommittedAtUnixMs != nil {
+		t.Fatalf("historical user time = %+v, want absent", page.Entries[0].User)
+	}
+	for _, row := range page.Entries[1:] {
+		data, err := json.Marshal(row)
+		if err != nil {
+			t.Fatalf("marshal non-message row: %v", err)
+		}
+		if bytes.Contains(data, []byte("committed_at_unix_ms")) {
+			t.Fatalf("non-message row exposed committed time: %s", data)
+		}
 	}
 }
 

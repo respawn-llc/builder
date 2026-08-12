@@ -24,6 +24,23 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 }
 
+func TestTranscriptMessageRowsValidateCommittedTime(t *testing.T) {
+	outOfRange := transcript.MaxCommittedAtUnixMs + 1
+	user := TranscriptUserRow{StepID: transcriptTestStepID(t), Text: "user", CommittedAtUnixMs: &outOfRange}
+	if err := user.Validate(); err == nil {
+		t.Fatal("user row accepted out-of-range committed time")
+	}
+	assistant := TranscriptAssistantRow{
+		StepID:            transcriptTestStepID(t),
+		Text:              "assistant",
+		Phase:             transcript.AssistantPhaseFinal,
+		CommittedAtUnixMs: &outOfRange,
+	}
+	if err := assistant.Validate(); err == nil {
+		t.Fatal("assistant row accepted out-of-range committed time")
+	}
+}
+
 func TestTranscriptCommittedRowValidateStructureOwnsPayloadDiscriminator(t *testing.T) {
 	row := TranscriptCommittedRow{
 		Visibility: transcript.EntryVisibilityDetail,

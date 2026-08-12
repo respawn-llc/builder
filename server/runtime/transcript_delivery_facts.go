@@ -43,16 +43,18 @@ type TranscriptCommittedRowFact struct {
 }
 
 type TranscriptUserRowFact struct {
-	Text             string
-	CondensedText    string
-	RollbackTargetID *string
+	Text              string
+	CondensedText     string
+	RollbackTargetID  *string
+	CommittedAtUnixMs *int64
 }
 
 type TranscriptAssistantRowFact struct {
-	Text          string
-	CondensedText string
-	Phase         llm.MessagePhase
-	StreamID      *uuid.UUID
+	Text              string
+	CondensedText     string
+	Phase             llm.MessagePhase
+	StreamID          *uuid.UUID
+	CommittedAtUnixMs *int64
 }
 
 type TranscriptToolRowFact struct {
@@ -183,6 +185,12 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		} else if facts[index].Provenance == nil {
 			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
 		}
+		if facts[index].User != nil {
+			facts[index].User.CommittedAtUnixMs = committedAtUnixMs(facts[index].Provenance)
+		}
+		if facts[index].Assistant != nil {
+			facts[index].Assistant.CommittedAtUnixMs = committedAtUnixMs(facts[index].Provenance)
+		}
 	}
 	facts = transcriptCommittedRowFactsForStep(evt.StepID, facts)
 	return locateTranscriptCommittedRowFacts(facts)
@@ -287,6 +295,12 @@ func transcriptCommittedRowFactsFromMessage(
 	}
 	for index := range facts {
 		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		if facts[index].User != nil {
+			facts[index].User.CommittedAtUnixMs = committedAtUnixMs(provenance)
+		}
+		if facts[index].Assistant != nil {
+			facts[index].Assistant.CommittedAtUnixMs = committedAtUnixMs(provenance)
+		}
 		if facts[index].Tool != nil && completionProvenance != nil {
 			if owner := completionProvenance[facts[index].Tool.ToolCallID]; owner != nil {
 				facts[index].Provenance = cloneTranscriptCommittedRowProvenance(owner)
@@ -294,6 +308,14 @@ func transcriptCommittedRowFactsFromMessage(
 		}
 	}
 	return facts
+}
+
+func committedAtUnixMs(provenance *TranscriptCommittedRowProvenance) *int64 {
+	if provenance == nil || provenance.CommittedAtUnixMs == nil {
+		return nil
+	}
+	value := *provenance.CommittedAtUnixMs
+	return &value
 }
 
 func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *uuid.UUID, completions map[string]tools.Result, materializedToolCalls map[string]struct{}) []TranscriptCommittedRowFact {
@@ -413,9 +435,10 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			StepID: entry.StepID,
 			Kind:   TranscriptCommittedRowFactUser,
 			User: &TranscriptUserRowFact{
-				Text:             text,
-				CondensedText:    entry.CondensedText,
-				RollbackTargetID: textutil.Pointer(entry.RollbackTargetID),
+				Text:              text,
+				CondensedText:     entry.CondensedText,
+				RollbackTargetID:  textutil.Pointer(entry.RollbackTargetID),
+				CommittedAtUnixMs: committedAtUnixMs(entry.CommittedProvenance),
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
@@ -430,9 +453,10 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			StepID: entry.StepID,
 			Kind:   TranscriptCommittedRowFactAssistant,
 			Assistant: &TranscriptAssistantRowFact{
-				Text:          text,
-				CondensedText: entry.CondensedText,
-				Phase:         entry.Phase,
+				Text:              text,
+				CondensedText:     entry.CondensedText,
+				Phase:             entry.Phase,
+				CommittedAtUnixMs: committedAtUnixMs(entry.CommittedProvenance),
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
