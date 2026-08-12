@@ -187,6 +187,11 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	if len(live) != 4 {
 		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
 	}
+	for index, fact := range live {
+		if fact.Provenance == nil || fact.Provenance.CommittedAtUnixMs != nil {
+			t.Fatalf("ineligible replacement fact %d provenance = %+v", index, fact.Provenance)
+		}
+	}
 	wantMessageTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
 		llm.MessageTypeCompactionPreservedUserMessage,

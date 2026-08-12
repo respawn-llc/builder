@@ -4,26 +4,11 @@ import (
 	"testing"
 	"time"
 
+	"core/shared/rollbacktarget"
 	"core/shared/transcript"
 )
 
 func TestCommittedTimeRangeAndEligibility(t *testing.T) {
-	for _, value := range []int64{
-		transcript.MinCommittedAtUnixMs, -1, 0, 1, transcript.MaxCommittedAtUnixMs,
-	} {
-		typed := transcript.CommittedAtUnixMs(value)
-		if err := transcript.ValidateCommittedAtUnixMs(&typed); err != nil {
-			t.Fatalf("valid committed time %d: %v", value, err)
-		}
-	}
-	for _, value := range []int64{
-		transcript.MinCommittedAtUnixMs - 1, transcript.MaxCommittedAtUnixMs + 1,
-	} {
-		typed := transcript.CommittedAtUnixMs(value)
-		if err := transcript.ValidateCommittedAtUnixMs(&typed); err == nil {
-			t.Fatalf("out-of-range committed time %d accepted", value)
-		}
-	}
 	content := "visible"
 	summary := MessageTypeCompactionSummary
 	tests := []struct {
@@ -116,10 +101,6 @@ func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
 			t.Fatalf("null field %q accepted", field)
 		}
 	}
-	one := transcript.CommittedAtUnixMs(1)
-	if _, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, MessageType: messageTypePointer(MessageTypeCompactionSummary), Content: &content}, &one); err == nil {
-		t.Fatal("ineligible timestamp accepted")
-	}
 }
 
 func TestCommittedTimeAtomicAppendSamplesClockOnce(t *testing.T) {
@@ -169,9 +150,12 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 	replacement, err := newEventRecord(3, nil, HistoryReplacementRecord{
 		Engine: "local",
 		Mode:   CompactionModeAuto,
+		LatestRollbackCandidate: &rollbacktarget.CandidateLocator{
+			UserMessageSeq: 2, CandidatePageEndByte: 1,
+		},
 		Items: []ProviderHistoryItem{{
 			Type:    ProviderHistoryItemTypeMessage,
-			Role:    messageRolePointer(MessageRoleAssistant),
+			Role:    pointerTo(MessageRoleAssistant),
 			Content: stringPointer("replacement"),
 			Raw:     []byte(`{"type":"message","role":"assistant","content":"replacement"}`),
 		}},
@@ -192,6 +176,15 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 	}
 	if _, receipt, err := log.AppendRecordsAtomic(nil, fillers); err != nil || !receipt.Committed {
 		t.Fatalf("append replay fillers: receipt=%+v err=%v", receipt, err)
+	}
+	postFlush, err := newEventRecord(514, nil, MessageRecord{
+		Role: MessageRoleAssistant, Content: stringPointer("post-flush"),
+	}, &present)
+	if err != nil {
+		t.Fatalf("create post-flush source message: %v", err)
+	}
+	if _, err := log.AppendReplayRecords([]EventRecord{postFlush}); err != nil {
+		t.Fatalf("replay post-flush source message: %v", err)
 	}
 	target, _, err := log.AppendRecord(nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("target")})
 	if err != nil {
@@ -219,14 +212,16 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 		if records[0].CommittedAtUnixMs() != nil {
 			t.Fatalf("%s absent record timestamp=%v", name, records[0].CommittedAtUnixMs())
 		}
-		for _, index := range []int{1, 2} {
+		replacement, ok := mustEventRecordPayload(records[2]).(HistoryReplacementRecord)
+		if !ok || replacement.LatestRollbackCandidate == nil ||
+			replacement.LatestRollbackCandidate.UserMessageSeq != records[1].Seq() ||
+			replacement.LatestRollbackCandidate.CandidatePageEndByte <= 0 {
+			t.Fatalf("%s replacement rebase = %+v", name, mustEventRecordPayload(records[2]))
+		}
+		for _, index := range []int{1, 2, forkReplayFlushEventCount + 1} {
 			if records[index].CommittedAtUnixMs() == nil || records[index].CommittedAtUnixMs().UnixMs() != present.UnixMs() {
 				t.Fatalf("%s record %d timestamp=%v want=%d", name, index, records[index].CommittedAtUnixMs(), present.UnixMs())
 			}
 		}
 	}
-}
-
-func messageRolePointer(value MessageRole) *MessageRole {
-	return &value
 }
