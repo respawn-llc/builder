@@ -788,6 +788,33 @@ func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
 	}
 }
 
+func TestGatewayRemoteWorkflowTaskSessionsRoundsTripPage(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	task := createGatewaySearchableTask(t, appCore)
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	response, err := remote.ListWorkflowTaskSessions(context.Background(), serverapi.WorkflowTaskOffsetPageRequest{
+		TaskID: task.ID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskSessions: %v", err)
+	}
+	if response.TaskID != task.ID || response.Items == nil || len(response.Items) != 0 || response.NextOffset != nil {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
 func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.WorkflowTaskSummary {
 	t.Helper()
 	ctx := context.Background()
