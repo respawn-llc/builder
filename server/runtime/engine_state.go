@@ -444,6 +444,10 @@ func (e *Engine) setReviewerFrequency(frequency string) bool {
 	return true
 }
 
+func (e *Engine) SetReviewerFrequency(frequency string) bool {
+	return e.setReviewerFrequency(frequency)
+}
+
 func (e *Engine) reviewerEnabledChange(enabled bool) (bool, string, error) {
 	e.mu.Lock()
 	current, ok := NormalizeReviewerFrequency(e.cfg.Reviewer.Frequency)

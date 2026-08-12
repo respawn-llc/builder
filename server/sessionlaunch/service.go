@@ -442,7 +442,7 @@ func (s *Service) planExistingSessionWithStore(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, store, maintenance)
+	agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, preparedOverrides, store, maintenance)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -471,6 +471,7 @@ func applyPreparedAgentChatSettings(
 	app config.App,
 	authState auth.State,
 	roleOverride serverapi.RunPromptAgentRoleOverride,
+	preparedOverrides launch.PreparedRunPromptOverrides,
 	store *session.Store,
 	maintenance *sessionruntime.ActiveRuntimeMaintenance,
 ) (bool, error) {
@@ -495,7 +496,26 @@ func applyPreparedAgentChatSettings(
 	if !selectAgent {
 		return false, nil
 	}
-	prepared, err := launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
+	var prepared launch.PreparedChatSettings
+	if roleOverride.Present {
+		target := preparedOverrides.BaseTarget
+		if targetAgent != config.DefaultSubagentRole {
+			target = nil
+			if preparedOverrides.NamedTarget != nil && preparedOverrides.NamedTarget.Selector == targetAgent {
+				target = &launch.PreparedBaseTarget{
+					Settings:     preparedOverrides.NamedTarget.Settings,
+					Source:       preparedOverrides.NamedTarget.Source,
+					EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
+				}
+			}
+		}
+		if target == nil {
+			return false, fmt.Errorf("prepared Chat Agent %q target is required", targetAgent)
+		}
+		prepared, err = launch.PrepareChatSettingsForTarget(authState, *target)
+	} else {
+		prepared, err = launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
+	}
 	if err != nil {
 		return false, err
 	}

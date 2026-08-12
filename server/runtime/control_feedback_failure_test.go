@@ -22,7 +22,7 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	changed, receipt, err := engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || engine.FastModeEnabled() {
+	if err == nil || receipt.Committed || !changed || engine.FastModeEnabled() {
 		t.Fatalf(
 			"uncommitted fast-mode feedback mutated runtime state: receipt=%+v changed=%t enabled=%t error=%v",
 			receipt,
@@ -60,7 +60,7 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 	changed, enabled, receipt, err := engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || !enabled || !engine.QuestionsEnabled() {
+	if err == nil || receipt.Committed || !changed || enabled || !engine.QuestionsEnabled() {
 		t.Fatalf(
 			"uncommitted questions feedback mutated runtime state: receipt=%+v changed=%t enabled=%t current=%t error=%v",
 			receipt,
@@ -111,7 +111,7 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	changed, mode, receipt, err := engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
 		return "feedback"
 	})
-	if err == nil || receipt.Committed || changed || mode != "edits" || engine.ReviewerFrequency() != "off" {
+	if err == nil || receipt.Committed || !changed || mode != "edits" || engine.ReviewerFrequency() != "off" {
 		t.Fatalf(
 			"uncommitted reviewer feedback mutated runtime state: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
 			receipt,

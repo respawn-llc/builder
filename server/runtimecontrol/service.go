@@ -463,6 +463,10 @@ func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeS
 				_, _, applyErr := engine.SetFastModeEnabledWithCommittedFeedback(req.Enabled, func(bool) string {
 					return serverapi.FastModeToggleStatusMessage(req.Enabled, result.Changed)
 				})
+				if applyErr != nil {
+					_, stateErr := engine.SetFastModeEnabled(req.Enabled)
+					applyErr = errors.Join(applyErr, stateErr)
+				}
 				return applyErr
 			},
 		)
@@ -502,6 +506,9 @@ func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeS
 				_, _, _, applyErr := engine.SetReviewerFrequencyWithCommittedFeedback(mode, func(enabled bool, mode string, _ bool) string {
 					return serverapi.ReviewerToggleStatusMessage(enabled, mode, result.Changed)
 				})
+				if applyErr != nil {
+					engine.SetReviewerFrequency(mode)
+				}
 				return applyErr
 			},
 		)
@@ -557,6 +564,9 @@ func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.Runtime
 				_, _, _, applyErr := engine.SetQuestionsEnabledWithCommittedFeedback(req.Enabled, func(enabled bool, _ bool) string {
 					return serverapi.QuestionsToggleStatusMessage(enabled, result.Changed)
 				})
+				if applyErr != nil {
+					engine.SetQuestionsEnabled(req.Enabled)
+				}
 				return applyErr
 			},
 		)

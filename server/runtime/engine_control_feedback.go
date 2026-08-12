@@ -44,7 +44,7 @@ func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback 
 	changed := e.localFastModeEnabledChange(enabled)
 	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(changed))
 	if !receipt.Committed {
-		return false, receipt, feedbackErr
+		return changed, receipt, feedbackErr
 	}
 	e.applyFastModeEnabled(enabled)
 	return changed, receipt, feedbackErr
@@ -63,7 +63,7 @@ func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback
 	}
 	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(resultEnabled, changed))
 	if !receipt.Committed {
-		return false, current, receipt, feedbackErr
+		return changed, resultEnabled, receipt, feedbackErr
 	}
 	if changed {
 		e.applyQuestionsEnabled(enabled)
@@ -83,7 +83,7 @@ func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback 
 	}
 	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(mode != "off", mode, changed))
 	if !receipt.Committed {
-		return false, mode, receipt, feedbackErr
+		return changed, mode, receipt, feedbackErr
 	}
 	e.applyReviewerEnabled(enabled, mode)
 	return changed, mode, receipt, feedbackErr
@@ -102,7 +102,7 @@ func (e *Engine) SetReviewerFrequencyWithCommittedFeedback(frequency string, fee
 	changed := e.ReviewerFrequency() != target
 	receipt, feedbackErr := e.appendCommittedControlFeedback(feedback(target != "off", target, changed))
 	if !receipt.Committed {
-		return false, e.ReviewerFrequency(), receipt, feedbackErr
+		return changed, target, receipt, feedbackErr
 	}
 	e.setReviewerFrequency(target)
 	return changed, target, receipt, feedbackErr
