@@ -13,6 +13,7 @@ import (
 	"core/server/llm"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
@@ -38,6 +39,7 @@ type runtimeControlFakeClient struct {
 	appendedRole          string
 	appendedText          string
 	submitText            string
+	submitInput           runtimeinput.Input
 	submitCalls           int
 	submitResult          string
 	interruptCalls        int
@@ -47,6 +49,9 @@ type runtimeControlFakeClient struct {
 	discardQueuedResult   bool
 	recordedPromptHistory string
 	refreshMainViewCalls  int
+	compactCalls          int
+	compactArgs           string
+	compactErr            error
 	err                   error
 	appendErr             error
 	submitErr             error
@@ -194,6 +199,7 @@ func (f *runtimeControlFakeClient) submitUserMessage(_ context.Context, text str
 }
 func (f *runtimeControlFakeClient) SubmitRuntimeInput(ctx context.Context, req clientui.RuntimeSubmitRequest) (clientui.UserTurnSubmission, error) {
 	f.submitCalls++
+	f.submitInput = req.Input
 	text := runtimeSubmitInputText(req)
 	submission, err := f.submitUserMessage(ctx, text)
 	if err == nil && strings.TrimSpace(f.submitQueuedID) != "" {
@@ -212,7 +218,11 @@ func (f *runtimeControlFakeClient) RunUserShell(ctx context.Context, req clientu
 	return f.submitUserShellCommand(ctx, req.Command)
 }
 func (f *runtimeControlFakeClient) compactContext(_ context.Context, args string) error {
-	_ = args
+	f.compactCalls++
+	f.compactArgs = args
+	if f.compactErr != nil {
+		return f.compactErr
+	}
 	return f.err
 }
 func (f *runtimeControlFakeClient) CompactRuntime(ctx context.Context, req clientui.RuntimeCompactRequest) error {

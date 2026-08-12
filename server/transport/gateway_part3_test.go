@@ -65,6 +65,58 @@ func TestGatewaySessionAttachEstablishesProjectForUnboundServer(t *testing.T) {
 	}
 }
 
+func TestCompactContextWithoutReadyRuntimePreservesJoinedErrorLoopbackAndRemote(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+
+	request := serverapi.RuntimeCompactContextRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       store.Meta().SessionID,
+		Args:            "compact without a Ready runtime",
+	}
+	loopbackErr := appCore.RuntimeControlClient().CompactContext(context.Background(), request)
+	requireCompactRuntimeUnavailableNotAccepted(t, loopbackErr)
+	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       store.Meta().SessionID,
+		Name:            "must remain unavailable",
+	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("loopback compact created a runtime: SetSessionName error = %v", err)
+	}
+
+	remote, err := remoteclient.DialRemoteURLForSession(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		store.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForSession: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+	request.ClientRequestID = runtimeids.NewRuntimeClientRequestID().String()
+	remoteErr := remote.CompactContext(context.Background(), request)
+	requireCompactRuntimeUnavailableNotAccepted(t, remoteErr)
+	if err := appCore.RuntimeControlClient().SetSessionName(context.Background(), serverapi.RuntimeSetSessionNameRequest{
+		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:       store.Meta().SessionID,
+		Name:            "must still remain unavailable",
+	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("remote compact created a runtime: SetSessionName error = %v", err)
+	}
+}
+
+func requireCompactRuntimeUnavailableNotAccepted(t *testing.T, err error) {
+	t.Helper()
+	if !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("CompactContext error = %v, want runtime command not accepted", err)
+	}
+	if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+		t.Fatalf("CompactContext error = %v, want runtime unavailable", err)
+	}
+}
+
 func newGatewayTestServer(t *testing.T) (*core.Core, *httptest.Server) {
 	t.Helper()
 	appCore, server, _ := newGatewayTestServerWithAuth(t, true)
@@ -259,6 +311,27 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 				t.Fatalf("raw %s response = %+v, want invalid params", name, resp)
 			}
 		})
+	}
+}
+
+func TestGatewaySessionExecutionEnvironmentRejectsExtraRequestField(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+
+	response := callGatewayRaw(
+		t,
+		conn,
+		"session-execution-extra",
+		protocol.MethodSessionGetExecutionEnvironment,
+		json.RawMessage(`{"session_id":"environment-session","extra":true}`),
+	)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeInvalidParams {
+		t.Fatalf("Session execution response = %+v, want invalid params", response)
 	}
 }
 

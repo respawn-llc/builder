@@ -13,7 +13,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/server/workflowstore"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -62,7 +61,7 @@ func (d *TaskDetail) ListCurrentNodes(ctx context.Context, taskID string) ([]wor
 	if strings.TrimSpace(taskID) == "" {
 		return nil, ErrTaskIDRequired
 	}
-	nodesByTask, err := workflowstore.ListCurrentNodesByTaskWithQueries(ctx, d.queries, []workflow.TaskID{workflow.TaskID(taskID)})
+	nodesByTask, err := d.projection.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, d.queries, []workflow.TaskID{workflow.TaskID(taskID)})
 	if err != nil {
 		return nil, err
 	}

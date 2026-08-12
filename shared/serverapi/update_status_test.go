@@ -1,12 +1,30 @@
-package serverapi
+package serverapi_test
 
 import (
 	"bytes"
 	"encoding/json"
 	"testing"
+
+	"core/shared/jsoncontract"
+	. "core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 )
 
+func TestUpdateStatusResponseContractRejectsNullResult(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareUpdateStatusResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Update Status response contract: %v", err)
+	}
+	if _, err := contract.Decode([]byte(`{"result":null}`)); err == nil {
+		t.Fatal("Update Status response contract accepted null result")
+	}
+}
+
 func TestUpdateStatusResultJSONRoundTrip(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareUpdateStatusResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Update Status response contract: %v", err)
+	}
 	tests := []struct {
 		name string
 		want UpdateStatusResult
@@ -47,23 +65,27 @@ func TestUpdateStatusResultJSONRoundTrip(t *testing.T) {
 				t.Fatalf("JSON = %s, want %s", encoded, test.json)
 			}
 
-			var decoded UpdateStatusResult
-			if err := json.Unmarshal(encoded, &decoded); err != nil {
-				t.Fatalf("Unmarshal: %v", err)
+			decoded, err := contract.Decode([]byte(`{"result":` + string(encoded) + `}`))
+			if err != nil {
+				t.Fatalf("Decode: %v", err)
 			}
-			roundTrip, err := json.Marshal(decoded)
+			roundTrip, err := json.Marshal(decoded.Result)
 			if err != nil {
 				t.Fatalf("Marshal decoded: %v", err)
 			}
 			if !bytes.Equal(roundTrip, encoded) {
 				t.Fatalf("decoded JSON = %s, want %s", roundTrip, encoded)
 			}
-			assertUpdateStatusResultAccessors(t, decoded)
+			assertUpdateStatusResultAccessors(t, decoded.Result)
 		})
 	}
 }
 
 func TestUpdateStatusResultRejectsInvalidJSON(t *testing.T) {
+	contract, err := serverjsoncontract.PrepareUpdateStatusResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Update Status response contract: %v", err)
+	}
 	for _, raw := range []string{
 		`{}`,
 		`null`,
@@ -89,9 +111,12 @@ func TestUpdateStatusResultRejectsInvalidJSON(t *testing.T) {
 		`{"kind":"check_unavailable"}{"kind":"check_unavailable"}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
-			var result UpdateStatusResult
-			if err := json.Unmarshal([]byte(raw), &result); err == nil {
-				t.Fatalf("Unmarshal(%s) unexpectedly succeeded: %+v", raw, result)
+			responseRaw := []byte(`{"result":` + raw + `}`)
+			if raw == `{"kind":"check_unavailable"}{"kind":"check_unavailable"}` {
+				responseRaw = []byte(`{"result":{"kind":"check_unavailable"}} {}`)
+			}
+			if _, err := contract.Decode(responseRaw); err == nil {
+				t.Fatalf("Decode(%s) unexpectedly succeeded", raw)
 			}
 		})
 	}
@@ -127,9 +152,13 @@ func TestUpdateStatusRequestAndResponseAreStrictValidatedContracts(t *testing.T)
 	if string(encodedResponse) != `{"result":{"kind":"available","current_version":"1.2.3","latest_version":"1.3.0"}}` {
 		t.Fatalf("response JSON = %s", encodedResponse)
 	}
-	var decodedResponse UpdateStatusResponse
-	if err := json.Unmarshal(encodedResponse, &decodedResponse); err != nil {
-		t.Fatalf("Unmarshal response: %v", err)
+	contract, err := serverjsoncontract.PrepareUpdateStatusResponse(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare Update Status response contract: %v", err)
+	}
+	decodedResponse, err := contract.Decode(encodedResponse)
+	if err != nil {
+		t.Fatalf("Decode response: %v", err)
 	}
 	if err := decodedResponse.Validate(); err != nil {
 		t.Fatalf("Validate decoded response: %v", err)
@@ -142,8 +171,7 @@ func TestUpdateStatusRequestAndResponseAreStrictValidatedContracts(t *testing.T)
 		`{"result":{"kind":"check_unavailable"},"unknown":true}`,
 		`{"result":{"kind":"check_unavailable"}} {}`,
 	} {
-		var response UpdateStatusResponse
-		if err := json.Unmarshal([]byte(raw), &response); err == nil {
+		if _, err := contract.Decode([]byte(raw)); err == nil {
 			t.Fatalf("response accepted invalid JSON %s", raw)
 		}
 	}

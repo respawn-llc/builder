@@ -11,7 +11,13 @@ const (
 	sqliteOpcodeOpenRead      sqliteOpcode = "OpenRead"
 	sqliteOpcodeOpenEphemeral sqliteOpcode = "OpenEphemeral"
 	sqliteOpcodeVFilter       sqliteOpcode = "VFilter"
+	sqliteOpcodeSeekGE        sqliteOpcode = "SeekGE"
+	sqliteOpcodeSeekGT        sqliteOpcode = "SeekGT"
+	sqliteOpcodeSeekLE        sqliteOpcode = "SeekLE"
+	sqliteOpcodeSeekLT        sqliteOpcode = "SeekLT"
+	sqliteOpcodeDecrJumpZero  sqliteOpcode = "DecrJumpZero"
 	sqliteOpcodeRewind        sqliteOpcode = "Rewind"
+	sqliteOpcodeLast          sqliteOpcode = "Last"
 	sqliteOpcodeNext          sqliteOpcode = "Next"
 	sqliteOpcodePrev          sqliteOpcode = "Prev"
 	sqliteOpcodeSorterOpen    sqliteOpcode = "SorterOpen"
@@ -20,10 +26,13 @@ const (
 )
 
 type sqliteInstruction struct {
-	Opcode sqliteOpcode
-	P1     int64
-	P2     int64
+	Address int64
+	Opcode  sqliteOpcode
+	P1      int64
+	P2      int64
 }
+
+type QueryInstruction = sqliteInstruction
 
 func requireQueryUsesIndexWithoutSort(t *testing.T, db *sql.DB, query string, indexName string, args ...any) {
 	t.Helper()
@@ -122,12 +131,109 @@ func queryProgram(t *testing.T, db *sql.DB, query string, args ...any) []sqliteI
 		if err := rows.Scan(&address, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
 			t.Fatalf("scan query program: %v", err)
 		}
-		instructions = append(instructions, sqliteInstruction{Opcode: sqliteOpcode(opcode), P1: p1, P2: p2})
+		instructions = append(instructions, sqliteInstruction{Address: address, Opcode: sqliteOpcode(opcode), P1: p1, P2: p2})
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate query program: %v", err)
 	}
 	return instructions
+}
+
+func QueryProgram(t *testing.T, db *sql.DB, query string, args ...any) []QueryInstruction {
+	t.Helper()
+	return queryProgram(t, db, query, args...)
+}
+
+func RequireProgramVirtualTableDrivesIndexPointSeeks(t *testing.T, db *sql.DB, instructions []QueryInstruction, indexName string) {
+	t.Helper()
+	cursor := queryProgramIndexCursor(t, db, instructions, indexName)
+	vfilterAddress := int64(-1)
+	pointSeeked := false
+	for _, instruction := range instructions {
+		if instruction.Opcode == sqliteOpcodeVFilter && vfilterAddress < 0 {
+			vfilterAddress = instruction.Address
+		}
+		if instruction.P1 != cursor {
+			continue
+		}
+		if instruction.Opcode == sqliteOpcodeRewind || instruction.Opcode == sqliteOpcodeLast {
+			t.Fatalf("query program scans index %q cursor %d from an endpoint", indexName, cursor)
+		}
+		if vfilterAddress >= 0 && instruction.Address > vfilterAddress && isSeekOpcode(instruction.Opcode) {
+			pointSeeked = true
+		}
+	}
+	if !pointSeeked {
+		t.Fatalf("query program does not drive index %q point seeks from a virtual table", indexName)
+	}
+}
+
+func RequireProgramIndexSeekStopsAfterFirstRow(t *testing.T, db *sql.DB, instructions []QueryInstruction, indexName string) {
+	t.Helper()
+	cursor := queryProgramIndexCursor(t, db, instructions, indexName)
+	seeked := false
+	for index, instruction := range instructions {
+		if instruction.P1 != cursor {
+			continue
+		}
+		seeked = seeked || isSeekOpcode(instruction.Opcode)
+		if instruction.Opcode != sqliteOpcodeNext && instruction.Opcode != sqliteOpcodePrev {
+			continue
+		}
+		if index == 0 {
+			t.Fatalf("query program loops over index %q without a one-row guard", indexName)
+		}
+		guard := instructions[index-1]
+		if guard.Opcode != sqliteOpcodeDecrJumpZero || guard.P2 <= instruction.Address {
+			t.Fatalf("query program loops over index %q without a one-row guard", indexName)
+		}
+	}
+	if !seeked {
+		t.Fatalf("query program does not seek index %q", indexName)
+	}
+}
+
+func RequireProgramIndexSeekWithoutSorter(t *testing.T, db *sql.DB, instructions []QueryInstruction, indexName string) {
+	t.Helper()
+	cursor := queryProgramIndexCursor(t, db, instructions, indexName)
+	seeked := false
+	for _, instruction := range instructions {
+		seeked = seeked || instruction.P1 == cursor && isSeekOpcode(instruction.Opcode)
+		switch instruction.Opcode {
+		case sqliteOpcodeSorterOpen, sqliteOpcodeSort, sqliteOpcodeSorterSort:
+			t.Fatalf("query program uses sorter opcode %s", instruction.Opcode)
+		}
+	}
+	if !seeked {
+		t.Fatalf("query program does not seek index %q", indexName)
+	}
+}
+
+func queryProgramIndexCursor(t *testing.T, db *sql.DB, instructions []QueryInstruction, indexName string) int64 {
+	t.Helper()
+	var rootPage int64
+	if err := db.QueryRow(
+		`SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?`,
+		indexName,
+	).Scan(&rootPage); err != nil {
+		t.Fatalf("resolve index %q root page: %v", indexName, err)
+	}
+	for _, instruction := range instructions {
+		if instruction.Opcode == sqliteOpcodeOpenRead && instruction.P2 == rootPage {
+			return instruction.P1
+		}
+	}
+	t.Fatalf("query program does not open index %q", indexName)
+	return 0
+}
+
+func isSeekOpcode(opcode sqliteOpcode) bool {
+	switch opcode {
+	case sqliteOpcodeSeekGE, sqliteOpcodeSeekGT, sqliteOpcodeSeekLE, sqliteOpcodeSeekLT:
+		return true
+	default:
+		return false
+	}
 }
 
 func closeQueryRows(t *testing.T, rows *sql.Rows) {
@@ -139,20 +245,5 @@ func closeQueryRows(t *testing.T, rows *sql.Rows) {
 
 func requireQueryProgramOpensIndex(t *testing.T, db *sql.DB, instructions []sqliteInstruction, indexName string) {
 	t.Helper()
-	var indexRootPage int64
-	if err := db.QueryRow(
-		`SELECT rootpage FROM sqlite_schema WHERE type = 'index' AND name = ?`,
-		indexName,
-	).Scan(&indexRootPage); err != nil {
-		t.Fatalf("resolve index root page: %v", err)
-	}
-	indexOpened := false
-	for _, instruction := range instructions {
-		if instruction.Opcode == sqliteOpcodeOpenRead && instruction.P2 == indexRootPage {
-			indexOpened = true
-		}
-	}
-	if !indexOpened {
-		t.Fatalf("query program did not open index %q at root page %d: %+v", indexName, indexRootPage, instructions)
-	}
+	_ = queryProgramIndexCursor(t, db, instructions, indexName)
 }

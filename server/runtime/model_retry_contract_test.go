@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 )
 
 func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.T) {
@@ -14,7 +13,7 @@ func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 	tests := []struct {

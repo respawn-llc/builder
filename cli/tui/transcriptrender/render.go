@@ -111,6 +111,9 @@ func renderCommittedRow(
 			group = clientui.TranscriptRowTool
 		}
 		options := textBlockOptions{}
+		if row.Notice != nil && row.Notice.Severity == clientui.TranscriptNoticeError {
+			options.forceFull = true
+		}
 		if isReviewerNotice(row.Notice) {
 			options.compactEllipsis = compactEllipsisNever
 		}
@@ -260,6 +263,7 @@ func renderTextBlockWithInlineMeta(role StyleRole, text string, inlineMeta strin
 
 type textBlockOptions struct {
 	compactEllipsis compactEllipsisPolicy
+	forceFull       bool
 }
 
 type compactEllipsisPolicy uint8
@@ -334,7 +338,7 @@ func renderFormattedTextBlock(
 	if text == "" {
 		text = labelForRole(role)
 	}
-	if modeUsesCompactTextBlock(mode) {
+	if !options.forceFull && modeUsesCompactTextBlock(mode) {
 		first := firstDisplayLine(text)
 		return attachPrefixWithFirstLineMeta(
 			role,
@@ -701,7 +705,12 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row == nil {
 		return StyleRoleNotice, "notice"
 	}
-	if row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageAgentSteer {
+	isError := row.Severity == clientui.TranscriptNoticeError
+	role := noticeStyleRoleForMode(row, mode)
+	if isError {
+		role = StyleRoleError
+	}
+	if !isError && row.MessageType != nil && *row.MessageType == clientui.TranscriptMessageAgentSteer {
 		if mode != ModeDetailCollapsed && mode != ModeDetailExpanded && row.Diagnostic != nil {
 			return StyleRoleUser, row.Diagnostic.Detail
 		}
@@ -712,18 +721,47 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	}
 	if row.Reason == clientui.TranscriptNoticeCompaction && row.Compaction != nil {
 		text := compactionNoticeText(row.Compaction.Count)
-		if mode == ModeDetailExpanded && row.Compaction.Detail != nil {
+		if row.Compaction.Detail != nil && (isError || mode == ModeDetailExpanded) {
 			text = *row.Compaction.Detail
 		}
-		return noticeStyleRoleForMode(row, mode), text
+		return role, text
 	}
 	if row.Reason == clientui.TranscriptNoticeToolOutputRepair && row.ToolOutputRepair != nil {
-		return StyleRoleWarning, toolOutputRepairNoticeText(row.ToolOutputRepair)
+		if !isError {
+			role = StyleRoleWarning
+		}
+		return role, toolOutputRepairNoticeText(row.ToolOutputRepair)
 	}
-	if text, ok := worktreeNoticeText(row, mode); ok {
-		return noticeStyleRole(row), text
+	if isError && row.Reason == clientui.TranscriptNoticeLegacyUntypedNotice && row.LegacyText != nil {
+		return role, *row.LegacyText
+	}
+	worktreeMode := mode
+	if isError {
+		worktreeMode = ModeDetailExpanded
+	}
+	if text, ok := worktreeNoticeText(row, worktreeMode); ok {
+		return role, text
 	}
 	cacheWarningText := cacheWarningNoticeText(row.CacheWarning)
+	if isError {
+		switch row.Reason {
+		case clientui.TranscriptNoticeCacheWarning:
+			return role, cacheWarningText
+		case clientui.TranscriptNoticeRuntimeDiagnostic:
+			return role, row.Diagnostic.Detail
+		case clientui.TranscriptNoticeLegacyUntypedNotice:
+			messageType := "<nil>"
+			if row.MessageType != nil {
+				messageType = string(*row.MessageType)
+			}
+			panic(fmt.Sprintf(
+				"render legacy error notice with no content source: message_type=%q",
+				messageType,
+			))
+		default:
+			panic(fmt.Sprintf("render error notice with unsupported reason %q", row.Reason))
+		}
+	}
 	typedCompactText := firstNonEmpty(optionalString(row.CompactLabel), optionalString(row.CondensedText), noticeLegacyText(row), cacheWarningText, optionalString(row.SourcePath))
 	compactText := firstNonEmpty(typedCompactText, string(row.Reason), "notice")
 	text := compactText
@@ -736,7 +774,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	if row.Diagnostic != nil && (mode == ModeDetailExpanded || typedCompactText == "") {
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
-	return noticeStyleRoleForMode(row, mode), text
+	return role, text
 }
 
 func toolOutputRepairNoticeText(repair *transcript.ToolOutputRepairNotice) string {

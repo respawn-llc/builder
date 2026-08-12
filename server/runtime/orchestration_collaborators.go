@@ -16,7 +16,10 @@ type exclusiveStepOptions struct {
 
 type exclusiveStepReservationKind uint8
 
-const exclusiveStepReservationManualCompaction exclusiveStepReservationKind = 1
+const (
+	exclusiveStepReservationManualCompaction exclusiveStepReservationKind = iota + 1
+	exclusiveStepReservationWorktreeTransition
+)
 
 type exclusiveStepReservation = struct {
 	Kind      exclusiveStepReservationKind

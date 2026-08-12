@@ -9,7 +9,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -19,7 +18,7 @@ import (
 
 func TestLiveRunWaitIdleReturnsNoActive(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	if _, err := eng.WaitForActiveRunResult(context.Background()); !errors.Is(err, ErrNoActiveLiveRun) {
 		t.Fatalf("WaitForActiveRunResult idle error = %v, want ErrNoActiveLiveRun", err)
@@ -32,7 +31,7 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("fast final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	var handle *LiveRunWaitHandle
 	var captureErr error
@@ -59,7 +58,7 @@ func TestCapturedActiveRunResultSurvivesFastCompletion(t *testing.T) {
 
 func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	eng.pauseQueuedUserAutoDrain()
 	t.Cleanup(eng.resumeQueuedUserAutoDrain)
 	startedAt := time.Now().UTC()
@@ -104,7 +103,7 @@ func TestTerminalWorkflowQueueFailureCompletesTaggedLiveItems(t *testing.T) {
 
 func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	eng.liveRun.beginStep(&RunSnapshot{
 		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
 		StepID:     "018fdd67-89ab-4cde-8123-456789abc002",
@@ -124,7 +123,7 @@ func TestTryInterruptActiveRunNoopsAfterStepLeavesActiveState(t *testing.T) {
 
 func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	stepCtxSeen := make(chan context.Context, 1)
 	done := make(chan error, 1)
 	eng.ensureOrchestrationCollaborators()
@@ -161,7 +160,7 @@ func TestTryInterruptActiveRunCancelsCompactionStep(t *testing.T) {
 
 func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	startedAt := time.Now().UTC()
 	snapshot := &RunSnapshot{
 		RunID:      "018fdd67-89ab-4cde-8123-456789abc001",
@@ -225,7 +224,7 @@ func TestTryInterruptActiveRunDoesNotCancelMaintenanceWhileDroppingTaggedItems(t
 
 func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
 	for _, test := range []struct {
@@ -280,7 +279,7 @@ func TestExclusiveStepEmitRunStateControlsActiveLiveRunGroup(t *testing.T) {
 
 func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	called := false
 
 	_, accepted, err := eng.QueueUserMessageForActiveRun(context.Background(), "steer", liveRunTestRequestID(t), func() error {
@@ -300,7 +299,7 @@ func TestQueueUserMessageForActiveRunRejectsIdleWithoutBeforeQueue(t *testing.T)
 
 func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	eng.pauseQueuedUserAutoDrain()
 	t.Cleanup(func() {
 		if err := eng.Close(); err != nil {
@@ -363,7 +362,7 @@ func TestQueueUserMessageForActiveRunAdmissionKeepsGroupOpenAcrossStepFinish(t *
 
 func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 
 	started := make(chan struct{})
@@ -401,7 +400,7 @@ func TestQueueUserMessageForActiveRunRollsBackBeforeQueueError(t *testing.T) {
 func TestQueueUserMessageForActiveRunStopCancelsBlockedAdmissionBeforeQueueMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	eng.stepLifecycle = lifecycle
 
@@ -500,7 +499,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 			return nil
 		},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	submitDone := make(chan error, 1)
 	go func() {
 		_, err := eng.SubmitUserMessage(context.Background(), "hello")
@@ -531,7 +530,7 @@ func TestWaitForActiveRunResultReturnsAssistantFinalAnswer(t *testing.T) {
 
 func TestWaitForActiveRunResultReturnsNoFinalAnswerForShellRun(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
@@ -569,7 +568,7 @@ func TestWaitForActiveRunResultReturnsNoFinalAnswerForShellRun(t *testing.T) {
 
 func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: eng}
 	eng.stepLifecycle = lifecycle
 	started := make(chan struct{})
@@ -610,7 +609,7 @@ func TestTryInterruptActiveRunCancelsActiveStepAndWaiters(t *testing.T) {
 func TestTryInterruptActiveAgentTurnCancelsActiveStepAndRestoresTaggedQueue(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -666,7 +665,7 @@ func TestTryInterruptActiveAgentTurnPersistenceFailurePreservesLiveRunAndQueue(t
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -728,7 +727,7 @@ func TestTryInterruptActiveAgentTurnPersistenceFailurePreservesLiveRunAndQueue(t
 func TestTryInterruptActiveAgentTurnPreservesGoalLoopInterruptBookkeeping(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	client := newScriptedGoalLoopClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	if _, err := eng.SetGoal("interrupt ordinary goal Agent Turn", session.GoalActorUser); err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
@@ -752,7 +751,7 @@ func TestTryInterruptActiveAgentTurnPreservesGoalLoopInterruptBookkeeping(t *tes
 
 func TestTryInterruptActiveAgentTurnLeavesStaleGoalLiveRunGroupRunning(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	eng.ensureOrchestrationCollaborators()
 	activeRunID := uuid.NewString()
 	activeStepID := uuid.NewString()
@@ -807,7 +806,7 @@ func TestTryInterruptActiveAgentTurnLeavesStaleGoalLiveRunGroupRunning(t *testin
 func TestTryInterruptActiveRunFailsAcceptedSteeringWhileStepRuns(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -853,7 +852,7 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringInTaggedQueueGap(t *testing.T
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
 	client := newBlockingThenQueuedClient()
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -909,7 +908,7 @@ func TestTryInterruptActiveRunFailsAcceptedSteeringInTaggedQueueGap(t *testing.T
 func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatus(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -976,7 +975,7 @@ func TestTryInterruptActiveRunDefersPublishingQueueItemFailureUntilAcceptedStatu
 func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			if evt.QueuedUserMessageStatus != nil {
@@ -1011,7 +1010,7 @@ func TestDroppedStoppedLiveRunQueueItemsClearAutoDrainState(t *testing.T) {
 
 func TestTryInterruptActiveRunIdleNoops(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	stopped, err := eng.TryInterruptActiveRun()
 	if err != nil || stopped {
@@ -1068,7 +1067,7 @@ func TestCapturedActiveRunResultCompletesLateTaggedQueuedDrain(t *testing.T) {
 		<-releaseTransition
 		return nil
 	}}
-	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5", StepLifecycle: sink})
+	eng := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5", StepLifecycle: sink})
 	submitDone := make(chan error, 1)
 	go func() {
 		_, err := eng.SubmitUserMessage(context.Background(), "hello")

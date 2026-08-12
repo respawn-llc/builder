@@ -517,7 +517,7 @@ func (s *TaskStatusDurableSnapshot) CurrentNodesByTask(
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	return workflowstore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+	return s.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
 }
 
 func (s *TaskStatusDurableSnapshot) Definition(

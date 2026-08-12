@@ -312,7 +312,7 @@ func TestPhaseProtocolRejectsInconsistentProviderAndLegacyPhaseFacts(t *testing.
 			Usage:         llm.Usage{WindowTokens: 200000},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{})
 
 	_, err := eng.SubmitUserMessage(context.Background(), "run")
 	if err == nil {
@@ -349,7 +349,7 @@ func TestWorkflowToolModeExposesCompleteNodeDespiteEnabledTools(t *testing.T) {
 func TestCompleteNodeNotAdvertisedOutsideWorkflow(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolCompleteNode},
 	})
 	req, err := eng.buildRequest(context.Background(), "step", true)
@@ -399,7 +399,7 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeClient{}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
@@ -423,7 +423,7 @@ func TestWorkflowRequiredToolChoiceIncludesLocalAndHostedTools(t *testing.T) {
 func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolWebSearch, Handler: fakeTool{name: toolspec.ToolWebSearch}},
 	), Config{
 		Model:                "gpt-5",
@@ -443,7 +443,7 @@ func TestWorkflowRequiredToolChoiceAcceptsHostedWebSearchOnly(t *testing.T) {
 func TestWorkflowRequiredToolChoiceRejectsEmptyEffectiveToolSet(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:                "gpt-5",
 		CurrentNodeExecution: testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeShellCommand),
 	})
@@ -762,7 +762,7 @@ func TestWorkflowMixedCompleteNodeRunsSideEffects(t *testing.T) {
 		),
 		commentaryResponse("complete", completeNodeCall("call_complete_2", json.RawMessage(`{"commentary":"complete","summary":"done"}`))),
 	}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: sideEffect}), Config{
 		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "run"); err != nil {
@@ -1233,7 +1233,7 @@ func TestWorkflowShellToolDurableCompletionStopsAfterToolResult(t *testing.T) {
 		),
 		structuredFinalResponse("unexpected"),
 	}}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
 		CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 		OnEvent:              events.accept,
 	})
@@ -1302,7 +1302,7 @@ func TestWorkflowStoppedQueuedFlushDoesNotFinalizeWithoutOutcome(t *testing.T) {
 		tailID = tail.ID
 		return nil
 	}
-	eng = mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng = mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: shellTool,
 	}), Config{
@@ -1391,7 +1391,7 @@ func TestCompatibleProviderPhaseAbsentProseConsumesWorkflowViolationAndCanRecove
 			mode: config.WorkflowCompletionModeShellCommand,
 			newEngine: func(t *testing.T, store *session.Store, client *fakeClient, controller *fakeWorkflowController) *Engine {
 				shellTool := &externalCompletionTool{controller: controller}
-				return mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
+				return mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shellTool}), Config{
 					CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeShellCommand),
 				})
 			},

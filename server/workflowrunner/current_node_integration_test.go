@@ -2017,6 +2017,29 @@ func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeScriptInvalidCompletionInterruptsTheNode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture is a POSIX shell script")
+	}
+	f := newCurrentNodeRunnerFixture(t)
+	scriptPath := filepath.Join(f.workspace, "invalid-completion.sh")
+	script := "#!/bin/sh\nprintf '%s' 'not-json'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	workflowID := createCurrentNodeScriptWorkflow(t, f.store, scriptPath)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	if got := nodes[0].Scheduling.Interruption.Reason; got != ReasonScriptCompletionFailed {
+		t.Fatalf("script completion interruption reason = %q, want %q", got, ReasonScriptCompletionFailed)
+	}
+}
+
 func TestCurrentNodeScriptFailureSurfacesStderr(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fixture is a POSIX shell script")

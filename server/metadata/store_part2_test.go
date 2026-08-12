@@ -625,8 +625,7 @@ func assertProjectSessionListingCount(t *testing.T, ctx context.Context, store *
 	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: projectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  20,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(20),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)

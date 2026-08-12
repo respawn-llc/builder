@@ -21,7 +21,7 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:            "gpt-5",
 			CacheWarningMode: config.CacheWarningModeVerbose,
@@ -104,7 +104,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -194,7 +194,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -266,7 +266,7 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -426,7 +426,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 		}
 	}
 
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	var hydration TranscriptHydrationSnapshot
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -448,7 +448,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	for _, role := range []string{
 		string(transcript.EntryRoleSystem),
 		string(transcript.EntryRoleSystem),
@@ -486,7 +486,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 		t,
 		mustOpenTestSession(t, store.Dir()),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },
@@ -522,7 +522,7 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:   "gpt-5",
 			OnEvent: func(event Event) { events = append(events, event) },

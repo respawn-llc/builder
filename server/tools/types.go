@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"core/shared/jsoncontract"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 	"encoding/json"
@@ -53,7 +54,7 @@ type Result struct {
 type Definition struct {
 	ID          toolspec.ID
 	Description string
-	Schema      json.RawMessage
+	Schema      jsoncontract.Function
 	contract    Contract
 }
 
@@ -67,15 +68,25 @@ type HandlerRegistration struct {
 }
 
 type Registry struct {
-	mu     sync.RWMutex
-	byName map[toolspec.ID]Handler
-	order  []toolspec.ID
+	mu        sync.RWMutex
+	contracts *StaticToolContracts
+	byName    map[toolspec.ID]Handler
+	order     []toolspec.ID
 }
 
-func NewRegistry(handlers ...HandlerRegistration) *Registry {
-	r := &Registry{}
-	r.mustReplaceLocked(handlers)
-	return r
+func NewRegistry() *Registry {
+	return &Registry{byName: map[toolspec.ID]Handler{}}
+}
+
+func NewStaticToolRegistry(
+	contracts StaticToolContracts,
+	handlers ...HandlerRegistration,
+) (*Registry, error) {
+	r := &Registry{contracts: &contracts}
+	if err := r.replaceLocked(handlers); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func (r *Registry) Get(name toolspec.ID) (Handler, bool) {
@@ -90,38 +101,67 @@ func (r *Registry) Definitions() []Definition {
 	defer r.mu.RUnlock()
 	out := make([]Definition, 0, len(r.byName))
 	for _, id := range r.order {
-		def := definitions[id]
+		def, ok := r.contracts.definition(id)
+		if !ok {
+			continue
+		}
 		out = append(out, def)
 	}
 	return out
 }
 
-func (r *Registry) ReplaceHandlers(handlers ...HandlerRegistration) {
+func (r *Registry) PrepareInput(id toolspec.ID, raw json.RawMessage) (json.RawMessage, error) {
 	if r == nil {
-		panic("tool registry is required")
+		return nil, fmt.Errorf("tool registry is required")
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.byName[id]; !ok {
+		return nil, fmt.Errorf("tool %q is not registered", id)
+	}
+	if r.contracts == nil {
+		return nil, fmt.Errorf("tool registry has no static contracts")
+	}
+	prepared, err := r.contracts.prepareInput(id, raw)
+	if err != nil {
+		return nil, fmt.Errorf("prepare %q input: %w", id, err)
+	}
+	return json.RawMessage(prepared), nil
+}
+
+func (r *Registry) ReplaceHandlers(handlers ...HandlerRegistration) error {
+	if r == nil {
+		return fmt.Errorf("tool registry is required")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.mustReplaceLocked(handlers)
+	return r.replaceLocked(handlers)
 }
 
-func (r *Registry) mustReplaceLocked(handlers []HandlerRegistration) {
+func (r *Registry) replaceLocked(handlers []HandlerRegistration) error {
+	if len(handlers) > 0 && r.contracts == nil {
+		return fmt.Errorf("empty tool registry cannot install ordinary handlers")
+	}
 	m := make(map[toolspec.ID]Handler, len(handlers))
 	order := make([]toolspec.ID, 0, len(handlers))
 	for _, h := range handlers {
 		id := h.ID
 		if _, ok := definitions[id]; !ok {
-			panic(fmt.Sprintf("tool %q is missing centralized definition", id))
+			return fmt.Errorf("tool %q is missing centralized definition", id)
+		}
+		if _, ok := r.contracts.contract(id); !ok {
+			return fmt.Errorf("tool %q is missing prepared static contract", id)
 		}
 		if h.Handler == nil {
-			panic(fmt.Sprintf("tool %q handler is required", id))
+			return fmt.Errorf("tool %q handler is required", id)
 		}
 		if _, exists := m[id]; exists {
-			panic(fmt.Sprintf("duplicate tool handler registration for %q", id))
+			return fmt.Errorf("duplicate tool handler registration for %q", id)
 		}
 		m[id] = h.Handler
 		order = append(order, id)
 	}
 	r.byName = m
 	r.order = order
+	return nil
 }

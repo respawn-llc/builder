@@ -911,7 +911,7 @@ func TestBuildPayloadRejectsRequiredToolChoiceForNonResponsesAdapter(t *testing.
 	_, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeRequired,
-		Tools:          []Tool{{Name: "shell"}},
+		Tools:          []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}, OpenAIAuthMode{}, ProviderCapabilities{ProviderID: "anthropic"})
 	if !errors.Is(err, ErrUnsupportedToolChoicePolicy) {
 		t.Fatalf("buildPayload() error = %v, want ErrUnsupportedToolChoicePolicy", err)
@@ -923,7 +923,7 @@ func TestBuildPayloadSerializesRequiredToolChoice(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeRequired,
-		Tools:          []Tool{{Name: "shell"}},
+		Tools:          []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("buildPayload: %v", err)
@@ -939,7 +939,7 @@ func TestBuildPayloadSerializesAutomaticToolChoice(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		Tools:          []Tool{{Name: "shell"}},
+		Tools:          []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("buildPayload: %v", err)
@@ -957,8 +957,8 @@ func TestBuildPayloadRequiredToolChoicePreservesEffectiveToolsAndParallelSetting
 		Model:                 "gpt-5",
 		EnableNativeWebSearch: true,
 		Tools: []Tool{
-			{Name: "shell"},
-			{Name: "patch"},
+			{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})},
+			{Name: "patch", Schema: mustTestFunctionSchema(t, struct{}{})},
 		},
 	}
 	base.ToolChoiceMode = ToolChoiceModeAutomatic
@@ -1056,7 +1056,7 @@ func TestBuildPayload_UsesExplicitPatchCustomGrammarTool(t *testing.T) {
 	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model: "gpt-5.4",
 		Tools: []Tool{
-			{Name: string(toolspec.ToolExecCommand), Description: "shell", Schema: json.RawMessage(`{"type":"object","additionalProperties":false}`)},
+			{Name: string(toolspec.ToolExecCommand), Description: "shell", Schema: mustTestFunctionSchema(t, struct{}{})},
 			{Name: string(toolspec.ToolPatch), Description: "patch", Custom: &CustomToolFormat{Type: "grammar", Syntax: "lark", Definition: PatchToolLarkGrammar}},
 		},
 	}, mode, requireProviderCapabilities(t, transport, mode))

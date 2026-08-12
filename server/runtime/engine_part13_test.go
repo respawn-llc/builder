@@ -736,7 +736,7 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 	}
 
 	var eng *Engine
-	registry := tools.NewRegistry(
+	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolTriggerHandoff, Handler: triggerhandofftool.NewTriggerHandoffTool(func() triggerhandofftool.TriggerHandoffController { return eng })},
 	)
@@ -814,7 +814,7 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 	}
 
 	var eng *Engine
-	registry := tools.NewRegistry(
+	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolTriggerHandoff, Handler: triggerhandofftool.NewTriggerHandoffTool(func() triggerhandofftool.TriggerHandoffController { return eng })},
 	)
@@ -866,7 +866,7 @@ func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
 	observer := &armedCommittedAppendFailObserver{}
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir, withRuntimeTestPersistenceObserver(observer))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
@@ -888,7 +888,7 @@ func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {
 			{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("should-not-run"), Phase: textutil.Value(llm.MessagePhaseFinal)}},
 		},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{})
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}

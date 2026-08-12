@@ -286,6 +286,7 @@
 - Any assistant answer that would otherwise complete an active workflow-controlled Node must pass through that Node's current completion contract in every completion mode, whether or not the answer carries an explicit final-phase designation.
 - Normal assistant final answers are invalid in `tool` and `shell_command` modes. Kent explains the invalid completion and continues until the agent completes correctly, asks a Question, is interrupted, reaches the invalid-attempt limit, or encounters an error.
 - A completion payload contains only optional `transition`, optional `commentary`, and possible Transition Parameters as top-level properties. It never exposes `next_node`.
+- If a completion payload reaches Kent with another top-level property, Kent ignores that property. A misspelled required Transition Parameter still leaves the required Parameter absent.
 - Transition Parameter outputs are strings. Kent converts non-string JSON values to strings before binding them. A later Node never receives a structured Parameter value.
 - Possible Transition Parameters are optional until Kent knows which Transition the agent selected. The selected Transition then determines which Parameters are required.
 - Each required Transition Parameter must become a non-empty string after leading and trailing whitespace is removed.

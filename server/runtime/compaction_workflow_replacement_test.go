@@ -9,7 +9,6 @@ import (
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
-	"core/server/tools"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
@@ -157,7 +156,7 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 		t.Fatalf("close source engine: %v", err)
 	}
 	reopenedStore := mustOpenTestSession(t, fixture.store.Dir())
-	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reopened := mustNewTestEngine(t, reopenedStore, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	mode, present := reopened.compactionRuntimeState().HistoryReplacementMode()
 	if !present || mode == nil || *mode != session.CompactionModeWorkflowPostCompletion {
 		t.Fatalf(
@@ -242,7 +241,7 @@ func TestWorkflowPostCompletionCompactionPreCommitFailureDoesNotCreateBoundary(t
 
 func TestWorkflowAssignmentSteeringPreservesPostCompletionBoundary(t *testing.T) {
 	t.Parallel()
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	mode := session.CompactionModeWorkflowPostCompletion
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set post-completion replacement mode: %v", err)
@@ -371,7 +370,7 @@ func TestWorkflowPostCompletionRestoreIgnoresCacheRequestObservation(t *testing.
 
 func TestWorkflowPostCompletionBoundaryPreservesLocalDiagnosticSteering(t *testing.T) {
 	t.Parallel()
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	mode := session.CompactionModeWorkflowPostCompletion
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set post-completion replacement mode: %v", err)
@@ -459,7 +458,7 @@ func TestWorkflowPostCompletionActivityPolicyPreservesMetaAndConsumesActivity(t 
 	}); activity != workflowPostCompletionDurableActivity {
 		t.Fatalf("goal notice activity = %d, want durable activity", activity)
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	if err := engine.compactionRuntimeState().SetHistoryReplacementMode(&mode); err != nil {
 		t.Fatalf("set engine replacement mode: %v", err)
 	}
@@ -490,7 +489,7 @@ func TestWorkflowPostCompletionCompactionUsesLocalGenerateClient(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
 	if err := engine.steer("terminal", steerMessagesWithPersistenceIntent(
