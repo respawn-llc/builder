@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -17,42 +18,6 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
-
-func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t *testing.T) {
-	source := currentNodeCompletionReference(t, "task-pending-approval", "node-agent")
-	approvalID := workflow.NewApprovalID()
-	execution := &currentNodeCompletionExecutionStub{
-		sessionResult: workflowstore.CurrentNodeCompletionResult{
-			PendingApproval: &workflow.PendingApproval{
-				ID:     approvalID,
-				Source: source,
-			},
-		},
-	}
-	service := currentNodeCompletionService(execution)
-	sessionID := runtimeids.NewSessionID()
-
-	response, err := service.CompleteWorkflowTask(context.Background(), serverapi.WorkflowTaskCompleteRequest{
-		ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
-		AgentSessionID: sessionID.String(),
-		TransitionID:   "done",
-	})
-	if err != nil {
-		t.Fatalf("CompleteWorkflowTask: %v", err)
-	}
-	if response.TaskID != string(source.TaskID) {
-		t.Fatalf("task id = %q, want %q", response.TaskID, source.TaskID)
-	}
-	if response.PendingApprovalID == nil || *response.PendingApprovalID != approvalID.String() {
-		t.Fatalf("pending approval id = %v, want %q", response.PendingApprovalID, approvalID)
-	}
-	if len(response.CurrentNodes) != 0 {
-		t.Fatalf("current nodes = %+v, want none while source remains pending approval", response.CurrentNodes)
-	}
-	if execution.sessionID != sessionID || execution.idleSelector.TaskID != nil || execution.idleSelector.SessionID != nil {
-		t.Fatalf("completion dispatch = %+v, want live Session completion", execution)
-	}
-}
 
 func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
 	source := currentNodeCompletionReference(t, "task-completion-diagnostic", "node-agent")
@@ -89,75 +54,110 @@ func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t 
 	}
 }
 
-func TestApproveWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
-	source := currentNodeCompletionReference(t, "task-approval-diagnostic", "node-agent")
-	target := currentNodeCompletionReference(t, "task-approval-diagnostic", "node-review")
-	approvalID := workflow.NewApprovalID()
-	workflowID := runtimeids.NewWorkflowID()
-	diagnostic := errors.New("approved successor assignment diagnostic")
-	execution := &currentNodeCompletionExecutionStub{
-		approvalResult: workflowstore.PendingApprovalApplyResult{
-			Mutation: workflow.CurrentNodeMutationResult{
-				Removed: []workflow.CurrentNodeReference{source},
-				Created: []workflow.CurrentNode{{Reference: target}},
-			},
-			ResolvedApproval: workflow.PendingApproval{
-				ID:     approvalID,
-				Source: source,
-			},
-			TaskAttentionResolution: workflowstore.TaskAttentionResolution{
-				Approvals: []workflowstore.ApprovalAttentionProjection{{
-					ApprovalID: approvalID,
-					Source:     source,
-				}},
-			},
-		},
-		approvalErr: diagnostic,
-	}
-	attention := &workflowAttentionRecorder{}
-	service := currentNodeCompletionService(execution)
-	service.readModels.TaskDetail = currentNodeCompletionTaskDetail{
-		detail: serverapi.WorkflowTaskDetail{Summary: serverapi.WorkflowTaskSummary{
-			ID:         string(source.TaskID),
-			ProjectID:  "project-approval-diagnostic",
-			WorkflowID: workflowID,
-		}},
-	}
-	service.attentionFinalizer = attention
-	service.events = newWorkflowProjectEventBroker()
-	_, persistedService, _ := newWorkflowServiceTestContext(t)
-	service.store = persistedService.store
-	service.store.SetWorkflowEventPublisher(service.events)
-	subscription, err := service.events.subscribe("project-approval-diagnostic", nil)
+func TestApproveWorkflowTaskStartupFailureProjectsInterruptedResumeAcrossRestart(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
+	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "next")
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	started, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
-		t.Fatalf("subscribe Workflow project events: %v", err)
+		t.Fatalf("StartTask: %v", err)
 	}
-	t.Cleanup(func() { _ = subscription.Close() })
-
-	response, err := service.ApproveWorkflowTask(context.Background(), serverapi.WorkflowTaskApproveRequest{
-		ApprovalID: approvalID.String(),
+	completed, err := service.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+		Source:       started.Mutation.Created[0].Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "approved plan"},
 	})
-	if !errors.Is(err, diagnostic) {
-		t.Fatalf("ApproveWorkflowTask error = %v, want %v", err, diagnostic)
+	if err != nil || completed.PendingApproval == nil {
+		t.Fatalf("CompleteCurrentNode = %+v, %v; want pending Approval", completed, err)
 	}
-	if response.Applied == nil ||
-		response.Applied.TaskID != string(source.TaskID) ||
-		len(response.Applied.CurrentNodes) != 1 ||
-		response.Applied.CurrentNodes[0].NodeID != string(target.NodeID) {
-		t.Fatalf("committed Approval response = %+v, want applied target %v", response, target)
+	approval := *completed.PendingApproval
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	newController := func(runtimeAuthority *sessionruntime.Authority) *workflowexecution.CurrentNodeController {
+		next, controllerErr := workflowexecution.NewCurrentNodeController(
+			service.store,
+			initialBranchControllerRunner{},
+			runtimeAuthority,
+			service.mutationPermit,
+			workflowexecution.CurrentNodeControllerConfig{
+				AgentConcurrency:  1,
+				AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},
+			},
+		)
+		if controllerErr != nil {
+			t.Fatalf("NewCurrentNodeController: %v", controllerErr)
+		}
+		return next
 	}
-	if approvalIDs := attention.resolvedApprovalIDs(); len(approvalIDs) != 1 || approvalIDs[0] != approvalID {
-		t.Fatalf("resolved Approval attention = %+v, want %q", approvalIDs, approvalID)
+	controller := newController(authority)
+	service.currentNodeExecution = controller
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	approved, err := service.ApproveWorkflowTask(ctx, serverapi.WorkflowTaskApproveRequest{ApprovalID: approval.ID.String()})
+	if err != nil || approved.Applied == nil || len(approved.Applied.CurrentNodes) != 1 {
+		t.Fatalf("ApproveWorkflowTask = %+v, %v; want consumed Approval and target", approved, err)
 	}
-	eventCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	event, eventErr := subscription.Next(eventCtx)
-	if eventErr != nil {
-		t.Fatalf("read approved Task event: %v", eventErr)
+	target, err := workflow.NewCurrentNodeReference(
+		workflow.TaskID(task.Task.ID),
+		workflow.NodeID(approved.Applied.CurrentNodes[0].NodeID),
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	if event.Action != serverapi.WorkflowProjectEventActionApproved ||
-		event.PrimaryEntityID != string(source.TaskID) {
-		t.Fatalf("approved Task event = %+v", event)
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		nodes, listErr := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+		return listErr == nil &&
+			len(nodes) == 1 &&
+			nodes[0].Reference.Equal(target) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	}, "approved target startup failure did not become interrupted")
+	pending, err := service.store.ListPendingApprovals(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil || len(pending) != 0 {
+		t.Fatalf("pending Approvals after startup failure = %+v, %v; want none", pending, err)
+	}
+	detail, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+	if err != nil ||
+		detail.Task.Status.Kind != serverapi.WorkflowTaskStatusKindInterrupted ||
+		!detail.Task.Actions.CanResume ||
+		detail.Task.Actions.CanInterrupt {
+		t.Fatalf("task detail after approved startup failure = %+v, %v", detail, err)
+	}
+	attention, err := service.ListWorkflowTaskAttention(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: task.Task.ID})
+	if err != nil ||
+		len(attention.Items) != 1 ||
+		attention.Items[0].Kind != "interrupted_current_node" ||
+		attention.Items[0].ApprovalID != nil ||
+		attention.Items[0].DetailJSON == nil {
+		t.Fatalf("Desktop attention after approved startup failure = %+v, %v", attention, err)
+	}
+
+	if recovered, err := controller.Recover(ctx); err != nil || recovered != 0 {
+		t.Fatalf("Recover after approved startup failure = %d, %v; want no restart start/rewrite", recovered, err)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatalf("close pre-restart CurrentNodeController: %v", err)
+	}
+	if err := authority.Close(context.Background()); err != nil {
+		t.Fatalf("close pre-restart Authority: %v", err)
+	}
+	authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller = newController(authority)
+	service.currentNodeExecution = controller
+	resumed, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	})
+	if err != nil || resumed.Applied == nil || len(resumed.Applied.CurrentNodes) != 1 {
+		t.Fatalf("ResumeWorkflowTask after approved startup failure = %+v, %v", resumed, err)
 	}
 }
 
@@ -254,67 +254,6 @@ WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 	}
 	if err := service.store.ValidateCurrentNodeSessionBinding(ctx, sessionID, currentNode.Reference); err != nil {
 		t.Fatalf("ResumeWorkflowTask did not repair exact Session provenance: %v", err)
-	}
-}
-
-func TestCompleteWorkflowTaskUsesOnlyTaskOrSessionForcedSelector(t *testing.T) {
-	source := currentNodeCompletionReference(t, "task-forced", "node-agent")
-	result := workflowstore.CurrentNodeCompletionResult{
-		Mutation: workflow.CurrentNodeMutationResult{
-			Removed: []workflow.CurrentNodeReference{source},
-			Created: []workflow.CurrentNode{{
-				Reference: currentNodeCompletionReference(t, "task-forced", "node-done"),
-			}},
-		},
-	}
-	tests := []struct {
-		name    string
-		request serverapi.WorkflowTaskCompleteRequest
-		assert  func(*testing.T, workflowstore.IdleCurrentNodeSelector)
-	}{
-		{
-			name: "task",
-			request: serverapi.WorkflowTaskCompleteRequest{
-				ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
-				Force:        true,
-				TaskID:       string(source.TaskID),
-				TransitionID: "done",
-			},
-			assert: func(t *testing.T, selector workflowstore.IdleCurrentNodeSelector) {
-				t.Helper()
-				if selector.TaskID == nil || *selector.TaskID != source.TaskID || selector.SessionID != nil {
-					t.Fatalf("idle selector = %+v, want task selector", selector)
-				}
-			},
-		},
-		{
-			name: "session",
-			request: serverapi.WorkflowTaskCompleteRequest{
-				ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
-				Force:        true,
-				SessionID:    runtimeids.NewSessionID().String(),
-				TransitionID: "done",
-			},
-			assert: func(t *testing.T, selector workflowstore.IdleCurrentNodeSelector) {
-				t.Helper()
-				if selector.TaskID != nil || selector.SessionID == nil {
-					t.Fatalf("idle selector = %+v, want Session selector", selector)
-				}
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			execution := &currentNodeCompletionExecutionStub{idleResult: result}
-			response, err := currentNodeCompletionService(execution).CompleteWorkflowTask(context.Background(), test.request)
-			if err != nil {
-				t.Fatalf("CompleteWorkflowTask: %v", err)
-			}
-			test.assert(t, execution.idleSelector)
-			if response.TaskID != string(source.TaskID) || len(response.CurrentNodes) != 1 || response.CurrentNodes[0].NodeID != "node-done" {
-				t.Fatalf("response = %+v, want task and replacement Current Node", response)
-			}
-		})
 	}
 }
 

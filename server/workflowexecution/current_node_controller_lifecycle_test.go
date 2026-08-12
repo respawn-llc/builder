@@ -441,51 +441,6 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	}
 }
 
-func TestCurrentNodeControllerInterruptsUnassignedApprovalTarget(t *testing.T) {
-	target := currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-target")
-	approval := workflow.PendingApproval{
-		ID:     workflow.NewApprovalID(),
-		Source: currentNodeReferenceForControllerTest(t, "task-approval-steer-failure", "node-source"),
-	}
-	store := &currentNodeControllerStore{
-		pendingApproval: approval,
-		approvalApplied: workflowstore.PendingApprovalApplyResult{
-			Mutation: workflow.CurrentNodeMutationResult{Created: []workflow.CurrentNode{{
-				Reference:  target,
-				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
-			}}},
-			ResolvedApproval: approval,
-		},
-	}
-	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-	runner := &countingCurrentNodeRunner{}
-	cause := errors.New("assignment append failed")
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
-		AgentConcurrency:  1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
-	})
-	if err != nil {
-		t.Fatalf("new current node controller: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = controller.Close()
-		_ = authority.Close(context.Background())
-	})
-
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, cause) {
-		t.Fatalf("ApplyPendingApproval error = %v, want %v", err, cause)
-	}
-	time.Sleep(50 * time.Millisecond)
-	if starts := runner.starts(); starts != 0 {
-		t.Fatalf("runner starts = %d, want none after steering failure", starts)
-	}
-	if interruption, interrupted := store.interruption(target); !interrupted {
-		t.Fatal("unassigned approval target was not interrupted")
-	} else if interruption.reason != reasonCurrentNodeRuntimeStartFailed {
-		t.Fatalf("approval target interruption = %+v, want runtime start failure", interruption)
-	}
-}
-
 func TestCompleteIdleCurrentNodeInterruptsOnlyFailedAgentAndStartsHealthyScriptSibling(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
