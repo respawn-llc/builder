@@ -236,7 +236,7 @@ func associateHistoricalTaskSessionForViewTest(t *testing.T, fixture currentNode
 	}
 	_, err := db.ExecContext(fixture.ctx, `INSERT INTO session_workflow_node_associations
 (task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms)
-VALUES (?, ?, ?, ?, 'historical', NULL, ?)`, string(reference.TaskID), sessionID.String(), string(reference.NodeID),
+VALUES (?, ?, kent_graph_entity_id_blob_v1(?), ?, 'historical', NULL, ?)`, string(reference.TaskID), sessionID.String(), string(reference.NodeID),
 		sql.NullString{String: string(branch), Valid: scoped}, associatedAt)
 	if err != nil {
 		t.Fatalf("insert historical Task Session association: %v", err)

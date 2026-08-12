@@ -3707,6 +3707,7 @@ WHERE task_id = ?1
             AND association.association_status = 'current'
             AND association.source_session_id = ?2
             AND association.session_id != ?3
+            AND (?4 IS NULL OR association.transition_branch_key = ?4)
           UNION
           SELECT association.session_id
           FROM session_workflow_node_associations association

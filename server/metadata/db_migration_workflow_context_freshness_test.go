@@ -47,7 +47,7 @@ INSERT INTO session_workflow_node_associations (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 83); err != nil {
+	if _, err := provider.UpTo(t.Context(), 84); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`
@@ -172,7 +172,7 @@ WHERE task_id = ?`, test.taskID)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 83); err != nil {
+	if _, err := provider.UpTo(t.Context(), 84); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for _, test := range cases {
@@ -270,6 +270,13 @@ INSERT INTO workflow_nodes (
 UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, test.targetSessionID)
 		}
 		execSeed(t, db, "pending Approval", insertTaskPendingApprovalSQL, approvalID, taskID, "node-start", nil, now)
+		execSeed(t, db, "pending Approval transition snapshot", `
+UPDATE task_pending_approvals
+SET transition_snapshot_json = json_object(
+    'id', 'group-start',
+    'source_node_id', 'node-start'
+)
+WHERE id = ?`, approvalID)
 		execSeed(t, db, "pending Approval branch", `
 INSERT INTO task_pending_approval_branches (
     approval_id,
@@ -287,23 +294,36 @@ INSERT INTO task_pending_approval_branches (
         'prior_values', json('{"transition_parameters":{}}'),
         'session_id', ?
     ),
-    '{}',
+    json_object(
+        'id', 'edge-start-1',
+        'transition_group_id', 'group-start',
+        'target_node_id', ?
+    ),
     json_object('session_id', ?)
 )`,
 			approvalID,
 			test.targetNodeID,
 			sql.NullString{String: test.targetSessionID, Valid: test.targetSessionID != ""},
+			test.targetNodeID,
 			sql.NullString{String: test.targetSessionID, Valid: test.targetSessionID != ""},
 		)
 		if test.name == "agent without Session" {
 			execSeed(t, db, "fresh pending Approval context mode", `
 UPDATE task_pending_approval_branches
-SET effective_edge_configuration_json = json_object('context_mode', 'new_session')
+SET effective_edge_configuration_json = json_set(
+    effective_edge_configuration_json,
+    '$.context_mode',
+    'new_session'
+)
 WHERE approval_id = ?`, approvalID)
 		} else if test.name == "unbound retained Agent" {
 			execSeed(t, db, "retained pending Approval context mode", `
 UPDATE task_pending_approval_branches
-SET effective_edge_configuration_json = json_object('context_mode', 'continue_session')
+SET effective_edge_configuration_json = json_set(
+    effective_edge_configuration_json,
+    '$.context_mode',
+    'continue_session'
+)
 WHERE approval_id = ?`, approvalID)
 		}
 	}
@@ -311,7 +331,7 @@ WHERE approval_id = ?`, approvalID)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 83); err != nil {
+	if _, err := provider.UpTo(t.Context(), 84); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for index, test := range cases {
@@ -381,7 +401,7 @@ INSERT INTO task_active_fanout_branches (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 83); err != nil {
+	if _, err := provider.UpTo(t.Context(), 84); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`

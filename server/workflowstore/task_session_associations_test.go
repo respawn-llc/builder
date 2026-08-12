@@ -796,10 +796,10 @@ INSERT INTO task_current_nodes (
     continuation_source_session_id, legacy_materialized
 ) VALUES (?, ?, ?, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, ?, ?, 'exact', ?, 0)`,
 			string(task.ID),
-			string(started.Reference.NodeID),
+			testGraphEntityBlob(t, string(started.Reference.NodeID)),
 			string(branchKey),
 			sourceSessionID.String(),
-			string(*started.EnteredByEdgeID),
+			testGraphEntityBlob(t, string(*started.EnteredByEdgeID)),
 			started.AgentExecutionSelection.Assignee,
 			string(started.AgentExecutionSelection.Origin),
 			sourceSessionID.String(),

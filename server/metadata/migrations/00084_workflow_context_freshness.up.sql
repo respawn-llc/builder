@@ -5,7 +5,8 @@ DROP TRIGGER IF EXISTS session_workflow_node_associations_owner_update;
 CREATE TABLE session_workflow_node_associations_rebuilt (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    node_id TEXT NOT NULL,
+    node_id BLOB NOT NULL
+        CHECK (typeof(node_id) = 'blob' AND length(node_id) = 16 AND node_id != zeroblob(16)),
     transition_branch_key TEXT
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
     association_status TEXT NOT NULL CHECK (association_status IN ('current', 'historical')),
@@ -294,7 +295,9 @@ SET context_source_resolution_json = (
         )
     )
     FROM workflow_nodes node
-    WHERE node.id = json_extract(task_pending_approval_branches.target_snapshot_json, '$.node_id')
+    WHERE node.id = kent_graph_entity_id_blob_v1(
+        json_extract(task_pending_approval_branches.target_snapshot_json, '$.node_id')
+    )
 );
 ALTER TABLE task_active_fanout_branches
 ADD COLUMN continuation_source_kind TEXT

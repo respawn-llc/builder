@@ -421,11 +421,21 @@ func insertTaskCurrentNodeWithKind(
 	if err := bindSessionToTask(ctx, q, association); err != nil {
 		return err
 	}
-	sourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID()
-	if !exact {
-		return errors.New("retained current node requires exact continuation source")
+	switch currentNode.ContinuationSource.Kind() {
+	case workflow.MaterializedContinuationSourceExact:
+		sourceSessionID, exact := currentNode.ContinuationSource.ExactSessionID()
+		if !exact {
+			return errors.New("exact retained current node omitted source Session")
+		}
+		return designateCurrentTaskSessionAssociation(ctx, q, association, sourceSessionID)
+	case workflow.MaterializedContinuationSourceLegacy:
+		return appendLegacyTaskSessionHistory(ctx, q, association)
+	default:
+		return fmt.Errorf(
+			"retained current node has invalid continuation source kind %q",
+			currentNode.ContinuationSource.Kind(),
+		)
 	}
-	return designateCurrentTaskSessionAssociation(ctx, q, association, sourceSessionID)
 }
 
 func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {

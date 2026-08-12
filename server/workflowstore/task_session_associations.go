@@ -115,7 +115,7 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 		if err := retireDependentCurrentTaskSessionAssociations(
 			ctx,
 			q,
-			normalized.CurrentNode.TaskID,
+			normalized.CurrentNode,
 			previousAssociation.SessionID,
 			sourceSessionID,
 		); err != nil {
@@ -290,16 +290,21 @@ func currentTaskSessionAssociationBeforeBinding(
 func retireDependentCurrentTaskSessionAssociations(
 	ctx context.Context,
 	q *sqlitegen.Queries,
-	taskID workflow.TaskID,
+	currentNode workflow.CurrentNodeReference,
 	obsoleteSessionID runtimeids.SessionID,
 	preservedSourceSessionID runtimeids.SessionID,
 ) error {
+	var transitionBranchKey sql.NullString
+	if branchKey, branchScoped := currentNode.TransitionBranchKey(); branchScoped {
+		transitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
+	}
 	return q.RetireDependentCurrentSessionWorkflowNodeAssociations(
 		ctx,
 		sqlitegen.RetireDependentCurrentSessionWorkflowNodeAssociationsParams{
-			TaskID:                   string(taskID),
+			TaskID:                   string(currentNode.TaskID),
 			ObsoleteSessionID:        obsoleteSessionID.String(),
 			PreservedSourceSessionID: preservedSourceSessionID.String(),
+			TransitionBranchKey:      transitionBranchKey,
 		},
 	)
 }

@@ -47,11 +47,11 @@ ORDER BY json_each.key`)
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 84); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply graph identity migration: %v", err)
 	}
 
-	assertGraphMigrationVersion(t, provider, 84)
+	assertGraphMigrationVersion(t, provider, 83)
 	assertGraphMigrationStorage(t, db)
 	var workflowVersion int64
 	if err := db.QueryRow(`SELECT version FROM workflows WHERE id = ?`, graphMigrationWorkflowBlob(t)).Scan(&workflowVersion); err != nil {
@@ -232,7 +232,7 @@ func TestGraphIdentityMigrationVersionsWorkflowForJoinOnlyBranchRemap(t *testing
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 84); err != nil {
+	if _, err := provider.UpTo(t.Context(), 83); err != nil {
 		t.Fatalf("apply graph identity migration: %v", err)
 	}
 
@@ -301,11 +301,11 @@ func TestGraphIdentityMigrationRejectsInvalidVersion79IdentitiesWithoutMutation(
 			if err != nil {
 				t.Fatalf("create migration provider: %v", err)
 			}
-			if _, err := provider.UpTo(t.Context(), 84); err == nil {
+			if _, err := provider.UpTo(t.Context(), 83); err == nil {
 				t.Fatal("invalid graph identity migration succeeded")
 			}
 
-			assertGraphMigrationVersion(t, provider, 83)
+			assertGraphMigrationVersion(t, provider, 82)
 			assertGraphMigrationVersion79State(t, db)
 		})
 	}
@@ -331,7 +331,7 @@ func TestGraphIdentityMigrationRollsBackWhenVersionRecordingFails(t *testing.T) 
 	if err != nil {
 		t.Fatalf("create failing migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(context.Background(), 84); err == nil {
+	if _, err := provider.UpTo(context.Background(), 83); err == nil {
 		t.Fatal("graph identity migration succeeded despite version-record failure")
 	}
 

@@ -222,15 +222,6 @@ CREATE TABLE task_current_nodes_v80 (
             'transition_selected',
             'retained_session'
         )),
-    continuation_source_kind TEXT
-        CHECK (continuation_source_kind IS NULL OR continuation_source_kind IN (
-            'exact',
-            'deferred_self',
-            'absent'
-        )),
-    continuation_source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT,
-    legacy_materialized INTEGER NOT NULL DEFAULT 1
-        CHECK (legacy_materialized IN (0, 1)),
     FOREIGN KEY (task_id, transition_branch_key)
         REFERENCES task_active_fanout_branches(task_id, transition_branch_key)
         ON DELETE RESTRICT,
@@ -283,19 +274,12 @@ CREATE TABLE task_pending_approval_branches_v80 (
 );
 
 CREATE TABLE session_workflow_node_associations_v80 (
-    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     node_id BLOB NOT NULL
         CHECK (typeof(node_id) = 'blob' AND length(node_id) = 16 AND node_id != zeroblob(16)),
     transition_branch_key TEXT
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
-    association_status TEXT NOT NULL CHECK (association_status IN ('current', 'historical')),
-    source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT,
-    associated_at_unix_ms INTEGER NOT NULL CHECK (associated_at_unix_ms > 0),
-    CHECK (
-        (association_status = 'current' AND source_session_id IS NOT NULL)
-        OR association_status = 'historical'
-    )
+    associated_at_unix_ms INTEGER NOT NULL CHECK (associated_at_unix_ms > 0)
 );
 
 INSERT INTO workflow_node_groups_v80 (
@@ -390,8 +374,7 @@ INSERT INTO task_current_nodes_v80 (
     task_id, node_id, transition_branch_key, current_input_values_json,
     prior_node_values_json, session_id, scheduling_state, interruption_reason,
     interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id,
-    effective_assignee, effective_thinking, assignee_origin,
-    continuation_source_kind, continuation_source_session_id, legacy_materialized
+    effective_assignee, effective_thinking, assignee_origin
 )
 SELECT
     source.task_id,
@@ -407,10 +390,7 @@ SELECT
     edge_map.new_id,
     source.effective_assignee,
     source.effective_thinking,
-    source.assignee_origin,
-    source.continuation_source_kind,
-    source.continuation_source_session_id,
-    source.legacy_materialized
+    source.assignee_origin
 FROM task_current_nodes source
 JOIN migration_graph_node_ids node_map ON node_map.old_id = source.node_id
 LEFT JOIN migration_graph_edge_ids edge_map ON edge_map.old_id = source.entered_by_edge_id
@@ -492,16 +472,12 @@ JOIN migration_graph_node_ids edge_target_node_map
 ORDER BY source.rowid;
 
 INSERT INTO session_workflow_node_associations_v80 (
-    task_id, session_id, node_id, transition_branch_key, association_status,
-    source_session_id, associated_at_unix_ms
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
 )
 SELECT
-    source.task_id,
     source.session_id,
     node_map.new_id,
     source.transition_branch_key,
-    source.association_status,
-    source.source_session_id,
     source.associated_at_unix_ms
 FROM session_workflow_node_associations source
 JOIN migration_graph_node_ids node_map ON node_map.old_id = source.node_id
