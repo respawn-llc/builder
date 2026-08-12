@@ -27,6 +27,25 @@ func completeCurrentNodeJoinArrival(
 	if !branchScoped {
 		return CurrentNodeCompletionResult{}, errors.New("join arrival requires a branch-scoped current node")
 	}
+	joinNode, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	group, err := transitionGroupForEdge(definition, edge)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	sourceNode, err := currentNodeDefinitionNode(definition, group.SourceNodeID)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
+	contextResolution, err := resolveTransitionContext(
+		ctx, q, definition, edge, source.Reference.TaskID, &source, &branchKey,
+		sourceNode, joinNode, false,
+	)
+	if err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	arrivalValues, err := joinArrivalValues(definition, edge, outputValues)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -40,6 +59,9 @@ func completeCurrentNodeJoinArrival(
 		return CurrentNodeCompletionResult{}, err
 	}
 	panicOnLegacyCurrentFanoutJoinSource(source.Reference.TaskID, persistedArrivals)
+	if err := updateActiveFanoutBranchContinuationSource(ctx, q, source.Reference, contextResolution.ActiveSource); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	updated, err := q.UpdateTaskActiveFanoutBranchArrival(ctx, sqlitegen.UpdateTaskActiveFanoutBranchArrivalParams{
 		TaskID:              string(source.Reference.TaskID),
 		TransitionBranchKey: string(branchKey),
