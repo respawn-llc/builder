@@ -29,14 +29,17 @@
   The parent destination owns navigation, server requests, pending state,
   failures, and retries through its existing action paths.
 - Cards are reserved for board Task cards. Navigation, browsing, and selection collections use list rows.
+- Workflow browsing rows show the Workflow name, description, version, and an Edit action. Selecting the row opens the Workflow editor. Edit opens Workflow settings without loading the Workflow graph.
 
 ## Home And Navigation
 
 - Home opens on Inbox unless a valid previously open Project or Workflow destination can be restored. Back and forward use available navigation history; otherwise Back returns Home.
 - Home has compact navigation and content side by side when both remain usable, otherwise navigation stacks above content. It has no resizable splitter or temporary navigation drawer.
 - Navigation pins global Inbox above the infinite-scrolling Projects list. Inbox is not a Project and has no required attention badge.
-- Home's `Projects` and `Workflows` tabs default to `Projects` after relaunch. Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace, whose `Workflows` and `Sessions` tabs share one window-local last-used selection while moving between Projects. That window-local selection starts at `Sessions` and is not persisted, so both the first manually selected Project and a Project restored after relaunch open on `Sessions`.
+- Selecting Inbox shows aggregate Inbox. Selecting a Project opens its workspace, whose `Workflows` and `Sessions` tabs share one window-local last-used selection while moving between Projects; relaunch defaults to `Workflows`.
 - Selecting an Inbox item leaves Inbox visible and opens Task Detail as an overlay. It does not replace Home content or navigate away from Home.
+- An Inbox item shows at most five lines of its detail message before truncation. Selecting the item still opens its complete Task Detail.
+- Home opens sidebars by shifting content when the available layout width exceeds 1000 pixels and as an overlay otherwise. Shift-mode sidebar opening, closing, and resizing keep the sidebar and Home content movement synchronized.
 - The sticky Project workspace header shows Project name and key, the two tabs, and `Link workflow` or `New Session` as appropriate.
 - Workflow links are an infinite-scrolling list. Each shows reusable Workflow identity, Project-default state, and validation state. Selecting one opens that Project's Workflow board.
 - `Manage workflows` is available from `Link workflow` for reusable Workflows, including those not linked to the selected Project. Project Task and board destinations remain Project-scoped.

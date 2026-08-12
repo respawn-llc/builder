@@ -4,6 +4,7 @@
 
 - Desktop Sessions and Chat are thin remote-control surfaces. The Kent server is authoritative for Sessions, project and workspace scope, runtime activity, transcript history, drafts, Pending Work, prompts, goals, processes, worktrees, and durable state.
 - Desktop provides the session-browser and chat capabilities available in the terminal product unless this specification explicitly excludes a capability.
+- Unfinished Desktop Chat entry points and Home navigation remain unavailable in production builds until product activation. Development builds may expose those surfaces through one Desktop Chat availability gate.
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.
@@ -11,7 +12,7 @@
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
 - Selecting the same Session in the main window afterward opens Chat there normally alongside the pop-out. Desktop adds no focus redirection, move-back behavior, or second pop-out for that Session.
-- Desktop relaunch restores the selected Project and opens its Sessions tab. It does not persist the Home Projects/Workflows selection or the Project Workflows/Sessions selection, reopen Chat, or restore Chat transcript/composer presentation state.
+- Desktop relaunch restores the selected Project and its active Workflows or Sessions tab. It does not reopen Chat or restore Chat transcript/composer presentation state.
 
 ## Sessions
 

@@ -1,3 +1,3 @@
 export { WorkflowActionsContextMenu } from "./WorkflowActionsContextMenu";
-export { WorkflowCard, type WorkflowCardContextActions } from "./WorkflowCard";
+export { WorkflowRow, type WorkflowRowContextActions } from "./WorkflowRow";
 export { useWorkflowPages } from "./WorkflowData";

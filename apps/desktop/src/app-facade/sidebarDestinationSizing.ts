@@ -14,7 +14,7 @@ export function sidebarWidthProfile(destination: SidebarDestination): SidebarWid
   if (destination.kind === "taskDetail") {
     return { kind: "taskDetail" };
   }
-  if (destination.kind === "workflowInspect") {
+  if (destination.kind === "workflowInspect" || destination.kind === "workflowSettings") {
     return { kind: "workflowInspector" };
   }
   if (destination.kind === "workflowEditor") {

@@ -5,7 +5,6 @@ import type { ProjectBinding } from "@/api";
 import { errorMessage } from "@/api";
 import { invalidateProjectDeleteQueries } from "@/app-facade";
 import type { AppServices } from "@/app-facade";
-import { projectEditInfiniteQueryOptions } from "@/app-facade";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 
@@ -16,7 +15,13 @@ type NativeWorkspaceUnlinkTarget = Parameters<Parameters<ProjectWorkspaceBridge[
 
 export function useProjectEdit(projectID: string) {
   const { api } = useAppServices();
-  return useInfiniteQuery(projectEditInfiniteQueryOptions(api, projectID));
+  return useInfiniteQuery({
+    queryKey: queryKeys.projectEdit(projectID),
+    queryFn: async ({ pageParam }) => api.getProjectEdit(projectID, pageParam),
+    initialPageParam: "",
+    enabled: projectID.length > 0,
+    getNextPageParam: (lastPage) => (lastPage.nextPageToken.length > 0 ? lastPage.nextPageToken : undefined),
+  });
 }
 
 export function useProjectSave(projectID: string) {

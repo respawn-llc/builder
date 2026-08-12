@@ -674,6 +674,13 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 		*moved.Mutation.Created[0].SessionID != sessionID {
 		t.Fatalf("manual move = %+v, want retained source Session %q", moved, sessionID)
 	}
+	if err := store.ValidateCurrentNodeSessionBinding(
+		ctx,
+		sessionID,
+		moved.Mutation.Created[0].Reference,
+	); err != nil {
+		t.Fatalf("validate moved retained Session binding: %v", err)
+	}
 }
 
 func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *testing.T) {
