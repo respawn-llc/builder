@@ -1,7 +1,7 @@
 # KENT-484 QA evidence
 
 Date: 2026-08-12
-Revision: `c2edce4f7` plus current review remediation
+Revision: `ba4441e53`
 
 ## Passed checks
 
@@ -24,6 +24,10 @@ Revision: `c2edce4f7` plus current review remediation
   -count=1` passed after the fixture remediation.
 - `go test ./server/core -run '^TestJSONContractArchitectureGuard$' -count=1`
   passed.
+- `go test ./... -run '^$' -count=1` passed, confirming all Go packages and
+  test packages type-check without import cycles.
+- `go test ./server/tools/patch ./server/tools/edit ./server/tools/readimage
+  -count=1` passed after the shared fixture/source-authority remediation.
 - `./scripts/build.sh --output ./bin/kent` passed and produced `bin/kent`.
 - `git diff --check HEAD` passed.
 - Embedded `server/tools/schemas/complete_node.json` is absent.
@@ -31,7 +35,15 @@ Revision: `c2edce4f7` plus current review remediation
   `echo '{"workflow_id":' | ./bin/kent workflow graph apply --json -`
   returned exit 1 and JSON `{"outcome":"invalid_document","message":"unexpected EOF"}`.
 
-## Remaining baseline caveat
+## Current verification caveats
+
+### Full server suite completed with the approved cap override
+
+`./scripts/test.sh server --no-wall-clock-cap` completed in 180 seconds on
+`ba4441e53`. `TestRawBackgroundOutputPathsPreserveAnsi`, which was still
+running when the capped QA attempt stopped, completed. The only failing tests
+were the five known Workflow Goal lifecycle tests listed below; no KENT-484
+package or behavior test failed.
 
 ### Full server suite reports unrelated workflow-goal failures
 
@@ -42,12 +54,18 @@ TestServiceWorkflowRuntimeAllowsGoalControl:
 session ... cannot start an ordinary execution while its workflow activation remains active
 TestServiceWorkflowSessionGoalMutationAllowed:
 session ... cannot start an ordinary execution while its workflow activation remains active
+TestServiceWorkflowAgentStepGoalCompleteDoesNotBypassStepQueue:
+session ... cannot start an ordinary execution while its workflow activation remains active
+TestServiceWorkflowRuntimeAllowsGoalStatusTransitions:
+session ... cannot start an ordinary execution while its workflow activation remains active
+TestGoalAuthorityLiveSetUsesRuntimeCommand:
+session ... cannot start an ordinary execution while its workflow activation remains active
 ```
 
 These are pre-existing baseline failures and are separate from the KENT-484
 import-cycle regression.
 
-## Prior QA environment note
+## QA environment note
 
 The first model-loop attempt on the session-qualified instance failed during
 pre-registration with duplicate `completion_mode` migration state. QA was
@@ -64,5 +82,13 @@ production server on `:53082` was not touched.
 The introduced import cycle is resolved. Registry fixtures now consume the
 same runtimewire-owned static contract preparation boundary as production,
 without duplicating the eight-tool source list. Concrete tool tests and the
-repository-wide type-check pass. The only recorded server-suite caveat is the
-unrelated Workflow Goal lifecycle failure reproduced on baseline `badbb5884`.
+repository-wide type-check pass. The remaining required-suite gap is the
+300-second test-sharder cap plus the unrelated Workflow Goal lifecycle
+failures reproduced on baseline `badbb5884`.
+
+## Verification conclusion
+
+The mandatory server suite now has a completed run using the repository's
+approved `--no-wall-clock-cap` option. It reports only the five unrelated
+Workflow Goal lifecycle failures reproduced on baseline `badbb5884`; all
+KENT-484-specific checks and isolated model QA passed.

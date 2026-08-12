@@ -70,6 +70,14 @@ All Planning checkboxes are complete.
 - [x] Refresh stale QA evidence to the remediated revision and results.
 - [x] Run focused verification, commit, and return to review.
 
+## Final QA verification
+
+- [x] Run the mandatory server suite with the repository-approved
+  `--no-wall-clock-cap` handling so the sharder can complete.
+- [x] Confirm the completed run contains only the documented baseline Workflow
+  Goal lifecycle failures.
+- [x] Update evidence, commit, and return to QA.
+
 ## Verification notes
 
 - Relevant static-tool, ingress, reviewer, Workflow completion, runtime,
