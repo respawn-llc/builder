@@ -8,6 +8,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -143,6 +144,48 @@ func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {
 	for index, fact := range facts {
 		if fact.Locator.EventSequence != 23 {
 			t.Fatalf("fact %d event sequence = %d, want 23", index, fact.Locator.EventSequence)
+		}
+	}
+}
+
+func TestAssistantCommittedTimeIsStableAcrossPageHydrationAndLiveProjection(t *testing.T) {
+	const (
+		sessionID = "12345678-1234-4234-8234-123456789012"
+		stepID    = "22222222-2222-4222-8222-222222222222"
+	)
+	committedAt := transcript.CommittedAtUnixMs(456)
+	provenance := &runtime.TranscriptCommittedRowProvenance{
+		EventSequence:     18,
+		CommittedAtUnixMs: &committedAt,
+	}
+	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
+		StepID:              stepID,
+		Visibility:          transcript.EntryVisibilityOngoing,
+		Role:                "assistant",
+		Text:                "done",
+		Phase:               llm.MessagePhaseFinal,
+		CommittedProvenance: provenance,
+	}}}
+	page, err := TranscriptPageFromSegment(sessionID, "session", clientui.ConversationFreshness(0), runtime.TranscriptSegmentPage{Snapshot: snapshot})
+	if err != nil {
+		t.Fatalf("project assistant page: %v", err)
+	}
+	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
+	})
+	live := TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventAssistantMessage,
+		StepID:              stepID,
+		Message:             llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+		CommittedProvenance: provenance,
+	})
+	liveRow := transcriptPayload[clientui.TranscriptCommittedRow](t, live[0])
+	for name, row := range map[string]clientui.TranscriptCommittedRow{
+		"page": page.Entries[0], "hydration": hydration.CommittedRows[0], "live": liveRow,
+	} {
+		if row.Assistant == nil || row.Assistant.CommittedAtUnixMs == nil ||
+			row.Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+			t.Fatalf("%s assistant timestamp = %+v, want %d", name, row.Assistant, committedAt.UnixMs())
 		}
 	}
 }

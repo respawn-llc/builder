@@ -296,6 +296,25 @@ func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T)
 				LegacyText: textutil.Value("notice"),
 			},
 		},
+		{
+			Visibility: transcript.EntryVisibilityOngoingCollapsed,
+			Kind:       TranscriptRowReviewerFeedback,
+			ReviewerFeedback: &TranscriptReviewerFeedbackRow{
+				ID:              runtimeids.NewReviewerFeedbackID(),
+				StepID:          stepID,
+				Suggestions:     []string{"suggestion"},
+				SuggestionCount: 1,
+			},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowReviewerError,
+			ReviewerError: &TranscriptReviewerErrorRow{
+				ID:     runtimeids.NewReviewerErrorID(),
+				StepID: stepID,
+				Detail: "error",
+			},
+		},
 	}
 	for _, row := range nonMessageRows {
 		data, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(row)))
