@@ -128,7 +128,7 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	diagnosticKey := preciseTokenCountFailureDiagnostic
+	diagnosticKey := "test_diagnostic"
 	if err := engine.steerPersistedDiagnosticEntry(
 		"before-compaction",
 		diagnosticKey,
@@ -175,7 +175,7 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	diagnosticKey := preciseTokenCountFailureDiagnostic
+	diagnosticKey := "test_diagnostic"
 	if err := engine.steerPersistedDiagnosticEntry(
 		"before-compaction",
 		diagnosticKey,
@@ -421,7 +421,6 @@ func newCommittedRemoteCompactionFixture(
 	fixture := &committedRemoteCompactionFixture{
 		store: mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(observer)),
 		client: &fakeCompactionClient{
-			inputTokenCount: 2_000,
 			compactionResponses: []llm.CompactionResponse{{
 				OutputItems: []llm.ResponseItem{
 					{
@@ -550,11 +549,12 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 
 	liveUsage := fixture.engine.ContextUsage()
-	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
-		t.Fatalf("live compacted usage = %+v, want input tokens %d", liveUsage, fixture.client.inputTokenCount)
+	expectedInputTokens := estimateItemsTokens(fixture.engine.transcriptRuntimeState().SnapshotItems())
+	if liveUsage.UsedTokens != expectedInputTokens {
+		t.Fatalf("live compacted usage = %+v, want estimated input tokens %d", liveUsage, expectedInputTokens)
 	}
 	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
-		persisted.InputTokens != fixture.client.inputTokenCount ||
+		persisted.InputTokens != expectedInputTokens ||
 		persisted.WindowTokens != fixture.previousUsage.WindowTokens {
 		t.Fatalf("persisted compacted usage = %+v", persisted)
 	}

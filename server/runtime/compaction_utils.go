@@ -42,32 +42,6 @@ func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderC
 	return providerCaps, nil
 }
 
-func (e *Engine) inputTokensForItems(ctx context.Context, model string, instructions string, items []llm.ResponseItem) (int, bool) {
-	req, ok := buildTokenCountRequestForItems(model, instructions, items)
-	if !ok {
-		return 0, false
-	}
-	return e.requestInputTokensPreciselyTracked(ctx, req, false)
-}
-
-func buildTokenCountRequestForItems(model string, instructions string, items []llm.ResponseItem) (llm.Request, bool) {
-	trimmedModel := strings.TrimSpace(model)
-	if trimmedModel == "" {
-		return llm.Request{}, false
-	}
-	req := llm.Request{
-		Model:          trimmedModel,
-		SystemPrompt:   strings.TrimSpace(instructions),
-		Items:          llm.CloneResponseItems(items),
-		Tools:          []llm.Tool{},
-		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-	}
-	if err := req.Validate(); err != nil {
-		return llm.Request{}, false
-	}
-	return req, true
-}
-
 func sanitizeRemoteCompactionOutput(output []llm.ResponseItem) ([]llm.ResponseItem, error) {
 	filtered := make([]llm.ResponseItem, 0, len(output))
 	hasCheckpoint := false

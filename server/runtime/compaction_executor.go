@@ -236,9 +236,6 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 	}})
 
 	usageInputTokens := estimateItemsTokens(replacement)
-	if preciseInput, ok := e.inputTokensForItems(ctx, e.currentModel(), "", replacement); ok {
-		usageInputTokens = preciseInput
-	}
 	return compactionResult{
 		engine:            "local",
 		items:             replacement,

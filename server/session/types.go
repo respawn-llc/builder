@@ -103,18 +103,16 @@ type LockedModelCapabilities struct {
 }
 
 type LockedProviderCapabilities struct {
-	ProviderID                        string `json:"provider_id,omitempty"`
-	SupportsResponsesAPI              bool   `json:"supports_responses_api,omitempty"`
-	SupportsResponsesCompact          bool   `json:"supports_responses_compact,omitempty"`
-	SupportsRequestInputTokenCount    bool   `json:"supports_request_input_token_count,omitempty"`
-	HasSupportsRequestInputTokenCount bool   `json:"has_supports_request_input_token_count,omitempty"`
-	SupportsPromptCacheKey            bool   `json:"supports_prompt_cache_key,omitempty"`
-	HasSupportsPromptCacheKey         bool   `json:"has_supports_prompt_cache_key,omitempty"`
-	SupportsNativeWebSearch           bool   `json:"supports_native_web_search,omitempty"`
-	SupportsReasoningEncrypted        bool   `json:"supports_reasoning_encrypted,omitempty"`
-	SupportsServerSideContextEdit     bool   `json:"supports_server_side_context_edit,omitempty"`
-	SupportsProviderVerbosity         *bool  `json:"supports_provider_verbosity,omitempty"`
-	IsOpenAIFirstParty                bool   `json:"is_openai_first_party,omitempty"`
+	ProviderID                    string `json:"provider_id,omitempty"`
+	SupportsResponsesAPI          bool   `json:"supports_responses_api,omitempty"`
+	SupportsResponsesCompact      bool   `json:"supports_responses_compact,omitempty"`
+	SupportsPromptCacheKey        bool   `json:"supports_prompt_cache_key,omitempty"`
+	HasSupportsPromptCacheKey     bool   `json:"has_supports_prompt_cache_key,omitempty"`
+	SupportsNativeWebSearch       bool   `json:"supports_native_web_search,omitempty"`
+	SupportsReasoningEncrypted    bool   `json:"supports_reasoning_encrypted,omitempty"`
+	SupportsServerSideContextEdit bool   `json:"supports_server_side_context_edit,omitempty"`
+	SupportsProviderVerbosity     *bool  `json:"supports_provider_verbosity,omitempty"`
+	IsOpenAIFirstParty            bool   `json:"is_openai_first_party,omitempty"`
 }
 
 type ContinuationContext struct {

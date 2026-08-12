@@ -57,57 +57,6 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 	}
 }
 
-func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeCompactionClient{inputTokenCountFn: func(req llm.Request) int {
-		for _, item := range req.Items {
-			if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == "call-1" {
-				return 200
-			}
-		}
-		return 100
-	}}
-	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
-	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
-	if err := eng.steer("step", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
-		t.Fatalf("append assistant tool call: %v", err)
-	}
-	if precise, ok := eng.currentInputTokensPrecisely(context.Background()); !ok || precise != 100 {
-		t.Fatalf("initial exact count = (%d, %v), want (100, true)", precise, ok)
-	}
-	if client.countInputTokenCalls != 1 {
-		t.Fatalf("count calls=%d, want 1", client.countInputTokenCalls)
-	}
-	results, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{call})
-	if err != nil {
-		t.Fatalf("execute tool calls: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("expected one tool result, got %d", len(results))
-	}
-	req, err := eng.buildRequest(context.Background(), "", true)
-	if err != nil {
-		t.Fatalf("build request after tool completion: %v", err)
-	}
-	foundOutput := false
-	for _, item := range req.Items {
-		if item.Type == llm.ResponseItemTypeFunctionCallOutput && item.CallID != nil && *item.CallID == call.ID {
-			foundOutput = true
-			break
-		}
-	}
-	if !foundOutput {
-		t.Fatalf("expected synthesized function_call_output before tool message append, items=%+v", req.Items)
-	}
-	if precise, ok := eng.currentInputTokensPreciselyIfDueWithPriority(context.Background(), 1_000, true); !ok || precise != 200 {
-		t.Fatalf("critical exact recount = (%d, %v), want (200, true)", precise, ok)
-	}
-	if client.countInputTokenCalls != 2 {
-		t.Fatalf("expected critical recount after tool completion, got %d count calls", client.countInputTokenCalls)
-	}
-}
-
 func TestCustomToolResultPersistsAsCustomToolCallOutput(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -316,25 +265,11 @@ func TestRestoreMessagesPreservesRecoveredMultiToolProviderOrder(t *testing.T) {
 	}
 }
 
-func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T) {
+func TestRestoreMessagesPreservesRecoveredMultiToolRequestParity(t *testing.T) {
 	dir := t.TempDir()
 	liveStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "live"), "ws", dir)
 	restoredStore := mustCreateNamedTestSessionAt(t, filepath.Join(dir, "restored"), "ws", dir)
-	countForRequest := func(req llm.Request) int {
-		count := 0
-		for i, item := range req.Items {
-			switch item.Type {
-			case llm.ResponseItemTypeFunctionCall:
-				count += 100 + (i * 7)
-			case llm.ResponseItemTypeFunctionCallOutput:
-				count += 1_000 + (i * 11)
-			default:
-				count += 10 + i
-			}
-		}
-		return count
-	}
-	client := &fakeCompactionClient{inputTokenCountFn: countForRequest}
+	client := &fakeCompactionClient{}
 	live := mustNewTestEngine(t, liveStore, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
@@ -347,10 +282,6 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	liveReq, err := live.buildRequest(context.Background(), "", true)
 	if err != nil {
 		t.Fatalf("build live request: %v", err)
-	}
-	liveCount, ok := live.requestInputTokensPreciselyTracked(context.Background(), liveReq, false)
-	if !ok {
-		t.Fatal("expected live precise token count")
 	}
 	if _, _, err := appendTestEvent(t, restoredStore, "step", llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}); err != nil {
 		t.Fatalf("append restored assistant tool calls: %v", err)
@@ -366,10 +297,6 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	if err != nil {
 		t.Fatalf("build restored request: %v", err)
 	}
-	restoredCount, ok := restored.requestInputTokensPreciselyTracked(context.Background(), restoredReq, false)
-	if !ok {
-		t.Fatal("expected restored precise token count")
-	}
 	liveItemsJSON, err := json.Marshal(liveReq.Items)
 	if err != nil {
 		t.Fatalf("marshal live request items: %v", err)
@@ -380,9 +307,6 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	}
 	if string(liveItemsJSON) != string(restoredItemsJSON) {
 		t.Fatalf("request items mismatch\nlive=%s\nrestored=%s", liveItemsJSON, restoredItemsJSON)
-	}
-	if liveCount != restoredCount {
-		t.Fatalf("precise token count mismatch: live=%d restored=%d", liveCount, restoredCount)
 	}
 }
 

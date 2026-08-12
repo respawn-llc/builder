@@ -74,23 +74,17 @@ func (c *projectionBlockingClient) ProviderCapabilities(context.Context) (llm.Pr
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
-type projectionPreciseClient struct {
-	inputTokens int
-}
+type projectionUsageClient struct{}
 
-func (c projectionPreciseClient) Generate(context.Context, llm.Request) (llm.Response, error) {
+func (projectionUsageClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 		Usage:     llm.Usage{InputTokens: 900, OutputTokens: 100, WindowTokens: 400_000},
 	}, nil
 }
 
-func (c projectionPreciseClient) CountRequestInputTokens(context.Context, llm.Request) (int, error) {
-	return c.inputTokens, nil
-}
-
-func (c projectionPreciseClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
-	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsRequestInputTokenCount: true, IsOpenAIFirstParty: true}, nil
+func (projectionUsageClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
 func newRuntimeViewStore(t *testing.T) *session.Store {
@@ -314,24 +308,21 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	}
 }
 
-func TestStatusFromRuntimeUsesFreshPreciseCurrentTokens(t *testing.T) {
-	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionPreciseClient{inputTokens: 180}, runtime.Config{
+func TestStatusFromRuntimeUsesResponseUsage(t *testing.T) {
+	eng := newRuntimeViewEngine(t, newRuntimeViewStore(t), projectionUsageClient{}, runtime.Config{
 		Model:                         "gpt-5",
 		ContextWindowTokens:           400_000,
-		AutoCompactTokenLimit:         1_000,
+		AutoCompactTokenLimit:         10_000,
 		PreSubmitCompactionLeadTokens: 100,
 	})
 	if _, err := eng.SubmitUserMessage(context.Background(), "prompt"); err != nil {
 		t.Fatalf("submit user message: %v", err)
 	}
-	if _, err := eng.ShouldCompactBeforeUserMessage(context.Background(), "follow-up"); err != nil {
-		t.Fatalf("warm exact count: %v", err)
-	}
 	view, err := StatusFromRuntime(eng)
 	if err != nil {
 		t.Fatalf("project runtime status: %v", err)
 	}
-	if view.ContextUsage.UsedTokens != 180 {
-		t.Fatalf("projected used tokens=%d, want exact 180", view.ContextUsage.UsedTokens)
+	if view.ContextUsage.UsedTokens != 901 {
+		t.Fatalf("projected used tokens=%d, want response baseline plus appended estimate 901", view.ContextUsage.UsedTokens)
 	}
 }

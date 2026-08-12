@@ -1051,7 +1051,6 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if replacement.payload.CompactionNumber != nil {
 		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
 	}
-	e.resetCurrentPreciseInputTracking()
 	e.resetLocalDiagnostics()
 	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
 		stepID,

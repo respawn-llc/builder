@@ -80,9 +80,6 @@ func TestTranscriptMessagePersistenceStaysBehindSteerAcrossRepository(t *testing
 		"ValidateMessage": {
 			"prepareMessageProjection": true,
 		},
-		"tokenUsageMutationForMessage": {
-			"prepareMessageProjection": true,
-		},
 		"sessionMessageRecordFromLLM": {
 			"prepareMessageProjection": true,
 		},
