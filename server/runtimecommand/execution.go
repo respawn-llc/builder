@@ -16,6 +16,11 @@ type ExecutionAdapter struct {
 	authority *sessionruntime.Authority
 }
 
+type AgentExecutionAdmission struct {
+	CallbackEntered bool
+	Err             error
+}
+
 func NewExecutionAdapter(authority *sessionruntime.Authority) *ExecutionAdapter {
 	return &ExecutionAdapter{authority: authority}
 }
@@ -25,28 +30,39 @@ func (a *ExecutionAdapter) RunAgentExecution(
 	sessionID string,
 	run func(context.Context, *runtime.Engine) error,
 ) error {
+	return a.RunAgentExecutionAdmission(ctx, sessionID, run).Err
+}
+
+func (a *ExecutionAdapter) RunAgentExecutionAdmission(
+	ctx context.Context,
+	sessionID string,
+	run func(context.Context, *runtime.Engine) error,
+) AgentExecutionAdmission {
 	if a == nil || a.authority == nil {
-		return errors.New("session runtime authority is required")
+		return AgentExecutionAdmission{Err: errors.New("session runtime authority is required")}
 	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
-		return err
+		return AgentExecutionAdmission{Err: err}
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(id)
 	if err != nil {
-		return err
+		return AgentExecutionAdmission{Err: err}
 	}
-	err = a.authority.RunCurrentAgentExecution(ctx, descriptor, run)
+	entered := false
+	err = a.authority.RunCurrentAgentExecution(ctx, descriptor, func(ctx context.Context, engine *runtime.Engine) error {
+		entered = true
+		return run(ctx, engine)
+	})
 	if err != nil {
 		if errors.Is(err, sessionruntime.ErrSessionStartsBlocked) {
-			return errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
+			err = errors.Join(serverapi.ErrSessionWorktreeDeleting, err)
 		}
 		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
-			return errors.Join(serverapi.ErrSessionRunStarting, err)
+			err = errors.Join(serverapi.ErrSessionRunStarting, err)
 		}
-		return err
 	}
-	return nil
+	return AgentExecutionAdmission{CallbackEntered: entered, Err: err}
 }
 
 func (a *ExecutionAdapter) WithLiveExecutionRuntime(

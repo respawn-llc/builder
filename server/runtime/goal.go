@@ -55,6 +55,121 @@ type GoalCommandResult struct {
 	NoticeReceipt   session.CommitReceipt
 }
 
+type CurrentGoalOperation interface{ currentGoalOperation() }
+
+type CurrentGoalSet struct {
+	Objective string
+	Actor     session.GoalActor
+}
+
+func (CurrentGoalSet) currentGoalOperation() {}
+
+type CurrentGoalStatus struct {
+	Status session.GoalStatus
+	Actor  session.GoalActor
+}
+
+func (CurrentGoalStatus) currentGoalOperation() {}
+
+type CurrentGoalClear struct{ Actor session.GoalActor }
+
+func (CurrentGoalClear) currentGoalOperation() {}
+
+type CurrentGoalExecutionOwnership uint8
+
+const (
+	CurrentGoalRetainedOnly CurrentGoalExecutionOwnership = iota + 1
+	CurrentGoalExactExecution
+)
+
+type CurrentGoalOperationOutcome struct {
+	Handled           *GoalCommandResult
+	ExecutionRequired bool
+}
+
+func (o CurrentGoalOperationOutcome) Validate() error {
+	if (o.Handled != nil) == o.ExecutionRequired {
+		return errors.New("current Goal operation must be handled or require execution")
+	}
+	return nil
+}
+
+func currentGoalHandled(result GoalCommandResult, err error) (CurrentGoalOperationOutcome, error) {
+	if err != nil {
+		return CurrentGoalOperationOutcome{}, err
+	}
+	outcome := CurrentGoalOperationOutcome{Handled: &result}
+	return outcome, outcome.Validate()
+}
+
+func currentGoalExecutionRequired() (CurrentGoalOperationOutcome, error) {
+	outcome := CurrentGoalOperationOutcome{ExecutionRequired: true}
+	return outcome, outcome.Validate()
+}
+
+func (e *Engine) currentGoalDisposition(disposition GoalCommandDisposition, goal session.GoalState, cleared bool) (CurrentGoalOperationOutcome, error) {
+	result := goalCommandResult(disposition, goal, cleared, session.CommitReceipt{}, session.CommitReceipt{})
+	result.Availability = e.GoalMutationAvailability()
+	return currentGoalHandled(result, nil)
+}
+
+func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, ownership CurrentGoalExecutionOwnership) (CurrentGoalOperationOutcome, error) {
+	if ownership != CurrentGoalRetainedOnly && ownership != CurrentGoalExactExecution {
+		return CurrentGoalOperationOutcome{}, errors.New("current Goal execution ownership is required")
+	}
+	switch operation := operation.(type) {
+	case CurrentGoalSet:
+		goal, queued, err := e.QueueGoalSetForActiveStep(operation.Objective, operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
+		}
+		if ownership == CurrentGoalExactExecution {
+			return currentGoalHandled(e.SetGoal(operation.Objective, operation.Actor))
+		}
+		if operation.Actor == session.GoalActorAgent {
+			if current := e.Goal(); current != nil && current.Status != session.GoalStatusComplete {
+				return CurrentGoalOperationOutcome{}, session.GoalAgentOverwriteBlockedError{Goal: *current}
+			}
+		}
+		return currentGoalExecutionRequired()
+	case CurrentGoalStatus:
+		status := operation.Status
+		if current := e.Goal(); current != nil && current.Status == status {
+			if status != session.GoalStatusActive || ownership == CurrentGoalExactExecution || e.CurrentNodeExecutionConfigured() || e.GoalLoopContinuationEnforced() {
+				return e.currentGoalDisposition(GoalCommandNoop, *current, false)
+			}
+		}
+		goal, queued, err := e.QueueGoalStatusForActiveStep(status, operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
+		}
+		if ownership == CurrentGoalExactExecution {
+			return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
+		}
+		if status == session.GoalStatusActive {
+			return currentGoalExecutionRequired()
+		}
+		return currentGoalHandled(e.SetGoalStatusWithoutGoalLoopStart(status, operation.Actor))
+	case CurrentGoalClear:
+		goal, queued, err := e.QueueGoalClearForActiveStep(operation.Actor)
+		if err != nil {
+			return CurrentGoalOperationOutcome{}, err
+		}
+		if queued {
+			return e.currentGoalDisposition(GoalCommandQueued, goal, true)
+		}
+		return currentGoalHandled(e.ClearGoal(operation.Actor))
+	default:
+		return CurrentGoalOperationOutcome{}, errors.New("current Goal operation is required")
+	}
+}
+
 func goalCommandResult(
 	disposition GoalCommandDisposition,
 	goal session.GoalState,
