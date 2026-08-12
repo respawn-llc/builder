@@ -20,6 +20,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -199,8 +200,8 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		FilesystemContext:     askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
 		Sources:               plan.Source.Sources,
 		Headless:              true,
-		QuestionsEnabled:      runPromptBoolPointer(plan.QuestionsEnabled),
-		AutoCompactionEnabled: runPromptBoolPointer(plan.AutoCompactionEnabled),
+		QuestionsEnabled:      textutil.Value(plan.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(plan.AutoCompactionEnabled),
 		StartLogLines:         startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
@@ -284,8 +285,6 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 	prepared.handle = handle
 	return prepared, nil
 }
-
-func runPromptBoolPointer(value bool) *bool { return &value }
 
 func preservePresentAssistantContent(current string, message llm.Message) string {
 	if message.Content == nil {

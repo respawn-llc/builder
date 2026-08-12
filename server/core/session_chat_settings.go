@@ -29,11 +29,10 @@ func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}
-	cfg, err := config.Load(target.WorkspaceRoot, config.LoadOptions{})
+	cfg, err := config.Load(target.WorkspaceRoot, config.LoadOptions{ConfigRoot: r.persistenceRoot})
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}
-	cfg.PersistenceRoot = r.persistenceRoot
 	authState := auth.EmptyState()
 	if r.authManager != nil {
 		authState, err = r.authManager.CurrentState(ctx)

@@ -411,9 +411,12 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Level}
+	level, ok := runtime.NormalizeThinkingLevel(req.Level)
+	if !ok {
+		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(req.Level))
+	}
+	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: level}
 	_, err := memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
-		level := strings.TrimSpace(req.Level)
 		_, accepted, mutationErr := s.mutateChatSettings(
 			ctx,
 			req.SessionID,

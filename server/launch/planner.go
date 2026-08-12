@@ -73,6 +73,7 @@ type SessionRequest struct {
 	Intent                              serverapi.SessionLaunchIntent
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
+	AgentSelectionResolved              bool
 }
 
 type SessionPlan struct {
@@ -422,8 +423,10 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if meta.Continuation != nil {
 		continuation.AgentRole = continuationAgentRole
 	}
-	if err := store.SetContinuationContext(continuation); err != nil {
-		return SessionPlan{}, err
+	if !req.AgentSelectionResolved {
+		if err := store.SetContinuationContext(continuation); err != nil {
+			return SessionPlan{}, err
+		}
 	}
 	if req.PreparedPromptFacingTarget == nil {
 		enabledTools, err = ActiveToolIDsForPlan(active, source, meta.Locked)

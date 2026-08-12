@@ -258,6 +258,9 @@ func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsM
 		agent := next.Agent
 		continuation.AgentRole = &agent
 	}
+	if prepared.agent != nil {
+		continuation.OpenAIBaseURL = ""
+	}
 	normalizedContinuation, err := NormalizeContinuationContext(*continuation)
 	if err != nil {
 		s.mu.Unlock()

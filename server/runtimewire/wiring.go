@@ -2,6 +2,7 @@ package runtimewire
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"core/server/tools/shell/postprocess"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -78,6 +80,12 @@ func NewRuntimeWiringWithBackground(
 	background *shelltool.Manager,
 	opts RuntimeWiringOptions,
 ) (*RuntimeWiring, error) {
+	if opts.QuestionsEnabled == nil {
+		return nil, errors.New("effective Session Questions setting is required")
+	}
+	if opts.AutoCompactionEnabled == nil {
+		return nil, errors.New("effective Session Auto-compaction setting is required")
+	}
 	if opts.Client != nil && opts.ClientFactory != nil {
 		return nil, ErrRuntimeClientFactoryConflict
 	}
@@ -234,8 +242,8 @@ func NewRuntimeWiringWithBackground(
 		LocalCompactionCarryoverLimit:   20_000,
 		CompactionMode:                  string(active.CompactionMode),
 		CacheWarningMode:                active.CacheWarningMode,
-		AutoCompactionEnabled:           boolRefOrDefault(opts.AutoCompactionEnabled, runtime.DefaultAutoCompactionEnabled),
-		QuestionsEnabled:                boolRefOrDefault(opts.QuestionsEnabled, runtime.DefaultQuestionsEnabled),
+		AutoCompactionEnabled:           textutil.Pointer(opts.AutoCompactionEnabled),
+		QuestionsEnabled:                textutil.Pointer(opts.QuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
 		CurrentNodeExecution:            opts.CurrentNodeExecution,
@@ -392,13 +400,4 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 		return nil
 	}
 	return &caps
-}
-
-func boolRef(v bool) *bool { return &v }
-
-func boolRefOrDefault(value *bool, fallback bool) *bool {
-	if value == nil {
-		return boolRef(fallback)
-	}
-	return boolRef(*value)
 }

@@ -9,6 +9,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -98,10 +99,8 @@ func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActiva
 		OwnerID:               ownerID,
 		ActiveSettings:        req.ActiveSettings,
 		EnabledToolIDs:        toolspec.IDStrings(req.EnabledTools),
-		QuestionsEnabled:      runtimeAttachBoolPointer(req.QuestionsEnabled),
-		AutoCompactionEnabled: runtimeAttachBoolPointer(req.AutoCompactionEnabled),
+		QuestionsEnabled:      textutil.Value(req.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(req.AutoCompactionEnabled),
 		Source:                req.Source,
 	}
 }
-
-func runtimeAttachBoolPointer(value bool) *bool { return &value }

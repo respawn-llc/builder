@@ -438,7 +438,8 @@ func (s *Service) planExistingSessionWithStore(
 	if err != nil {
 		return PlanResult{}, err
 	}
-	if err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, store, maintenance); err != nil {
+	agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, store, maintenance)
+	if err != nil {
 		return PlanResult{}, err
 	}
 	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
@@ -450,6 +451,7 @@ func (s *Service) planExistingSessionWithStore(
 				Intent:                              req.Intent,
 				SkipContinuationAgentRoleValidation: roleOverride.Default,
 				PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+				AgentSelectionResolved:              agentSelectionResolved,
 			}, store)
 			if err != nil {
 				return launch.SessionPlan{}, nil, err
@@ -467,10 +469,10 @@ func applyPreparedAgentChatSettings(
 	roleOverride serverapi.RunPromptAgentRoleOverride,
 	store *session.Store,
 	maintenance *sessionruntime.ActiveRuntimeMaintenance,
-) error {
+) (bool, error) {
 	state, err := session.ChatSettingsStateFromMeta(store.Meta())
 	if err != nil {
-		return err
+		return false, err
 	}
 	targetAgent := state.Agent
 	selectAgent := roleOverride.Present
@@ -487,11 +489,11 @@ func applyPreparedAgentChatSettings(
 		}
 	}
 	if !selectAgent {
-		return nil
+		return false, nil
 	}
 	prepared, err := launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
 	if err != nil {
-		return err
+		return false, err
 	}
 	result, err := store.MutateChatSettings(session.ChatSettingsMutation{
 		Agent: &session.ChatAgentSelection{
@@ -500,15 +502,15 @@ func applyPreparedAgentChatSettings(
 		},
 	})
 	if errors.Is(err, session.ErrChatAgentLocked) {
-		return fmt.Errorf("%w: current=%q requested=%q", launch.ErrLockedAgentRoleChange, state.Agent, targetAgent)
+		return false, fmt.Errorf("%w: current=%q requested=%q", launch.ErrLockedAgentRoleChange, state.Agent, targetAgent)
 	}
 	if err != nil && !result.Committed {
-		return err
+		return false, err
 	}
 	if result.Changed && maintenance != nil {
 		maintenance.RetireRuntime()
 	}
-	return err
+	return true, err
 }
 
 func preparePromptFacingTarget(

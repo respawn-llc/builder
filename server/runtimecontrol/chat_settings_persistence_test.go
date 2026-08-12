@@ -19,6 +19,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestServicePersistsEveryChatControlWithoutCreatingRuntime(t *testing.T) {
@@ -167,6 +168,37 @@ func TestServicePersistsLiveChatControlsAndReopenedEngineObservesThem(t *testing
 	assertEngineChatSettings(t, reopened, want)
 }
 
+func TestServiceRejectsInvalidThinkingWithoutPersistingDormantOrLiveOverride(t *testing.T) {
+	initial := session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "high",
+		Fast:           false,
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	for _, live := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
+			fixture := newChatControlFixture(t, initial)
+			var engine *runtime.Engine
+			if live {
+				_, engine = fixture.openRuntime(t, fixture.store, initial, "thinking-validation")
+			}
+			err := fixture.service.SetThinkingLevel(t.Context(), serverapi.RuntimeSetThinkingLevelRequest{
+				ClientRequestID: "invalid-thinking",
+				SessionID:       fixture.store.Meta().SessionID,
+				Level:           "provider-specific-depth",
+			})
+			if err == nil {
+				t.Fatal("SetThinkingLevel accepted an unsupported public control value")
+			}
+			assertPersistedChatSettings(t, fixture.persistence, fixture.store.Meta().SessionID, initial)
+			if engine != nil && engine.ThinkingLevel() != initial.Thinking {
+				t.Fatalf("live Thinking = %q, want unchanged %q", engine.ThinkingLevel(), initial.Thinking)
+			}
+		})
+	}
+}
+
 func TestServiceSupervisorEnableUsesSelectedAgentBaselineWithoutHiddenResumeMode(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -267,11 +299,11 @@ func (f *chatControlFixture) createSession(t *testing.T, settings session.ChatSe
 	if err := session.InitializeChatDraft(store, session.ChatDraftState{
 		Agent: config.DefaultSubagentRole,
 		Settings: &session.ChatSettingsOverrides{
-			Supervisor:     chatControlStringPointer(settings.Supervisor),
-			Thinking:       chatControlStringPointer(settings.Thinking),
-			Fast:           chatControlBoolPointer(settings.Fast),
-			Questions:      chatControlBoolPointer(settings.Questions),
-			AutoCompaction: chatControlBoolPointer(settings.AutoCompaction),
+			Supervisor:     textutil.Value(settings.Supervisor),
+			Thinking:       textutil.Value(settings.Thinking),
+			Fast:           textutil.Value(settings.Fast),
+			Questions:      textutil.Value(settings.Questions),
+			AutoCompaction: textutil.Value(settings.AutoCompaction),
 		},
 	}); err != nil {
 		t.Fatalf("InitializeChatDraft: %v", err)
@@ -304,9 +336,11 @@ func (f *chatControlFixture) openRuntime(
 	runtimeSettings.PriorityRequestMode = settings.Fast
 	runtimeSettings.Reviewer.Frequency = settings.Supervisor
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:          runtimeSettings,
-		FilesystemContext: tools.FilesystemContext{Access: filesystemContext.Access},
-		Client:            &runtimeControlFakeClient{},
+		Settings:              runtimeSettings,
+		FilesystemContext:     tools.FilesystemContext{Access: filesystemContext.Access},
+		QuestionsEnabled:      textutil.Value(settings.Questions),
+		AutoCompactionEnabled: textutil.Value(settings.AutoCompaction),
+		Client:                &runtimeControlFakeClient{},
 		ReviewerClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return &runtimeControlFakeClient{}, nil
 		}),
@@ -373,9 +407,6 @@ func assertEngineChatSettings(t *testing.T, engine *runtime.Engine, want session
 		t.Fatalf("Auto-compaction = %t, want %t", got, want.AutoCompaction)
 	}
 }
-
-func chatControlStringPointer(value string) *string { return &value }
-func chatControlBoolPointer(value bool) *bool       { return &value }
 
 func mustChatControlSessionID(t *testing.T, value string) runtimeids.SessionID {
 	t.Helper()

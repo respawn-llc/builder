@@ -18,6 +18,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -133,8 +134,8 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		SessionID:             plan.Plan.SessionID,
 		ActiveSettings:        plan.Plan.ActiveSettings,
 		EnabledToolIDs:        plan.Plan.EnabledToolIDs,
-		QuestionsEnabled:      startupBoolPointer(plan.Plan.QuestionsEnabled),
-		AutoCompactionEnabled: startupBoolPointer(plan.Plan.AutoCompactionEnabled),
+		QuestionsEnabled:      textutil.Value(plan.Plan.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(plan.Plan.AutoCompactionEnabled),
 		Source:                plan.Plan.Source,
 	})
 	if err != nil {
@@ -182,5 +183,3 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("provider request omitted resolved prompt body: %+v", payload.Input)
 	}
 }
-
-func startupBoolPointer(value bool) *bool { return &value }

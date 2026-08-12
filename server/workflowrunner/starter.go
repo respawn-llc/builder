@@ -385,7 +385,7 @@ func (s *Starter) startCurrentNodeAgent(
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
 		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true,
-		QuestionsEnabled: workflowRunnerBoolPointer(prepared.plan.QuestionsEnabled), AutoCompactionEnabled: workflowRunnerBoolPointer(prepared.plan.AutoCompactionEnabled), Client: prepared.client,
+		QuestionsEnabled: textutil.Value(prepared.plan.QuestionsEnabled), AutoCompactionEnabled: textutil.Value(prepared.plan.AutoCompactionEnabled), Client: prepared.client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
 		StartLogLines: []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, prepared.plan.Descriptor.SessionID(), input.Node.ID, prepared.root.EffectiveRoot(), prepared.plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
@@ -454,8 +454,6 @@ func (s *Starter) startCurrentNodeAgent(
 	}
 	return nil
 }
-
-func workflowRunnerBoolPointer(value bool) *bool { return &value }
 
 func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,

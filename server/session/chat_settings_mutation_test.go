@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"testing"
+
+	"core/shared/textutil"
 )
 
 func TestMutateChatSettingsUpdatesOneControlWithoutChangingTheAggregate(t *testing.T) {
@@ -24,27 +26,27 @@ func TestMutateChatSettingsUpdatesOneControlWithoutChangingTheAggregate(t *testi
 	}{
 		{
 			name:     "Supervisor",
-			mutation: ChatSettingsMutation{Supervisor: chatSettingsStringPointer("all")},
+			mutation: ChatSettingsMutation{Supervisor: textutil.Value("all")},
 			want:     completeChatSettingsOverrides("all", "custom-depth", false, true, true),
 		},
 		{
 			name:     "Thinking",
-			mutation: ChatSettingsMutation{Thinking: chatSettingsStringPointer("  provider-specific  ")},
+			mutation: ChatSettingsMutation{Thinking: textutil.Value("  provider-specific  ")},
 			want:     completeChatSettingsOverrides("all", "provider-specific", false, true, true),
 		},
 		{
 			name:     "Fast",
-			mutation: ChatSettingsMutation{Fast: chatSettingsBoolPointer(true)},
+			mutation: ChatSettingsMutation{Fast: textutil.Value(true)},
 			want:     completeChatSettingsOverrides("all", "provider-specific", true, true, true),
 		},
 		{
 			name:     "Questions",
-			mutation: ChatSettingsMutation{Questions: chatSettingsBoolPointer(false)},
+			mutation: ChatSettingsMutation{Questions: textutil.Value(false)},
 			want:     completeChatSettingsOverrides("all", "provider-specific", true, false, true),
 		},
 		{
 			name:     "Auto-compaction",
-			mutation: ChatSettingsMutation{AutoCompaction: chatSettingsBoolPointer(false)},
+			mutation: ChatSettingsMutation{AutoCompaction: textutil.Value(false)},
 			want:     completeChatSettingsOverrides("all", "provider-specific", true, false, false),
 		},
 	}
@@ -71,6 +73,12 @@ func TestMutateChatSettingsSelectsDifferentAgentWithCompleteBaselineAtomically(t
 		Agent:    "worker",
 		Settings: completeChatSettingsOverrides("edits", "medium", false, true, true),
 	})
+	if err := store.SetContinuationContext(ContinuationContext{
+		AgentRole:     textutil.Value("worker"),
+		OpenAIBaseURL: "https://old-agent.example/v1",
+	}); err != nil {
+		t.Fatalf("seed continuation: %v", err)
+	}
 	observer.called = false
 	result, err := store.MutateChatSettings(ChatSettingsMutation{
 		Agent: &ChatAgentSelection{
@@ -93,6 +101,14 @@ func TestMutateChatSettingsSelectsDifferentAgentWithCompleteBaselineAtomically(t
 	}
 	assertChatSettingsState(t, result.State, "reviewer", want)
 	assertChatSettingsStateFromMeta(t, observer.snapshot.Meta, "reviewer", want)
+	for name, meta := range map[string]Meta{
+		"store":    store.Meta(),
+		"observer": observer.snapshot.Meta,
+	} {
+		if meta.Continuation == nil || meta.Continuation.OpenAIBaseURL != "" {
+			t.Fatalf("%s continuation = %+v, want selected Agent with no previous base URL", name, meta.Continuation)
+		}
+	}
 }
 
 func TestMutateChatSettingsSelectingCurrentAgentIsNoWriteNoOp(t *testing.T) {
@@ -241,11 +257,11 @@ func completeChatSettingsOverrides(
 	autoCompaction bool,
 ) *ChatSettingsOverrides {
 	return &ChatSettingsOverrides{
-		Supervisor:     chatSettingsStringPointer(supervisor),
-		Thinking:       chatSettingsStringPointer(thinking),
-		Fast:           chatSettingsBoolPointer(fast),
-		Questions:      chatSettingsBoolPointer(questions),
-		AutoCompaction: chatSettingsBoolPointer(autoCompaction),
+		Supervisor:     textutil.Value(supervisor),
+		Thinking:       textutil.Value(thinking),
+		Fast:           textutil.Value(fast),
+		Questions:      textutil.Value(questions),
+		AutoCompaction: textutil.Value(autoCompaction),
 	}
 }
 

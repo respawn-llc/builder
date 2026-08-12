@@ -202,8 +202,8 @@ func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
 	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID:       "req-1",
 		SessionID:             "session-1",
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 	})
 	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
 		t.Fatalf("expected runtime owner id rejection, got %v", err)
@@ -226,8 +226,8 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		ClientRequestID:       "activate-factory",
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "owner",
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -265,10 +265,10 @@ func TestSessionFastModeRemainsEngineLocalAcrossActivationMutationAndReopen(t *t
 	if err != nil {
 		t.Fatalf("create second Session: %v", err)
 	}
-	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: sessionRuntimeBoolPointer(true)}); err != nil {
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(true)}); err != nil {
 		t.Fatalf("persist first Fast: %v", err)
 	}
-	if _, err := second.MutateChatSettings(session.ChatSettingsMutation{Fast: sessionRuntimeBoolPointer(false)}); err != nil {
+	if _, err := second.MutateChatSettings(session.ChatSettingsMutation{Fast: textutil.Value(false)}); err != nil {
 		t.Fatalf("persist second Fast: %v", err)
 	}
 	factory := runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
@@ -322,8 +322,8 @@ func TestActivateSessionRuntimeUsesTypedQuestionAndAutoCompactionSettings(t *tes
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "typed-session-settings",
 		ActiveSettings:        settings,
-		QuestionsEnabled:      sessionRuntimeBoolPointer(false),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(false),
+		QuestionsEnabled:      textutil.Value(false),
+		AutoCompactionEnabled: textutil.Value(false),
 		Source:                config.SourceReport{Sources: map[string]string{}},
 	})
 	if err != nil {
@@ -356,8 +356,8 @@ func activateSessionRuntimeForFastTest(t *testing.T, api *API, sessionID string,
 		SessionID:             sessionID,
 		OwnerID:               owner,
 		ActiveSettings:        settings,
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		Source:                config.SourceReport{Sources: map[string]string{}},
 	})
 	if err != nil {
@@ -394,8 +394,6 @@ func currentSessionRuntimeEngine(t *testing.T, authority *Authority, rawSessionI
 	}
 	return engine
 }
-
-func sessionRuntimeBoolPointer(value bool) *bool { return &value }
 
 func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
@@ -435,8 +433,8 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 		ClientRequestID:       "activate-sibling-edit",
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "interactive-owner",
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -569,7 +567,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID: "activate-foreign-edit", SessionID: fixture.store.Meta().SessionID, OwnerID: "interactive-owner",
-		QuestionsEnabled: sessionRuntimeBoolPointer(true), AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled: textutil.Value(true), AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
@@ -657,8 +655,8 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 		ClientRequestID:       "activate-legacy-outside-namespace",
 		SessionID:             fixture.store.Meta().SessionID,
 		OwnerID:               "interactive-owner",
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
@@ -737,8 +735,8 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 		ClientRequestID:       "activate-active-shell",
 		SessionID:             sessionID,
 		OwnerID:               "interactive-owner",
-		QuestionsEnabled:      sessionRuntimeBoolPointer(true),
-		AutoCompactionEnabled: sessionRuntimeBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
 			ThinkingLevel:          "medium",

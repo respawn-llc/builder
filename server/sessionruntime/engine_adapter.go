@@ -49,6 +49,12 @@ type AgentRuntimePlan struct {
 }
 
 func NewAgentRuntimePlan(options AgentRuntimePlanOptions) (AgentRuntimePlan, error) {
+	if options.QuestionsEnabled == nil {
+		return AgentRuntimePlan{}, errors.New("effective Session Questions setting is required")
+	}
+	if options.AutoCompactionEnabled == nil {
+		return AgentRuntimePlan{}, errors.New("effective Session Auto-compaction setting is required")
+	}
 	if strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.LexicalPath) == "" ||
 		strings.TrimSpace(options.FilesystemContext.Access.WorkingDirectory.RealPath) == "" ||
 		strings.TrimSpace(options.FilesystemContext.Access.ExecutionTargetRoot.LexicalPath) == "" ||

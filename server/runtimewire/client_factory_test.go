@@ -43,7 +43,7 @@ func TestRuntimeClientFactoryCreatesMainAndReviewerClients(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -68,11 +68,11 @@ func TestRuntimeClientFactoryRejectsDirectClientOverride(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{
 			FilesystemContext: runtimeWireFilesystemContext(t, root),
 			Client:            &runtimewireCaptureClient{},
 			ClientFactory:     RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) { return nil, nil }),
-		},
+		}),
 	)
 	if !errors.Is(err, ErrRuntimeClientFactoryConflict) {
 		t.Fatalf("error = %v, want ErrRuntimeClientFactoryConflict", err)
@@ -105,11 +105,11 @@ func TestReviewerRuntimeClientFactoryCanPairWithDirectMainClient(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{
 			FilesystemContext:     runtimeWireFilesystemContext(t, root),
 			Client:                &runtimewireCaptureClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}},
 			ReviewerClientFactory: factory,
-		},
+		}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -146,7 +146,7 @@ func TestRuntimeClientFactoryReceivesActivationContext(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), Context: ctx, ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)
@@ -173,10 +173,10 @@ func TestRuntimeClientFactoryErrorDoesNotFallBackToProvider(t *testing.T) {
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: RuntimeClientFactoryFunc(func(context.Context, RuntimeClientRequest) (llm.Client, error) {
 			calls++
 			return nil, wantErr
-		})},
+		})}),
 	)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want factory error", err)
@@ -262,7 +262,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 		nil,
 		nil,
 		nil,
-		RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory},
+		requiredRuntimeWireTestOptions(RuntimeWiringOptions{FilesystemContext: runtimeWireFilesystemContext(t, root), ClientFactory: factory}),
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeWiringWithBackground: %v", err)

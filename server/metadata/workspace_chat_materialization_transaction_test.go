@@ -10,6 +10,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func TestWorkspaceChatMaterializationCommitsVisibleSessionAndDraftRemovalTogether(t *testing.T) {
@@ -234,11 +235,11 @@ func newWorkspaceChatMaterializationSessionForRoot(
 		Message: fixture.Message,
 		Agent:   fixture.Agent,
 		Settings: &session.ChatSettingsOverrides{
-			Supervisor:     materializationStringPointer(fixture.Supervisor),
-			Thinking:       materializationStringPointer(fixture.Thinking),
-			Fast:           materializationBoolPointer(fixture.Fast),
-			Questions:      materializationBoolPointer(fixture.Questions),
-			AutoCompaction: materializationBoolPointer(fixture.AutoCompaction),
+			Supervisor:     textutil.Value(fixture.Supervisor),
+			Thinking:       textutil.Value(fixture.Thinking),
+			Fast:           textutil.Value(fixture.Fast),
+			Questions:      textutil.Value(fixture.Questions),
+			AutoCompaction: textutil.Value(fixture.AutoCompaction),
 		},
 	}); err != nil {
 		t.Fatalf("InitializeChatDraft: %v", err)
@@ -259,6 +260,3 @@ func materializedSessionPage(t *testing.T, store *Store, projectID string) serve
 	}
 	return page
 }
-
-func materializationStringPointer(value string) *string { return &value }
-func materializationBoolPointer(value bool) *bool       { return &value }

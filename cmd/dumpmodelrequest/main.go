@@ -44,6 +44,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 func main() {
@@ -210,8 +211,8 @@ func captureSessionRequest(
 		auth.NewManager(authStore, nil, nil),
 		nil,
 		runtimewire.RuntimeWiringOptions{
-			QuestionsEnabled:                    dumpModelRequestBoolPointer(runtime.DefaultQuestionsEnabled),
-			AutoCompactionEnabled:               dumpModelRequestBoolPointer(runtime.DefaultAutoCompactionEnabled),
+			QuestionsEnabled:                    textutil.Value(resolved.QuestionsEnabled),
+			AutoCompactionEnabled:               textutil.Value(resolved.AutoCompactionEnabled),
 			FilesystemContext:                   filesystemContext,
 			Context:                             ctx,
 			Client:                              inspectionCapabilityClient{capabilities: caps},
@@ -290,8 +291,6 @@ func captureSessionRequest(
 		Request:     req,
 	}, nil
 }
-
-func dumpModelRequestBoolPointer(value bool) *bool { return &value }
 
 func loadSessionConfig(bootstrap launch.BootstrapPlan, persistenceRoot string) (config.App, error) {
 	options := config.LoadOptions{

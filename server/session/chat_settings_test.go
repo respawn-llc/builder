@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 func TestNormalizeChatSettingsOverridesValidatesPresentValuesAndClones(t *testing.T) {
@@ -57,9 +58,9 @@ func TestNormalizeChatSettingsOverridesValidatesPresentValuesAndClones(t *testin
 
 func TestChatSettingsOverridesRejectInvalidPresentStringsWithoutThinkingAllowlist(t *testing.T) {
 	for name, overrides := range map[string]ChatSettingsOverrides{
-		"blank supervisor":   {Supervisor: chatSettingsStringPointer("")},
-		"unknown supervisor": {Supervisor: chatSettingsStringPointer("sometimes")},
-		"blank thinking":     {Thinking: chatSettingsStringPointer(" \t ")},
+		"blank supervisor":   {Supervisor: textutil.Value("")},
+		"unknown supervisor": {Supervisor: textutil.Value("sometimes")},
+		"blank thinking":     {Thinking: textutil.Value(" \t ")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := NormalizeChatSettingsOverrides(&overrides); err == nil {
@@ -70,7 +71,7 @@ func TestChatSettingsOverridesRejectInvalidPresentStringsWithoutThinkingAllowlis
 
 	for _, thinking := range []string{"ultra", "provider-specific-depth"} {
 		normalized, err := NormalizeChatSettingsOverrides(&ChatSettingsOverrides{
-			Thinking: chatSettingsStringPointer(thinking),
+			Thinking: textutil.Value(thinking),
 		})
 		if err != nil {
 			t.Fatalf("custom Thinking %q rejected: %v", thinking, err)
@@ -95,13 +96,13 @@ func TestResolveEffectiveChatSettingsUsesOverrideCurrentDefaultPrecedence(t *tes
 		AutoCompaction: true,
 	}
 	current := &ChatSettingsOverrides{
-		Supervisor: chatSettingsStringPointer("all"),
-		Fast:       chatSettingsBoolPointer(false),
-		Questions:  chatSettingsBoolPointer(false),
+		Supervisor: textutil.Value("all"),
+		Fast:       textutil.Value(false),
+		Questions:  textutil.Value(false),
 	}
 	overrides := &ChatSettingsOverrides{
-		Thinking:       chatSettingsStringPointer("  custom-depth  "),
-		AutoCompaction: chatSettingsBoolPointer(false),
+		Thinking:       textutil.Value("  custom-depth  "),
+		AutoCompaction: textutil.Value(false),
 	}
 
 	effective, err := ResolveEffectiveChatSettings(overrides, current, defaults)
@@ -126,11 +127,11 @@ func TestInitializeChatDraftTransfersCompleteAggregateAndRoundTrips(t *testing.T
 		Message: "unsent composer text",
 		Agent:   "worker",
 		Settings: &ChatSettingsOverrides{
-			Supervisor:     chatSettingsStringPointer("all"),
-			Thinking:       chatSettingsStringPointer("  provider-specific-depth  "),
-			Fast:           chatSettingsBoolPointer(true),
-			Questions:      chatSettingsBoolPointer(false),
-			AutoCompaction: chatSettingsBoolPointer(false),
+			Supervisor:     textutil.Value("all"),
+			Thinking:       textutil.Value("  provider-specific-depth  "),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(false),
+			AutoCompaction: textutil.Value(false),
 		},
 	}
 	if err := InitializeChatDraft(store, state); err != nil {
@@ -140,11 +141,11 @@ func TestInitializeChatDraftTransfersCompleteAggregateAndRoundTrips(t *testing.T
 		Message: "unsent composer text",
 		Agent:   "worker",
 		Settings: &ChatSettingsOverrides{
-			Supervisor:     chatSettingsStringPointer("all"),
-			Thinking:       chatSettingsStringPointer("provider-specific-depth"),
-			Fast:           chatSettingsBoolPointer(true),
-			Questions:      chatSettingsBoolPointer(false),
-			AutoCompaction: chatSettingsBoolPointer(false),
+			Supervisor:     textutil.Value("all"),
+			Thinking:       textutil.Value("provider-specific-depth"),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(false),
+			AutoCompaction: textutil.Value(false),
 		},
 	})
 	meta := store.Meta()
@@ -162,11 +163,11 @@ func TestInitializeChatDraftTransfersCompleteAggregateAndRoundTrips(t *testing.T
 		Message: "unsent composer text",
 		Agent:   "worker",
 		Settings: &ChatSettingsOverrides{
-			Supervisor:     chatSettingsStringPointer("all"),
-			Thinking:       chatSettingsStringPointer("provider-specific-depth"),
-			Fast:           chatSettingsBoolPointer(true),
-			Questions:      chatSettingsBoolPointer(false),
-			AutoCompaction: chatSettingsBoolPointer(false),
+			Supervisor:     textutil.Value("all"),
+			Thinking:       textutil.Value("provider-specific-depth"),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(false),
+			AutoCompaction: textutil.Value(false),
 		},
 	})
 }
@@ -175,11 +176,11 @@ func TestInitializeChatDraftRequiresFreshIndependentMainSessionAndCompleteSettin
 	valid := ChatDraftState{
 		Agent: config.DefaultSubagentRole,
 		Settings: &ChatSettingsOverrides{
-			Supervisor:     chatSettingsStringPointer("off"),
-			Thinking:       chatSettingsStringPointer("medium"),
-			Fast:           chatSettingsBoolPointer(false),
-			Questions:      chatSettingsBoolPointer(true),
-			AutoCompaction: chatSettingsBoolPointer(true),
+			Supervisor:     textutil.Value("off"),
+			Thinking:       textutil.Value("medium"),
+			Fast:           textutil.Value(false),
+			Questions:      textutil.Value(true),
+			AutoCompaction: textutil.Value(true),
 		},
 	}
 	for name, mutate := range map[string]func(*ChatDraftState){
@@ -216,9 +217,9 @@ func TestExistingSessionWithoutChatOverridesUsesCurrentAndProductDefaults(t *tes
 	}
 
 	effective, err := ResolveEffectiveChatSettings(nil, &ChatSettingsOverrides{
-		Supervisor: chatSettingsStringPointer("all"),
-		Thinking:   chatSettingsStringPointer("high"),
-		Fast:       chatSettingsBoolPointer(false),
+		Supervisor: textutil.Value("all"),
+		Thinking:   textutil.Value("high"),
+		Fast:       textutil.Value(false),
 	}, ChatSettings{
 		Supervisor:     "edits",
 		Thinking:       "medium",
@@ -269,15 +270,12 @@ func cloneChatDraftStateFixture(input ChatDraftState) ChatDraftState {
 	result := input
 	if input.Settings != nil {
 		result.Settings = &ChatSettingsOverrides{
-			Supervisor:     chatSettingsStringPointer(*input.Settings.Supervisor),
-			Thinking:       chatSettingsStringPointer(*input.Settings.Thinking),
-			Fast:           chatSettingsBoolPointer(*input.Settings.Fast),
-			Questions:      chatSettingsBoolPointer(*input.Settings.Questions),
-			AutoCompaction: chatSettingsBoolPointer(*input.Settings.AutoCompaction),
+			Supervisor:     textutil.Value(*input.Settings.Supervisor),
+			Thinking:       textutil.Value(*input.Settings.Thinking),
+			Fast:           textutil.Value(*input.Settings.Fast),
+			Questions:      textutil.Value(*input.Settings.Questions),
+			AutoCompaction: textutil.Value(*input.Settings.AutoCompaction),
 		}
 	}
 	return result
 }
-
-func chatSettingsStringPointer(value string) *string { return &value }
-func chatSettingsBoolPointer(value bool) *bool       { return &value }

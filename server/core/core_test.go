@@ -641,6 +641,52 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 		t.Fatalf("ignored committed response list = %+v, want two Sessions", page.Sessions)
 	}
 }
+
+func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	t.Setenv(brand.PersistenceRootEnvName, t.TempDir())
+	if err := os.WriteFile(
+		filepath.Join(persistenceRoot, "config.toml"),
+		[]byte("[subagents.worker]\nthinking_level = \"high\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write custom-root config: %v", err)
+	}
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   brand.LoadOptions{ConfigRoot: persistenceRoot},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(t.Context(), persistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	client, err := appCore.SessionLaunchClientForProjectWorkspace(t.Context(), binding.ProjectID, workspace)
+	if err != nil {
+		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
+	}
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+	}
+
+	prepared, err := (sessionChatSettingsPreparationResolver{
+		metadataStore:   appCore.MetadataStore(),
+		authManager:     appCore.AuthManager(),
+		persistenceRoot: persistenceRoot,
+	}).PrepareSessionChatSettings(t.Context(), materialized.SessionID.String(), "worker")
+	if err != nil {
+		t.Fatalf("PrepareSessionChatSettings: %v", err)
+	}
+	if prepared.Baseline.Thinking != "high" {
+		t.Fatalf("worker Thinking = %q, want custom-root value high", prepared.Baseline.Thinking)
+	}
+}
+
 func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstances(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()

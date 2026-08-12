@@ -20,6 +20,7 @@ import (
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -646,6 +647,7 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 		AutoCompaction: false,
 	})
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
 	workerSettings := cfg.Settings
 	workerSettings.ProviderOverride = "openai"
 	workerSettings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
@@ -670,6 +672,11 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	}
 	service := newSessionLaunchTestService(cfg, containerDir)
 	worker := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		OpenAIBaseURL: "https://previous-agent.example/v1",
+	}); err != nil {
+		t.Fatalf("seed previous Agent base URL: %v", err)
+	}
 
 	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
 		ClientRequestID: "select-worker",
@@ -684,11 +691,18 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 		Settings: &session.ChatSettingsOverrides{
 			Supervisor:     sessionLaunchStringPtr("all"),
 			Thinking:       sessionLaunchStringPtr("custom-depth"),
-			Fast:           sessionLaunchBoolPtr(true),
-			Questions:      sessionLaunchBoolPtr(true),
-			AutoCompaction: sessionLaunchBoolPtr(true),
+			Fast:           textutil.Value(true),
+			Questions:      textutil.Value(true),
+			AutoCompaction: textutil.Value(true),
 		},
 	})
+	selected, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen selected Agent Session: %v", err)
+	}
+	if continuation := selected.Meta().Continuation; continuation == nil || continuation.OpenAIBaseURL != "" {
+		t.Fatalf("selected Agent continuation = %+v, want previous base URL cleared", continuation)
+	}
 
 	second, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
 		ClientRequestID: "observe-worker",
@@ -700,7 +714,8 @@ func TestServicePlanSessionAgentSelectionPersistsCompletePreparedBaseline(t *tes
 	}
 	if strings.TrimSpace(second.Plan.ActiveSettings.ThinkingLevel) != "custom-depth" ||
 		second.Plan.ActiveSettings.Reviewer.Frequency != "all" ||
-		!second.Plan.ActiveSettings.PriorityRequestMode {
+		!second.Plan.ActiveSettings.PriorityRequestMode ||
+		second.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
 		t.Fatalf("second plan active settings = %+v, want selected worker baseline", second.Plan.ActiveSettings)
 	}
 }
@@ -724,18 +739,26 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 	}}); err != nil {
 		t.Fatalf("seed removed Agent: %v", err)
 	}
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		AgentRole:     &removed,
+		OpenAIBaseURL: "https://removed-agent.example/v1",
+	}); err != nil {
+		t.Fatalf("seed removed Agent base URL: %v", err)
+	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
+	cfg.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
 	cfg.Settings.Reviewer.Frequency = "edits"
 	cfg.Settings.ThinkingLevel = "default-custom"
 	cfg.Settings.PriorityRequestMode = false
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	service := newSessionLaunchTestService(cfg, containerDir)
 
-	if _, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+	repaired, err := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
 		ClientRequestID: "repair-removed",
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("PlanSession repair removed Agent: %v", err)
 	}
 	assertSessionLaunchChatSettings(t, store.Dir(), session.ChatSettingsState{
@@ -743,11 +766,21 @@ func TestServicePlanSessionRepairsUnavailableAgentWithCompleteDefaultBaseline(t 
 		Settings: &session.ChatSettingsOverrides{
 			Supervisor:     sessionLaunchStringPtr("edits"),
 			Thinking:       sessionLaunchStringPtr("default-custom"),
-			Fast:           sessionLaunchBoolPtr(false),
-			Questions:      sessionLaunchBoolPtr(true),
-			AutoCompaction: sessionLaunchBoolPtr(true),
+			Fast:           textutil.Value(false),
+			Questions:      textutil.Value(true),
+			AutoCompaction: textutil.Value(true),
 		},
 	})
+	reopened, err := session.Open(store.Dir(), serviceTestPersistence.Options()...)
+	if err != nil {
+		t.Fatalf("reopen repaired Agent Session: %v", err)
+	}
+	if continuation := reopened.Meta().Continuation; continuation != nil {
+		t.Fatalf("repaired Agent continuation = %+v, want default Agent inheriting current config", continuation)
+	}
+	if repaired.Plan.ActiveSettings.OpenAIBaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("repaired Agent base URL = %q, want current config", repaired.Plan.ActiveSettings.OpenAIBaseURL)
+	}
 }
 
 func TestServicePlanSessionAppliesPersistedChatSettingPrecedence(t *testing.T) {
@@ -808,9 +841,9 @@ func setSessionLaunchChatSettings(t *testing.T, store *session.Store, settings s
 	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
 		Supervisor:     sessionLaunchStringPtr(settings.Supervisor),
 		Thinking:       sessionLaunchStringPtr(settings.Thinking),
-		Fast:           sessionLaunchBoolPtr(settings.Fast),
-		Questions:      sessionLaunchBoolPtr(settings.Questions),
-		AutoCompaction: sessionLaunchBoolPtr(settings.AutoCompaction),
+		Fast:           textutil.Value(settings.Fast),
+		Questions:      textutil.Value(settings.Questions),
+		AutoCompaction: textutil.Value(settings.AutoCompaction),
 	}); err != nil {
 		t.Fatalf("MutateChatSettings: %v", err)
 	}
@@ -832,8 +865,6 @@ func assertSessionLaunchChatSettings(t *testing.T, sessionDir string, want sessi
 		t.Fatalf("Chat settings state = agent %q settings %s, want agent %q settings %s", got.Agent, gotJSON, want.Agent, wantJSON)
 	}
 }
-
-func sessionLaunchBoolPtr(value bool) *bool { return &value }
 
 func TestServicePlanSessionConfigOnlyOverrideDoesNotSkipInvalidPersistedRoleValidation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

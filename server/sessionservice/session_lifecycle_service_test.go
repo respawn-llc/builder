@@ -701,8 +701,8 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		SessionID:             forkID.String(),
 		OwnerID:               "test-owner",
 		ActiveSettings:        activateSettings,
-		QuestionsEnabled:      sessionLifecycleBoolPointer(true),
-		AutoCompactionEnabled: sessionLifecycleBoolPointer(true),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		Source:                config.SourceReport{},
 	})
 	if err != nil {
@@ -736,8 +736,6 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 		t.Fatalf("expected activation workdir %q in log, got %q", wantWorkdir, string(logBody))
 	}
 }
-
-func sessionLifecycleBoolPointer(value bool) *bool { return &value }
 
 func TestServiceResolveTransitionForkRollbackRejectsInvalidTargetToken(t *testing.T) {
 	_, containerDir, store := createPersistedSession(t)
