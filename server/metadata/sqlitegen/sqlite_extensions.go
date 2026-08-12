@@ -16,8 +16,8 @@ import (
 const LabelCollationName = "kent_label_casefold_v1"
 const LabelFoldFunctionName = "kent_label_casefold_v1_fold"
 const LiteralOccurrenceCountFunctionName = "kent_task_search_occurrence_count_v1"
-const graphEntityIDBlobFunctionName = "kent_graph_entity_id_blob_v1"
-const graphEntityIDTextFunctionName = "kent_graph_entity_id_text_v1"
+const GraphEntityIDBlobFunctionName = "kent_graph_entity_id_blob_v1"
+const GraphEntityIDTextFunctionName = "kent_graph_entity_id_text_v1"
 
 type RegistrationError struct {
 	ExtensionName string
@@ -72,23 +72,23 @@ func RegisterSQLiteExtensions() error {
 			return
 		}
 		if err := sqlitedriver.RegisterDeterministicScalarFunction(
-			graphEntityIDBlobFunctionName,
+			GraphEntityIDBlobFunctionName,
 			1,
 			graphEntityIDBlob,
 		); err != nil {
 			registrationErr = &RegistrationError{
-				ExtensionName: graphEntityIDBlobFunctionName,
+				ExtensionName: GraphEntityIDBlobFunctionName,
 				Cause:         err,
 			}
 			return
 		}
 		if err := sqlitedriver.RegisterDeterministicScalarFunction(
-			graphEntityIDTextFunctionName,
+			GraphEntityIDTextFunctionName,
 			1,
 			graphEntityIDText,
 		); err != nil {
 			registrationErr = &RegistrationError{
-				ExtensionName: graphEntityIDTextFunctionName,
+				ExtensionName: GraphEntityIDTextFunctionName,
 				Cause:         err,
 			}
 		}

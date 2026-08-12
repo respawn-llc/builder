@@ -658,7 +658,10 @@ func (s *validationState) validateKindConstraints() {
 
 func validateAgentRoleRequirement(workflowID runtimeids.WorkflowID, node Node, requiredTool toolspec.ID, catalog TargetAgentCatalog) (ValidationError, bool) {
 	nodeID := NodeIDOf(node)
-	ref := ValidationError{WorkflowID: WorkflowIDPointer(workflowID), NodeID: &nodeID}
+	ref := ValidationError{WorkflowID: WorkflowIDPointer(workflowID)}
+	if strings.TrimSpace(string(nodeID)) != "" {
+		ref.NodeID = &nodeID
+	}
 	role := strings.TrimSpace(NodeSubagentRole(node))
 	if role == "" {
 		return ValidationError{
