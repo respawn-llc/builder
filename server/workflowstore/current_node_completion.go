@@ -13,6 +13,7 @@ import (
 	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/session"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -40,6 +41,7 @@ type CurrentNodeCompletionResult struct {
 	SessionReuse             *workflow.SessionReuseAnalysisInput
 	PostCompletionEligible   bool
 	retainedTargetInvariants []workflow.RetainedTargetInvariantDetail
+	legacyFallbacks          []legacyContinuationSourceFallbackDetail
 }
 
 func (r CurrentNodeCompletionResult) Committed() bool {
@@ -156,7 +158,7 @@ func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector I
 
 func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (result CurrentNodeCompletionResult, resultErr error) {
 	defer func() {
-		reportRetainedTargetInvariantError(resultErr)
+		reportWorkflowInvariantError(s.invariantPolicy, resultErr)
 	}()
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
@@ -233,6 +235,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		result, err := completeCurrentNodeFanout(
 			ctx,
 			q,
+			s.invariantPolicy,
 			definition,
 			source,
 			currentSource,
@@ -257,7 +260,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		for _, detail := range result.retainedTargetInvariants {
-			reportRetainedTargetInvariantAfterCommit(detail)
+			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
+		}
+		for _, detail := range result.legacyFallbacks {
+			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
 		}
 		if len(result.Mutation.Removed) > 0 {
 			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
@@ -269,6 +275,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		result, err := completeCurrentNodeJoinArrival(
 			ctx,
 			q,
+			s.invariantPolicy,
 			definition,
 			currentSource,
 			target.Edge,
@@ -287,7 +294,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		for _, detail := range result.retainedTargetInvariants {
-			reportRetainedTargetInvariantAfterCommit(detail)
+			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
+		}
+		for _, detail := range result.legacyFallbacks {
+			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, detail)
 		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
@@ -299,6 +309,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	materializedTarget, err := materializeCompletionTargetCurrentNode(
 		ctx,
 		q,
+		s.invariantPolicy,
 		definition,
 		target.Edge,
 		source,
@@ -316,7 +327,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	targetCurrentNode := materializedTarget.CurrentNode
 	if target.Edge.RequiresApproval {
 		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
+		}
+		if materializedTarget.LegacyFallback != nil {
+			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 		}
 		approval, err := newPendingApproval(
 			currentSource,
@@ -343,7 +357,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 			return CurrentNodeCompletionResult{}, err
 		}
 		if materializedTarget.Invariant != nil {
-			reportRetainedTargetInvariantAfterCommit(*materializedTarget.Invariant)
+			reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, *materializedTarget.Invariant)
+		}
+		if materializedTarget.LegacyFallback != nil {
+			reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, *materializedTarget.LegacyFallback)
 		}
 		return CurrentNodeCompletionResult{
 			PendingApproval:        &approval,
@@ -352,7 +369,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}, nil
 	}
 	if materializedTarget.Invariant != nil {
-		checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+		checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
+	}
+	if materializedTarget.LegacyFallback != nil {
+		checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target.Node)
 	if err != nil {
@@ -378,7 +398,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		return CurrentNodeCompletionResult{}, err
 	}
 	if materializedTarget.Invariant != nil {
-		reportRetainedTargetInvariantAfterCommit(*materializedTarget.Invariant)
+		reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, *materializedTarget.Invariant)
+	}
+	if materializedTarget.LegacyFallback != nil {
+		reportLegacyContinuationSourceAfterCommit(s.invariantPolicy, *materializedTarget.LegacyFallback)
 	}
 	result = CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
@@ -606,8 +629,9 @@ type transitionTargetMaterializationRequest struct {
 }
 
 type transitionTargetMaterialization struct {
-	CurrentNode workflow.CurrentNode
-	Invariant   *workflow.RetainedTargetInvariantDetail
+	CurrentNode    workflow.CurrentNode
+	Invariant      *workflow.RetainedTargetInvariantDetail
+	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
 func materializeTransitionTargetCurrentNode(
@@ -731,6 +755,7 @@ func materializeTransitionTargetCurrentNode(
 	if detail, ok := contextResolution.invariantDetail(); ok {
 		materialized.Invariant = &detail
 	}
+	materialized.LegacyFallback = contextResolution.legacyFallback
 	return materialized, nil
 }
 
@@ -810,6 +835,7 @@ func transitionParameterByKey(edge workflow.Edge, key string) (workflow.Paramete
 func materializeCompletionTargetCurrentNode(
 	ctx context.Context,
 	q *sqlitegen.Queries,
+	policy invariant.Policy,
 	definition workflow.Definition,
 	edge workflow.Edge,
 	source workflow.Node,

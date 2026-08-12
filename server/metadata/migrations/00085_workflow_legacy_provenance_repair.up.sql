@@ -1,0 +1,257 @@
+-- +goose Up
+CREATE TEMP TABLE workflow_legacy_current_node_source_candidates (
+    task_id TEXT NOT NULL,
+    target_node_id BLOB NOT NULL,
+    transition_branch_key TEXT,
+    source_session_id TEXT NOT NULL,
+    associated_at_unix_ms INTEGER NOT NULL
+);
+
+INSERT INTO workflow_legacy_current_node_source_candidates (
+    task_id,
+    target_node_id,
+    transition_branch_key,
+    source_session_id,
+    associated_at_unix_ms
+)
+SELECT
+    current_node.task_id,
+    current_node.node_id,
+    current_node.transition_branch_key,
+    source_association.session_id,
+    source_association.associated_at_unix_ms
+FROM task_current_nodes current_node
+JOIN task_records task
+  ON task.id = current_node.task_id
+JOIN workflow_edges entering_edge
+  ON entering_edge.id = current_node.entered_by_edge_id
+ AND entering_edge.target_node_id = current_node.node_id
+JOIN workflow_transition_groups entering_transition
+  ON entering_transition.id = entering_edge.transition_group_id
+JOIN workflow_nodes source_node
+  ON source_node.id = entering_transition.source_node_id
+ AND source_node.workflow_id = task.workflow_id
+JOIN session_workflow_node_associations source_association
+  ON source_association.task_id = current_node.task_id
+ AND source_association.node_id = source_node.id
+LEFT JOIN session_workflow_node_associations target_association
+  ON target_association.task_id = current_node.task_id
+ AND target_association.session_id = current_node.session_id
+ AND target_association.node_id = current_node.node_id
+ AND (
+        target_association.transition_branch_key = current_node.transition_branch_key
+        OR (
+            target_association.transition_branch_key IS NULL
+            AND current_node.transition_branch_key IS NULL
+        )
+ )
+WHERE current_node.legacy_materialized = 1
+  AND (
+        (
+            current_node.transition_branch_key IS NULL
+            AND source_association.transition_branch_key IS NULL
+        )
+        OR (
+            current_node.transition_branch_key IS NOT NULL
+            AND (
+                (
+                    SELECT COUNT(*)
+                    FROM workflow_edges sibling_edge
+                    WHERE sibling_edge.transition_group_id = entering_transition.id
+                ) > 1
+                AND source_association.transition_branch_key IS NULL
+            )
+        )
+        OR (
+            current_node.transition_branch_key IS NOT NULL
+            AND (
+                SELECT COUNT(*)
+                FROM workflow_edges sibling_edge
+                WHERE sibling_edge.transition_group_id = entering_transition.id
+            ) = 1
+            AND source_association.transition_branch_key = current_node.transition_branch_key
+        )
+  )
+  AND (
+        target_association.associated_at_unix_ms IS NULL
+        OR source_association.associated_at_unix_ms <= target_association.associated_at_unix_ms
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM session_workflow_node_associations conflicting_current
+      WHERE conflicting_current.task_id = current_node.task_id
+        AND conflicting_current.node_id = current_node.node_id
+        AND conflicting_current.association_status = 'current'
+        AND (
+              conflicting_current.transition_branch_key = current_node.transition_branch_key
+              OR (
+                  conflicting_current.transition_branch_key IS NULL
+                  AND current_node.transition_branch_key IS NULL
+              )
+        )
+        AND (
+              current_node.session_id IS NULL
+              OR conflicting_current.session_id != current_node.session_id
+        )
+  );
+
+CREATE TEMP TABLE workflow_legacy_current_node_source_winners AS
+SELECT
+    candidate.task_id,
+    candidate.target_node_id,
+    candidate.transition_branch_key,
+    candidate.source_session_id
+FROM workflow_legacy_current_node_source_candidates candidate
+WHERE candidate.associated_at_unix_ms = (
+    SELECT MAX(latest.associated_at_unix_ms)
+    FROM workflow_legacy_current_node_source_candidates latest
+    WHERE latest.task_id = candidate.task_id
+      AND latest.target_node_id = candidate.target_node_id
+      AND (
+            latest.transition_branch_key = candidate.transition_branch_key
+            OR (
+                latest.transition_branch_key IS NULL
+                AND candidate.transition_branch_key IS NULL
+            )
+      )
+)
+AND 1 = (
+    SELECT COUNT(*)
+    FROM workflow_legacy_current_node_source_candidates tied
+    WHERE tied.task_id = candidate.task_id
+      AND tied.target_node_id = candidate.target_node_id
+      AND (
+            tied.transition_branch_key = candidate.transition_branch_key
+            OR (
+                tied.transition_branch_key IS NULL
+                AND candidate.transition_branch_key IS NULL
+            )
+      )
+      AND tied.associated_at_unix_ms = candidate.associated_at_unix_ms
+);
+
+UPDATE task_current_nodes
+SET
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = (
+        SELECT winner.source_session_id
+        FROM workflow_legacy_current_node_source_winners winner
+        WHERE winner.task_id = task_current_nodes.task_id
+          AND winner.target_node_id = task_current_nodes.node_id
+          AND (
+                winner.transition_branch_key = task_current_nodes.transition_branch_key
+                OR (
+                    winner.transition_branch_key IS NULL
+                    AND task_current_nodes.transition_branch_key IS NULL
+                )
+          )
+    ),
+    legacy_materialized = 0
+WHERE legacy_materialized = 1
+  AND EXISTS (
+      SELECT 1
+      FROM workflow_legacy_current_node_source_winners winner
+      WHERE winner.task_id = task_current_nodes.task_id
+        AND winner.target_node_id = task_current_nodes.node_id
+        AND (
+              winner.transition_branch_key = task_current_nodes.transition_branch_key
+              OR (
+                  winner.transition_branch_key IS NULL
+                  AND task_current_nodes.transition_branch_key IS NULL
+              )
+        )
+  );
+
+UPDATE session_workflow_node_associations
+SET
+    association_status = 'current',
+    source_session_id = (
+        SELECT winner.source_session_id
+        FROM workflow_legacy_current_node_source_winners winner
+        WHERE winner.task_id = session_workflow_node_associations.task_id
+          AND winner.target_node_id = session_workflow_node_associations.node_id
+          AND (
+                winner.transition_branch_key = session_workflow_node_associations.transition_branch_key
+                OR (
+                    winner.transition_branch_key IS NULL
+                    AND session_workflow_node_associations.transition_branch_key IS NULL
+                )
+          )
+    )
+WHERE association_status = 'historical'
+  AND EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      JOIN workflow_legacy_current_node_source_winners winner
+        ON winner.task_id = current_node.task_id
+       AND winner.target_node_id = current_node.node_id
+       AND (
+             winner.transition_branch_key = current_node.transition_branch_key
+             OR (
+                 winner.transition_branch_key IS NULL
+                 AND current_node.transition_branch_key IS NULL
+             )
+       )
+      WHERE current_node.task_id = session_workflow_node_associations.task_id
+        AND current_node.node_id = session_workflow_node_associations.node_id
+        AND current_node.session_id = session_workflow_node_associations.session_id
+        AND (
+              current_node.transition_branch_key = session_workflow_node_associations.transition_branch_key
+              OR (
+                  current_node.transition_branch_key IS NULL
+                  AND session_workflow_node_associations.transition_branch_key IS NULL
+              )
+        )
+  );
+
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = 'exact',
+    continuation_source_session_id = (
+        SELECT MIN(current_node.continuation_source_session_id)
+        FROM task_current_nodes current_node
+        WHERE current_node.task_id = task_active_fanout_branches.task_id
+          AND current_node.transition_branch_key IS NOT NULL
+          AND current_node.continuation_source_kind = 'exact'
+          AND current_node.legacy_materialized = 0
+    ),
+    legacy_materialized = 0
+WHERE legacy_materialized = 1
+  AND 1 = (
+      SELECT COUNT(DISTINCT current_node.continuation_source_session_id)
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = task_active_fanout_branches.task_id
+        AND current_node.transition_branch_key IS NOT NULL
+        AND current_node.continuation_source_kind = 'exact'
+        AND current_node.legacy_materialized = 0
+  );
+
+UPDATE task_pending_approval_branches
+SET
+    target_snapshot_json = json_remove(target_snapshot_json, '$.session_id'),
+    context_source_resolution_json = json_set(
+        context_source_resolution_json,
+        '$.active_source',
+        json_object(
+            'kind',
+            'exact',
+            'session_id',
+            (
+                SELECT approval.source_session_id
+                FROM task_pending_approvals approval
+                WHERE approval.id = task_pending_approval_branches.approval_id
+            )
+        )
+    )
+WHERE json_extract(context_source_resolution_json, '$.active_source.kind') = 'legacy'
+  AND EXISTS (
+      SELECT 1
+      FROM task_pending_approvals approval
+      JOIN sessions source_session
+        ON source_session.id = approval.source_session_id
+       AND source_session.task_id = approval.source_task_id
+      WHERE approval.id = task_pending_approval_branches.approval_id
+  );
+
+DROP TABLE workflow_legacy_current_node_source_winners;
+DROP TABLE workflow_legacy_current_node_source_candidates;

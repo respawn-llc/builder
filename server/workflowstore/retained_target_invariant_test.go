@@ -18,28 +18,37 @@ func TestRetainedTargetInvariantDiagnostics(t *testing.T) {
 		ActiveSourceSessionID: &source, RejectedRetainedSessionID: &rejected,
 		Reason: workflow.RetainedTargetInvariantProoflessCurrentTarget,
 	}
-	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+	diagnosticPolicy := invariant.NewPolicy(
+		invariant.WithMode(invariant.ModeDiagnostic),
+		invariant.WithSink(workflowInvariantSlogSink{}),
+	)
 	for _, emit := range []func(){
-		func() { reportRetainedTargetInvariantError(workflow.RetainedTargetInvariantError{Detail: detail}) },
-		func() { reportRetainedTargetInvariantAfterCommit(detail) },
+		func() {
+			reportRetainedTargetInvariantError(
+				diagnosticPolicy,
+				workflow.RetainedTargetInvariantError{Detail: detail},
+			)
+		},
+		func() { reportRetainedTargetInvariantAfterCommit(diagnosticPolicy, detail) },
 	} {
 		records := testsetup.CaptureSlogRecords(t)
 		emit()
 		assertRetainedTargetInvariantDiagnostic(t, records.Records(), source, rejected)
 	}
-	t.Setenv("KENT_INVARIANT_MODE", "panic")
 	func() {
 		defer func() {
 			if _, ok := recover().(invariant.Diagnostic); !ok {
 				t.Fatal("debug invariant did not panic with typed diagnostic")
 			}
 		}()
-		checkRetainedTargetInvariantBeforeMutation(detail)
+		checkRetainedTargetInvariantBeforeMutation(
+			invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)),
+			detail,
+		)
 	}()
-	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
 	records := testsetup.CaptureSlogRecords(t)
-	reportRetainedTargetInvariantError(workflow.RetainedTargetUnavailableError{})
-	reportRetainedTargetInvariantError(errors.New("ordinary mismatch"))
+	reportRetainedTargetInvariantError(diagnosticPolicy, workflow.RetainedTargetUnavailableError{})
+	reportRetainedTargetInvariantError(diagnosticPolicy, errors.New("ordinary mismatch"))
 	for _, record := range records.Records() {
 		if record.Fields[string(invariant.FieldOperation)] == retainedTargetInvariantOperation {
 			t.Fatal("ordinary retained-target state emitted invariant diagnostic")

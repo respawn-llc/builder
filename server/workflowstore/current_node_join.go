@@ -11,12 +11,14 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
 func completeCurrentNodeJoinArrival(
 	ctx context.Context,
 	q *sqlitegen.Queries,
+	policy invariant.Policy,
 	definition workflow.Definition,
 	source workflow.CurrentNode,
 	edge workflow.Edge,
@@ -60,7 +62,15 @@ func completeCurrentNodeJoinArrival(
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	panicOnLegacyCurrentFanoutJoinSource(source.Reference.TaskID, persistedArrivals)
+	if err := rejectLegacyCurrentFanoutJoinSource(
+		policy,
+		source.Reference,
+		workflow.NodeIDOf(joinNode),
+		edge.ID,
+		persistedArrivals,
+	); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	if err := updateActiveFanoutBranchContinuationSource(ctx, q, source.Reference, contextResolution.ActiveSource); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
@@ -127,6 +137,7 @@ func completeCurrentNodeJoinArrival(
 	materializedTarget, err := materializeCompletionTargetCurrentNode(
 		ctx,
 		q,
+		policy,
 		definition,
 		target.Edge,
 		resolution.Join,
@@ -143,7 +154,10 @@ func completeCurrentNodeJoinArrival(
 	}
 	targetCurrentNode := materializedTarget.CurrentNode
 	if materializedTarget.Invariant != nil {
-		checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+		checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
+	}
+	if materializedTarget.LegacyFallback != nil {
+		checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
 	}
 	handoff, err := currentNodeCompletionHandoff(resolution.Join, target.Node)
 	if err != nil {
@@ -175,6 +189,9 @@ func completeCurrentNodeJoinArrival(
 	}
 	if materializedTarget.Invariant != nil {
 		result.retainedTargetInvariants = []workflow.RetainedTargetInvariantDetail{*materializedTarget.Invariant}
+	}
+	if materializedTarget.LegacyFallback != nil {
+		result.legacyFallbacks = []legacyContinuationSourceFallbackDetail{*materializedTarget.LegacyFallback}
 	}
 	if executableNodeKind(target.Node.Kind()) {
 		intent, err := newCurrentNodeAutomaticIntent(targetCurrentNode.Reference, target.Node)
@@ -242,19 +259,36 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 	return arrivals, ready, nil
 }
 
-func panicOnLegacyCurrentFanoutJoinSource(
-	taskID workflow.TaskID,
+func rejectLegacyCurrentFanoutJoinSource(
+	policy invariant.Policy,
+	source workflow.CurrentNodeReference,
+	targetNodeID workflow.NodeID,
+	edgeID workflow.EdgeID,
 	arrivals []currentFanoutJoinArrival,
-) {
+) error {
 	for _, arrival := range arrivals {
 		if arrival.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
-			panic(fmt.Sprintf(
-				"legacy active Fan-Out branch cannot complete Join: task=%q branch=%q",
-				taskID,
-				arrival.BranchKey,
-			))
+			branchKey := arrival.BranchKey
+			branchSource, err := workflow.NewCurrentNodeReference(
+				source.TaskID,
+				source.NodeID,
+				&branchKey,
+			)
+			if err != nil {
+				return err
+			}
+			return legacyContinuationSourceError(
+				policy,
+				legacyContinuationSourceFallbackDetail{
+					Source:       branchSource,
+					TargetNodeID: targetNodeID,
+					EdgeID:       edgeID,
+					Scope:        workflow.LegacyContinuationSourceFanoutBranch,
+				},
+			)
 		}
 	}
+	return nil
 }
 
 func mergeCurrentFanoutJoinContinuationSources(

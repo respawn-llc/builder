@@ -16,6 +16,7 @@ type transitionContextResolution struct {
 	ActiveSource               workflow.MaterializedContinuationSource
 	SelectedCurrentAssociation *TaskSessionAssociation
 	invariant                  *workflow.RetainedTargetInvariantDetail
+	legacyFallback             *legacyContinuationSourceFallbackDetail
 }
 
 func (r transitionContextResolution) targetSessionID() *runtimeids.SessionID {
@@ -45,6 +46,23 @@ func resolveTransitionContext(
 	targetNode workflow.Node,
 	manualMoveContext bool,
 ) (transitionContextResolution, error) {
+	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
+	if edge.ContextMode != workflow.ContextModeNewSession &&
+		source != nil &&
+		source.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy &&
+		(contextSource.Kind == workflow.ContextSourcePreviousTarget ||
+			contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew) {
+		return resolveLegacyContinuationSource(
+			legacyContinuationSourceFallbackDetail{
+				Source:       source.Reference,
+				TargetNodeID: workflow.NodeIDOf(targetNode),
+				EdgeID:       edge.ID,
+				Scope:        workflow.LegacyContinuationSourceCurrentNode,
+			},
+			contextSource.Kind,
+			targetNode.Kind(),
+		)
+	}
 	if targetNode.Kind() == workflow.NodeKindTerminal {
 		return transitionContextResolution{
 			TargetSession: workflow.NoAgentTargetSessionIntent(),
@@ -62,17 +80,6 @@ func resolveTransitionContext(
 			TargetSession: workflow.NoAgentTargetSessionIntent(),
 			ActiveSource:  incomingTransitionActiveSource(source),
 		}, nil
-	}
-	contextSource := workflow.CanonicalContextSource(edge.ContextSource)
-	if source != nil &&
-		source.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy &&
-		(contextSource.Kind == workflow.ContextSourcePreviousTarget ||
-			contextSource.Kind == workflow.ContextSourcePreviousTargetOrNew) {
-		panic(fmt.Sprintf(
-			"legacy Current Node %v cannot resolve retained target context for edge %q",
-			source.Reference,
-			edge.ID,
-		))
 	}
 	switch contextSource.Kind {
 	case workflow.ContextSourceImmediateSource:

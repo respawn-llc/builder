@@ -9,20 +9,23 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
 type currentNodeFanoutTarget struct {
-	BranchKey   workflow.TransitionBranchKey
-	CurrentNode workflow.CurrentNode
-	Node        workflow.Node
-	NodeKind    workflow.NodeKind
-	Invariant   *workflow.RetainedTargetInvariantDetail
+	BranchKey      workflow.TransitionBranchKey
+	CurrentNode    workflow.CurrentNode
+	Node           workflow.Node
+	NodeKind       workflow.NodeKind
+	Invariant      *workflow.RetainedTargetInvariantDetail
+	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
 func completeCurrentNodeFanout(
 	ctx context.Context,
 	q *sqlitegen.Queries,
+	policy invariant.Policy,
 	definition workflow.Definition,
 	source workflow.Node,
 	currentSource workflow.CurrentNode,
@@ -49,6 +52,7 @@ func completeCurrentNodeFanout(
 		materializedTarget, err := materializeCompletionTargetCurrentNode(
 			ctx,
 			q,
+			policy,
 			definition,
 			target.Edge,
 			source,
@@ -65,13 +69,17 @@ func completeCurrentNodeFanout(
 		}
 		targetCurrentNode := materializedTarget.CurrentNode
 		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+			checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
+		}
+		if materializedTarget.LegacyFallback != nil {
+			checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
 		}
 		preparedTargets = append(preparedTargets, currentNodeFanoutTarget{
-			BranchKey:   branchKey,
-			CurrentNode: targetCurrentNode,
-			Node:        target.Node,
-			Invariant:   materializedTarget.Invariant,
+			BranchKey:      branchKey,
+			CurrentNode:    targetCurrentNode,
+			Node:           target.Node,
+			Invariant:      materializedTarget.Invariant,
+			LegacyFallback: materializedTarget.LegacyFallback,
 		})
 		contextResolution, err := pendingApprovalContextSourceResolution(target.Node.Kind(), targetCurrentNode)
 		if err != nil {
@@ -111,6 +119,9 @@ func completeCurrentNodeFanout(
 			if target.Invariant != nil {
 				result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
 			}
+			if target.LegacyFallback != nil {
+				result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
+			}
 		}
 		return result, nil
 	}
@@ -130,6 +141,9 @@ func completeCurrentNodeFanout(
 	for _, target := range preparedTargets {
 		if target.Invariant != nil {
 			result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
+		}
+		if target.LegacyFallback != nil {
+			result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
 		}
 	}
 	for _, target := range preparedTargets {

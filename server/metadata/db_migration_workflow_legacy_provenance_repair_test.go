@@ -1,0 +1,562 @@
+package metadata
+
+import (
+	"database/sql"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"core/shared/runtimeids"
+)
+
+func TestWorkflowLegacyProvenanceRepairMigrationRepairsV25CurrentNodeDuringFullUpgrade(t *testing.T) {
+	t.Parallel()
+	const (
+		projectID       = "project-v25-provenance-repair"
+		taskID          = "task-v25-provenance-repair"
+		sourceSessionID = "session-v25-source"
+		targetSessionID = "session-v25-target"
+		targetNodeID    = "node-v25-target"
+		groupID         = "group-v25-repair"
+		edgeID          = "edge-v25-repair"
+	)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 80)
+	if err != nil {
+		t.Fatalf("open version 80 metadata database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES (?, 'v2.5 provenance repair', ?, ?, '{}')`, projectID, now, now)
+	seedWorkflowGraph(t, db, projectID, now)
+	workflowID := workflowSeedID(t, db, "1")
+	execSeed(t, db, "v2.5 target Node", `
+INSERT INTO workflow_nodes (
+    id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode
+) VALUES (?, ?, 'v25_target', 'agent', 'v2.5 target', 'default', 'tool')`,
+		targetNodeID,
+		workflowID,
+	)
+	execSeed(t, db, "v2.5 Transition", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES (?, 'node-agent', 'repair', 'Repair')`, groupID)
+	execSeed(t, db, "v2.5 Edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode,
+    context_source_kind, assignee_selection, thinking_selection
+) VALUES (?, ?, 'repair', ?, 'continue_session', 'previous_target_or_new', 'configured', 'configured')`,
+		edgeID,
+		groupID,
+		targetNodeID,
+	)
+	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "V25-1", now, now)
+	for _, session := range []struct {
+		id           string
+		nodeID       string
+		associatedAt int64
+	}{
+		{id: sourceSessionID, nodeID: "node-agent", associatedAt: now + 1},
+		{id: targetSessionID, nodeID: targetNodeID, associatedAt: now + 2},
+	} {
+		seedLegacyWorkflowSession(t, db, projectID, "workspace-"+session.id, session.id, now)
+		execSeed(t, db, "Session owner", `UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, session.id)
+		execSeed(t, db, "v2.5 association", `
+INSERT INTO session_workflow_node_associations (
+    session_id, node_id, transition_branch_key, associated_at_unix_ms
+) VALUES (?, ?, NULL, ?)`,
+			session.id,
+			session.nodeID,
+			session.associatedAt,
+		)
+	}
+	execSeed(t, db, "v2.5 Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin
+) VALUES (?, ?, NULL, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, 'default', 'configured_fallback')`,
+		taskID,
+		targetNodeID,
+		targetSessionID,
+		edgeID,
+	)
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 85); err != nil {
+		t.Fatalf("upgrade v2.5 Workflow state through provenance repair: %v", err)
+	}
+	var sourceKind, repairedSource string
+	var legacyMaterialized int64
+	if err := db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, taskID).Scan(&sourceKind, &repairedSource, &legacyMaterialized); err != nil {
+		t.Fatalf("read fully upgraded Current Node: %v", err)
+	}
+	if sourceKind != "exact" || repairedSource != sourceSessionID || legacyMaterialized != 0 {
+		t.Fatalf(
+			"fully upgraded Current Node = kind %q source %q legacy %d; want exact v2.5 source",
+			sourceKind,
+			repairedSource,
+			legacyMaterialized,
+		)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationInfersUniqueLatestEnteringSource(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-source-older", associatedAtOffset: 1},
+		{sessionID: "session-source-latest", associatedAtOffset: 2},
+	}, 3)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID string
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(
+		&sourceKind,
+		&sourceSessionID,
+		&legacyMaterialized,
+	); err != nil {
+		t.Fatalf("read repaired Current Node: %v", err)
+	}
+	if sourceKind != "exact" || sourceSessionID != "session-source-latest" || legacyMaterialized != 0 {
+		t.Fatalf(
+			"repaired Current Node = kind %q Session %q legacy %d; want exact latest source",
+			sourceKind,
+			sourceSessionID,
+			legacyMaterialized,
+		)
+	}
+	var status, associationSource string
+	if err := fixture.db.QueryRow(`
+SELECT association_status, source_session_id
+FROM session_workflow_node_associations
+WHERE task_id = ? AND session_id = ? AND node_id = ?`,
+		fixture.taskID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+	).Scan(&status, &associationSource); err != nil {
+		t.Fatalf("read repaired retained association: %v", err)
+	}
+	if status != "current" || associationSource != "session-source-latest" {
+		t.Fatalf(
+			"repaired retained association = status %q source %q; want current latest source",
+			status,
+			associationSource,
+		)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationLeavesTimestampTieUnresolved(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-source-a", associatedAtOffset: 2},
+		{sessionID: "session-source-b", associatedAtOffset: 2},
+	}, 3)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID sql.NullString
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(
+		&sourceKind,
+		&sourceSessionID,
+		&legacyMaterialized,
+	); err != nil {
+		t.Fatalf("read unresolved Current Node: %v", err)
+	}
+	if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
+		t.Fatalf(
+			"tied Current Node = kind %v Session %v legacy %d; want unresolved legacy",
+			sourceKind,
+			sourceSessionID,
+			legacyMaterialized,
+		)
+	}
+	var status string
+	var associationSource sql.NullString
+	if err := fixture.db.QueryRow(`
+SELECT association_status, source_session_id
+FROM session_workflow_node_associations
+WHERE task_id = ? AND session_id = ? AND node_id = ?`,
+		fixture.taskID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+	).Scan(&status, &associationSource); err != nil {
+		t.Fatalf("read unresolved retained association: %v", err)
+	}
+	if status != "historical" || associationSource.Valid {
+		t.Fatalf(
+			"tied retained association = status %q source %v; want unchanged historical",
+			status,
+			associationSource,
+		)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationRejectsSourceAfterRetainedTarget(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-source-future", associatedAtOffset: 4},
+	}, 3)
+
+	fixture.migrate(t)
+
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(&legacyMaterialized); err != nil {
+		t.Fatalf("read future-source Current Node: %v", err)
+	}
+	if legacyMaterialized != 1 {
+		t.Fatalf("future-source Current Node legacy = %d, want unresolved legacy", legacyMaterialized)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationRepairsAllActiveFanoutBranchesFromOneProvedSource(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-fanout-source", associatedAtOffset: 1},
+	}, 2)
+	execSeed(t, fixture.db, "remove serial repair Current Node", `
+DELETE FROM task_current_nodes WHERE task_id = ?`, fixture.taskID)
+	execSeed(t, fixture.db, "scope retained association to fanout branch", `
+UPDATE session_workflow_node_associations
+SET transition_branch_key = 'branch-a'
+WHERE task_id = ? AND session_id = ? AND node_id = ?`,
+		fixture.taskID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+	)
+	execSeed(t, fixture.db, "fanout sibling Edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode, context_source_kind,
+    assignee_selection, thinking_selection
+)
+SELECT ?, edge.transition_group_id, 'repair-b', ?, 'new_session', 'immediate_source',
+       'configured', 'configured'
+FROM workflow_edges edge
+WHERE edge.target_node_id = ? AND edge.edge_key = 'repair'`,
+		legacyProvenanceGraphID(t),
+		workflowGraphSeedID(t, fixture.db, "node-done"),
+		fixture.targetNodeID,
+	)
+	execSeed(t, fixture.db, "active Fan-Out", `
+INSERT INTO task_active_fanouts (task_id) VALUES (?)`, fixture.taskID)
+	execSeed(t, fixture.db, "active Fan-Out branches", `
+INSERT INTO task_active_fanout_branches (
+    task_id, transition_branch_key, arrival_state, arrival_values_json,
+    continuation_source_kind, continuation_source_session_id, legacy_materialized
+) VALUES
+    (?, 'branch-a', 'pending', NULL, NULL, NULL, 1),
+    (?, 'branch-b', 'arrived', '{}', NULL, NULL, 1)`,
+		fixture.taskID,
+		fixture.taskID,
+	)
+	execSeed(t, fixture.db, "legacy branch Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin, continuation_source_kind,
+    continuation_source_session_id, legacy_materialized
+) SELECT
+    ?, ?, 'branch-a', '{}', '{"transition_parameters":{}}', ?, 'ready',
+    edge.id, 'default', 'configured_fallback', NULL, NULL, 1
+FROM workflow_edges edge
+WHERE edge.target_node_id = ? AND edge.edge_key = 'repair'`,
+		fixture.taskID,
+		fixture.targetNodeID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+	)
+
+	fixture.migrate(t)
+
+	rows, err := fixture.db.Query(`
+SELECT transition_branch_key, continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_active_fanout_branches
+WHERE task_id = ?
+ORDER BY transition_branch_key`, fixture.taskID)
+	if err != nil {
+		t.Fatalf("read repaired Fan-Out branches: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var count int
+	for rows.Next() {
+		var branchKey, sourceKind, sourceSessionID string
+		var legacyMaterialized int64
+		if err := rows.Scan(&branchKey, &sourceKind, &sourceSessionID, &legacyMaterialized); err != nil {
+			t.Fatalf("scan repaired Fan-Out branch: %v", err)
+		}
+		if sourceKind != "exact" || sourceSessionID != "session-fanout-source" || legacyMaterialized != 0 {
+			t.Fatalf(
+				"repaired Fan-Out branch %q = kind %q Session %q legacy %d; want one proved source",
+				branchKey,
+				sourceKind,
+				sourceSessionID,
+				legacyMaterialized,
+			)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate repaired Fan-Out branches: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("repaired Fan-Out branch count = %d, want 2", count)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationRepairsPendingApprovalFromFrozenSourceSession(t *testing.T) {
+	t.Parallel()
+	const (
+		projectID  = "project-legacy-approval-repair"
+		taskID     = "task-legacy-approval-repair"
+		sessionID  = "session-legacy-approval-source"
+		approvalID = "approval-legacy-source"
+	)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 84)
+	if err != nil {
+		t.Fatalf("open version 84 metadata database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES (?, 'Legacy Approval repair', ?, ?, '{}')`, projectID, now, now)
+	seedWorkflowGraph(t, db, projectID, now)
+	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "APPROVAL-REPAIR-1", now, now)
+	seedLegacyWorkflowSession(t, db, projectID, "workspace-legacy-approval-source", sessionID, now)
+	execSeed(t, db, "source Session owner", `UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, sessionID)
+	sourceNodeID := workflowGraphSeedID(t, db, "node-agent")
+	execSeed(t, db, "source association", `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'current', ?, ?)`,
+		taskID,
+		sessionID,
+		sourceNodeID,
+		sessionID,
+		now,
+	)
+	execSeed(t, db, "source Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin, continuation_source_kind,
+    continuation_source_session_id, legacy_materialized
+) VALUES (?, ?, NULL, '{}', '{"transition_parameters":{}}', ?, 'ready', ?,
+          'default', 'configured_fallback', 'exact', ?, 0)`,
+		taskID,
+		sourceNodeID,
+		sessionID,
+		workflowGraphSeedID(t, db, "edge-start-1"),
+		sessionID,
+	)
+	execSeed(t, db, "pending Approval", `
+INSERT INTO task_pending_approvals (
+    id, source_task_id, source_node_id, source_transition_branch_key,
+    source_session_id, workflow_version, transition_snapshot_json,
+    materialized_values_json, created_at_unix_ms
+) VALUES (?, ?, ?, NULL, ?, 1, '{}', '{}', ?)`,
+		approvalID,
+		taskID,
+		sourceNodeID,
+		sessionID,
+		now,
+	)
+	execSeed(t, db, "pending Approval branch", `
+INSERT INTO task_pending_approval_branches (
+    approval_id, transition_branch_key, target_snapshot_json,
+    effective_edge_configuration_json, context_source_resolution_json
+) VALUES (
+    ?,
+    'target',
+    json_object(
+        'node_id', 'node-agent',
+        'display_name', 'Agent',
+        'current_input_values', json('{}'),
+        'prior_values', json('{"transition_parameters":{}}'),
+        'session_id', NULL
+    ),
+    json_object(
+        'id', 'edge-done-1',
+        'transition_group_id', 'group-done',
+        'target_node_id', 'node-agent',
+        'context_mode', 'continue_session'
+    ),
+    json_object(
+        'target_session', json_object('kind', 'create'),
+        'active_source', json_object('kind', 'legacy')
+    )
+)`, approvalID)
+
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 85); err != nil {
+		t.Fatalf("apply Workflow legacy Approval repair migration: %v", err)
+	}
+	var sourceKind, repairedSessionID string
+	if err := db.QueryRow(`
+SELECT
+    json_extract(context_source_resolution_json, '$.active_source.kind'),
+    json_extract(context_source_resolution_json, '$.active_source.session_id')
+FROM task_pending_approval_branches
+WHERE approval_id = ?`, approvalID).Scan(&sourceKind, &repairedSessionID); err != nil {
+		t.Fatalf("read repaired pending Approval: %v", err)
+	}
+	if sourceKind != "exact" || repairedSessionID != sessionID {
+		t.Fatalf(
+			"repaired pending Approval source = kind %q Session %q; want frozen exact source",
+			sourceKind,
+			repairedSessionID,
+		)
+	}
+}
+
+type legacyProvenanceSource struct {
+	sessionID          string
+	associatedAtOffset int64
+}
+
+type legacyProvenanceRepairFixture struct {
+	db              *sql.DB
+	taskID          string
+	targetNodeID    []byte
+	targetSessionID string
+}
+
+func seedWorkflowLegacyProvenanceRepairFixture(
+	t *testing.T,
+	sources []legacyProvenanceSource,
+	targetAssociatedAtOffset int64,
+) legacyProvenanceRepairFixture {
+	t.Helper()
+	const (
+		projectID       = "project-legacy-provenance-repair"
+		taskID          = "task-legacy-provenance-repair"
+		targetSessionID = "session-target"
+	)
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 84)
+	if err != nil {
+		t.Fatalf("open version 84 metadata database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := time.Now().UTC().UnixMilli()
+	execSeed(t, db, "project", `
+INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
+VALUES (?, 'Legacy provenance repair', ?, ?, '{}')`, projectID, now, now)
+	seedWorkflowGraph(t, db, projectID, now)
+	workflowID := workflowSeedID(t, db, "1")
+	targetNodeID := legacyProvenanceGraphID(t)
+	groupID := legacyProvenanceGraphID(t)
+	edgeID := legacyProvenanceGraphID(t)
+	sourceNodeID := workflowGraphSeedID(t, db, "node-agent")
+	execSeed(t, db, "repair target Node", `
+INSERT INTO workflow_nodes (id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode)
+VALUES (?, ?, 'repair_target', 'agent', 'Repair target', 'default', 'tool')`,
+		targetNodeID,
+		workflowID,
+	)
+	execSeed(t, db, "repair Transition", `
+INSERT INTO workflow_transition_groups (id, source_node_id, transition_id, display_name)
+VALUES (?, ?, 'repair', 'Repair')`,
+		groupID,
+		sourceNodeID,
+	)
+	execSeed(t, db, "repair Edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode, context_source_kind,
+    assignee_selection, thinking_selection
+) VALUES (?, ?, 'repair', ?, 'continue_session', 'previous_target_or_new', 'configured', 'configured')`,
+		edgeID,
+		groupID,
+		targetNodeID,
+	)
+	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "REPAIR-1", now, now)
+	for _, source := range sources {
+		seedLegacyWorkflowSession(t, db, projectID, "workspace-"+source.sessionID, source.sessionID, now)
+		execSeed(t, db, "source Session owner", `UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, source.sessionID)
+		execSeed(t, db, "source association", `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'historical', NULL, ?)`,
+			taskID,
+			source.sessionID,
+			sourceNodeID,
+			now+source.associatedAtOffset,
+		)
+	}
+	seedLegacyWorkflowSession(t, db, projectID, "workspace-target", targetSessionID, now)
+	execSeed(t, db, "target Session owner", `UPDATE sessions SET task_id = ? WHERE id = ?`, taskID, targetSessionID)
+	execSeed(t, db, "target association", `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'historical', NULL, ?)`,
+		taskID,
+		targetSessionID,
+		targetNodeID,
+		now+targetAssociatedAtOffset,
+	)
+	execSeed(t, db, "legacy Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin, continuation_source_kind,
+    continuation_source_session_id, legacy_materialized
+) VALUES (?, ?, NULL, '{}', '{"transition_parameters":{}}', ?, 'ready', ?, 'default', 'configured_fallback', NULL, NULL, 1)`,
+		taskID,
+		targetNodeID,
+		targetSessionID,
+		edgeID,
+	)
+	return legacyProvenanceRepairFixture{
+		db:              db,
+		taskID:          taskID,
+		targetNodeID:    targetNodeID,
+		targetSessionID: targetSessionID,
+	}
+}
+
+func (f legacyProvenanceRepairFixture) migrate(t *testing.T) {
+	t.Helper()
+	provider, err := newMetadataMigrationProvider(f.db)
+	if err != nil {
+		t.Fatalf("create migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 85); err != nil {
+		t.Fatalf("apply Workflow legacy provenance repair migration: %v", err)
+	}
+}
+
+func legacyProvenanceGraphID(t *testing.T) []byte {
+	t.Helper()
+	raw, err := runtimeids.GraphEntityIDBlob(runtimeids.NewGraphEntityID())
+	if err != nil {
+		t.Fatalf("encode Workflow graph fixture identity: %v", err)
+	}
+	return raw
+}

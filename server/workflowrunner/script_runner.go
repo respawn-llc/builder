@@ -88,7 +88,10 @@ func (s *Starter) startCurrentNodeScript(
 				OutputValues: parsed.OutputValues,
 				Commentary:   parsed.Commentary,
 			})
-			return err
+			if err != nil {
+				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
+			}
+			return nil
 		},
 	})
 	return err
