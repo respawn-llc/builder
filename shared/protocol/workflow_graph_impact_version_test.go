@@ -9,8 +9,8 @@ import (
 )
 
 func TestWorkflowGraphImpactHardCutoverChangesProtocolFixture(t *testing.T) {
-	if protocol.Version != "117" {
-		t.Fatalf("Workflow graph identity hard cutover protocol version = %q, want 117", protocol.Version)
+	if protocol.Version != "118" {
+		t.Fatalf("Workflow graph identity hard cutover protocol version = %q, want 118", protocol.Version)
 	}
 	const edgeID = "55555555-5555-4555-8555-555555555555"
 	response := protocol.NewSuccessResponse("request", serverapi.WorkflowGraphSavePreviewResponse{
