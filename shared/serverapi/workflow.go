@@ -1686,6 +1686,27 @@ type WorkflowTaskActivityListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskActivityItem]
 }
 
+type WorkflowTaskSessionStatus string
+
+const (
+	WorkflowTaskSessionStatusRunning  WorkflowTaskSessionStatus = "running"
+	WorkflowTaskSessionStatusQuestion WorkflowTaskSessionStatus = "question"
+	WorkflowTaskSessionStatusIdle     WorkflowTaskSessionStatus = "idle"
+)
+
+type WorkflowTaskSessionItem struct {
+	SessionID   string                    `json:"session_id"`
+	SessionName *string                   `json:"session_name,omitempty"`
+	NodeName    *string                   `json:"node_name,omitempty"`
+	AgentRole   string                    `json:"agent_role"`
+	Status      WorkflowTaskSessionStatus `json:"status"`
+}
+
+type WorkflowTaskSessionListResponse struct {
+	TaskID string `json:"task_id"`
+	WorkflowOffsetPage[WorkflowTaskSessionItem]
+}
+
 type WorkflowTaskSummary struct {
 	ID                string                `json:"id"`
 	ProjectID         string                `json:"project_id"`

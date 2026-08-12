@@ -41,6 +41,28 @@
 {{.}}    ELSE NULL
 {{.}}END{{end}}
 
+{{define "taskSessionProjectionFields"}}
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+{{end}}
+
+{{define "taskSessionProjectionJoins"}}
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+{{end}}
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -2355,6 +2377,31 @@ ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
 WHERE task_id = sqlc.arg(task_id);
+
+-- name: ListIdleWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM sessions session INDEXED BY sessions_task_activity_idx
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(sqlc.arg(excluded_session_ids_json) AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
+
+-- name: ListActiveWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
+CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
+    ON session.id = CAST(active.value AS TEXT)
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id);
 
 -- name: GetLatestSerialTaskSessionAssociationForNode :one
 SELECT

@@ -2179,6 +2179,17 @@ func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wo
 	return response, nil
 }
 
+func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	response, err := s.readModels.TaskSessions.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	return response, nil
+}
+
 func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
