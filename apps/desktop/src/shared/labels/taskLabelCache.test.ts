@@ -2,7 +2,7 @@ import type { InfiniteData } from "@tanstack/react-query";
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
 
-import type { BoardCard, BoardNodeCardsPage } from "@/api";
+import type { BoardCard, BoardNodeCardsPage, TaskListPage } from "@/api";
 import { queryKeys } from "@/app-facade";
 import {
   patchExistingTaskLabelProjections,
@@ -27,14 +27,47 @@ describe("task label board-cache projections", () => {
     expect(data?.pages[0]?.cards[0]?.labelIDs).toEqual(["label-new"]);
   });
 
+  it("patches retained Task-list display records in catalog order", () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(taskListCacheKey, taskListData());
+
+    patchExistingTaskLabelProjections(queryClient, "task-1", [betaID, alphaID], [
+      { id: alphaID, name: "Alpha" },
+      { id: betaID, name: "Beta" },
+    ]);
+
+    expect(
+      queryClient.getQueryData<InfiniteData<TaskListPage, number>>(taskListCacheKey)?.pages[0]?.tasks[0]
+        ?.labels,
+    ).toEqual([
+      { id: alphaID, name: "Alpha" },
+      { id: betaID, name: "Beta" },
+    ]);
+  });
+
+  it("preserves non-page Task-list projections while patching retained pages", () => {
+    const queryClient = new QueryClient();
+    const countsKey = [...queryKeys.allTaskLists, "project-1", "counts"];
+    const counts = {
+      projectID: "project-1",
+      counts: { active: 1, backlog: 0, done: 0 },
+      generatedAt: 0,
+    };
+    queryClient.setQueryData(countsKey, counts);
+
+    patchExistingTaskLabelProjections(queryClient, "task-1", [alphaID], [
+      { id: alphaID, name: "Alpha" },
+    ]);
+
+    expect(queryClient.getQueryData(countsKey)).toEqual(counts);
+  });
+
   it("preserves numeric board offsets when removing a deleted task", () => {
     const queryClient = new QueryClient();
     queryClient.setQueryData(boardCacheKey, boardCardsData(["task-1", "task-2"]));
     queryClient.setQueryData(taskListCacheKey, {
-      tasks: [
-        { id: "task-1", labelIDs: [] },
-        { id: "task-2", labelIDs: [] },
-      ],
+      pageParams: [0],
+      pages: [{ ...taskListData().pages[0], tasks: [taskListItem("task-1"), taskListItem("task-2")] }],
     });
     queryClient.setQueryData(queryKeys.task("task-1"), { id: "task-1", labelIDs: [] });
     queryClient.setQueryData(queryKeys.taskLabels("task-1"), { taskID: "task-1", labelIDs: [] });
@@ -46,8 +79,8 @@ describe("task label board-cache projections", () => {
     expect(data?.pages[0]?.cards.map((card) => card.id)).toEqual(["task-2"]);
     expect(
       queryClient
-        .getQueryData<Readonly<{ tasks: readonly Readonly<{ id: string }>[] }>>(taskListCacheKey)
-        ?.tasks.map((task) => task.id),
+        .getQueryData<InfiniteData<TaskListPage, number>>(taskListCacheKey)
+        ?.pages[0]?.tasks.map((task) => task.id),
     ).toEqual(["task-2"]);
     expect(queryClient.getQueryData(queryKeys.task("task-1"))).toBeUndefined();
     expect(queryClient.getQueryData(queryKeys.taskLabels("task-1"))).toBeUndefined();
@@ -72,7 +105,21 @@ describe("task label board-cache projections", () => {
     });
     queryClient.setQueryData(boardCacheKey, boardCardsData(["task-1"]));
     queryClient.setQueryData(taskListCacheKey, {
-      tasks: [{ id: "task-1", labelIDs: [alphaID, betaID] }],
+      pageParams: [0],
+      pages: [
+        {
+          ...taskListData().pages[0],
+          tasks: [
+            {
+              ...taskListItem("task-1"),
+              labels: [
+                { id: alphaID, name: "Alpha" },
+                { id: betaID, name: "Beta" },
+              ],
+            },
+          ],
+        },
+      ],
     });
     patchExistingTaskLabelProjections(queryClient, "task-1", [alphaID, betaID]);
 
@@ -94,10 +141,9 @@ describe("task label board-cache projections", () => {
         ?.labelIDs,
     ).toEqual([betaID]);
     expect(
-      queryClient.getQueryData<Readonly<{ tasks: readonly Readonly<{ labelIDs: readonly string[] }>[] }>>(
-        taskListCacheKey,
-      )?.tasks[0]?.labelIDs,
-    ).toEqual([betaID]);
+      queryClient.getQueryData<InfiniteData<TaskListPage, number>>(taskListCacheKey)?.pages[0]?.tasks[0]
+        ?.labels,
+    ).toEqual([{ id: betaID, name: "Beta" }]);
   });
 });
 
@@ -114,6 +160,46 @@ function boardCardsData(taskIDs: readonly string[]): InfiniteData<BoardNodeCards
         generatedAt: 0,
       },
     ],
+  };
+}
+
+function taskListData(): InfiniteData<TaskListPage, number> {
+  return {
+    pageParams: [0],
+    pages: [
+      {
+        scope: { projectID: "project-1", workflowID: null },
+        matchingWorkflowCardinality: "one",
+        nextOffset: null,
+        generatedAt: 0,
+        tasks: [
+          {
+            ...taskListItem("task-1"),
+          },
+        ],
+      },
+    ],
+  };
+}
+
+function taskListItem(id: string): TaskListPage["tasks"][number] {
+  return {
+    id,
+    shortID: id,
+    workflowID: "workflow-1",
+    workflowName: "Delivery",
+    title: id,
+    createdAt: 0,
+    updatedAt: 0,
+    columnKeys: null,
+    status: {
+      kind: "backlog",
+      nativeState: "backlog",
+      nodeIDs: [],
+      attentionTypes: [],
+    },
+    labels: [],
+    dependencyProgress: null,
   };
 }
 

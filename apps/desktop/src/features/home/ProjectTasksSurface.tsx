@@ -134,6 +134,7 @@ export function ProjectTasksSurface({
     onLabelsActivate: toggleLabelEditor,
     onTaskActivate: openTaskDetail,
     onToggle: toggleGroup,
+    projectID,
     taskDetailID,
     t,
   });
@@ -161,6 +162,7 @@ function projectTasksPresentation({
   onLabelsActivate,
   onTaskActivate,
   onToggle,
+  projectID,
   taskDetailID,
   t,
 }: Readonly<{
@@ -171,6 +173,7 @@ function projectTasksPresentation({
   onLabelsActivate: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
   onToggle: (group: ProjectTaskGroup) => void;
+  projectID: string;
   taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
 }>): Readonly<{
@@ -197,6 +200,7 @@ function projectTasksPresentation({
       onLabelsActivate,
       onTaskActivate,
       onToggle,
+      projectID,
       taskDetailID,
       t,
     }),
@@ -355,6 +359,7 @@ function groupedEntries({
   onLabelsActivate,
   onTaskActivate,
   onToggle,
+  projectID,
   taskDetailID,
   t,
 }: Readonly<{
@@ -365,6 +370,7 @@ function groupedEntries({
   onLabelsActivate: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
   onToggle: (group: ProjectTaskGroup) => void;
+  projectID: string;
   taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
 }>): readonly VirtualizedGroupedGridEntry[] {
@@ -408,6 +414,7 @@ function groupedEntries({
               labelEditorTaskID,
               onLabelsActivate,
               onTaskActivate,
+              projectID,
               task,
               taskDetailID,
               t,

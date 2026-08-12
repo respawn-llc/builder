@@ -5,8 +5,9 @@ import type { useTranslation } from "react-i18next";
 import type { TaskListItem } from "@/api";
 import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
-import { Badge, OneLineOverflowRow, type VirtualizedGroupedGridEntry } from "@/ui";
+import { type VirtualizedGroupedGridEntry } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
+import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 
 export const projectTaskColumnCount = 6;
@@ -44,6 +45,7 @@ export function projectTaskEntry({
   labelEditorTaskID,
   onLabelsActivate,
   onTaskActivate,
+  projectID,
   task,
   taskDetailID,
   t,
@@ -52,6 +54,7 @@ export function projectTaskEntry({
   labelEditorTaskID: string | null;
   onLabelsActivate: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
+  projectID: string;
   task: TaskListItem;
   taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
@@ -143,25 +146,17 @@ export function projectTaskEntry({
         key: "labels",
         className: "min-w-0",
         content: (
-          <button
-            aria-expanded={labelEditorTaskID === task.id}
-            aria-label={t("home.prototype.editTaskLabels", { shortID: task.shortID })}
-            className="block h-full w-full min-w-0 rounded-[var(--radius-s)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)]"
-            onClick={(event) => {
-              event.stopPropagation();
-              onLabelsActivate(task.id);
+          <ProjectTaskLabelsCell
+            onOpenChange={(open) => {
+              if (open !== (labelEditorTaskID === task.id)) {
+                onLabelsActivate(task.id);
+              }
             }}
-            type="button"
-          >
-            <OneLineOverflowRow
-              ariaLabel={t("labels.filter")}
-              items={task.labels.map((label) => ({
-                content: <Badge tone="neutral">{label.name}</Badge>,
-                id: label.id,
-              }))}
-              renderOverflow={(hiddenCount) => <Badge tone="neutral">+{hiddenCount}</Badge>}
-            />
-          </button>
+            open={labelEditorTaskID === task.id}
+            projectID={projectID}
+            task={task}
+            t={t}
+          />
         ),
       },
     ],

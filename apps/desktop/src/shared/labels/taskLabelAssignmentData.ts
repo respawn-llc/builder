@@ -41,12 +41,14 @@ type AssignmentBasis = Readonly<{
 
 export function useManagedTaskLabelAssignment({
   availableLabelIDs,
+  enabled = true,
   projectID,
   scheduleCatalogRefresh,
   scheduleTaskAssignmentRefresh,
   taskID,
 }: Readonly<{
   availableLabelIDs: readonly string[];
+  enabled?: boolean | undefined;
   projectID: string;
   scheduleCatalogRefresh(): void;
   scheduleTaskAssignmentRefresh(taskID: string): void;
@@ -55,7 +57,6 @@ export function useManagedTaskLabelAssignment({
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const assignmentKey = queryKeys.taskLabels(taskID);
-  const taskKey = queryKeys.task(taskID);
   const catalogKey = queryKeys.projectLabels(projectID);
   const assignment = useQuery({
     queryKey: assignmentKey,
@@ -64,14 +65,18 @@ export function useManagedTaskLabelAssignment({
       assertTaskAssignment(loaded, taskID);
       return loaded;
     },
+    enabled,
     retry: false,
   });
   const [local, setLocal] = useState<LocalAssignmentState>(emptyLocalState);
   const mounted = useRef(false);
   const launched = useRef<AssignmentIntent | null>(null);
 
-  const isTaskLive = useStableCallback(
-    (): boolean => mounted.current && queryClient.getQueryData(taskKey) !== undefined,
+  const isMountedOwnerLive = useStableCallback((): boolean => mounted.current);
+  const canMutateTask = useStableCallback(
+    (): boolean =>
+      isMountedOwnerLive() &&
+      queryClient.getQueryData<TaskLabelAssignment>(assignmentKey) !== undefined,
   );
   const clearIfMounted = useStableCallback((): void => {
     if (mounted.current) {
@@ -103,7 +108,7 @@ export function useManagedTaskLabelAssignment({
         intent.desiredSelected ? [] : [intent.labelID],
       );
       assertTaskAssignment(response, taskID);
-      if (!isTaskLive()) {
+      if (!canMutateTask()) {
         clearIfMounted();
         return;
       }
@@ -111,13 +116,17 @@ export function useManagedTaskLabelAssignment({
         { queryKey: assignmentKey, exact: true },
         { revert: false, silent: true },
       );
-      if (!isTaskLive()) {
+      if (!canMutateTask()) {
         clearIfMounted();
         return;
       }
       const catalog = readCatalog();
       if (catalog === undefined) {
         setLocal((state) => settleAssignmentSuccess(state, intent, null, null));
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.projectTaskListsRoot(projectID),
+          refetchType: "active",
+        });
         scheduleCatalogRefresh();
         scheduleTaskAssignmentRefresh(taskID);
         return;
@@ -125,11 +134,11 @@ export function useManagedTaskLabelAssignment({
       const available = new Set(catalog.labels.map((label) => label.id));
       const installed = response.labelIDs.filter((labelID) => available.has(labelID));
       patchExistingTaskLabelAssignment(queryClient, { taskID, labelIDs: installed });
-      patchExistingTaskLabelProjections(queryClient, taskID, installed);
+      patchExistingTaskLabelProjections(queryClient, taskID, installed, catalog.labels);
       setLocal((state) => settleAssignmentSuccess(state, intent, installed, available));
       scheduleTaskAssignmentRefresh(taskID);
     } catch (error: unknown) {
-      if (!isTaskLive()) {
+      if (!canMutateTask()) {
         clearIfMounted();
         return;
       }
@@ -164,15 +173,15 @@ export function useManagedTaskLabelAssignment({
       return;
     }
     launched.current = intent;
-    if (!isTaskLive()) {
+    if (!canMutateTask()) {
       clearIfMounted();
       return;
     }
     void runIntent(intent);
-  }, [clearIfMounted, isTaskLive, local.inFlight, runIntent]);
+  }, [canMutateTask, clearIfMounted, local.inFlight, runIntent]);
 
   useEffect(() => {
-    if (!isTaskLive()) {
+    if (!canMutateTask()) {
       clearIfMounted();
       return;
     }
@@ -186,13 +195,14 @@ export function useManagedTaskLabelAssignment({
       queryClient,
       taskID,
       base.labelIDs.filter((labelID) => available.has(labelID)),
+      catalog.labels,
     );
     setLocal((state) => prepareNext(state, base.labelIDs, available));
   }, [
     assignment.data,
     availableLabelIDs,
     clearIfMounted,
-    isTaskLive,
+    canMutateTask,
     queryClient,
     readAssignment,
     readCatalog,
@@ -200,7 +210,7 @@ export function useManagedTaskLabelAssignment({
   ]);
 
   const setSelected = useStableCallback((labelID: string, selected: boolean): void => {
-    if (!isTaskLive()) {
+    if (!canMutateTask()) {
       clearIfMounted();
       return;
     }
@@ -226,7 +236,7 @@ export function useManagedTaskLabelAssignment({
   });
 
   const retry = useStableCallback((labelID: string): void => {
-    if (!isTaskLive()) {
+    if (!canMutateTask()) {
       clearIfMounted();
       return;
     }
@@ -240,7 +250,7 @@ export function useManagedTaskLabelAssignment({
   });
 
   const retryLoad = useStableCallback((): void => {
-    if (!isTaskLive()) {
+    if (!canMutateTask()) {
       clearIfMounted();
       return;
     }

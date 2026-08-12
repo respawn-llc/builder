@@ -2,7 +2,9 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
 import type {
   BoardNodeCardsPage,
+  ProjectLabel,
   ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
   TaskDetail,
   TaskLabelAssignment,
   TaskListPage,
@@ -13,6 +15,7 @@ export function patchExistingTaskLabelProjections(
   queryClient: QueryClient,
   taskID: string,
   labelIDs: readonly string[],
+  catalogLabels?: readonly ProjectLabel[],
 ): void {
   const detailKey = queryKeys.task(taskID);
   const detail = queryClient.getQueryData<TaskDetail>(detailKey);
@@ -22,14 +25,22 @@ export function patchExistingTaskLabelProjections(
       labelIDs: [...labelIDs],
     });
   }
-  transformExistingPagedTaskLabels(queryClient, (candidateTaskID, currentLabelIDs) =>
+  transformExistingBoardTaskLabels(queryClient, (candidateTaskID, currentLabelIDs) =>
     candidateTaskID === taskID ? labelIDs : currentLabelIDs,
+  );
+  if (catalogLabels === undefined) {
+    return;
+  }
+  const assigned = new Set(labelIDs);
+  const labels = catalogLabels.filter((label) => assigned.has(label.id));
+  transformExistingTaskListPages(queryClient, (task) =>
+    task.id === taskID ? { ...task, labels } : task,
   );
 }
 
 type TaskLabelTransform = (taskID: string, labelIDs: readonly string[]) => readonly string[];
 
-function transformExistingPagedTaskLabels(queryClient: QueryClient, transform: TaskLabelTransform): void {
+function transformExistingBoardTaskLabels(queryClient: QueryClient, transform: TaskLabelTransform): void {
   queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, number>>(
     { queryKey: queryKeys.allBoardNodeCards },
     (data) => {
@@ -48,18 +59,6 @@ function transformExistingPagedTaskLabels(queryClient: QueryClient, transform: T
       };
     },
   );
-  queryClient.setQueriesData<TaskListPage>({ queryKey: queryKeys.allTaskLists }, (page) => {
-    if (page === undefined) {
-      return undefined;
-    }
-    return {
-      ...page,
-      tasks: page.tasks.map((task) => ({
-        ...task,
-        labelIDs: [...transform(task.id, task.labelIDs)],
-      })),
-    };
-  });
 }
 
 export function patchExistingTaskLabelAssignment(
@@ -114,9 +113,13 @@ export function pruneDeletedLabelFromExistingCaches(
           labelIDs: detail.labelIDs.filter((assignedLabelID) => assignedLabelID !== labelID),
         },
   );
-  transformExistingPagedTaskLabels(queryClient, (_taskID, labelIDs) =>
+  transformExistingBoardTaskLabels(queryClient, (_taskID, labelIDs) =>
     labelIDs.filter((assignedLabelID) => assignedLabelID !== labelID),
   );
+  transformExistingTaskListPages(queryClient, (task) => ({
+    ...task,
+    labels: task.labels.filter((label) => label.id !== labelID),
+  }));
 }
 
 export function removeDeletedTaskFromExistingCaches(queryClient: QueryClient, taskID: string): void {
@@ -141,12 +144,29 @@ export function removeDeletedTaskFromExistingCaches(queryClient: QueryClient, ta
             })),
           },
   );
-  queryClient.setQueriesData<TaskListPage>({ queryKey: queryKeys.allTaskLists }, (page) =>
-    page === undefined
-      ? undefined
-      : {
-          ...page,
-          tasks: page.tasks.filter((task) => task.id !== taskID),
-        },
-  );
+  transformExistingTaskListPages(queryClient, (task) => (task.id === taskID ? null : task));
+}
+
+type TaskListItem = TaskListPage["tasks"][number];
+type TaskListCacheData = InfiniteData<TaskListPage, number> | ProjectTaskGroupCounts;
+
+function transformExistingTaskListPages(
+  queryClient: QueryClient,
+  transform: (task: TaskListItem) => TaskListItem | null,
+): void {
+  queryClient.setQueriesData<TaskListCacheData>({ queryKey: queryKeys.allTaskLists }, (data) => {
+    if (data === undefined || !("pages" in data)) {
+      return data;
+    }
+    return {
+      ...data,
+      pages: data.pages.map((page) => ({
+        ...page,
+        tasks: page.tasks.flatMap((task) => {
+          const transformed = transform(task);
+          return transformed === null ? [] : [transformed];
+        }),
+      })),
+    };
+  });
 }

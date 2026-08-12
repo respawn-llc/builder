@@ -6,9 +6,11 @@ import { useProjectLabelData } from "./projectLabelContext";
 
 export function TaskLabelAssignmentProvider({
   children,
+  enabled = true,
   taskID,
 }: Readonly<{
   children: ReactNode;
+  enabled?: boolean | undefined;
   taskID: string;
 }>) {
   const { catalog, effects, projectID } = useProjectLabelData();
@@ -18,6 +20,7 @@ export function TaskLabelAssignmentProvider({
   );
   const assignment = useManagedTaskLabelAssignment({
     availableLabelIDs,
+    enabled,
     projectID,
     scheduleCatalogRefresh: effects.scheduleCatalogRefresh,
     scheduleTaskAssignmentRefresh: effects.scheduleTaskAssignmentRefresh,

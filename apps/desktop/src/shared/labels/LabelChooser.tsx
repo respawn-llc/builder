@@ -8,6 +8,7 @@ import {
   useState,
   type Dispatch,
   type ReactElement,
+  type ReactNode,
   type SetStateAction,
 } from "react";
 import { useTranslation } from "react-i18next";
@@ -51,6 +52,7 @@ export type LabelChooserInvocation =
       onAction(action: LabelFilterAction): void;
     }>
   | Readonly<{
+      disabled?: boolean | undefined;
       kind: "assignment";
       selectedLabelIDs: readonly string[];
       onCreatePendingChange?(pending: boolean): void;
@@ -58,7 +60,10 @@ export type LabelChooserInvocation =
     }>;
 
 export type LabelChooserProps = Readonly<{
+  footer?: ReactNode;
   invocation: LabelChooserInvocation;
+  onOpenChange?: ((open: boolean) => void) | undefined;
+  open?: boolean | undefined;
   trigger: ReactElement;
 }>;
 
@@ -172,7 +177,13 @@ function renderLabelChooserSearch({
   );
 }
 
-export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
+export function LabelChooser({
+  footer,
+  invocation,
+  onOpenChange,
+  open: controlledOpen,
+  trigger,
+}: LabelChooserProps) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const { push } = useStatusController();
@@ -180,7 +191,8 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
   const mutations = useProjectLabelCatalogMutations();
   const [search, setSearch] = useState("");
   const [keyboardHighlightedIndex, setKeyboardHighlightedIndex] = useState<number | null>(null);
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
   const [rename, setRename] = useState<RenameState | null>(null);
   const [deletion, setDeletion] = useState<DeleteState | null>(null);
   const outsideInteractionRef = useRef(false);
@@ -226,7 +238,10 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           return;
         }
         outsideInteractionRef.current = false;
-        setOpen(nextOpen);
+        if (controlledOpen === undefined) {
+          setUncontrolledOpen(nextOpen);
+        }
+        onOpenChange?.(nextOpen);
         if (!nextOpen) {
           setSearch("");
           setKeyboardHighlightedIndex(null);
@@ -323,6 +338,7 @@ export function LabelChooser({ invocation, trigger }: LabelChooserProps) {
           reorderEnabled,
           catalogMutationPending,
         })}
+        {footer}
       </PopoverContent>
     </Popover>
   );
@@ -555,6 +571,7 @@ function renderLabelChooserChoiceRow({
       }}
       reorder={sortable}
       selection={selection}
+      selectionDisabled={invocation.kind === "assignment" && invocation.disabled === true}
     />
   );
   if (sortable === undefined) {

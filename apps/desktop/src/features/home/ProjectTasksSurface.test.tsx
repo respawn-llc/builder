@@ -1,7 +1,9 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
-import type { ProjectTaskGroupCounts, TaskListItem } from "@/api";
+import { canonicalBoardFilter, type ProjectTaskGroupCounts, type TaskListItem } from "@/api";
+import { queryKeys } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
@@ -24,6 +26,8 @@ const fixture = vi.hoisted<{
   };
   counts: ProjectTaskGroupCounts["counts"];
   open: ReturnType<typeof vi.fn>;
+  labelCatalogRequests: number;
+  assignmentRequests: number;
 }>(() => ({
   activeDestination: null,
   board: {
@@ -41,19 +45,35 @@ const fixture = vi.hoisted<{
   },
   counts: { active: 2, backlog: 1, done: 1 },
   open: vi.fn(),
-}));
-
-vi.mock("@tanstack/react-query", () => ({
-  useQuery: () => fixture.board,
+  labelCatalogRequests: 0,
+  assignmentRequests: 0,
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
   ...(await importOriginal()),
   useAppNavigation: () => ({ openProject: vi.fn() }),
-  useAppServices: () => ({ api: {} }),
+  useAppServices: () => ({
+    api: {
+      getBoard: async () => fixture.board.data,
+      getTaskLabels: async (taskID: string) => {
+        fixture.assignmentRequests += 1;
+        return { taskID, labelIDs: [] };
+      },
+      listProjectLabels: async () => {
+        fixture.labelCatalogRequests += 1;
+        return {
+          projectID: "project-1",
+          labels: [{ id: "label-1", name: "Priority" }],
+        };
+      },
+    },
+    logger: { append: vi.fn() },
+    nativeBridge: { capabilities: { platform: "macos" } },
+  }),
   useConnectionSnapshot: () => ({ generation: 1, phase: "disconnected" }),
   useOwnedSidebarRoots: () => ({ open: fixture.open }),
   useSidebarShell: () => ({ activeDestination: fixture.activeDestination }),
+  useStatusController: () => ({ dismiss: vi.fn(), push: vi.fn() }),
 }));
 
 vi.mock("./projectTaskListData", async (importOriginal) => {
@@ -84,6 +104,8 @@ describe("ProjectTasksSurface", () => {
     fixture.counts = { active: 2, backlog: 1, done: 1 };
     fixture.activeDestination = null;
     fixture.open.mockReset();
+    fixture.labelCatalogRequests = 0;
+    fixture.assignmentRequests = 0;
     mockedActiveTasks = undefined;
   });
 
@@ -119,7 +141,7 @@ describe("ProjectTasksSurface", () => {
     expect(screen.getByRole("button", { name: "New Task" })).toBeDisabled();
 
     fixture.counts = { active: 2, backlog: 0, done: 0 };
-    view.rerender(surface());
+    view.rerender(withQueryClient(surface()));
     expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Backlog/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Done/ })).not.toBeInTheDocument();
@@ -168,7 +190,7 @@ describe("ProjectTasksSurface", () => {
     });
 
     fixture.activeDestination = { kind: "taskDetail", mode: "overlay", taskID: "active-1" };
-    view.rerender(surface(createProjectTasksViewMemory(), "shift"));
+    view.rerender(withQueryClient(surface(createProjectTasksViewMemory(), "shift")));
     fireEvent.click(screen.getByRole("row", { name: "KNT-LONG-1001 Canonical row" }));
     expect(fixture.open).toHaveBeenLastCalledWith({
       kind: "taskDetail",
@@ -177,7 +199,7 @@ describe("ProjectTasksSurface", () => {
     });
 
     fixture.activeDestination = null;
-    view.rerender(surface(createProjectTasksViewMemory(), "shift"));
+    view.rerender(withQueryClient(surface(createProjectTasksViewMemory(), "shift")));
     fireEvent.click(screen.getByRole("row", { name: "KNT-LONG-1001 Canonical row" }));
     expect(fixture.open).toHaveBeenLastCalledWith({
       kind: "taskDetail",
@@ -208,7 +230,7 @@ describe("ProjectTasksSurface", () => {
     expect(fixture.open).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps Labels as the only cell action and applies last-wins selection while it is open", () => {
+  it("keeps Labels as the only cell action and applies last-wins selection while it is open", async () => {
     fixture.activeDestination = { kind: "taskDetail", mode: "shift", taskID: "active-1" };
     renderSurface(createProjectTasksViewMemory(), "shift", [
       task("active-1", "KNT-1", "Detail selected"),
@@ -223,14 +245,25 @@ describe("ProjectTasksSurface", () => {
     expect(detailRow).toHaveAttribute("aria-selected", "true");
     expect(labelsRow).toHaveAttribute("aria-selected", "false");
 
+    expect(fixture.labelCatalogRequests).toBe(0);
+    expect(fixture.assignmentRequests).toBe(0);
     fireEvent.click(screen.getByRole("button", { name: "Edit labels for KNT-2" }));
     expect(fixture.open).not.toHaveBeenCalled();
     expect(detailRow).toHaveAttribute("aria-selected", "false");
     expect(labelsRow).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("textbox", { name: "Search or create labels" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fixture.labelCatalogRequests).toBe(1);
+      expect(fixture.assignmentRequests).toBe(1);
+    });
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit labels for KNT-2" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search or create labels" }), {
+      key: "Escape",
+    });
     expect(detailRow).toHaveAttribute("aria-selected", "true");
     expect(labelsRow).toHaveAttribute("aria-selected", "false");
+    expect(fixture.labelCatalogRequests).toBe(1);
+    expect(fixture.assignmentRequests).toBe(1);
   });
 });
 
@@ -243,7 +276,7 @@ function renderSurface(
     fixture.counts = { active: activeTasks.length, backlog: 0, done: 0 };
     mockedActiveTasks = activeTasks;
   }
-  return render(surface(memory, sidebarMode));
+  return render(withQueryClient(surface(memory, sidebarMode)));
 }
 
 function surface(memory = createProjectTasksViewMemory(), sidebarMode: "overlay" | "shift" = "shift") {
@@ -252,6 +285,17 @@ function surface(memory = createProjectTasksViewMemory(), sidebarMode: "overlay"
       <ProjectTasksSurface projectID="project-1" sidebarMode={sidebarMode} viewMemory={memory} />
     </I18nextProvider>
   );
+}
+
+function withQueryClient(children: React.ReactNode) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  queryClient.setQueryData(
+    queryKeys.board("project-1", undefined, canonicalBoardFilter({ kind: "none" })),
+    fixture.board.data,
+  );
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
 function countsQuery(counts: ProjectTaskGroupCounts["counts"]) {
