@@ -577,8 +577,9 @@ func newRuntimeControlTestServiceWithEventFeed(
 				Questions:      runtime.DefaultQuestionsEnabled,
 				AutoCompaction: runtime.DefaultAutoCompactionEnabled,
 			},
-			FastAvailable:      true,
-			QuestionsAvailable: true,
+			SupportedThinkingValues: []string{"low", "medium", "high"},
+			FastAvailable:           true,
+			QuestionsAvailable:      true,
 		},
 	})
 	return store, engine, service

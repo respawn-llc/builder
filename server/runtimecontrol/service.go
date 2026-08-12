@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -420,7 +421,17 @@ func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSet
 		_, accepted, mutationErr := s.mutateChatSettings(
 			ctx,
 			req.SessionID,
-			func(context.Context, *session.Store, *runtime.Engine) (session.ChatSettingsMutation, error) {
+			func(ctx context.Context, store *session.Store, _ *runtime.Engine) (session.ChatSettingsMutation, error) {
+				prepared, err := s.prepareChatSettings(ctx, req.SessionID, store)
+				if err != nil {
+					return session.ChatSettingsMutation{}, err
+				}
+				if !slices.Contains(prepared.SupportedThinkingValues, level) {
+					return session.ChatSettingsMutation{}, fmt.Errorf(
+						"thinking level %q is unavailable for the selected Session Agent",
+						level,
+					)
+				}
 				return session.ChatSettingsMutation{Thinking: &level}, nil
 			},
 			func(engine *runtime.Engine, _ session.ChatSettingsMutationResult) error {

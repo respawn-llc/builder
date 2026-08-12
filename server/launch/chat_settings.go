@@ -16,9 +16,10 @@ import (
 )
 
 type PreparedChatSettings struct {
-	Baseline           session.ChatSettings
-	FastAvailable      bool
-	QuestionsAvailable bool
+	Baseline                session.ChatSettings
+	SupportedThinkingValues []string
+	FastAvailable           bool
+	QuestionsAvailable      bool
 }
 
 func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent string) (PreparedChatSettings, error) {
@@ -73,9 +74,22 @@ func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarge
 			Questions:      runtime.DefaultQuestionsEnabled && questionsAvailable,
 			AutoCompaction: runtime.DefaultAutoCompactionEnabled,
 		},
-		FastAvailable:      fastAvailable,
-		QuestionsAvailable: questionsAvailable,
+		SupportedThinkingValues: supportedChatThinkingValues(target.Settings.Model, thinking),
+		FastAvailable:           fastAvailable,
+		QuestionsAvailable:      questionsAvailable,
 	}, nil
+}
+
+func supportedChatThinkingValues(model string, configured string) []string {
+	values := llm.SupportedThinkingLevelsModel(model)
+	if _, known := llm.LookupModelCapabilityContract(model); known {
+		return values
+	}
+	configured = strings.TrimSpace(configured)
+	if configured != "" && !slices.Contains(values, configured) {
+		values = append(values, configured)
+	}
+	return values
 }
 
 func ResolveSessionChatSettings(meta session.Meta, current config.Settings) (session.ChatSettings, error) {

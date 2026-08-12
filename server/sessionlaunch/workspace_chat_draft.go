@@ -8,7 +8,6 @@ import (
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/llm"
 	"core/server/metadata"
 	"core/server/requestmemo"
 	"core/shared/config"
@@ -260,9 +259,8 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if err != nil {
 			return nil, err
 		}
-		thinking := preparedSettings.Baseline.Thinking
-		thinkingLevels := make(map[string]struct{})
-		for _, level := range append(llm.SupportedThinkingLevelsModel(target.Settings.Model), thinking) {
+		thinkingLevels := make(map[string]struct{}, len(preparedSettings.SupportedThinkingValues))
+		for _, level := range preparedSettings.SupportedThinkingValues {
 			thinkingLevels[level] = struct{}{}
 		}
 		baseline := preparedSettings.Baseline

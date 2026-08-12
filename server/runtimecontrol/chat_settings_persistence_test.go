@@ -199,6 +199,37 @@ func TestServiceRejectsInvalidThinkingWithoutPersistingDormantOrLiveOverride(t *
 	}
 }
 
+func TestServiceRejectsThinkingUnsupportedBySelectedAgentWithoutPersistingDormantOrLiveOverride(t *testing.T) {
+	initial := session.ChatSettings{
+		Supervisor:     "off",
+		Thinking:       "high",
+		Fast:           false,
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	for _, live := range []bool{false, true} {
+		t.Run(map[bool]string{false: "dormant", true: "live"}[live], func(t *testing.T) {
+			fixture := newChatControlFixture(t, initial)
+			var engine *runtime.Engine
+			if live {
+				_, engine = fixture.openRuntime(t, fixture.store, initial, "thinking-capability-validation")
+			}
+			err := fixture.service.SetThinkingLevel(t.Context(), serverapi.RuntimeSetThinkingLevelRequest{
+				ClientRequestID: "unsupported-thinking",
+				SessionID:       fixture.store.Meta().SessionID,
+				Level:           "ultra",
+			})
+			if err == nil {
+				t.Fatal("SetThinkingLevel accepted a value unsupported by the selected Agent")
+			}
+			assertPersistedChatSettings(t, fixture.persistence, fixture.store.Meta().SessionID, initial)
+			if engine != nil && engine.ThinkingLevel() != initial.Thinking {
+				t.Fatalf("live Thinking = %q, want unchanged %q", engine.ThinkingLevel(), initial.Thinking)
+			}
+		})
+	}
+}
+
 func TestServiceSupervisorEnableUsesSelectedAgentBaselineWithoutHiddenResumeMode(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string
@@ -273,9 +304,10 @@ func newChatControlFixture(t *testing.T, settings session.ChatSettings) *chatCon
 	fixture.service = NewService(fixture.authority).WithPersistedSessionResolver(persistence)
 	fixture.service.WithChatSettingsPreparationResolver(staticChatSettingsPreparationResolver{
 		prepared: launch.PreparedChatSettings{
-			Baseline:           settings,
-			FastAvailable:      true,
-			QuestionsAvailable: true,
+			Baseline:                settings,
+			SupportedThinkingValues: []string{"low", "medium", "high"},
+			FastAvailable:           true,
+			QuestionsAvailable:      true,
 		},
 	})
 	return fixture
