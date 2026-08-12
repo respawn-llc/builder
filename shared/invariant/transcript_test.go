@@ -123,27 +123,20 @@ func TestValidateTranscriptCommittedRowRejectsInvalidTimestampBeforeIntegritySho
 		transcript.RowIntegrityRecoverableMalformed,
 		transcript.RowIntegrityUnrecoverableMalformed,
 	} {
-		for _, row := range []clientui.TranscriptCommittedRow{
-			{
+		for _, kind := range []clientui.TranscriptRowKind{clientui.TranscriptRowUser, clientui.TranscriptRowAssistant} {
+			row := clientui.TranscriptCommittedRow{
 				Visibility: transcript.EntryVisibilityOngoing,
 				Integrity:  integrity,
-				Kind:       clientui.TranscriptRowUser,
+				Kind:       kind,
 				Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
-				User:       &clientui.TranscriptUserRow{StepID: stepID, Text: "user", CommittedAtUnixMs: &outOfRange},
-			},
-			{
-				Visibility: transcript.EntryVisibilityOngoing,
-				Integrity:  integrity,
-				Kind:       clientui.TranscriptRowAssistant,
-				Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
-				Assistant: &clientui.TranscriptAssistantRow{
-					StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal,
-					CommittedAtUnixMs: &outOfRange,
-				},
-			},
-		} {
+			}
+			if kind == clientui.TranscriptRowUser {
+				row.User = &clientui.TranscriptUserRow{StepID: stepID, Text: "user", CommittedAtUnixMs: &outOfRange}
+			} else {
+				row.Assistant = &clientui.TranscriptAssistantRow{StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal, CommittedAtUnixMs: &outOfRange}
+			}
 			if err := ValidateTranscriptCommittedRow(row); err == nil {
-				t.Fatalf("integrity %v accepted invalid timestamp: %#v", integrity, row)
+				t.Fatalf("integrity %v kind %q accepted invalid timestamp: %#v", integrity, kind, row)
 			}
 		}
 	}

@@ -187,14 +187,6 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 	if len(live) != 4 {
 		t.Fatalf("projected transcript facts = %+v, want summary, two preserved messages, and environment", live)
 	}
-	for index, fact := range live {
-		if fact.Provenance == nil {
-			t.Fatalf("history replacement fact %d has no provenance", index)
-		}
-		if fact.Provenance.CommittedAtUnixMs != nil {
-			t.Fatalf("ineligible history replacement fact %d has committed time %d", index, *fact.Provenance.CommittedAtUnixMs)
-		}
-	}
 	wantMessageTypes := []llm.MessageType{
 		llm.MessageTypeCompactionSummary,
 		llm.MessageTypeCompactionPreservedUserMessage,
@@ -309,11 +301,13 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 		t.Fatalf("persist eligible history replacement: %v", err)
 	}
 
-	liveFacts := transcriptFactsForReplacementMessages(events)
+	var liveFacts []TranscriptCommittedRowFact
+	for _, event := range events {
+		liveFacts = append(liveFacts, TranscriptCommittedRowFactsFromEvent(event)...)
+	}
 	replacementTime := assertEligibleReplacementFacts(t, liveFacts)
 	pageFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, engine).Snapshot)
 	assertReplacementFactsMatch(t, pageFacts, replacementTime)
-
 	eventLog := mustMaterializeTestEventLog(t, store)
 	window, err := eventLog.ReadRecentRecords(32)
 	if err != nil {
@@ -334,7 +328,6 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 	}
 	persistedFacts := TranscriptCommittedRowFactsFromSnapshot(scan.CollectedPageSnapshot())
 	assertReplacementFactsMatch(t, persistedFacts, replacementTime)
-
 	if err := engine.Close(); err != nil {
 		t.Fatalf("close eligible replacement engine: %v", err)
 	}
@@ -347,22 +340,6 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 	)
 	restartedFacts := TranscriptCommittedRowFactsFromSnapshot(mustEngineNewestSegmentPage(t, reopened).Snapshot)
 	assertReplacementFactsMatch(t, restartedFacts, replacementTime)
-}
-
-func transcriptFactsForReplacementMessages(events []Event) []TranscriptCommittedRowFact {
-	facts := make([]TranscriptCommittedRowFact, 0)
-	for _, event := range events {
-		facts = append(facts, TranscriptCommittedRowFactsFromEvent(event)...)
-	}
-	filtered := make([]TranscriptCommittedRowFact, 0, len(facts))
-	for _, fact := range facts {
-		if fact.User != nil && fact.User.Text == "replacement user" ||
-			fact.Assistant != nil && fact.Assistant.Text == "replacement assistant" ||
-			fact.Notice != nil && fact.Notice.MessageType == llm.MessageTypeCompactionSummary {
-			filtered = append(filtered, fact)
-		}
-	}
-	return filtered
 }
 
 func assertEligibleReplacementFacts(

@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/shared/clientui"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -81,11 +82,26 @@ func TestCommittedTimeCopiesToUserAndAssistantClientRows(t *testing.T) {
 	if len(page.Entries) != 2 || len(hydration.CommittedRows) != 2 {
 		t.Fatalf("projected rows page=%d hydration=%d", len(page.Entries), len(hydration.CommittedRows))
 	}
+	assistantPhase := llm.MessagePhaseFinal
+	liveUser := transcriptPayload[clientui.TranscriptCommittedRow](t, TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventUserMessageFlushed,
+		StepID:              stepID,
+		UserMessage:         "user",
+		CommittedProvenance: provenance,
+	})[0])
+	liveAssistant := transcriptPayload[clientui.TranscriptCommittedRow](t, TranscriptMessagesFromRuntimeEvent(runtime.Event{
+		Kind:                runtime.EventAssistantMessage,
+		StepID:              stepID,
+		Message:             llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("assistant"), Phase: &assistantPhase},
+		CommittedProvenance: provenance,
+	})[0])
 	if page.Entries[0].User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
 		page.Entries[1].Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
 		hydration.CommittedRows[0].User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
-		hydration.CommittedRows[1].Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
-		t.Fatalf("client timestamp projection lost committed time: page=%+v hydration=%+v", page.Entries, hydration.CommittedRows)
+		hydration.CommittedRows[1].Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
+		liveUser.User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() ||
+		liveAssistant.Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+		t.Fatalf("client timestamp projection lost committed time: page=%+v hydration=%+v live=%+v/%+v", page.Entries, hydration.CommittedRows, liveUser, liveAssistant)
 	}
 }
 func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {

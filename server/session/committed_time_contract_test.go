@@ -72,6 +72,21 @@ func TestCommittedTimeRangeAndEligibility(t *testing.T) {
 			}
 		})
 	}
+	for _, test := range []struct {
+		name  string
+		items []ProviderHistoryItem
+	}{
+		{"replacement user-like non-message", []ProviderHistoryItem{{Type: ProviderHistoryItemTypeOther, Role: &user, Content: &content}}},
+		{"replacement tools and notices only", []ProviderHistoryItem{{Type: ProviderHistoryItemTypeFunctionCall, Content: &content}, {Type: ProviderHistoryItemTypeOther, Role: &user, Content: &content}}},
+		{"replacement empty", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := eventPayloadEligibleForCommittedTime(HistoryReplacementRecord{Items: test.items})
+			if err != nil || got {
+				t.Fatalf("eligible=%t err=%v want=false", got, err)
+			}
+		})
+	}
 }
 
 func TestCommittedTimeEventEnvelopeAndNullRejection(t *testing.T) {
@@ -139,43 +154,19 @@ func TestCommittedTimeAtomicAppendSamplesClockOnce(t *testing.T) {
 	}
 }
 
-func TestReplayPreservesEligibleAbsentCommittedTime(t *testing.T) {
-	parent := newSessionTestStore(t)
-	log := mustMaterializeSessionTestEventLog(t, parent)
-	user, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`))
-	if err != nil {
-		t.Fatalf("decode user: %v", err)
-	}
-	if _, err := log.AppendReplayRecords([]EventRecord{user}); err != nil {
-		t.Fatalf("replay user: %v", err)
-	}
-	target, _, err := log.AppendRecord(nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("target")})
-	if err != nil {
-		t.Fatalf("append target: %v", err)
-	}
-	child, _, err := ForkAtUserMessage(log, target.Seq(), "fork", testSessionCategory)
-	if err != nil {
-		t.Fatalf("fork: %v", err)
-	}
-	childLog := mustMaterializeSessionTestEventLog(t, child)
-	var records []EventRecord
-	if err := childLog.WalkRecords(func(record EventRecord) error { records = append(records, record); return nil }); err != nil {
-		t.Fatalf("walk child: %v", err)
-	}
-	if len(records) != 1 || records[0].CommittedAtUnixMs() != nil {
-		t.Fatalf("child replay records=%d time=%v", len(records), records[0].CommittedAtUnixMs())
-	}
-}
-
 func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testing.T) {
 	parent := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, parent)
+	absent, err := decodeEventRecordV1([]byte(`{"seq":1,"kind":"message","payload":{"role":"user","content":"old"}}`))
+	if err != nil {
+		t.Fatalf("decode absent source user: %v", err)
+	}
 	present := transcript.CommittedAtUnixMs(123)
-	user, err := newEventRecord(1, nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("old")}, &present)
+	user, err := newEventRecord(2, nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("present")}, &present)
 	if err != nil {
 		t.Fatalf("create source user: %v", err)
 	}
-	replacement, err := newEventRecord(2, nil, HistoryReplacementRecord{
+	replacement, err := newEventRecord(3, nil, HistoryReplacementRecord{
 		Engine: "local",
 		Mode:   CompactionModeAuto,
 		Items: []ProviderHistoryItem{{
@@ -188,8 +179,19 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 	if err != nil {
 		t.Fatalf("create source replacement: %v", err)
 	}
-	if _, err := log.AppendReplayRecords([]EventRecord{user, replacement}); err != nil {
+	if _, err := log.AppendReplayRecords([]EventRecord{absent, user, replacement}); err != nil {
 		t.Fatalf("replay source records: %v", err)
+	}
+	fillers := make([]EventRecordPayload, forkReplayFlushEventCount-2)
+	for index := range fillers {
+		fillers[index] = LocalEntryRecord{
+			Visibility: EntryVisibilityHidden,
+			Role:       "replay filler",
+			Text:       stringPointer("bounded"),
+		}
+	}
+	if _, receipt, err := log.AppendRecordsAtomic(nil, fillers); err != nil || !receipt.Committed {
+		t.Fatalf("append replay fillers: receipt=%+v err=%v", receipt, err)
 	}
 	target, _, err := log.AppendRecord(nil, MessageRecord{Role: MessageRoleUser, Content: stringPointer("target")})
 	if err != nil {
@@ -211,16 +213,20 @@ func TestReplayPreservesPresentTimeThroughForkCloneAndReplacementRebase(t *testi
 		}); err != nil {
 			t.Fatalf("%s walk: %v", name, err)
 		}
-		if len(records) < 2 {
+		if len(records) < forkReplayFlushEventCount {
 			t.Fatalf("%s records=%d", name, len(records))
 		}
-		for _, record := range records[:2] {
-			if record.CommittedAtUnixMs() == nil || record.CommittedAtUnixMs().UnixMs() != present.UnixMs() {
-				t.Fatalf("%s record timestamp=%v want=%d", name, record.CommittedAtUnixMs(), present.UnixMs())
+		if records[0].CommittedAtUnixMs() != nil {
+			t.Fatalf("%s absent record timestamp=%v", name, records[0].CommittedAtUnixMs())
+		}
+		for _, index := range []int{1, 2} {
+			if records[index].CommittedAtUnixMs() == nil || records[index].CommittedAtUnixMs().UnixMs() != present.UnixMs() {
+				t.Fatalf("%s record %d timestamp=%v want=%d", name, index, records[index].CommittedAtUnixMs(), present.UnixMs())
 			}
 		}
 	}
 }
+
 func messageRolePointer(value MessageRole) *MessageRole {
 	return &value
 }
