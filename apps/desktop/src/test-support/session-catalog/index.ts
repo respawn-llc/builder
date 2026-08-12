@@ -1,27 +1,23 @@
 import { z } from "zod";
 
-import type { SessionCategory, SessionPagePosition } from "@/api";
+import { sessionCatalogPageSize, type SessionCategory } from "@/api";
 
 export type SessionPageRequest = Readonly<{
   projectID: string;
   category: SessionCategory;
-  position: SessionPagePosition;
+  offset: number;
 }>;
 
 const sessionPageRequestSchema = z.strictObject({
   project_id: z.string(),
   category: z.enum(["main", "subagent"]),
-  page_size: z.literal(100),
-  position: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("newest") }),
-    z.strictObject({ kind: z.literal("older"), token: z.string() }),
-    z.strictObject({ kind: z.literal("newer"), token: z.string() }),
-  ]),
+  offset: z.number().int().nonnegative(),
+  limit: z.literal(sessionCatalogPageSize),
 });
 
 export function parseSessionPageRequest(params: unknown): SessionPageRequest {
   const value = sessionPageRequestSchema.parse(params);
-  return { projectID: value.project_id, category: value.category, position: value.position };
+  return { projectID: value.project_id, category: value.category, offset: value.offset };
 }
 
 type SessionFixture = readonly [id: string, name?: string, preview?: string];
@@ -29,7 +25,7 @@ type SessionFixture = readonly [id: string, name?: string, preview?: string];
 export function sessionPageFixture(
   scope: Pick<SessionPageRequest, "projectID" | "category">,
   sessions: readonly SessionFixture[],
-  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }> = {},
+  nextOffset: number | null = null,
 ) {
   return {
     project_id: scope.projectID,
@@ -44,7 +40,6 @@ export function sessionPageFixture(
         updated_at: "2026-08-11T20:00:00Z",
       };
     }),
-    older: cursors.older,
-    newer: cursors.newer,
+    next_offset: nextOffset,
   };
 }
