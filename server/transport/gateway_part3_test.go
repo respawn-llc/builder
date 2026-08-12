@@ -433,7 +433,7 @@ func TestDecodeAndHandleMapsMalformedWorkflowLabelFilters(t *testing.T) {
 				protocol.Request{ID: "invalid-board-card-filter", Params: mustJSON(t, serverapi.WorkflowBoardNodeCardsListRequest{
 					ProjectID:  projectID,
 					WorkflowID: runtimeids.NewWorkflowID(),
-					NodeID:     "node-1",
+					NodeID:     runtimeids.NewGraphEntityID(),
 				})},
 				func(serverapi.WorkflowBoardNodeCardsListRequest) (struct{}, error) {
 					t.Fatal("invalid board-card filter reached handler")

@@ -24,6 +24,7 @@ import (
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -324,9 +325,9 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 	if startID == "" || terminalID == "" {
 		t.Fatalf("default workflow nodes = %+v", definition.Definition.Nodes)
 	}
-	agentID := "node-agent-" + created.Workflow.ID.String()
-	startGroupID := "group-start-" + created.Workflow.ID.String()
-	doneGroupID := "group-done-" + created.Workflow.ID.String()
+	agentID := runtimeids.NewGraphEntityID()
+	startGroupID := runtimeids.NewGraphEntityID()
+	doneGroupID := runtimeids.NewGraphEntityID()
 	graph := serverapi.WorkflowGraphDraftFromDefinition(definition.Definition)
 	graph.Nodes = append(graph.Nodes, serverapi.WorkflowGraphDraftNode{
 		ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder",
@@ -336,8 +337,8 @@ func createAdmittedCurrentNodeForRecovery(t *testing.T, server *ServeServer) (wo
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
 	)
 	graph.Edges = append(graph.Edges,
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-start-" + created.Workflow.ID.String(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work."},
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-done-" + created.Workflow.ID.String(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Perform the work."},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
 	)
 	saved, err := client.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID: created.Workflow.ID, ExpectedVersion: definition.Definition.Workflow.Version, Graph: graph,

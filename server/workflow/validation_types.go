@@ -137,13 +137,13 @@ type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
 	WorkflowID        *runtimeids.WorkflowID
-	NodeID            NodeID
-	TransitionGroupID TransitionGroupID
-	EdgeID            EdgeID
+	NodeID            *NodeID
+	TransitionGroupID *TransitionGroupID
+	EdgeID            *EdgeID
 	FieldName         string
 	InputName         string
 	Placeholder       string
-	ProviderEdgeID    EdgeID
+	ProviderEdgeID    *EdgeID
 	RelatedIDs        []string
 	RelatedEntities   []workflowcontract.WorkflowGraphEntityReference
 	AgentRole         *string

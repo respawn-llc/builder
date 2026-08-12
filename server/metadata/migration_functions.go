@@ -29,6 +29,7 @@ const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_ses
 const migrationCurrentNodeAgentExecutionFunction = "kent_migration_current_node_agent_execution_v1"
 const migrationCurrentNodeAgentExecutionValidationFunction = "kent_migration_current_node_agent_execution_validation_v1"
 const migrationPendingApprovalAgentExecutionValidationFunction = "kent_migration_pending_approval_agent_execution_validation_v1"
+const migrationGraphEntityIDBlobFunction = "kent_migration_graph_entity_id_blob_v1"
 
 func migrationAgentExecutionSelection(
 	contextMode workflow.ContextMode,
@@ -103,6 +104,14 @@ func registerMetadataSQLiteFunctions() error {
 		if registerMetadataSQLiteFunctionsErr != nil {
 			return
 		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterScalarFunction(
+			migrationGraphEntityIDBlobFunction,
+			2,
+			migrationGraphEntityIDBlob,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
 			migrationCurrentNodeAgentExecutionFunction,
 			6,
@@ -146,6 +155,28 @@ func registerMetadataSQLiteFunctions() error {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationGraphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("%s requires 2 arguments", migrationGraphEntityIDBlobFunction)
+	}
+	raw, err := migrationStringArgument(args[0], "graph entity ID")
+	if err != nil {
+		return nil, err
+	}
+	location, err := migrationStringArgument(args[1], "graph identity location")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(location) == "" {
+		return nil, errors.New("graph identity migration location is required")
+	}
+	value, err := runtimeids.MigrateGraphEntityIDBlob(raw)
+	if err != nil {
+		return nil, fmt.Errorf("graph identity migration failure at %s: %w", location, err)
+	}
+	return value, nil
 }
 
 func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {

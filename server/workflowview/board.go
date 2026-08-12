@@ -454,7 +454,7 @@ func boardGroups(def serverapi.WorkflowDefinition) []serverapi.WorkflowBoardGrou
 			SortOrder:   group.SortOrder,
 		}
 		for _, node := range columnNodes {
-			if node.GroupID == group.GroupID {
+			if node.GroupID != nil && *node.GroupID == group.GroupID {
 				dto.NodeIDs = append(dto.NodeIDs, node.ID)
 			}
 		}

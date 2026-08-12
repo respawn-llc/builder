@@ -62,9 +62,9 @@ func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflo
 			Code:              string(err.Code),
 			Message:           err.Message,
 			WorkflowID:        err.WorkflowID,
-			NodeID:            string(err.NodeID),
-			TransitionGroupID: string(err.TransitionGroupID),
-			EdgeID:            string(err.EdgeID),
+			NodeID:            graphIDPointer(err.NodeID),
+			TransitionGroupID: graphIDPointer(err.TransitionGroupID),
+			EdgeID:            graphIDPointer(err.EdgeID),
 			Details:           validationErrorDetails(err),
 			RelatedIDs:        relatedIDs,
 			BlocksContext:     err.BlocksContext,
@@ -77,6 +77,14 @@ func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflo
 	return out
 }
 
+func graphIDPointer[T ~string](value *T) *string {
+	if value == nil {
+		return nil
+	}
+	copy := string(*value)
+	return &copy
+}
+
 func validationErrorDetails(err workflow.ValidationError) *serverapi.WorkflowValidationErrorDetails {
 	var requiredTool *string
 	if err.RequiredTool != nil {
@@ -87,11 +95,11 @@ func validationErrorDetails(err workflow.ValidationError) *serverapi.WorkflowVal
 		FieldName:      err.FieldName,
 		InputName:      err.InputName,
 		Placeholder:    err.Placeholder,
-		ProviderEdgeID: string(err.ProviderEdgeID),
+		ProviderEdgeID: graphIDPointer(err.ProviderEdgeID),
 		Role:           err.AgentRole,
 		RequiredTool:   requiredTool,
 	}
-	if details.FieldName == "" && details.InputName == "" && details.Placeholder == "" && details.ProviderEdgeID == "" && details.Role == nil && details.RequiredTool == nil {
+	if details.FieldName == "" && details.InputName == "" && details.Placeholder == "" && details.ProviderEdgeID == nil && details.Role == nil && details.RequiredTool == nil {
 		return nil
 	}
 	return &details

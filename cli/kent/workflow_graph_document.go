@@ -166,10 +166,10 @@ func (d workflowGraphDocument) WorkflowGraphDraft() (serverapi.WorkflowGraphDraf
 			JoinInputProviders: node.JoinInputProviders,
 		})
 	}
-	if err := (serverapi.WorkflowGraphSaveRequest{
-		WorkflowID:      d.WorkflowID,
-		ExpectedVersion: d.ExpectedVersion,
-		Graph:           graph,
+	if err := (serverapi.WorkflowGraphValidateDraftRequest{
+		WorkflowID: d.WorkflowID,
+		Graph:      graph,
+		Modes:      []serverapi.WorkflowValidationMode{serverapi.WorkflowValidationModeDraft},
 	}).Validate(); err != nil {
 		return serverapi.WorkflowGraphDraft{}, err
 	}

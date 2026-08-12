@@ -393,7 +393,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		source := nodeByKey(t, def, "plan")
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
-		groupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
+		groupID := testTransitionGroupID("group-alternate-" + workflowID.String())
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           groupID,
 			WorkflowID:   workflowID,
@@ -402,7 +402,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 			DisplayName:  "Alternate",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-alternate-" + workflowID.String()),
+			ID:                testEdgeID("edge-alternate-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: groupID,
 			Key:               "alternate",
@@ -1016,7 +1016,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 	}
 	audit := nodeByKey(t, definition, "audit")
 	review := nodeByKey(t, definition, "review")
-	reworkGroupID := workflow.TransitionGroupID("group-rework-" + workflowID.String())
+	reworkGroupID := testTransitionGroupID("group-rework-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
 			ID:           reworkGroupID,
@@ -1026,7 +1026,7 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			DisplayName:  "Rework",
 		})
 		req.Edges = append(req.Edges, EdgeRecord{
-			ID:                workflow.EdgeID("edge-rework-" + workflowID.String()),
+			ID:                testEdgeID("edge-rework-" + workflowID.String()),
 			WorkflowID:        workflowID,
 			TransitionGroupID: reworkGroupID,
 			Key:               "rework",
@@ -1124,7 +1124,7 @@ WHERE task_id = ?
   AND transition_branch_key IS NULL`,
 		sessionID.String(),
 		string(currentNode.TaskID),
-		string(currentNode.NodeID),
+		testGraphEntityBlob(t, string(currentNode.NodeID)),
 	); err != nil {
 		t.Fatalf("bind current node session: %v", err)
 	}

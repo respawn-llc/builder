@@ -100,27 +100,27 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 	fixture := newCurrentNodeViewFixture(t, false)
 	started := fixture.startTask(t, "Live Scripts")
 	scriptNodeIDs := []workflow.NodeID{
-		workflow.NodeID("node-" + uuid.NewString()),
-		workflow.NodeID("node-" + uuid.NewString()),
+		workflow.NodeID(uuid.NewString()),
+		workflow.NodeID(uuid.NewString()),
 	}
 	slices.Sort(scriptNodeIDs)
 	scriptPaths := []string{"scripts/a.sh", "scripts/b.sh"}
-	joinNodeID := workflow.NodeID("node-" + uuid.NewString())
-	splitAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
-	splitBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
-	joinAEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
-	joinBEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
-	finishEdgeID := workflow.EdgeID("edge-" + uuid.NewString())
+	joinNodeID := workflow.NodeID(uuid.NewString())
+	splitAEdgeID := workflow.EdgeID(uuid.NewString())
+	splitBEdgeID := workflow.EdgeID(uuid.NewString())
+	joinAEdgeID := workflow.EdgeID(uuid.NewString())
+	joinBEdgeID := workflow.EdgeID(uuid.NewString())
+	finishEdgeID := workflow.EdgeID(uuid.NewString())
 	nodes := []workflowstore.NodeRecord{
 		{ID: scriptNodeIDs[0], WorkflowID: fixture.workflowID, Key: "script_a", Kind: workflow.NodeKindScript, DisplayName: "Script A", ScriptPath: scriptPaths[0]},
 		{ID: scriptNodeIDs[1], WorkflowID: fixture.workflowID, Key: "script_b", Kind: workflow.NodeKindScript, DisplayName: "Script B", ScriptPath: scriptPaths[1]},
 		{ID: joinNodeID, WorkflowID: fixture.workflowID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: joinAEdgeID}}},
 	}
 	groupIDs := []workflow.TransitionGroupID{
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
-		workflow.TransitionGroupID("group-" + uuid.NewString()),
+		workflow.TransitionGroupID(uuid.NewString()),
+		workflow.TransitionGroupID(uuid.NewString()),
+		workflow.TransitionGroupID(uuid.NewString()),
+		workflow.TransitionGroupID(uuid.NewString()),
 	}
 	groups := []workflowstore.TransitionGroupRecord{
 		{ID: groupIDs[0], WorkflowID: fixture.workflowID, SourceNodeID: fixture.agentNodeID, TransitionID: "split", DisplayName: "Split"},

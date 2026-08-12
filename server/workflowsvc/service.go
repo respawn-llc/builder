@@ -18,6 +18,7 @@ import (
 	"core/server/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/worktreecontract"
 )
 
@@ -231,7 +232,13 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 	}
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
-	service := &Service{store: store, readModels: readModels, roleResolver: roleResolver, events: events, mutationPermit: mutationPermit}
+	service := &Service{
+		store:          store,
+		readModels:     readModels,
+		roleResolver:   roleResolver,
+		events:         events,
+		mutationPermit: mutationPermit,
+	}
 	for _, opt := range opts {
 		opt(service)
 	}
@@ -318,7 +325,12 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	if err := s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description); err != nil {
+	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
+		_, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+		})
+		return struct{}{}, err
+	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionUpdated, req.WorkflowID.String())
@@ -565,16 +577,28 @@ func (s *Service) DeriveWorkflowGraphWiring(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
+	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		if currentVersion != req.ExpectedVersion {
+			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+		}
+		if err := req.Validate(); err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		return s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+	})
 	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
-	}
-	result, err := s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
-	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
 	}
 	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
 	if err := resp.Validate(); err != nil {
@@ -584,18 +608,30 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
 	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
-		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
-		}
-		return s.store.SaveWorkflowGraph(ctx, storeRequest)
+		return s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+			currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+			if err != nil {
+				return workflowstore.WorkflowGraphSaveResult{}, err
+			}
+			if currentVersion != req.ExpectedVersion {
+				return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+			}
+			if err := req.Validate(); err != nil {
+				return workflowstore.WorkflowGraphSaveResult{}, err
+			}
+			storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
+			if err != nil {
+				return workflowstore.WorkflowGraphSaveResult{}, err
+			}
+			return s.store.SaveWorkflowGraph(ctx, storeRequest)
+		})
 	})
 	if err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, err
+		return serverapi.WorkflowGraphSaveResponse{}, workflowGraphSaveError(err)
 	}
 	resp := workflowGraphSaveResponse(result, workflowGraphSaveValidationResponses(result))
 	if result.Saved {
@@ -610,6 +646,26 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
+}
+
+func (s *Service) workflowGraphSaveCurrentVersion(ctx context.Context, workflowID runtimeids.WorkflowID) (int64, error) {
+	_, record, err := s.store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		return 0, err
+	}
+	return record.Version, nil
+}
+
+func workflowGraphSaveError(err error) error {
+	var ownershipErr workflowstore.WorkflowGraphIdentityOwnershipError
+	if errors.As(err, &ownershipErr) {
+		return serverapi.WorkflowRequestValidationError{
+			Code:    serverapi.WorkflowRequestErrorInvalidValue,
+			Field:   ownershipErr.Field,
+			Message: ownershipErr.Error(),
+		}
+	}
+	return err
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
@@ -2299,11 +2355,12 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 
 func scriptPathValidationError(workflowID runtimeids.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
 	workflowIDValue := workflowID
+	nodeIDValue := string(nodeID)
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
 		Message:       diagnostic.Message,
 		WorkflowID:    &workflowIDValue,
-		NodeID:        string(nodeID),
+		NodeID:        &nodeIDValue,
 		BlocksContext: diagnostic.Blocking,
 	}
 }
@@ -2342,9 +2399,7 @@ func (s *Service) workflowGraphDraftDefinition(ctx context.Context, workflowID r
 func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph serverapi.WorkflowGraphDraft) (workflow.Definition, error) {
 	def := workflow.Definition{ID: workflowID}
 	groupMemberIDs := map[string][]workflow.NodeID{}
-	groupIDByKey := make(map[workflow.ModelKey]string, len(graph.NodeGroups))
 	for _, group := range graph.NodeGroups {
-		groupIDByKey[workflow.ModelKey(strings.TrimSpace(group.Key))] = group.ID
 		def.NodeGroups = append(def.NodeGroups, workflow.NodeGroup{
 			WorkflowID:  workflowID,
 			ID:          group.ID,
@@ -2353,20 +2408,8 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 		})
 	}
 	for _, node := range graph.Nodes {
-		groupID := optionalStringValue(node.GroupID)
-		if groupID == "" && strings.TrimSpace(node.GroupKey) != "" {
-			groupKey := workflow.ModelKey(strings.TrimSpace(node.GroupKey))
-			var ok bool
-			groupID, ok = groupIDByKey[groupKey]
-			if !ok {
-				return workflow.Definition{}, fmt.Errorf(
-					"workflow node group key %q is not in the saved graph",
-					groupKey,
-				)
-			}
-		}
-		if groupID != "" {
-			groupMemberIDs[groupID] = append(groupMemberIDs[groupID], workflow.NodeID(node.ID))
+		if node.GroupID != nil {
+			groupMemberIDs[*node.GroupID] = append(groupMemberIDs[*node.GroupID], workflow.NodeID(node.ID))
 		}
 		workflowNode, err := workflow.NewNode(
 			workflow.NodeIdentity{
@@ -2374,7 +2417,7 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     groupID,
+				GroupID:     textutil.Pointer(node.GroupID),
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{

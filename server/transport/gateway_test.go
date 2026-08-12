@@ -30,6 +30,7 @@ import (
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
@@ -839,12 +840,11 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	if startID == "" || terminalID == "" {
 		t.Fatalf("workflow definition lacks start/terminal Nodes: %+v", definition.Definition.Nodes)
 	}
-	workflowID := created.Workflow.ID.String()
-	agentID := "node-agent-" + workflowID
-	reviewID := "node-review-" + workflowID
-	startGroupID := "group-start-" + workflowID
-	doneGroupID := "group-done-" + workflowID
-	finishGroupID := "group-finish-" + workflowID
+	agentID := runtimeids.NewGraphEntityID()
+	reviewID := runtimeids.NewGraphEntityID()
+	startGroupID := runtimeids.NewGraphEntityID()
+	doneGroupID := runtimeids.NewGraphEntityID()
+	finishGroupID := runtimeids.NewGraphEntityID()
 	graph := serverapi.WorkflowGraphDraftFromDefinition(definition.Definition)
 	graph.Nodes = append(graph.Nodes,
 		serverapi.WorkflowGraphDraftNode{ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder"},
@@ -856,9 +856,9 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 		serverapi.WorkflowGraphDraftTransitionGroup{ID: finishGroupID, SourceNodeID: reviewID, TransitionID: "finish", DisplayName: "Finish"},
 	)
 	graph.Edges = append(graph.Edges,
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-start-" + workflowID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Search work."},
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-done-" + workflowID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: reviewID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Review the search work."},
-		serverapi.WorkflowGraphDraftEdge{ID: "edge-finish-" + workflowID, TransitionGroupID: finishGroupID, Key: "finish", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Search work."},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: reviewID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Review the search work."},
+		serverapi.WorkflowGraphDraftEdge{ID: runtimeids.NewGraphEntityID(), TransitionGroupID: finishGroupID, Key: "finish", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
 	)
 	saved, err := workflows.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID: created.Workflow.ID, ExpectedVersion: definition.Definition.Workflow.Version, Graph: graph,

@@ -2263,12 +2263,12 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 	if err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	implementationID := workflow.NodeID("node-implementation-" + created.ID.String())
-	reviewID := workflow.NodeID("node-review-" + created.ID.String())
-	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	reviewGroup := workflow.TransitionGroupID("group-review-" + created.ID.String())
-	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
-	reworkGroup := workflow.TransitionGroupID("group-rework-" + created.ID.String())
+	implementationID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	reviewID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	reviewGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	reworkGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindStart))
 		doneID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal))
@@ -2290,22 +2290,22 @@ func createCurrentNodeApprovalLoopWorkflow(t *testing.T, store *workflowstore.St
 		)
 		request.Edges = append(request.Edges,
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 				TransitionGroupID: startGroup, Key: "start", TargetNodeID: implementationID,
 				ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Implement the task.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-review-" + created.ID.String()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 				TransitionGroupID: reviewGroup, Key: "review", TargetNodeID: reviewID,
 				ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Review the implementation.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 				TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID,
 				ContextMode: workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 			workflowstore.EdgeRecord{
-				ID: workflow.EdgeID("edge-rework-" + created.ID.String()), WorkflowID: created.ID,
+				ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 				TransitionGroupID: reworkGroup, Key: "rework", TargetNodeID: implementationID,
 				RequiresApproval: true,
 				ContextMode:      workflow.ContextModeContinueSession,
@@ -2328,18 +2328,17 @@ func createCurrentNodeFanoutContinuationWorkflow(
 	if err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	workflowSuffix := created.ID.String()
-	sourceID := workflow.NodeID("node-source-" + workflowSuffix)
+	sourceID := workflow.NodeID(runtimeids.NewGraphEntityID())
 	branchNodeIDs := map[workflow.TransitionBranchKey]workflow.NodeID{
-		"branch_a": workflow.NodeID("node-branch-a-" + workflowSuffix),
-		"branch_b": workflow.NodeID("node-branch-b-" + workflowSuffix),
+		"branch_a": workflow.NodeID(runtimeids.NewGraphEntityID()),
+		"branch_b": workflow.NodeID(runtimeids.NewGraphEntityID()),
 	}
-	joinID := workflow.NodeID("node-join-" + workflowSuffix)
-	startGroup := workflow.TransitionGroupID("group-start-" + workflowSuffix)
-	splitGroup := workflow.TransitionGroupID("group-split-" + workflowSuffix)
-	branchAGroup := workflow.TransitionGroupID("group-branch-a-" + workflowSuffix)
-	branchBGroup := workflow.TransitionGroupID("group-branch-b-" + workflowSuffix)
-	doneGroup := workflow.TransitionGroupID("group-done-" + workflowSuffix)
+	joinID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	splitGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	branchAGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	branchBGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindStart))
 		doneID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal))
@@ -2357,12 +2356,12 @@ func createCurrentNodeFanoutContinuationWorkflow(
 			workflowstore.TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source."},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-branch-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"], AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch A."},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-branch-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"], AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch B."},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-join-a-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-join-b-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + workflowSuffix), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Source."},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_a", TargetNodeID: branchNodeIDs["branch_a"], AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch A."},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: splitGroup, Key: "branch_b", TargetNodeID: branchNodeIDs["branch_b"], AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeContinueSession, RequiresApproval: requiresApproval, PromptTemplate: "Branch B."},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: branchAGroup, Key: "join_a", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: branchBGroup, Key: "join_b", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID, branchNodeIDs
@@ -2486,17 +2485,16 @@ func createCurrentNodeLinearWorkflow(
 	if err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	suffix := created.ID.String()
 	nodeIDs := make([]workflow.NodeID, len(steps))
 	for index := range steps {
-		nodeIDs[index] = workflow.NodeID(fmt.Sprintf("node-step-%d-%s", index+1, suffix))
+		nodeIDs[index] = workflow.NodeID(runtimeids.NewGraphEntityID())
 	}
 	groupIDs := make([]workflow.TransitionGroupID, len(steps)+1)
-	groupIDs[0] = workflow.TransitionGroupID("group-start-" + suffix)
-	for index, transition := range transitions {
-		groupIDs[index+1] = workflow.TransitionGroupID(fmt.Sprintf("group-%s-%s", transition.id, suffix))
+	groupIDs[0] = workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	for index := range transitions {
+		groupIDs[index+1] = workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	}
-	groupIDs[len(steps)] = workflow.TransitionGroupID("group-done-" + suffix)
+	groupIDs[len(steps)] = workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindStart))
 		doneID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal))
@@ -2528,13 +2526,13 @@ func createCurrentNodeLinearWorkflow(
 			})
 		}
 		request.Edges = append(request.Edges, workflowstore.EdgeRecord{
-			ID: workflow.EdgeID("edge-start-" + suffix), WorkflowID: created.ID,
+			ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 			TransitionGroupID: groupIDs[0], Key: "start", TargetNodeID: nodeIDs[0],
 			ContextMode: workflow.ContextModeNewSession, PromptTemplate: steps[0].prompt, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
 		for index, transition := range transitions {
 			request.Edges = append(request.Edges, workflowstore.EdgeRecord{
-				ID:         workflow.EdgeID(fmt.Sprintf("edge-%s-%s", transition.id, suffix)),
+				ID:         workflow.EdgeID(runtimeids.NewGraphEntityID()),
 				WorkflowID: created.ID, TransitionGroupID: groupIDs[index+1],
 				Key: workflow.ModelKey(transition.id), TargetNodeID: nodeIDs[index+1],
 				ContextMode: transition.mode, RequiresApproval: transition.requiresApproval,
@@ -2542,7 +2540,7 @@ func createCurrentNodeLinearWorkflow(
 			})
 		}
 		request.Edges = append(request.Edges, workflowstore.EdgeRecord{
-			ID: workflow.EdgeID("edge-done-" + suffix), WorkflowID: created.ID,
+			ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID,
 			TransitionGroupID: groupIDs[len(groupIDs)-1], Key: "done",
 			TargetNodeID: doneID, ContextMode: workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
@@ -2557,9 +2555,9 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 	if err != nil {
 		t.Fatalf("create workflow: %v", err)
 	}
-	nodeID := workflow.NodeID("node-execute-" + created.ID.String())
-	startGroup := workflow.TransitionGroupID("group-start-" + created.ID.String())
-	doneGroup := workflow.TransitionGroupID("group-done-" + created.ID.String())
+	nodeID := workflow.NodeID(runtimeids.NewGraphEntityID())
+	startGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
+	doneGroup := workflow.TransitionGroupID(runtimeids.NewGraphEntityID())
 	workflowfixture.SaveStoreGraph(t, ctx, store, created.ID, func(definition workflow.Definition, request *workflowstore.WorkflowGraphSaveRequest) {
 		startID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindStart))
 		doneID := workflow.NodeIDOf(nodeByKindRunnerTest(t, definition, workflow.NodeKindTerminal))
@@ -2572,13 +2570,13 @@ func createCurrentNodeWorkflow(t *testing.T, store *workflowstore.Store, kind wo
 			workflowstore.TransitionGroupRecord{ID: doneGroup, WorkflowID: created.ID, SourceNodeID: nodeID, TransitionID: "done", DisplayName: "Done"},
 		)
 		request.Edges = append(request.Edges,
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-start-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: nodeID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: func() string {
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: nodeID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: func() string {
 				if kind == workflow.NodeKindAgent {
 					return "Do the work."
 				}
 				return ""
 			}()},
-			workflowstore.EdgeRecord{ID: workflow.EdgeID("edge-done-" + created.ID.String()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			workflowstore.EdgeRecord{ID: workflow.EdgeID(runtimeids.NewGraphEntityID()), WorkflowID: created.ID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: doneID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return created.ID

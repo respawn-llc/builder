@@ -39,7 +39,10 @@ function inferNodeGroupV1TopologyFacts(
   addedBranchID: string,
 ): InferredNodeGroupTopology | null {
   const addedBranch = draft.nodes.find((node) => node.id === addedBranchID);
-  if (addedBranch === undefined || addedBranch.groupID.length === 0) {
+  if (addedBranch === undefined) {
+    return null;
+  }
+  if (addedBranch.groupID === null) {
     return null;
   }
   if (incidentEdges(draft, addedBranch.id).length > 0) {

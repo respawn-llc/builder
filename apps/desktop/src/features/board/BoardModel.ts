@@ -23,7 +23,7 @@ export function boardSections(board: WorkflowBoard): readonly BoardSection[] {
       continue;
     }
 
-    const group = groupsByID.get(column.groupID);
+    const group = column.groupID === null ? undefined : groupsByID.get(column.groupID);
     if (group === undefined) {
       consumed.add(column.id);
       sections.push({ kind: "column", id: column.id, column });
