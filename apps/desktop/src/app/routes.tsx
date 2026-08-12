@@ -6,6 +6,7 @@ import { createNativeDialogRoutes, workspaceUnlinkNativeDialogPath } from "./nat
 import {
   HomeShellRoute,
   ProjectRoute,
+  ProjectTasksRoute,
   RootRoute,
   TaskRoute,
   WorkflowEditorShellRoute,
@@ -24,11 +25,16 @@ const workflowEditorSearchSchema = z.object({
   projectId: optionalSearchString,
 });
 
+const homeSearchSchema = z.object({
+  projectId: z.string().min(1).optional(),
+});
+
 const rootRoute = createRootRoute({ component: RootRoute });
 
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
+  validateSearch: (search: Record<string, unknown>) => homeSearchSchema.parse(search),
   component: HomeShellRoute,
 });
 
@@ -37,6 +43,12 @@ const projectRoute = createRoute({
   path: "/projects/$projectId",
   validateSearch: (search: Record<string, unknown>) => projectSearchSchema.parse(search),
   component: ProjectRoute,
+});
+
+const projectTasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects/$projectId/tasks",
+  component: ProjectTasksRoute,
 });
 
 const workflowLibraryRoute = createRoute({
@@ -63,6 +75,7 @@ const nativeDialogRoutes = createNativeDialogRoutes(rootRoute);
 
 const routeTree = rootRoute.addChildren([
   homeRoute,
+  projectTasksRoute,
   projectRoute,
   workflowLibraryRoute,
   workflowEditorRoute,

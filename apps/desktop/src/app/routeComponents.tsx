@@ -3,7 +3,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
-import { HomeRoute } from "@/features/home";
+import { HomeRoute, ProjectTasksSurface } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
 import { LoadingState } from "@/ui";
@@ -11,6 +11,7 @@ import { AppChrome } from "./AppChrome";
 import {
   readBrowserStorage,
   readLastProjectRoute,
+  SidebarRootOwner,
   writeBrowserStorage,
   writeLastProjectRoute,
 } from "@/app-facade";
@@ -29,7 +30,9 @@ const LazyWorkflowLibraryRoute = lazy(async () => {
 });
 
 const rootRouteApi = getRouteApi("__root__");
+const homeRouteApi = getRouteApi("/");
 const projectRouteApi = getRouteApi("/projects/$projectId");
+const projectTasksRouteApi = getRouteApi("/projects/$projectId/tasks");
 const workflowEditorRouteApi = getRouteApi("/workflows/$workflowId/editor");
 const taskRouteApi = getRouteApi("/tasks/$taskId");
 
@@ -117,10 +120,24 @@ export function ProjectRoute() {
   );
 }
 
+export function ProjectTasksRoute() {
+  const { t } = useTranslation();
+  const params = projectTasksRouteApi.useParams();
+  useWindowChromeTitle(t("home.prototype.tasks"));
+  return (
+    <SidebarRootOwner>
+      <section className="island-glass h-full min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
+        <ProjectTasksSurface projectID={params.projectId} sidebarMode="shift" />
+      </section>
+    </SidebarRootOwner>
+  );
+}
+
 export function HomeShellRoute() {
   const { t } = useTranslation();
+  const search = homeRouteApi.useSearch();
   useWindowChromeTitle(t("home.projectsPane"));
-  return <HomeRoute />;
+  return <HomeRoute selectedProjectID={search.projectId ?? null} />;
 }
 
 export function WorkflowEditorShellRoute() {

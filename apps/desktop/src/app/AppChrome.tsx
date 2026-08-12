@@ -5,11 +5,7 @@ import { useCallback, type MouseEvent, type PointerEvent, type ReactNode } from 
 import { useTranslation } from "react-i18next";
 
 import { WorkflowEditorDraftBridgeProvider } from "@/features/workflow-editor";
-import {
-  TaskSearchGlobalTrigger,
-  TaskSearchHost,
-  TaskSearchProvider,
-} from "@/features/board";
+import { TaskSearchGlobalTrigger, TaskSearchHost, TaskSearchProvider } from "@/features/board";
 import { toggleInMemoryThemeOverride } from "./startup/appEnvironment";
 import { AttentionNotificationController } from "./AttentionNotificationController";
 import { AppUpdateChip } from "./AppUpdateChip";
@@ -93,6 +89,7 @@ function AppChromeContent({ children }: AppChromeProps) {
               void navigation.openHome();
             }
           }}
+          search={{}}
           to="/"
         >
           <Home aria-hidden="true" size={16} strokeWidth={1.125} />

@@ -42,15 +42,15 @@ import {
 } from "./useHomeData";
 
 const LOCAL_UNBOUND_PLAN_KIND = "local_unbound";
-export function HomeRoute() {
+export function HomeRoute({ selectedProjectID }: Readonly<{ selectedProjectID: string | null }>) {
   return (
     <SidebarRootOwner>
-      <HomeRouteContent />
+      <HomeRouteContent selectedProjectID={selectedProjectID} />
     </SidebarRootOwner>
   );
 }
 
-function HomeRouteContent() {
+function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: string | null }>) {
   const { t } = useTranslation();
   const { api, nativeBridge } = useAppServices();
   const { push } = useStatusController();
@@ -65,7 +65,6 @@ function HomeRouteContent() {
   const attention = useGlobalAttentionPages(attentionSubscriptionReady);
   const [primaryTab, setPrimaryTab] = useState<HomePrimaryTab>("projects");
   const [prototypeCategory, setPrototypeCategory] = useState<HomePrimaryTab>("projects");
-  const [selectedProjectID, setSelectedProjectID] = useState<string | null>(null);
   const projectItems = projects.data?.pages.flatMap((page) => page.projects) ?? [];
   const attentionItems = attention.data?.pages.flatMap((page) => page.items) ?? [];
   const disabled = connection.phase !== "connected";
@@ -195,11 +194,20 @@ function HomeRouteContent() {
               open({ kind: "workflowCreate", mode: sidebarMode });
             }}
             onProjectSelect={(projectID) => {
-              setSelectedProjectID((current) => (current === projectID ? null : projectID));
+              if (selectedProjectID === projectID) {
+                void navigation.selectHomeProject(null);
+                return;
+              }
+              void navigation.selectHomeProject(projectID);
             }}
             onCategorySelect={(category) => {
+              if (prototypeCategory === category && selectedProjectID === null) {
+                return;
+              }
               setPrototypeCategory(category);
-              setSelectedProjectID(null);
+              if (selectedProjectID !== null) {
+                void navigation.selectHomeProject(null);
+              }
             }}
             selectedCategory={prototypeCategory}
             projectItems={projectItems}
@@ -212,10 +220,6 @@ function HomeRouteContent() {
               {selectedProject !== null ? (
                 <ProjectPrototypeDetail
                   key={selectedProject.id}
-                  disabled={disabled}
-                  onLinkWorkflow={() => {
-                    open({ kind: "linkWorkflow", mode: sidebarMode, projectID: selectedProject.id });
-                  }}
                   project={selectedProject}
                   sidebarMode={sidebarMode}
                 />
