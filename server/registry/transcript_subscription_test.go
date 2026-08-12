@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"core/server/runtime"
-	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -278,7 +277,6 @@ func TestSessionFeedSequencerHydrationProjectionUsesContractFailurePolicy(t *tes
 func TestRegistryHydrationCompositionUsesContractFailurePolicy(t *testing.T) {
 	registry := NewRuntimeRegistry()
 	snapshot := runtime.TranscriptHydrationSnapshot{
-		GoalAvailability: session.GoalAvailable,
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
 			Locator: transcript.CommittedRowLocator{},
 		}},

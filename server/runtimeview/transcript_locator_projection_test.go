@@ -5,7 +5,6 @@ import (
 
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/transcript"
 )
@@ -34,8 +33,7 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 		t.Fatalf("project page: %v", err)
 	}
 	hydration := TranscriptHydrationFromSnapshot(runtime.TranscriptHydrationSnapshot{
-		CommittedRows:    runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
-		GoalAvailability: session.GoalAvailable,
+		CommittedRows: runtime.TranscriptCommittedRowFactsFromSnapshot(snapshot),
 	})
 	live := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventUserMessageFlushed,
