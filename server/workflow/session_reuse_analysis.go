@@ -303,9 +303,16 @@ func (a sessionReuseAnalyzer) applyEdge(state reusePathState, edge Edge) (reuseT
 			a.staticInvalidEdges[edge.ID] = struct{}{}
 		}
 		return reuseTransition{target: reusePathState{
-			nodeID:       edge.TargetNodeID,
-			branch:       targetBranch,
-			staticSource: a.transferStaticContinuationSource(state.staticSource, state.nodeID, edge, target),
+			nodeID: edge.TargetNodeID,
+			branch: targetBranch,
+			staticSource: a.transferStaticContinuationSource(
+				state.staticSource,
+				state.nodeID,
+				state.branch,
+				targetBranch,
+				edge,
+				target,
+			),
 		}}, true
 	}
 	targetLineage, activeSourceSessionID, activeSourceKnown, selected := a.targetContext(state, edge, target, targetBranch)
@@ -884,6 +891,7 @@ const (
 type staticContinuationSource struct {
 	kind   staticContinuationSourceKind
 	nodeID NodeID
+	branch reuseBranch
 }
 
 type staticFanout struct {
@@ -1006,6 +1014,8 @@ func sessionReuseFanouts(def Definition) map[TransitionGroupID]staticFanout {
 func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 	source staticContinuationSource,
 	sourceNodeID NodeID,
+	sourceBranch reuseBranch,
+	targetBranch reuseBranch,
 	edge Edge,
 	target Node,
 ) staticContinuationSource {
@@ -1016,7 +1026,11 @@ func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 		if target.Kind() != NodeKindAgent {
 			return source
 		}
-		return staticContinuationSource{kind: staticContinuationSourceExact, nodeID: edge.TargetNodeID}
+		return staticContinuationSource{
+			kind:   staticContinuationSourceExact,
+			nodeID: edge.TargetNodeID,
+			branch: targetBranch,
+		}
 	}
 	if edge.ContextMode != ContextModeContinueSession &&
 		edge.ContextMode != ContextModeCompactAndContinueSession {
@@ -1025,14 +1039,22 @@ func (a sessionReuseAnalyzer) transferStaticContinuationSource(
 	switch contextSource := CanonicalContextSource(edge.ContextSource); contextSource.Kind {
 	case ContextSourceImmediateSource:
 		if sourceNode, exists := a.nodesByID[sourceNodeID]; exists && sourceNode.Kind() == NodeKindAgent {
-			return staticContinuationSource{kind: staticContinuationSourceExact, nodeID: sourceNodeID}
+			return staticContinuationSource{
+				kind:   staticContinuationSourceExact,
+				nodeID: sourceNodeID,
+				branch: sourceBranch,
+			}
 		}
 		return source
 	case ContextSourcePreviousTarget, ContextSourcePreviousTargetOrNew:
 		return source
 	case ContextSourceSelectedNode:
 		if nodeID, exists := a.nodeIDsByKey[contextSource.NodeKey]; exists {
-			return staticContinuationSource{kind: staticContinuationSourceExact, nodeID: nodeID}
+			return staticContinuationSource{
+				kind:   staticContinuationSourceExact,
+				nodeID: nodeID,
+				branch: sourceBranch,
+			}
 		}
 	}
 	return staticContinuationSource{kind: staticContinuationSourceAbsent}

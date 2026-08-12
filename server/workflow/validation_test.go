@@ -581,6 +581,13 @@ func TestRetainedTargetRequiresExactActiveContinuationSource(t *testing.T) {
 		},
 		{name: "divergent join sources", setup: func(*workflow.Definition) {}},
 		{
+			name: "same Agent target on sibling branches creates distinct Sessions",
+			setup: func(def *workflow.Definition) {
+				edgeByIDForValidationTest(t, def, "edge_split_b").TargetNodeID =
+					edgeByIDForValidationTest(t, def, "edge_split_a").TargetNodeID
+			},
+		},
+		{
 			name: "script branches select divergent sources",
 			setup: func(def *workflow.Definition) {
 				for _, nodeKey := range []workflow.ModelKey{"impl_a", "impl_b"} {
