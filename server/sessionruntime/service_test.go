@@ -420,6 +420,41 @@ func TestActivateSessionRuntimeUsesLatestPersistedCompleteChatSettings(t *testin
 	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "stale-complete-session-settings")
 }
 
+func TestActivateSessionRuntimePreservesExplicitThinkingOverPersistedSetting(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	if _, err := fixture.store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking: textutil.Value("low"),
+	}); err != nil {
+		t.Fatalf("persist Session Thinking: %v", err)
+	}
+	settings := sessionRuntimeFastSettings(false)
+	settings.ThinkingLevel = "high"
+
+	response, err := fixture.api.ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:          "explicit-thinking-activation",
+		SessionID:                fixture.store.Meta().SessionID,
+		OwnerID:                  "explicit-thinking-activation",
+		ActiveSettings:           settings,
+		QuestionsEnabled:         textutil.Value(true),
+		AutoCompactionEnabled:    textutil.Value(true),
+		ThinkingOverrideExplicit: true,
+		Source:                   config.SourceReport{Sources: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	engine := currentSessionRuntimeEngine(t, fixture.authority, fixture.store.Meta().SessionID)
+	if engine.ThinkingLevel() != "high" {
+		t.Fatalf("runtime Thinking = %q, want explicit high", engine.ThinkingLevel())
+	}
+	releaseSessionRuntimeForFastTest(t, fixture.api, response.Attachment, "explicit-thinking-activation")
+}
+
 func sessionRuntimeFastSettings(enabled bool) config.Settings {
 	settings := config.DefaultOnboardingSettings()
 	settings.Model = "gpt-5"

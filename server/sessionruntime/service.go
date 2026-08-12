@@ -88,6 +88,12 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 		SessionID: sessionID,
 		OwnerID:   ownerID,
 	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
+		persisted := store.Meta().ChatSettings
+		if persisted != nil && req.ThinkingOverrideExplicit {
+			cloned := *persisted
+			cloned.Thinking = nil
+			persisted = &cloned
+		}
 		current := &session.ChatSettingsOverrides{
 			Supervisor:     textutil.Value(req.ActiveSettings.Reviewer.Frequency),
 			Thinking:       textutil.Value(req.ActiveSettings.ThinkingLevel),
@@ -96,7 +102,7 @@ func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionR
 			AutoCompaction: req.AutoCompactionEnabled,
 		}
 		effective, resolveErr := session.ResolveEffectiveChatSettings(
-			store.Meta().ChatSettings,
+			persisted,
 			current,
 			session.ChatSettings{
 				Supervisor:     req.ActiveSettings.Reviewer.Frequency,

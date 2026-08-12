@@ -18,12 +18,13 @@ import (
 const ReleaseTimeout = 3 * time.Second
 
 type Request struct {
-	SessionID             string
-	ActiveSettings        config.Settings
-	EnabledTools          []toolspec.ID
-	QuestionsEnabled      bool
-	AutoCompactionEnabled bool
-	Source                config.SourceReport
+	SessionID                string
+	ActiveSettings           config.Settings
+	EnabledTools             []toolspec.ID
+	QuestionsEnabled         bool
+	AutoCompactionEnabled    bool
+	ThinkingOverrideExplicit bool
+	Source                   config.SourceReport
 }
 
 type Activation struct {
@@ -94,13 +95,14 @@ func activate(ctx context.Context, service servicecontract.SessionRuntimeService
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:       uuid.NewString(),
-		SessionID:             req.SessionID,
-		OwnerID:               ownerID,
-		ActiveSettings:        req.ActiveSettings,
-		EnabledToolIDs:        toolspec.IDStrings(req.EnabledTools),
-		QuestionsEnabled:      textutil.Value(req.QuestionsEnabled),
-		AutoCompactionEnabled: textutil.Value(req.AutoCompactionEnabled),
-		Source:                req.Source,
+		ClientRequestID:          uuid.NewString(),
+		SessionID:                req.SessionID,
+		OwnerID:                  ownerID,
+		ActiveSettings:           req.ActiveSettings,
+		EnabledToolIDs:           toolspec.IDStrings(req.EnabledTools),
+		QuestionsEnabled:         textutil.Value(req.QuestionsEnabled),
+		AutoCompactionEnabled:    textutil.Value(req.AutoCompactionEnabled),
+		ThinkingOverrideExplicit: req.ThinkingOverrideExplicit,
+		Source:                   req.Source,
 	}
 }

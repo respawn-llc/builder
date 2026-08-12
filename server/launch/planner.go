@@ -99,6 +99,7 @@ type SessionPlan struct {
 	BaseSource                          config.SourceReport
 	QuestionsEnabled                    bool
 	AutoCompactionEnabled               bool
+	ThinkingOverrideExplicit            bool
 }
 
 func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
@@ -603,6 +604,7 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 		return SessionPlan{}, nil, err
 	}
 	next, err = withWorkflowThinking(next, options.WorkflowThinking)
+	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
 	return next, warnings, err
 }
 
@@ -873,6 +875,7 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	}
 	next.QuestionsEnabled = chatSettings.Questions
 	next.AutoCompactionEnabled = chatSettings.AutoCompaction
+	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
 	return next, warnings, nil
 }
 

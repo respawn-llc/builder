@@ -1054,6 +1054,9 @@ func TestApplyRunPromptOverridesPreservesExplicitThinkingOverSessionSetting(t *t
 	if updated.ActiveSettings.ThinkingLevel != "high" {
 		t.Fatalf("thinking level = %q, want explicit override high", updated.ActiveSettings.ThinkingLevel)
 	}
+	if !updated.ThinkingOverrideExplicit {
+		t.Fatal("explicit Thinking override marker = false, want true")
+	}
 }
 
 func TestApplyPreparedRunPromptOverridesWithoutRolePreservesConfiguredModelAndContinuation(t *testing.T) {

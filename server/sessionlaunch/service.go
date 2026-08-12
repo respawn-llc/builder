@@ -586,16 +586,17 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		enabledToolIDs = append(enabledToolIDs, string(id))
 	}
 	return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-		SessionID:             result.Plan.Descriptor.SessionID().String(),
-		ActiveSettings:        result.Plan.ActiveSettings,
-		EnabledToolIDs:        enabledToolIDs,
-		ConfiguredModelName:   result.Plan.ConfiguredModelName,
-		SessionName:           textutil.Pointer(result.Plan.SessionName),
-		PromptHistory:         append([]string(nil), result.Plan.PromptHistory...),
-		ModelContractLocked:   result.Plan.ModelContractLocked,
-		QuestionsEnabled:      result.Plan.QuestionsEnabled,
-		AutoCompactionEnabled: result.Plan.AutoCompactionEnabled,
-		Source:                result.Plan.Source,
+		SessionID:                result.Plan.Descriptor.SessionID().String(),
+		ActiveSettings:           result.Plan.ActiveSettings,
+		EnabledToolIDs:           enabledToolIDs,
+		ConfiguredModelName:      result.Plan.ConfiguredModelName,
+		SessionName:              textutil.Pointer(result.Plan.SessionName),
+		PromptHistory:            append([]string(nil), result.Plan.PromptHistory...),
+		ModelContractLocked:      result.Plan.ModelContractLocked,
+		QuestionsEnabled:         result.Plan.QuestionsEnabled,
+		AutoCompactionEnabled:    result.Plan.AutoCompactionEnabled,
+		ThinkingOverrideExplicit: result.Plan.ThinkingOverrideExplicit,
+		Source:                   result.Plan.Source,
 	}, Warnings: result.Warnings}
 }
 

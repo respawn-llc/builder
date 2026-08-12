@@ -10,14 +10,15 @@ import (
 )
 
 type SessionRuntimeActivateRequest struct {
-	ClientRequestID       string              `json:"client_request_id"`
-	SessionID             string              `json:"session_id"`
-	OwnerID               string              `json:"owner_id,omitempty"`
-	ActiveSettings        config.Settings     `json:"active_settings"`
-	EnabledToolIDs        []string            `json:"enabled_tool_ids"`
-	QuestionsEnabled      *bool               `json:"questions_enabled"`
-	AutoCompactionEnabled *bool               `json:"auto_compaction_enabled"`
-	Source                config.SourceReport `json:"source"`
+	ClientRequestID          string              `json:"client_request_id"`
+	SessionID                string              `json:"session_id"`
+	OwnerID                  string              `json:"owner_id,omitempty"`
+	ActiveSettings           config.Settings     `json:"active_settings"`
+	EnabledToolIDs           []string            `json:"enabled_tool_ids"`
+	QuestionsEnabled         *bool               `json:"questions_enabled"`
+	AutoCompactionEnabled    *bool               `json:"auto_compaction_enabled"`
+	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
+	Source                   config.SourceReport `json:"source"`
 }
 
 type SessionRuntimeAttachment struct {
