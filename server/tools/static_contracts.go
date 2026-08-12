@@ -33,17 +33,6 @@ type StaticToolContracts struct {
 	byID    map[toolspec.ID]staticToolContract
 }
 
-var ordinaryStaticToolIDs = []toolspec.ID{
-	toolspec.ToolExecCommand,
-	toolspec.ToolWriteStdin,
-	toolspec.ToolViewImage,
-	toolspec.ToolPatch,
-	toolspec.ToolEdit,
-	toolspec.ToolAskQuestion,
-	toolspec.ToolTriggerHandoff,
-	toolspec.ToolWebSearch,
-}
-
 func NewStaticToolContracts(
 	preparer jsoncontract.Preparer,
 	sources ...StaticContractSource,
@@ -60,15 +49,11 @@ func NewStaticToolContracts(
 		return StaticToolContracts{}, fmt.Errorf("%w: prepare ingress: %w", errStaticToolContractPreparation, err)
 	}
 
-	expected := make(map[toolspec.ID]struct{}, len(ordinaryStaticToolIDs))
-	for _, id := range ordinaryStaticToolIDs {
-		expected[id] = struct{}{}
-	}
 	contracts := make(map[toolspec.ID]staticToolContract, len(sources))
 	for _, source := range sources {
-		if _, ok := expected[source.ID]; !ok {
+		if _, ok := definitions[source.ID]; !ok {
 			return StaticToolContracts{}, fmt.Errorf(
-				"%w: tool %q is not an ordinary static tool",
+				"%w: tool %q is missing centralized metadata",
 				errStaticToolContractPreparation,
 				source.ID,
 			)
@@ -117,15 +102,6 @@ func NewStaticToolContracts(
 			)
 		}
 		contracts[source.ID] = staticToolContract{schema: schema, projection: projection}
-	}
-	for _, id := range ordinaryStaticToolIDs {
-		if _, ok := contracts[id]; !ok {
-			return StaticToolContracts{}, fmt.Errorf(
-				"%w: tool %q contract is missing",
-				errStaticToolContractPreparation,
-				id,
-			)
-		}
 	}
 	return StaticToolContracts{ingress: ingress, byID: contracts}, nil
 }

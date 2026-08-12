@@ -129,14 +129,6 @@ func TestRegistryReplaceHandlersSwapsDefinitionsAtomically(t *testing.T) {
 	}
 }
 
-func TestStaticRegistryRejectsMissingPreparedContract(t *testing.T) {
-	sources := staticContractTestSources()
-	sources = sources[:len(sources)-1]
-	if _, err := NewStaticToolContracts(jsoncontract.NewPreparer(false), sources...); err == nil {
-		t.Fatal("incomplete static contract owner unexpectedly prepared")
-	}
-}
-
 func TestEmptyRegistryCannotInstallOrdinaryHandlers(t *testing.T) {
 	r := NewRegistry()
 	err := r.ReplaceHandlers(handlerRegistration(toolspec.ToolPatch))
@@ -165,18 +157,6 @@ func TestRegistryPrepareInputUsesRegisteredPreparedContract(t *testing.T) {
 	}
 	if _, err := r.PrepareInput(toolspec.ToolExecCommand, json.RawMessage(`{"value":"ok"}`)); err == nil {
 		t.Fatal("unregistered tool input unexpectedly prepared")
-	}
-}
-
-func TestStaticToolContractsRejectCompleteNode(t *testing.T) {
-	sources := staticContractTestSources()
-	sources[len(sources)-1] = StaticContractSource{
-		ID:    toolspec.ToolCompleteNode,
-		Input: staticContractTestInput{},
-	}
-	_, err := NewStaticToolContracts(jsoncontract.NewPreparer(false), sources...)
-	if err == nil {
-		t.Fatal("complete_node unexpectedly entered static tool contracts")
 	}
 }
 
