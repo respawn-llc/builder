@@ -2368,6 +2368,11 @@ func TestProtocolErrorDecodesRuntimeCommandNotAcceptedCauses(t *testing.T) {
 				t.Fatalf("decoded cause = %v, want manual compaction active", err)
 			}
 		}},
+		{name: "runtime unavailable", cause: serverapi.ErrRuntimeUnavailable, check: func(t *testing.T, err error) {
+			if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+				t.Fatalf("decoded cause = %v, want runtime unavailable", err)
+			}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := serverapi.NewRuntimeCommandNotAcceptedError(test.cause)

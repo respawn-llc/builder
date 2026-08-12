@@ -6,6 +6,8 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
+
+	"github.com/google/uuid"
 )
 
 func (c *sessionRuntimeClient) sessionRuntimeBoundary() {}
@@ -240,9 +242,7 @@ func (c *sessionRuntimeClient) CompactRuntime(ctx context.Context, req clientui.
 	if err := req.Validate(); err != nil {
 		return err
 	}
-	return runtimeRequestCallNoResult(ctx, c, func(ctx context.Context, requestID string) error {
-		return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: requestID, SessionID: c.sessionID, Args: req.Args})
-	})
+	return c.controls.CompactContext(ctx, serverapi.RuntimeCompactContextRequest{ClientRequestID: uuid.NewString(), SessionID: c.sessionID, Args: req.Args})
 }
 
 func (c *sessionRuntimeClient) Interrupt() error {
