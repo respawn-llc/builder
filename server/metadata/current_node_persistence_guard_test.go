@@ -293,18 +293,35 @@ func baselinePersistenceFixture() persistenceSchemaModel {
 	model.relations["session_node_association"] = &persistenceRelation{
 		name: "session_node_association",
 		columns: map[string]persistenceColumn{
+			"task_id":               {name: "task_id", notNull: true},
 			"session_id":            {name: "session_id", notNull: true},
 			"node_id":               {name: "node_id", notNull: true},
 			"transition_branch_key": {name: "transition_branch_key"},
+			"association_status":    {name: "association_status", notNull: true},
+			"source_session_id":     {name: "source_session_id"},
 		},
-		foreignKeys: []persistenceForeignKey{{
-			targetTable:   "sessions",
-			localColumns:  []string{"session_id"},
-			targetColumns: []string{"id"},
-		}},
+		foreignKeys: []persistenceForeignKey{
+			{
+				targetTable:   "tasks",
+				localColumns:  []string{"task_id"},
+				targetColumns: []string{"id"},
+			},
+			{
+				targetTable:   "sessions",
+				localColumns:  []string{"session_id"},
+				targetColumns: []string{"id"},
+			},
+			{
+				targetTable:   "sessions",
+				localColumns:  []string{"source_session_id"},
+				targetColumns: []string{"id"},
+			},
+		},
 		indexes: []persistenceIndex{
 			{unique: true, partial: true, columns: []string{"session_id", "node_id"}},
 			{unique: true, partial: true, columns: []string{"session_id", "node_id", "transition_branch_key"}},
+			{unique: true, partial: true, columns: []string{"task_id", "node_id"}},
+			{unique: true, partial: true, columns: []string{"task_id", "node_id", "transition_branch_key"}},
 		},
 		triggers: []persistenceTrigger{
 			{

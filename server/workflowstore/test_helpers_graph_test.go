@@ -282,7 +282,7 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) run
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID: workflow.NodeID(agentID), WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
+			ID: agentID, WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
 			DisplayName: "Agent", SubagentRole: "coder",
 		})
 		req.TransitionGroups = append(req.TransitionGroups,

@@ -2,8 +2,8 @@ package protocol
 
 import "testing"
 
-func TestManualMoveOptionalDescriptionChangesProtocolVersion(t *testing.T) {
-	if Version == "101" {
-		t.Fatalf("manual move optional description retained the pre-contract protocol version")
+func TestCurrentContractChangesProtocolVersion(t *testing.T) {
+	if Version != "120" {
+		t.Fatalf("current protocol version = %q, want 120", Version)
 	}
 }

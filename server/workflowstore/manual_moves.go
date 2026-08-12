@@ -58,7 +58,10 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	return s.ApplyManualMove(ctx, prepared, nil)
 }
 
-func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreparation, error) {
+func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (preparation ManualMovePreparation, resultErr error) {
+	defer func() {
+		reportRetainedTargetInvariantError(resultErr)
+	}()
 	if err := validateCommentarySize(req.Commentary); err != nil {
 		return ManualMovePreparation{}, err
 	}
@@ -111,7 +114,10 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 	return currentNodeDefinitionNode(definition, nodeID)
 }
 
-func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (ManualMoveResult, error) {
+func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (result ManualMoveResult, resultErr error) {
+	defer func() {
+		reportRetainedTargetInvariantError(resultErr)
+	}()
 	if strings.TrimSpace(string(prepared.request.TaskID)) == "" || (!prepared.noOp && prepared.target == nil) {
 		return ManualMoveResult{}, errors.New("manual move preparation is invalid")
 	}
@@ -173,7 +179,10 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if targetDefinition.Kind() != prepared.target.Kind() {
 		return ManualMoveResult{}, errManualMoveTargetShapeChanged
 	}
-	var targets []workflow.CurrentNode
+	var (
+		targets    []workflow.CurrentNode
+		invariants []workflow.RetainedTargetInvariantDetail
+	)
 	if executableNodeKind(targetDefinition.Kind()) {
 		if len(preview.Choices) != 1 {
 			return ManualMoveResult{}, ErrManualMoveTransitionSelectionRequired
@@ -189,7 +198,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
 			return ManualMoveResult{}, err
 		}
-		targets, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
+		targets, invariants, err = s.materializeManualMoveTargets(ctx, q, definition, choice, currentNodes, valueEnvironment, prepared.request.Values)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
@@ -243,11 +252,14 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err := tx.Commit(); err != nil {
 		return ManualMoveResult{}, err
 	}
+	for _, detail := range invariants {
+		reportRetainedTargetInvariantAfterCommit(detail)
+	}
 	removedReferences := make([]workflow.CurrentNodeReference, 0, len(currentNodes))
 	for _, currentNode := range currentNodes {
 		removedReferences = append(removedReferences, currentNode.Reference)
 	}
-	result := ManualMoveResult{
+	result = ManualMoveResult{
 		Outcome: ManualMoveResultOutcomeApplied,
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: removedReferences,
@@ -364,27 +376,28 @@ func (s *Store) materializeManualMoveTargets(
 	currentNodes []workflow.CurrentNode,
 	environment manualMoveValueEnvironment,
 	submitted map[workflow.ModelKey]map[string]string,
-) ([]workflow.CurrentNode, error) {
+) ([]workflow.CurrentNode, []workflow.RetainedTargetInvariantDetail, error) {
 	if len(choice.Edges) == 0 {
-		return nil, ErrManualMoveTransitionNotUsable
+		return nil, nil, ErrManualMoveTransitionNotUsable
 	}
 	targets := make([]workflow.CurrentNode, 0, len(choice.Edges))
+	invariants := make([]workflow.RetainedTargetInvariantDetail, 0, len(choice.Edges))
 	contextSource := manualMoveContextCurrentNode(currentNodes)
 	priorValues := manualMoveBasePriorValues(currentNodes)
 	for _, edge := range choice.Edges {
 		target, err := currentNodeDefinitionNode(definition, edge.TargetNodeID)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		var branchKey *workflow.TransitionBranchKey
 		if len(choice.Edges) > 1 {
 			value := workflow.TransitionBranchKey(strings.TrimSpace(string(edge.Key)))
 			if value == "" {
-				return nil, errors.New("manual move fan-out branch key is required")
+				return nil, nil, errors.New("manual move fan-out branch key is required")
 			}
 			branchKey = &value
 		}
-		targetCurrentNode, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
+		materializedTarget, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
 			Definition:                      definition,
 			Edge:                            edge,
 			Source:                          choice.SourceNode,
@@ -405,16 +418,20 @@ func (s *Store) materializeManualMoveTargets(
 			TransitionBranchKey: branchKey,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		targets = append(targets, targetCurrentNode)
+		if materializedTarget.Invariant != nil {
+			checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+			invariants = append(invariants, *materializedTarget.Invariant)
+		}
+		targets = append(targets, materializedTarget.CurrentNode)
 	}
 	if len(targets) > 1 {
 		if err := validateFanoutTargets(currentNodes[0].Reference.TaskID, targets); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return targets, nil
+	return targets, invariants, nil
 }
 
 func manualMoveBasePriorValues(currentNodes []workflow.CurrentNode) workflow.MaterializedPriorValues {

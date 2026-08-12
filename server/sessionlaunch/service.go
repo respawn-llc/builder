@@ -406,12 +406,87 @@ func (s *Service) planExistingSession(
 	if s.runtime == nil {
 		return PlanResult{}, ErrExistingSessionAuthorityRequired
 	}
-	callback := func(ctx context.Context, store *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+	if !existingSessionRequestRequiresMaintenance(req, roleOverride) {
+		descriptor, err := session.NewOpenSessionDescriptor(sessionID)
+		if err != nil {
+			return PlanResult{}, err
+		}
+		maintenanceRequired := false
+		callback := func(ctx context.Context, store *session.Store) error {
+			if existingSessionStoreRequiresMaintenance(planner.Config, store) {
+				maintenanceRequired = true
+				return nil
+			}
+			result, resultErr = s.planExistingSessionSnapshot(ctx, planner, req, roleOverride, caller, store)
+			return resultErr
+		}
+		resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
+		if resultErr != nil || !maintenanceRequired {
+			return result, resultErr
+		}
+	}
+	maintenanceCallback := func(ctx context.Context, store *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
 		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store, maintenance)
 		return resultErr
 	}
-	resultErr = s.runtime.RunSessionMaintenance(ctx, sessionID.String(), callback)
+	resultErr = s.runtime.RunSessionMaintenance(ctx, sessionID.String(), maintenanceCallback)
 	return result, resultErr
+}
+
+func existingSessionRequestRequiresMaintenance(
+	req serverapi.SessionPlanRequest,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+) bool {
+	return roleOverride.Present || req.Overrides.HasAny()
+}
+
+func existingSessionStoreRequiresMaintenance(
+	app config.App,
+	store *session.Store,
+) bool {
+	meta := store.Meta()
+	state, err := session.ChatSettingsStateFromMeta(meta)
+	if err != nil {
+		return true
+	}
+	if meta.Locked != nil || state.Agent == config.DefaultSubagentRole {
+		return false
+	}
+	return config.LookupSubagentRole(app.Settings, state.Agent).Status != config.SubagentRoleLookupPresent
+}
+
+func (s *Service) planExistingSessionSnapshot(
+	ctx context.Context,
+	planner launch.Planner,
+	req serverapi.SessionPlanRequest,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	caller *subagentpolicy.Caller,
+	store *session.Store,
+) (PlanResult, error) {
+	if err := authorizePersistedHeadlessRole(planner, req, roleOverride, caller, store); err != nil {
+		return PlanResult{}, err
+	}
+	return s.finalizeLaunchPlan(
+		ctx,
+		func() (launch.SessionPlan, []string, error) {
+			plan, err := planner.PlanSessionWithStore(ctx, launch.SessionRequest{
+				Mode:                                launch.Mode(req.Mode),
+				Intent:                              req.Intent,
+				SkipContinuationAgentRoleValidation: roleOverride.Default,
+				AgentSelectionResolved:              true,
+				ReadOnlySnapshot:                    true,
+			}, store)
+			if err != nil {
+				return launch.SessionPlan{}, nil, err
+			}
+			if req.Mode == serverapi.SessionLaunchModeInteractive {
+				if _, err := store.PromoteSubagentToMain(); err != nil {
+					return launch.SessionPlan{}, nil, err
+				}
+			}
+			return plan, nil, nil
+		},
+	)
 }
 
 func (s *Service) planExistingSessionWithStore(
@@ -424,23 +499,8 @@ func (s *Service) planExistingSessionWithStore(
 	store *session.Store,
 	maintenance *sessionruntime.ActiveRuntimeMaintenance,
 ) (PlanResult, error) {
-	if req.Mode == serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
-		persistedRole, err := planner.SelectedSessionContinuationAgentRoleWithStore(store)
-		if err != nil {
-			return PlanResult{}, err
-		}
-		if persistedRole != nil && caller != nil {
-			lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
-			if lookup.Status == config.SubagentRoleLookupPresent {
-				persistedOverride, err := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
-				if err != nil {
-					return PlanResult{}, err
-				}
-				if err := subagentpolicy.Authorize(planner.Config.Settings, caller, subagentpolicy.TargetFromOverride(persistedOverride)); err != nil {
-					return PlanResult{}, err
-				}
-			}
-		}
+	if err := authorizePersistedHeadlessRole(planner, req, roleOverride, caller, store); err != nil {
+		return PlanResult{}, err
 	}
 	locked, err := planner.SelectedSessionLockedContractWithStore(store)
 	if err != nil {
@@ -480,6 +540,35 @@ func (s *Service) planExistingSessionWithStore(
 				AgentSelectionPersisted: agentSelectionResolved && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
 			})
 		},
+	)
+}
+
+func authorizePersistedHeadlessRole(
+	planner launch.Planner,
+	req serverapi.SessionPlanRequest,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	caller *subagentpolicy.Caller,
+	store *session.Store,
+) error {
+	if req.Mode != serverapi.SessionLaunchModeHeadless || roleOverride.Present {
+		return nil
+	}
+	persistedRole, err := planner.SelectedSessionContinuationAgentRoleWithStore(store)
+	if err != nil || persistedRole == nil || caller == nil {
+		return err
+	}
+	lookup := config.LookupSubagentRole(planner.Config.Settings, *persistedRole)
+	if lookup.Status != config.SubagentRoleLookupPresent {
+		return nil
+	}
+	persistedOverride, err := (serverapi.RunPromptOverrides{AgentRole: persistedRole}).AgentRoleOverride()
+	if err != nil {
+		return err
+	}
+	return subagentpolicy.Authorize(
+		planner.Config.Settings,
+		caller,
+		subagentpolicy.TargetFromOverride(persistedOverride),
 	)
 }
 

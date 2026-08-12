@@ -33,12 +33,13 @@ type CurrentNodeAutomaticIntent struct {
 }
 
 type CurrentNodeCompletionResult struct {
-	Mutation               workflow.CurrentNodeMutationResult
-	Handoff                CompletionHandoff
-	AutomaticIntents       []CurrentNodeAutomaticIntent
-	PendingApproval        *workflow.PendingApproval
-	SessionReuse           *workflow.SessionReuseAnalysisInput
-	PostCompletionEligible bool
+	Mutation                 workflow.CurrentNodeMutationResult
+	Handoff                  CompletionHandoff
+	AutomaticIntents         []CurrentNodeAutomaticIntent
+	PendingApproval          *workflow.PendingApproval
+	SessionReuse             *workflow.SessionReuseAnalysisInput
+	PostCompletionEligible   bool
+	retainedTargetInvariants []workflow.RetainedTargetInvariantDetail
 }
 
 func (r CurrentNodeCompletionResult) Committed() bool {
@@ -153,7 +154,10 @@ func (s *Store) ResolveIdleExecutableCurrentNode(ctx context.Context, selector I
 	}
 }
 
-func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (CurrentNodeCompletionResult, error) {
+func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompletionRequest) (result CurrentNodeCompletionResult, resultErr error) {
+	defer func() {
+		reportRetainedTargetInvariantError(resultErr)
+	}()
 	prepared, err := prepareCurrentNodeCompletionRequest(req)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -252,6 +256,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		for _, detail := range result.retainedTargetInvariants {
+			reportRetainedTargetInvariantAfterCommit(detail)
+		}
 		if len(result.Mutation.Removed) > 0 {
 			s.publishCommittedCurrentNodeCompletionEvent(ctx, prepared.Source)
 		}
@@ -279,6 +286,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		for _, detail := range result.retainedTargetInvariants {
+			reportRetainedTargetInvariantAfterCommit(detail)
+		}
 		result.SessionReuse = newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge})
 		result.PostCompletionEligible = source.Kind() == workflow.NodeKindAgent
 		if len(result.Mutation.Removed) > 0 {
@@ -286,7 +296,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		}
 		return result, nil
 	}
-	targetCurrentNode, err := materializeCompletionTargetCurrentNode(
+	materializedTarget, err := materializeCompletionTargetCurrentNode(
 		ctx,
 		q,
 		definition,
@@ -303,7 +313,11 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
+	targetCurrentNode := materializedTarget.CurrentNode
 	if target.Edge.RequiresApproval {
+		if materializedTarget.Invariant != nil {
+			checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
+		}
 		approval, err := newPendingApproval(
 			currentSource,
 			workflowRecord.Version,
@@ -328,11 +342,17 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		if err := commit(); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		if materializedTarget.Invariant != nil {
+			reportRetainedTargetInvariantAfterCommit(*materializedTarget.Invariant)
+		}
 		return CurrentNodeCompletionResult{
 			PendingApproval:        &approval,
 			SessionReuse:           newSessionReuseAnalysisInput(definition, currentSource, []workflow.Edge{target.Edge}),
 			PostCompletionEligible: source.Kind() == workflow.NodeKindAgent,
 		}, nil
+	}
+	if materializedTarget.Invariant != nil {
+		checkRetainedTargetInvariantBeforeMutation(*materializedTarget.Invariant)
 	}
 	handoff, err := currentNodeCompletionHandoff(source, target.Node)
 	if err != nil {
@@ -345,6 +365,9 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if removed != 1 {
 		return CurrentNodeCompletionResult{}, sql.ErrNoRows
 	}
+	if err := updateActiveFanoutBranchContinuationSource(ctx, q, prepared.Source, targetCurrentNode.ContinuationSource); err != nil {
+		return CurrentNodeCompletionResult{}, err
+	}
 	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode, nowTime); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
@@ -354,7 +377,10 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if err := commit(); err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}
-	result := CurrentNodeCompletionResult{
+	if materializedTarget.Invariant != nil {
+		reportRetainedTargetInvariantAfterCommit(*materializedTarget.Invariant)
+	}
+	result = CurrentNodeCompletionResult{
 		Mutation: workflow.CurrentNodeMutationResult{
 			Removed: []workflow.CurrentNodeReference{prepared.Source},
 			Created: []workflow.CurrentNode{targetCurrentNode},
@@ -579,24 +605,29 @@ type transitionTargetMaterializationRequest struct {
 	TransitionBranchKey             *workflow.TransitionBranchKey
 }
 
+type transitionTargetMaterialization struct {
+	CurrentNode workflow.CurrentNode
+	Invariant   *workflow.RetainedTargetInvariantDetail
+}
+
 func materializeTransitionTargetCurrentNode(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	request transitionTargetMaterializationRequest,
-) (workflow.CurrentNode, error) {
+) (transitionTargetMaterialization, error) {
 	definition := request.Definition
 	edge := request.Edge
 	source := request.Source
 	target := request.Target
 	if strings.TrimSpace(string(request.ContextTaskID)) == "" {
 		if request.ManualMoveContext {
-			return workflow.CurrentNode{}, ErrManualMoveTransitionNotUsable
+			return transitionTargetMaterialization{}, ErrManualMoveTransitionNotUsable
 		}
-		return workflow.CurrentNode{}, errors.New("current node completion requires task id")
+		return transitionTargetMaterialization{}, errors.New("current node completion requires task id")
 	}
 	transitionGroup, err := transitionGroupForEdge(definition, edge)
 	if err != nil {
-		return workflow.CurrentNode{}, err
+		return transitionTargetMaterialization{}, err
 	}
 	sourceTransitionKey := workflow.ModelKey(transitionGroup.TransitionID)
 	wiring := workflow.DeriveWiringWithCatalog(definition, request.Catalog)
@@ -604,7 +635,7 @@ func materializeTransitionTargetCurrentNode(
 	for _, binding := range wiring.CurrentNodeInputBindingsForEdge(edge.ID) {
 		providerNode, err := transitionTargetInputProviderNodeKey(definition, wiring, source, binding.Field)
 		if err != nil {
-			return workflow.CurrentNode{}, err
+			return transitionTargetMaterialization{}, err
 		}
 		value, exists := request.Value(providerNode, sourceTransitionKey, binding.Field)
 		if !exists {
@@ -612,7 +643,7 @@ func materializeTransitionTargetCurrentNode(
 				workflow.CanonicalParameterPurpose(parameter.Purpose) != workflow.ParameterPurposeOrdinary {
 				continue
 			}
-			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+			return transitionTargetMaterialization{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
 				Code:    CompletionCodeRequiredOutputMissing,
 				Field:   strings.TrimSpace(binding.Field),
 				Message: "required output is missing",
@@ -624,7 +655,7 @@ func materializeTransitionTargetCurrentNode(
 	for _, requirement := range wiring.PriorParameterRequirementsForNode(workflow.NodeIDOf(target)) {
 		value, exists := request.Value(requirement.ProviderNode, requirement.TransitionKey, requirement.ParameterName)
 		if !exists {
-			return workflow.CurrentNode{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
+			return transitionTargetMaterialization{}, CompletionValidationError{Issues: []CompletionValidationIssue{{
 				Code:    CompletionCodeRequiredOutputMissing,
 				Field:   strings.TrimSpace(requirement.ParameterName),
 				Message: "required prior Transition parameter is missing",
@@ -632,7 +663,7 @@ func materializeTransitionTargetCurrentNode(
 		}
 		priorValues.SetTransitionParameter(requirement.TransitionKey, requirement.ParameterName, value)
 	}
-	sessionID, err := resolveTransitionTargetSession(
+	contextResolution, err := resolveTransitionContext(
 		ctx,
 		q,
 		definition,
@@ -641,11 +672,13 @@ func materializeTransitionTargetCurrentNode(
 		request.ContextCurrentSource,
 		request.TransitionBranchKey,
 		request.Source,
+		request.Target,
 		request.ManualMoveContext,
 	)
 	if err != nil {
-		return workflow.CurrentNode{}, err
+		return transitionTargetMaterialization{}, err
 	}
+	sessionID := contextResolution.targetSessionID()
 	var retainedSessionSelection *workflow.AgentExecutionSelection
 	if sessionID != nil && request.ResolveRetainedSessionSelection != nil {
 		policy, err := workflow.ResolveAssigneeSessionPolicy(workflow.AssigneeSessionPolicyRequest{
@@ -654,12 +687,12 @@ func materializeTransitionTargetCurrentNode(
 			TargetSessionResolved: true,
 		})
 		if err != nil {
-			return workflow.CurrentNode{}, err
+			return transitionTargetMaterialization{}, err
 		}
 		if policy == workflow.AssigneeSessionPolicyPreserve {
 			retainedSessionSelection, err = request.ResolveRetainedSessionSelection(ctx, *sessionID)
 			if err != nil {
-				return workflow.CurrentNode{}, err
+				return transitionTargetMaterialization{}, err
 			}
 		}
 	}
@@ -669,7 +702,7 @@ func materializeTransitionTargetCurrentNode(
 		retainedSessionSelection,
 	)
 	if err != nil {
-		return workflow.CurrentNode{}, err
+		return transitionTargetMaterialization{}, err
 	}
 	for _, parameter := range edge.Parameters {
 		if workflow.CanonicalParameterPurpose(parameter.Purpose) == workflow.ParameterPurposeOrdinary {
@@ -680,16 +713,25 @@ func materializeTransitionTargetCurrentNode(
 			priorValues.SetTransitionParameter(sourceTransitionKey, parameter.Key, value)
 		}
 	}
-	return completionTargetCurrentNode(
+	currentNode, err := completionTargetCurrentNode(
 		request.ContextTaskID,
 		target,
 		request.TransitionBranchKey,
 		currentInputValues,
 		priorValues,
 		sessionID,
+		contextResolution.ActiveSource,
 		edge.ID,
 		selection,
 	)
+	if err != nil {
+		return transitionTargetMaterialization{}, err
+	}
+	materialized := transitionTargetMaterialization{CurrentNode: currentNode}
+	if detail, ok := contextResolution.invariantDetail(); ok {
+		materialized.Invariant = &detail
+	}
+	return materialized, nil
 }
 
 func materializeTargetAgentSelection(
@@ -778,7 +820,7 @@ func materializeCompletionTargetCurrentNode(
 	outputValues map[string]string,
 	commentary string,
 	transitionBranchKey *workflow.TransitionBranchKey,
-) (workflow.CurrentNode, error) {
+) (transitionTargetMaterialization, error) {
 	wiring := workflow.DeriveWiringWithCatalog(definition, catalog)
 	sourceKey := workflow.NodeKey(source)
 	var sourceTransitionKey workflow.ModelKey
@@ -789,7 +831,7 @@ func materializeCompletionTargetCurrentNode(
 		}
 	}
 	if sourceTransitionKey == "" {
-		return workflow.CurrentNode{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
+		return transitionTargetMaterialization{}, fmt.Errorf("transition group %q is absent", edge.TransitionGroupID)
 	}
 	value := func(providerNode, transitionKey workflow.ModelKey, outputName string) (string, bool) {
 		if transitionKey == sourceTransitionKey &&
@@ -821,7 +863,7 @@ func materializeCompletionTargetCurrentNode(
 		}
 		return "", false
 	}
-	targetCurrentNode, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
+	materialized, err := materializeTransitionTargetCurrentNode(ctx, q, transitionTargetMaterializationRequest{
 		Definition:                      definition,
 		Edge:                            edge,
 		Source:                          source,
@@ -835,13 +877,15 @@ func materializeCompletionTargetCurrentNode(
 		TransitionBranchKey:             transitionBranchKey,
 	})
 	if err != nil {
-		return workflow.CurrentNode{}, err
+		return transitionTargetMaterialization{}, err
 	}
+	targetCurrentNode := materialized.CurrentNode
 	if targetCurrentNode.CurrentInputValues == nil {
 		targetCurrentNode.CurrentInputValues = make(map[string]string)
 	}
 	targetCurrentNode.CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
-	return targetCurrentNode, nil
+	materialized.CurrentNode = targetCurrentNode
+	return materialized, nil
 }
 
 func (s *Store) resolveRetainedSessionSelection(ctx context.Context, sessionID runtimeids.SessionID) (*workflow.AgentExecutionSelection, error) {
@@ -961,6 +1005,7 @@ func completionTargetCurrentNode(
 	currentInputValues map[string]string,
 	priorValues workflow.MaterializedPriorValues,
 	sessionID *runtimeids.SessionID,
+	continuationSource workflow.MaterializedContinuationSource,
 	enteredByEdgeID workflow.EdgeID,
 	selection *workflow.AgentExecutionSelection,
 ) (workflow.CurrentNode, error) {
@@ -977,11 +1022,12 @@ func completionTargetCurrentNode(
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedSource(
 		reference,
 		currentInputValues,
 		priorValues,
 		sessionID,
+		continuationSource,
 		scheduling,
 		selection,
 	)

@@ -74,6 +74,7 @@ type SessionRequest struct {
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
 	AgentSelectionResolved              bool
+	ReadOnlySnapshot                    bool
 }
 
 type SessionPlan struct {
@@ -390,6 +391,9 @@ func (p Planner) PlanSessionWithStore(ctx context.Context, req SessionRequest, s
 }
 
 func preparePlanStore(req SessionRequest, store *session.Store) error {
+	if req.ReadOnlySnapshot {
+		return nil
+	}
 	if req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting && req.Mode == ModeInteractive {
 		if _, err := store.PromoteSubagentToMain(); err != nil {
 			return err
@@ -399,7 +403,7 @@ func preparePlanStore(req SessionRequest, store *session.Store) error {
 }
 
 func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
-	if req.Mode == ModeHeadless {
+	if req.Mode == ModeHeadless && !req.ReadOnlySnapshot {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
 		}
@@ -433,7 +437,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if meta.Continuation != nil {
 		continuation.AgentRole = continuationAgentRole
 	}
-	if !req.AgentSelectionResolved {
+	if !req.AgentSelectionResolved && !req.ReadOnlySnapshot {
 		if err := store.SetContinuationContext(continuation); err != nil {
 			return SessionPlan{}, err
 		}
@@ -448,7 +452,9 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
+	if meta.Locked != nil &&
+		(!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") &&
+		!req.ReadOnlySnapshot {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
