@@ -130,56 +130,63 @@ describe("Project Sessions browser", () => {
   });
 
   it.each([
-    ["virtual-boundary-next", "older", "older-1"],
-    ["virtual-boundary-previous", "newer", "newer-1"],
-  ] as const)("retains rows behind the %s failure boundary", async (boundaryTestID, direction, cursor) => {
+    ["virtual-boundary-next", "older"],
+    ["virtual-boundary-previous", "newer"],
+  ] as const)("retains rows behind the %s failure boundary", async (boundaryTestID, direction) => {
+    let failNewer = false;
     renderBrowser(
       sessionRoute((request) => {
-        if (request.position.kind === direction) throw new Error(`${direction} failed`);
-        return feedPage(request, ["retained-session"], {
-          ...(direction === "older" ? { older: cursor } : { newer: cursor }),
-        });
+        if (direction === "older") {
+          if (request.offset === 50) throw new Error("older failed");
+          return feedPage(request, ["retained-session"], 50);
+        }
+        if (request.offset === 0 && failNewer) throw new Error("newer failed");
+        return sessionNumberPage(request, request.offset / 50, request.offset + 50);
       }),
     );
 
-    expect(await screen.findByText("retained-session")).toBeInTheDocument();
+    if (direction === "newer") {
+      expect(await screen.findByText("session-0-1")).toBeInTheDocument();
+      for (let page = 1; page <= 10; page += 1) {
+        await loadPage("older", `session-${page.toString()}-1`);
+      }
+      failNewer = true;
+    } else {
+      expect(await screen.findByText("retained-session")).toBeInTheDocument();
+    }
+    const retainedIdentity = direction === "older" ? "retained-session" : "session-1-1";
     await reachEdge(direction);
     act(() => {
       virtualizerHarness.show(direction === "older" ? [1, 3] : [0, 2]);
     });
     const boundary = await screen.findByTestId(boundaryTestID);
-    expect(screen.getByText("retained-session")).toBeInTheDocument();
+    expect(screen.getByText(retainedIdentity)).toBeInTheDocument();
     expect(within(boundary).getByRole("button")).toBeInTheDocument();
   });
 
-  it("shows one current occurrence when live cursor movement returns an older Session again", async () => {
-    const olderPageByToken = numberedTokens("older", 5);
+  it("shows one current occurrence when offset movement returns an older Session again", async () => {
     renderBrowser(
       sessionRoute((request) => {
-        if (request.position.kind === "newest") {
-          return feedPage(request, ["head"], { older: "older-1" });
+        if (request.offset === 0) {
+          return feedPage(request, ["moving-session", "Current occurrence"], 50);
         }
-        if (request.position.kind === "newer") {
-          return feedPage(request, ["moving-session", "Current occurrence"], {
-            older: "older-1",
-          });
-        }
-        const number = requiredPage(olderPageByToken, request.position.token);
+        const page = request.offset / 50;
         return feedPage(
           request,
-          number === 1 ? ["moving-session", "Older occurrence"] : [`older-session-${number.toString()}`],
-          {
-            older: `older-${(number + 1).toString()}`,
-            newer: `newer-${(number - 1).toString()}`,
-          },
+          page === 1 ? ["moving-session", "Older occurrence"] : [`older-session-${page.toString()}`],
+          request.offset + 50,
         );
       }),
     );
 
-    expect(await screen.findByText("head")).toBeInTheDocument();
-    for (let page = 1; page <= 5; page += 1) {
-      await loadPage("older", page === 1 ? "Older occurrence" : `older-session-${page.toString()}`);
+    expect(await screen.findByText("Current occurrence")).toBeInTheDocument();
+    for (let page = 1; page <= 10; page += 1) {
+      await loadPage("older", page === 1 ? "Current occurrence" : `older-session-${page.toString()}`);
     }
+    act(() => {
+      virtualizerHarness.show([1]);
+    });
+    expect(await screen.findByText("Older occurrence")).toBeInTheDocument();
     await loadPage("newer", "Current occurrence");
     expect(screen.queryByText("Older occurrence")).not.toBeInTheDocument();
     expect(screen.getAllByText("Current occurrence")).toHaveLength(1);
@@ -187,28 +194,19 @@ describe("Project Sessions browser", () => {
 
   it("re-enters an evicted category at its changed current head", async () => {
     let currentHead = "head-before";
-    const olderPageByToken = numberedTokens("older", 5);
     renderBrowser(
       sessionRoute((request) => {
         if (request.category === "subagent") {
           return feedPage(request, ["subagent-head"]);
         }
-        if (request.position.kind === "newest") {
-          return feedPage(request, [currentHead], { older: "older-1" });
-        }
-        if (request.position.kind === "newer") {
-          throw new Error("Re-entry fixture does not load toward newer.");
-        }
-        const number = requiredPage(olderPageByToken, request.position.token);
-        return feedPage(request, [`older-${number.toString()}`], {
-          older: `older-${(number + 1).toString()}`,
-          newer: `newer-${(number - 1).toString()}`,
-        });
+        if (request.offset === 0) return feedPage(request, [currentHead], 50);
+        const page = request.offset / 50;
+        return feedPage(request, [`older-${page.toString()}`], request.offset + 50);
       }),
     );
 
     expect(await screen.findByText("head-before")).toBeInTheDocument();
-    for (let page = 1; page <= 5; page += 1) {
+    for (let page = 1; page <= 10; page += 1) {
       await loadPage("older", `older-${page.toString()}`);
     }
     expect(screen.queryByText("head-before")).not.toBeInTheDocument();
@@ -223,51 +221,30 @@ describe("Project Sessions browser", () => {
 
   it("keeps traversing both directions beyond five retained pages at constant row count", async () => {
     const requests: SessionPageRequest[] = [];
-    const olderPageByToken = numberedTokens("older", 7);
-    const newerPageByToken = numberedTokens("newer", 6, 0);
     renderBrowser(
       sessionRoute((request) => {
         requests.push(request);
-        if (request.position.kind === "newest") {
-          return sessionNumberPage(request, 0, { older: "older-1" });
-        }
-        if (request.position.kind === "older") {
-          const page = requiredPage(olderPageByToken, request.position.token);
-          return sessionNumberPage(request, page, {
-            older: `older-${(page + 1).toString()}`,
-            newer: `newer-${(page - 1).toString()}`,
-          });
-        }
-        const page = requiredPage(newerPageByToken, request.position.token);
-        return sessionNumberPage(request, page, {
-          older: `older-${(page + 1).toString()}`,
-          ...(page > 0 ? { newer: `newer-${(page - 1).toString()}` } : {}),
-        });
+        const page = request.offset / 50;
+        return sessionNumberPage(request, page, request.offset + 50);
       }),
     );
 
     expect(await screen.findByText("session-0-1")).toBeInTheDocument();
-    for (let page = 1; page <= 5; page += 1) {
+    for (let page = 1; page <= 10; page += 1) {
       await loadPage("older", `session-${page.toString()}-1`);
     }
     const retainedRowCount = screen.getAllByTestId("session-row").length;
-    for (let page = 6; page <= 7; page += 1) {
+    for (let page = 11; page <= 12; page += 1) {
       await loadPage("older", `session-${page.toString()}-1`);
       expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
     }
-    expect(requests.map((request) => request.position)).toContainEqual({
-      kind: "older",
-      token: "older-7",
-    });
+    expect(requests.map((request) => request.offset)).toContain(600);
 
     for (let page = 2; page >= 0; page -= 1) {
       await loadPage("newer", `session-${page.toString()}-1`);
       expect(screen.getAllByTestId("session-row")).toHaveLength(retainedRowCount);
     }
-    expect(requests.map((request) => request.position)).toContainEqual({
-      kind: "newer",
-      token: "newer-0",
-    });
+    expect(requests.map((request) => request.offset)).toContain(0);
   });
 });
 
@@ -298,42 +275,19 @@ function sessionRoute(handler: (request: SessionPageRequest) => unknown): FakeRo
   };
 }
 
-function sessionNumberPage(
-  request: SessionPageRequest,
-  page: number,
-  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }>,
-) {
+function sessionNumberPage(request: SessionPageRequest, page: number, nextOffset: number | null) {
   return sessionPageFixture(
     request,
     Array.from({ length: 3 }, (_, index) => [`session-${page.toString()}-${index.toString()}`] as const),
-    cursors,
+    nextOffset,
   );
 }
 
 type SessionFixture = Parameters<typeof sessionPageFixture>[1][number];
 
-function feedPage(
-  request: SessionPageRequest,
-  session: SessionFixture,
-  cursors: Readonly<{ older?: string | undefined; newer?: string | undefined }> = {},
-) {
+function feedPage(request: SessionPageRequest, session: SessionFixture, nextOffset: number | null = null) {
   const id = session[0];
-  return sessionPageFixture(request, [[`${id}-filler-1`], session, [`${id}-filler-2`]], cursors);
-}
-
-function numberedTokens(prefix: "newer" | "older", last: number, first = 1): ReadonlyMap<string, number> {
-  return new Map(
-    Array.from({ length: last - first + 1 }, (_, index) => {
-      const page = first + index;
-      return [`${prefix}-${page.toString()}`, page] as const;
-    }),
-  );
-}
-
-function requiredPage(pages: ReadonlyMap<string, number>, token: string): number {
-  const page = pages.get(token);
-  if (page === undefined) throw new Error("Fixture received an unknown Session cursor.");
-  return page;
+  return sessionPageFixture(request, [[`${id}-filler-1`], session, [`${id}-filler-2`]], nextOffset);
 }
 
 async function loadPage(direction: "newer" | "older", visibleIdentity: string): Promise<void> {

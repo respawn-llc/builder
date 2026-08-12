@@ -2,6 +2,7 @@ import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import type { SessionCatalogSummary, SessionCategory } from "@/api";
+import { sessionCatalogPageSize } from "@/api";
 import {
   mainSessionCatalogInfiniteQueryOptions,
   queryKeys,
@@ -36,10 +37,7 @@ export type ProjectSessionsData =
       retry(): void;
     }>;
 
-export function useProjectSessionsData(
-  projectID: string,
-  category: SessionCategory,
-): ProjectSessionsData {
+export function useProjectSessionsData(projectID: string, category: SessionCategory): ProjectSessionsData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   const query = useInfiniteQuery(
@@ -75,11 +73,14 @@ export function useProjectSessionsData(
     return { kind: "error", error: query.error, retry };
   }
 
-  if (pages === undefined) {
+  const retainedData = query.data;
+  if (pages === undefined || retainedData === undefined) {
     throw new Error("Ready Project Sessions data requires retained pages.");
   }
-  const newerCursor = pages[0]?.newer ?? null;
-  const olderCursor = pages.at(-1)?.older ?? null;
+  const { nextOffset, previousOffset } = sessionCatalogOffsets(
+    retainedData.pageParams[0],
+    pages.at(-1)?.nextOffset,
+  );
   return {
     kind: "ready",
     rows,
@@ -90,8 +91,8 @@ export function useProjectSessionsData(
     loadingNewer: query.isFetchingPreviousPage,
     olderFailed: query.isFetchNextPageError,
     newerFailed: query.isFetchPreviousPageError,
-    loadMoreKey: sessionCatalogLoadKey(projectID, category, "older", olderCursor),
-    previousLoadKey: sessionCatalogLoadKey(projectID, category, "newer", newerCursor),
+    loadMoreKey: sessionCatalogLoadKey(projectID, category, "older", nextOffset),
+    previousLoadKey: sessionCatalogLoadKey(projectID, category, "newer", previousOffset),
     loadOlder: () => {
       void query.fetchNextPage();
     },
@@ -102,10 +103,24 @@ export function useProjectSessionsData(
   };
 }
 
+function sessionCatalogOffsets(
+  firstOffset: number | null | undefined,
+  nextOffset: number | null | undefined,
+): Readonly<{ nextOffset: number | null; previousOffset: number | null }> {
+  if (firstOffset === null) {
+    throw new Error("Ready Project Sessions data cannot have a null first page offset.");
+  }
+  return {
+    nextOffset: nextOffset ?? null,
+    previousOffset:
+      firstOffset === undefined || firstOffset === 0
+        ? null
+        : Math.max(0, firstOffset - sessionCatalogPageSize),
+  };
+}
+
 function projectSessionRows(
-  pages:
-    | readonly Readonly<{ sessions: readonly SessionCatalogSummary[] }>[]
-    | undefined,
+  pages: readonly Readonly<{ sessions: readonly SessionCatalogSummary[] }>[] | undefined,
 ): readonly SessionCatalogSummary[] {
   if (pages === undefined) return [];
   const seen = new Set<string>();
@@ -124,18 +139,20 @@ function sessionCatalogLoadKey(
   projectID: string,
   category: SessionCategory,
   direction: "older" | "newer",
-  cursor: string | null,
+  offset: number | null,
 ): string | undefined {
-  if (cursor === null) return undefined;
-  return JSON.stringify([projectID, category, direction, cursor]);
+  if (offset === null) return undefined;
+  return JSON.stringify([projectID, category, direction, offset]);
 }
 
-function projectSessionsPhase(input: Readonly<{
-  hasPages: boolean;
-  isError: boolean;
-  olderFailed: boolean;
-  newerFailed: boolean;
-}>): "loading" | "error" | "ready" {
+function projectSessionsPhase(
+  input: Readonly<{
+    hasPages: boolean;
+    isError: boolean;
+    olderFailed: boolean;
+    newerFailed: boolean;
+  }>,
+): "loading" | "error" | "ready" {
   if (!input.hasPages) return input.isError ? "error" : "loading";
   if (input.isError && !input.olderFailed && !input.newerFailed) return "error";
   return "ready";

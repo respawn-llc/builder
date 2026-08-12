@@ -7,6 +7,7 @@ const sessionCatalogMaxPages = 10;
 const workspaceCatalogMaxPages = 4;
 type SessionCatalogApi = Pick<ApiService, "listSessionPage">;
 type WorkspaceCatalogApi = Pick<ApiService, "listWorkspaces">;
+type SessionCatalogQueryKey = ReturnType<typeof queryKeys.projectSessionCatalog>;
 type WorkspaceCatalogQueryKey = ReturnType<typeof queryKeys.projectWorkspaceCatalog>;
 
 export function mainSessionCatalogInfiniteQueryOptions(api: SessionCatalogApi, projectID: string) {
@@ -49,7 +50,13 @@ function sessionCatalogInfiniteQueryOptions(
   projectID: string,
   category: SessionCategory,
 ) {
-  return infiniteQueryOptions({
+  return infiniteQueryOptions<
+    SessionCatalogPage,
+    Error,
+    InfiniteData<SessionCatalogPage, number>,
+    SessionCatalogQueryKey,
+    number
+  >({
     queryKey: queryKeys.projectSessionCatalog(projectID, category),
     queryFn: async ({ pageParam }) => api.listSessionPage(projectID, category, pageParam),
     initialPageParam: 0,
