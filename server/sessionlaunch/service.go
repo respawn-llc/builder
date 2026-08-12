@@ -149,7 +149,9 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
+		var availability session.GoalAvailability
 		resolved, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+			availability = current.GoalAvailability
 			next := current.Draft
 			next.Message = message
 			return next, nil
@@ -157,7 +159,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message}, nil
+		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(availability)}, nil
 	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {

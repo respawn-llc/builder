@@ -282,11 +282,12 @@ func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	return withGoalCommandRemote(stderr, func(remote goalCommandRemote) int {
 		ctx, cancel := context.WithTimeout(context.Background(), goalCommandTimeout)
 		defer cancel()
-		if _, err := remote.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: "user"}); err != nil {
+		resp, err := remote.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: "user"})
+		if err != nil {
 			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
 			return 1
 		}
-		fmt.Fprintln(stdout, "Goal cleared")
+		writeGoalMutationText(stdout, resp)
 		return 0
 	})
 }

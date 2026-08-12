@@ -248,11 +248,7 @@ func (r RuntimeGoalShowResponse) Validate() error {
 	return r.GoalEnvelope.Validate()
 }
 
-type RuntimeGoalMutationResponse clientui.GoalMutationResult
-
-func (r RuntimeGoalMutationResponse) Validate() error {
-	return clientui.GoalMutationResult(r).Validate()
-}
+type RuntimeGoalMutationResponse = clientui.GoalMutationResult
 
 type RuntimeGoalSetRequest struct {
 	ClientRequestID string `json:"client_request_id"`

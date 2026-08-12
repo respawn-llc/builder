@@ -2,7 +2,6 @@ package app
 
 import (
 	"testing"
-	"time"
 
 	"core/shared/clientui"
 	"core/shared/serverapi"
@@ -24,8 +23,7 @@ func TestGoalSetCommandDeliversQueuedPreviewToTUI(t *testing.T) {
 }
 
 func TestGoalMutationFeedbackPreservesApprovedStateBoundaries(t *testing.T) {
-	now := time.Now()
-	goal := &clientui.Goal{ID: "goal-1", Objective: "accepted objective", Status: clientui.RuntimeGoalStatusActive, CreatedAt: now, UpdatedAt: now}
+	goal := runtimeClientTestGoal("goal-1", "accepted objective", clientui.RuntimeGoalStatusActive)
 	tests := []struct {
 		name      string
 		operation goalRuntimeOperation
