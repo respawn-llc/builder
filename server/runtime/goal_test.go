@@ -33,8 +33,7 @@ func TestCurrentGoalOperationOutcomeRequiresOneDisposition(t *testing.T) {
 func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	store := mustCreateNamedTestSession(t, "workspace-x", "/tmp/workspace-x")
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
-		EnabledTools:         []toolspec.ID{toolspec.ToolAskQuestion},
-		CurrentNodeExecution: &workflowruntime.CurrentNodeExecutionConfig{ScopeID: runtimeids.NewExecutionScopeID()},
+		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 	})
 	assert := func(operation CurrentGoalOperation, want GoalCommandDisposition, execution bool) {
 		t.Helper()
@@ -52,6 +51,14 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	outcome, err := engine.ApplyCurrentGoalOperation(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, CurrentGoalExactExecution)
 	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
 		t.Fatalf("direct Exact Set = %+v, %v", outcome, err)
+	}
+	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, CurrentGoalExactExecution)
+	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
+		t.Fatalf("direct Exact Status = %+v, %v", outcome, err)
+	}
+	outcome, err = engine.ApplyCurrentGoalOperation(CurrentGoalClear{Actor: session.GoalActorUser}, CurrentGoalExactExecution)
+	if err != nil || outcome.Handled == nil || outcome.Handled.Disposition != GoalCommandApplied {
+		t.Fatalf("direct Exact Clear = %+v, %v", outcome, err)
 	}
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}
 	assert(CurrentGoalSet{Objective: "queued exact", Actor: session.GoalActorUser}, GoalCommandQueued, false)
