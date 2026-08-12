@@ -1,10 +1,19 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
-import type { ProjectEdit, WorkspaceSummary } from "@/api";
+import type { ProjectEdit, WorkspaceCatalogRow } from "@/api";
 import { errorMessage, isProjectMissingError } from "@/api";
 import type { SidebarPageNavigator } from "@/app-facade";
+import { workspaceCatalogInfiniteQueryOptions } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
@@ -14,7 +23,15 @@ import { useSidebarHeaderOffset } from "@/app-facade";
 import { useStatusController } from "@/app-facade";
 import { useTextFieldSubmitShortcut } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
-import { Button, ErrorState, HelpHint, LoadingState, VirtualizedInfiniteList } from "@/ui";
+import {
+  Button,
+  ErrorState,
+  HelpHint,
+  LoadingState,
+  VirtualizedInfiniteList,
+  type VirtualizedInfiniteListBoundaryState,
+} from "@/ui";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import {
   ProjectKeyField,
   ProjectNameField,
@@ -23,7 +40,7 @@ import {
   type WorkspaceUnlinkTarget,
   workspaceUnlinkDialogWidth,
 } from "./ProjectEditParts";
-import { findWorkspaceByPath, projectKeyErrors, projectNameErrors } from "./ProjectEditUtils";
+import { projectKeyErrors, projectNameErrors } from "./ProjectEditUtils";
 import {
   useProjectDefaultWorkspaceSave,
   useProjectWorkspaceChangedEvents,
@@ -44,78 +61,102 @@ export function ProjectEditRoute({
   headerAccessory?: ReactNode;
   navigator?: SidebarPageNavigator;
   projectId: string;
-}>) {
+}>): ReactElement | null {
   const { t } = useTranslation();
+  const { api } = useAppServices();
   const query = useProjectEdit(projectId);
-  const pages = query.data?.pages;
-  const project = pages?.[0];
-  const workspaces = useMemo(() => pages?.flatMap((page) => page.workspaces) ?? [], [pages]);
-  const projectMissing = query.isError && isProjectMissingError(query.error);
+  const catalog = useInfiniteQuery(workspaceCatalogInfiniteQueryOptions(api, projectId));
+  const workspaceOccurrences = useMemo(
+    () =>
+      catalog.data?.pages.flatMap((page) =>
+        page.workspaces.map((workspace, index) => ({
+          occurrenceKey: `${page.offset.toString()}:${index.toString()}`,
+          workspace,
+        })),
+      ) ?? [],
+    [catalog.data?.pages],
+  );
+  const projectMissing = [query.error, catalog.error].some(isProjectMissingError);
   useSidebarBackWhen(projectMissing, navigator);
-  useWindowChromeTitle(project?.displayName ?? null);
-
-  if (query.isPending) {
-    return <LoadingState body={t("states.loading")} reveal={false} title={t("projectEdit.loadingTitle")} />;
-  }
-
-  if (query.isError || project === undefined) {
-    if (projectMissing && navigator !== undefined) return null;
-    return (
-      <ErrorState
-        body={query.isError ? errorMessage(query.error) : t("projectEdit.missingProject")}
-        onRetry={() => void query.refetch()}
-        reveal={false}
-        retryLabel={t("app.retry")}
-        title={t("states.error")}
-      />
-    );
-  }
+  useWindowChromeTitle(query.data?.displayName ?? null);
+  if (projectMissing && navigator !== undefined) return null;
 
   return (
     <ProjectEditContent
+      catalogBoundary={projectCatalogBoundary(catalog, t)}
+      catalogPending={catalog.isPending}
       headerAccessory={headerAccessory}
-      hasNextPage={query.hasNextPage}
-      isFetchingNextPage={query.isFetchingNextPage}
-      key={project.projectID}
-      onLoadMore={() => void query.fetchNextPage()}
-      project={project}
-      workspaces={workspaces}
+      hasNextPage={catalog.hasNextPage}
+      hasPreviousPage={catalog.hasPreviousPage}
+      isFetchingNextPage={catalog.isFetchingNextPage}
+      isFetchingPreviousPage={catalog.isFetchingPreviousPage}
+      key={query.data?.projectID ?? projectId}
+      metadata={
+        query.isPending
+          ? { state: "pending" }
+          : query.isError
+            ? {
+                state: "error",
+                error: query.error,
+                onRetry: () => void query.refetch(),
+              }
+            : { state: "loaded", project: query.data }
+      }
+      onLoadMore={() => void catalog.fetchNextPage()}
+      onLoadPrevious={() => void catalog.fetchPreviousPage()}
+      previousBoundary={projectCatalogPreviousBoundary(catalog, t)}
+      projectID={projectId}
+      workspaceOccurrences={workspaceOccurrences}
     />
   );
 }
 
 function ProjectEditContent({
+  catalogBoundary,
+  catalogPending,
   headerAccessory,
   hasNextPage,
+  hasPreviousPage,
   isFetchingNextPage,
+  isFetchingPreviousPage,
+  metadata,
   onLoadMore,
-  project,
-  workspaces,
+  onLoadPrevious,
+  previousBoundary,
+  projectID,
+  workspaceOccurrences,
 }: Readonly<{
+  catalogBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  catalogPending: boolean;
   headerAccessory?: ReactNode;
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
+  metadata: ProjectEditMetadataState;
   onLoadMore: () => void;
-  project: ProjectEdit;
-  workspaces: readonly WorkspaceSummary[];
+  onLoadPrevious: () => void;
+  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  projectID: string;
+  workspaceOccurrences: readonly ProjectWorkspaceOccurrence[];
 }>) {
   const { t } = useTranslation();
   const { nativeBridge } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
-  const save = useProjectSave(project.projectID);
-  const defaultSave = useProjectDefaultWorkspaceSave(project.projectID);
-  const attach = useProjectWorkspaceAttach(project.projectID);
-  const unlink = useProjectWorkspaceUnlink(project.projectID);
-  const [nameDraft, setNameDraft] = useState(project.displayName);
-  const [keyDraft, setKeyDraft] = useState(project.projectKey);
+  const save = useProjectSave(projectID);
+  const defaultSave = useProjectDefaultWorkspaceSave(projectID);
+  const attach = useProjectWorkspaceAttach(projectID);
+  const unlink = useProjectWorkspaceUnlink(projectID);
+  const project = metadata.state === "loaded" ? metadata.project : undefined;
+  const { keyDraft, nameDraft, setKeyDraft, setNameDraft } = useProjectDrafts(project);
   const disabled = connection.phase !== "connected";
   const mutating =
     disabled || save.isPending || defaultSave.isPending || attach.isPending || unlink.isPending;
   const nameErrors = projectNameErrors(nameDraft, t);
   const keyErrors = projectKeyErrors(keyDraft, t);
-  const nameChanged = nameDraft !== project.displayName;
-  const keyChanged = keyDraft !== project.projectKey;
+  const nameChanged = project !== undefined && nameDraft !== project.displayName;
+  const keyChanged = project !== undefined && keyDraft !== project.projectKey;
   const dirty = nameChanged || keyChanged;
   const pushToast = useCallback(
     (id: string, tone: "info" | "success" | "danger", body: string, title = t("projectEdit.title")) => {
@@ -123,28 +164,7 @@ function ProjectEditContent({
     },
     [push, t],
   );
-  const confirmUnlink = useCallback(
-    async (target: WorkspaceUnlinkTarget, close?: () => void): Promise<void> => {
-      try {
-        const response = await unlink.mutateAsync(target.workspaceID);
-        if (response.blockers.length === 0) {
-          close?.();
-          pushToast("project-edit-workspace-unlinked", "success", t("projectEdit.workspaceUnlinked"));
-          return;
-        }
-        pushToast(
-          "project-edit-workspace-unlink-blocked",
-          "danger",
-          response.blockers.map((blocker) => blocker.message).join("\n") ||
-            t("projectEdit.workspaceUnlinkBlocked"),
-          t("projectEdit.workspaceUnlinkBlocked"),
-        );
-      } catch (error) {
-        pushToast("project-edit-workspace-unlink-error", "danger", errorMessage(error));
-      }
-    },
-    [pushToast, t, unlink],
-  );
+  const confirmUnlink = useConfirmWorkspaceUnlink(unlink, pushToast, t);
   const unlinkDialog = useNativeDialogFallback<WorkspaceUnlinkTarget>({
     errorNoticeID: "workspace-unlink-window-error",
     errorTitle: t("projectEdit.unlinkWindowError"),
@@ -165,35 +185,17 @@ function ProjectEditContent({
   });
   const handleWorkspaceUnlinkRequest = useCallback(
     (target: WorkspaceUnlinkTarget) => {
-      if (target.projectID === project.projectID) {
+      if (target.projectID === projectID) {
         void confirmUnlink(target);
       }
     },
-    [confirmUnlink, project.projectID],
+    [confirmUnlink, projectID],
   );
 
   useProjectWorkspaceUnlinkRequests(nativeBridge, handleWorkspaceUnlinkRequest);
-  useProjectWorkspaceChangedEvents(nativeBridge, project.projectID);
+  useProjectWorkspaceChangedEvents(nativeBridge, projectID);
 
-  async function chooseWorkspace(): Promise<void> {
-    try {
-      const selected = await nativeBridge.directories.selectDirectory({
-        title: t("projectEdit.chooseWorkspace"),
-      });
-      if (selected === null) {
-        return;
-      }
-      const loadedMatch = findWorkspaceByPath(workspaces, selected.path);
-      if (loadedMatch !== undefined) {
-        pushToast("project-edit-workspace-duplicate", "info", t("projectEdit.workspaceAlreadyLinked"));
-        return;
-      }
-      await attach.mutateAsync(selected.path);
-      pushToast("project-edit-workspace-attached", "success", t("projectEdit.workspaceAttached"));
-    } catch (error) {
-      pushToast("project-edit-workspace-attach-error", "danger", errorMessage(error));
-    }
-  }
+  const chooseWorkspace = useChooseWorkspace(nativeBridge, attach, pushToast, t);
 
   const saveProject = useCallback(async (): Promise<void> => {
     try {
@@ -204,17 +206,7 @@ function ProjectEditContent({
     }
   }, [keyChanged, keyDraft, nameDraft, save, pushToast, t]);
 
-  async function saveDefaultWorkspace(workspace: WorkspaceSummary): Promise<void> {
-    if (workspace.id === project.defaultWorkspaceID) {
-      return;
-    }
-    try {
-      await defaultSave.mutateAsync(workspace.id);
-      pushToast("project-edit-default-saved", "success", t("projectEdit.defaultWorkspaceSaved"));
-    } catch (error) {
-      pushToast("project-edit-default-save-error", "danger", errorMessage(error));
-    }
-  }
+  const saveDefaultWorkspace = useSaveDefaultWorkspace(defaultSave, pushToast, t);
 
   // Publish the save control into the shared sidebar header (left of delete). It only appears when a
   // draft (name or key) differs from the saved value, and is disabled while invalid or disconnected.
@@ -259,6 +251,7 @@ function ProjectEditContent({
       disabled={mutating}
       keyDraft={keyDraft}
       keyErrors={keyErrors}
+      metadata={metadata}
       nameDraft={nameDraft}
       nameErrors={nameErrors}
       onAttach={() => void chooseWorkspace()}
@@ -276,23 +269,126 @@ function ProjectEditContent({
     >
       {unlinkDialog.fallback}
       <ProjectWorkspaceList
-        defaultWorkspaceID={project.defaultWorkspaceID}
         disabled={mutating}
         hasNextPage={hasNextPage}
+        hasPreviousPage={hasPreviousPage}
         header={header}
         isFetchingNextPage={isFetchingNextPage}
+        isFetchingPreviousPage={isFetchingPreviousPage}
+        nextBoundary={catalogBoundary}
         onLoadMore={onLoadMore}
+        onLoadPrevious={onLoadPrevious}
+        previousBoundary={previousBoundary}
         onMakeDefault={(workspace) => void saveDefaultWorkspace(workspace)}
         onUnlink={(workspace) => {
           void unlinkDialog.open({
-            projectID: project.projectID,
+            projectID,
             rootPath: workspace.rootPath,
             workspaceID: workspace.id,
           });
         }}
-        workspaces={workspaces}
+        catalogPending={catalogPending}
+        workspaceOccurrences={workspaceOccurrences}
       />
     </section>
+  );
+}
+
+function useProjectDrafts(project: ProjectEdit | undefined) {
+  const [nameDraft, setNameDraft] = useState(project?.displayName ?? "");
+  const [keyDraft, setKeyDraft] = useState(project?.projectKey ?? "");
+  const draftsHydrated = useRef(project !== undefined);
+  useEffect(() => {
+    if (project === undefined || draftsHydrated.current) return;
+    setNameDraft(project.displayName);
+    setKeyDraft(project.projectKey);
+    draftsHydrated.current = true;
+  }, [project]);
+  return { keyDraft, nameDraft, setKeyDraft, setNameDraft };
+}
+
+type ProjectEditMutation = ReturnType<typeof useProjectWorkspaceUnlink>;
+type ProjectAttachMutation = ReturnType<typeof useProjectWorkspaceAttach>;
+type ProjectDefaultMutation = ReturnType<typeof useProjectDefaultWorkspaceSave>;
+type ProjectEditTranslator = ReturnType<typeof useTranslation>["t"];
+type PushToast = (
+  id: string,
+  tone: "info" | "success" | "danger",
+  body: string,
+  title?: string,
+) => void;
+
+function useConfirmWorkspaceUnlink(
+  unlink: ProjectEditMutation,
+  pushToast: PushToast,
+  t: ProjectEditTranslator,
+) {
+  return useCallback(
+    async (target: WorkspaceUnlinkTarget, close?: () => void): Promise<void> => {
+      try {
+        const response = await unlink.mutateAsync(target.workspaceID);
+        if (response.blockers.length === 0) {
+          close?.();
+          pushToast("project-edit-workspace-unlinked", "success", t("projectEdit.workspaceUnlinked"));
+          return;
+        }
+        pushToast(
+          "project-edit-workspace-unlink-blocked",
+          "danger",
+          response.blockers.map((blocker) => blocker.message).join("\n") ||
+            t("projectEdit.workspaceUnlinkBlocked"),
+          t("projectEdit.workspaceUnlinkBlocked"),
+        );
+      } catch (error) {
+        pushToast("project-edit-workspace-unlink-error", "danger", errorMessage(error));
+      }
+    },
+    [pushToast, t, unlink],
+  );
+}
+
+function useChooseWorkspace(
+  nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"],
+  attach: ProjectAttachMutation,
+  pushToast: PushToast,
+  t: ProjectEditTranslator,
+) {
+  return useCallback(async (): Promise<void> => {
+    try {
+      const selected = await nativeBridge.directories.selectDirectory({
+        title: t("projectEdit.chooseWorkspace"),
+      });
+      if (selected === null) return;
+      const response = await attach.mutateAsync(selected.path);
+      pushToast(
+        "project-edit-workspace-attached",
+        "success",
+        response.outcome === "already_attached"
+          ? t("projectEdit.workspaceAlreadyLinked")
+          : t("projectEdit.workspaceAttached"),
+      );
+    } catch (error) {
+      pushToast("project-edit-workspace-attach-error", "danger", errorMessage(error));
+    }
+  }, [attach, nativeBridge.directories, pushToast, t]);
+}
+
+function useSaveDefaultWorkspace(
+  defaultSave: ProjectDefaultMutation,
+  pushToast: PushToast,
+  t: ProjectEditTranslator,
+) {
+  return useCallback(
+    async (workspace: WorkspaceCatalogRow): Promise<void> => {
+      if (workspace.isDefault) return;
+      try {
+        await defaultSave.mutateAsync(workspace.id);
+        pushToast("project-edit-default-saved", "success", t("projectEdit.defaultWorkspaceSaved"));
+      } catch (error) {
+        pushToast("project-edit-default-save-error", "danger", errorMessage(error));
+      }
+    },
+    [defaultSave, pushToast, t],
   );
 }
 
@@ -300,6 +396,7 @@ function ProjectEditListHeader({
   disabled,
   keyDraft,
   keyErrors,
+  metadata,
   nameDraft,
   nameErrors,
   onAttach,
@@ -310,6 +407,7 @@ function ProjectEditListHeader({
   disabled: boolean;
   keyDraft: string;
   keyErrors: readonly string[];
+  metadata: ProjectEditMetadataState;
   nameDraft: string;
   nameErrors: readonly string[];
   onAttach: () => void;
@@ -321,20 +419,36 @@ function ProjectEditListHeader({
   return (
     <div className={`mx-auto grid w-full ${projectEditContentMaxWidthClassName} gap-[var(--space-3)]`}>
       <div className="grid min-w-0 gap-[var(--space-3)]">
-        <ProjectNameField
-          disabled={disabled}
-          nameDraft={nameDraft}
-          nameErrors={nameErrors}
-          onKeyDown={onKeyDown}
-          onNameChange={onNameChange}
-        />
-        <ProjectKeyField
-          disabled={disabled}
-          keyDraft={keyDraft}
-          keyErrors={keyErrors}
-          onKeyDown={onKeyDown}
-          onKeyChange={onKeyChange}
-        />
+        {metadata.state === "pending" ? (
+          <LoadingState body={t("states.loading")} reveal={false} title={t("projectEdit.loadingTitle")} />
+        ) : null}
+        {metadata.state === "error" ? (
+          <ErrorState
+            body={errorMessage(metadata.error)}
+            onRetry={metadata.onRetry}
+            reveal={false}
+            retryLabel={t("app.retry")}
+            title={t("states.error")}
+          />
+        ) : null}
+        {metadata.state === "loaded" ? (
+          <>
+            <ProjectNameField
+              disabled={disabled}
+              nameDraft={nameDraft}
+              nameErrors={nameErrors}
+              onKeyDown={onKeyDown}
+              onNameChange={onNameChange}
+            />
+            <ProjectKeyField
+              disabled={disabled}
+              keyDraft={keyDraft}
+              keyErrors={keyErrors}
+              onKeyDown={onKeyDown}
+              onKeyChange={onKeyChange}
+            />
+          </>
+        ) : null}
       </div>
       <div className="flex min-w-0 items-center justify-between gap-[var(--space-3)]">
         <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]">
@@ -358,46 +472,75 @@ function ProjectEditListHeader({
 }
 
 function ProjectWorkspaceList({
-  defaultWorkspaceID,
+  catalogPending,
   disabled,
   hasNextPage,
+  hasPreviousPage,
   header,
   isFetchingNextPage,
+  isFetchingPreviousPage,
+  nextBoundary,
   onLoadMore,
+  onLoadPrevious,
   onMakeDefault,
   onUnlink,
-  workspaces,
+  workspaceOccurrences,
+  previousBoundary,
 }: Readonly<{
-  defaultWorkspaceID: string;
+  catalogPending: boolean;
   disabled: boolean;
   hasNextPage: boolean;
+  hasPreviousPage: boolean;
   header: ReactNode;
   isFetchingNextPage: boolean;
+  isFetchingPreviousPage: boolean;
+  nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   onLoadMore: () => void;
-  onMakeDefault: (workspace: WorkspaceSummary) => void;
-  onUnlink: (workspace: WorkspaceSummary) => void;
-  workspaces: readonly WorkspaceSummary[];
+  onLoadPrevious: () => void;
+  onMakeDefault: (workspace: WorkspaceCatalogRow) => void;
+  onUnlink: (workspace: WorkspaceCatalogRow) => void;
+  workspaceOccurrences: readonly ProjectWorkspaceOccurrence[];
+  previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>) {
   const { t } = useTranslation();
   const headerOffset = useSidebarHeaderOffset();
   return (
     <VirtualizedInfiniteList
       className="h-full min-h-0 overflow-auto px-[var(--space-4)] hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
-      empty={<p className="m-0 text-[var(--color-muted)]">{t("projectEdit.noWorkspaces")}</p>}
+      empty={
+        catalogPending ? (
+          <LoadingState body={t("states.loading")} reveal={false} title={t("projectEdit.workspaces")} />
+        ) : nextBoundary?.state === "error" ? (
+          <ErrorState
+            body={nextBoundary.message}
+            onRetry={nextBoundary.onRetry}
+            reveal={false}
+            retryLabel={nextBoundary.retryLabel}
+            title={t("projectEdit.workspaces")}
+          />
+        ) : (
+          <p className="m-0 text-[var(--color-muted)]">{t("projectEdit.noWorkspaces")}</p>
+        )
+      }
       estimateSize={() => 72}
-      getItemKey={(workspace) => workspace.id}
-      hasNextPage={hasNextPage}
+      getItemKey={(occurrence) => occurrence.occurrenceKey}
+      hasNextPage={hasNextPage && nextBoundary?.state !== "error"}
+      hasPreviousPage={hasPreviousPage && previousBoundary?.state !== "error"}
       header={header}
       isFetchingNextPage={isFetchingNextPage}
-      items={workspaces}
+      isFetchingPreviousPage={isFetchingPreviousPage}
+      items={workspaceOccurrences}
       loadingLabel={t("app.loadingMore")}
+      nextBoundary={workspaceOccurrences.length === 0 ? undefined : nextBoundary}
       onLoadMore={onLoadMore}
+      onLoadPrevious={onLoadPrevious}
+      previousBoundary={previousBoundary}
+      previousLoadItemKey={workspaceOccurrences[0]?.occurrenceKey}
       paddingEnd={16}
       paddingStart={16 + headerOffset}
-      renderItem={(workspace) => (
+      renderItem={({ workspace }) => (
         <div className={`mx-auto w-full ${projectEditContentMaxWidthClassName}`}>
           <WorkspaceRow
-            defaultWorkspaceID={defaultWorkspaceID}
             disabled={disabled}
             onMakeDefault={() => {
               onMakeDefault(workspace);
@@ -411,6 +554,60 @@ function ProjectWorkspaceList({
       )}
     />
   );
+}
+
+type ProjectEditMetadataState =
+  | Readonly<{ state: "pending" }>
+  | Readonly<{ state: "error"; error: unknown; onRetry: () => void }>
+  | Readonly<{ state: "loaded"; project: ProjectEdit }>;
+
+type ProjectWorkspaceOccurrence = Readonly<{
+  occurrenceKey: string;
+  workspace: WorkspaceCatalogRow;
+}>;
+
+function projectCatalogBoundary(
+  catalog: ReturnType<typeof useInfiniteQuery>,
+  t: ReturnType<typeof useTranslation>["t"],
+): VirtualizedInfiniteListBoundaryState | undefined {
+  if (catalog.isFetchingNextPage) {
+    return { state: "loading", label: t("app.loadingMore") };
+  }
+  if (catalog.isFetchNextPageError || (catalog.isError && catalog.data === undefined)) {
+    return {
+      state: "error",
+      message: errorMessage(catalog.error),
+      retryLabel: t("app.retry"),
+      onRetry: () => {
+        if (catalog.data === undefined) {
+          void catalog.refetch();
+        } else {
+          void catalog.fetchNextPage();
+        }
+      },
+    };
+  }
+  return undefined;
+}
+
+function projectCatalogPreviousBoundary(
+  catalog: ReturnType<typeof useInfiniteQuery>,
+  t: ReturnType<typeof useTranslation>["t"],
+): VirtualizedInfiniteListBoundaryState | undefined {
+  if (catalog.isFetchingPreviousPage) {
+    return { state: "loading", label: t("app.loadingMore") };
+  }
+  if (catalog.isFetchPreviousPageError) {
+    return {
+      state: "error",
+      message: errorMessage(catalog.error),
+      retryLabel: t("app.retry"),
+      onRetry: () => {
+        void catalog.fetchPreviousPage();
+      },
+    };
+  }
+  return undefined;
 }
 
 function workspaceUnlinkWindowOptions(target: WorkspaceUnlinkTarget, title: string) {

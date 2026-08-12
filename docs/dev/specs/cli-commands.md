@@ -101,7 +101,8 @@
 - `kent rebind --project <project-id> <session-id> <path>` is required for cross-Project movement. It may attach an unbound target path to the explicit Project and reports that attachment, but rejects a path already attached only to other Projects.
 - Failed rebinds never change bindings or Session attachment.
 - Sessions attached to Workflow Nodes cannot move across Projects.
-- Rebinding is explicit. It waits for the current step, prevents concurrent new execution and queued steering, and rejects rebind when the Session owns a background command.
+- Same-Project rebind is explicit. It waits for the current step, prevents concurrent new execution and queued steering, and rejects rebind when the Session owns a background command.
+- Cross-Project rebind never waits for a non-idle Session Runtime. It rejects immediately while the Runtime is non-idle, accepts an idle or Dormant Session, and prevents concurrent new execution and queued steering while the accepted move is in progress.
 - A cross-Project move either changes both Session location and artifact location or leaves both unchanged.
 
 ## Question Commands
@@ -133,6 +134,7 @@
 - Agent `goal set` is allowed only when no active or paused Goal exists. Completed Goals do not block the next agent-set Goal.
 - Goal completion is explicit CLI state mutation, not natural-language inference.
 - Goal CLI never mutates Session storage directly. It submits Goal commands to the server.
+- A successful Goal mutation prints authoritative Goal details when present, prints objective and status for a queued Set or replacement preview, and prints no applied Goal-state output when neither is present.
 - Any `kent service` command that affects server state detects invocation by Kent itself and refuses to run because it is human-only.
 - On Linux and Windows, server exit status `2` must suppress automatic crash recovery for the current service-manager activation. A later independent service-manager activation may run the installed service again.
 - On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run. On macOS, every server exit must retain automatic restoration while the current service-manager activation expects Kent to run.
@@ -151,6 +153,8 @@
 - `--fast` selects the built-in fast role and cannot be combined with `--agent`.
 - Named roles are file-only `[subagents.<role>]` settings and inherit main settings unless overridden.
 - Headless execution runs one non-interactive prompt with ordinary Session persistence.
+- When the configured workspace path is unavailable to the target server and does not resolve to an attached Workspace, Headless Run returns a selection-required failure even if exactly one remote Workspace exists. It never selects a remote Workspace implicitly.
+- The selection-required failure directs the operator to register or attach a server-visible path or use interactive Kent to choose an existing Project and Workspace.
 - New unnamed Sessions are named `<session-id> subagent`.
 - Timeout is unlimited unless `--timeout` is given.
 - Default progress mode is `--progress-mode=stderr`: committed assistant commentary and final text go to stdout; lifecycle notices go to stderr.

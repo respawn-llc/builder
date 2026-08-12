@@ -134,6 +134,15 @@ SELECT
 FROM projects
 ORDER BY created_at_unix_ms ASC, rowid ASC;
 
+-- name: GetProjectEditMetadata :one
+SELECT
+    id,
+    display_name,
+    project_key
+FROM projects
+WHERE id = sqlc.arg(project_id)
+LIMIT 1;
+
 -- name: GetProjectKeyState :one
 SELECT
     p.id,
@@ -2173,6 +2182,33 @@ GROUP BY w.id, w.canonical_root_path, p.primary_workspace_id, w.updated_at_unix_
 ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.created_at_unix_ms DESC, w.rowid DESC
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
+
+-- name: ListProjectWorkspaceCatalogPage :many
+WITH catalog_page AS (
+    SELECT
+        w.id AS workspace_id,
+        w.canonical_root_path AS canonical_root,
+        CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_default,
+        w.created_at_unix_ms
+    FROM projects p
+    JOIN workspaces w ON w.project_id = p.id
+    WHERE p.id = sqlc.arg(project_id)
+    ORDER BY is_default DESC, w.created_at_unix_ms DESC, w.id ASC
+    LIMIT sqlc.arg(limit_rows)
+    OFFSET sqlc.arg(offset_rows)
+)
+SELECT
+    p.id AS project_id,
+    catalog_page.workspace_id,
+    catalog_page.canonical_root,
+    catalog_page.is_default
+FROM projects p
+LEFT JOIN catalog_page ON TRUE
+WHERE p.id = sqlc.arg(project_id)
+ORDER BY
+    catalog_page.is_default DESC,
+    catalog_page.created_at_unix_ms DESC,
+    catalog_page.workspace_id ASC;
 
 -- name: ListSessionPage :many
 SELECT

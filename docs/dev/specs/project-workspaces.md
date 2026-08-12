@@ -9,9 +9,9 @@
 - Detaching a workspace removes the selected Project-workspace relationship together with its pre-Session Chat draft.
 - Workspace files remain in place when attaching, detaching, or changing the default workspace.
 - All other artifacts remain intact after detach, including Tasks, Sessions, worktrees, retained Workflow state, and materialized Session drafts.
-- Project Workspace collections contain at most the 500 most recently attached Workspaces.
-- Older Workspaces remain attached and remain selectable by exact Project-scoped path or Workspace ID when omitted from a Project Workspace collection.
-- The global collection limit bounds memory and response growth for Project consumers, including unpaginated Project overview reads.
+- A Project Workspace catalog covers every Workspace attached to its Project.
+- Catalog reads request bounded segments and never request the complete catalog as one unbounded operation.
+- Exact Project-scoped path and Workspace ID selection remain available independently of catalog page retention.
 
 ## Detach Safety
 
@@ -29,6 +29,15 @@
 
 ## API
 
+- The workspace-catalog API uses offset-and-limit traversal and returns at most 100 Workspaces per request.
+- The default Workspace is the first catalog row. Remaining rows use newest attachment first.
+- Each catalog row contains Workspace identity, name, canonical path, and default status. It contains no availability, Session-count, activity-time, or Git facts.
+- Catalog responses contain no separate default-Workspace reference.
+- Workspace-catalog reads use stored Project and Workspace facts without inspecting the filesystem or Git.
+- The exact Project-scoped Workspace API accepts a Workspace ID or path and returns the lean catalog row with a typed `attached` outcome when that Workspace is attached to the selected Project.
+- The exact Project-scoped Workspace API returns a typed `not_attached` outcome when the selected Workspace is not attached to the selected Project.
+- The workspace-attach API returns the authoritative Project-workspace binding with a typed `attached` or `already_attached` outcome.
+- Project overview and board reads obtain bounded Project, default-Workspace, Workspace-count, and exact source-Workspace facts without loading the Project Workspace catalog.
 - The workspace-detach API requires a Project ID and exactly one workspace selector: workspace ID or workspace path.
 - The default-workspace API requires a Project ID and exactly one workspace selector: workspace ID or workspace path.
 - Workspace-ID requests remain supported.

@@ -11,6 +11,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -469,6 +470,7 @@ func ongoingHydrationMessage(sequence uint64) clientui.TranscriptMessage {
 			},
 		},
 		CommittedRows: []clientui.TranscriptCommittedRow{},
+		GoalStatus:    &clientui.TranscriptGoalStatus{Availability: func() *clientui.GoalAvailability { value := clientui.GoalAvailabilityAvailable; return &value }()},
 	}))
 
 }
@@ -541,11 +543,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 	case clientui.TranscriptMessageContextUsage:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})
 	case clientui.TranscriptMessageGoalStatus:
-		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
-			ID:        "goal-1",
-			Objective: "finish review fixes",
-			Status:    clientui.RuntimeGoalStatusActive,
-		}})
+		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Availability: textutil.Value(clientui.GoalAvailabilityAvailable)})
 	case clientui.TranscriptMessageBackgroundActivity:
 		preview := "running tests"
 		event = clientui.NewTranscriptEvent(clientui.TranscriptBackgroundActivity{

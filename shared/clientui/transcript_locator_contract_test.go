@@ -67,6 +67,7 @@ func TestTranscriptHydrationRequiresUniqueLocatorsAndPreservesThemThroughJSON(t 
 		SessionStatus:          transcriptTestSessionStatus(),
 		RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 		CommittedRows:          []TranscriptCommittedRow{row},
+		GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 	}
 	if err := hydration.Validate(); err != nil {
 		t.Fatalf("validate hydration: %v", err)

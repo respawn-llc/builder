@@ -32,6 +32,7 @@ const (
 	MethodProjectUpdate                                 = "project.update"
 	MethodProjectSetDefaultWorkspace                    = "project.defaultWorkspace.set"
 	MethodProjectWorkspaceList                          = "project.workspace.list"
+	MethodProjectWorkspaceGet                           = "project.workspace.get"
 	MethodProjectUnlinkWorkspace                        = "project.unlinkWorkspace"
 	MethodProjectDelete                                 = "project.delete"
 	MethodProjectAttachWorkspace                        = "project.attachWorkspace"

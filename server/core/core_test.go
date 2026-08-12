@@ -444,6 +444,8 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	resolved.Config.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
+	resolved.Config.Settings.Subagents["worker"] = brand.SubagentRole{Settings: brand.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}}, Sources: map[string]string{"tools." + toolspec.ConfigName(toolspec.ToolAskQuestion): "test"}}
 	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -458,12 +460,14 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 		t.Fatal("workspace cache key ignored workspace identity")
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
+	message := "new"
 	go func() {
 		_, err := first.TransformWorkspaceChatDraftAggregate(t.Context(), func(r sessionlaunch.WorkspaceChatDraftResolution) (sessionlaunch.WorkspaceChatDraft, error) {
 			close(entered)
 			<-release
-			r.Draft.Message = "new"
-			return r.Draft, nil
+			next := r.Baselines["worker"]
+			next.Message = "new"
+			return next, nil
 		})
 		if err != nil {
 			t.Errorf("first: %v", err)
@@ -482,8 +486,14 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	operations := []serverapi.WorkspaceChatDraftOperation{{Kind: serverapi.WorkspaceChatDraftUpdateMessage, Message: &message}, {Kind: serverapi.WorkspaceChatDraftClear}}
+	for i, operation := range operations {
+		if response, err := second.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{Operation: operation}); err != nil || response.GoalAvailability != []clientui.GoalAvailability{clientui.GoalAvailabilityAvailable, clientui.GoalAvailabilityAgentCapabilityMissing}[i] {
+			t.Fatalf("%s response=%+v err=%v", operation.Kind, response, err)
+		}
+	}
 	got, err := first.ResolveWorkspaceChatDraftAggregate(t.Context())
-	if err != nil || got.Draft.Message != "new" || !got.Draft.Fast {
+	if err != nil || got.Draft.Message != "" || got.Draft.Fast {
 		t.Fatalf("aggregate=%+v err=%v", got.Draft, err)
 	}
 }

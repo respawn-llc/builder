@@ -136,8 +136,9 @@ type Event struct {
 }
 
 type GoalStatusUpdate struct {
-	State   session.GoalState
-	Cleared bool
+	State        session.GoalState
+	Availability *session.GoalAvailability
+	Cleared      bool
 }
 
 type RunState struct {

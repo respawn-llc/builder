@@ -14,13 +14,12 @@ type TranscriptContextUsage struct {
 }
 
 type TranscriptGoalStatus struct {
-	Goal *TranscriptGoal
+	Goal         *TranscriptGoal
+	Availability *GoalAvailability
 }
 
 type TranscriptGoal struct {
-	ID        string
-	Objective string
-	Status    RuntimeGoalStatus
+	*Goal
 	Suspended bool
 }
 
@@ -54,27 +53,26 @@ func (u TranscriptContextUsage) Validate() error {
 }
 
 func (s TranscriptGoalStatus) Validate() error {
+	if s.Availability != nil {
+		if err := s.Availability.Validate(); err != nil {
+			return err
+		}
+	}
 	if s.Goal == nil {
 		return nil
 	}
-	return s.Goal.Validate()
-}
-
-func (g TranscriptGoal) Validate() error {
-	if strings.TrimSpace(g.ID) == "" {
-		return fmt.Errorf("goal id is required")
+	if s.Goal.Goal == nil {
+		return fmt.Errorf("transcript goal core is required")
 	}
-	if strings.TrimSpace(g.Objective) == "" {
-		return fmt.Errorf("goal objective is required")
+	if err := s.Goal.Goal.Validate(); err != nil {
+		return err
 	}
-	switch g.Status {
+	switch s.Goal.Goal.Status {
 	case RuntimeGoalStatusActive:
 	case RuntimeGoalStatusPaused, RuntimeGoalStatusComplete:
-		if g.Suspended {
-			return fmt.Errorf("%s goal cannot be suspended", g.Status)
+		if s.Goal.Suspended {
+			return fmt.Errorf("%s goal cannot be suspended", s.Goal.Goal.Status)
 		}
-	default:
-		return fmt.Errorf("unknown goal status %q", g.Status)
 	}
 	return nil
 }
