@@ -1000,6 +1000,38 @@ func (a *Authority) WithCurrentRuntime(ctx context.Context, sessionID runtimeids
 	return resource.withEngine(ctx, resource.ref, callback)
 }
 
+func (a *Authority) ApplyCurrentGoalOperation(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	operation runtime.CurrentGoalOperation,
+) (runtime.CurrentGoalOperationOutcome, error) {
+	if a == nil {
+		return runtime.CurrentGoalOperationOutcome{}, errors.New("session runtime authority is required")
+	}
+	if err := context.Cause(ctx); err != nil {
+		return runtime.CurrentGoalOperationOutcome{}, err
+	}
+	if sessionID.IsZero() {
+		return runtime.CurrentGoalOperationOutcome{}, errors.New("session id is required")
+	}
+	a.mu.Lock()
+	resource := a.resources[sessionID]
+	a.mu.Unlock()
+	if resource == nil {
+		return runtime.CurrentGoalOperationOutcome{}, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
+	}
+	resource.mu.Lock()
+	defer resource.mu.Unlock()
+	if resource.rejectsNewUseLocked() || resource.engine == nil {
+		return runtime.CurrentGoalOperationOutcome{}, errors.Join(serverapi.ErrRuntimeUnavailable, fmt.Errorf("session %s has no active runtime available", sessionID))
+	}
+	ownership := runtime.CurrentGoalRetainedOnly
+	if resource.current != nil {
+		ownership = runtime.CurrentGoalExactExecution
+	}
+	return resource.engine.ApplyCurrentGoalOperation(operation, ownership)
+}
+
 func (a *Authority) WithLiveExecutionRuntime(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,

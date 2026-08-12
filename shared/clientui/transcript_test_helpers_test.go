@@ -6,6 +6,8 @@ import (
 	"core/shared/runtimeids"
 )
 
+func testGoalAvailability() *GoalAvailability { value := GoalAvailabilityAvailable; return &value }
+
 func transcriptTestSessionID(t *testing.T) runtimeids.SessionID {
 	t.Helper()
 	id, err := runtimeids.ParseSessionID("session-1")

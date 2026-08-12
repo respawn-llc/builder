@@ -17,6 +17,7 @@ func TestTranscriptHydrationRejectsStepScopedFactsOutsideCanonicalActiveStep(t *
 			SessionStatus:          transcriptTestSessionStatus(),
 			RuntimeReadModelUpdate: transcriptTestRuntimeReadModelUpdate(t),
 			CommittedRows:          []TranscriptCommittedRow{},
+			GoalStatus:             &TranscriptGoalStatus{Availability: testGoalAvailability()},
 			ActiveStep: &TranscriptStepState{
 				RunID:      runID,
 				StepID:     stepID,

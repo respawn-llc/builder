@@ -198,7 +198,7 @@ func TestGoalAuthorityDormantSetRespectsAdmissionFence(t *testing.T) {
 	}
 }
 
-func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
+func TestGoalAuthorityLiveSetPreservesOrdinaryExecutionAdmission(t *testing.T) {
 	var eventMu sync.Mutex
 	var goalFeedbackEvents int
 	var goalStatusEvents int
@@ -235,29 +235,58 @@ func TestGoalAuthorityLiveSetUsesRuntimeCommand(t *testing.T) {
 		Objective: "persist live goal",
 		Actor:     session.GoalActorUser,
 	})
-	if err != nil {
-		t.Fatalf("Set live goal: %v", err)
+	if !errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
+		t.Fatalf("Set live Goal error = %v, want retained workflow activation rejection", err)
 	}
-	if result.Goal == nil || result.Goal.Objective != "persist live goal" ||
-		result.Disposition != runtime.GoalCommandApplied ||
-		!result.MetadataReceipt.Committed || !result.NoticeReceipt.Committed {
-		t.Fatalf("live set result = %+v, want applied committed goal", result)
+	if result.Accepted() {
+		t.Fatalf("rejected live Goal result = %+v, want unaccepted", result)
 	}
 	reopened := reopenGoalAuthorityStore(t, store, observer)
-	if goal := reopened.Meta().Goal; goal == nil || goal.ID != result.Goal.ID {
-		t.Fatalf("persisted live goal = %+v, want %+v", goal, result.Goal)
+	if goal := reopened.Meta().Goal; goal != nil {
+		t.Fatalf("rejected live Goal mutation persisted %+v", goal)
 	}
-	if count := goalAuthorityNoticeCount(t, reopened); count != 1 {
-		t.Fatalf("live goal notice count = %d, want 1", count)
+	if count := goalAuthorityNoticeCount(t, reopened); count != 0 {
+		t.Fatalf("rejected live Goal notice count = %d, want 0", count)
 	}
 	eventMu.Lock()
 	defer eventMu.Unlock()
-	if goalFeedbackEvents != 1 || goalStatusEvents != 1 {
-		t.Fatalf(
-			"live goal events = feedback:%d status:%d, want one of each",
-			goalFeedbackEvents,
-			goalStatusEvents,
-		)
+	if goalFeedbackEvents != 0 || goalStatusEvents != 0 {
+		t.Fatalf("rejected live Goal events = feedback:%d status:%d, want none", goalFeedbackEvents, goalStatusEvents)
+	}
+}
+
+func TestGoalAuthorityAdmissionRetryDependsOnCallbackEntry(t *testing.T) {
+	runStarting := errors.Join(serverapi.ErrSessionRunStarting, sessionruntime.ErrSessionRunActive)
+	for _, test := range []struct {
+		name                  string
+		entered, retryHandled bool
+	}{
+		{name: "pre-callback race retries typed operation", retryHandled: true},
+		{name: "post-callback error does not replay", entered: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			applyCalls, admissionCalls := 0, 0
+			result, err := applyGoalOperationWithAdmission(func() (runtime.CurrentGoalOperationOutcome, error) {
+				applyCalls++
+				if test.retryHandled && applyCalls == 2 {
+					handled := runtime.GoalCommandResult{Disposition: runtime.GoalCommandQueued}
+					return runtime.CurrentGoalOperationOutcome{Handled: &handled}, nil
+				}
+				return runtime.CurrentGoalOperationOutcome{ExecutionRequired: true}, nil
+			}, func() (GoalCommandResult, AgentExecutionAdmission) {
+				admissionCalls++
+				accepted := GoalCommandResult{Disposition: runtime.GoalCommandApplied, MetadataReceipt: session.CommitReceipt{Committed: test.entered}}
+				return accepted, AgentExecutionAdmission{CallbackEntered: test.entered, Err: runStarting}
+			})
+			wantApply := 1
+			if test.retryHandled {
+				wantApply++
+			}
+			if admissionCalls != 1 || applyCalls != wantApply || (test.entered && (!result.Accepted() || !errors.Is(result.Err, runStarting) || err != nil)) ||
+				(!test.entered && (result.Disposition != runtime.GoalCommandQueued || err != nil)) {
+				t.Fatal(applyCalls, admissionCalls, result, err)
+			}
+		})
 	}
 }
 

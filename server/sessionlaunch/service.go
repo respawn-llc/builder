@@ -10,6 +10,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/requestmemo"
+	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/subagentpolicy"
@@ -252,10 +253,12 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message}, nil
+		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Draft.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	case serverapi.WorkspaceChatDraftUpdateMessage:
 		message := *req.Operation.Message
+		var availability session.GoalAvailability
 		resolved, err := s.TransformWorkspaceChatDraftAggregate(ctx, func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+			availability = current.GoalAvailability
 			next := current.Draft
 			next.Message = message
 			return next, nil
@@ -263,7 +266,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message}, nil
+		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(availability)}, nil
 	case serverapi.WorkspaceChatDraftClear:
 		owner, workspaceID, err := s.workspaceChatDraftOwner()
 		if err != nil {
@@ -272,7 +275,11 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 		if err := owner.ClearWorkspaceChatDraft(ctx, workspaceID); err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
-		return serverapi.WorkspaceChatDraftResponse{}, nil
+		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+		if err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, err
+		}
+		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
 	default:
 		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 	}
