@@ -10,6 +10,7 @@ import (
 )
 
 var ErrInvalidContinuationAgentRole = errors.New("invalid continuation agent role")
+var ErrInvalidContinuationOpenAIBaseURL = errors.New("invalid continuation OpenAI base URL")
 
 // ContinuationAgentRole returns the persisted named role, if one was selected.
 func ContinuationAgentRole(meta Meta) *string {
@@ -20,10 +21,17 @@ func ContinuationAgentRole(meta Meta) *string {
 }
 
 // NormalizeContinuationContext validates persisted continuation metadata at
-// every persistence boundary. An omitted or JSON-null role is the sole
-// default-agent encoding.
+// every persistence boundary. Omitted or JSON-null values encode absence;
+// present blank values are invalid.
 func NormalizeContinuationContext(ctx ContinuationContext) (*ContinuationContext, error) {
-	normalized := ContinuationContext{OpenAIBaseURL: strings.TrimSpace(ctx.OpenAIBaseURL)}
+	normalized := ContinuationContext{}
+	if ctx.OpenAIBaseURL != nil {
+		baseURL := strings.TrimSpace(*ctx.OpenAIBaseURL)
+		if baseURL == "" {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidContinuationOpenAIBaseURL, *ctx.OpenAIBaseURL)
+		}
+		normalized.OpenAIBaseURL = &baseURL
+	}
 	if ctx.AgentRole != nil {
 		raw := *ctx.AgentRole
 		role := config.NormalizeSubagentSelector(raw)
@@ -32,7 +40,7 @@ func NormalizeContinuationContext(ctx ContinuationContext) (*ContinuationContext
 		}
 		normalized.AgentRole = &role
 	}
-	if normalized.OpenAIBaseURL == "" && normalized.AgentRole == nil {
+	if normalized.OpenAIBaseURL == nil && normalized.AgentRole == nil {
 		return nil, nil
 	}
 	return &normalized, nil

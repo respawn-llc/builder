@@ -8,6 +8,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/textutil"
 )
 
 func TestResolveBootstrapPlanUsesSessionWorkspaceAndPersistedBaseURL(t *testing.T) {
@@ -22,7 +23,7 @@ func TestResolveBootstrapPlanUsesSessionWorkspaceAndPersistedBaseURL(t *testing.
 		metadataStore,
 		persistenceRoot,
 		"/tmp/original-workspace",
-		session.ContinuationContext{OpenAIBaseURL: "http://persisted.local/v1"},
+		session.ContinuationContext{OpenAIBaseURL: textutil.Value("http://persisted.local/v1")},
 	)
 
 	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{
@@ -55,7 +56,7 @@ func TestResolveBootstrapPlanRespectsExplicitOverrides(t *testing.T) {
 		metadataStore,
 		persistenceRoot,
 		"/tmp/original-workspace",
-		session.ContinuationContext{OpenAIBaseURL: "http://persisted.local/v1"},
+		session.ContinuationContext{OpenAIBaseURL: textutil.Value("http://persisted.local/v1")},
 	)
 
 	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{
@@ -91,7 +92,7 @@ func TestResolveBootstrapPlanUsesMetadataSessionLookupByID(t *testing.T) {
 		metadataStore,
 		persistenceRoot,
 		"/tmp/workspace-b",
-		session.ContinuationContext{OpenAIBaseURL: "http://workspace-b.local/v1"},
+		session.ContinuationContext{OpenAIBaseURL: textutil.Value("http://workspace-b.local/v1")},
 	)
 
 	plan, err := ResolveBootstrapPlan(persistenceRoot, BootstrapRequest{SessionID: store.Meta().SessionID})

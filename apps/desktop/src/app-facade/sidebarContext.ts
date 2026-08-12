@@ -65,6 +65,11 @@ export type SidebarDestination =
       initialFocus?: WorkflowInspectorInitialFocus | undefined;
     }>
   | Readonly<{
+      kind: "workflowSettings";
+      mode?: SidebarMode;
+      workflowID: string;
+    }>
+  | Readonly<{
       kind: "workflowEditor";
       mode?: SidebarMode;
       projectID?: string | undefined;

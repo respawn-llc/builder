@@ -456,7 +456,21 @@ INSERT INTO task_runs (
 	if err != nil {
 		t.Fatalf("ResolveCurrentSessionStartContext: %v", err)
 	}
-	if input.Task.ID != workflow.TaskID(taskID) || input.Node.ID != workflow.NodeID("node-agent") || input.CurrentNode.EnteredByEdgeID == nil || *input.CurrentNode.EnteredByEdgeID != workflow.EdgeID("edge-start") {
+	definition, _, err := store.GetDefinition(t.Context(), input.Workflow.ID)
+	if err != nil {
+		t.Fatalf("GetDefinition migrated Workflow: %v", err)
+	}
+	startEdgeID := edgeByKey(t, definition, "start").ID
+	if _, err := runtimeids.GraphEntityIDBlob(string(input.Node.ID)); err != nil {
+		t.Fatalf("migrated context Node ID %q: %v", input.Node.ID, err)
+	}
+	if _, err := runtimeids.GraphEntityIDBlob(string(startEdgeID)); err != nil {
+		t.Fatalf("migrated context entering Edge ID %q: %v", startEdgeID, err)
+	}
+	if input.Task.ID != workflow.TaskID(taskID) ||
+		input.Node.Key != "agent" ||
+		input.CurrentNode.EnteredByEdgeID == nil ||
+		*input.CurrentNode.EnteredByEdgeID != startEdgeID {
 		t.Fatalf("resolved migrated context = %+v, want direct current ownership and entering edge", input)
 	}
 }

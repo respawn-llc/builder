@@ -128,7 +128,7 @@ type NodeRecord struct {
 	Key                workflow.ModelKey
 	Kind               workflow.NodeKind
 	DisplayName        string
-	GroupID            string
+	GroupID            *string
 	GroupKey           string
 	SubagentRole       string
 	CompletionMode     string
@@ -381,8 +381,8 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	}
 	description := strings.TrimSpace(req.Description)
 	workflowID := runtimeids.NewWorkflowID()
-	startID := prefixedID("node")
-	doneID := prefixedID("node")
+	startID := runtimeids.NewGraphEntityID()
+	doneID := runtimeids.NewGraphEntityID()
 	policy := workflow.DefaultExecutionTargetPolicy()
 	if err := q.InsertWorkflow(ctx, sqlitegen.InsertWorkflowParams{
 		ID:                    workflowID,

@@ -1754,10 +1754,12 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	settings.ShellOutputMaxChars = 16_000
 	settings.Reviewer.Frequency = "off"
 	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:          settings,
-		EnabledTools:      []toolspec.ID{toolspec.ToolExecCommand},
-		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		Client:            client,
+		Settings:              settings,
+		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
+		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -2197,10 +2199,12 @@ func TestOwnerlessBackgroundContinuationPublishesQuestionFromExactExecution(t *t
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:          settings,
-		EnabledTools:      []toolspec.ID{toolspec.ToolAskQuestion},
-		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		Client:            client,
+		Settings:              settings,
+		EnabledTools:          []toolspec.ID{toolspec.ToolAskQuestion},
+		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -3298,15 +3302,30 @@ func workflowExecutionRefForTestPointer(
 	return &ref
 }
 
+func TestNewAgentRuntimePlanRequiresEffectiveSessionSettings(t *testing.T) {
+	for name, options := range map[string]AgentRuntimePlanOptions{
+		"Questions":       {AutoCompactionEnabled: textutil.Value(true)},
+		"Auto-compaction": {QuestionsEnabled: textutil.Value(true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := NewAgentRuntimePlan(options); err == nil {
+				t.Fatalf("runtime plan accepted missing effective %s setting", name)
+			}
+		})
+	}
+}
+
 func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, client llm.Client, onEvent ...func(runtime.Event)) AgentRuntimePlan {
 	settings := fixture.config.Settings
 	settings.Model = "gpt-5"
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	options := AgentRuntimePlanOptions{
-		Settings:          settings,
-		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		Client:            client,
+		Settings:              settings,
+		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                client,
 	}
 	if len(onEvent) != 0 {
 		options.OnEvent = onEvent[0]

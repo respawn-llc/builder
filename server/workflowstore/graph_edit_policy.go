@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
@@ -171,7 +170,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		}
 	}
 	for _, edgeID := range structural.Removed.edges {
-		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
+		count, err := q.CountTaskEdgeReferences(ctx, string(edgeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
@@ -205,7 +204,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 	}
 	historyEdgeChangeEntities := []WorkflowGraphEntityReference{}
 	for _, edgeID := range structural.EditPolicy.HistoryEdgeChanges {
-		refCount, err := q.CountAllTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
+		refCount, err := q.CountAllTaskEdgeReferences(ctx, string(edgeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}

@@ -35,7 +35,7 @@ CREATE INDEX tasks_project_workflow_updated_idx
 CREATE VIEW task_records AS SELECT * FROM tasks;
 CREATE TABLE task_current_nodes (
 	task_id TEXT NOT NULL,
-	node_id TEXT NOT NULL
+	node_id BLOB NOT NULL
 );
 CREATE TABLE task_dependencies (
 	blocker_task_id TEXT NOT NULL,
@@ -58,6 +58,6 @@ CREATE INDEX task_label_assignments_label_task_idx
 		t.Fatalf("create query-plan fixture: %v", err)
 	}
 
-	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "sqlite_autoindex_task_label_assignments_1", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
-	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "task_label_assignments_label_task_idx", "none", "", "[]", "[]", "project-1", "workflow-1", "node-done")
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "sqlite_autoindex_task_label_assignments_1", "none", "", "[]", "[]", "project-1", "workflow-1", boardQueryNodeID)
+	requireQueryUsesIndex(t, db, listBoardColumnTaskCounts, "task_label_assignments_label_task_idx", "none", "", "[]", "[]", "project-1", "workflow-1", boardQueryNodeID)
 }

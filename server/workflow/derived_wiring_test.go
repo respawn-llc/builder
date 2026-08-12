@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"core/internal/testharness/testsetup"
@@ -300,4 +301,29 @@ func assertDerivedDiagnosticsBlock(t *testing.T, derived workflow.DerivedWiring)
 		}
 	}
 	t.Fatalf("expected at least one blocking diagnostic in %+v", derived.Diagnostics)
+}
+
+func TestDerivedWiringDiagnosticsOmitBlankGraphIdentities(t *testing.T) {
+	def := validWorkflow(t)
+	def.Edges[0].ID = ""
+	def.Edges[0].Parameters = []workflow.Parameter{{Key: "result", Description: "First"}}
+	conflicting := def.Edges[0]
+	conflicting.ID = ""
+	conflicting.Key = "conflicting"
+	conflicting.Parameters = []workflow.Parameter{{Key: "result", Description: "Second"}}
+	def.Edges = append(def.Edges, conflicting)
+
+	derived := workflow.DeriveWiring(def)
+
+	for _, diagnostic := range derived.Diagnostics {
+		if diagnostic.EdgeID != nil && strings.TrimSpace(string(*diagnostic.EdgeID)) == "" {
+			t.Fatalf("derived diagnostic references missing Transition Branch identity: %+v", diagnostic)
+		}
+		if diagnostic.NodeID != nil && strings.TrimSpace(string(*diagnostic.NodeID)) == "" {
+			t.Fatalf("derived diagnostic references missing Node identity: %+v", diagnostic)
+		}
+		if diagnostic.TransitionGroupID != nil && strings.TrimSpace(string(*diagnostic.TransitionGroupID)) == "" {
+			t.Fatalf("derived diagnostic references missing Transition identity: %+v", diagnostic)
+		}
+	}
 }

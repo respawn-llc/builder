@@ -10,10 +10,9 @@ import (
 )
 
 type reviewerRuntimeState struct {
-	mu              sync.Mutex
-	client          llm.Client
-	resumeFrequency string
-	active          *TranscriptReviewerState
+	mu     sync.Mutex
+	client llm.Client
+	active *TranscriptReviewerState
 }
 
 func newReviewerRuntimeState(client llm.Client) *reviewerRuntimeState {
@@ -90,46 +89,4 @@ func (s *reviewerRuntimeState) EnsureClient(factory func() (llm.Client, error)) 
 	}
 	s.mu.Unlock()
 	return nil
-}
-
-func (s *reviewerRuntimeState) RecordResumeFrequency(frequency string) {
-	if s == nil {
-		return
-	}
-	normalized, ok := NormalizeReviewerFrequency(frequency)
-	if !ok || normalized == "off" {
-		return
-	}
-	s.mu.Lock()
-	s.resumeFrequency = normalized
-	s.mu.Unlock()
-}
-
-func (s *reviewerRuntimeState) SetResumeFrequency(frequency string) {
-	if s == nil {
-		return
-	}
-	normalized, ok := NormalizeReviewerFrequency(frequency)
-	if !ok || normalized == "" || normalized == "off" {
-		normalized = "edits"
-	}
-	s.mu.Lock()
-	s.resumeFrequency = normalized
-	s.mu.Unlock()
-}
-
-func (s *reviewerRuntimeState) ResumeFrequency(defaultFrequency string) string {
-	if s == nil {
-		return strings.TrimSpace(defaultFrequency)
-	}
-	s.mu.Lock()
-	resume := s.resumeFrequency
-	s.mu.Unlock()
-	if normalized, ok := NormalizeReviewerFrequency(resume); ok && normalized != "" && normalized != "off" {
-		return normalized
-	}
-	if normalized, ok := NormalizeReviewerFrequency(defaultFrequency); ok && normalized != "" && normalized != "off" {
-		return normalized
-	}
-	return "edits"
 }

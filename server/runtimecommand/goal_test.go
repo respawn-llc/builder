@@ -20,6 +20,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -337,8 +338,10 @@ func workflowGoalAuthorityPlan(t *testing.T, workdir string) sessionruntime.Agen
 	settings.Model = "gpt-5"
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
+		Settings:              settings,
+		EnabledTools:          []toolspec.ID{toolspec.ToolAskQuestion},
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(workdir, workdir, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {

@@ -21,6 +21,7 @@ func (s *Store) GoalAvailability() (GoalAvailability, error) {
 	}
 	return GoalAvailabilityFromMeta(s.Meta())
 }
+
 func (s *Store) GoalMutationAvailability() *GoalAvailability {
 	availability, err := s.GoalAvailability()
 	if err != nil {
@@ -29,11 +30,8 @@ func (s *Store) GoalMutationAvailability() *GoalAvailability {
 	return &availability
 }
 func GoalAvailabilityFromMeta(meta Meta) (GoalAvailability, error) {
-	if meta.Locked == nil {
+	if meta.Locked == nil || !meta.Locked.HasEnabledTools {
 		return GoalAvailable, nil
-	}
-	if !meta.Locked.HasEnabledTools {
-		return 0, malformedGoalContract(meta, errors.New("enabled tool snapshot is absent"))
 	}
 	availability := GoalAgentCapabilityMissing
 	for _, raw := range meta.Locked.EnabledTools {

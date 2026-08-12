@@ -150,9 +150,15 @@ type CompletionRequest struct {
 	Commentary   string
 }
 
+const CompletionStateApplied = "applied"
+
 type CompletionResult struct {
 	TransitionID workflow.TransitionID
 	State        string
+}
+
+func (r CompletionResult) IsApplied() bool {
+	return r.State == CompletionStateApplied
 }
 
 type CompletionObservationRequest struct {

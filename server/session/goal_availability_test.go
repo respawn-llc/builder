@@ -17,10 +17,11 @@ func TestGoalAvailabilityResolvesCapabilityAndRejectsMalformed(t *testing.T) {
 	if got, err := mustOpenSessionTestStore(t, store).GoalAvailability(); err != nil || got != GoalAgentCapabilityMissing {
 		t.Fatalf("reopened availability=%q err=%v", got, err)
 	}
+	if got, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{}}); err != nil || got != GoalAvailable {
+		t.Fatalf("stale availability=%q err=%v", got, err)
+	}
 	t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-	for _, meta := range []Meta{{Locked: &LockedContract{}}, {Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}} {
-		if _, err := GoalAvailabilityFromMeta(meta); err == nil {
-			t.Fatal("malformed locked tools returned availability")
-		}
+	if _, err := GoalAvailabilityFromMeta(Meta{Locked: &LockedContract{HasEnabledTools: true, EnabledTools: []string{"unknown"}}}); err == nil {
+		t.Fatal("malformed locked tools returned availability")
 	}
 }

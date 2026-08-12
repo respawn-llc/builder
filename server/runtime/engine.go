@@ -50,16 +50,7 @@ func NormalizeThinkingLevel(level string) (string, bool) {
 }
 
 func NormalizeReviewerFrequency(frequency string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(frequency)) {
-	case "off":
-		return "off", true
-	case "all":
-		return "all", true
-	case "edits":
-		return "edits", true
-	default:
-		return "", false
-	}
+	return session.NormalizeReviewerFrequency(frequency)
 }
 
 func NormalizeCompactionMode(mode string) (string, bool) {
@@ -98,7 +89,6 @@ type Config struct {
 	ThinkingLevel                   string
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
-	FastModeState                   *FastModeState
 	WebSearchMode                   string
 	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
@@ -342,7 +332,6 @@ func New(
 		reviewerFrequency = "off"
 	}
 	eng.cfg.Reviewer.Frequency = reviewerFrequency
-	eng.reviewerRuntimeState().SetResumeFrequency(reviewerFrequency)
 	if reviewerFrequency != "off" {
 		if err := eng.initReviewerClient(); err != nil {
 			return nil, err

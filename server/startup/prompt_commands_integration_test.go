@@ -18,6 +18,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -129,11 +130,13 @@ func TestRemotePromptCommandStartupCatalogAndInvocationUseImportedServerContent(
 		t.Fatalf("PlanSession: %v", err)
 	}
 	attachment, err := remote.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID: runtimeids.NewRuntimeClientRequestID().String(),
-		SessionID:       plan.Plan.SessionID,
-		ActiveSettings:  plan.Plan.ActiveSettings,
-		EnabledToolIDs:  plan.Plan.EnabledToolIDs,
-		Source:          plan.Plan.Source,
+		ClientRequestID:       runtimeids.NewRuntimeClientRequestID().String(),
+		SessionID:             plan.Plan.SessionID,
+		ActiveSettings:        plan.Plan.ActiveSettings,
+		EnabledToolIDs:        plan.Plan.EnabledToolIDs,
+		QuestionsEnabled:      textutil.Value(plan.Plan.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(plan.Plan.AutoCompactionEnabled),
+		Source:                plan.Plan.Source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)

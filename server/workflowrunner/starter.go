@@ -101,7 +101,7 @@ func (s *Starter) StartCurrentNode(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignment *workflowexecution.CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
@@ -126,7 +126,7 @@ func (s *Starter) StartCurrentNode(
 		if err := s.validateRole(selection.Assignee); err != nil {
 			return err
 		}
-		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignmentSteer, lease, controller)
+		return s.startCurrentNodeAgent(ctx, input, taskPromptDelivery, assignment, lease, controller)
 	default:
 		return fmt.Errorf("current node %v is not executable", reference)
 	}
@@ -343,11 +343,11 @@ func (s *Starter) startCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	assignment *workflowexecution.CurrentNodeClassifiedAssignment,
 	lease sessionruntime.WorkflowExecutionLease,
 	controller workflowruntime.Controller,
 ) error {
-	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignmentSteer)
+	prepared, resource, err := s.currentNodeAgentSessionForStart(ctx, input, assignment)
 	if err != nil {
 		return err
 	}
@@ -384,7 +384,8 @@ func (s *Starter) startCurrentNodeAgent(
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
 		Settings: prepared.plan.ActiveSettings, EnabledTools: workflowRuntimeEnabledTools(prepared.plan.EnabledTools),
-		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true, Client: prepared.client,
+		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: pathContext}, Sources: prepared.plan.Source.Sources, Headless: true,
+		QuestionsEnabled: textutil.Value(prepared.plan.QuestionsEnabled), AutoCompactionEnabled: textutil.Value(prepared.plan.AutoCompactionEnabled), Client: prepared.client,
 		ReviewerClientFactory: s.runtimeClientFactory, CurrentNodeExecution: runtimeConfig,
 		StartLogLines: []string{fmt.Sprintf("workflow.runtime.start task_id=%s session_id=%s node_id=%s execution_root=%s model=%s", input.Task.ID, prepared.plan.Descriptor.SessionID(), input.Node.ID, prepared.root.EffectiveRoot(), prepared.plan.ActiveSettings.Model)},
 		AskQuestionBatchSkipped: func(batch askquestion.AskQuestionBatchMetadata) {
@@ -457,18 +458,26 @@ func (s *Starter) startCurrentNodeAgent(
 func (s *Starter) currentNodeAgentSessionForStart(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
-	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
+	classified *workflowexecution.CurrentNodeClassifiedAssignment,
 ) (preparedCurrentNodeAgentSession, sessionruntime.AgentResourceSelection, error) {
-	if assignmentSteer == nil {
+	if classified == nil {
 		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, true, true)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}
-	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
+	if !classified.Reference().Equal(input.CurrentNode.Reference) {
+		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
+			"classified current node assignment %v does not match start %v",
+			classified.Reference(),
+			input.CurrentNode.Reference,
+		)
+	}
+	preparedAssignment := classified.PreparedAssignment()
+	assignment, ok := preparedAssignment.(*currentNodeAgentAssignmentSteer)
 	if !ok {
 		return preparedCurrentNodeAgentSession{}, nil, fmt.Errorf(
 			"current node %v received incompatible assignment steer %T",
 			input.CurrentNode.Reference,
-			assignmentSteer,
+			preparedAssignment,
 		)
 	}
 	if !assignment.reference.Equal(input.CurrentNode.Reference) {
@@ -477,13 +486,6 @@ func (s *Starter) currentNodeAgentSessionForStart(
 			assignment.reference,
 			input.CurrentNode.Reference,
 		)
-	}
-	receipt, err := assignment.Wait(ctx)
-	if err != nil {
-		return preparedCurrentNodeAgentSession{}, nil, err
-	}
-	if !receipt.Committed {
-		return preparedCurrentNodeAgentSession{}, nil, errors.New("current node assignment was not committed")
 	}
 	if assignment.retainSourceRuntime {
 		return assignment.prepared, sessionruntime.CurrentAgentResource{}, nil
@@ -526,9 +528,18 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.EnsureDurable() }); err != nil {
+	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+		if err := store.EnsureDurable(); err != nil {
+			return err
+		}
+		_, err := store.MutateChatSettings(session.ChatSettingsMutation{
+			AutoCompaction: textutil.Value(true),
+		})
+		return err
+	}); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
+	plan.AutoCompactionEnabled = true
 	if input.ContextMode == workflow.ContextModeCompactAndContinueSession && !sessionPrepared {
 		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 			return store.ResetLockedContractForCompactionBoundary()

@@ -7,7 +7,6 @@ const sessionCatalogMaxPages = 10;
 const workspaceCatalogMaxPages = 4;
 type SessionCatalogApi = Pick<ApiService, "listSessionPage">;
 type WorkspaceCatalogApi = Pick<ApiService, "listWorkspaces">;
-type SessionCatalogQueryKey = ReturnType<typeof queryKeys.projectSessionCatalog>;
 type WorkspaceCatalogQueryKey = ReturnType<typeof queryKeys.projectWorkspaceCatalog>;
 
 export function mainSessionCatalogInfiniteQueryOptions(api: SessionCatalogApi, projectID: string) {
@@ -45,22 +44,12 @@ export async function invalidateProjectSessionCatalogs(
   });
 }
 
-export function previousSessionCatalogOffset(offset: number): number | undefined {
-  return offset === 0 ? undefined : Math.max(0, offset - sessionCatalogPageSize);
-}
-
 function sessionCatalogInfiniteQueryOptions(
   api: SessionCatalogApi,
   projectID: string,
   category: SessionCategory,
 ) {
-  return infiniteQueryOptions<
-    SessionCatalogPage,
-    Error,
-    InfiniteData<SessionCatalogPage, number>,
-    SessionCatalogQueryKey,
-    number
-  >({
+  return infiniteQueryOptions({
     queryKey: queryKeys.projectSessionCatalog(projectID, category),
     queryFn: async ({ pageParam }) => api.listSessionPage(projectID, category, pageParam),
     initialPageParam: 0,
@@ -69,7 +58,8 @@ function sessionCatalogInfiniteQueryOptions(
       _firstPage: SessionCatalogPage,
       _allPages: SessionCatalogPage[],
       firstPageParam: number,
-    ): number | undefined => previousSessionCatalogOffset(firstPageParam),
+    ): number | undefined =>
+      firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - sessionCatalogPageSize),
     maxPages: sessionCatalogMaxPages,
   });
 }

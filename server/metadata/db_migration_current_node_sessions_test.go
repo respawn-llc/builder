@@ -195,13 +195,15 @@ INSERT INTO task_runs (
 	var taskID, nodeID string
 	var associatedAt int64
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT session.task_id, association.node_id, association.associated_at_unix_ms
+SELECT session.task_id, `+graphEntityIDTextFunction+`(association.node_id), association.associated_at_unix_ms
 FROM sessions session
 JOIN session_workflow_node_associations association ON association.session_id = session.id
 WHERE session.id = '550e8400-e29b-41d4-a716-446655440001'`).Scan(&taskID, &nodeID, &associatedAt); err != nil {
 		t.Fatalf("query retained completed agent session association: %v", err)
 	}
-	if taskID != "task-completed-session-migration" || nodeID != "node-agent" || associatedAt != runUpdatedAt {
+	if taskID != "task-completed-session-migration" ||
+		nodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
+		associatedAt != runUpdatedAt {
 		t.Fatalf("retained completed agent session association = task=%q node=%q associated_at=%d", taskID, nodeID, associatedAt)
 	}
 
@@ -210,7 +212,13 @@ WHERE session.id = '550e8400-e29b-41d4-a716-446655440001'`).Scan(&taskID, &nodeI
 SELECT COUNT(*)
 FROM task_current_nodes
 WHERE task_id = 'task-completed-session-migration'
-  AND node_id = 'node-agent'`).Scan(&historicalCurrentNodeCount); err != nil {
+  AND node_id = (
+      SELECT node.id
+      FROM workflow_nodes node
+      JOIN task_records task ON task.workflow_id = node.workflow_id
+      WHERE task.id = 'task-completed-session-migration'
+        AND node.node_key = 'agent'
+  )`).Scan(&historicalCurrentNodeCount); err != nil {
 		t.Fatalf("count projected completed agent current nodes: %v", err)
 	}
 	if historicalCurrentNodeCount != 0 {
@@ -328,7 +336,7 @@ WHERE id = 'group-done'`)
 	var sourceNodeID, sourceSessionID string
 	var sourceSchedulingState sql.NullString
 	if err := store.db.QueryRowContext(t.Context(), `
-SELECT node_id, session_id, scheduling_state
+SELECT `+graphEntityIDTextFunction+`(node_id), session_id, scheduling_state
 FROM task_current_nodes
 WHERE task_id = 'task-pending-approval-migration'`).Scan(
 		&sourceNodeID,
@@ -337,7 +345,7 @@ WHERE task_id = 'task-pending-approval-migration'`).Scan(
 	); err != nil {
 		t.Fatalf("query pending approval source current node: %v", err)
 	}
-	if sourceNodeID != "node-agent" ||
+	if sourceNodeID != workflowGraphSeedIDText(t, store.db, "node-agent") ||
 		sourceSessionID != "550e8400-e29b-41d4-a716-446655440002" ||
 		sourceSchedulingState.Valid {
 		t.Fatalf(
@@ -363,7 +371,7 @@ WHERE task_id = 'task-pending-approval-migration'`).Scan(
 SELECT
     approval.id,
     approval.source_task_id,
-    approval.source_node_id,
+    `+graphEntityIDTextFunction+`(approval.source_node_id),
     approval.source_session_id,
     approval.workflow_version,
     approval.materialized_values_json,
@@ -426,29 +434,32 @@ WHERE approval.source_task_id = 'task-pending-approval-migration'`).Scan(
 	if _, err := workflow.ParseApprovalID(approvalID); err != nil {
 		t.Fatalf("migrated approval id %q: %v", approvalID, err)
 	}
+	assertCanonicalGraphEntityIDText(t, transitionGroupID)
+	assertCanonicalGraphEntityIDText(t, targetEnteredByEdgeID)
+	assertCanonicalGraphEntityIDText(t, edgeID)
+	agentNodeID := workflowGraphSeedIDText(t, store.db, "node-agent")
+	doneNodeID := workflowGraphSeedIDText(t, store.db, "node-done")
 	if approvalSourceTaskID != "task-pending-approval-migration" ||
-		approvalSourceNodeID != "node-agent" ||
+		approvalSourceNodeID != agentNodeID ||
 		approvalSourceSessionID != "550e8400-e29b-41d4-a716-446655440002" ||
 		workflowVersion != 1 ||
 		materializedValues != `{"summary":"done"}` ||
 		createdAt != now+3 ||
 		transitionWorkflowID != workflowTestID(t, "1").String() ||
-		transitionGroupID != "transition-pending-approval-migration" ||
-		transitionSourceNodeID != "node-agent" ||
+		transitionSourceNodeID != agentNodeID ||
 		transitionID != "done" ||
 		sourceDisplayName != "Agent" ||
 		branchKey != "done" ||
-		targetNodeID != "node-done" ||
+		targetNodeID != doneNodeID ||
 		targetBranchKey.Valid ||
-		targetEnteredByEdgeID != "transition-edge-pending-approval-migration" ||
+		targetEnteredByEdgeID != edgeID ||
 		targetDisplayName != "Done" ||
 		targetInputs != `{"summary":"done"}` ||
 		targetPriorValues != `{"transition_parameters":{}}` ||
 		targetSessionID != "" ||
 		targetSchedulingState != "" ||
-		edgeID != "transition-edge-pending-approval-migration" ||
 		edgeKey != "done" ||
-		edgeTargetNodeID != "node-done" ||
+		edgeTargetNodeID != doneNodeID ||
 		edgeContextMode != "new_session" ||
 		edgeContextSourceKind != "immediate_source" ||
 		edgeRequiresApproval != 1 ||

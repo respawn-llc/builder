@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync/atomic"
 	"testing"
 
@@ -10,12 +11,14 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
+	"core/shared/transcript"
 )
 
 type completeNodeBarrierController struct {
 	fakeWorkflowController
 	beforeComplete func()
 	completeError  error
+	committedError error
 	completeCalls  atomic.Int32
 }
 
@@ -32,8 +35,8 @@ func (c *completeNodeBarrierController) CompleteCurrentNode(
 	}
 	return workflowruntime.CompletionResult{
 		TransitionID: "done",
-		State:        "applied",
-	}, nil
+		State:        workflowruntime.CompletionStateApplied,
+	}, c.committedError
 }
 
 func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCalls {
@@ -49,7 +52,9 @@ func completeNodeBarrierAcceptedCalls(input json.RawMessage) acceptedResponseCal
 func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 	flushes := &resultGroupFlushRecorder{}
-	controller := &completeNodeBarrierController{}
+	var events []Event
+	diagnostic := errors.New("successor assignment observer failed")
+	controller := &completeNodeBarrierController{committedError: diagnostic}
 	var (
 		engine                  *Engine
 		mutatedBeforeDurability atomic.Bool
@@ -68,6 +73,7 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 			Model:                "gpt-5",
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
 			DurabilityObserver:   flushes,
+			OnEvent:              func(event Event) { events = append(events, event) },
 		},
 	)
 
@@ -93,6 +99,14 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		!results[0].Terminal {
 		t.Fatalf("complete_node results = %+v, want one terminal success", results)
 	}
+	var output map[string]any
+	if err := json.Unmarshal(results[0].Output, &output); err != nil {
+		t.Fatalf("decode complete_node output: %v", err)
+	}
+	if _, present := output["diagnostic"]; present {
+		t.Fatalf("complete_node output exposed a diagnostic field: %s", results[0].Output)
+	}
+	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 	observations := flushes.snapshot()
 	if len(observations) != 2 ||
 		observations[0].Reason != ResultGroupFlushCompleteNode ||
@@ -103,6 +117,24 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 			observations,
 		)
 	}
+}
+
+func assertWorkflowCompletionOperatorDiagnostic(
+	t *testing.T,
+	events []Event,
+	diagnostic error,
+) {
+	t.Helper()
+	for _, event := range events {
+		if event.Kind == EventLocalEntryAdded &&
+			event.CommittedTranscriptChanged &&
+			event.LocalEntry != nil &&
+			event.LocalEntry.Role == string(transcript.EntryRoleDeveloperErrorFeedback) &&
+			event.LocalEntry.Text == diagnostic.Error() {
+			return
+		}
+	}
+	t.Fatal("typed workflow completion operator diagnostic was not published")
 }
 
 func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {

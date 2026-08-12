@@ -152,9 +152,10 @@ func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(batch *taskPr
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
 	var (
-		interrupted []workflow.CurrentNodeReference
-		commitErr   error
-		canceled    bool
+		interrupted            []workflow.CurrentNodeReference
+		interruptionDiagnostic error
+		commitErr              error
+		canceled               bool
 	)
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
@@ -167,15 +168,17 @@ func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(batch *taskPr
 			return nil
 		}
 		if commitErr = batch.preparation.Commit(ctx); commitErr != nil {
-			var err error
-			interrupted, err = c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, commitErr)
-			return err
+			var persistenceErr error
+			interrupted, interruptionDiagnostic, persistenceErr =
+				c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, commitErr)
+			return persistenceErr
 		}
 		if handoffErr := c.handoffTaskPreparationBatch(batch); handoffErr != nil {
 			commitErr = handoffErr
-			var err error
-			interrupted, err = c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, commitErr)
-			return err
+			var persistenceErr error
+			interrupted, interruptionDiagnostic, persistenceErr =
+				c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, commitErr)
+			return persistenceErr
 		}
 		return nil
 	})
@@ -184,7 +187,12 @@ func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(batch *taskPr
 		return
 	}
 	if commitErr != nil || persistenceErr != nil {
-		c.publishFailedTaskPreparationBatch(batch, commitErr, persistenceErr, interrupted)
+		c.publishFailedTaskPreparationBatch(
+			batch,
+			errors.Join(commitErr, interruptionDiagnostic),
+			persistenceErr,
+			interrupted,
+		)
 		return
 	}
 	batch.finalizer(TaskPreparationFinalization{Kind: TaskPreparationHandedOff})
@@ -238,8 +246,9 @@ func (c *CurrentNodeController) finishFailedTaskPreparationBatch(batch *taskPrep
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
 	var (
-		interrupted []workflow.CurrentNodeReference
-		canceled    bool
+		interrupted            []workflow.CurrentNodeReference
+		interruptionDiagnostic error
+		canceled               bool
 	)
 	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
@@ -251,27 +260,33 @@ func (c *CurrentNodeController) finishFailedTaskPreparationBatch(batch *taskPrep
 			canceled = true
 			return nil
 		}
-		var err error
-		interrupted, err = c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, cause)
-		return err
+		var persistenceErr error
+		interrupted, interruptionDiagnostic, persistenceErr =
+			c.persistAndRetireFailedTaskPreparationBatch(ctx, batch, cause)
+		return persistenceErr
 	})
 	if canceled {
 		c.finalizeCanceledTaskPreparationBatch(batch, persistenceErr)
 		return
 	}
-	c.publishFailedTaskPreparationBatch(batch, cause, persistenceErr, interrupted)
+	c.publishFailedTaskPreparationBatch(
+		batch,
+		errors.Join(cause, interruptionDiagnostic),
+		persistenceErr,
+		interrupted,
+	)
 }
 
 func (c *CurrentNodeController) persistAndRetireFailedTaskPreparationBatch(
 	ctx context.Context,
 	batch *taskPreparationBatch,
 	cause error,
-) ([]workflow.CurrentNodeReference, error) {
+) ([]workflow.CurrentNodeReference, error, error) {
 	c.mu.Lock()
 	active := c.runningTaskPreparationLocked(batch.taskID) == batch
 	c.mu.Unlock()
 	if !active {
-		return nil, errors.New("failed task preparation batch is no longer the active owner")
+		return nil, nil, errors.New("failed task preparation batch is no longer the active owner")
 	}
 	detail := workflow.NewCurrentNodeInterruptionDetail(string(reasonCurrentNodeRuntimeStartFailed), cause)
 	var preparationErr *TaskStartPreparationError
@@ -280,39 +295,50 @@ func (c *CurrentNodeController) persistAndRetireFailedTaskPreparationBatch(
 		canonicalDetail = preparationErr.InterruptionDetail()
 	}
 	interrupted := make([]workflow.CurrentNodeReference, 0, len(batch.starts))
+	var interruptionDiagnostic error
 	var persistenceErr error
 	for _, start := range batch.starts[1:] {
-		if err := c.store.InterruptCurrentNode(
+		committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptCurrentNode(
 			ctx,
 			start.reference,
 			reasonCurrentNodeRuntimeStartFailed,
 			detail,
-		); err != nil {
-			persistenceErr = fmt.Errorf("interrupt task preparation sibling %v: %w", start.reference, err)
+		))
+		if diagnostic != nil {
+			diagnostic = fmt.Errorf("interrupt task preparation sibling %v: %w", start.reference, diagnostic)
+		}
+		if !committed {
+			persistenceErr = diagnostic
 			break
 		}
 		interrupted = append(interrupted, start.reference)
+		interruptionDiagnostic = errors.Join(interruptionDiagnostic, diagnostic)
 	}
 	if persistenceErr == nil {
 		canonical := batch.starts[0].reference
-		if err := c.store.InterruptCurrentNode(
+		committed, diagnostic := classifyCurrentNodeInterruption(c.store.InterruptCurrentNode(
 			ctx,
 			canonical,
 			reasonCurrentNodeRuntimeStartFailed,
 			canonicalDetail,
-		); err != nil {
-			persistenceErr = fmt.Errorf("interrupt canonical task preparation Current Node %v: %w", canonical, err)
+		))
+		if diagnostic != nil {
+			diagnostic = fmt.Errorf("interrupt canonical task preparation Current Node %v: %w", canonical, diagnostic)
+		}
+		if !committed {
+			persistenceErr = diagnostic
 		} else {
 			interrupted = append([]workflow.CurrentNodeReference{canonical}, interrupted...)
+			interruptionDiagnostic = errors.Join(interruptionDiagnostic, diagnostic)
 		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.runningTaskPreparationLocked(batch.taskID) != batch {
-		return interrupted, errors.Join(persistenceErr, errors.New("failed task preparation ownership changed before retirement"))
+		return interrupted, interruptionDiagnostic, errors.Join(persistenceErr, errors.New("failed task preparation ownership changed before retirement"))
 	}
 	c.removeRunningTaskPreparationLocked(batch)
-	return interrupted, persistenceErr
+	return interrupted, interruptionDiagnostic, persistenceErr
 }
 
 func (c *CurrentNodeController) publishFailedTaskPreparationBatch(

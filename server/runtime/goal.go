@@ -126,7 +126,11 @@ func (e *Engine) ApplyCurrentGoalOperation(operation CurrentGoalOperation, owner
 			return e.currentGoalDisposition(GoalCommandQueued, goal, false)
 		}
 		if ownership == CurrentGoalExactExecution {
-			return currentGoalHandled(e.SetGoal(operation.Objective, operation.Actor))
+			result, err := e.SetGoal(operation.Objective, operation.Actor)
+			if err == nil && result.MetadataReceipt.Committed {
+				err = e.StartGoalLoop()
+			}
+			return currentGoalHandled(result, err)
 		}
 		if operation.Actor == session.GoalActorAgent {
 			if current := e.Goal(); current != nil && current.Status != session.GoalStatusComplete {

@@ -14,6 +14,6 @@ export function workflowValidationErrorDetails(
   ].filter((item): item is string => item !== null);
 }
 
-function detail(label: string, value: string): string | null {
-  return value.length === 0 ? null : `${label}: ${value}`;
+function detail(label: string, value: string | null): string | null {
+  return value === null || value.length === 0 ? null : `${label}: ${value}`;
 }

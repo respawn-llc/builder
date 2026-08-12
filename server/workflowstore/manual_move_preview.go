@@ -650,7 +650,7 @@ func (s *Store) manualMoveValueEnvironment(
 		return manualMoveValueEnvironment{}, err
 	}
 	for _, row := range rows {
-		approval, err := pendingApprovalFromRow(ctx, q, row)
+		approval, err := pendingApprovalFromRow(ctx, q, pendingApprovalRecordFromListRow(row))
 		if err != nil {
 			return manualMoveValueEnvironment{}, err
 		}

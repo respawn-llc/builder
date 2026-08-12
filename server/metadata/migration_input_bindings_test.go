@@ -171,10 +171,11 @@ func TestMigration82NormalizesExistingEmptyObjectInputBindings(t *testing.T) {
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('project-input-binding-normalization', 'Project', ?, ?, '{}')`, now, now)
 	seedWorkflowGraph(t, db, "project-input-binding-normalization", now)
+	edgeID := workflowGraphSeedID(t, db, "edge-start-1")
 	if _, err := db.ExecContext(t.Context(), `
 UPDATE workflow_edges
 SET input_bindings_json = '{}'
-WHERE id = 'edge-start-1'`); err != nil {
+WHERE id = ?`, edgeID); err != nil {
 		t.Fatalf("seed existing empty-object input bindings: %v", err)
 	}
 
@@ -190,7 +191,7 @@ WHERE id = 'edge-start-1'`); err != nil {
 	if err := db.QueryRowContext(t.Context(), `
 SELECT input_bindings_json
 FROM workflow_edges
-WHERE id = 'edge-start-1'`).Scan(&persistedBindings); err != nil {
+WHERE id = ?`, edgeID).Scan(&persistedBindings); err != nil {
 		t.Fatalf("query normalized input bindings: %v", err)
 	}
 	if persistedBindings != `[]` {

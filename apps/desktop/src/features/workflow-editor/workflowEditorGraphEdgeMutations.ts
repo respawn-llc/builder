@@ -95,10 +95,14 @@ function nodeGroupFanoutConnection(
   targetNodeID: string,
 ): NodeGroupFanoutConnection | null {
   const target = draft.nodes.find((node) => node.id === targetNodeID);
-  if (target === undefined || !workflowBranchNodeKind(target.kind) || target.groupID.trim() === "") {
+  if (target === undefined || !workflowBranchNodeKind(target.kind)) {
     return null;
   }
-  const groupedBranchIDs = groupedSiblingBranchIDs(draft, target.groupID, targetNodeID);
+  const targetGroupID = target.groupID;
+  if (targetGroupID === null) {
+    return null;
+  }
+  const groupedBranchIDs = groupedSiblingBranchIDs(draft, targetGroupID, targetNodeID);
   if (groupedBranchIDs.size === 0) {
     return null;
   }

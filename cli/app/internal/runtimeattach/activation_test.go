@@ -51,10 +51,11 @@ func TestSessionRuntimeAttachmentValidation(t *testing.T) {
 func TestActivateBuildsRequest(t *testing.T) {
 	service := &fakeRuntimeService{}
 	_, err := Activate(context.Background(), service, Request{
-		SessionID:      "session-1",
-		EnabledTools:   []toolspec.ID{"shell", "patch"},
-		ActiveSettings: config.Settings{Model: "gpt-test"},
-		Source:         config.SourceReport{SettingsPath: "/config.toml"},
+		SessionID:                "session-1",
+		EnabledTools:             []toolspec.ID{"shell", "patch"},
+		ActiveSettings:           config.Settings{Model: "gpt-test"},
+		ThinkingOverrideExplicit: true,
+		Source:                   config.SourceReport{SettingsPath: "/config.toml"},
 	})
 	if err != nil {
 		t.Fatalf("Activate: %v", err)
@@ -71,6 +72,9 @@ func TestActivateBuildsRequest(t *testing.T) {
 	}
 	if req.ActiveSettings.Model != "gpt-test" || req.Source.SettingsPath != "/config.toml" {
 		t.Fatalf("request config = %+v source = %+v", req.ActiveSettings, req.Source)
+	}
+	if !req.ThinkingOverrideExplicit {
+		t.Fatal("explicit Thinking override was not forwarded")
 	}
 }
 

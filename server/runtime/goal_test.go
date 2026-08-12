@@ -39,6 +39,9 @@ func TestApplyCurrentGoalOperationDispositions(t *testing.T) {
 	_, _ = engine.SetGoal("existing", session.GoalActorUser)
 	assert(CurrentGoalStatus{Status: session.GoalStatusPaused, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalRetainedOnly)
 	assert(CurrentGoalSet{Objective: "direct exact", Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
+	if !engine.GoalLoopRunning() {
+		t.Fatal("direct exact Set did not start Goal loop")
+	}
 	assert(CurrentGoalStatus{Status: session.GoalStatusComplete, Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	assert(CurrentGoalClear{Actor: session.GoalActorUser}, GoalCommandApplied, false, CurrentGoalExactExecution)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: "step", snapshot: &RunSnapshot{RunID: "run", StepID: "step"}}

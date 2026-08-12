@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/requestmemo"
-	"core/server/runtime"
 	"core/server/runtimeview"
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -18,11 +18,13 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 	"core/shared/textutil"
 )
 
 type authStateReader interface {
 	CurrentState(context.Context) (auth.State, error)
+	StoredState(context.Context) (auth.State, error)
 }
 
 type promptHistoryReader interface {
@@ -30,14 +32,14 @@ type promptHistoryReader interface {
 }
 
 type Service struct {
-	planner       launch.Planner
-	authStates    authStateReader
-	promptHistory promptHistoryReader
-	runtime       *sessionruntime.Authority
-	plans         *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
-	workspaceID   string
-	fastModeState *runtime.FastModeState
-	draftOwner    *WorkspaceChatDraftOwner
+	planner                     launch.Planner
+	authStates                  authStateReader
+	promptHistory               promptHistoryReader
+	runtime                     *sessionruntime.Authority
+	plans                       *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
+	workspaceID                 string
+	draftOwner                  *WorkspaceChatDraftOwner
+	materializationStoreOptions []session.StoreOption
 }
 
 var ErrExistingSessionAuthorityRequired = errors.New("session runtime authority is required for existing-session planning")
@@ -81,14 +83,119 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string, state *runtime.FastModeState) *Service {
+func (s *Service) WithWorkspaceChatDraft(owner *WorkspaceChatDraftOwner, workspaceID string) *Service {
 	if s != nil {
 		s.workspaceID = strings.TrimSpace(workspaceID)
-		s.fastModeState = state
 		s.draftOwner = owner
 	}
 	return s
 }
+
+func (s *Service) WithWorkspaceChatMaterializationStoreOptions(options ...session.StoreOption) *Service {
+	if s != nil {
+		s.materializationStoreOptions = append([]session.StoreOption(nil), options...)
+	}
+	return s
+}
+
+func (s *Service) materializeWorkspaceChatSession(ctx context.Context) (runtimeids.SessionID, error) {
+	owner, workspaceID, err := s.workspaceChatDraftOwner()
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	return owner.MaterializeWorkspaceChat(
+		ctx,
+		workspaceID,
+		s.workspaceChatMaterializationResolverInput,
+		s.materializeResolvedWorkspaceChat,
+	)
+}
+
+func (s *Service) workspaceChatMaterializationResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
+	input, err := s.workspaceChatDraftResolverInput(ctx)
+	if err != nil {
+		return WorkspaceChatDraftResolverInput{}, err
+	}
+	input.SkipProviderReadinessValidation = true
+	return input, nil
+}
+
+func (s *Service) MaterializeWorkspaceChat(
+	ctx context.Context,
+	req serverapi.WorkspaceChatMaterializeRequest,
+) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	sessionID, err := s.materializeWorkspaceChatSession(ctx)
+	if err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	response := serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) materializeResolvedWorkspaceChat(
+	ctx context.Context,
+	resolution WorkspaceChatDraftResolution,
+) (runtimeids.SessionID, error) {
+	if s == nil {
+		return runtimeids.SessionID{}, errors.New("Session launch service is required")
+	}
+	if len(s.materializationStoreOptions) == 0 {
+		return runtimeids.SessionID{}, errors.New("workspace Chat materialization persistence is required")
+	}
+	containerDir := strings.TrimSpace(s.planner.ContainerDir)
+	if containerDir == "" {
+		return runtimeids.SessionID{}, errors.New("Session container directory is required")
+	}
+	workspaceRoot := strings.TrimSpace(s.planner.Config.WorkspaceRoot)
+	if workspaceRoot == "" {
+		return runtimeids.SessionID{}, errors.New("workspace root is required")
+	}
+	store, err := session.NewLazy(
+		containerDir,
+		filepath.Base(containerDir),
+		workspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		s.materializationStoreOptions...,
+	)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	draft := resolution.Draft
+	if err := session.InitializeChatDraft(store, session.ChatDraftState{
+		Message: draft.Message,
+		Agent:   draft.Agent,
+		Settings: &session.ChatSettingsOverrides{
+			Supervisor:     &draft.Supervisor,
+			Thinking:       &draft.Thinking,
+			Fast:           &draft.Fast,
+			Questions:      &draft.Questions,
+			AutoCompaction: &draft.AutoCompaction,
+		},
+	}); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q is invalid: %w", store.Meta().SessionID, err)
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, fmt.Errorf("materialized Session id %q must be a canonical UUIDv4", sessionID.String())
+	}
+	if err := store.EnsureDurable(); err != nil {
+		return runtimeids.SessionID{}, errors.Join(err, store.RemoveDurable())
+	}
+	return sessionID, nil
+}
+
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
 	planner := s.planner
 	if planner.ReloadConfig != nil {
@@ -101,12 +208,12 @@ func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (Workspac
 	authState := auth.EmptyState()
 	if s.authStates != nil {
 		var err error
-		authState, err = s.authStates.CurrentState(ctx)
+		authState, err = s.authStates.StoredState(ctx)
 		if err != nil {
 			return WorkspaceChatDraftResolverInput{}, err
 		}
 	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState, FastModeState: s.fastModeState}, nil
+	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState}, nil
 }
 
 func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
@@ -160,7 +267,7 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
 		return serverapi.WorkspaceChatDraftResponse{Message: resolved.Message, GoalAvailability: runtimeview.GoalAvailabilityFromSession(availability)}, nil
-	case serverapi.WorkspaceChatDraftClear, serverapi.WorkspaceChatDraftConsume:
+	case serverapi.WorkspaceChatDraftClear:
 		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
 		if err != nil {
 			return serverapi.WorkspaceChatDraftResponse{}, err
@@ -303,15 +410,11 @@ func (s *Service) planExistingSession(
 	if s.runtime == nil {
 		return PlanResult{}, ErrExistingSessionAuthorityRequired
 	}
-	descriptor, err := session.NewScopedOpenSessionDescriptor(sessionID, planner.ContainerDir)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	callback := func(ctx context.Context, store *session.Store) error {
-		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store)
+	callback := func(ctx context.Context, store *session.Store, maintenance *sessionruntime.ActiveRuntimeMaintenance) error {
+		result, resultErr = s.planExistingSessionWithStore(ctx, planner, req, roleOverride, caller, authState, store, maintenance)
 		return resultErr
 	}
-	resultErr = s.runtime.WithSessionStore(ctx, descriptor, callback)
+	resultErr = s.runtime.RunSessionMaintenance(ctx, sessionID.String(), callback)
 	return result, resultErr
 }
 
@@ -323,6 +426,7 @@ func (s *Service) planExistingSessionWithStore(
 	caller *subagentpolicy.Caller,
 	authState auth.State,
 	store *session.Store,
+	maintenance *sessionruntime.ActiveRuntimeMaintenance,
 ) (PlanResult, error) {
 	if req.Mode == serverapi.SessionLaunchModeHeadless && !roleOverride.Present {
 		persistedRole, err := planner.SelectedSessionContinuationAgentRoleWithStore(store)
@@ -358,6 +462,10 @@ func (s *Service) planExistingSessionWithStore(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	agentSelectionResolved, err := applyPreparedAgentChatSettings(planner.Config, authState, roleOverride, preparedOverrides, store, maintenance)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	preparedPromptFacingTarget := preparePromptFacingTarget(req.Mode, roleOverride, &preparedOverrides)
 	return s.finalizeLaunchPlan(
 		ctx,
@@ -367,13 +475,86 @@ func (s *Service) planExistingSessionWithStore(
 				Intent:                              req.Intent,
 				SkipContinuationAgentRoleValidation: roleOverride.Default,
 				PreparedPromptFacingTarget:          preparedPromptFacingTarget,
+				AgentSelectionResolved:              agentSelectionResolved,
 			}, store)
 			if err != nil {
 				return launch.SessionPlan{}, nil, err
 			}
-			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{})
+			return planner.ApplyPreparedRunPromptOverridesWithStore(plan, store, req.Overrides, preparedOverrides, launch.RunPromptOverrideOptions{
+				AgentSelectionPersisted: agentSelectionResolved && strings.TrimSpace(req.Overrides.OpenAIBaseURL) == "",
+			})
 		},
 	)
+}
+
+func applyPreparedAgentChatSettings(
+	app config.App,
+	authState auth.State,
+	roleOverride serverapi.RunPromptAgentRoleOverride,
+	preparedOverrides launch.PreparedRunPromptOverrides,
+	store *session.Store,
+	maintenance *sessionruntime.ActiveRuntimeMaintenance,
+) (bool, error) {
+	state, err := session.ChatSettingsStateFromMeta(store.Meta())
+	if err != nil {
+		return false, err
+	}
+	targetAgent := state.Agent
+	selectAgent := roleOverride.Present
+	if roleOverride.Present {
+		targetAgent = config.DefaultSubagentRole
+		if !roleOverride.Default {
+			targetAgent = roleOverride.Role
+		}
+	} else if store.Meta().Locked == nil && state.Agent != config.DefaultSubagentRole {
+		lookup := config.LookupSubagentRole(app.Settings, state.Agent)
+		selectAgent = lookup.Status != config.SubagentRoleLookupPresent
+		if selectAgent {
+			targetAgent = config.DefaultSubagentRole
+		}
+	}
+	if !selectAgent {
+		return false, nil
+	}
+	var prepared launch.PreparedChatSettings
+	if roleOverride.Present {
+		target := preparedOverrides.BaseTarget
+		if targetAgent != config.DefaultSubagentRole {
+			target = nil
+			if preparedOverrides.NamedTarget != nil && preparedOverrides.NamedTarget.Selector == targetAgent {
+				target = &launch.PreparedBaseTarget{
+					Settings:     preparedOverrides.NamedTarget.Settings,
+					Source:       preparedOverrides.NamedTarget.Source,
+					EnabledTools: preparedOverrides.NamedTarget.EnabledTools,
+				}
+			}
+		}
+		if target == nil {
+			return false, fmt.Errorf("prepared Chat Agent %q target is required", targetAgent)
+		}
+		prepared, err = launch.PrepareChatSettingsForPreparedTarget(*target, preparedOverrides.FastAvailable)
+	} else {
+		prepared, err = launch.PrepareChatSettingsForAgent(app, authState, targetAgent)
+	}
+	if err != nil {
+		return false, err
+	}
+	result, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Agent: &session.ChatAgentSelection{
+			Agent:    targetAgent,
+			Baseline: prepared.Baseline,
+		},
+	})
+	if errors.Is(err, session.ErrChatAgentLocked) {
+		return false, fmt.Errorf("%w: current=%q requested=%q", launch.ErrLockedAgentRoleChange, state.Agent, targetAgent)
+	}
+	if err != nil && !result.Committed {
+		return false, err
+	}
+	if result.Changed && maintenance != nil {
+		maintenance.RetireRuntime()
+	}
+	return result.Changed, err
 }
 
 func preparePromptFacingTarget(
@@ -425,14 +606,17 @@ func sessionPlanResponseFromResult(result PlanResult) serverapi.SessionPlanRespo
 		enabledToolIDs = append(enabledToolIDs, string(id))
 	}
 	return serverapi.SessionPlanResponse{Plan: serverapi.SessionPlan{
-		SessionID:           result.Plan.Descriptor.SessionID().String(),
-		ActiveSettings:      result.Plan.ActiveSettings,
-		EnabledToolIDs:      enabledToolIDs,
-		ConfiguredModelName: result.Plan.ConfiguredModelName,
-		SessionName:         textutil.Pointer(result.Plan.SessionName),
-		PromptHistory:       append([]string(nil), result.Plan.PromptHistory...),
-		ModelContractLocked: result.Plan.ModelContractLocked,
-		Source:              result.Plan.Source,
+		SessionID:                result.Plan.Descriptor.SessionID().String(),
+		ActiveSettings:           result.Plan.ActiveSettings,
+		EnabledToolIDs:           enabledToolIDs,
+		ConfiguredModelName:      result.Plan.ConfiguredModelName,
+		SessionName:              textutil.Pointer(result.Plan.SessionName),
+		PromptHistory:            append([]string(nil), result.Plan.PromptHistory...),
+		ModelContractLocked:      result.Plan.ModelContractLocked,
+		QuestionsEnabled:         result.Plan.QuestionsEnabled,
+		AutoCompactionEnabled:    result.Plan.AutoCompactionEnabled,
+		ThinkingOverrideExplicit: result.Plan.ThinkingOverrideExplicit,
+		Source:                   result.Plan.Source,
 	}, Warnings: result.Warnings}
 }
 

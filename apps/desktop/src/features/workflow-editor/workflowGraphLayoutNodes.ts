@@ -66,7 +66,7 @@ export function layoutWorkflowGraphNodes(
 }
 
 export function isWorkflowGroupIslandMember(node: WorkflowDefinition["nodes"][number]): boolean {
-  return node.groupID.length > 0 && node.kind !== "join";
+  return node.groupID !== null && node.kind !== "join";
 }
 
 function layoutNodeByID(root: ElkNode): ReadonlyMap<string, ElkNode> {

@@ -459,7 +459,7 @@ func (s *TaskStatusDurableSnapshot) projectedStatuses(
 func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 	ctx context.Context,
 	taskIDs []workflow.TaskID,
-) (map[workflow.TaskID][]sqlitegen.TaskPendingApproval, error) {
+) (map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
@@ -472,7 +472,7 @@ func (s *TaskStatusDurableSnapshot) PendingApprovalsByTask(
 		return nil, err
 	}
 	requested := taskIDSet(encodedTaskIDs.values)
-	approvals := make(map[workflow.TaskID][]sqlitegen.TaskPendingApproval, len(encodedTaskIDs.values))
+	approvals := make(map[workflow.TaskID][]sqlitegen.ListTaskPendingApprovalsByTasksRow, len(encodedTaskIDs.values))
 	for _, taskID := range encodedTaskIDs.values {
 		approvals[taskID] = nil
 	}
