@@ -23,10 +23,29 @@ type PreparedChatSettings struct {
 }
 
 func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent string) (PreparedChatSettings, error) {
+	target, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	if err != nil {
+		return PreparedChatSettings{}, err
+	}
+	return PrepareChatSettingsForTarget(authState, target)
+}
+
+func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacingProvider config.Settings) (PreparedChatSettings, error) {
+	target, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	if err != nil {
+		return PreparedChatSettings{}, err
+	}
+	target.Settings.OpenAIBaseURL = promptFacingProvider.OpenAIBaseURL
+	target.Settings.ProviderOverride = promptFacingProvider.ProviderOverride
+	target.Settings.ProviderCapabilities = promptFacingProvider.ProviderCapabilities
+	return PrepareChatSettingsForTarget(authState, target)
+}
+
+func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, agent string) (PreparedBaseTarget, error) {
 	var valid bool
 	agent, valid = session.NormalizeChatAgent(agent)
 	if !valid {
-		return PreparedChatSettings{}, errors.New("Chat Agent is required")
+		return PreparedBaseTarget{}, errors.New("Chat Agent is required")
 	}
 	prepared, err := PrepareRunPromptOverridesWithContext(
 		app,
@@ -35,7 +54,7 @@ func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent str
 		RunPromptPreparationContext{},
 	)
 	if err != nil {
-		return PreparedChatSettings{}, err
+		return PreparedBaseTarget{}, err
 	}
 	target := prepared.BaseTarget
 	if agent != config.DefaultSubagentRole {
@@ -49,9 +68,9 @@ func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent str
 		}
 	}
 	if target == nil {
-		return PreparedChatSettings{}, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
+		return PreparedBaseTarget{}, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
 	}
-	return PrepareChatSettingsForTarget(authState, *target)
+	return *target, nil
 }
 
 func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarget) (PreparedChatSettings, error) {

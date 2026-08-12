@@ -8,6 +8,7 @@ import (
 	"core/server/auth"
 	"core/server/launch"
 	"core/server/metadata"
+	"core/server/session"
 	"core/shared/config"
 )
 
@@ -40,5 +41,17 @@ func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 			return launch.PreparedChatSettings{}, err
 		}
 	}
-	return launch.PrepareChatSettingsForAgent(cfg, authState, agent)
+	store, err := session.OpenByID(
+		r.persistenceRoot,
+		strings.TrimSpace(sessionID),
+		r.metadataStore.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		return launch.PreparedChatSettings{}, err
+	}
+	promptFacing, err := (launch.Planner{Config: cfg}).SelectedSessionPromptFacingTargetWithStore(store)
+	if err != nil {
+		return launch.PreparedChatSettings{}, err
+	}
+	return launch.PrepareSessionChatSettingsForAgent(cfg, authState, agent, promptFacing.Settings)
 }

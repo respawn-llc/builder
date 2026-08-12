@@ -23,6 +23,7 @@ import (
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -684,6 +685,59 @@ func TestSessionChatSettingsPreparationUsesAuthoritativePersistenceRoot(t *testi
 	}
 	if prepared.Baseline.Thinking != "high" {
 		t.Fatalf("worker Thinking = %q, want custom-root value high", prepared.Baseline.Thinking)
+	}
+}
+
+func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *testing.T) {
+	workspace := t.TempDir()
+	persistenceRoot := t.TempDir()
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   brand.LoadOptions{ConfigRoot: persistenceRoot},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	resolved.Config.Settings.Model = "gpt-5.6-sol"
+	resolved.Config.Settings.OpenAIBaseURL = "https://api.openai.com/v1"
+	resolved.Config.Settings.PriorityRequestMode = true
+	binding, err := metadata.RegisterBinding(t.Context(), persistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	client, err := appCore.SessionLaunchClientForProjectWorkspace(t.Context(), binding.ProjectID, workspace)
+	if err != nil {
+		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
+	}
+	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+	}
+	store, err := session.OpenByID(
+		persistenceRoot,
+		materialized.SessionID.String(),
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("OpenByID: %v", err)
+	}
+	if err := store.SetContinuationContext(session.ContinuationContext{
+		OpenAIBaseURL: textutil.Value("https://compatible.example/v1"),
+	}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+
+	prepared, err := (sessionChatSettingsPreparationResolver{
+		metadataStore:   appCore.MetadataStore(),
+		authManager:     appCore.AuthManager(),
+		persistenceRoot: persistenceRoot,
+	}).PrepareSessionChatSettings(t.Context(), materialized.SessionID.String(), brand.DefaultSubagentRole)
+	if err != nil {
+		t.Fatalf("PrepareSessionChatSettings: %v", err)
+	}
+	if prepared.FastAvailable || prepared.Baseline.Fast {
+		t.Fatalf("prepared Fast = available:%t enabled:%t, want unavailable and disabled for compatible endpoint", prepared.FastAvailable, prepared.Baseline.Fast)
 	}
 }
 
