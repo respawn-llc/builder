@@ -170,6 +170,26 @@ func TestResponseForErrorPreservesRuntimeCommandNotAcceptedCause(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorPreservesRuntimeCommandNotAcceptedUnavailableCause(t *testing.T) {
+	source := serverapi.NewRuntimeCommandNotAcceptedError(errors.Join(
+		serverapi.ErrRuntimeUnavailable,
+		errors.New("session has no Ready runtime"),
+	))
+	response := responseForError("runtime-command", source)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeRuntimeCommandNotAccepted {
+		t.Fatalf("runtime command response = %+v, want structured not-accepted error", response.Error)
+	}
+	var payload struct {
+		Cause protocol.ResponseError `json:"cause"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &payload); err != nil {
+		t.Fatalf("decode nested cause: %v", err)
+	}
+	if payload.Cause.Code != protocol.ErrCodeRuntimeUnavailable {
+		t.Fatalf("nested cause code = %d, want %d", payload.Cause.Code, protocol.ErrCodeRuntimeUnavailable)
+	}
+}
+
 func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -765,6 +785,33 @@ func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
 		response.Groups[0].Hits[0].Source.Kind != serverapi.TaskSearchSourceKindBody ||
 		response.Groups[0].Hits[0].FTS5 == nil {
 		t.Fatalf("remote indexed task-search response = %+v", response)
+	}
+}
+
+func TestGatewayRemoteWorkflowTaskSessionsRoundsTripPage(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	task := createGatewaySearchableTask(t, appCore)
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	response, err := remote.ListWorkflowTaskSessions(context.Background(), serverapi.WorkflowTaskOffsetPageRequest{
+		TaskID: task.ID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskSessions: %v", err)
+	}
+	if response.TaskID != task.ID || response.Items == nil || len(response.Items) != 0 || response.NextOffset != nil {
+		t.Fatalf("response = %+v", response)
 	}
 }
 

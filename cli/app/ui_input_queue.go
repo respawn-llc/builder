@@ -353,6 +353,9 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 	if len(m.queued) == 0 {
 		return m, nil
 	}
+	if m.postTurnCompactionsInFlight > 0 {
+		return m, nil
+	}
 	if blocked, disconnectCmd := c.blockDisconnectedQueuedSubmission(); blocked {
 		return m, disconnectCmd
 	}
@@ -374,7 +377,7 @@ func (c uiInputController) flushQueuedInputs(mode queueDrainMode) (tea.Model, te
 
 func (c uiInputController) resumeQueuedInputsAfterIdleRuntime() tea.Cmd {
 	m := c.model
-	if m == nil || m.blocksRuntimeInput() || m.ask.hasCurrent() ||
+	if m == nil || m.blocksRuntimeInput() || m.postTurnCompactionsInFlight > 0 || m.ask.hasCurrent() ||
 		m.processList.actionInFlight {
 		return nil
 	}
@@ -393,13 +396,14 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 		if _, knownCommand := m.commandRegistry.Command(text); knownCommand {
 			if commandResult := m.commandRegistry.Execute(text); commandResult.Handled {
 				if commandResult.Action == commands.ActionCompact {
-					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
+					return finalizeSlashCommandCmd(commandResult.Action, c.startCompactionWithOrigin(text, commandResult.Args, uiCompactionOriginQueued), m.recordPromptHistory(text))
 				}
 				_, cmd := c.applyCommandResultWithPreSubmitQueuePositionAndOriginAndOrder(
 					commandResult,
 					preSubmitQueueFront,
 					activeSubmitOriginQueued,
 					&item.submissionOrder,
+					text,
 				)
 				var recordCmd tea.Cmd
 				if commandResult.PromptCommand == nil {
@@ -423,7 +427,7 @@ func (c uiInputController) dispatchQueuedInput(item queuedInputItem) tea.Cmd {
 }
 
 func (m *uiModel) shouldContinueQueuedInputAutoDrain() bool {
-	if len(m.queued) == 0 || m.blocksRuntimeInput() ||
+	if len(m.queued) == 0 || m.postTurnCompactionsInFlight > 0 || m.blocksRuntimeInput() ||
 		m.exitAction != UIActionNone || m.ask.hasCurrent() || m.processList.actionInFlight {
 		return false
 	}

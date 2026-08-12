@@ -316,10 +316,17 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 		"session_workflow_node_associations_branch_unique_idx",
 		"session_workflow_node_associations_current_serial_unique_idx",
 		"session_workflow_node_associations_current_branch_unique_idx",
+		"session_workflow_node_associations_session_recency_idx",
 	} {
 		if !indexExists(t, store.db, index) {
 			t.Fatalf("expected session association index %s", index)
 		}
+	}
+	if got := indexColumns(t, store.db, "session_workflow_node_associations_session_recency_idx"); !equalStrings(
+		got,
+		[]string{"session_id", "associated_at_unix_ms", "node_id"},
+	) {
+		t.Fatalf("Session association recency index columns = %v", got)
 	}
 	for _, assertion := range []struct {
 		table string

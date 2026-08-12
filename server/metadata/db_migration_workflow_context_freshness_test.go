@@ -47,7 +47,7 @@ INSERT INTO session_workflow_node_associations (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 81); err != nil {
+	if _, err := provider.UpTo(t.Context(), 82); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`
@@ -161,7 +161,7 @@ INSERT INTO task_current_nodes (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 81); err != nil {
+	if _, err := provider.UpTo(t.Context(), 82); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for _, test := range cases {
@@ -283,7 +283,7 @@ INSERT INTO task_pending_approval_branches (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 81); err != nil {
+	if _, err := provider.UpTo(t.Context(), 82); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	for index, test := range cases {
@@ -353,7 +353,7 @@ INSERT INTO task_active_fanout_branches (
 	if err != nil {
 		t.Fatalf("create migration provider: %v", err)
 	}
-	if _, err := provider.UpTo(t.Context(), 81); err != nil {
+	if _, err := provider.UpTo(t.Context(), 82); err != nil {
 		t.Fatalf("apply Workflow context freshness migration: %v", err)
 	}
 	rows, err := db.Query(`

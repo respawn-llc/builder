@@ -59,6 +59,35 @@ func (e *Engine) RunWhenIdleBeforeQueuedUserWork(ctx context.Context, activeKind
 	return e.RunWhenIdle(ctx, activeKind, fn)
 }
 
+// RunWorktreeTransition runs immediately when idle or suspends an active Agent
+// Turn at its next Step Boundary. Queued user steering remains paused until the
+// execution target and its model-visible reminder are updated together.
+func (e *Engine) RunWorktreeTransition(ctx context.Context, fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	e.ensureOrchestrationCollaborators()
+	reservation := &exclusiveStepReservation{
+		Kind:      exclusiveStepReservationWorktreeTransition,
+		queueable: true,
+	}
+	if err := e.stepLifecycle.AcquireReservation(reservation); err != nil {
+		return err
+	}
+	defer e.stepLifecycle.ReleaseReservation(reservation)
+	e.pauseQueuedUserAutoDrain()
+	defer e.resumeQueuedUserAutoDrain()
+	return runExclusiveStepWhenIdle(
+		ctx,
+		e.stepLifecycle,
+		ActiveKindRuntimeMaintenance,
+		reservation,
+		func(context.Context, string) error {
+			return fn()
+		},
+	)
+}
+
 // SubmitQueuedUserMessages starts a fresh step from already-queued injected user
 // messages or background notices. This is used when a non-turn busy operation
 // (for example manual compaction) completes while queued steering is waiting.

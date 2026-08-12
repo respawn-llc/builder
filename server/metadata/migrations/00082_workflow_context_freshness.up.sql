@@ -53,6 +53,8 @@ CREATE UNIQUE INDEX session_workflow_node_associations_current_branch_unique_idx
 CREATE INDEX session_workflow_node_associations_history_lookup_idx
     ON session_workflow_node_associations(task_id, node_id, transition_branch_key)
     WHERE association_status = 'historical';
+CREATE INDEX session_workflow_node_associations_session_recency_idx
+    ON session_workflow_node_associations(session_id, associated_at_unix_ms DESC, node_id DESC);
 -- +goose StatementBegin
 CREATE TRIGGER sessions_task_owner_clear_associations
 AFTER UPDATE OF task_id ON sessions

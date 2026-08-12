@@ -25,7 +25,7 @@ const (
 	WorkflowRequestErrorTooLong      = "workflow.request.too_long"
 )
 
-const WorkflowPaginationMaxLimit = 100
+const WorkflowPaginationMaxLimit = OffsetPaginationMaxLimit
 const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
@@ -1686,6 +1686,27 @@ type WorkflowTaskActivityListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskActivityItem]
 }
 
+type WorkflowTaskSessionStatus string
+
+const (
+	WorkflowTaskSessionStatusRunning  WorkflowTaskSessionStatus = "running"
+	WorkflowTaskSessionStatusQuestion WorkflowTaskSessionStatus = "question"
+	WorkflowTaskSessionStatusIdle     WorkflowTaskSessionStatus = "idle"
+)
+
+type WorkflowTaskSessionItem struct {
+	SessionID   string                    `json:"session_id"`
+	SessionName *string                   `json:"session_name,omitempty"`
+	NodeName    *string                   `json:"node_name,omitempty"`
+	AgentRole   string                    `json:"agent_role"`
+	Status      WorkflowTaskSessionStatus `json:"status"`
+}
+
+type WorkflowTaskSessionListResponse struct {
+	TaskID string `json:"task_id"`
+	WorkflowOffsetPage[WorkflowTaskSessionItem]
+}
+
 type WorkflowTaskSummary struct {
 	ID                string                `json:"id"`
 	ProjectID         string                `json:"project_id"`
@@ -1846,27 +1867,22 @@ func (r WorkflowListRequest) Validate() error {
 	return nil
 }
 
-type WorkflowOffsetWindow struct {
-	Offset int
-	Limit  int
-}
+type WorkflowOffsetWindow = OffsetWindow
 
 func ResolveWorkflowOffsetWindow(offset *int, limit *int) (WorkflowOffsetWindow, error) {
-	resolvedOffset := 0
-	if offset != nil {
-		if *offset < 0 {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
-		}
-		resolvedOffset = *offset
+	window, err := ResolveOffsetWindow(offset, limit)
+	if err == nil {
+		return window, nil
 	}
-	resolvedLimit := WorkflowPaginationMaxLimit
-	if limit != nil {
-		if *limit < 1 || *limit > WorkflowPaginationMaxLimit {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "limit", fmt.Sprintf("limit must be between 1 and %d", WorkflowPaginationMaxLimit))
-		}
-		resolvedLimit = *limit
+	var windowError *offsetWindowError
+	if !errors.As(err, &windowError) {
+		return WorkflowOffsetWindow{}, err
 	}
-	return WorkflowOffsetWindow{Offset: resolvedOffset, Limit: resolvedLimit}, nil
+	return WorkflowOffsetWindow{}, workflowRequestError(
+		WorkflowRequestErrorInvalidMode,
+		windowError.Field,
+		windowError.Message,
+	)
 }
 
 func (r WorkflowGetRequest) Validate() error {

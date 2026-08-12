@@ -68,7 +68,7 @@ func (s *defaultExclusiveStepLifecycle) RunNext(ctx context.Context, options exc
 }
 
 func (s *defaultExclusiveStepLifecycle) AcquireReservation(reservation *exclusiveStepReservation) error {
-	if reservation == nil || reservation.Kind != exclusiveStepReservationManualCompaction {
+	if reservation == nil || !reservation.Kind.valid() {
 		return errors.New("exclusive step reservation is invalid")
 	}
 	s.mu.Lock()
@@ -576,10 +576,19 @@ func validateExclusiveStepStart(ctx context.Context, options exclusiveStepOption
 	if !options.ActiveKind.Valid() {
 		return errors.New("exclusive step active kind is required")
 	}
-	if options.Reservation != nil && options.Reservation.Kind != exclusiveStepReservationManualCompaction {
+	if options.Reservation != nil && !options.Reservation.Kind.valid() {
 		return errors.New("exclusive step reservation kind is invalid")
 	}
 	return nil
+}
+
+func (kind exclusiveStepReservationKind) valid() bool {
+	switch kind {
+	case exclusiveStepReservationManualCompaction, exclusiveStepReservationWorktreeTransition:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *defaultExclusiveStepLifecycle) activateLocked(ctx context.Context, options exclusiveStepOptions) (context.Context, string) {

@@ -3212,10 +3212,22 @@ func newWorkflowServiceReadModels(
 		TaskSearch:       taskSearch,
 		TaskDetail:       taskDetail,
 		TaskDependencies: dependencies,
+		TaskSessions:     emptyWorkflowTaskSessionReadModel{},
 		Activity:         activity,
 		Attention:        attention,
 		Approvals:        emptyWorkflowApprovalView{},
 	}
+}
+
+type emptyWorkflowTaskSessionReadModel struct{}
+
+func (emptyWorkflowTaskSessionReadModel) List(_ context.Context, request serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	return serverapi.WorkflowTaskSessionListResponse{
+		TaskID: request.TaskID,
+		WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskSessionItem]{
+			Items: []serverapi.WorkflowTaskSessionItem{},
+		},
+	}, nil
 }
 
 type workflowViewQuiescenceSource struct{}

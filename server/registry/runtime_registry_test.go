@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +24,33 @@ import (
 )
 
 type registryRuntimeFakeClient struct{}
+
+type registryBlockingClient struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newRegistryBlockingClient() *registryBlockingClient {
+	return &registryBlockingClient{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (c *registryBlockingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
+	c.once.Do(func() { close(c.started) })
+	select {
+	case <-ctx.Done():
+		return llm.Response{}, context.Cause(ctx)
+	case <-c.release:
+		return llm.Response{}, nil
+	}
+}
+
+func (c *registryBlockingClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
+	return llm.ProviderCapabilities{ProviderID: "fake", SupportsResponsesAPI: true}, nil
+}
 
 type registryRetention chan struct{}
 
@@ -909,4 +938,93 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 		Version:  runtimeactivity.NextReadModelVersion(sessionID),
 		Activity: activity,
 	})
+}
+
+func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	for index := range 500 {
+		sessionID := fmt.Sprintf("idle-session-%03d", index)
+		registerReady(t, registry, sessionID, &runtime.Engine{})
+	}
+	runningEngine, runningDone := startRegistryBlockingRuntime(t, registry)
+	questionEngine, questionDone := startRegistryBlockingRuntime(t, registry)
+	projectPendingPromptForTest(registry, questionEngine.SessionID(), askquestion.AskQuestionRequest{
+		ID:       "question-active-snapshot",
+		StepID:   registryTestStepID,
+		Question: "Continue?",
+	})
+
+	snapshots, err := registry.ActiveRuntimeActivitySnapshots(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveRuntimeActivitySnapshots: %v", err)
+	}
+	wantIDs := []string{runningEngine.SessionID(), questionEngine.SessionID()}
+	slices.Sort(wantIDs)
+	if len(snapshots) != len(wantIDs) {
+		t.Fatalf("snapshots = %+v, want only %v", snapshots, wantIDs)
+	}
+	for index, snapshot := range snapshots {
+		if snapshot.SessionID != wantIDs[index] {
+			t.Fatalf("snapshots = %+v, want sorted IDs %v", snapshots, wantIDs)
+		}
+		if !snapshot.Activity.ActiveForControl() {
+			t.Fatalf("snapshot %q is not active: %+v", snapshot.SessionID, snapshot.Activity)
+		}
+	}
+
+	closeRegistryBlockingRuntime(t, runningEngine, runningDone)
+	closeRegistryBlockingRuntime(t, questionEngine, questionDone)
+}
+
+func startRegistryBlockingRuntime(t *testing.T, registry *RuntimeRegistry) (*runtime.Engine, <-chan error) {
+	t.Helper()
+	client := newRegistryBlockingClient()
+	engine := newRegistryRuntime(
+		t,
+		client,
+		askquestion.NewRegistry(),
+		runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"},
+		func(engine *runtime.Engine, evt runtime.Event) {
+			if err := registry.PublishAuthorityRuntimeEvent(registryTestResourceRef(engine.SessionID()), evt); err != nil {
+				t.Errorf("PublishAuthorityRuntimeEvent: %v", err)
+			}
+		},
+	)
+	registerReady(t, registry, engine.SessionID(), engine)
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "work")
+		done <- err
+	}()
+	select {
+	case <-client.started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime")
+	}
+	if err := registry.publishCurrentRuntimeActivity(engine.SessionID()); err != nil {
+		t.Fatalf("publish active runtime: %v", err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-client.release:
+		default:
+			close(client.release)
+		}
+	})
+	return engine, done
+}
+
+func closeRegistryBlockingRuntime(t *testing.T, engine *runtime.Engine, done <-chan error) {
+	t.Helper()
+	if _, err := engine.TryInterruptActiveRun(); err != nil {
+		t.Fatalf("TryInterruptActiveRun: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("SubmitUserMessage: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for active runtime to stop")
+	}
 }

@@ -188,9 +188,14 @@ type agentResource struct {
 	current              *execution
 	pins                 int
 	callbacks            int
-	steps                int
+	steps                []agentResourceStep
 	lifecycleReady       bool
 	lifecycleDraining    bool
+}
+
+type agentResourceStep struct {
+	stepID     string
+	activeKind runtime.ActiveKind
 }
 
 func (r *agentResource) descriptorLocked() AgentResourceDescriptor {
@@ -367,7 +372,7 @@ func (r *agentResource) closeResource(ctx context.Context) error {
 		lifecycleErr = r.authority.options.resourceLifecycle.ResourceDraining(ctx, descriptor)
 	}
 	r.mu.Lock()
-	for r.pins != 0 || r.callbacks != 0 || r.steps != 0 || r.current != nil {
+	for r.pins != 0 || r.callbacks != 0 || len(r.steps) != 0 || r.current != nil {
 		changed := r.changed
 		r.mu.Unlock()
 		select {
@@ -397,11 +402,22 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 			fmt.Errorf("agent resource %s generation %d is retiring", r.ref.SessionID(), r.ref.Generation()),
 		)
 	}
-	if r.steps != 0 {
-		r.mu.Unlock()
-		panic(fmt.Sprintf("agent resource %s generation %d admitted overlapping engine steps", r.ref.SessionID(), r.ref.Generation()))
+	if len(r.steps) != 0 {
+		parent := r.steps[len(r.steps)-1]
+		if len(r.steps) != 1 || !allowsBoundaryNestedStep(parent.activeKind, snapshot.ActiveKind) {
+			r.mu.Unlock()
+			panic(fmt.Sprintf(
+				"agent resource %s generation %d admitted overlapping engine steps: active step %q kind %q, incoming step %q kind %q",
+				r.ref.SessionID(),
+				r.ref.Generation(),
+				parent.stepID,
+				parent.activeKind,
+				snapshot.StepID,
+				snapshot.ActiveKind,
+			))
+		}
 	}
-	r.steps++
+	r.steps = append(r.steps, agentResourceStep{stepID: snapshot.StepID, activeKind: snapshot.ActiveKind})
 	r.signalLocked()
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
@@ -413,13 +429,30 @@ func (r *agentResource) StepBegan(ctx context.Context, snapshot runtime.StepLife
 
 func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLifecycleSnapshot) error {
 	r.mu.Lock()
-	if r.steps == 0 {
+	if len(r.steps) == 0 {
 		rejected := r.rejectsNewStepLocked()
 		r.mu.Unlock()
 		if rejected {
 			return nil
 		}
 		panic(fmt.Sprintf("agent resource %s generation %d engine step underflow", r.ref.SessionID(), r.ref.Generation()))
+	}
+	completing := r.steps[len(r.steps)-1]
+	if completing.stepID != snapshot.StepID || completing.activeKind != snapshot.ActiveKind {
+		if r.rejectsNewStepLocked() && len(r.steps) == 1 && allowsBoundaryNestedStep(completing.activeKind, snapshot.ActiveKind) {
+			r.mu.Unlock()
+			return nil
+		}
+		r.mu.Unlock()
+		panic(fmt.Sprintf(
+			"agent resource %s generation %d completed engine step out of order: active step %q kind %q, completion step %q kind %q",
+			r.ref.SessionID(),
+			r.ref.Generation(),
+			completing.stepID,
+			completing.activeKind,
+			snapshot.StepID,
+			snapshot.ActiveKind,
+		))
 	}
 	descriptor := r.descriptorLocked()
 	r.mu.Unlock()
@@ -428,14 +461,30 @@ func (r *agentResource) StepEnded(ctx context.Context, snapshot runtime.StepLife
 		publishErr = r.authority.options.stepLifecycle.StepEnded(ctx, descriptor, snapshot)
 	}
 	r.mu.Lock()
-	if r.steps != 1 {
+	if len(r.steps) == 0 ||
+		r.steps[len(r.steps)-1].stepID != completing.stepID ||
+		r.steps[len(r.steps)-1].activeKind != completing.activeKind {
 		r.mu.Unlock()
-		panic(fmt.Sprintf("agent resource %s generation %d engine step count changed during completion", r.ref.SessionID(), r.ref.Generation()))
+		panic(fmt.Sprintf("agent resource %s generation %d engine step stack changed during completion", r.ref.SessionID(), r.ref.Generation()))
 	}
-	r.steps--
+	r.steps = r.steps[:len(r.steps)-1]
 	r.signalLocked()
 	r.mu.Unlock()
 	return publishErr
+}
+
+func allowsBoundaryNestedStep(parent runtime.ActiveKind, nested runtime.ActiveKind) bool {
+	switch nested {
+	case runtime.ActiveKindCompaction, runtime.ActiveKindRuntimeMaintenance:
+	default:
+		return false
+	}
+	switch parent {
+	case runtime.ActiveKindUserTurn, runtime.ActiveKindWorkflowTurn, runtime.ActiveKindGoalLoop:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *agentResource) rejectsNewUseLocked() bool {
@@ -544,7 +593,7 @@ func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRe
 		inFlight := resource.current != nil ||
 			resource.pins != 0 ||
 			resource.callbacks != 0 ||
-			resource.steps != 0
+			len(resource.steps) != 0
 		queued := resource.engine != nil && resource.engine.HasQueuedUserWork()
 		scheduled := resource.engine != nil && resource.engine.HasScheduledQueuedUserWork()
 		if inFlight || scheduled || (!request.DropOwner && queued) {
@@ -582,7 +631,7 @@ func (a *Authority) closeRetiringResource(ctx context.Context, resource *agentRe
 		resource.current != nil ||
 		resource.pins != 0 ||
 		resource.callbacks != 0 ||
-		resource.steps != 0 {
+		len(resource.steps) != 0 {
 		resource.mu.Unlock()
 		return nil
 	}
@@ -612,7 +661,7 @@ func (a *Authority) retireRuntimeAbortResource(ctx context.Context, resource *ag
 		return nil
 	}
 	if resource.state != AgentResourceReady ||
-		resource.steps != 0 {
+		len(resource.steps) != 0 {
 		descriptor := resource.descriptorLocked()
 		resource.mu.Unlock()
 		return fmt.Errorf(
@@ -1189,7 +1238,7 @@ func (a *Authority) retireResourceForReplacement(ctx context.Context, resource *
 			)
 		}
 
-		if resource.current != nil || resource.callbacks != 0 || resource.steps != 0 {
+		if resource.current != nil || resource.callbacks != 0 || len(resource.steps) != 0 {
 			changed := resource.changed
 			resource.mu.Unlock()
 			select {
