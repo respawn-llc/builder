@@ -23,6 +23,28 @@
 )
 {{end}}
 
+{{define "taskSessionProjectionFields"}}
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+{{end}}
+
+{{define "taskSessionProjectionJoins"}}
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+{{end}}
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -393,30 +415,6 @@ INSERT INTO workflow_nodes (
     sqlc.arg(sort_order)
 );
 
--- name: InsertWorkflowNodeGroup :exec
-INSERT INTO workflow_node_groups (
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-) VALUES (
-    sqlc.arg(id),
-    sqlc.arg(workflow_id),
-    sqlc.arg(group_key),
-    sqlc.arg(display_name),
-    sqlc.arg(sort_order)
-);
-
--- name: UpdateWorkflowNodeGroup :execrows
-UPDATE workflow_node_groups
-SET
-    group_key = sqlc.arg(group_key),
-    display_name = sqlc.arg(display_name),
-    sort_order = sqlc.arg(sort_order)
-WHERE id = sqlc.arg(id)
-  AND workflow_id = sqlc.arg(workflow_id);
-
 -- name: DeleteWorkflowNodeGroup :execrows
 DELETE FROM workflow_node_groups
 WHERE id = sqlc.arg(id)
@@ -566,29 +564,6 @@ FROM workflow_node_groups
 WHERE workflow_id = sqlc.arg(workflow_id)
 ORDER BY sort_order ASC, rowid ASC;
 
--- name: GetWorkflowNodeGroupByKey :one
-SELECT
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-FROM workflow_node_groups
-WHERE workflow_id = sqlc.arg(workflow_id)
-  AND group_key = sqlc.arg(group_key)
-LIMIT 1;
-
--- name: GetWorkflowNodeGroupByID :one
-SELECT
-    id,
-    workflow_id,
-    group_key,
-    display_name,
-    sort_order
-FROM workflow_node_groups
-WHERE id = sqlc.arg(id)
-LIMIT 1;
-
 -- name: ListWorkflowNodes :many
 SELECT
     id,
@@ -627,28 +602,6 @@ LIMIT 1;
 DELETE FROM workflow_nodes
 WHERE id = sqlc.arg(id);
 
--- name: CountWorkflowNodesByGroup :one
-SELECT CAST(COUNT(*) AS INTEGER) AS node_count
-FROM workflow_nodes
-WHERE group_id = sqlc.arg(group_id);
-
--- name: InsertWorkflowTransitionGroup :exec
-INSERT INTO workflow_transition_groups (
-    id,
-    source_node_id,
-    transition_id,
-    display_name,
-    description,
-    sort_order
-) VALUES (
-    sqlc.arg(id),
-    sqlc.arg(source_node_id),
-    sqlc.arg(transition_id),
-    sqlc.arg(display_name),
-    sqlc.arg(description),
-    sqlc.arg(sort_order)
-);
-
 -- name: ListWorkflowTransitionGroups :many
 SELECT
     tg.id,
@@ -662,41 +615,6 @@ FROM workflow_transition_groups tg
 JOIN workflow_nodes source ON source.id = tg.source_node_id
 WHERE source.workflow_id = sqlc.arg(workflow_id)
 ORDER BY tg.sort_order ASC, tg.rowid ASC;
-
--- name: InsertWorkflowEdge :exec
-INSERT INTO workflow_edges (
-    id,
-    transition_group_id,
-    edge_key,
-    target_node_id,
-    assignee_selection,
-    thinking_selection,
-    requires_approval,
-    context_mode,
-    context_source_kind,
-    context_source_node_key,
-    prompt_template,
-    parameters_json,
-    input_bindings_json,
-    output_requirements_json,
-    sort_order
-) VALUES (
-    sqlc.arg(id),
-    sqlc.arg(transition_group_id),
-    sqlc.arg(edge_key),
-    sqlc.arg(target_node_id),
-    sqlc.arg(assignee_selection),
-    sqlc.arg(thinking_selection),
-    sqlc.arg(requires_approval),
-    sqlc.arg(context_mode),
-    sqlc.arg(context_source_kind),
-    sqlc.arg(context_source_node_key),
-    sqlc.arg(prompt_template),
-    sqlc.arg(parameters_json),
-    sqlc.arg(input_bindings_json),
-    sqlc.arg(output_requirements_json),
-    sqlc.arg(sort_order)
-);
 
 -- name: ListWorkflowEdges :many
 SELECT
@@ -722,102 +640,9 @@ JOIN workflow_nodes source ON source.id = tg.source_node_id
 WHERE source.workflow_id = sqlc.arg(workflow_id)
 ORDER BY e.sort_order ASC, e.rowid ASC;
 
--- name: GetWorkflowEdge :one
-SELECT
-    e.id,
-    source.workflow_id AS workflow_id,
-    e.transition_group_id,
-    e.edge_key,
-    e.target_node_id,
-    e.assignee_selection,
-    e.thinking_selection,
-    e.requires_approval,
-    e.context_mode,
-    e.context_source_kind,
-    e.context_source_node_key,
-    e.prompt_template,
-    e.parameters_json,
-    e.input_bindings_json,
-    e.output_requirements_json,
-    e.sort_order
-FROM workflow_edges e
-JOIN workflow_transition_groups tg ON tg.id = e.transition_group_id
-JOIN workflow_nodes source ON source.id = tg.source_node_id
-WHERE e.id = sqlc.arg(id)
-LIMIT 1;
-
 -- name: DeleteWorkflowEdge :execrows
 DELETE FROM workflow_edges
 WHERE id = sqlc.arg(id);
-
--- name: UpdateWorkflowNode :execrows
-UPDATE workflow_nodes
-SET
-    node_key = sqlc.arg(node_key),
-    kind = sqlc.arg(kind),
-    display_name = sqlc.arg(display_name),
-    subagent_role = sqlc.arg(subagent_role),
-    completion_mode = sqlc.arg(completion_mode),
-    script_path = sqlc.narg(script_path),
-    join_input_providers_json = sqlc.arg(join_input_providers_json),
-    group_id = sqlc.narg(group_id)
-WHERE id = sqlc.arg(id)
-  AND workflow_id = sqlc.arg(workflow_id);
-
--- name: UpdateWorkflowTransitionGroup :execrows
-UPDATE workflow_transition_groups
-SET
-    source_node_id = sqlc.arg(source_node_id),
-    transition_id = sqlc.arg(transition_id),
-    display_name = sqlc.arg(display_name),
-    description = sqlc.arg(description)
-WHERE workflow_transition_groups.id = sqlc.arg(transition_group_id)
-  AND (
-      SELECT source.workflow_id
-      FROM workflow_transition_groups existing
-      JOIN workflow_nodes source ON source.id = existing.source_node_id
-      WHERE existing.id = sqlc.arg(transition_group_id)
-  ) = sqlc.arg(workflow_id)
-  AND EXISTS (
-      SELECT 1
-      FROM workflow_nodes new_source
-      WHERE new_source.id = sqlc.arg(source_node_id)
-        AND new_source.workflow_id = sqlc.arg(workflow_id)
-  );
-
--- name: UpdateWorkflowEdge :execrows
-UPDATE workflow_edges
-SET
-    transition_group_id = sqlc.arg(transition_group_id),
-    edge_key = sqlc.arg(edge_key),
-    target_node_id = sqlc.arg(target_node_id),
-    assignee_selection = sqlc.arg(assignee_selection),
-    thinking_selection = sqlc.arg(thinking_selection),
-    requires_approval = sqlc.arg(requires_approval),
-    context_mode = sqlc.arg(context_mode),
-    context_source_kind = sqlc.arg(context_source_kind),
-    context_source_node_key = sqlc.arg(context_source_node_key),
-    prompt_template = sqlc.arg(prompt_template),
-    parameters_json = sqlc.arg(parameters_json),
-    input_bindings_json = sqlc.arg(input_bindings_json),
-    output_requirements_json = sqlc.arg(output_requirements_json)
-WHERE workflow_edges.id = sqlc.arg(edge_id)
-  AND (
-      SELECT source.workflow_id
-      FROM workflow_edges existing
-      JOIN workflow_transition_groups tg ON tg.id = existing.transition_group_id
-      JOIN workflow_nodes source ON source.id = tg.source_node_id
-      WHERE existing.id = sqlc.arg(edge_id)
-  ) = sqlc.arg(workflow_id)
-  AND EXISTS (
-      SELECT 1
-      FROM workflow_transition_groups new_tg
-      JOIN workflow_nodes new_source ON new_source.id = new_tg.source_node_id
-      JOIN workflow_nodes target ON target.id = sqlc.arg(target_node_id)
-      WHERE new_tg.id = sqlc.arg(transition_group_id)
-        AND new_source.workflow_id = sqlc.arg(workflow_id)
-        AND target.workflow_id = sqlc.arg(workflow_id)
-  );
 
 -- name: ClearProjectDefaultWorkflowLinks :exec
 UPDATE projects
@@ -1053,13 +878,6 @@ WHERE workflow_id = sqlc.arg(workflow_id);
 -- name: DeleteWorkflowByID :execrows
 DELETE FROM workflows
 WHERE id = sqlc.arg(id);
-
--- name: GetWorkflowTransitionGroupWorkflowID :one
-SELECT source.workflow_id
-FROM workflow_transition_groups tg
-JOIN workflow_nodes source ON source.id = tg.source_node_id
-WHERE tg.id = sqlc.arg(id)
-LIMIT 1;
 
 -- name: DeleteTaskCommentsByTask :execrows
 DELETE FROM task_comments
@@ -2321,7 +2139,7 @@ ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.creat
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
 
--- name: ListNewestSessionPage :many
+-- name: ListSessionPage :many
 SELECT
     id,
     name,
@@ -2333,49 +2151,8 @@ WHERE project_id = sqlc.arg(project_id)
   AND launch_visible <> 0
   AND COALESCE(category, 'main') = sqlc.arg(category)
 ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit);
-
--- name: ListOlderSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = sqlc.arg(category)
-  AND (
-      updated_at_unix_ms < sqlc.arg(boundary_updated_at_unix_ms)
-      OR (
-          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
-          AND id < sqlc.arg(boundary_session_id)
-      )
-  )
-ORDER BY updated_at_unix_ms DESC, id DESC
-LIMIT sqlc.arg(page_limit);
-
--- name: ListNewerSessionPage :many
-SELECT
-    id,
-    name,
-    first_prompt_preview,
-    COALESCE(category, 'main') AS category,
-    updated_at_unix_ms
-FROM sessions
-WHERE project_id = sqlc.arg(project_id)
-  AND launch_visible <> 0
-  AND COALESCE(category, 'main') = sqlc.arg(category)
-  AND (
-      updated_at_unix_ms > sqlc.arg(boundary_updated_at_unix_ms)
-      OR (
-          updated_at_unix_ms = sqlc.arg(boundary_updated_at_unix_ms)
-          AND id > sqlc.arg(boundary_session_id)
-      )
-  )
-ORDER BY updated_at_unix_ms ASC, id ASC
-LIMIT sqlc.arg(page_limit);
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
 
 -- name: ListProjectSessionIDs :many
 SELECT id
@@ -2565,6 +2342,31 @@ ON CONFLICT(session_id, node_id, transition_branch_key) WHERE transition_branch_
 SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
 WHERE task_id = sqlc.arg(task_id);
+
+-- name: ListIdleWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM sessions session INDEXED BY sessions_task_activity_idx
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(sqlc.arg(excluded_session_ids_json) AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
+
+-- name: ListActiveWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
+CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
+    ON session.id = CAST(active.value AS TEXT)
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id);
 
 -- name: GetLatestSerialTaskSessionAssociationForNode :one
 SELECT

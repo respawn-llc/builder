@@ -303,7 +303,7 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 	if taskID == nil || *taskID != reference.TaskID {
 		return ErrSessionNotCurrentWorkflowNode
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrSessionNotCurrentWorkflowNode
 	}
@@ -363,7 +363,7 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		}
 	}()
 	q := sqlitegen.New(connection)
-	persisted, err := currentNodeForReference(ctx, q, currentNode.Reference)
+	persisted, err := s.currentNodeForReference(ctx, q, currentNode.Reference)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		persisted.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
 		return ErrSessionNotCurrentWorkflowNode
 	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
 	if err != nil {
 		return err
 	}
@@ -439,7 +439,7 @@ func (s *Store) ResolveCurrentNodeStartContext(ctx context.Context, reference wo
 	if err := reference.Validate(); err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	currentNode, err := currentNodeForReference(ctx, s.queries, reference)
+	currentNode, err := s.currentNodeForReference(ctx, s.queries, reference)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}

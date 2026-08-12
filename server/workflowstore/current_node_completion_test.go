@@ -407,7 +407,7 @@ func TestCompleteCurrentNodeRequiresTransitionIDForSeveralOutgoingTransitions(t 
 			TransitionGroupID: groupID,
 			Key:               "alternate",
 			TargetNodeID:      workflow.NodeIDOf(done),
-			ContextMode:       workflow.ContextModeNewSession,
+			ContextMode:       workflow.ContextModeNewSession, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
@@ -514,7 +514,8 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 	if err != nil {
 		t.Fatalf("GetDefinition before frozen edge removal: %v", err)
 	}
-	edgeRemoval := workflowGraphSaveRequestFromDefinition(workflowID, currentRecord.Version, true, currentDefinition)
+	edgeRemoval := NewWorkflowGraphSaveRequest(currentDefinition, currentRecord.Version)
+	edgeRemoval.Confirmed = true
 	edgeRemoval.Edges = removeWorkflowGraphSaveEdge(edgeRemoval.Edges, reviewEdgeID)
 	preview, err := store.PreviewWorkflowGraphSave(ctx, edgeRemoval)
 	if err != nil {
@@ -1035,8 +1036,8 @@ func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.Cont
 			PromptTemplate:    "Review {{.Params.summary}}.",
 			Parameters: []workflow.Parameter{{
 				Key:         "summary",
-				Description: "Rework summary.",
-			}},
+				Description: "Rework summary.", Purpose: workflow.ParameterPurposeOrdinary,
+			}}, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 		})
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)

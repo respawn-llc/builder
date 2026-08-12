@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { useMemo, useRef, type Ref } from "react";
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -12,6 +12,7 @@ import {
   homeListCardListMaxWidthClassName,
   IslandTabs,
   LoadingState,
+  useElementHeight,
   VirtualizedInfiniteList,
 } from "@/ui";
 import { ProjectRow } from "./ProjectRow";
@@ -202,30 +203,6 @@ function HomeWorkflowList({ controlsHeight }: Readonly<{ controlsHeight: number 
       )}
     />
   );
-}
-
-function useElementHeight(ref: Readonly<{ current: HTMLElement | null }>): number {
-  const [height, setHeight] = useState(0);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (element === null) {
-      return;
-    }
-    const measure = () => {
-      const nextHeight = element.getBoundingClientRect().height;
-      setHeight((currentHeight) => (currentHeight === nextHeight ? currentHeight : nextHeight));
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    return () => {
-      observer.disconnect();
-    };
-  }, [ref]);
-  return height;
 }
 
 function HomeInlineEmptyState({ body }: Readonly<{ body: string }>) {

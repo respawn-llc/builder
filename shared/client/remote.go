@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/rpcwire"
 	"core/shared/serverapi"
+	"core/shared/serverjsoncontract"
 )
 
 type InvalidResponseError struct {
@@ -40,16 +42,18 @@ func validateRuntimeLiveResponseSession(operation string, requestedSessionID str
 }
 
 type Remote struct {
-	plan           remoteDialPlan
-	transport      rpcwire.ClientTransport
-	mu             sync.Mutex
-	control        *remoteControlConn
-	identity       protocol.ServerIdentity
-	attachIntent   *remoteAttachmentIntent
-	attachment     *protocol.AttachResponse
-	expectedRootID atomic.Value // string; empty disables root validation
-	noAuthAck      atomic.Bool
-	closed         atomic.Bool
+	plan                             remoteDialPlan
+	transport                        rpcwire.ClientTransport
+	mu                               sync.Mutex
+	control                          *remoteControlConn
+	identity                         protocol.ServerIdentity
+	attachIntent                     *remoteAttachmentIntent
+	attachment                       *protocol.AttachResponse
+	updateStatusResponseContract     serverjsoncontract.UpdateStatusResponse
+	sessionExecutionResponseContract serverjsoncontract.SessionExecutionEnvironmentResponse
+	expectedRootID                   atomic.Value // string; empty disables root validation
+	noAuthAck                        atomic.Bool
+	closed                           atomic.Bool
 }
 
 func DialRemoteURL(ctx context.Context, rpcURL string) (*Remote, error) {
@@ -215,13 +219,11 @@ func (c *Remote) GetServerReadiness(ctx context.Context, req serverapi.ServerRea
 }
 
 func (c *Remote) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	return callDedicatedRPC[serverapi.UpdateStatusRequest, serverapi.UpdateStatusResponse](
-		c,
-		ctx,
-		apicontract.UpdateStatusDedicatedRequestID,
-		protocol.MethodServerUpdateStatusGet,
-		req,
-	)
+	var raw json.RawMessage
+	if err := c.callDedicated(ctx, apicontract.UpdateStatusDedicatedRequestID, protocol.MethodServerUpdateStatusGet, req, &raw); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	return c.updateStatusResponseContract.Decode(raw)
 }
 
 func (c *Remote) ProjectID() string {
@@ -417,42 +419,6 @@ func (c *Remote) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetReque
 	return callUnscopedRPC[serverapi.WorkflowGetRequest, serverapi.WorkflowGetResponse](c, ctx, protocol.MethodWorkflowGet, req)
 }
 
-func (c *Remote) AddWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupAddRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeGroupAddRequest, serverapi.WorkflowNodeGroupResponse](c, ctx, protocol.MethodWorkflowNodeGroupAdd, req)
-}
-
-func (c *Remote) UpdateWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupUpdateRequest) (serverapi.WorkflowNodeGroupResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeGroupUpdateRequest, serverapi.WorkflowNodeGroupResponse](c, ctx, protocol.MethodWorkflowNodeGroupUpdate, req)
-}
-
-func (c *Remote) DeleteWorkflowNodeGroup(ctx context.Context, req serverapi.WorkflowNodeGroupDeleteRequest) error {
-	return c.callUnscoped(ctx, protocol.MethodWorkflowNodeGroupDelete, req, &struct{}{})
-}
-
-func (c *Remote) AddWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeAddRequest) (serverapi.WorkflowNodeAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeAddRequest, serverapi.WorkflowNodeAddResponse](c, ctx, protocol.MethodWorkflowAddNode, req)
-}
-
-func (c *Remote) UpdateWorkflowNode(ctx context.Context, req serverapi.WorkflowNodeUpdateRequest) (serverapi.WorkflowNodeUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowNodeUpdateRequest, serverapi.WorkflowNodeUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateNode, req)
-}
-
-func (c *Remote) AddWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupAddRequest) (serverapi.WorkflowTransitionGroupAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTransitionGroupAddRequest, serverapi.WorkflowTransitionGroupAddResponse](c, ctx, protocol.MethodWorkflowAddTransitionGroup, req)
-}
-
-func (c *Remote) UpdateWorkflowTransitionGroup(ctx context.Context, req serverapi.WorkflowTransitionGroupUpdateRequest) (serverapi.WorkflowTransitionGroupUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowTransitionGroupUpdateRequest, serverapi.WorkflowTransitionGroupUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateTransitionGroup, req)
-}
-
-func (c *Remote) AddWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeAddRequest) (serverapi.WorkflowEdgeAddResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowEdgeAddRequest, serverapi.WorkflowEdgeAddResponse](c, ctx, protocol.MethodWorkflowAddEdge, req)
-}
-
-func (c *Remote) UpdateWorkflowEdge(ctx context.Context, req serverapi.WorkflowEdgeUpdateRequest) (serverapi.WorkflowEdgeUpdateResponse, error) {
-	return callUnscopedRPC[serverapi.WorkflowEdgeUpdateRequest, serverapi.WorkflowEdgeUpdateResponse](c, ctx, protocol.MethodWorkflowUpdateEdge, req)
-}
-
 func (c *Remote) LinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
 	return callUnscopedRPC[serverapi.WorkflowLinkProjectRequest, serverapi.WorkflowLinkProjectResponse](c, ctx, protocol.MethodWorkflowLinkProject, req)
 }
@@ -627,6 +593,10 @@ func (c *Remote) ListWorkflowTaskActivity(ctx context.Context, req serverapi.Wor
 	return validateWorkflowTaskBoundResponse("list workflow task activity", strings.TrimSpace(req.TaskID), response, err)
 }
 
+func (c *Remote) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskSessionListResponse](c, ctx, protocol.MethodWorkflowTaskSessionList, req)
+}
+
 func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
 	response, err := callUnscopedRPC[serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](c, ctx, protocol.MethodWorkflowTaskList, req)
 	return validateWorkflowResponse("list workflow tasks", response, err)
@@ -721,8 +691,11 @@ func (c *Remote) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req
 }
 
 func (c *Remote) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	var resp serverapi.SessionExecutionEnvironmentResponse
-	return resp, c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &resp)
+	var raw json.RawMessage
+	if err := c.call(ctx, protocol.MethodSessionGetExecutionEnvironment, req, &raw); err != nil {
+		return serverapi.SessionExecutionEnvironmentResponse{}, err
+	}
+	return c.sessionExecutionResponseContract.Decode(raw)
 }
 
 func (c *Remote) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {

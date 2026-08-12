@@ -1,25 +1,25 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"core/shared/client"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 
 	"core/prompts"
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
+
+	invjsonschema "github.com/invopop/jsonschema"
 )
 
 type taskCompleteArgs struct {
@@ -38,7 +38,12 @@ type taskCompleteArgs struct {
 }
 
 func taskCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
-	parsed, ok, exitCode := parseTaskCompleteArgs(args, stderr)
+	contract, err := prepareTaskCompleteJSONContract()
+	if err != nil {
+		fmt.Fprintf(stderr, "prepare Task Complete JSON contract: %v\n", err)
+		return 1
+	}
+	parsed, ok, exitCode := parseTaskCompleteArgs(args, stderr, contract)
 	if !ok {
 		return exitCode
 	}
@@ -133,7 +138,11 @@ func (a taskCompleteArgs) request(
 	return req, nil
 }
 
-func parseTaskCompleteArgs(args []string, stderr io.Writer) (taskCompleteArgs, bool, int) {
+func parseTaskCompleteArgs(
+	args []string,
+	stderr io.Writer,
+	jsonContract taskCompleteJSONContract,
+) (taskCompleteArgs, bool, int) {
 	parsed := taskCompleteArgs{ProjectRef: ".", OutputValues: map[string]string{}}
 	for index := 0; index < len(args); index++ {
 		raw := args[index]
@@ -245,7 +254,7 @@ func parseTaskCompleteArgs(args []string, stderr io.Writer) (taskCompleteArgs, b
 		return taskCompleteArgs{}, false, 2
 	}
 	if parsed.JSONPayloadSet || parsed.JSONFileSet {
-		if err := parsed.applyJSONPayload(); err != nil {
+		if err := parsed.applyJSONPayload(jsonContract); err != nil {
 			fmt.Fprintln(stderr, err)
 			return taskCompleteArgs{}, false, 2
 		}
@@ -304,7 +313,7 @@ func setTaskCompleteOutputValue(values map[string]string, raw string) error {
 	return nil
 }
 
-func (a *taskCompleteArgs) applyJSONPayload() error {
+func (a *taskCompleteArgs) applyJSONPayload(contract taskCompleteJSONContract) error {
 	raw := a.JSONPayload
 	if a.JSONFileSet {
 		content, err := os.ReadFile(a.JSONFile)
@@ -313,7 +322,7 @@ func (a *taskCompleteArgs) applyJSONPayload() error {
 		}
 		raw = string(content)
 	}
-	fields, err := parseTaskCompleteJSONPayload(raw)
+	fields, err := contract.Parse(raw)
 	if err != nil {
 		return err
 	}
@@ -329,122 +338,121 @@ type taskCompleteJSONFields struct {
 	OutputValues map[string]string
 }
 
-func parseTaskCompleteJSONPayload(raw string) (taskCompleteJSONFields, error) {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	var payload map[string]json.RawMessage
-	if err := decoder.Decode(&payload); err != nil {
+type taskCompleteJSONSchema struct {
+	Transition   *string        `json:"transition,omitempty" jsonschema:"nullable"`
+	TransitionID *string        `json:"transition_id,omitempty" jsonschema:"nullable"`
+	Commentary   *string        `json:"commentary,omitempty" jsonschema:"nullable"`
+	OutputValues map[string]any `json:"output_values,omitempty" jsonschema:"nullable"`
+}
+
+type taskCompleteJSONContract struct {
+	accepted jsoncontract.Function
+}
+
+func prepareTaskCompleteJSONContract() (taskCompleteJSONContract, error) {
+	accepted, err := jsoncontract.NewPreparer(false).Function(
+		"Task Complete CLI JSON",
+		taskCompleteJSONSchema{},
+		func(schema *invjsonschema.Schema) error {
+			schema.AdditionalProperties = invjsonschema.TrueSchema
+			for _, field := range []string{
+				"session_id",
+				"task_id",
+				"actor_kind",
+				"agent_session_id",
+				"force",
+			} {
+				schema.Properties.Set(field, invjsonschema.FalseSchema)
+			}
+			schema.Properties.Set("output_values", &invjsonschema.Schema{
+				OneOf: []*invjsonschema.Schema{
+					{Type: "object", AdditionalProperties: invjsonschema.TrueSchema},
+					{Type: "null"},
+				},
+			})
+			return nil
+		},
+	)
+	if err != nil {
+		return taskCompleteJSONContract{}, err
+	}
+	return taskCompleteJSONContract{accepted: accepted}, nil
+}
+
+func (c taskCompleteJSONContract) Parse(raw string) (taskCompleteJSONFields, error) {
+	payload, err := c.accepted.ValidateValue([]byte(raw))
+	if err != nil {
 		return taskCompleteJSONFields{}, fmt.Errorf("parse --json payload: %w", err)
 	}
-	if payload == nil {
-		return taskCompleteJSONFields{}, errors.New("parse --json payload: expected one JSON object")
-	}
-	var extra json.RawMessage
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return taskCompleteJSONFields{}, errors.New("parse --json payload: expected one JSON object")
-	}
 	out := taskCompleteJSONFields{OutputValues: map[string]string{}}
-	if rawOutputValues, ok := payload["output_values"]; ok {
-		values, err := taskCompleteJSONOutputValues(rawOutputValues)
+	if outputValues, present := payload.Field("output_values"); present && !outputValues.IsNull() {
+		fields, err := outputValues.ObjectFields()
 		if err != nil {
-			return taskCompleteJSONFields{}, err
+			return taskCompleteJSONFields{}, fmt.Errorf("parse --json payload: %w", err)
 		}
-		for key, value := range values {
-			out.OutputValues[key] = value
+		for _, field := range fields {
+			name := strings.TrimSpace(field.Name)
+			if name == "" {
+				return taskCompleteJSONFields{}, errors.New("parse --json payload: output_values field name is required")
+			}
+			value, err := taskCompleteJSONParameterValue(field.Value)
+			if err != nil {
+				return taskCompleteJSONFields{}, fmt.Errorf(
+					"parse --json payload: output_values.%s: %w",
+					name,
+					err,
+				)
+			}
+			out.OutputValues[name] = value
 		}
 	}
-	for _, key := range sortedRawJSONKeys(payload) {
-		switch key {
-		case "output_values":
+	for _, fieldName := range []string{"transition", "transition_id"} {
+		value, present := payload.Field(fieldName)
+		if !present || value.IsNull() {
 			continue
-		case "transition", "transition_id":
-			value, ok, err := taskCompleteJSONStringValue(payload[key], key)
-			if err != nil {
-				return taskCompleteJSONFields{}, err
-			}
-			if !ok {
-				continue
-			}
-			trimmed := strings.TrimSpace(value)
-			if out.TransitionID != "" && trimmed != "" && out.TransitionID != trimmed {
-				return taskCompleteJSONFields{}, errors.New("parse --json payload: transition and transition_id cannot disagree")
-			}
-			out.TransitionID = trimmed
-		case "commentary":
-			value, ok, err := taskCompleteJSONStringValue(payload[key], key)
-			if err != nil {
-				return taskCompleteJSONFields{}, err
-			}
-			if ok {
-				out.Commentary = value
-			}
-		case "session_id", "task_id", "actor_kind", "agent_session_id", "force":
-			return taskCompleteJSONFields{}, fmt.Errorf("parse --json payload: %s must be passed as a flag, not in the JSON payload", key)
+		}
+		text, _ := value.String()
+		trimmed := strings.TrimSpace(text)
+		if out.TransitionID != "" && trimmed != "" && out.TransitionID != trimmed {
+			return taskCompleteJSONFields{}, errors.New("parse --json payload: transition and transition_id cannot disagree")
+		}
+		out.TransitionID = trimmed
+	}
+	if commentary, present := payload.Field("commentary"); present && !commentary.IsNull() {
+		out.Commentary, _ = commentary.String()
+	}
+	fields, err := payload.ObjectFields()
+	if err != nil {
+		return taskCompleteJSONFields{}, fmt.Errorf("parse --json payload: %w", err)
+	}
+	for _, field := range fields {
+		switch field.Name {
+		case "output_values", "transition", "transition_id", "commentary":
+			continue
 		default:
-			value, ok, err := taskCompleteJSONParameterValue(payload[key], key)
+			value, err := taskCompleteJSONParameterValue(field.Value)
 			if err != nil {
-				return taskCompleteJSONFields{}, err
+				return taskCompleteJSONFields{}, fmt.Errorf(
+					"parse --json payload: %s: %w",
+					field.Name,
+					err,
+				)
 			}
-			if ok {
-				out.OutputValues[key] = value
-			}
+			out.OutputValues[field.Name] = value
 		}
 	}
 	return out, nil
 }
 
-func taskCompleteJSONOutputValues(raw json.RawMessage) (map[string]string, error) {
-	if strings.TrimSpace(string(raw)) == "null" {
-		return map[string]string{}, nil
+func taskCompleteJSONParameterValue(value jsoncontract.Value) (string, error) {
+	if text, ok := value.String(); ok {
+		return text, nil
 	}
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("parse --json payload: output_values must be an object")
+	compact, err := value.CompactJSON()
+	if err != nil {
+		return "", err
 	}
-	values := map[string]string{}
-	for _, key := range sortedRawJSONKeys(payload) {
-		trimmed := strings.TrimSpace(key)
-		if trimmed == "" {
-			return nil, errors.New("parse --json payload: output_values field name is required")
-		}
-		value, ok, err := taskCompleteJSONParameterValue(payload[key], "output_values."+trimmed)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			values[trimmed] = value
-		}
-	}
-	return values, nil
-}
-
-func taskCompleteJSONStringValue(raw json.RawMessage, field string) (string, bool, error) {
-	if strings.TrimSpace(string(raw)) == "null" {
-		return "", false, nil
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", false, fmt.Errorf("parse --json payload: %s must be a string", field)
-	}
-	return value, true, nil
-}
-
-func taskCompleteJSONParameterValue(raw json.RawMessage, field string) (string, bool, error) {
-	if strings.TrimSpace(string(raw)) == "null" {
-		return "null", true, nil
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err == nil {
-		return value, true, nil
-	}
-	var compacted bytes.Buffer
-	if err := json.Compact(&compacted, bytes.TrimSpace(raw)); err != nil {
-		return "", false, fmt.Errorf("parse --json payload: %s must be valid JSON", field)
-	}
-	return compacted.String(), true, nil
-}
-
-func sortedRawJSONKeys(payload map[string]json.RawMessage) []string {
-	return slices.Sorted(maps.Keys(payload))
+	return string(compact), nil
 }
 
 func taskCompleteErrorMessage(err error) string {

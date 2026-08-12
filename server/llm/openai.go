@@ -31,6 +31,11 @@ type OpenAIRequest struct {
 // OpenAIClient request methods and the offline inspection seam both use it, so
 // the wire shape stays identical between live generation and captured payloads.
 func RequestAsOpenAI(request Request) OpenAIRequest {
+	var structuredOutput *StructuredOutput
+	if request.StructuredOutput != nil {
+		cloned := *request.StructuredOutput
+		structuredOutput = &cloned
+	}
 	return OpenAIRequest{
 		Model:                   request.Model,
 		Temperature:             request.Temperature,
@@ -45,7 +50,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 		Items:                   CloneResponseItems(request.Items),
 		Tools:                   append([]Tool(nil), request.Tools...),
 		ToolChoiceMode:          request.ToolChoiceMode,
-		StructuredOutput:        request.StructuredOutput,
+		StructuredOutput:        structuredOutput,
 	}
 }
 

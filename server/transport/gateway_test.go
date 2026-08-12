@@ -170,6 +170,26 @@ func TestResponseForErrorPreservesRuntimeCommandNotAcceptedCause(t *testing.T) {
 	}
 }
 
+func TestResponseForErrorPreservesRuntimeCommandNotAcceptedUnavailableCause(t *testing.T) {
+	source := serverapi.NewRuntimeCommandNotAcceptedError(errors.Join(
+		serverapi.ErrRuntimeUnavailable,
+		errors.New("session has no Ready runtime"),
+	))
+	response := responseForError("runtime-command", source)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeRuntimeCommandNotAccepted {
+		t.Fatalf("runtime command response = %+v, want structured not-accepted error", response.Error)
+	}
+	var payload struct {
+		Cause protocol.ResponseError `json:"cause"`
+	}
+	if err := json.Unmarshal(response.Error.Data, &payload); err != nil {
+		t.Fatalf("decode nested cause: %v", err)
+	}
+	if payload.Cause.Code != protocol.ErrCodeRuntimeUnavailable {
+		t.Fatalf("nested cause code = %d, want %d", payload.Cause.Code, protocol.ErrCodeRuntimeUnavailable)
+	}
+}
+
 func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	tests := []struct {
 		name string
@@ -669,16 +689,16 @@ func TestGatewayHandshakeRejectsProtocolVersionMismatch(t *testing.T) {
 	}
 }
 
-func TestGatewayHandshakeRejectsProtocolVersion106(t *testing.T) {
+func TestGatewayHandshakeRejectsPreviousProtocolVersion(t *testing.T) {
 	_, server := newGatewayTestServer(t)
 	defer server.Close()
 
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 
-	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "106"})
+	respErr := callGatewayExpectError(t, conn, "1", protocol.MethodHandshake, protocol.HandshakeRequest{ProtocolVersion: "115"})
 	if respErr.Code != protocol.ErrCodeProtocolVersionMismatch {
-		t.Fatalf("expected protocol version 106 rejection, got %+v", respErr)
+		t.Fatalf("expected previous protocol version rejection, got %+v", respErr)
 	}
 }
 
@@ -768,6 +788,33 @@ func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
 	}
 }
 
+func TestGatewayRemoteWorkflowTaskSessionsRoundsTripPage(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	task := createGatewaySearchableTask(t, appCore)
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	response, err := remote.ListWorkflowTaskSessions(context.Background(), serverapi.WorkflowTaskOffsetPageRequest{
+		TaskID: task.ID,
+	})
+	if err != nil {
+		t.Fatalf("ListWorkflowTaskSessions: %v", err)
+	}
+	if response.TaskID != task.ID || response.Items == nil || len(response.Items) != 0 || response.NextOffset != nil {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
 func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.WorkflowTaskSummary {
 	t.Helper()
 	ctx := context.Background()
@@ -798,90 +845,26 @@ func createGatewaySearchableTask(t *testing.T, appCore *core.Core) serverapi.Wor
 	startGroupID := "group-start-" + workflowID
 	doneGroupID := "group-done-" + workflowID
 	finishGroupID := "group-finish-" + workflowID
-	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
-		WorkflowID:   created.Workflow.ID,
-		NodeID:       agentID,
-		Key:          "agent",
-		Kind:         "agent",
-		DisplayName:  "Agent",
-		SubagentRole: "coder",
-	}); err != nil {
-		t.Fatalf("AddWorkflowNode: %v", err)
-	}
-	if _, err := workflows.AddWorkflowNode(ctx, serverapi.WorkflowNodeAddRequest{
-		WorkflowID:   created.Workflow.ID,
-		NodeID:       reviewID,
-		Key:          "review",
-		Kind:         "agent",
-		DisplayName:  "Review",
-		SubagentRole: "coder",
-	}); err != nil {
-		t.Fatalf("AddWorkflowNode review: %v", err)
-	}
-	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-		WorkflowID:   created.Workflow.ID,
-		GroupID:      startGroupID,
-		SourceNodeID: startID,
-		TransitionID: "start",
-		DisplayName:  "Start",
-	}); err != nil {
-		t.Fatalf("AddWorkflowTransitionGroup start: %v", err)
-	}
-	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-start-" + workflowID,
-		TransitionGroupID: startGroupID,
-		Key:               "start",
-		TargetNodeID:      agentID,
-		AssigneeSelection: "configured",
-		ThinkingSelection: "configured",
-		ContextMode:       "new_session",
-		PromptTemplate:    "Search work.",
-	}); err != nil {
-		t.Fatalf("AddWorkflowEdge start: %v", err)
-	}
-	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-		WorkflowID:   created.Workflow.ID,
-		GroupID:      doneGroupID,
-		SourceNodeID: agentID,
-		TransitionID: "done",
-		DisplayName:  "Done",
-	}); err != nil {
-		t.Fatalf("AddWorkflowTransitionGroup done: %v", err)
-	}
-	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-done-" + workflowID,
-		TransitionGroupID: doneGroupID,
-		Key:               "done",
-		TargetNodeID:      reviewID,
-		AssigneeSelection: "configured",
-		ThinkingSelection: "configured",
-		ContextMode:       "new_session",
-		PromptTemplate:    "Review the search work.",
-	}); err != nil {
-		t.Fatalf("AddWorkflowEdge done: %v", err)
-	}
-	if _, err := workflows.AddWorkflowTransitionGroup(ctx, serverapi.WorkflowTransitionGroupAddRequest{
-		WorkflowID:   created.Workflow.ID,
-		GroupID:      finishGroupID,
-		SourceNodeID: reviewID,
-		TransitionID: "finish",
-		DisplayName:  "Finish",
-	}); err != nil {
-		t.Fatalf("AddWorkflowTransitionGroup finish: %v", err)
-	}
-	if _, err := workflows.AddWorkflowEdge(ctx, serverapi.WorkflowEdgeAddRequest{
-		WorkflowID:        created.Workflow.ID,
-		EdgeID:            "edge-finish-" + workflowID,
-		TransitionGroupID: finishGroupID,
-		Key:               "finish",
-		TargetNodeID:      terminalID,
-		AssigneeSelection: "configured",
-		ThinkingSelection: "configured",
-		ContextMode:       "new_session",
-	}); err != nil {
-		t.Fatalf("AddWorkflowEdge finish: %v", err)
+	graph := serverapi.WorkflowGraphDraftFromDefinition(definition.Definition)
+	graph.Nodes = append(graph.Nodes,
+		serverapi.WorkflowGraphDraftNode{ID: agentID, Key: "agent", Kind: "agent", DisplayName: "Agent", SubagentRole: "coder"},
+		serverapi.WorkflowGraphDraftNode{ID: reviewID, Key: "review", Kind: "agent", DisplayName: "Review", SubagentRole: "coder"},
+	)
+	graph.TransitionGroups = append(graph.TransitionGroups,
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: startGroupID, SourceNodeID: startID, TransitionID: "start", DisplayName: "Start"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: doneGroupID, SourceNodeID: agentID, TransitionID: "done", DisplayName: "Done"},
+		serverapi.WorkflowGraphDraftTransitionGroup{ID: finishGroupID, SourceNodeID: reviewID, TransitionID: "finish", DisplayName: "Finish"},
+	)
+	graph.Edges = append(graph.Edges,
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-start-" + workflowID, TransitionGroupID: startGroupID, Key: "start", TargetNodeID: agentID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Search work."},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-done-" + workflowID, TransitionGroupID: doneGroupID, Key: "done", TargetNodeID: reviewID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session", PromptTemplate: "Review the search work."},
+		serverapi.WorkflowGraphDraftEdge{ID: "edge-finish-" + workflowID, TransitionGroupID: finishGroupID, Key: "finish", TargetNodeID: terminalID, AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session"},
+	)
+	saved, err := workflows.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID: created.Workflow.ID, ExpectedVersion: definition.Definition.Workflow.Version, Graph: graph,
+	})
+	if err != nil || !saved.Saved {
+		t.Fatalf("SaveWorkflowGraph searchable task fixture = %+v, err = %v", saved, err)
 	}
 	if _, err := workflows.LinkWorkflowToProject(ctx, serverapi.WorkflowLinkProjectRequest{
 		ProjectID:     appCore.ProjectID(),

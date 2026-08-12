@@ -209,7 +209,7 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 		return nil
 	}
 	q := sqlitegen.New(connection)
-	currentSource, err := currentNodeForReference(ctx, q, prepared.Source)
+	currentSource, err := s.currentNodeForReference(ctx, q, prepared.Source)
 	if err != nil {
 		return CurrentNodeCompletionResult{}, err
 	}

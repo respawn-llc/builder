@@ -10,54 +10,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestOpenMigratesCommentsToMinimalStorage(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 19)
-	if err != nil {
-		t.Fatalf("open test database at version 19: %v", err)
-	}
-	if _, err := db.Exec(metadataDBTestSQL(t, "version19_minimal_storage.sql")); err != nil {
-		t.Fatalf("seed version 19 minimal storage data: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 19 db: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-	for _, column := range []string{"source_run_id", "deleted_at_unix_ms", "metadata_json"} {
-		if columnExists(t, store.db, "task_comments", column) {
-			t.Fatalf("task_comments.%s should have been removed", column)
-		}
-	}
-	comments, err := store.DB().QueryContext(t.Context(), `SELECT id, body FROM task_comments ORDER BY updated_at_unix_ms DESC`)
-	if err != nil {
-		t.Fatalf("query migrated comments: %v", err)
-	}
-	defer func() { _ = comments.Close() }()
-	if !comments.Next() {
-		t.Fatal("expected one visible comment after migration")
-	}
-	var commentID, body string
-	if err := comments.Scan(&commentID, &body); err != nil {
-		t.Fatalf("scan migrated comment: %v", err)
-	}
-	if commentID != "comment-visible" || body != "visible" {
-		t.Fatalf("migrated comment = %q/%q, want visible comment", commentID, body)
-	}
-	if comments.Next() {
-		t.Fatal("deleted comment should not survive hard-delete migration")
-	}
-	if err := comments.Err(); err != nil {
-		t.Fatalf("iterate migrated comments: %v", err)
-	}
-}
-
 func TestOpenProjectsLegacyBacklogPlacementToCurrentNode(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

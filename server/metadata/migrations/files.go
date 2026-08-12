@@ -6,9 +6,8 @@ import (
 
 // FS is the authoritative metadata migration filesystem.
 //
-// Keeping the migration assets and provider construction together ensures
-// production migrations and historical-version migration tests execute the
-// same migration path.
+// It starts at the minimum supported release baseline and contains every
+// supported forward migration after that baseline.
 //
 //go:embed *.up.sql
 var FS embed.FS

@@ -7,7 +7,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -67,7 +66,7 @@ func containsText(texts []string, want string) bool {
 
 func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u1")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a1")
@@ -107,7 +106,7 @@ func TestEngineTranscriptSegmentPagePaginatesAcrossCompaction(t *testing.T) {
 
 func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "u1")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "a1")
@@ -147,7 +146,7 @@ func TestEngineTranscriptSegmentPageForwardMatchesBackwardSegments(t *testing.T)
 
 func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "only")
 	appendSegmentTestMessage(t, store, llm.RoleAssistant, "answer")
@@ -164,7 +163,7 @@ func TestEngineTranscriptSegmentPageSingleSegment(t *testing.T) {
 
 func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "before compaction")
 	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{
@@ -206,7 +205,7 @@ func TestEngineTranscriptNewestSegmentPageIncludesCompleteActiveSegment(t *testi
 
 func TestEngineTranscriptNewestSegmentPageProjectsHistoryReplacementRows(t *testing.T) {
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
 
 	appendSegmentTestMessage(t, store, llm.RoleUser, "before compaction")
 	if _, _, err := appendTestEvent(t, store, "step", historyReplacementPayload{

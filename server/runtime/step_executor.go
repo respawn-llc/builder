@@ -253,7 +253,7 @@ func registerAcceptedOutputPosition(
 func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	result, err := s.runStepLoopWithOptions(ctx, stepID, options)
 	var stopped *queuedUserFlushStoppedError
-	if errors.As(err, &stopped) {
+	if errors.As(err, &stopped) && !s.engine.currentNodeExecutionActive() {
 		return stepLoopResult{}, nil
 	}
 	return result, err
@@ -665,6 +665,25 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 			executedToolCall:   executedToolCall,
 			preflightRejection: rejection,
 		}, nil
+	}
+	preparedLocalCalls, err := prepareExecutorToolCalls(
+		e,
+		stepID,
+		activeRunIDForStep(e, stepID),
+		e.currentNodeExecutionActive(),
+		acceptedCalls.local,
+	)
+	if err != nil {
+		return preparedCompletedResponse{}, err
+	}
+	for index := range preparedLocalCalls {
+		if preparedLocalCalls[index].inputErr == nil {
+			acceptedCalls.local[index] = prepareRawToolCallForTranscript(
+				preparedLocalCalls[index].call,
+				preparedLocalCalls[index].executableCall,
+				e.transcriptWorkingDir(),
+			)
+		}
 	}
 	assistantMsg.ToolCalls = acceptedCalls.toolCalls()
 	phaseTurn.Assistant = assistantMsg

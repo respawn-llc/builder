@@ -331,6 +331,11 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
+	workflowTaskSessions, err := workflowview.NewTaskSessions(metadataStore, runtimeRegistry)
+	if err != nil {
+		cleanupNewFailure()
+		return nil, fmt.Errorf("workflow bundle: Task Sessions: %w", err)
+	}
 	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions:      workflowDefinitions,
@@ -339,6 +344,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		TaskSearch:       workflowTaskSearch,
 		TaskDetail:       workflowTaskDetail,
 		TaskDependencies: workflowTaskDependencies,
+		TaskSessions:     workflowTaskSessions,
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,

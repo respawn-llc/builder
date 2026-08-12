@@ -151,7 +151,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 				Key:               "alternate",
 				TargetNodeID:      alternateID,
 				ContextMode:       workflow.ContextModeNewSession,
-				PromptTemplate:    "Alternate.",
+				PromptTemplate:    "Alternate.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 			EdgeRecord{
 				ID:                workflow.EdgeID("edge-alternate-audit-" + workflowID.String()),
@@ -160,7 +160,7 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 				Key:               "audit",
 				TargetNodeID:      workflow.NodeIDOf(audit),
 				ContextMode:       workflow.ContextModeNewSession,
-				PromptTemplate:    "Audit.",
+				PromptTemplate:    "Audit.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
 			},
 		)
 		override := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))

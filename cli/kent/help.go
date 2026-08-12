@@ -204,6 +204,7 @@ var (
 	taskListUsage           = leafCommandUsage(config.Command+" task list [--workflow <uuid>] [flags]", "List and filter tasks in a project.")
 	taskSearchUsage         = commandUsage{helpFile: "task_search.txt", includeEmbeddedFlags: true}
 	taskShowUsage           = leafCommandUsage(config.Command+" task show <task> [--project <project>] [--json]", "Show task content, workflow state, Current Nodes, and comments.")
+	taskSessionsUsage       = leafCommandUsage(config.Command+" task sessions <task> [--project <project>] [--offset <n>] [--limit <n>] [--json]", "List retained agent Sessions for a task.")
 	taskDeleteUsage         = leafCommandUsage(config.Command+" task delete <task> [--project <project>]", "Permanently delete a task.", "", "User-only; unavailable inside Kent shell commands.")
 	taskLabelUsage          = leafCommandUsage(config.Command+" task label <add|create|delete|list|remove|rename> ...", "Manage Project labels and task label assignments.")
 	taskLabelCreateUsage    = leafCommandUsage(config.Command+" task label create [--project <project>] [--json] <name>", "Create a Project label.")

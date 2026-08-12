@@ -6,12 +6,11 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/tools"
 )
 
 func newTranscriptHydrationSnapshotTestEngine(t *testing.T, client llm.Client) *Engine {
 	t.Helper()
-	return mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{Model: "gpt-5"})
+	return mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 }
 
 func hydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {
@@ -116,7 +115,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 func TestFailedQueueFlushRestoresAcceptedStateAcrossHydrationRace(t *testing.T) {
 	store := mustCreateTestSession(t)
 	statuses := make(chan QueuedUserMessageStatusEvent, 4)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
 		Model: "gpt-5",
 		OnEvent: func(event Event) {
 			if event.QueuedUserMessageStatus != nil {

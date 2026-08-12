@@ -11,6 +11,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/workflowcontract"
 	"core/shared/workflowkey"
 	"core/shared/worktreecontract"
@@ -24,7 +25,7 @@ const (
 	WorkflowRequestErrorTooLong      = "workflow.request.too_long"
 )
 
-const WorkflowPaginationMaxLimit = 100
+const WorkflowPaginationMaxLimit = OffsetPaginationMaxLimit
 const WorkflowTaskListMaxSortSelectors = 7
 const WorkflowBoardNodeCardsMaxPageSize = 25
 
@@ -323,6 +324,45 @@ type WorkflowGraphDraftEdge struct {
 	Parameters        []WorkflowParameter   `json:"parameters,omitempty"`
 }
 
+func WorkflowGraphDraftFromDefinition(definition WorkflowDefinition) WorkflowGraphDraft {
+	graph := WorkflowGraphDraft{
+		NodeGroups:       make([]WorkflowGraphDraftNodeGroup, 0, len(definition.NodeGroups)),
+		Nodes:            make([]WorkflowGraphDraftNode, 0, len(definition.Nodes)),
+		TransitionGroups: make([]WorkflowGraphDraftTransitionGroup, 0, len(definition.TransitionGroups)),
+		Edges:            make([]WorkflowGraphDraftEdge, 0, len(definition.Edges)),
+	}
+	for _, group := range definition.NodeGroups {
+		graph.NodeGroups = append(graph.NodeGroups, WorkflowGraphDraftNodeGroup{
+			ID: group.GroupID, Key: group.GroupKey, DisplayName: group.DisplayName,
+		})
+	}
+	for _, node := range definition.Nodes {
+		graph.Nodes = append(graph.Nodes, WorkflowGraphDraftNode{
+			ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName,
+			GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey,
+			SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode,
+			ScriptPath:         textutil.Pointer(node.ScriptPath),
+			JoinInputProviders: slices.Clone(node.JoinInputProviders),
+		})
+	}
+	for _, group := range definition.TransitionGroups {
+		graph.TransitionGroups = append(graph.TransitionGroups, WorkflowGraphDraftTransitionGroup{
+			ID: group.ID, SourceNodeID: group.SourceNodeID, TransitionID: group.TransitionID,
+			DisplayName: group.DisplayName, Description: group.Description,
+		})
+	}
+	for _, edge := range definition.Edges {
+		graph.Edges = append(graph.Edges, WorkflowGraphDraftEdge{
+			ID: edge.ID, TransitionGroupID: edge.TransitionGroupID, Key: edge.Key,
+			TargetNodeID: edge.TargetNodeID, AssigneeSelection: edge.AssigneeSelection,
+			ThinkingSelection: edge.ThinkingSelection, RequiresApproval: edge.RequiresApproval,
+			ContextMode: edge.ContextMode, ContextSource: edge.ContextSource,
+			PromptTemplate: edge.PromptTemplate, Parameters: slices.Clone(edge.Parameters),
+		})
+	}
+	return graph
+}
+
 type WorkflowGraphValidateDraftRequest struct {
 	WorkflowID runtimeids.WorkflowID    `json:"workflow_id"`
 	Metadata   *WorkflowGraphMetadata   `json:"metadata,omitempty"`
@@ -479,130 +519,6 @@ type WorkflowGetRequest struct {
 
 type WorkflowGetResponse struct {
 	Definition WorkflowDefinition `json:"definition"`
-}
-
-type WorkflowNodeAddRequest struct {
-	WorkflowID         runtimeids.WorkflowID       `json:"workflow_id"`
-	NodeID             string                      `json:"node_id,omitempty"`
-	Key                string                      `json:"key"`
-	Kind               string                      `json:"kind"`
-	DisplayName        string                      `json:"display_name"`
-	GroupKey           string                      `json:"group_key,omitempty"`
-	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	CompletionMode     string                      `json:"completion_mode,omitempty"`
-	ScriptPath         *string                     `json:"script_path,omitempty"`
-	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
-}
-
-type WorkflowNodeAddResponse struct {
-	Version int64 `json:"version"`
-}
-
-type WorkflowNodeUpdateRequest struct {
-	WorkflowID         runtimeids.WorkflowID       `json:"workflow_id"`
-	NodeID             string                      `json:"node_id"`
-	Key                string                      `json:"key"`
-	Kind               string                      `json:"kind"`
-	DisplayName        string                      `json:"display_name"`
-	GroupKey           string                      `json:"group_key,omitempty"`
-	SubagentRole       string                      `json:"subagent_role,omitempty"`
-	CompletionMode     string                      `json:"completion_mode,omitempty"`
-	ScriptPath         *string                     `json:"script_path,omitempty"`
-	JoinInputProviders []WorkflowJoinInputProvider `json:"join_input_providers,omitempty"`
-}
-
-type WorkflowNodeUpdateResponse struct {
-	Version int64 `json:"version"`
-}
-
-type WorkflowNodeGroupAddRequest struct {
-	WorkflowID  runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID     string                `json:"group_id,omitempty"`
-	GroupKey    string                `json:"group_key"`
-	DisplayName string                `json:"display_name"`
-	SortOrder   int                   `json:"sort_order"`
-}
-
-type WorkflowNodeGroupUpdateRequest struct {
-	WorkflowID  runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID     string                `json:"group_id"`
-	GroupKey    string                `json:"group_key"`
-	DisplayName string                `json:"display_name"`
-	SortOrder   int                   `json:"sort_order"`
-}
-
-type WorkflowNodeGroupDeleteRequest struct {
-	WorkflowID runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID    string                `json:"group_id"`
-}
-
-type WorkflowNodeGroupResponse struct {
-	Group   WorkflowNodeGroup `json:"group"`
-	Version int64             `json:"version"`
-}
-
-type WorkflowTransitionGroupAddRequest struct {
-	WorkflowID   runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID      string                `json:"group_id,omitempty"`
-	SourceNodeID string                `json:"source_node_id"`
-	TransitionID string                `json:"transition_id"`
-	DisplayName  string                `json:"display_name,omitempty"`
-	Description  string                `json:"description,omitempty"`
-}
-
-type WorkflowTransitionGroupAddResponse struct {
-	Version int64 `json:"version"`
-}
-
-type WorkflowTransitionGroupUpdateRequest struct {
-	WorkflowID   runtimeids.WorkflowID `json:"workflow_id"`
-	GroupID      string                `json:"group_id"`
-	SourceNodeID string                `json:"source_node_id"`
-	TransitionID string                `json:"transition_id"`
-	DisplayName  string                `json:"display_name,omitempty"`
-	Description  string                `json:"description,omitempty"`
-}
-
-type WorkflowTransitionGroupUpdateResponse struct {
-	Version int64 `json:"version"`
-}
-
-type WorkflowEdgeAddRequest struct {
-	WorkflowID        runtimeids.WorkflowID `json:"workflow_id"`
-	EdgeID            string                `json:"edge_id,omitempty"`
-	TransitionGroupID string                `json:"transition_group_id"`
-	Key               string                `json:"key"`
-	TargetNodeID      string                `json:"target_node_id"`
-	AssigneeSelection string                `json:"assignee_selection"`
-	ThinkingSelection string                `json:"thinking_selection"`
-	ContextMode       string                `json:"context_mode"`
-	ContextSource     WorkflowContextSource `json:"context_source"`
-	RequiresApproval  bool                  `json:"requires_approval"`
-	PromptTemplate    string                `json:"prompt_template,omitempty"`
-	Parameters        []WorkflowParameter   `json:"parameters,omitempty"`
-}
-
-type WorkflowEdgeAddResponse struct {
-	Version int64 `json:"version"`
-}
-
-type WorkflowEdgeUpdateRequest struct {
-	WorkflowID        runtimeids.WorkflowID `json:"workflow_id"`
-	EdgeID            string                `json:"edge_id"`
-	TransitionGroupID string                `json:"transition_group_id"`
-	Key               string                `json:"key"`
-	TargetNodeID      string                `json:"target_node_id"`
-	AssigneeSelection string                `json:"assignee_selection"`
-	ThinkingSelection string                `json:"thinking_selection"`
-	ContextMode       string                `json:"context_mode"`
-	ContextSource     WorkflowContextSource `json:"context_source"`
-	RequiresApproval  bool                  `json:"requires_approval"`
-	PromptTemplate    string                `json:"prompt_template,omitempty"`
-	Parameters        []WorkflowParameter   `json:"parameters,omitempty"`
-}
-
-type WorkflowEdgeUpdateResponse struct {
-	Version int64 `json:"version"`
 }
 
 type WorkflowLinkProjectRequest struct {
@@ -1600,37 +1516,28 @@ const (
 type WorkflowProjectEventAction = protocol.WorkflowProjectEventAction
 
 const (
-	WorkflowProjectEventActionCreated                = protocol.WorkflowProjectEventActionCreated
-	WorkflowProjectEventActionUpdated                = protocol.WorkflowProjectEventActionUpdated
-	WorkflowProjectEventActionRenamed                = protocol.WorkflowProjectEventActionRenamed
-	WorkflowProjectEventActionReordered              = protocol.WorkflowProjectEventActionReordered
-	WorkflowProjectEventActionDeleted                = protocol.WorkflowProjectEventActionDeleted
-	WorkflowProjectEventActionNodeAdded              = protocol.WorkflowProjectEventActionNodeAdded
-	WorkflowProjectEventActionNodeUpdated            = protocol.WorkflowProjectEventActionNodeUpdated
-	WorkflowProjectEventActionNodeGroupAdded         = protocol.WorkflowProjectEventActionNodeGroupAdded
-	WorkflowProjectEventActionNodeGroupUpdated       = protocol.WorkflowProjectEventActionNodeGroupUpdated
-	WorkflowProjectEventActionNodeGroupDeleted       = protocol.WorkflowProjectEventActionNodeGroupDeleted
-	WorkflowProjectEventActionTransitionGroupAdded   = protocol.WorkflowProjectEventActionTransitionGroupAdded
-	WorkflowProjectEventActionTransitionGroupUpdated = protocol.WorkflowProjectEventActionTransitionGroupUpdated
-	WorkflowProjectEventActionEdgeAdded              = protocol.WorkflowProjectEventActionEdgeAdded
-	WorkflowProjectEventActionEdgeUpdated            = protocol.WorkflowProjectEventActionEdgeUpdated
-	WorkflowProjectEventActionGraphSaved             = protocol.WorkflowProjectEventActionGraphSaved
-	WorkflowProjectEventActionLinked                 = protocol.WorkflowProjectEventActionLinked
-	WorkflowProjectEventActionDefaultChanged         = protocol.WorkflowProjectEventActionDefaultChanged
-	WorkflowProjectEventActionUnlinked               = protocol.WorkflowProjectEventActionUnlinked
-	WorkflowProjectEventActionStarted                = protocol.WorkflowProjectEventActionStarted
-	WorkflowProjectEventActionInterrupted            = protocol.WorkflowProjectEventActionInterrupted
-	WorkflowProjectEventActionResumed                = protocol.WorkflowProjectEventActionResumed
-	WorkflowProjectEventActionApproved               = protocol.WorkflowProjectEventActionApproved
-	WorkflowProjectEventActionMoved                  = protocol.WorkflowProjectEventActionMoved
-	WorkflowProjectEventActionCompleted              = protocol.WorkflowProjectEventActionCompleted
-	WorkflowProjectEventActionCommentAdded           = protocol.WorkflowProjectEventActionCommentAdded
-	WorkflowProjectEventActionCommentUpdated         = protocol.WorkflowProjectEventActionCommentUpdated
-	WorkflowProjectEventActionCommentDeleted         = protocol.WorkflowProjectEventActionCommentDeleted
-	WorkflowProjectEventActionQuestionWaiting        = protocol.WorkflowProjectEventActionQuestionWaiting
-	WorkflowProjectEventActionQuestionCleared        = protocol.WorkflowProjectEventActionQuestionCleared
-	WorkflowProjectEventActionLabelsChanged          = protocol.WorkflowProjectEventActionLabelsChanged
-	WorkflowProjectEventActionDependenciesChanged    = protocol.WorkflowProjectEventActionDependenciesChanged
+	WorkflowProjectEventActionCreated             = protocol.WorkflowProjectEventActionCreated
+	WorkflowProjectEventActionUpdated             = protocol.WorkflowProjectEventActionUpdated
+	WorkflowProjectEventActionRenamed             = protocol.WorkflowProjectEventActionRenamed
+	WorkflowProjectEventActionReordered           = protocol.WorkflowProjectEventActionReordered
+	WorkflowProjectEventActionDeleted             = protocol.WorkflowProjectEventActionDeleted
+	WorkflowProjectEventActionGraphSaved          = protocol.WorkflowProjectEventActionGraphSaved
+	WorkflowProjectEventActionLinked              = protocol.WorkflowProjectEventActionLinked
+	WorkflowProjectEventActionDefaultChanged      = protocol.WorkflowProjectEventActionDefaultChanged
+	WorkflowProjectEventActionUnlinked            = protocol.WorkflowProjectEventActionUnlinked
+	WorkflowProjectEventActionStarted             = protocol.WorkflowProjectEventActionStarted
+	WorkflowProjectEventActionInterrupted         = protocol.WorkflowProjectEventActionInterrupted
+	WorkflowProjectEventActionResumed             = protocol.WorkflowProjectEventActionResumed
+	WorkflowProjectEventActionApproved            = protocol.WorkflowProjectEventActionApproved
+	WorkflowProjectEventActionMoved               = protocol.WorkflowProjectEventActionMoved
+	WorkflowProjectEventActionCompleted           = protocol.WorkflowProjectEventActionCompleted
+	WorkflowProjectEventActionCommentAdded        = protocol.WorkflowProjectEventActionCommentAdded
+	WorkflowProjectEventActionCommentUpdated      = protocol.WorkflowProjectEventActionCommentUpdated
+	WorkflowProjectEventActionCommentDeleted      = protocol.WorkflowProjectEventActionCommentDeleted
+	WorkflowProjectEventActionQuestionWaiting     = protocol.WorkflowProjectEventActionQuestionWaiting
+	WorkflowProjectEventActionQuestionCleared     = protocol.WorkflowProjectEventActionQuestionCleared
+	WorkflowProjectEventActionLabelsChanged       = protocol.WorkflowProjectEventActionLabelsChanged
+	WorkflowProjectEventActionDependenciesChanged = protocol.WorkflowProjectEventActionDependenciesChanged
 )
 
 type WorkflowProjectEvent struct {
@@ -1713,15 +1620,6 @@ func workflowProjectEventActionAllowed(resource WorkflowProjectEventResource, ac
 		switch action {
 		case WorkflowProjectEventActionUpdated,
 			WorkflowProjectEventActionDeleted,
-			WorkflowProjectEventActionNodeAdded,
-			WorkflowProjectEventActionNodeUpdated,
-			WorkflowProjectEventActionNodeGroupAdded,
-			WorkflowProjectEventActionNodeGroupUpdated,
-			WorkflowProjectEventActionNodeGroupDeleted,
-			WorkflowProjectEventActionTransitionGroupAdded,
-			WorkflowProjectEventActionTransitionGroupUpdated,
-			WorkflowProjectEventActionEdgeAdded,
-			WorkflowProjectEventActionEdgeUpdated,
 			WorkflowProjectEventActionGraphSaved:
 			return true
 		}
@@ -1786,6 +1684,27 @@ type WorkflowTaskGetResponse struct {
 
 type WorkflowTaskActivityListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskActivityItem]
+}
+
+type WorkflowTaskSessionStatus string
+
+const (
+	WorkflowTaskSessionStatusRunning  WorkflowTaskSessionStatus = "running"
+	WorkflowTaskSessionStatusQuestion WorkflowTaskSessionStatus = "question"
+	WorkflowTaskSessionStatusIdle     WorkflowTaskSessionStatus = "idle"
+)
+
+type WorkflowTaskSessionItem struct {
+	SessionID   string                    `json:"session_id"`
+	SessionName *string                   `json:"session_name,omitempty"`
+	NodeName    *string                   `json:"node_name,omitempty"`
+	AgentRole   string                    `json:"agent_role"`
+	Status      WorkflowTaskSessionStatus `json:"status"`
+}
+
+type WorkflowTaskSessionListResponse struct {
+	TaskID string `json:"task_id"`
+	WorkflowOffsetPage[WorkflowTaskSessionItem]
 }
 
 type WorkflowTaskSummary struct {
@@ -1948,80 +1867,26 @@ func (r WorkflowListRequest) Validate() error {
 	return nil
 }
 
-type WorkflowOffsetWindow struct {
-	Offset int
-	Limit  int
-}
+type WorkflowOffsetWindow = OffsetWindow
 
 func ResolveWorkflowOffsetWindow(offset *int, limit *int) (WorkflowOffsetWindow, error) {
-	resolvedOffset := 0
-	if offset != nil {
-		if *offset < 0 {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
-		}
-		resolvedOffset = *offset
+	window, err := ResolveOffsetWindow(offset, limit)
+	if err == nil {
+		return window, nil
 	}
-	resolvedLimit := WorkflowPaginationMaxLimit
-	if limit != nil {
-		if *limit < 1 || *limit > WorkflowPaginationMaxLimit {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "limit", fmt.Sprintf("limit must be between 1 and %d", WorkflowPaginationMaxLimit))
-		}
-		resolvedLimit = *limit
+	var windowError *offsetWindowError
+	if !errors.As(err, &windowError) {
+		return WorkflowOffsetWindow{}, err
 	}
-	return WorkflowOffsetWindow{Offset: resolvedOffset, Limit: resolvedLimit}, nil
+	return WorkflowOffsetWindow{}, workflowRequestError(
+		WorkflowRequestErrorInvalidMode,
+		windowError.Field,
+		windowError.Message,
+	)
 }
 
 func (r WorkflowGetRequest) Validate() error {
 	return validateRequiredWorkflowID(r.WorkflowID)
-}
-
-func (r WorkflowNodeAddRequest) Validate() error {
-	return validateWorkflowNodeFields(r.WorkflowID, "", r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
-}
-
-func (r WorkflowNodeUpdateRequest) Validate() error {
-	if err := validateRequired("node_id", r.NodeID); err != nil {
-		return err
-	}
-	return validateWorkflowNodeFields(r.WorkflowID, r.NodeID, r.Key, r.Kind, r.DisplayName, r.GroupKey, r.CompletionMode, r.ScriptPath, r.JoinInputProviders)
-}
-
-func validateWorkflowNodeFields(workflowID runtimeids.WorkflowID, nodeID string, key string, kind string, displayName string, groupKey string, completionMode string, scriptPath *string, joinInputProviders []WorkflowJoinInputProvider) error {
-	if err := validateRequiredWorkflowID(workflowID); err != nil {
-		return err
-	}
-	if err := validateModelKey("key", key); err != nil {
-		return err
-	}
-	if err := validateRequired("kind", kind); err != nil {
-		return err
-	}
-	if err := validateDisplayName(displayName); err != nil {
-		return err
-	}
-	if err := validateWorkflowNodeCompletionMode(kind, completionMode); err != nil {
-		return err
-	}
-	if scriptPath != nil && strings.TrimSpace(*scriptPath) == "" {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path must be null or a non-empty path")
-	}
-	if scriptPath != nil && strings.TrimSpace(kind) != "script" {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "script_path", "script_path is only valid for script nodes")
-	}
-	if strings.TrimSpace(groupKey) != "" {
-		if err := validateModelKey("group_key", groupKey); err != nil {
-			return err
-		}
-	}
-	for _, provider := range joinInputProviders {
-		if err := validateModelKey("join_input_provider.input_name", provider.InputName); err != nil {
-			return err
-		}
-		if err := validateRequired("join_input_provider.provider_edge_id", provider.ProviderEdgeID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func validateWorkflowNodeCompletionMode(kind string, completionMode string) error {
@@ -2038,117 +1903,6 @@ func validateWorkflowNodeCompletionMode(kind string, completionMode string) erro
 	default:
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "completion_mode", "completion_mode must be auto|structured_output|tool|shell_command|unstructured_output")
 	}
-}
-
-func (r WorkflowNodeGroupAddRequest) Validate() error {
-	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
-		return err
-	}
-	if err := validateModelKey("group_key", r.GroupKey); err != nil {
-		return err
-	}
-	if err := validateDisplayName(r.DisplayName); err != nil {
-		return err
-	}
-	if r.SortOrder < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "sort_order", "sort_order must be non-negative")
-	}
-	return nil
-}
-
-func (r WorkflowNodeGroupUpdateRequest) Validate() error {
-	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
-		return err
-	}
-	if err := validateRequired("group_id", r.GroupID); err != nil {
-		return err
-	}
-	if err := validateModelKey("group_key", r.GroupKey); err != nil {
-		return err
-	}
-	if err := validateDisplayName(r.DisplayName); err != nil {
-		return err
-	}
-	if r.SortOrder < 0 {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "sort_order", "sort_order must be non-negative")
-	}
-	return nil
-}
-
-func (r WorkflowNodeGroupDeleteRequest) Validate() error {
-	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
-		return err
-	}
-	return validateRequired("group_id", r.GroupID)
-}
-
-func (r WorkflowTransitionGroupAddRequest) Validate() error {
-	return validateWorkflowTransitionGroupFields(r.WorkflowID, "", r.SourceNodeID, r.TransitionID, r.DisplayName, r.Description)
-}
-
-func (r WorkflowTransitionGroupUpdateRequest) Validate() error {
-	if err := validateRequired("group_id", r.GroupID); err != nil {
-		return err
-	}
-	return validateWorkflowTransitionGroupFields(r.WorkflowID, r.GroupID, r.SourceNodeID, r.TransitionID, r.DisplayName, r.Description)
-}
-
-func validateWorkflowTransitionGroupFields(workflowID runtimeids.WorkflowID, groupID string, sourceNodeID string, transitionID string, displayName string, description string) error {
-	_ = groupID
-	if err := validateRequiredWorkflowID(workflowID); err != nil {
-		return err
-	}
-	if err := validateRequired("source_node_id", sourceNodeID); err != nil {
-		return err
-	}
-	if err := validateModelKey("transition_id", transitionID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(displayName) != "" {
-		if err := validateDisplayName(displayName); err != nil {
-			return err
-		}
-	}
-	if len([]rune(description)) > 1000 {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "description", "description must be <= 1000 characters")
-	}
-	return nil
-}
-
-func (r WorkflowEdgeAddRequest) Validate() error {
-	return validateWorkflowEdgeFields(r.WorkflowID, "", r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
-}
-
-func (r WorkflowEdgeUpdateRequest) Validate() error {
-	if err := validateRequired("edge_id", r.EdgeID); err != nil {
-		return err
-	}
-	return validateWorkflowEdgeFields(r.WorkflowID, r.EdgeID, r.TransitionGroupID, r.Key, r.TargetNodeID, r.ContextMode, r.ContextSource, r.AssigneeSelection, r.ThinkingSelection, r.Parameters)
-}
-
-func validateWorkflowEdgeFields(workflowID runtimeids.WorkflowID, edgeID string, transitionGroupID string, key string, targetNodeID string, contextMode string, contextSource WorkflowContextSource, assigneeSelection string, thinkingSelection string, parameters []WorkflowParameter) error {
-	_ = edgeID
-	if err := validateRequiredWorkflowID(workflowID); err != nil {
-		return err
-	}
-	for _, field := range []struct{ name, value string }{{"transition_group_id", transitionGroupID}, {"target_node_id", targetNodeID}, {"context_mode", contextMode}} {
-		if err := validateRequired(field.name, field.value); err != nil {
-			return err
-		}
-	}
-	if err := validateModelKey("key", key); err != nil {
-		return err
-	}
-	if err := validateWorkflowContextSource(contextSource); err != nil {
-		return err
-	}
-	if err := validateWorkflowEdgeSelectionShape("parameters", assigneeSelection, thinkingSelection, parameters); err != nil {
-		return err
-	}
-	if len(parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
-	}
-	return nil
 }
 
 func validateWorkflowEdgeSelectionShape(fieldPrefix string, assigneeSelection string, thinkingSelection string, parameters []WorkflowParameter) error {

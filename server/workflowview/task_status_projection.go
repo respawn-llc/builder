@@ -81,7 +81,7 @@ func (p *TaskStatusProjection) Observe(taskIDs []workflow.TaskID) (TaskStatusObs
 	if err != nil {
 		return TaskStatusObservation{}, err
 	}
-	liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation.Executions)
+	liveTaskStatesJSON, err := taskStatusLiveStatesJSON(observation)
 	if err != nil {
 		return TaskStatusObservation{}, err
 	}
@@ -106,13 +106,23 @@ type taskStatusLiveState struct {
 	HasWaitingApproval bool   `json:"has_waiting_approval"`
 }
 
-func taskStatusLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) (string, error) {
-	states := make([]taskStatusLiveState, 0, len(snapshots))
-	for taskID, snapshot := range snapshots {
+func taskStatusLiveStatesJSON(observation workflowexecution.WorkflowTaskExecutionObservation) (string, error) {
+	statesByTask := make(map[workflow.TaskID]taskStatusLiveState)
+	for taskID, references := range observation.ConcurrencyQueued {
+		if len(references) == 0 {
+			continue
+		}
+		statesByTask[taskID] = taskStatusLiveState{
+			TaskID:    string(taskID),
+			HasQueued: true,
+		}
+	}
+	for taskID, snapshot := range observation.Executions {
 		if len(snapshot.Executions) == 0 {
 			continue
 		}
-		state := taskStatusLiveState{TaskID: string(taskID)}
+		state := statesByTask[taskID]
+		state.TaskID = string(taskID)
 		for _, execution := range snapshot.Executions {
 			state.HasRunning = state.HasRunning || !execution.Queued
 			state.HasQueued = state.HasQueued || execution.Queued
@@ -121,6 +131,10 @@ func taskStatusLiveStatesJSON(snapshots map[workflow.TaskID]sessionruntime.TaskE
 			state.HasWaitingApproval = state.HasWaitingApproval ||
 				execution.HasPendingPromptKind(sessionruntime.PendingPromptKindSessionApproval)
 		}
+		statesByTask[taskID] = state
+	}
+	states := make([]taskStatusLiveState, 0, len(statesByTask))
+	for _, state := range statesByTask {
 		states = append(states, state)
 	}
 	sort.Slice(states, func(i, j int) bool { return states[i].TaskID < states[j].TaskID })
@@ -224,6 +238,10 @@ func (p *TaskStatusProjection) Project(
 			return nil, fmt.Errorf("workflow execution omitted Task %q from Quiescence snapshot", taskID)
 		}
 		liveExecutions := append([]sessionruntime.TaskExecution(nil), observation.Live.Executions[taskID].Executions...)
+		concurrencyQueued := append(
+			[]workflow.CurrentNodeReference(nil),
+			observation.Live.ConcurrencyQueued[taskID]...,
+		)
 		pendingApprovals := pendingApprovalsByTask[taskID]
 		pendingApprovalIDs := make([]string, 0, len(pendingApprovals))
 		for _, approval := range pendingApprovals {
@@ -234,12 +252,13 @@ func (p *TaskStatusProjection) Project(
 		}
 		sort.Strings(pendingApprovalIDs)
 		facts := p.projector.ProjectTaskFacts(TaskFactsInput{
-			Task:           task,
-			Status:         status,
-			CurrentNodes:   currentNodes,
-			LiveExecutions: liveExecutions,
-			Definition:     definition,
-			CanDelete:      quiescent,
+			Task:              task,
+			Status:            status,
+			CurrentNodes:      currentNodes,
+			LiveExecutions:    liveExecutions,
+			ConcurrencyQueued: concurrencyQueued,
+			Definition:        definition,
+			CanDelete:         quiescent,
 		})
 		results[taskID] = TaskStatusProjectionResult{
 			Task:                         task,
@@ -498,7 +517,7 @@ func (s *TaskStatusDurableSnapshot) CurrentNodesByTask(
 	if err := s.validate(); err != nil {
 		return nil, err
 	}
-	return workflowstore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+	return s.workflowStore.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
 }
 
 func (s *TaskStatusDurableSnapshot) Definition(

@@ -31,6 +31,7 @@
 
 - The core model tools are `shell`, `write_stdin`, `view_image`, `patch`, `ask_question`, and `trigger_handoff`.
 - Kent does not expose model-callable Goal, worktree, Task, or Workflow tools outside Workflow-controlled Sessions. Adding a tool requires explicit human approval and a spec update.
+- Tool definitions advertise one canonical tool name and canonical parameter names, and their schemas remain closed to unrecognized parameters. Kent separately maintains common tool-name and parameter-name aliases that remain hidden from the advertised definition but are accepted when supplied. A canonical parameter takes priority over its aliases when both are supplied; when only multiple aliases are supplied, their precedence is unspecified. When a tool call reaches Kent, unrecognized parameters are ignored.
 - One ordered runtime authority owns all model-visible and transcript-visible changes for an Exact Execution Scope. Human input, workflow-completion intent, Goal changes, and technical input enter that authority. A question answer resolves only its matching live question.
 - `steer` applies submitted commands at the next step boundary. `queue` applies the same commands after the current model turn.
 - A human steer remains a user message. Pending human steers become one user message, with submissions separated by blank lines.
@@ -45,6 +46,11 @@
 ## Command Execution
 
 - `shell` is the only model-facing command-execution tool. It uses the user's login shell without a TTY, inherits the parent environment, adds non-interactive technical environment values, and combines stdout and stderr into one unlabelled stream.
+- Before launching a command, Kent must resolve a non-empty selected Working Directory to a normalized absolute path and verify that the path exists and is a directory.
+- If a non-empty selected Working Directory does not exist, Kent must not launch the command and must return `<normalized absolute path> does not exist, so the shell command was not executed. Please select an existing working directory`.
+- If a non-empty selected Working Directory exists but is not a directory, Kent must not launch the command and must return `<normalized absolute path> is not a directory, so the shell command was not executed. Please select an existing working directory`.
+- An empty selected Working Directory retains the shell manager's existing validation behavior and never falls back to Kent's server process working directory.
+- A `shell` failure never adds the `exec_command failed:` prefix to its model-visible error.
 - Commands have no lifetime limit. `yield_time_ms` returns control and leaves the command running in the background. An output check with no requested wait may return available output immediately.
 - Kent does not limit concurrent command processes, including background processes visible through `/ps`.
 - A model output check requesting less than 15 seconds fails with `Avoid polling repeatedly for short intervals, prefer 3-15min polls depending on task. Pick a better interval and retry`. One requesting more than 24 hours fails with `This poll is too long. Consider using system cron jobs and \`kent run\` headless runs for tasks that require such long wait periods`. Sending input is not subject to those limits.
@@ -54,6 +60,10 @@
 - Except in `none` and `raw` modes, generic command-output sanitization runs before built-ins and the optional hook. Built-ins run before the hook; a built-in halt stops only later built-ins. A user hook receives JSON on stdin containing the original sanitized and current processed output, and returns JSON on stdout. Hook failures do not change the model-facing output envelope.
 - `/ps` can show and operate on background processes from other sessions in the same app instance.
 - Background process IDs are unique for one server lifetime. Their Session association controls notices and history, not access.
+- Kent exposes at most 1,000 completed background processes per server lifetime. Completing another process removes the least recently directly accessed completed process from `/ps` and process controls.
+- Direct process access refreshes completed-process recency. Listing `/ps` does not refresh recency.
+- The completed-process retention limit never removes a running process.
+- Accessing an unknown or removed process returns the same shell-result-unavailable error.
 
 ## Patch And Image Tools
 

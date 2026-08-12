@@ -137,7 +137,7 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	currentNodes, err := listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, prepared.request.TaskID)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}

@@ -10,6 +10,7 @@ import type {
 } from "@/api";
 import {
   requiredTaskDependencyDirection,
+  TaskDependencyPicker,
   TaskDependencyProgressChip,
   type TaskDependencyPair,
 } from "@/shared/task-dependencies";
@@ -22,16 +23,20 @@ export function TaskDependenciesArea({
   disabled,
   navigationDisabled,
   onAdd,
+  onAddExisting,
   onRemove,
   onSelectTask,
+  projectID,
   taskID,
 }: Readonly<{
   dependencies: TaskDependencies;
   disabled: boolean;
   navigationDisabled: boolean;
   onAdd(direction: TaskDependencyDirection): void;
+  onAddExisting(pair: TaskDependencyPair): Promise<unknown>;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
+  projectID: string;
   taskID: string;
 }>) {
   const { t } = useTranslation();
@@ -56,21 +61,27 @@ export function TaskDependenciesArea({
       </header>
       <DependencyDirection
         direction={blockedBy}
+        dependencies={dependencies}
         disabled={disabled}
         navigationDisabled={navigationDisabled}
         onAdd={onAdd}
+        onAddExisting={onAddExisting}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        projectID={projectID}
         taskID={taskID}
       />
       <div className="h-px bg-[var(--color-outline)]" />
       <DependencyDirection
         direction={blocks}
+        dependencies={dependencies}
         disabled={disabled}
         navigationDisabled={navigationDisabled}
         onAdd={onAdd}
+        onAddExisting={onAddExisting}
         onRemove={onRemove}
         onSelectTask={onSelectTask}
+        projectID={projectID}
         taskID={taskID}
       />
     </Island>
@@ -79,19 +90,25 @@ export function TaskDependenciesArea({
 
 function DependencyDirection({
   direction,
+  dependencies,
   disabled,
   navigationDisabled,
   onAdd,
+  onAddExisting,
   onRemove,
   onSelectTask,
+  projectID,
   taskID,
 }: Readonly<{
   direction: TaskDependencyDirectionProjection;
+  dependencies: TaskDependencies;
   disabled: boolean;
   navigationDisabled: boolean;
   onAdd(direction: TaskDependencyDirection): void;
+  onAddExisting(pair: TaskDependencyPair): Promise<unknown>;
   onRemove(pair: TaskDependencyPair): void;
   onSelectTask(taskID: string): void;
+  projectID: string;
   taskID: string;
 }>) {
   const { t } = useTranslation();
@@ -107,19 +124,29 @@ function DependencyDirection({
             { count: direction.totalCount },
           )}
         </h3>
-        <Button
-          aria-describedby={limitReached ? unavailableID : undefined}
-          aria-label={t("task.dependenciesAdd")}
-          data-testid={`dependency-add-${direction.direction}`}
+        <TaskDependencyPicker
+          dependencies={dependencies}
+          direction={direction.direction}
           disabled={navigationDisabled || limitReached}
-          onClick={() => {
+          onAddExisting={onAddExisting}
+          onCreateTask={() => {
             onAdd(direction.direction);
           }}
-          size="icon-sm"
-          variant="ghost"
-        >
-          <Plus aria-hidden="true" size={15} />
-        </Button>
+          projectID={projectID}
+          taskID={taskID}
+          trigger={
+            <Button
+              aria-describedby={limitReached ? unavailableID : undefined}
+              aria-label={t("task.dependenciesAdd")}
+              data-testid={`dependency-add-${direction.direction}`}
+              disabled={navigationDisabled || limitReached}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <Plus aria-hidden="true" size={15} />
+            </Button>
+          }
+        />
         {limitReached ? (
           <span className="sr-only" id={unavailableID}>
             {t("task.dependenciesLimitReached")}

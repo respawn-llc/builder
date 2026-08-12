@@ -77,7 +77,7 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 
 	select {
 	case <-steps.started:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("background continuation did not start")
 	}
 
@@ -92,20 +92,20 @@ func TestBackgroundNoticeSchedulerCancelsQueuedContinuationOnEngineClose(t *test
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("step lifecycle stopped with %v, want context canceled", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("background continuation was not canceled on engine close")
 	}
 
 	select {
 	case <-closeDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("engine close did not wait for queued background continuation")
 	}
 }
 
 func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 
 	if err := engine.SteerBackgroundContinuationFailure(errors.New("provider unavailable")); err != nil {
 		t.Fatalf("steer background continuation failure: %v", err)
@@ -185,7 +185,7 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 		}()
 		select {
 		case <-closeDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(runtimeTestSynchronizationTimeout):
 			t.Fatalf("iteration %d: close remained blocked after race", i)
 		}
 	}
@@ -193,7 +193,7 @@ func TestBackgroundNoticeSchedulerSchedulingRaceWithEngineCloseDoesNotPanic(t *t
 
 func TestBackgroundNoticeSchedulerPreservesNoticeWhenMetaContextPreparationFails(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	mustBlockTestEventLogAppends(t, store)
 	steps := &stubExclusiveStepLifecycle{busy: true}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
@@ -222,7 +222,7 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
-			engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 			steps := &stubExclusiveStepLifecycle{busy: true}
 			scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
 			engine.stepLifecycle = steps
@@ -262,7 +262,7 @@ func TestBackgroundNoticeOwnershipFollowsWriteStdinCompletionCommitReceipt(t *te
 
 func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) {
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steps := &stubExclusiveStepLifecycle{busy: true}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
 	if err := engine.ensureMetaContextForRequest(context.Background(), "seed"); err != nil {
@@ -290,7 +290,7 @@ func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserver
 	observerErr := errors.New("background notice observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steps := &stubExclusiveStepLifecycle{busy: true}
 	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
 	lifecycle := newDefaultMessageLifecycle(engine, scheduler)

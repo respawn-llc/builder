@@ -9,6 +9,7 @@ import (
 
 	"core/internal/testharness/runtimewirefixture"
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	edittool "core/server/tools/edit"
 	"core/shared/textutil"
@@ -28,9 +29,9 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		t.Fatalf("new edit tool: %v", err)
 	}
 	editInput, _ := json.Marshal(map[string]any{
-		"path":       "a.txt",
-		"old_string": "old",
-		"new_string": "new",
+		"filePath": "a.txt",
+		"oldText":  "old",
+		"newText":  "new",
 	})
 	mainClient := &fakeClient{responses: []llm.Response{
 		{
@@ -52,7 +53,7 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 
-	eng := mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: editTool}), Config{
+	eng := mustNewTestEngine(t, store, mainClient, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolEdit, Handler: editTool}), Config{
 		Model:        "claude",
 		EnabledTools: []toolspec.ID{toolspec.ToolEdit},
 		Reviewer: ReviewerConfig{
@@ -78,6 +79,38 @@ func TestEditAliasCompletionDiffAndReviewerEditsFlow(t *testing.T) {
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("expected reviewer to run after edit, got %d calls", len(reviewerClient.calls))
+	}
+	records, err := collectTestEventRecords(store)
+	if err != nil {
+		t.Fatalf("collect persisted events: %v", err)
+	}
+	var persistedCall *llm.ToolCall
+	for _, event := range records {
+		message, ok := mustSessionEventPayload(event.Record).(session.MessageRecord)
+		if !ok {
+			continue
+		}
+		restored, err := llmMessageFromSessionRecord(message)
+		if err != nil {
+			t.Fatalf("restore persisted assistant message: %v", err)
+		}
+		for index := range restored.ToolCalls {
+			if restored.ToolCalls[index].ID == "call-edit-1" {
+				call := restored.ToolCalls[index]
+				persistedCall = &call
+			}
+		}
+	}
+	if persistedCall == nil {
+		t.Fatal("persisted assistant history omitted alias-only Edit call")
+	}
+	if string(persistedCall.Input) != string(editInput) {
+		t.Fatalf("persisted Edit input = %s, want raw provider input %s", persistedCall.Input, editInput)
+	}
+	persistedMeta := transcriptToolCallMeta(*persistedCall, workspace)
+	if persistedMeta.PatchRender == nil || len(persistedMeta.PatchRender.Files) != 1 ||
+		persistedMeta.PatchRender.Files[0].RelPath != "./a.txt" {
+		t.Fatalf("persisted Edit presentation = %+v, want a.txt diff", persistedMeta)
 	}
 
 	snapshot := eng.ChatSnapshot()

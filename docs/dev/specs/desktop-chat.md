@@ -11,12 +11,16 @@
 - The separate-window action is available only in Chat chrome. Session rows do not offer it in their context menu.
 - Popping out Chat moves that destination into one Session-specific native window and returns the main window to the Project's Sessions tab.
 - Selecting the same Session in the main window afterward opens Chat there normally alongside the pop-out. Desktop adds no focus redirection, move-back behavior, or second pop-out for that Session.
-- Desktop relaunch restores the selected Project and its active Workflows or Sessions tab. It does not reopen Chat or restore Chat transcript/composer presentation state.
+- Desktop relaunch restores the selected Project and opens its Sessions tab. It does not persist the Home Projects/Workflows selection or the Project Workflows/Sessions selection, reopen Chat, or restore Chat transcript/composer presentation state.
 
 ## Sessions
 
 - A Project's session browser has `Sessions` and `Subagents` categories. `Sessions` contains server-visible main Sessions and `Subagents` contains server-visible subagent Sessions; Workflow and headless launch modes do not create additional browser categories. Each category uses server-authoritative Infinite Scroll. Changing category requests that category alone, and Desktop never materializes a complete category.
 - Sessions are recency ordered. A compact full-width row shows the Session title, first-prompt preview, and recency. There is no search or additional status filter.
+- Session discovery uses zero-based, non-negative offset pagination. An omitted offset starts at zero. An omitted limit defaults to 100, and a supplied limit is between 1 and 100.
+- A response includes the next offset only when older Sessions remain. Clients derive the preceding page offset from the offset and limit they requested.
+- Each request reads the current category as a stateless live view. Session recency changes between requests may cause later results to repeat or skip Sessions, and Kent does not reconcile them.
+- Desktop requests 50 Sessions per page and retains at most ten pages independently for each category.
 - Selecting a Session opens full-page Chat. Session rows have no secondary actions or context menu.
 - Session rows do not expose execution-target availability or warnings.
 - Opening preserves the Session's recorded execution target and uses the ordinary Session open, launch, and runtime path. Desktop adds no automatic fallback, workspace retarget, target-repair picker, or read-only recovery mode.
@@ -123,7 +127,7 @@
 - Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
 - Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
 - The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
-- The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry.
+- The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry. Goal inheritance follows the Rollback Picker contract.
 - The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
 - After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.
 - Fork failure leaves the operator in the unchanged parent Session and surfaces the authoritative diagnostic through Sonner. Desktop creates no optimistic child route or local fork state.

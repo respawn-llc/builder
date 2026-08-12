@@ -54,7 +54,7 @@ func TestCriticalExactCountRefreshesAfterCommittedToolCompletion(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -108,7 +108,7 @@ func TestCriticalExactCountRefreshesAfterCommittedToolCompletion(t *testing.T) {
 
 func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T) {
 	t.Parallel()
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 300,
@@ -133,7 +133,7 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 func TestShouldAutoCompactUsesPreciseRequestInputTokenCountWhenAvailable(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 960}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 900,
@@ -179,7 +179,7 @@ func TestShouldCompactBeforeUserMessageUsesPromptGrowthBelowPreSubmitBand(t *tes
 			return 850
 		},
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                         "gpt-5",
 		ContextWindowTokens:           1_000,
 		AutoCompactTokenLimit:         950,
@@ -217,7 +217,7 @@ func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *tes
 		inputTokenCount: 960,
 		countSupported:  &supported,
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                         "gpt-5",
 		ContextWindowTokens:           1_000,
 		AutoCompactTokenLimit:         950,
@@ -251,7 +251,7 @@ func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *tes
 func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 1}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 2,
@@ -289,7 +289,7 @@ func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *tes
 func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 950, contextWindow: 1_000}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 360_000,
@@ -318,7 +318,7 @@ func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t 
 func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 850}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 900,
@@ -345,7 +345,7 @@ func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
 func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 999_999}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 100_000,
@@ -371,7 +371,7 @@ func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
 func TestShouldAutoCompactMemoizesPreciseCountForUnchangedRequest(t *testing.T) {
 	t.Parallel()
 	client := &preciseCompactionClient{inputTokenCount: 96_000}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(), Config{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 100_000,

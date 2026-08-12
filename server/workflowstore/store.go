@@ -13,21 +13,23 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/workflow"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
 
 type Store struct {
-	metadata     *metadata.Store
-	db           *sql.DB
-	queries      *sqlitegen.Queries
-	roleResolver workflow.RoleResolver
-	now          func() time.Time
-	approvalGate chan struct{}
-	graphSaves   *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
-	eventMu      sync.RWMutex
-	eventSink    WorkflowEventPublisher
+	metadata            *metadata.Store
+	db                  *sql.DB
+	queries             *sqlitegen.Queries
+	priorValuesContract jsoncontract.Internal
+	roleResolver        workflow.RoleResolver
+	now                 func() time.Time
+	approvalGate        chan struct{}
+	graphSaves          *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
+	eventMu             sync.RWMutex
+	eventSink           WorkflowEventPublisher
 }
 
 type Option func(*Store)
@@ -57,14 +59,22 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
+	priorValues, err := jsoncontract.NewPreparer(false).Internal(
+		"Workflow Store current-node prior values",
+		workflow.MaterializedPriorValues{},
+	)
+	if err != nil {
+		return nil, err
+	}
 	store := &Store{
-		metadata:     metadataStore,
-		db:           metadataStore.DB(),
-		queries:      metadataStore.Queries(),
-		now:          func() time.Time { return time.Now().UTC() },
-		approvalGate: make(chan struct{}, 1),
-		graphSaves:   requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
-		eventSink:    noopWorkflowEventPublisher{},
+		metadata:            metadataStore,
+		db:                  metadataStore.DB(),
+		queries:             metadataStore.Queries(),
+		priorValuesContract: priorValues,
+		now:                 func() time.Time { return time.Now().UTC() },
+		approvalGate:        make(chan struct{}, 1),
+		graphSaves:          requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
+		eventSink:           noopWorkflowEventPublisher{},
 	}
 	for _, opt := range opts {
 		opt(store)
@@ -95,37 +105,6 @@ func (s *Store) incrementWorkflowVersion(ctx context.Context, q *sqlitegen.Queri
 	revision, err := q.IncrementWorkflowVersion(ctx, sqlitegen.IncrementWorkflowVersionParams{ID: workflowID, UpdatedAtUnixMs: s.now().UnixMilli()})
 	if err != nil {
 		return 0, fmt.Errorf("increment workflow version: %w", err)
-	}
-	return revision, nil
-}
-
-func (s *Store) withWorkflowGraphMutation(ctx context.Context, workflowID runtimeids.WorkflowID, nextGraph func(preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error), apply func(context.Context, *sqlitegen.Queries, *sql.Tx) error) (int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
-	if err != nil {
-		return 0, err
-	}
-	next, err := nextGraph(currentGraph)
-	if err != nil {
-		return 0, err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, next); err != nil {
-		return 0, err
-	}
-	if err := apply(ctx, q, tx); err != nil {
-		return 0, err
-	}
-	revision, err := s.incrementWorkflowVersion(ctx, q, workflowID)
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 	return revision, nil
 }
@@ -502,66 +481,6 @@ func validateWorkflowListScopes(projectID *string, workflowID *runtimeids.Workfl
 	return nil
 }
 
-func (s *Store) AddNode(ctx context.Context, node NodeRecord) (int64, error) {
-	if node.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
-		return 0, err
-	}
-	if node.ID == "" {
-		node.ID = workflow.NodeID(prefixedID("node"))
-	}
-	node.SortOrder = 100
-	return s.withWorkflowGraphMutation(ctx, node.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		if _, exists := workflowGraphRecordByID(currentGraph.nodes, node.ID, func(record NodeRecord) workflow.NodeID { return record.ID }); exists {
-			return preparedWorkflowGraphSave{}, fmt.Errorf("insert workflow node: id %q already exists", node.ID)
-		}
-		if node.Kind == workflow.NodeKindStart {
-			for _, existing := range currentGraph.nodes {
-				if existing.Kind == workflow.NodeKindStart {
-					return preparedWorkflowGraphSave{}, ErrWorkflowStartNodeExists
-				}
-			}
-		}
-		return withWorkflowGraphNode(currentGraph, node), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		groupID, err := resolveWorkflowNodeGroupID(ctx, q, node.WorkflowID, node.GroupID, node.GroupKey)
-		if err != nil {
-			return err
-		}
-		node.GroupID = groupID
-		return upsertWorkflowNode(ctx, q, node, node.SortOrder, "insert workflow node")
-	})
-}
-
-func (s *Store) UpdateNode(ctx context.Context, node NodeRecord) (int64, error) {
-	if strings.TrimSpace(string(node.ID)) == "" {
-		return 0, errors.New("node id is required")
-	}
-	if node.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
-		return 0, err
-	}
-	return s.withWorkflowGraphMutation(ctx, node.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		current, exists := workflowGraphRecordByID(currentGraph.nodes, node.ID, func(record NodeRecord) workflow.NodeID { return record.ID })
-		if !exists {
-			return preparedWorkflowGraphSave{}, sql.ErrNoRows
-		}
-		node.SortOrder = current.SortOrder
-		return withWorkflowGraphNode(currentGraph, node), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		groupID, err := resolveWorkflowNodeGroupID(ctx, q, node.WorkflowID, node.GroupID, node.GroupKey)
-		if err != nil {
-			return err
-		}
-		node.GroupID = groupID
-		return upsertWorkflowNode(ctx, q, node, node.SortOrder, "update workflow node")
-	})
-}
-
 func validateNodeCompletionMode(kind workflow.NodeKind, mode string) error {
 	trimmed := strings.TrimSpace(mode)
 	if trimmed == "" {
@@ -593,88 +512,6 @@ func executableNodeKind(kind workflow.NodeKind) bool {
 	default:
 		return false
 	}
-}
-
-func (s *Store) AddNodeGroup(ctx context.Context, group NodeGroupRecord) (NodeGroupRecord, int64, error) {
-	if group.WorkflowID.IsZero() {
-		return NodeGroupRecord{}, 0, ErrWorkflowIDRequired
-	}
-	if strings.TrimSpace(string(group.Key)) == "" {
-		return NodeGroupRecord{}, 0, errors.New("group key is required")
-	}
-	if strings.TrimSpace(group.DisplayName) == "" {
-		return NodeGroupRecord{}, 0, errors.New("group display name is required")
-	}
-	if strings.TrimSpace(group.ID) == "" {
-		group.ID = prefixedID("workflow-node-group")
-	}
-	revision, err := s.withWorkflowGraphMutation(ctx, group.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		if _, exists := workflowGraphRecordByID(currentGraph.nodeGroups, group.ID, func(record NodeGroupRecord) string { return record.ID }); exists {
-			return preparedWorkflowGraphSave{}, fmt.Errorf("insert workflow node group: id %q already exists", group.ID)
-		}
-		return withWorkflowGraphNodeGroup(currentGraph, group), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		return upsertWorkflowNodeGroup(ctx, q, group, "insert workflow node group")
-	})
-	if err != nil {
-		return NodeGroupRecord{}, 0, err
-	}
-	return group, revision, nil
-}
-
-func (s *Store) UpdateNodeGroup(ctx context.Context, group NodeGroupRecord) (NodeGroupRecord, int64, error) {
-	if strings.TrimSpace(group.ID) == "" {
-		return NodeGroupRecord{}, 0, errors.New("group id is required")
-	}
-	if group.WorkflowID.IsZero() {
-		return NodeGroupRecord{}, 0, ErrWorkflowIDRequired
-	}
-	if strings.TrimSpace(string(group.Key)) == "" {
-		return NodeGroupRecord{}, 0, errors.New("group key is required")
-	}
-	if strings.TrimSpace(group.DisplayName) == "" {
-		return NodeGroupRecord{}, 0, errors.New("group display name is required")
-	}
-	revision, err := s.withWorkflowGraphMutation(ctx, group.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		if _, exists := workflowGraphRecordByID(currentGraph.nodeGroups, group.ID, func(record NodeGroupRecord) string { return record.ID }); !exists {
-			return preparedWorkflowGraphSave{}, sql.ErrNoRows
-		}
-		return withWorkflowGraphNodeGroup(currentGraph, group), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		return upsertWorkflowNodeGroup(ctx, q, group, "update workflow node group")
-	})
-	if err != nil {
-		return NodeGroupRecord{}, 0, err
-	}
-	return group, revision, nil
-}
-
-func (s *Store) DeleteNodeGroup(ctx context.Context, workflowID runtimeids.WorkflowID, groupID string) (int64, error) {
-	if workflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if strings.TrimSpace(groupID) == "" {
-		return 0, errors.New("group id is required")
-	}
-	nodeCount, err := s.queries.CountWorkflowNodesByGroup(ctx, nullableString(groupID))
-	if err != nil {
-		return 0, err
-	}
-	if nodeCount > 0 {
-		return 0, errors.New("workflow node group is in use")
-	}
-	return s.withWorkflowGraphMutation(ctx, workflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		return withoutWorkflowGraphNodeGroup(currentGraph, strings.TrimSpace(groupID)), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		deleted, err := q.DeleteWorkflowNodeGroup(ctx, sqlitegen.DeleteWorkflowNodeGroupParams{ID: strings.TrimSpace(groupID), WorkflowID: workflowID})
-		if err != nil {
-			return fmt.Errorf("delete workflow node group: %w", err)
-		}
-		if deleted != 1 {
-			return sql.ErrNoRows
-		}
-		return nil
-	})
 }
 
 func (s *Store) SetWorkflowEventPublisher(publisher WorkflowEventPublisher) {
@@ -726,226 +563,6 @@ func cloneWorkflowEventWorkflowID(id *runtimeids.WorkflowID) *runtimeids.Workflo
 	}
 	value := *id
 	return &value
-}
-
-func (s *Store) AddTransitionGroup(ctx context.Context, group TransitionGroupRecord) (int64, error) {
-	if group.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if group.ID == "" {
-		group.ID = workflow.TransitionGroupID(prefixedID("group"))
-	}
-	group.SortOrder = 100
-	return s.withWorkflowGraphMutation(ctx, group.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		if _, exists := workflowGraphRecordByID(currentGraph.transitionGroups, group.ID, func(record TransitionGroupRecord) workflow.TransitionGroupID { return record.ID }); exists {
-			return preparedWorkflowGraphSave{}, fmt.Errorf("insert transition group: id %q already exists", group.ID)
-		}
-		return withWorkflowGraphTransitionGroup(currentGraph, group), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		if err := ensureWorkflowNodeID(ctx, q, group.WorkflowID, group.SourceNodeID); err != nil {
-			return err
-		}
-		return upsertWorkflowTransitionGroup(ctx, q, group, group.SortOrder, "insert transition group")
-	})
-}
-
-func (s *Store) UpdateTransitionGroup(ctx context.Context, group TransitionGroupRecord) (int64, error) {
-	if strings.TrimSpace(string(group.ID)) == "" {
-		return 0, errors.New("transition group id is required")
-	}
-	if group.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	return s.withWorkflowGraphMutation(ctx, group.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		current, exists := workflowGraphRecordByID(currentGraph.transitionGroups, group.ID, func(record TransitionGroupRecord) workflow.TransitionGroupID { return record.ID })
-		if !exists {
-			return preparedWorkflowGraphSave{}, sql.ErrNoRows
-		}
-		group.SortOrder = current.SortOrder
-		return withWorkflowGraphTransitionGroup(currentGraph, group), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		if err := ensureWorkflowNodeID(ctx, q, group.WorkflowID, group.SourceNodeID); err != nil {
-			return err
-		}
-		return upsertWorkflowTransitionGroup(ctx, q, group, group.SortOrder, "update transition group")
-	})
-}
-
-func (s *Store) AddEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
-	if edge.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if edge.ID == "" {
-		edge.ID = workflow.EdgeID(prefixedID("edge"))
-	}
-	if err := s.validateDirectEdgeSelection(ctx, edge, false); err != nil {
-		return 0, err
-	}
-	edge.SortOrder = 100
-	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		if _, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID }); exists {
-			return preparedWorkflowGraphSave{}, fmt.Errorf("insert workflow edge: id %q already exists", edge.ID)
-		}
-		return withWorkflowGraphEdge(currentGraph, edge), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		if err := ensureWorkflowTransitionGroupID(ctx, q, edge.WorkflowID, edge.TransitionGroupID); err != nil {
-			return err
-		}
-		if err := ensureWorkflowNodeID(ctx, q, edge.WorkflowID, edge.TargetNodeID); err != nil {
-			return err
-		}
-		return upsertWorkflowEdge(ctx, q, edge, edge.SortOrder, "insert workflow edge")
-	})
-}
-
-func (s *Store) UpdateEdge(ctx context.Context, edge EdgeRecord) (int64, error) {
-	if strings.TrimSpace(string(edge.ID)) == "" {
-		return 0, errors.New("edge id is required")
-	}
-	if edge.WorkflowID.IsZero() {
-		return 0, ErrWorkflowIDRequired
-	}
-	if err := s.validateDirectEdgeSelection(ctx, edge, true); err != nil {
-		return 0, err
-	}
-	return s.withWorkflowGraphMutation(ctx, edge.WorkflowID, func(currentGraph preparedWorkflowGraphSave) (preparedWorkflowGraphSave, error) {
-		current, exists := workflowGraphRecordByID(currentGraph.edges, edge.ID, func(record EdgeRecord) workflow.EdgeID { return record.ID })
-		if !exists {
-			return preparedWorkflowGraphSave{}, sql.ErrNoRows
-		}
-		edge.SortOrder = current.SortOrder
-		return withWorkflowGraphEdge(currentGraph, edge), nil
-	}, func(ctx context.Context, q *sqlitegen.Queries, _ *sql.Tx) error {
-		if err := ensureWorkflowTransitionGroupID(ctx, q, edge.WorkflowID, edge.TransitionGroupID); err != nil {
-			return err
-		}
-		if err := ensureWorkflowNodeID(ctx, q, edge.WorkflowID, edge.TargetNodeID); err != nil {
-			return err
-		}
-		return upsertWorkflowEdge(ctx, q, edge, edge.SortOrder, "update workflow edge")
-	})
-}
-
-func (s *Store) validateDirectEdgeSelection(ctx context.Context, candidate EdgeRecord, updating bool) error {
-	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) != workflow.AssigneeSelectionPreviousNode &&
-		workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) != workflow.ThinkingSelectionPreviousNode {
-		return nil
-	}
-	definition, _, err := s.GetDefinition(ctx, candidate.WorkflowID)
-	if err != nil {
-		return err
-	}
-	candidateValue := workflowEdgeFromRecord(candidate)
-	replaced := false
-	for index, edge := range definition.Edges {
-		if edge.ID != candidate.ID {
-			continue
-		}
-		if updating {
-			definition.Edges[index] = candidateValue
-			replaced = true
-		}
-	}
-	if updating && !replaced {
-		return nil
-	}
-	if !updating {
-		definition.Edges = append(definition.Edges, candidateValue)
-	}
-	planned, err := workflow.PlanDefinitionTransitionSelection(definition, candidateValue, s.roleResolver, false)
-	if err != nil {
-		return err
-	}
-	applicability := planned.Applicability
-	if workflow.CanonicalAssigneeSelection(candidate.AssigneeSelection) == workflow.AssigneeSelectionPreviousNode &&
-		!applicability.Assignee.Available {
-		return fmt.Errorf("edge Assignee selection is inapplicable: %s", applicability.Assignee.Reason)
-	}
-	if workflow.CanonicalThinkingSelection(candidate.ThinkingSelection) == workflow.ThinkingSelectionPreviousNode &&
-		!applicability.Thinking.Available {
-		return fmt.Errorf("edge thinking selection is inapplicable: %s", applicability.Thinking.Reason)
-	}
-	return nil
-}
-
-func (s *Store) DeleteNode(ctx context.Context, nodeID workflow.NodeID) error {
-	if strings.TrimSpace(string(nodeID)) == "" {
-		return errors.New("node id is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	node, err := q.GetWorkflowNode(ctx, string(nodeID))
-	if err != nil {
-		return err
-	}
-	workflowID := node.WorkflowID
-	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
-	if err != nil {
-		return err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphNode(currentGraph, nodeID)); err != nil {
-		return err
-	}
-	refs, err := q.CountCurrentTaskNodeAnchorReferences(ctx, string(nodeID))
-	if err != nil {
-		return err
-	}
-	if refs > 0 {
-		return ErrNodeHasTaskHistory
-	}
-	if deleted, err := q.DeleteWorkflowNode(ctx, string(nodeID)); err != nil {
-		return fmt.Errorf("delete workflow node: %w", err)
-	} else if deleted != 1 {
-		return sql.ErrNoRows
-	}
-	if _, err := s.incrementWorkflowVersion(ctx, q, node.WorkflowID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) DeleteEdge(ctx context.Context, edgeID workflow.EdgeID) error {
-	if strings.TrimSpace(string(edgeID)) == "" {
-		return errors.New("edge id is required")
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
-	edge, err := q.GetWorkflowEdge(ctx, string(edgeID))
-	if err != nil {
-		return err
-	}
-	workflowID := edge.WorkflowID
-	currentGraph, err := currentWorkflowGraphSavePrepared(ctx, q, workflowID)
-	if err != nil {
-		return err
-	}
-	if err := enforceWorkflowGraphEditPolicy(ctx, q, workflowID, withoutWorkflowGraphEdge(currentGraph, edgeID)); err != nil {
-		return err
-	}
-	refs, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
-	if err != nil {
-		return err
-	}
-	if refs > 0 {
-		return ErrEdgeHasTaskHistory
-	}
-	if deleted, err := q.DeleteWorkflowEdge(ctx, string(edgeID)); err != nil {
-		return fmt.Errorf("delete workflow edge: %w", err)
-	} else if deleted != 1 {
-		return sql.ErrNoRows
-	}
-	if _, err := s.incrementWorkflowVersion(ctx, q, edge.WorkflowID); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (s *Store) GetDefinition(ctx context.Context, workflowID runtimeids.WorkflowID) (workflow.Definition, WorkflowRecord, error) {
@@ -1043,71 +660,6 @@ func sqliteLowerASCII(value string) string {
 		}
 	}
 	return string(bytes)
-}
-
-func resolveWorkflowNodeGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, groupID string, groupKey string) (string, error) {
-	trimmedGroupID := strings.TrimSpace(groupID)
-	if trimmedGroupID != "" {
-		row, err := q.GetWorkflowNodeGroupByID(ctx, trimmedGroupID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", fmt.Errorf("workflow node group %q not found", trimmedGroupID)
-			}
-			return "", err
-		}
-		if row.WorkflowID != workflowID {
-			return "", fmt.Errorf("workflow node group %q belongs to workflow %q: %w", trimmedGroupID, row.WorkflowID, ErrBelongsToOtherWorkflow)
-		}
-		return trimmedGroupID, nil
-	}
-	trimmedGroupKey := strings.TrimSpace(groupKey)
-	if trimmedGroupKey == "" {
-		return "", nil
-	}
-	row, err := q.GetWorkflowNodeGroupByKey(ctx, sqlitegen.GetWorkflowNodeGroupByKeyParams{WorkflowID: workflowID, GroupKey: trimmedGroupKey})
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("workflow node group %q not found", trimmedGroupKey)
-		}
-		return "", err
-	}
-	return row.ID, nil
-}
-
-func ensureWorkflowNodeID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, nodeID workflow.NodeID) error {
-	trimmedNodeID := strings.TrimSpace(string(nodeID))
-	if trimmedNodeID == "" {
-		return errors.New("workflow node id is required")
-	}
-	row, err := q.GetWorkflowNode(ctx, trimmedNodeID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("workflow node %q not found: %w", trimmedNodeID, sql.ErrNoRows)
-		}
-		return fmt.Errorf("resolve workflow node %q: %w", trimmedNodeID, err)
-	}
-	if row.WorkflowID != workflowID {
-		return fmt.Errorf("workflow node %q belongs to workflow %q, not %q: %w", trimmedNodeID, row.WorkflowID, workflowID, ErrBelongsToOtherWorkflow)
-	}
-	return nil
-}
-
-func ensureWorkflowTransitionGroupID(ctx context.Context, q *sqlitegen.Queries, workflowID runtimeids.WorkflowID, groupID workflow.TransitionGroupID) error {
-	trimmedGroupID := strings.TrimSpace(string(groupID))
-	if trimmedGroupID == "" {
-		return errors.New("workflow transition group id is required")
-	}
-	rowWorkflowID, err := q.GetWorkflowTransitionGroupWorkflowID(ctx, trimmedGroupID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("workflow transition group %q not found: %w", trimmedGroupID, sql.ErrNoRows)
-		}
-		return fmt.Errorf("resolve workflow transition group %q: %w", trimmedGroupID, err)
-	}
-	if rowWorkflowID != workflowID {
-		return fmt.Errorf("workflow transition group %q belongs to workflow %q, not %q: %w", trimmedGroupID, rowWorkflowID, workflowID, ErrBelongsToOtherWorkflow)
-	}
-	return nil
 }
 
 func prefixedID(prefix string) string {

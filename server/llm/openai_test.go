@@ -42,7 +42,7 @@ func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *t
 		Model:                 "gpt-5",
 		ToolChoiceMode:        ToolChoiceModeRequired,
 		EnableNativeWebSearch: true,
-		Tools:                 []Tool{{Name: "shell"}},
+		Tools:                 []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}
 	count, err := client.CountRequestInputTokens(context.Background(), request)
 	if err != nil {
@@ -56,6 +56,35 @@ func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *t
 	}
 	if len(transport.request.Tools) != 1 || transport.request.Tools[0].Name != "shell" {
 		t.Fatalf("captured tools = %+v", transport.request.Tools)
+	}
+}
+
+func TestRequestAsOpenAIClonesPreparedSchemaCarriers(t *testing.T) {
+	request := Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		Tools: []Tool{{
+			Name:   "shell",
+			Schema: mustTestFunctionSchema(t, struct{}{}),
+		}},
+		StructuredOutput: &StructuredOutput{
+			Name:   "reviewer_suggestions",
+			Schema: mustTestStructuredSchema(t, testReviewerStructuredOutput{}),
+		},
+	}
+	projected := RequestAsOpenAI(request)
+	request.Tools[0].Name = "mutated"
+	request.StructuredOutput.Name = "mutated"
+	if len(projected.Tools) != 1 ||
+		projected.Tools[0].Name != "shell" ||
+		!projected.Tools[0].Schema.Prepared() {
+		t.Fatalf("projected tools changed with source mutation: %+v", projected.Tools)
+	}
+	if projected.StructuredOutput == nil || projected.StructuredOutput.Name != "reviewer_suggestions" {
+		t.Fatalf("projected structured output changed with source mutation: %+v", projected.StructuredOutput)
+	}
+	if !projected.StructuredOutput.Schema.Prepared() {
+		t.Fatal("projected structured output lost its prepared schema")
 	}
 }
 

@@ -176,15 +176,6 @@ export function shouldRefreshWorkflowLink(
 
 const workflowDefinitionActions = new Set([
   "updated",
-  "node_added",
-  "node_updated",
-  "node_group_added",
-  "node_group_updated",
-  "node_group_deleted",
-  "transition_group_added",
-  "transition_group_updated",
-  "edge_added",
-  "edge_updated",
   "deleted",
   "graph_saved",
 ]);

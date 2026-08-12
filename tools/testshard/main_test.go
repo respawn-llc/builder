@@ -290,44 +290,14 @@ func TestGoTestArgumentsLimitEachShardToOnePackageBuild(t *testing.T) {
 		"-count=1",
 		"-p",
 		"1",
+		"-parallel",
+		"4",
 		"core/fixture",
 		"-run",
 		"^(TestOne|TestTwo)$",
 	}
 	if !equalStrings(got, want) {
 		t.Fatalf("arguments = %q, want %q", got, want)
-	}
-}
-
-func TestRequiresRuntimeAdmissionOnlyForUnadmittedRuntimeJobs(t *testing.T) {
-	tests := []struct {
-		name string
-		env  string
-		jobs []testJob
-		want bool
-	}{
-		{
-			name: "runtime job",
-			jobs: []testJob{{packagePath: runtimePackagePath}},
-			want: true,
-		},
-		{
-			name: "non-runtime job",
-			jobs: []testJob{{packagePath: "core/server/session"}},
-		},
-		{
-			name: "admitted runtime job",
-			env:  "1",
-			jobs: []testJob{{packagePath: runtimePackagePath}},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Setenv(runtimeAdmissionHeldEnvironment, test.env)
-			if got := requiresRuntimeAdmission(test.jobs); got != test.want {
-				t.Fatalf("requires runtime admission = %t, want %t", got, test.want)
-			}
-		})
 	}
 }
 

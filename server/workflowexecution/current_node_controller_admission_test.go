@@ -558,6 +558,78 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	}
 }
 
+func TestCurrentNodeControllerPromotesConcurrencyQueuedTaskToExplicitAdmission(t *testing.T) {
+	first := currentNodeReferenceForControllerTest(t, "task-capacity-owner", "node-first")
+	queued := currentNodeReferenceForControllerTest(t, "task-force-resume", "node-queued")
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &boundedExplicitAdmissionRunner{
+		entered: make(chan workflow.CurrentNodeReference, 2),
+		release: make(chan struct{}),
+	}
+	controller := newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	var releaseOnce sync.Once
+	releaseAll := func() {
+		releaseOnce.Do(func() {
+			close(runner.release)
+		})
+	}
+	t.Cleanup(func() {
+		releaseAll()
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{
+		{CurrentNode: first, NodeKind: workflow.NodeKindAgent},
+		{CurrentNode: queued, NodeKind: workflow.NodeKindAgent},
+	})
+	select {
+	case entered := <-runner.entered:
+		if !entered.Equal(first) {
+			t.Fatalf("first automatic admission = %v, want %v", entered, first)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first automatic admission did not begin")
+	}
+	select {
+	case entered := <-runner.entered:
+		t.Fatalf("automatic admission %v exceeded Agent capacity", entered)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{queued.TaskID})
+	if err != nil {
+		t.Fatalf("ObserveWorkflowTaskExecutions: %v", err)
+	}
+	if references := observation.ConcurrencyQueued[queued.TaskID]; len(references) != 1 ||
+		!references[0].Equal(queued) {
+		t.Fatalf("concurrency-queued Current Nodes = %+v, want %v", references, queued)
+	}
+	promoted, handled, err := controller.PromoteConcurrencyQueuedTask(
+		context.Background(),
+		queued.TaskID,
+	)
+	if err != nil {
+		t.Fatalf("PromoteConcurrencyQueuedTask: %v", err)
+	}
+	if !handled || len(promoted) != 1 || !promoted[0].Reference.Equal(queued) {
+		t.Fatalf("promoted Current Nodes = %+v handled=%v, want %v", promoted, handled, queued)
+	}
+	select {
+	case entered := <-runner.entered:
+		if !entered.Equal(queued) {
+			t.Fatalf("explicit promoted admission = %v, want %v", entered, queued)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("promoted Current Node did not bypass Agent concurrency")
+	}
+}
+
 func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

@@ -275,7 +275,8 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		},
 	})
 	if err != nil {
-		if errors.Is(err, sessionruntime.ErrSessionRunActive) {
+		if errors.Is(err, sessionruntime.ErrSessionRunActive) ||
+			errors.Is(err, sessionruntime.ErrSessionWorkflowActivationActive) {
 			return nil, ErrSessionRunning
 		}
 		return nil, err

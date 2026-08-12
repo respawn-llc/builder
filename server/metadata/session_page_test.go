@@ -2,8 +2,7 @@ package metadata
 
 import (
 	"context"
-	"encoding/base64"
-	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -26,8 +25,7 @@ func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
 	mainPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage main: %v", err)
@@ -37,8 +35,7 @@ func TestSessionPageSeparatesCategoriesAndMapsLegacyToMain(t *testing.T) {
 	subagentPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategorySubagent,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage subagent: %v", err)
@@ -71,8 +68,7 @@ func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
 	mainPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage main: %v", err)
@@ -82,8 +78,7 @@ func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
 	subagentPage, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategorySubagent,
-		PageSize:  10,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Limit:     sessionPageInt(10),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage subagent: %v", err)
@@ -91,7 +86,7 @@ func TestSessionPageReflectsPersistedCategoryPromotion(t *testing.T) {
 	requireSessionPageIDs(t, subagentPage)
 }
 
-func TestSessionPageNavigatesOlderAndNewerWithStableTieBreaks(t *testing.T) {
+func TestSessionPageUsesStableRecencyOrderAcrossAdjacentOffsets(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
@@ -100,107 +95,50 @@ func TestSessionPageNavigatesOlderAndNewerWithStableTieBreaks(t *testing.T) {
 		importSessionPageFixture(t, store, cfg, binding, id, sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), updatedAt)
 	}
 
-	newest, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.NewestSessionPagePosition(),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage newest: %v", err)
-	}
-	requireSessionPageIDs(t, newest, "session-d", "session-c")
-	if newest.Older == nil || newest.Newer != nil {
-		t.Fatalf("newest continuations older=%v newer=%v", newest.Older, newest.Newer)
-	}
-
-	older, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.OlderSessionPagePosition(*newest.Older),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage older: %v", err)
-	}
-	requireSessionPageIDs(t, older, "session-b", "session-a")
-	if older.Older != nil || older.Newer == nil {
-		t.Fatalf("older continuations older=%v newer=%v", older.Older, older.Newer)
-	}
-
-	newer, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.NewerSessionPagePosition(*older.Newer),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage newer: %v", err)
-	}
-	requireSessionPageIDs(t, newer, "session-d", "session-c")
-}
-
-func TestSessionPageRejectsInvalidAndCrossScopeTokens(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
-	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other project")
-	if err != nil {
-		t.Fatalf("CreateProjectForWorkspace: %v", err)
-	}
-	importSessionPageFixture(t, store, cfg, binding, "session-main", sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), time.Now().UTC())
 	first, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  1,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    sessionPageInt(0),
+		Limit:     sessionPageInt(2),
 	})
 	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
+		t.Fatalf("ListSessionPage first: %v", err)
 	}
-	if first.Older == nil {
-		importSessionPageFixture(t, store, cfg, binding, "session-main-older", sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), time.Now().UTC().Add(-time.Hour))
-		first, err = store.ListSessionPage(ctx, serverapi.SessionPageRequest{
-			ProjectID: binding.ProjectID,
-			Category:  sessioncontract.SessionCategoryMain,
-			PageSize:  1,
-			Position:  serverapi.NewestSessionPagePosition(),
-		})
-		if err != nil {
-			t.Fatalf("ListSessionPage after older seed: %v", err)
-		}
-	}
-	if first.Older == nil {
-		t.Fatal("expected older continuation")
-	}
-	tokenJSON, err := base64.RawURLEncoding.DecodeString(first.Older.String())
-	if err != nil {
-		t.Fatalf("decode valid continuation: %v", err)
-	}
-	trailingJSON, err := serverapi.ParseSessionPageContinuation(
-		base64.RawURLEncoding.EncodeToString(append(tokenJSON, []byte("{}")...)),
-	)
-	if err != nil {
-		t.Fatalf("parse trailing-json continuation: %v", err)
+	requireSessionPageIDs(t, first, "session-d", "session-c")
+	if first.NextOffset == nil || *first.NextOffset != 2 {
+		t.Fatalf("first next offset = %v, want 2", first.NextOffset)
 	}
 
-	invalid, err := serverapi.ParseSessionPageContinuation("not-base64-json")
+	second, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		Offset:    first.NextOffset,
+		Limit:     sessionPageInt(2),
+	})
 	if err != nil {
-		t.Fatalf("parse opaque invalid continuation: %v", err)
+		t.Fatalf("ListSessionPage second: %v", err)
 	}
-	for _, request := range []serverapi.SessionPageRequest{
-		{ProjectID: binding.ProjectID, Category: sessioncontract.SessionCategoryMain, PageSize: 1, Position: serverapi.OlderSessionPagePosition(invalid)},
-		{ProjectID: binding.ProjectID, Category: sessioncontract.SessionCategoryMain, PageSize: 1, Position: serverapi.OlderSessionPagePosition(trailingJSON)},
-		{ProjectID: binding.ProjectID, Category: sessioncontract.SessionCategorySubagent, PageSize: 1, Position: serverapi.OlderSessionPagePosition(*first.Older)},
-		{ProjectID: other.ProjectID, Category: sessioncontract.SessionCategoryMain, PageSize: 1, Position: serverapi.OlderSessionPagePosition(*first.Older)},
-	} {
-		if _, err := store.ListSessionPage(ctx, request); !errors.Is(err, ErrInvalidPageToken) {
-			t.Fatalf("ListSessionPage error = %v, want ErrInvalidPageToken for %+v", err, request)
-		}
+	requireSessionPageIDs(t, second, "session-b", "session-a")
+	if second.NextOffset != nil {
+		t.Fatalf("second next offset = %v, want nil", second.NextOffset)
+	}
+
+	beyond, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		Offset:    sessionPageInt(10),
+		Limit:     sessionPageInt(2),
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage beyond end: %v", err)
+	}
+	requireSessionPageIDs(t, beyond)
+	if beyond.NextOffset != nil {
+		t.Fatalf("beyond next offset = %v, want nil", beyond.NextOffset)
 	}
 }
 
-func TestSessionPageUsesLiveRecencyWithoutOffsetDrift(t *testing.T) {
+func TestSessionPageAcceptsLiveRepeatAndSkipAfterRecencyChange(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store, cfg, binding := newMetadataTestStore(t)
@@ -211,39 +149,64 @@ func TestSessionPageUsesLiveRecencyWithoutOffsetDrift(t *testing.T) {
 	first, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    sessionPageInt(0),
+		Limit:     sessionPageInt(2),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage first: %v", err)
 	}
 	requireSessionPageIDs(t, first, "session-c", "session-b")
-	if first.Older == nil {
-		t.Fatal("expected older continuation")
+	if first.NextOffset == nil {
+		t.Fatal("expected next offset")
 	}
 
 	importSessionPageFixture(t, store, cfg, binding, "session-a", sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), base.Add(time.Minute))
-	older, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+	second, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.OlderSessionPagePosition(*first.Older),
+		Offset:    first.NextOffset,
+		Limit:     sessionPageInt(2),
 	})
 	if err != nil {
-		t.Fatalf("ListSessionPage older: %v", err)
+		t.Fatalf("ListSessionPage second: %v", err)
 	}
-	requireSessionPageIDs(t, older)
+	requireSessionPageIDs(t, second, "session-b")
 
 	refreshed, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		PageSize:  2,
-		Position:  serverapi.NewestSessionPagePosition(),
+		Offset:    sessionPageInt(0),
+		Limit:     sessionPageInt(2),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage refreshed: %v", err)
 	}
 	requireSessionPageIDs(t, refreshed, "session-a", "session-c")
+}
+
+func TestSessionPageDefaultWindowTrimsOneHundredAndOneRowLookahead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	base := time.Date(2026, time.July, 14, 12, 0, 0, 0, time.UTC)
+	for index := range serverapi.MaxSessionPageSize + 1 {
+		id := fmt.Sprintf("session-%03d", index)
+		importSessionPageFixture(t, store, cfg, binding, id, sessionCategoryForPageTest(sessioncontract.SessionCategoryMain), base.Add(time.Duration(index)*time.Second))
+	}
+
+	page, err := store.ListSessionPage(ctx, serverapi.SessionPageRequest{
+		ProjectID: binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage: %v", err)
+	}
+	if len(page.Sessions) != serverapi.MaxSessionPageSize {
+		t.Fatalf("session count = %d, want %d", len(page.Sessions), serverapi.MaxSessionPageSize)
+	}
+	if page.NextOffset == nil || *page.NextOffset != serverapi.MaxSessionPageSize {
+		t.Fatalf("next offset = %v, want %d", page.NextOffset, serverapi.MaxSessionPageSize)
+	}
 }
 
 func importSessionPageFixture(
@@ -275,6 +238,10 @@ func importSessionPageFixture(
 
 func sessionCategoryForPageTest(category sessioncontract.SessionCategory) *sessioncontract.SessionCategory {
 	return &category
+}
+
+func sessionPageInt(value int) *int {
+	return &value
 }
 
 func requireSessionPageIDs(t *testing.T, page serverapi.SessionPageResponse, want ...string) {

@@ -282,7 +282,7 @@ func TestServiceSubmitUserTurnReplaysAcceptedError(t *testing.T) {
 func TestServiceSubmitUserShellCommandReplaysCommittedObserverError(t *testing.T) {
 	observerErr := errors.New("shell acceptance observer failed")
 	gate := sessiontest.NewPersistenceGate(runtimeControlTestSessionPersistence)
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}})
 	store, _, service := newRuntimeControlTestService(t, nil, registry, runtime.Config{}, session.WithPersistenceObserver(gate))
 	if err := service.SubmitUserShellCommand(context.Background(), runtimeControlShellCommandRequest(store, "seed-shell", "true")); err != nil {
 		t.Fatalf("seed shell metadata: %v", err)
@@ -310,11 +310,11 @@ func TestServiceCompactionConsumesCommittedObserverError(t *testing.T) {
 		Args:            "compact now",
 	}
 	gate.FailNext(observerErr)
-	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
-		t.Fatalf("first compaction error = %v, want observer error", err)
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("first compaction error = %v, want accepted observer cause", err)
 	}
-	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) {
-		t.Fatalf("replayed compaction error = %v, want cached observer error", err)
+	if err := service.CompactContext(context.Background(), request); !errors.Is(err, observerErr) || errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) {
+		t.Fatalf("replayed compaction error = %v, want cached accepted observer cause", err)
 	}
 	if client.compactionCalls != 1 {
 		t.Fatalf("compaction call count = %d, want 1", client.compactionCalls)

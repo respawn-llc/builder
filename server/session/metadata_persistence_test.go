@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -107,6 +108,54 @@ func (o *blockingFailingPersistenceObserver) ObservePersistedStore(ctx context.C
 	return o.downstream.ObservePersistedStore(ctx, snapshot)
 }
 
+type deadlineRejectingPersistenceObserver struct {
+	downstream PersistenceObserver
+	mu         sync.Mutex
+	checkNext  bool
+}
+
+func (o *deadlineRejectingPersistenceObserver) Arm() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.checkNext = true
+}
+
+func (o *deadlineRejectingPersistenceObserver) takeCheck() bool {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	check := o.checkNext
+	o.checkNext = false
+	return check
+}
+
+func (o *deadlineRejectingPersistenceObserver) ObservePersistedStore(
+	ctx context.Context,
+	snapshot PersistedStoreSnapshot,
+) error {
+	if o.takeCheck() {
+		if deadline, ok := ctx.Deadline(); ok {
+			return fmt.Errorf("metadata durability has synthetic deadline %s", deadline)
+		}
+	}
+	return o.downstream.ObservePersistedStore(ctx, snapshot)
+}
+
+func (o *deadlineRejectingPersistenceObserver) ObserveEventLogReconciliation(
+	ctx context.Context,
+	reconciliation PersistedEventLogReconciliation,
+) error {
+	downstream, ok := o.downstream.(EventLogReconciliationObserver)
+	if !ok {
+		return errEventLogReconcilerRequired
+	}
+	if o.takeCheck() {
+		if deadline, ok := ctx.Deadline(); ok {
+			return fmt.Errorf("event-log reconciliation has synthetic deadline %s", deadline)
+		}
+	}
+	return downstream.ObserveEventLogReconciliation(ctx, reconciliation)
+}
+
 func TestOpenByIDUsesAuthoritativeResolver(t *testing.T) {
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "projects", "project-1", "sessions", "session-1")
@@ -130,6 +179,35 @@ func TestOpenByIDUsesAuthoritativeResolver(t *testing.T) {
 	}
 	if got := store.Meta().WorkspaceRoot; got != "/tmp/workspace-a" {
 		t.Fatalf("workspace root = %q", got)
+	}
+}
+
+func TestCommittedEventMetadataDurabilityHasNoSyntheticDeadline(t *testing.T) {
+	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
+	observer := &deadlineRejectingPersistenceObserver{downstream: persistence}
+	store, err := Create(
+		t.TempDir(),
+		"workspace-x",
+		"/tmp/work",
+		testSessionCategory,
+		WithPersistenceObserver(observer),
+		WithPersistedSessionResolver(persistence),
+	)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	log := mustMaterializeSessionTestEventLog(t, store)
+
+	observer.Arm()
+	record, receipt, err := log.AppendRecord(
+		sessionTestStringPointer("step-1"),
+		sessionTestMessage(MessageRoleAssistant, "durable"),
+	)
+	if err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	if !receipt.Committed || record.Seq() != 1 {
+		t.Fatalf("append record=%+v receipt=%+v, want committed sequence 1", record, receipt)
 	}
 }
 

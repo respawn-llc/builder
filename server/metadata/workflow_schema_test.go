@@ -17,9 +17,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-//go:embed testdata/workflow_project_key_backfill.sql
-var workflowProjectKeyBackfillSQL string
-
 //go:embed testdata/workflow_schema_node_groups.sql
 var workflowSchemaNodeGroupsSQL string
 
@@ -314,10 +311,17 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 	for _, index := range []string{
 		"session_workflow_node_associations_serial_unique_idx",
 		"session_workflow_node_associations_branch_unique_idx",
+		"session_workflow_node_associations_session_recency_idx",
 	} {
 		if !indexExists(t, store.db, index) {
 			t.Fatalf("expected session association index %s", index)
 		}
+	}
+	if got := indexColumns(t, store.db, "session_workflow_node_associations_session_recency_idx"); !equalStrings(
+		got,
+		[]string{"session_id", "associated_at_unix_ms", "node_id"},
+	) {
+		t.Fatalf("Session association recency index columns = %v", got)
 	}
 	for _, assertion := range []struct {
 		table string
@@ -483,34 +487,6 @@ VALUES (?, ?, 'STRASSE', ?, ?)`,
 	}
 	if assignmentCount != 0 {
 		t.Fatalf("assignment count after label delete = %d, want 0", assignmentCount)
-	}
-}
-
-func TestOpenBackfillsProjectKeysForExistingMetadataDB(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := root + "/db/main.sqlite3"
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 4)
-	if err != nil {
-		t.Fatalf("open version 4 db: %v", err)
-	}
-	execSeed(t, db, "version 4 db", workflowProjectKeyBackfillSQL)
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 4 db: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open migrated db: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	keys := projectKeysByID(t, store.db)
-	if keys["project-a"] != "BUI" {
-		t.Fatalf("project-a key = %q, want BUI", keys["project-a"])
-	}
-	if keys["project-b"] != "BUI2" {
-		t.Fatalf("project-b key = %q, want BUI2", keys["project-b"])
 	}
 }
 

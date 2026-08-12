@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/config"
 	"core/shared/toolspec"
@@ -69,7 +68,7 @@ func TestCompleteNodeBarrierCommitsReadySiblingBeforeWorkflowMutation(t *testing
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:                "gpt-5",
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
@@ -145,7 +144,7 @@ func TestCompleteNodeValidatesBeforeEffectBarrier(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{
 			Model:                "gpt-5",
 			CurrentNodeExecution: testWorkflowConfig(controller, config.WorkflowCompletionModeTool),

@@ -2,7 +2,6 @@ import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 
-import { BoardRoute } from "@/features/board";
 import { HomeRoute } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
@@ -15,6 +14,7 @@ import {
   writeLastProjectRoute,
 } from "@/app-facade";
 import { RouteTransitionFrame } from "./RouteTransitionFrame";
+import { ProjectWorkspaceRoute } from "./ProjectWorkspace";
 import { shouldSkipNativeDialogStartupGate } from "./routes";
 import { useWindowChromeTitle } from "@/app-facade";
 
@@ -113,7 +113,11 @@ export function ProjectRoute() {
   const search = projectRouteApi.useSearch();
   useWindowChromeTitle(null);
   return (
-    <BoardRoute projectId={params.projectId} selectedTaskId={search.taskId} workflowId={search.workflowId} />
+    <ProjectWorkspaceRoute
+      projectId={params.projectId}
+      selectedTaskId={search.taskId}
+      workflowId={search.workflowId}
+    />
   );
 }
 

@@ -155,6 +155,50 @@ func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.
 	return c.resumeTask(ctx, taskID, nil, nil)
 }
 
+// PromoteConcurrencyQueuedTask moves automatic Current Nodes waiting for agent
+// capacity into the explicit admission lane. Explicit admission intentionally
+// bypasses the automatic concurrency limit.
+func (c *CurrentNodeController) PromoteConcurrencyQueuedTask(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) ([]workflow.CurrentNode, bool, error) {
+	if c == nil {
+		return nil, false, errors.New("current node workflow controller is required")
+	}
+	if strings.TrimSpace(string(taskID)) == "" {
+		return nil, false, errors.New("workflow task id is required")
+	}
+	var promoted []workflow.CurrentNode
+	err := c.permit.Run(ctx, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.closed {
+			return errors.New("current node workflow controller is closed")
+		}
+		starts := c.automaticQueue.removeTask(taskID)
+		for _, start := range starts {
+			key, err := start.reference.Key()
+			if err != nil {
+				return err
+			}
+			delete(c.queued, key)
+			start.policy = currentNodeAdmissionExplicitOverride
+			c.explicitQueue = append(c.explicitQueue, start)
+			c.explicitQueued[key] = struct{}{}
+			promoted = append(promoted, workflow.CurrentNode{Reference: start.reference})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(promoted) == 0 {
+		return nil, false, nil
+	}
+	c.wakeAdmissionWorker()
+	return promoted, true, nil
+}
+
 func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -268,6 +312,21 @@ func (c *CurrentNodeController) resumeTask(
 			if keyErr != nil {
 				resumeErrs = append(resumeErrs, keyErr)
 				continue
+			}
+			if currentNode.SessionID != nil {
+				if active, exists := c.authority.SessionExecution(*currentNode.SessionID); exists {
+					resumeErrs = append(
+						resumeErrs,
+						fmt.Errorf(
+							"resume current node %v: retained Session %s already has active execution scope %s: %w",
+							currentNode.Reference,
+							*currentNode.SessionID,
+							active.Scope().ID(),
+							ErrTaskExecutionNotQuiescent,
+						),
+					)
+					continue
+				}
 			}
 			if _, duplicate := seen[key]; duplicate {
 				resumeErrs = append(resumeErrs, fmt.Errorf("resumable current node %v is duplicated", currentNode.Reference))
