@@ -141,6 +141,10 @@ func TestDefinitionValidationDoesNotReferenceMissingGraphIdentities(t *testing.T
 	updateNodeAt(&def, 0, func(identity *workflow.NodeIdentity, _ *workflow.NodeKind, _ *workflow.NodeFields) {
 		identity.ID = ""
 	})
+	updateNodeAt(&def, 1, func(identity *workflow.NodeIdentity, kind *workflow.NodeKind, _ *workflow.NodeFields) {
+		identity.ID = ""
+		*kind = workflow.NodeKindJoin
+	})
 	def.TransitionGroups[0].ID = ""
 	def.TransitionGroups[1].SourceNodeID = ""
 	def.Edges[0].ID = ""

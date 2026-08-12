@@ -623,7 +623,10 @@ func (s *validationState) validateGraph() {
 func (s *validationState) validateKindConstraints() {
 	for _, node := range s.def.Nodes {
 		nodeID := NodeIDOf(node)
-		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID), NodeID: &nodeID}
+		ref := ValidationError{WorkflowID: WorkflowIDPointer(s.def.ID)}
+		if strings.TrimSpace(string(nodeID)) != "" {
+			ref.NodeID = &nodeID
+		}
 		incoming := len(s.incomingByNode[nodeID])
 		outgoingGroups := s.groupsBySource[nodeID]
 		switch node.Kind() {
