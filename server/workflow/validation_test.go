@@ -553,6 +553,25 @@ func TestRetainedTargetRequiresExactActiveContinuationSource(t *testing.T) {
 			},
 		},
 		{
+			name: "alternate branch route diverges before join",
+			setup: func(def *workflow.Definition) {
+				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
+					edge := edgeByIDForValidationTest(t, def, edgeID)
+					edge.ContextMode = workflow.ContextModeContinueSession
+					edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+				}
+				def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_alt", "alt", "Alternate", workflow.NodeFields{SubagentRole: "coder"}))
+				def.TransitionGroups = append(def.TransitionGroups,
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_alt", SourceNodeID: "node_impl_a", TransitionID: "alternate", DisplayName: "Alternate"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_alt_join", SourceNodeID: "node_alt", TransitionID: "join", DisplayName: "Join"},
+				)
+				def.Edges = append(def.Edges,
+					workflow.Edge{WorkflowID: def.ID, ID: "edge_impl_a_alt", Key: "alternate", TransitionGroupID: "group_impl_a_alt", TargetNodeID: "node_alt", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Alternate."},
+					workflow.Edge{WorkflowID: def.ID, ID: "edge_alt_join", Key: "join", TransitionGroupID: "group_alt_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+				)
+			},
+		},
+		{
 			name: "alternate serial routes remain separate",
 			setup: func(def *workflow.Definition) {
 				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {

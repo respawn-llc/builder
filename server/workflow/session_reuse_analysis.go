@@ -596,12 +596,19 @@ func (a sessionReuseAnalyzer) buildGraph(initial []reuseTransition) reuseGraph {
 						arrivals = make(map[TransitionBranchKey]reusePathState, len(a.staticFanouts[invocation.groupID].siblings))
 						joinArrivals[key] = arrivals
 					}
-					arrivals[invocation.sibling] = transition.target
+					if previous, exists := arrivals[invocation.sibling]; exists {
+						merged := reduceJoinState(previous, transition.target)
+						if previous.staticSource != transition.target.staticSource {
+							merged.staticSource = staticContinuationSource{kind: staticContinuationSourceDivergent}
+						}
+						arrivals[invocation.sibling] = merged
+					} else {
+						arrivals[invocation.sibling] = transition.target
+					}
 					fanout := a.staticFanouts[invocation.groupID]
 					if len(arrivals) != len(fanout.siblings) {
 						continue
 					}
-					delete(joinArrivals, key)
 					source := staticContinuationSource{}
 					var reduced reusePathState
 					for index, sibling := range fanout.siblings {
