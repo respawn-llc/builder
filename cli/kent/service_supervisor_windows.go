@@ -23,7 +23,6 @@ import (
 const (
 	supervisorInitialBackoff = 1 * time.Second
 	supervisorMaxBackoff     = 30 * time.Second
-	stillActiveExitCode      = 259
 
 	supervisorStopGracePeriod = 15 * time.Second
 
@@ -64,7 +63,9 @@ func (s *serverSupervisor) run(ctx context.Context) {
 		}
 		session := s.wanted.Load()
 		if session == 0 {
-			s.stopChild()
+			if s.stopChild().Complete {
+				return
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -73,10 +74,15 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			}
 		}
 		s.mu.Lock()
-		needLaunch := s.child == nil || s.child.session != session || !s.child.alive()
+		needLaunch := s.child == nil || s.child.session != session
 		s.mu.Unlock()
 		if needLaunch {
-			s.stopChild()
+			if s.stopChild().Complete {
+				return
+			}
+			if ctx.Err() != nil || s.wanted.Load() != session {
+				continue
+			}
 			child, err := launchServerAsUser(s.spec, session)
 			if err != nil {
 				s.logf("launch failed for session %d: %v", session, err)
@@ -84,6 +90,12 @@ func (s *serverSupervisor) run(ctx context.Context) {
 					return
 				}
 				backoff = growBackoff(backoff)
+				continue
+			}
+			if ctx.Err() != nil || s.wanted.Load() != session {
+				if settleStaleLaunchedCandidate(s.settlementTarget(child)).Complete {
+					return
+				}
 				continue
 			}
 			s.mu.Lock()
@@ -100,16 +112,14 @@ func (s *serverSupervisor) run(ctx context.Context) {
 			s.stopChild()
 			return
 		case <-s.wake:
-			continue
-		case <-child.exited:
-			child.release()
-			s.mu.Lock()
-			if s.child == child {
-				s.child = nil
+			if routeManagedChildWake(child.session, s.wanted.Load(), func() managedChildSettlementDecision {
+				return settleManagedChild(s.settlementTarget(child), child.terminate(s.spec))
+			}).Complete {
+				return
 			}
-			s.mu.Unlock()
-			s.clearPID()
-			if ctx.Err() != nil {
+			continue
+		case observation := <-child.observed:
+			if settleManagedChild(s.settlementTarget(child), observation).Complete {
 				return
 			}
 			if !s.sleep(ctx, backoff) {
@@ -133,17 +143,21 @@ func (s *serverSupervisor) sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-func (s *serverSupervisor) stopChild() {
+func (s *serverSupervisor) stopChild() managedChildSettlementDecision {
 	s.mu.Lock()
 	child := s.child
-	s.child = nil
 	s.mu.Unlock()
-	if child != nil {
-		child.terminate()
+	if child == nil {
+		s.clearPID()
+		return managedChildSettlementDecision{Replace: true}
 	}
-	s.clearPID()
+	return settleManagedChild(s.settlementTarget(child), child.terminate(s.spec))
 }
 
+func (s *serverSupervisor) settlementTarget(child *managedChild) managedChildSettlementTarget {
+	return managedChildSettlementTarget{func() serviceTerminationObservation { return child.terminate(s.spec) }, func() { child.release(); s.setChild(nil); s.clearPID() }, func() { s.setChild(child); s.writePID(child.pid); select {} }}
+}
+func (s *serverSupervisor) setChild(child *managedChild) { s.mu.Lock(); s.child = child; s.mu.Unlock() }
 func (s *serverSupervisor) writePID(pid uint32) {
 	_ = os.MkdirAll(windowsServiceDir(s.spec), 0o755)
 	_ = os.WriteFile(windowsServerPIDPath(s.spec), []byte(fmt.Sprintf("%d", pid)), 0o644)
@@ -243,38 +257,54 @@ type managedChild struct {
 	profile  windows.Handle
 	shutdown windows.Handle
 	job      windows.Handle
-	exited   chan struct{}
+	observed chan serviceTerminationObservation
 	released sync.Once
 }
 
-func (c *managedChild) watch() {
-	_, _ = windows.WaitForSingleObject(c.process, windows.INFINITE)
-	close(c.exited)
-}
-
-func (c *managedChild) alive() bool {
-	var code uint32
-	if err := windows.GetExitCodeProcess(c.process, &code); err != nil {
-		return false
+func (c *managedChild) watch(spec serviceSpec) {
+	result, waitErr := windows.WaitForSingleObject(c.process, windows.INFINITE)
+	observation := serviceTerminationObservation{TerminationConfirmed: waitErr == nil && result == windows.WAIT_OBJECT_0}
+	if waitErr != nil {
+		appendServiceLog(spec, "wait for server process failed: %v", waitErr)
+	} else if !observation.TerminationConfirmed {
+		appendServiceLog(spec, "wait for server process returned %d", result)
 	}
-	return code == stillActiveExitCode
-}
-
-func (c *managedChild) terminate() {
-	if c.shutdown != 0 && windows.SetEvent(c.shutdown) == nil {
-		select {
-		case <-c.exited:
-			c.release()
-			return
-		case <-time.After(supervisorStopGracePeriod):
+	if observation.TerminationConfirmed {
+		var status uint32
+		if err := windows.GetExitCodeProcess(c.process, &status); err != nil {
+			appendServiceLog(spec, "read server process exit status failed: %v", err)
+		} else {
+			observation.ExitStatus = &status
 		}
 	}
-	_ = windows.TerminateProcess(c.process, 1)
-	select {
-	case <-c.exited:
-	case <-time.After(5 * time.Second):
+	c.observed <- observation
+}
+
+func (c *managedChild) terminate(spec serviceSpec) serviceTerminationObservation {
+	if c.shutdown == 0 {
+		appendServiceLog(spec, "shutdown handle unavailable: pid %d", c.pid)
+	} else if err := windows.SetEvent(c.shutdown); err != nil {
+		appendServiceLog(spec, "shutdown signal failed: pid %d: %v", c.pid, err)
+	} else {
+		select {
+		case observation := <-c.observed:
+			if serviceTerminationConfirmed(observation) {
+				return observation
+			}
+		case <-time.After(supervisorStopGracePeriod):
+			appendServiceLog(spec, "shutdown timeout pid %d", c.pid)
+		}
 	}
-	c.release()
+	if err := windows.TerminateProcess(c.process, 1); err != nil {
+		appendServiceLog(spec, "terminate server process %d failed: %v", c.pid, err)
+	}
+	select {
+	case observation := <-c.observed:
+		return observation
+	case <-time.After(5 * time.Second):
+		appendServiceLog(spec, "termination wait timeout pid %d", c.pid)
+		return serviceTerminationObservation{}
+	}
 }
 
 func (c *managedChild) release() {
@@ -390,9 +420,9 @@ func launchServerAsUser(spec serviceSpec, session uint32) (child *managedChild, 
 		profile:  profile,
 		shutdown: shutdown,
 		job:      job,
-		exited:   make(chan struct{}),
+		observed: make(chan serviceTerminationObservation, 1),
 	}
-	go c.watch()
+	go c.watch(spec)
 	committed = true
 	return c, nil
 }
