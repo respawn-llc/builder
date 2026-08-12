@@ -21,6 +21,7 @@ import (
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/runtime"
+	"core/server/runtimewire/toolcontracts"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
@@ -142,21 +143,18 @@ func TestBuildToolRegistryAllowsHostedWebSearchWithoutLocalRuntimeBuilder(t *tes
 }
 
 func TestRuntimeWirePreparesExactlyEightOrdinaryStaticContracts(t *testing.T) {
-	sources := staticToolContractSources()
-	if len(sources) != 8 {
-		t.Fatalf("static contract source count = %d, want 8", len(sources))
-	}
-	contracts, err := tools.NewStaticToolContracts(jsoncontract.NewPreparer(false), sources...)
+	contracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(false))
 	if err != nil {
-		t.Fatalf("prepare static contracts: %v", err)
+		t.Fatalf("prepare static tool contracts: %v", err)
 	}
-	registrations := make([]tools.HandlerRegistration, 0, len(sources))
-	for _, source := range sources {
-		if source.ID == toolspec.ToolCompleteNode {
-			t.Fatal("complete_node entered ordinary static contract sources")
+	ids := toolspec.CatalogIDs()
+	registrations := make([]tools.HandlerRegistration, 0, len(ids))
+	for _, id := range ids {
+		if id == toolspec.ToolCompleteNode {
+			continue
 		}
 		registrations = append(registrations, tools.HandlerRegistration{
-			ID:      source.ID,
+			ID:      id,
 			Handler: mismatchedDeletionPresentationHandler{},
 		})
 	}

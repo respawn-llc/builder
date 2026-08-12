@@ -3,6 +3,7 @@ package runtimewire
 import (
 	"core/prompts"
 	"core/server/metadata"
+	"core/server/runtimewire/toolcontracts"
 	"core/server/tools"
 	askquestion "core/server/tools"
 	triggerhandofftool "core/server/tools"
@@ -263,10 +264,7 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 			return nil, nil, nil, err
 		}
 	}
-	staticContracts, err := tools.NewStaticToolContracts(
-		jsoncontract.NewPreparer(opts.Debug),
-		staticToolContractSources()...,
-	)
+	staticContracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(opts.Debug))
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("prepare local static tool contracts: %w", err)
 	}
@@ -310,19 +308,6 @@ func NewLocalToolRegistryBinding(opts LocalToolRegistryOptions) (*LocalToolRegis
 		return nil, nil, nil, err
 	}
 	return binding, broker, background, nil
-}
-
-func staticToolContractSources() []tools.StaticContractSource {
-	return []tools.StaticContractSource{
-		shelltool.ExecCommandStaticContractSource(),
-		shelltool.WriteStdinStaticContractSource(),
-		readimagetool.StaticContractSource(),
-		patchtool.StaticContractSource(),
-		edittool.StaticContractSource(),
-		askquestion.AskQuestionStaticContractSource(),
-		triggerhandofftool.TriggerHandoffStaticContractSource(),
-		tools.WebSearchStaticContractSource(),
-	}
 }
 
 func NewFilesystemContext(workdir string, targetRoot string, boundary metadata.ProjectWorkspaceBoundary) (tools.FilesystemContext, error) {

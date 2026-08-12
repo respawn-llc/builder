@@ -1,7 +1,7 @@
 # KENT-484 QA evidence
 
 Date: 2026-08-12
-Revision: `6339eb7de`
+Revision: `c2edce4f7` plus current review remediation
 
 ## Passed checks
 
@@ -15,8 +15,13 @@ Revision: `6339eb7de`
   -run 'TestJSONContractArchitectureGuard|TestStaticToolContracts|TestRegistryPrepareInput|TestCompletion|TestWorkflowGraphDocument|TestTaskComplete|TestMigrationInputBindings|TestOpenAI' -count=1`
   passed.
 - `go test ./server/tools/patch ./server/tools/edit ./server/tools/readimage
-  -count=1` passed on the baseline revision, confirming the current import-cycle
-  failure is introduced by KENT-484.
+  -count=1` passed after moving Registry composition out of
+  `runtimewirefixture`.
+- `go test ./... -run '^$' -count=1` passed, confirming every Go package and
+  test package type-checks without an import cycle.
+- `go test ./server/core -run
+  '^TestProductionGoFilesDoNotExposeTestOnlyAPIs$|^TestSmallPackagesRemainExplicitlyClassified$'
+  -count=1` passed after the fixture remediation.
 - `go test ./server/core -run '^TestJSONContractArchitectureGuard$' -count=1`
   passed.
 - `./scripts/build.sh --output ./bin/kent` passed and produced `bin/kent`.
@@ -26,33 +31,9 @@ Revision: `6339eb7de`
   `echo '{"workflow_id":' | ./bin/kent workflow graph apply --json -`
   returned exit 1 and JSON `{"outcome":"invalid_document","message":"unexpected EOF"}`.
 
-## Failures
+## Remaining baseline caveat
 
-### 1. Server suite fails with introduced test import cycles — implementation owner
-
-`./scripts/test.sh server` failed. The failure is reproducible directly on the
-current revision:
-
-```text
-# core/server/tools/patch
-package core/server/tools/patch
-    imports core/internal/testharness/runtimewirefixture from tool_part2_test.go
-    imports core/server/tools/patch from registry.go: import cycle not allowed in test
-# core/server/tools/edit
-... imports core/server/tools/edit from registry.go: import cycle not allowed in test
-# core/server/tools/readimage
-... imports core/server/tools/readimage from registry.go: import cycle not allowed in test
-```
-
-The same package commands pass on baseline `badbb5884` (no tests to run), so
-this is a KENT-484 regression, not an environmental failure. The helper
-`internal/testharness/runtimewirefixture/registry.go` imports concrete tool
-packages while being used by their internal package tests.
-
-The same cycle prevents `TestProductionGoFilesDoNotExposeTestOnlyAPIs` from
-type-checking in `server/core`.
-
-### 2. Full server suite also reports baseline workflow-goal failures
+### Full server suite reports unrelated workflow-goal failures
 
 Focused reproduction on baseline `badbb5884`:
 
@@ -66,7 +47,7 @@ session ... cannot start an ordinary execution while its workflow activation rem
 These are pre-existing baseline failures and are separate from the KENT-484
 import-cycle regression.
 
-### 3. Stale QA instance migration failure
+## Prior QA environment note
 
 The first model-loop attempt on the session-qualified instance failed during
 pre-registration with duplicate `completion_mode` migration state. QA was
@@ -78,7 +59,10 @@ No production state was touched.
 The QA server instances used for this run were stopped and wiped. The
 production server on `:53082` was not touched.
 
-## Verdict
+## Post-remediation status
 
-**QA failed** because the KENT-484 revision introduces test import cycles that
-break the required server suite and architecture type-checking guard.
+The introduced import cycle is resolved. Registry fixtures now consume the
+same runtimewire-owned static contract preparation boundary as production,
+without duplicating the eight-tool source list. Concrete tool tests and the
+repository-wide type-check pass. The only recorded server-suite caveat is the
+unrelated Workflow Goal lifecycle failure reproduced on baseline `badbb5884`.

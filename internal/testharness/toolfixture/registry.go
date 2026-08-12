@@ -1,6 +1,7 @@
 package toolfixture
 
 import (
+	"core/server/runtimewire/toolcontracts"
 	"core/server/tools"
 	"core/shared/jsoncontract"
 )
@@ -10,10 +11,7 @@ func NewRegistry(t TestingT, registrations ...tools.HandlerRegistration) *tools.
 	if len(registrations) == 0 {
 		return tools.NewRegistry()
 	}
-	contracts, err := tools.NewStaticToolContracts(
-		jsoncontract.NewPreparer(false),
-		staticContractSources()...,
-	)
+	contracts, err := toolcontracts.Prepare(jsoncontract.NewPreparer(false))
 	if err != nil {
 		t.Fatalf("prepare test static tool contracts: %v", err)
 	}

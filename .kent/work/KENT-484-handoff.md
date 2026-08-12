@@ -63,6 +63,13 @@ All Planning checkboxes are complete.
 - [x] Inspect every consumer and equivalent concrete-tool package test.
 - [x] Run focused package and architecture tests, commit, and return to QA.
 
+## Second review remediation
+
+- [x] Remove duplicate eight-tool source authority through one runtimewire-owned
+  static-contract composition package shared by production and tests.
+- [x] Refresh stale QA evidence to the remediated revision and results.
+- [x] Run focused verification, commit, and return to review.
+
 ## Verification notes
 
 - Relevant static-tool, ingress, reviewer, Workflow completion, runtime,

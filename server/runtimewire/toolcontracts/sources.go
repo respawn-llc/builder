@@ -1,4 +1,4 @@
-package toolfixture
+package toolcontracts
 
 import (
 	"core/server/tools"
@@ -8,7 +8,7 @@ import (
 	shelltool "core/server/tools/shell"
 )
 
-func staticContractSources() []tools.StaticContractSource {
+func sources() []tools.StaticContractSource {
 	return []tools.StaticContractSource{
 		shelltool.ExecCommandStaticContractSource(),
 		shelltool.WriteStdinStaticContractSource(),
