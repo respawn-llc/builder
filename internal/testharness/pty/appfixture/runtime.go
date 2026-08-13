@@ -18,6 +18,7 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -26,6 +27,7 @@ import (
 
 type ScriptFile struct {
 	Prompt         string                    `json:"prompt"`
+	ServedModel    *string                   `json:"served_model"`
 	StreamDeltas   []string                  `json:"stream_deltas"`
 	StreamDelayMS  *int                      `json:"stream_delay_ms"`
 	Final          string                    `json:"final"`
@@ -55,6 +57,7 @@ type SeedTranscriptEntryFile struct {
 
 type StepFile struct {
 	Final               string                           `json:"final"`
+	ServedModel         *string                          `json:"served_model"`
 	Commentary          string                           `json:"commentary"`
 	StreamDeltas        []string                         `json:"stream_deltas"`
 	StreamDelayMS       *int                             `json:"stream_delay_ms"`
@@ -220,6 +223,11 @@ func scriptSteps(file ScriptFile) ([]scriptedllm.Step, error) {
 			return nil, fmt.Errorf("script final response is required")
 		}
 		step := scriptedllm.FinalAnswer(file.Final)
+		servedModel, err := optionalServedModel(file.ServedModel)
+		if err != nil {
+			return nil, err
+		}
+		step.Response.ServedModel = servedModel
 		step.StreamDeltas = assistantDeltas(file.StreamDeltas)
 		delay, err := streamDeltaDelay(file.StreamDelayMS)
 		if err != nil {
@@ -257,6 +265,11 @@ func scriptStep(spec StepFile) (scriptedllm.Step, error) {
 		return scriptedllm.Step{}, fmt.Errorf("script step requires final response or tool calls")
 	}
 	step.StreamDeltas = assistantDeltas(spec.StreamDeltas)
+	servedModel, err := optionalServedModel(spec.ServedModel)
+	if err != nil {
+		return scriptedllm.Step{}, err
+	}
+	step.Response.ServedModel = servedModel
 	delay, err := streamDeltaDelay(spec.StreamDelayMS)
 	if err != nil {
 		return scriptedllm.Step{}, err
@@ -264,6 +277,17 @@ func scriptStep(spec StepFile) (scriptedllm.Step, error) {
 	step.StreamDeltaDelay = delay
 	step.ExpectedToolResults = append([]scriptedllm.ExpectedToolResult(nil), spec.ExpectedToolResults...)
 	return step, nil
+}
+
+func optionalServedModel(value *string) (*string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil, errors.New("served_model must not be blank when present")
+	}
+	return textutil.Value(trimmed), nil
 }
 
 func streamDeltaDelay(milliseconds *int) (*time.Duration, error) {

@@ -100,6 +100,7 @@ const (
 
 type userInjectionCommitResult struct {
 	flushed      int
+	startedStep  bool
 	receipt      session.CommitReceipt
 	queueItemIDs map[string]struct{}
 	disposition  userInjectionFlushDisposition

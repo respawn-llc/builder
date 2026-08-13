@@ -3,6 +3,8 @@ package session
 import (
 	"errors"
 	"fmt"
+
+	"core/shared/transcript"
 )
 
 type recordAppendOutcome struct {
@@ -12,8 +14,10 @@ type recordAppendOutcome struct {
 }
 
 type EventRecordAppendInput struct {
-	StepID  *string
-	Payload EventRecordPayload
+	StepID              *string
+	Payload             EventRecordPayload
+	committedAtUnixMs   *transcript.CommittedAtUnixMs
+	preserveCommittedAt bool
 }
 
 type recordMetadataTransition func(*Meta) (bool, error)
@@ -92,8 +96,10 @@ func (c MaterializedEventLog) appendReplayRecords(
 			)
 		}
 		inputs[index] = EventRecordAppendInput{
-			StepID:  record.StepID(),
-			Payload: payload,
+			StepID:              record.StepID(),
+			Payload:             payload,
+			committedAtUnixMs:   record.CommittedAtUnixMs(),
+			preserveCommittedAt: true,
 		}
 	}
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
@@ -219,9 +225,30 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	records := make([]EventRecord, 0, len(inputs))
 	sequence := log.lastSequence
+	appendNow := storeTimestamp(s.options)
+	appendTimeUnixMs, err := transcript.NewCommittedAtUnixMs(appendNow.UnixMilli())
+	if err != nil {
+		s.mu.Unlock()
+		return recordAppendOutcome{}, fmt.Errorf("store clock committed time: %w", err)
+	}
 	for index, input := range inputs {
 		sequence++
-		record, err := NewEventRecord(sequence, input.StepID, input.Payload)
+		committedAtUnixMs := input.committedAtUnixMs
+		if !input.preserveCommittedAt {
+			eligible, err := eventPayloadEligibleForCommittedTime(input.Payload)
+			if err != nil {
+				s.mu.Unlock()
+				return recordAppendOutcome{}, fmt.Errorf(
+					"evaluate committed time eligibility for event record %d: %w",
+					index,
+					err,
+				)
+			}
+			if eligible {
+				committedAtUnixMs = &appendTimeUnixMs
+			}
+		}
+		record, err := newEventRecord(sequence, input.StepID, input.Payload, committedAtUnixMs)
 		if err != nil {
 			s.mu.Unlock()
 			return recordAppendOutcome{}, fmt.Errorf(
@@ -268,7 +295,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 
 	postMeta := cloneMeta(s.meta)
 	postMeta.LastSequence = records[len(records)-1].Seq()
-	postMeta.UpdatedAt = s.options.now()
+	postMeta.UpdatedAt = appendNow
 	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
 	if err != nil {
 		s.meta = previousMeta

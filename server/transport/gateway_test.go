@@ -224,36 +224,6 @@ func TestResponseForErrorMapsProjectWorkspaceTypedFailures(t *testing.T) {
 	}
 }
 
-func TestResponseForErrorSurfacesIrreconcilableRecoveryEvidence(t *testing.T) {
-	detail := &session.IrreconcilableRecoveryDetail{
-		SessionID:             "session-1",
-		Operation:             "recover_append_transaction",
-		RecoveryPath:          "/sessions/session-1/append-recovery.json",
-		EventsPath:            "/sessions/session-1/events.jsonl",
-		CurrentMetadataSHA256: "current",
-		PreMetadataSHA256:     "pre",
-		PostMetadataSHA256:    "post",
-		Phase:                 "committed",
-		Conflict:              session.IrreconcilableRecoveryConflictCommittedSuffix,
-		Suffix: &session.IrreconcilableRecoverySuffixIdentity{
-			StartOffset:   101,
-			EndOffset:     202,
-			EventCount:    2,
-			FirstSequence: 7,
-			LastSequence:  8,
-			SHA256:        "suffix",
-		},
-	}
-
-	response := responseForError("recovery-conflict", detail)
-	if response.Error == nil {
-		t.Fatal("recovery-conflict response did not include an error")
-	}
-	if response.Error.Message != detail.Error() {
-		t.Fatalf("recovery-conflict message = %q, want projected detail %q", response.Error.Message, detail.Error())
-	}
-}
-
 func TestStreamCompleteParamsMapsTerminalErrors(t *testing.T) {
 	for _, err := range []error{nil, io.EOF, context.Canceled, context.DeadlineExceeded} {
 		params := streamCompleteParams(err)

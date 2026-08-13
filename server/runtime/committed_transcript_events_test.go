@@ -440,7 +440,10 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
+	if err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, err := eng.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
+		return err
+	}); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -498,7 +501,10 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
 
-	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
+	if err := withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, err := eng.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
+		return err
+	}); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 

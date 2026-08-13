@@ -23,7 +23,6 @@ type runtimeAttachmentSource interface {
 
 type runtimeAttachmentClients struct {
 	ProcessControls   apicontract.ProcessControlService
-	ProcessOutput     apicontract.ProcessOutputService
 	ProcessViews      apicontract.ProcessViewService
 	PromptControl     apicontract.PromptControlService
 	RuntimeControls   apicontract.RuntimeControlService
@@ -153,7 +152,6 @@ func prepareSharedRuntimeWiring(
 		runtimeClient:         runtimeClient,
 		worktrees:             clients.Worktrees,
 		processControls:       clients.ProcessControls,
-		processOutput:         clients.ProcessOutput,
 		processViews:          clients.ProcessViews,
 		promptHistory:         append([]string(nil), plan.PromptHistory...),
 	}

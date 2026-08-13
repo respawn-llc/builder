@@ -14,5 +14,12 @@ if ! command -v pnpm >/dev/null 2>&1; then
 	exit 2
 fi
 
+installed_lockfile="apps/node_modules/.pnpm/lock.yaml"
+if [ -f apps/node_modules/.modules.yaml ] &&
+	[ -f "$installed_lockfile" ] &&
+	cmp -s apps/pnpm-lock.yaml "$installed_lockfile"; then
+	exit 0
+fi
+
 export npm_config_confirm_modules_purge=false
 pnpm --dir apps install --frozen-lockfile

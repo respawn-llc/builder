@@ -2,11 +2,9 @@ package transport
 
 import (
 	"context"
-	modelstub "core/internal/testharness/pty/blackbox"
 	"core/internal/testharness/testsetup"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/core"
-	"core/server/metadata"
 	"core/server/session"
 	remoteclient "core/shared/client"
 	"core/shared/protocol"
@@ -16,11 +14,9 @@ import (
 	"encoding/json"
 	"errors"
 	"golang.org/x/net/websocket"
-	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
-	"sync/atomic"
 	"testing"
 )
 
@@ -318,99 +314,6 @@ func TestGatewayRunPromptValidatesTypedIntentCallerAndSelector(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGatewayRunPromptCanonicalizesMemoHistoryAndModelInputs(t *testing.T) {
-	home := t.TempDir()
-	workspace := t.TempDir()
-	t.Setenv("HOME", home)
-	configureGatewayTestServerPort(t)
-
-	var providerCalls atomic.Int32
-	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
-		providerCalls.Add(1)
-		defer r.Body.Close()
-		var payload map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatalf("decode provider request: %v", err)
-		}
-		if got := gatewayRunPromptUserInput(payload); got != "hello" {
-			t.Fatalf("provider user input = %q, want trimmed prompt", got)
-		}
-		modelstub.WriteCompletedResponseStream(w, "done", 1, 1)
-	}))
-	t.Cleanup(provider.Close)
-
-	resolved := resolveGatewayTestConfig(t, workspace)
-	resolved.Config.Settings.Model = "gpt-5"
-	resolved.Config.Settings.OpenAIBaseURL = provider.URL
-	binding := registerGatewayTestBinding(t, resolved.Config)
-	appCore, gatewayServer := newGatewayTestServerForConfig(t, resolved.Config)
-
-	remote, err := remoteclient.DialRemoteURLForProject(
-		context.Background(),
-		"ws"+gatewayServer.URL[len("http"):],
-		binding.ProjectID,
-	)
-	if err != nil {
-		t.Fatalf("DialRemoteURLForProject: %v", err)
-	}
-	t.Cleanup(func() { _ = remote.Close() })
-
-	request := serverapi.RunPromptRequest{
-		ClientRequestID: "  network-request  ",
-		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-		Prompt:          "  hello  ",
-	}
-	first, err := remote.RunPrompt(context.Background(), request, nil)
-	if err != nil {
-		t.Fatalf("first RunPrompt: %v", err)
-	}
-	request.ClientRequestID = "network-request"
-	request.Prompt = "hello"
-	replayed, err := remote.RunPrompt(context.Background(), request, nil)
-	if err != nil {
-		t.Fatalf("replayed RunPrompt: %v", err)
-	}
-	if replayed.SessionID != first.SessionID || replayed.Result != first.Result || providerCalls.Load() != 1 {
-		t.Fatalf("replayed response=%+v provider calls=%d, want memoized %+v/1", replayed, providerCalls.Load(), first)
-	}
-	history, inserted, err := appCore.MetadataStore().RecordPromptHistoryEntry(context.Background(), metadata.PromptHistoryEntry{
-		SessionID: first.SessionID,
-		SourceID:  "network-request",
-		Text:      "hello",
-	})
-	if err != nil {
-		t.Fatalf("canonical prompt history lookup: %v", err)
-	}
-	if inserted {
-		t.Fatal("canonical prompt history entry was not already stored")
-	}
-	if history.SourceID != "network-request" || history.Text != "hello" {
-		t.Fatalf("prompt history = %+v, want canonical source and prompt", history)
-	}
-}
-
-func gatewayRunPromptUserInput(payload map[string]any) string {
-	items, _ := payload["input"].([]any)
-	for index := len(items) - 1; index >= 0; index-- {
-		item, ok := items[index].(map[string]any)
-		if !ok || item["type"] != "message" || item["role"] != "user" {
-			continue
-		}
-		content, _ := item["content"].([]any)
-		for _, rawPart := range content {
-			part, ok := rawPart.(map[string]any)
-			if ok && part["type"] == "input_text" {
-				text, _ := part["text"].(string)
-				return text
-			}
-		}
-	}
-	return ""
 }
 
 func TestGatewaySessionExecutionEnvironmentRejectsExtraRequestField(t *testing.T) {

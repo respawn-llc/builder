@@ -521,7 +521,8 @@ type Request struct {
 	SystemPrompt            string                       `json:"system_prompt"`
 	PromptCacheKey          string                       `json:"prompt_cache_key,omitempty"`
 	PromptCacheScope        transcript.CacheWarningScope `json:"prompt_cache_scope,omitempty"`
-	SessionID               string                       `json:"session_id,omitempty"`
+	SessionID               *string                      `json:"session_id,omitempty"`
+	CodexDispatch           *CodexDispatchContext        `json:"-"`
 	Items                   []ResponseItem               `json:"items,omitempty"`
 	Tools                   []Tool                       `json:"tools,omitempty"`
 	ToolChoiceMode          ToolChoiceMode               `json:"tool_choice_mode"`
@@ -569,6 +570,9 @@ func (r Request) Validate() error {
 			return fmt.Errorf("%w: structured_output.schema must be prepared", ErrInvalidRequest)
 		}
 	}
+	if err := validateSessionDispatchPairing(r.SessionID, r.CodexDispatch); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -589,7 +593,6 @@ func RequestFromLockedContract(locked session.LockedContract, systemPrompt strin
 		SystemPrompt:            systemPrompt,
 		PromptCacheKey:          "",
 		PromptCacheScope:        "",
-		SessionID:               "",
 		Items:                   CloneResponseItems(items),
 		Tools:                   append([]Tool(nil), tools...),
 		ToolChoiceMode:          controls.ChoiceMode,
@@ -692,20 +695,24 @@ func (u Usage) CacheHitPercent() (int, bool) {
 }
 
 type Response struct {
-	Assistant      Message          `json:"assistant"`
-	ProviderPhase  *ProviderPhase   `json:"-"`
-	ToolCalls      []ToolCall       `json:"tool_calls,omitempty"`
-	Reasoning      []ReasoningEntry `json:"reasoning,omitempty"`
-	ReasoningItems []ReasoningItem  `json:"reasoning_items,omitempty"`
-	OutputItems    []ResponseItem   `json:"output_items,omitempty"`
-	Usage          Usage            `json:"usage"`
+	Assistant         Message          `json:"assistant"`
+	ProviderPhase     *ProviderPhase   `json:"-"`
+	ServedModel       *string          `json:"served_model,omitempty"`
+	ReasoningIncluded bool             `json:"reasoning_included,omitempty"`
+	ToolCalls         []ToolCall       `json:"tool_calls,omitempty"`
+	Reasoning         []ReasoningEntry `json:"reasoning,omitempty"`
+	ReasoningItems    []ReasoningItem  `json:"reasoning_items,omitempty"`
+	OutputItems       []ResponseItem   `json:"output_items,omitempty"`
+	Usage             Usage            `json:"usage"`
 }
 
 type CompactionRequest struct {
 	Model          string
 	Instructions   string
 	PromptCacheKey string
-	SessionID      string
+	SessionID      *string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext `json:"-"`
 	InputItems     []ResponseItem
 }
 
@@ -758,14 +765,6 @@ type StreamCallbacks struct {
 
 type StreamEventsClient interface {
 	GenerateStreamWithEvents(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error)
-}
-
-type RequestInputTokenCountClient interface {
-	CountRequestInputTokens(ctx context.Context, request Request) (int, error)
-}
-
-type RequestInputTokenCountSupportClient interface {
-	SupportsRequestInputTokenCount(ctx context.Context) (bool, error)
 }
 
 type ModelContextWindowClient interface {

@@ -120,9 +120,6 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 	case protocol.MethodAttentionNotificationSubscribe:
 		executeAttentionNotificationSubscription(g, conn, ctx, state, route, req)
 		return
-	case protocol.MethodProcessSubscribeOutput:
-		executeProcessOutputSubscription(g, conn, ctx, state, route, req)
-		return
 	case protocol.MethodPromptFollowUpWatch:
 		executePromptFollowUpSubscription(g, conn, ctx, state, route, req)
 		return
@@ -151,37 +148,6 @@ func executeAttentionNotificationSubscription(g *Gateway, conn rpcwire.Conn, ctx
 		}
 		serveInstalledGatewaySubscription(conn, ctx, route, req, subscription, func(event clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
 			return protocol.AttentionNotificationEventParams{Event: event}
-		})
-		return struct{}{}, nil
-	})
-	if err != nil {
-		_ = sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
-	}
-}
-
-func executeProcessOutputSubscription(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	params, err := decodeInboundRequest[serverapi.ProcessOutputSubscribeRequest](g, route, requestDecoderDefault, req.Params)
-	if err != nil {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
-		return
-	}
-	_, err = rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[serverapi.ProcessOutputSubscribeRequest]) (struct{}, error) {
-		authorization, err := authorizeProcessActiveProject(func(request serverapi.ProcessOutputSubscribeRequest) string {
-			return request.ProcessID
-		})(ctx, g, state, validated)
-		if err != nil {
-			return struct{}{}, validatedOwnerError{cause: err}
-		}
-		trusted, ok := g.deps.ProcessOutputClient().(rpccontract.ProcessOutputTrustedService)
-		if !ok {
-			return struct{}{}, validatedOwnerError{cause: errors.New("Process Output trusted service is required")}
-		}
-		subscription, err := trusted.SubscribeProcessOutputValidated(ctx, validated, authorization)
-		if err != nil {
-			return struct{}{}, validatedOwnerError{cause: err}
-		}
-		serveInstalledGatewaySubscription(conn, ctx, route, req, subscription, func(chunk clientui.ProcessOutputChunk) protocol.ProcessOutputEventParams {
-			return protocol.ProcessOutputEventParams{Chunk: chunk}
 		})
 		return struct{}{}, nil
 	})
@@ -332,12 +298,6 @@ func serveInstalledGatewaySubscription[Event any, Wire any, Sub gatewaySubscript
 			return
 		}
 	}
-}
-
-func (g *Gateway) serveProcessOutputSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.ProcessOutputClient().SubscribeProcessOutput, func(chunk clientui.ProcessOutputChunk) protocol.ProcessOutputEventParams {
-		return protocol.ProcessOutputEventParams{Chunk: chunk}
-	})
 }
 
 func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {

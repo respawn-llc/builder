@@ -128,7 +128,7 @@ func TestHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	diagnosticKey := preciseTokenCountFailureDiagnostic
+	diagnosticKey := "test_diagnostic"
 	if err := engine.steerPersistedDiagnosticEntry(
 		"before-compaction",
 		diagnosticKey,
@@ -175,7 +175,7 @@ func TestReopenedSessionHistoryReplacementResetsDiagnosticDedupe(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	diagnosticKey := preciseTokenCountFailureDiagnostic
+	diagnosticKey := "test_diagnostic"
 	if err := engine.steerPersistedDiagnosticEntry(
 		"before-compaction",
 		diagnosticKey,
@@ -421,7 +421,6 @@ func newCommittedRemoteCompactionFixture(
 	fixture := &committedRemoteCompactionFixture{
 		store: mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(observer)),
 		client: &fakeCompactionClient{
-			inputTokenCount: 2_000,
 			compactionResponses: []llm.CompactionResponse{{
 				OutputItems: []llm.ResponseItem{
 					{
@@ -479,9 +478,9 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -538,9 +537,9 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 			usage.InputTokens != fixture.previousUsage.InputTokens
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -550,11 +549,12 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 	}
 
 	liveUsage := fixture.engine.ContextUsage()
-	if liveUsage.UsedTokens != fixture.client.inputTokenCount {
-		t.Fatalf("live compacted usage = %+v, want input tokens %d", liveUsage, fixture.client.inputTokenCount)
+	expectedInputTokens := estimateItemsTokens(fixture.engine.transcriptRuntimeState().SnapshotItems())
+	if liveUsage.UsedTokens != expectedInputTokens {
+		t.Fatalf("live compacted usage = %+v, want estimated input tokens %d", liveUsage, expectedInputTokens)
 	}
 	if persisted := fixture.store.Meta().UsageState; persisted == nil ||
-		persisted.InputTokens != fixture.client.inputTokenCount ||
+		persisted.InputTokens != expectedInputTokens ||
 		persisted.WindowTokens != fixture.previousUsage.WindowTokens {
 		t.Fatalf("persisted compacted usage = %+v", persisted)
 	}
@@ -591,9 +591,9 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		return locked != nil && !locked.HasSystemPrompt && !locked.HasReviewerPrompt
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -628,12 +628,13 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		fixture.store.Meta().PromptCacheLineageGeneration,
 		0,
 	)
-	if request.SessionID != fixture.store.Meta().SessionID ||
+	if request.SessionID != nil ||
+		request.CodexDispatch != nil ||
 		request.PromptCacheKey != expectedCacheKey ||
 		request.PromptCacheKey == preCompactionCacheKey ||
 		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
 		t.Fatalf(
-			"post-compaction request identity = session:%q cache-key:%q scope:%q",
+			"post-compaction context-free request identity = session:%v cache-key:%q scope:%q",
 			request.SessionID,
 			request.PromptCacheKey,
 			request.PromptCacheScope,
@@ -830,9 +831,9 @@ func TestRemoteCompactionTaskAwarenessErrorDoesNotReplaceHistory(t *testing.T) {
 	}
 	before := engine.transcriptRuntimeState().SnapshotItems()
 
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

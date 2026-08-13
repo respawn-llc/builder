@@ -20,8 +20,8 @@ type ptyFixtureBinaryBuild struct {
 }
 
 const (
-	ptyFixtureBuildTimeout = 2 * time.Minute
-	ptyFixtureBinaryEnv    = "KENT_PTY_FIXTURE_BINARY"
+	ptyFixtureTestTimeout = 5 * time.Second
+	ptyFixtureBinaryEnv   = "KENT_PTY_FIXTURE_BINARY"
 )
 
 var (
@@ -29,7 +29,7 @@ var (
 	ptyFixtureCachedBuild     ptyFixtureBinaryBuild
 )
 
-func buildPTYFixtureBinary(t *testing.T, _ context.Context) string {
+func buildPTYFixtureBinary(t *testing.T, ctx context.Context) string {
 	t.Helper()
 
 	binary, err := pty.PrebuiltExecutable(ptyFixtureBinaryEnv)
@@ -51,7 +51,7 @@ func buildPTYFixtureBinary(t *testing.T, _ context.Context) string {
 		binary := filepath.Join(root, "kent-pty-fixture.test")
 		ptyFixtureCachedBuild.binary = &binary
 
-		buildCtx, cancel := context.WithTimeout(context.Background(), ptyFixtureBuildTimeout)
+		buildCtx, cancel := context.WithTimeout(ctx, ptyFixtureTestTimeout)
 		defer cancel()
 		ptyFixtureCachedBuild.err = pty.BuildTestBinary(buildCtx, "core/cli/app", binary)
 	})

@@ -198,11 +198,7 @@ WHERE task_id = 'task-1'`)
 
 func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testing.T) {
 	t.Parallel()
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, t.TempDir())
 
 	for _, table := range []string{
 		"task_current_nodes",

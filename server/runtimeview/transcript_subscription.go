@@ -259,7 +259,10 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptLiveRunFinishedMessages(evt)
 	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
 		return transcriptReviewerStateMessages(evt)
-	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed, runtime.EventInFlightClearFailed:
+	case runtime.EventSleepGuardFailed,
+		runtime.EventPromptHistoryPersistFailed,
+		runtime.EventInFlightClearFailed,
+		runtime.EventProviderTurnStateInvalid:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -658,22 +661,28 @@ func transcriptReviewerStateMessages(evt runtime.Event) []clientui.TranscriptEve
 }
 
 func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.TranscriptEvent {
-	diagnostic := clientui.TranscriptOperationalDiagnostic{Detail: strings.TrimSpace(evt.Error)}
+	var stepID *runtimeids.StepID
 	if strings.TrimSpace(evt.StepID) != "" {
-		stepID := mustTranscriptStepID(evt.StepID, "operational diagnostic")
-		diagnostic.StepID = &stepID
+		parsed := mustTranscriptStepID(evt.StepID, "operational diagnostic")
+		stepID = &parsed
+	}
+	diagnostic := func(code clientui.OperationalDiagnosticCode, detail string) []clientui.TranscriptEvent {
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+			Code: code, StepID: stepID, Detail: detail,
+		})}
 	}
 	switch evt.Kind {
 	case runtime.EventSleepGuardFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticSleepGuardFailed
+		return diagnostic(clientui.OperationalDiagnosticSleepGuardFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventPromptHistoryPersistFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticPromptHistoryPersistFailed
+		return diagnostic(clientui.OperationalDiagnosticPromptHistoryPersistFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventInFlightClearFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticInFlightClearFailed
+		return diagnostic(clientui.OperationalDiagnosticInFlightClearFailed, strings.TrimSpace(evt.Error))
+	case runtime.EventProviderTurnStateInvalid:
+		return diagnostic(clientui.OperationalDiagnosticProviderTurnStateInvalid, "")
 	default:
 		panic(fmt.Sprintf("runtime event %q is not an operational diagnostic", evt.Kind))
 	}
-	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(diagnostic)}
 }
 
 func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.TranscriptCommittedRow {
@@ -689,10 +698,11 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowUser
 		row.User = &clientui.TranscriptUserRow{
-			StepID:           mustTranscriptStepID(fact.StepID, "committed user row"),
-			Text:             fact.User.Text,
-			CondensedText:    optionalNonBlankString(fact.User.CondensedText),
-			RollbackTargetID: textutil.Pointer(fact.User.RollbackTargetID),
+			StepID:            mustTranscriptStepID(fact.StepID, "committed user row"),
+			Text:              fact.User.Text,
+			CondensedText:     optionalNonBlankString(fact.User.CondensedText),
+			RollbackTargetID:  textutil.Pointer(fact.User.RollbackTargetID),
+			CommittedAtUnixMs: textutil.Pointer(fact.User.CommittedAtUnixMs),
 		}
 	case runtime.TranscriptCommittedRowFactAssistant:
 		if fact.Assistant == nil {
@@ -700,10 +710,11 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowAssistant
 		row.Assistant = &clientui.TranscriptAssistantRow{
-			StepID:        mustTranscriptStepID(fact.StepID, "committed assistant row"),
-			Text:          fact.Assistant.Text,
-			CondensedText: optionalNonBlankString(fact.Assistant.CondensedText),
-			Phase:         transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+			StepID:            mustTranscriptStepID(fact.StepID, "committed assistant row"),
+			Text:              fact.Assistant.Text,
+			CondensedText:     optionalNonBlankString(fact.Assistant.CondensedText),
+			Phase:             transcript.ClassifyAssistantPhase(string(fact.Assistant.Phase)),
+			CommittedAtUnixMs: textutil.Pointer(fact.Assistant.CommittedAtUnixMs),
 		}
 		if fact.Assistant.StreamID != nil {
 			streamID := mustTranscriptAssistantStreamID(fact.Assistant.StreamID, "committed assistant row")
@@ -834,6 +845,9 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 	}
 	if fact.ToolOutputRepair != nil {
 		notice.ToolOutputRepair = textutil.Pointer(fact.ToolOutputRepair)
+	}
+	if fact.ProviderModelMismatch != nil {
+		notice.ProviderModelMismatch = textutil.Pointer(fact.ProviderModelMismatch)
 	}
 	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
 	diagnosticDetail := fact.DiagnosticDetail

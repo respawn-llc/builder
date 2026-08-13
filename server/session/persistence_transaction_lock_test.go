@@ -137,6 +137,14 @@ func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	if got := opened.store.Meta().LastSequence; got != 1 {
 		t.Fatalf("concurrently opened metadata sequence = %d, want 1", got)
 	}
+	recovered, err := collectEvents(opened.store)
+	if err != nil {
+		t.Fatalf("collect recovered events: %v", err)
+	}
+	if len(recovered) != 1 || recovered[0].CommittedAtUnixMs() == nil ||
+		recovered[0].CommittedAtUnixMs().UnixMs() != appended.record.CommittedAtUnixMs().UnixMs() {
+		t.Fatalf("recovered committed time = %+v, want %d", recovered, appended.record.CommittedAtUnixMs().UnixMs())
+	}
 
 	second, _, err := log.AppendRecord(
 		sessionTestStringPointer("step-2"),

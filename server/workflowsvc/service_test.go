@@ -1999,7 +1999,7 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	release := make(chan struct{})
 	held := make(chan error, 1)
 	go func() {
-		held <- service.mutationPermit.Run(context.Background(), func(context.Context) error {
+		held <- service.taskMutations.Run(context.Background(), workflow.TaskID("task-held"), func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
@@ -3031,7 +3031,7 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 	releasePermit := make(chan struct{})
 	permitDone := make(chan error, 1)
 	go func() {
-		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
+		permitDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
 			close(permitStarted)
 			<-releasePermit
 			return service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
@@ -3047,11 +3047,7 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 		response, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             workflowServiceGraphEntityID("ordered-semantic-" + workflowID.String()),
-				Kind:           string(serverapi.WorkflowNodeKindAgent),
-				CompletionMode: "tool",
-			}}},
+			Graph:           serverapi.WorkflowGraphDraftFromDefinition(current.Definition),
 		})
 		saveDone <- struct {
 			response serverapi.WorkflowGraphSaveResponse
@@ -3092,7 +3088,7 @@ func TestServiceWorkflowGraphPreviewDoesNotWaitForUnrelatedMutation(t *testing.T
 	releasePermit := make(chan struct{})
 	permitDone := make(chan error, 1)
 	go func() {
-		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
+		permitDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
 			close(permitStarted)
 			<-releasePermit
 			return nil
@@ -3515,7 +3511,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewTaskMutationCoordinator()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -3549,7 +3545,7 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

@@ -964,11 +964,11 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 // each iteration so the retry observes the appended synthetic outputs. When the
 // 400 is unrelated to missing outputs (nothing to repair), the original error is
 // returned unchanged.
-func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID string, rebuild func() (llm.Request, error), onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (successfulRequestCandidate, error) {
 	for {
 		req, err := rebuild()
 		if err != nil {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 		var emitted atomic.Bool
 		wrappedDelta := onDelta
@@ -991,10 +991,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 		}
 		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, wrappedDelta, wrappedReasoningDelta, onAttemptReset)
 		if err == nil {
-			return resp, nil
+			return newSuccessfulRequestCandidate(req, resp), nil
 		}
 		if !llm.HasHTTPStatus(err, 400) {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 		if emitted.Load() && onAttemptReset != nil {
 			onAttemptReset()
@@ -1004,10 +1004,10 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 			missingToolOutputRepairLiveProvider400,
 		)
 		if repairErr != nil {
-			return llm.Response{}, errors.Join(err, repairErr)
+			return successfulRequestCandidate{}, errors.Join(err, repairErr)
 		}
 		if repaired == 0 {
-			return llm.Response{}, err
+			return successfulRequestCandidate{}, err
 		}
 	}
 }
@@ -1021,6 +1021,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 		return llm.Response{}, err
 	}
 	var lastErr error
+	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -1079,6 +1080,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 		}
 		attemptDone.Store(true)
+		e.publishProviderTurnStateDiagnostics(stepID, req.CodexDispatch, publishedProviderDiagnostics)
 		if attemptErr != nil && ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
 		}

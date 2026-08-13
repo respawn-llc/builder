@@ -3,32 +3,28 @@ package transport
 import (
 	"context"
 	"errors"
-	"io"
 	"testing"
 
 	"core/server/core"
 	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/protocol"
-	"core/shared/rpcwire"
 	"core/shared/serverapi"
 )
 
 var errRawProcessServiceCalled = errors.New("raw Process service called")
 
 type processAuthorizationService struct {
-	listCalls             int
-	rawGetCalls           int
-	rawKillCalls          int
-	rawInlineCalls        int
-	rawSubscribeCalls     int
-	resolveCalls          int
-	trustedGetCalls       int
-	trustedKillCalls      int
-	trustedInlineCalls    int
-	trustedSubscribeCalls int
-	candidate             apicontract.ProcessAuthorizationCandidate
-	authorizations        []apicontract.AuthorizedProcessInActiveProject
+	listCalls          int
+	rawGetCalls        int
+	rawKillCalls       int
+	rawInlineCalls     int
+	resolveCalls       int
+	trustedGetCalls    int
+	trustedKillCalls   int
+	trustedInlineCalls int
+	candidate          apicontract.ProcessAuthorizationCandidate
+	authorizations     []apicontract.AuthorizedProcessInActiveProject
 }
 
 func (s *processAuthorizationService) ListProcesses(context.Context, serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
@@ -46,10 +42,6 @@ func (s *processAuthorizationService) KillProcess(context.Context, serverapi.Pro
 func (s *processAuthorizationService) GetInlineOutput(context.Context, serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error) {
 	s.rawInlineCalls++
 	return serverapi.ProcessInlineOutputResponse{}, errRawProcessServiceCalled
-}
-func (s *processAuthorizationService) SubscribeProcessOutput(context.Context, serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
-	s.rawSubscribeCalls++
-	return nil, errRawProcessServiceCalled
 }
 func (s *processAuthorizationService) ResolveProcessAuthorization(context.Context, string) (apicontract.ProcessAuthorizationCandidate, error) {
 	s.resolveCalls++
@@ -74,18 +66,6 @@ func (s *processAuthorizationService) GetInlineOutputValidated(_ context.Context
 	s.capture(authorization)
 	return serverapi.ProcessInlineOutputResponse{Output: "output", LogPath: "/tmp/proc.log"}, nil
 }
-func (s *processAuthorizationService) SubscribeProcessOutputValidated(_ context.Context, _ apicontract.Validated[serverapi.ProcessOutputSubscribeRequest], authorization apicontract.AuthorizedProcessInActiveProject) (serverapi.ProcessOutputSubscription, error) {
-	s.trustedSubscribeCalls++
-	s.capture(authorization)
-	return immediateProcessOutputSubscription{}, nil
-}
-
-type immediateProcessOutputSubscription struct{}
-
-func (immediateProcessOutputSubscription) Next(context.Context) (clientui.ProcessOutputChunk, error) {
-	return clientui.ProcessOutputChunk{}, io.EOF
-}
-func (immediateProcessOutputSubscription) Close() error { return nil }
 
 type processAuthorizationDependencies struct {
 	*core.Core
@@ -98,10 +78,6 @@ func (d *processAuthorizationDependencies) ProcessViewClient() apicontract.Proce
 func (d *processAuthorizationDependencies) ProcessControlClient() apicontract.ProcessControlService {
 	return d.process
 }
-func (d *processAuthorizationDependencies) ProcessOutputClient() apicontract.ProcessOutputService {
-	return d.process
-}
-
 func TestGatewayCarriesOneTypedProcessAuthorizationFactToAllProcessOwners(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	t.Cleanup(func() { _ = appCore.Close() })
@@ -137,26 +113,17 @@ func TestGatewayCarriesOneTypedProcessAuthorizationFactToAllProcessOwners(t *tes
 		}
 	}
 
-	conn := &processAuthorizationConn{}
-	route, _ := apicontract.RouteByMethod(protocol.MethodProcessSubscribeOutput)
-	executeProcessOutputSubscription(gateway, conn, t.Context(), state, route, protocol.Request{
-		JSONRPC: protocol.JSONRPCVersion,
-		ID:      "subscribe",
-		Method:  protocol.MethodProcessSubscribeOutput,
-		Params:  mustJSON(t, serverapi.ProcessOutputSubscribeRequest{ProcessID: process.ID}),
-	})
-
-	if service.resolveCalls != 4 {
-		t.Fatalf("authorization snapshots = %d, want 4", service.resolveCalls)
+	if service.resolveCalls != 3 {
+		t.Fatalf("authorization snapshots = %d, want 3", service.resolveCalls)
 	}
-	if service.rawGetCalls != 0 || service.rawKillCalls != 0 || service.rawInlineCalls != 0 || service.rawSubscribeCalls != 0 {
-		t.Fatalf("raw calls: get=%d kill=%d inline=%d subscribe=%d", service.rawGetCalls, service.rawKillCalls, service.rawInlineCalls, service.rawSubscribeCalls)
+	if service.rawGetCalls != 0 || service.rawKillCalls != 0 || service.rawInlineCalls != 0 {
+		t.Fatalf("raw calls: get=%d kill=%d inline=%d", service.rawGetCalls, service.rawKillCalls, service.rawInlineCalls)
 	}
-	if service.trustedGetCalls != 1 || service.trustedKillCalls != 1 || service.trustedInlineCalls != 1 || service.trustedSubscribeCalls != 1 {
-		t.Fatalf("trusted calls: get=%d kill=%d inline=%d subscribe=%d", service.trustedGetCalls, service.trustedKillCalls, service.trustedInlineCalls, service.trustedSubscribeCalls)
+	if service.trustedGetCalls != 1 || service.trustedKillCalls != 1 || service.trustedInlineCalls != 1 {
+		t.Fatalf("trusted calls: get=%d kill=%d inline=%d", service.trustedGetCalls, service.trustedKillCalls, service.trustedInlineCalls)
 	}
-	if len(service.authorizations) != 4 {
-		t.Fatalf("authorization facts = %d, want 4", len(service.authorizations))
+	if len(service.authorizations) != 3 {
+		t.Fatalf("authorization facts = %d, want 3", len(service.authorizations))
 	}
 	want := apicontract.AuthorizedProcessInActiveProject{ProcessID: process.ID, OwnerSessionID: process.OwnerSessionID, Process: process}
 	for index, got := range service.authorizations {
@@ -196,15 +163,3 @@ func TestGatewayRejectsProcessListForSessionOutsideActiveProject(t *testing.T) {
 		t.Fatalf("Process owner called %d times, want 0", service.listCalls)
 	}
 }
-
-type processAuthorizationConn struct {
-	frames []rpcwire.Frame
-}
-
-func (c *processAuthorizationConn) Send(_ context.Context, frame rpcwire.Frame) error {
-	c.frames = append(c.frames, frame)
-	return nil
-}
-func (*processAuthorizationConn) Events() <-chan rpcwire.Event { return nil }
-func (*processAuthorizationConn) Closed() <-chan struct{}      { return nil }
-func (*processAuthorizationConn) Close() error                 { return nil }

@@ -527,13 +527,6 @@ func (s *Core) ProcessControlClient() apicontract.ProcessControlService {
 	return s.safeBundles().Processes.processControls
 }
 
-func (s *Core) ProcessOutputClient() apicontract.ProcessOutputService {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Processes.processOutput
-}
-
 func (s *Core) SessionTranscriptClient() apicontract.SessionTranscriptService {
 	if s == nil {
 		return nil

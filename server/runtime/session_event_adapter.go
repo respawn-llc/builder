@@ -274,15 +274,16 @@ func storedLocalEntryFromSessionRecord(
 ) storedLocalEntry {
 	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
-		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
-		Role:             record.Role,
-		Text:             text,
-		DurationMs:       textutil.Pointer(record.DurationMs),
-		CondensedText:    textutil.Pointer(record.CondensedText),
-		DiagnosticKey:    textutil.Pointer(record.DiagnosticKey),
-		NoticeID:         textutil.Pointer(record.NoticeID),
-		AfterToolCallID:  textutil.Pointer(record.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(record.ToolOutputRepair),
+		Visibility:            runtimeEntryVisibilityFromSession(record.Visibility),
+		Role:                  record.Role,
+		Text:                  text,
+		DurationMs:            textutil.Pointer(record.DurationMs),
+		CondensedText:         textutil.Pointer(record.CondensedText),
+		DiagnosticKey:         textutil.Pointer(record.DiagnosticKey),
+		NoticeID:              textutil.Pointer(record.NoticeID),
+		AfterToolCallID:       textutil.Pointer(record.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(record.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(record.ProviderModelMismatch),
 	}
 }
 

@@ -89,14 +89,6 @@ type ProcessControlTrustedService interface {
 	GetInlineOutputValidated(ctx context.Context, req Validated[serverapi.ProcessInlineOutputRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessInlineOutputResponse, error)
 }
 
-type ProcessOutputService interface {
-	SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error)
-}
-
-type ProcessOutputTrustedService interface {
-	SubscribeProcessOutputValidated(ctx context.Context, req Validated[serverapi.ProcessOutputSubscribeRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessOutputSubscription, error)
-}
-
 type ProcessViewService interface {
 	ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error)
 	GetProcess(ctx context.Context, req serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error)

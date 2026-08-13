@@ -23,7 +23,7 @@ import (
 type Service struct {
 	metadata          *metadata.Store
 	runtimeAuthority  *sessionruntime.Authority
-	mutationPermit    *workflowexecution.MutationPermit
+	taskMutations     *workflowexecution.TaskMutationCoordinator
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
 	}
@@ -57,13 +57,13 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
+func (s *Service) WithWorkflowExecution(taskMutations *workflowexecution.TaskMutationCoordinator, execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
 }, store *workflowstore.Store) *Service {
 	if s == nil {
 		return nil
 	}
-	s.mutationPermit = permit
+	s.taskMutations = taskMutations
 	s.workflowExecution = execution
 	s.workflowStore = store
 	return s
@@ -304,7 +304,7 @@ func (s *Service) DeleteProjectValidated(ctx context.Context, validated servicec
 		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	if s.mutationPermit == nil || s.workflowExecution == nil {
+	if s.taskMutations == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
 	}
 
@@ -349,8 +349,16 @@ func (s *Service) DeleteProjectValidated(ctx context.Context, validated servicec
 		}
 		return nil, nil
 	}
+	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	workflowTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		workflowTaskIDs = append(workflowTaskIDs, workflow.TaskID(taskID))
+	}
 	var blockers []serverapi.ProjectDeleteBlocker
-	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	err = s.taskMutations.RunMany(ctx, workflowTaskIDs, func(ctx context.Context) error {
 		var runErr error
 		blockers, runErr = deleteProject(ctx)
 		return runErr

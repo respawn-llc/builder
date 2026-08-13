@@ -25,40 +25,6 @@ func (streamingOnlyTransport) GenerateStream(_ context.Context, _ OpenAIRequest,
 	return OpenAIResponse{AssistantText: textutil.Value("Hello"), ProviderPhase: AbsentProviderPhase()}, nil
 }
 
-type capturingInputTokenTransport struct {
-	streamingOnlyTransport
-	request OpenAIRequest
-}
-
-func (t *capturingInputTokenTransport) CountRequestInputTokens(_ context.Context, request OpenAIRequest) (int, error) {
-	t.request = request
-	return 123, nil
-}
-
-func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *testing.T) {
-	transport := &capturingInputTokenTransport{}
-	client := NewOpenAIClient(transport)
-	request := Request{
-		Model:                 "gpt-5",
-		ToolChoiceMode:        ToolChoiceModeRequired,
-		EnableNativeWebSearch: true,
-		Tools:                 []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
-	}
-	count, err := client.CountRequestInputTokens(context.Background(), request)
-	if err != nil {
-		t.Fatalf("CountRequestInputTokens: %v", err)
-	}
-	if count != 123 {
-		t.Fatalf("count = %d, want 123", count)
-	}
-	if transport.request.ToolChoiceMode != ToolChoiceModeRequired || !transport.request.EnableNativeWebSearch {
-		t.Fatalf("captured tool controls = mode:%q web_search:%t", transport.request.ToolChoiceMode, transport.request.EnableNativeWebSearch)
-	}
-	if len(transport.request.Tools) != 1 || transport.request.Tools[0].Name != "shell" {
-		t.Fatalf("captured tools = %+v", transport.request.Tools)
-	}
-}
-
 func TestRequestAsOpenAIClonesPreparedSchemaCarriers(t *testing.T) {
 	request := Request{
 		Model:          "gpt-5",

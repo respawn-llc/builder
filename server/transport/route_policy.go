@@ -402,8 +402,6 @@ func routeProcessID(params any) (string, bool) {
 		return p.ProcessID, true
 	case serverapi.ProcessInlineOutputRequest:
 		return p.ProcessID, true
-	case serverapi.ProcessOutputSubscribeRequest:
-		return p.ProcessID, true
 	default:
 		return "", false
 	}

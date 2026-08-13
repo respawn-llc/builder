@@ -818,7 +818,8 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
 			},
 		},
-		Usage: llm.Usage{WindowTokens: 200000},
+		Usage:       llm.Usage{WindowTokens: 200000},
+		ServedModel: textutil.Value("served-model"),
 	}}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
@@ -836,7 +837,14 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	hostedCallPersisted := false
 	hostedResultPersisted := false
+	modelMismatchWarnings := 0
 	for _, evt := range events {
+		if evt.Kind == "local_entry" {
+			if persistedLocalEntryForTest(t, evt).ProviderModelMismatch != nil {
+				modelMismatchWarnings++
+			}
+			continue
+		}
 		if evt.Kind != "message" {
 			continue
 		}
@@ -854,6 +862,12 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	if !hostedCallPersisted || !hostedResultPersisted {
 		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)
+	}
+	if modelMismatchWarnings != 1 {
+		t.Fatalf("provider-model mismatch warnings = %d, want one for terminal accepted response", modelMismatchWarnings)
+	}
+	if store.Meta().UsageState == nil {
+		t.Fatal("terminal accepted response did not persist usage")
 	}
 }
 

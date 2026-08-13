@@ -525,7 +525,7 @@ func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 			workflowStore,
 			gatewayFailingRunner{cause: errors.New("automatic fatal test runner must not start")},
 			authority,
-			workflowexecution.NewMutationPermit(),
+			workflowexecution.NewTaskMutationCoordinator(),
 			workflowexecution.CurrentNodeControllerConfig{
 				AgentConcurrency: 1,
 				AssignmentSteerer: gatewayAutomaticFatalSteerer{
@@ -640,7 +640,7 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 				workflowStore,
 				runner,
 				authority,
-				workflowexecution.NewMutationPermit(),
+				workflowexecution.NewTaskMutationCoordinator(),
 				workflowexecution.CurrentNodeControllerConfig{
 					AgentConcurrency:  1,
 					AssignmentSteerer: steerer,

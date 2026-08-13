@@ -50,13 +50,12 @@ func (*persistedBoundaryClient) ProviderCapabilities(
 	context.Context,
 ) (llm.ProviderCapabilities, error) {
 	return llm.ProviderCapabilities{
-		ProviderID:                     "openai",
-		SupportsResponsesAPI:           true,
-		SupportsResponsesCompact:       true,
-		SupportsRequestInputTokenCount: true,
-		SupportsPromptCacheKey:         true,
-		SupportsReasoningEncrypted:     true,
-		SupportsServerSideContextEdit:  true,
+		ProviderID:                    "openai",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsPromptCacheKey:        true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
 	}, nil
 }
 

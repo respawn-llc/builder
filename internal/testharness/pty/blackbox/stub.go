@@ -106,7 +106,6 @@ func startResponsesStub(required []RequiredOperation, scripted *scriptedResponse
 	}
 	router := http.NewServeMux()
 	router.HandleFunc("POST /v1/responses", stub.serveRoute(RouteResponses))
-	router.HandleFunc("POST /v1/responses/input_tokens", stub.serveRoute(RouteInputTokens))
 	router.HandleFunc("GET /v1/models/{model}", stub.serveRoute(RouteModel))
 	router.HandleFunc("/", stub.serveUnsupportedRoute)
 	stub.server = &http.Server{
@@ -353,14 +352,14 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, s.failure
 	}
 	if s.index >= len(s.required) {
-		if route == RouteInputTokens || route == RouteModel {
+		if route == RouteModel {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("unexpected model operation route=%s after required queue", route)
 	}
 	required := s.required[s.index]
 	if route != required.Route {
-		if route == RouteInputTokens || route == RouteModel {
+		if route == RouteModel {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("required model operation route=%s got=%s", required.Route, route)
@@ -375,7 +374,7 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, fmt.Errorf("developer message count mismatch: got=%d want=%d", responseDeveloperMessageCount(body), *required.DeveloperMessageCount)
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
-		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
+		return nil, errors.New("required response session-id and prompt_cache_key relation was not present")
 	}
 	s.index++
 	s.requiredInFlight = true
@@ -398,10 +397,6 @@ func (s *ResponsesStub) writeOperationResponse(ctx context.Context, writer http.
 	switch route {
 	case RouteResponses:
 		s.writeResponse(ctx, writer, operation)
-	case RouteInputTokens:
-		if err := writeJSON(writer, http.StatusOK, map[string]int{"input_tokens": 0}); err != nil {
-			s.recordFailure(fmt.Errorf("write input-token response: %w", err))
-		}
 	case RouteModel:
 		if err := writeJSON(writer, http.StatusOK, map[string]any{
 			"id":             "gpt-5",
@@ -535,20 +530,6 @@ func flushResponseWriter(writer http.ResponseWriter) {
 	if flusher, ok := writer.(http.Flusher); ok {
 		flusher.Flush()
 	}
-}
-
-func HandleInputTokenCount(writer http.ResponseWriter, request *http.Request, inputTokens int) bool {
-	if request.URL.Path != "/responses/input_tokens" {
-		return false
-	}
-	if request.Method != http.MethodPost {
-		writer.Header().Set("Allow", http.MethodPost)
-		writer.WriteHeader(http.StatusMethodNotAllowed)
-		return true
-	}
-	writer.Header().Set("Content-Type", "application/json")
-	mustWriteFixtureResponse(writer, fmt.Sprintf(`{"object":"response.input_tokens","input_tokens":%d}`, inputTokens))
-	return true
 }
 
 func WriteCompletedResponseStream(writer http.ResponseWriter, assistantText string, inputTokens, outputTokens int) {
@@ -718,7 +699,7 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	session, err := parseSessionCacheKey(headers.Get("session_id"))
+	session, err := parseSessionCacheKey(headers.Get("session-id"))
 	if err != nil {
 		return false
 	}
