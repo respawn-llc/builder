@@ -27,6 +27,20 @@ type openAIPayloadToolControls struct {
 	choice responses.ToolChoiceOptions
 }
 
+func effectiveGenerationServiceTier(request OpenAIRequest, capabilities ProviderCapabilities) responses.ResponseNewParamsServiceTier {
+	if request.FastMode && SupportsFastModeProvider(capabilities) {
+		return responses.ResponseNewParamsServiceTierPriority
+	}
+	return ""
+}
+
+func effectiveCompactionServiceTier(request OpenAICompactionRequest, capabilities ProviderCapabilities) responses.ResponseNewParamsServiceTier {
+	if request.FastMode && SupportsFastModeProvider(capabilities) {
+		return responses.ResponseNewParamsServiceTierPriority
+	}
+	return ""
+}
+
 func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilities ProviderCapabilities) openAIRequestPayloadBuilder {
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
@@ -34,6 +48,20 @@ func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilit
 func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode, capabilities ProviderCapabilities) (responses.ResponseNewParams, error) {
 	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
 	return builder.BuildResponse(request, mode)
+}
+
+func (t *HTTPTransport) buildDispatchPayload(
+	request OpenAIRequest,
+	mode OpenAIAuthMode,
+	capabilities ProviderCapabilities,
+	projection codexDispatchProjection,
+) (responses.ResponseNewParams, error) {
+	payload, err := t.buildPayload(request, mode, capabilities)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	applyCodexClientMetadata(&payload, projection)
+	return payload, nil
 }
 
 func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabilities ProviderCapabilities) (responses.InputTokenCountParams, error) {
@@ -187,7 +215,21 @@ func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequ
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
 		out.Instructions = openai.String(instructions)
 	}
+	if serviceTier := effectiveCompactionServiceTier(request, b.capabilities); serviceTier != "" {
+		out.ServiceTier = serviceTier
+	}
 	return out, nil
+}
+
+func applyCodexClientMetadata(payload *responses.ResponseNewParams, projection codexDispatchProjection) {
+	if projection.TurnMetadataJSON == "" {
+		return
+	}
+	payload.SetExtraFields(map[string]any{
+		"client_metadata": map[string]string{
+			"x-codex-turn-metadata": projection.TurnMetadataJSON,
+		},
+	})
 }
 
 func (b openAIRequestPayloadBuilder) buildTools(requestTools []Tool, enableNativeWebSearch bool) ([]responses.ToolUnionParam, error) {

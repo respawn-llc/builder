@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 )
 
 type TranscriptMessageKind string
@@ -69,6 +70,7 @@ type transcriptEventPayloadValue interface {
 		TranscriptPrompt |
 		TranscriptWorktreeTransitionOutcome |
 		TranscriptOperationalDiagnostic |
+		TranscriptProviderStateDiagnostic |
 		TranscriptLiveRunResult
 }
 
@@ -245,7 +247,7 @@ func unmarshalTranscriptEvent(kind TranscriptMessageKind, data []byte) (Transcri
 	case TranscriptMessageWorktreeTransitionOutcome:
 		return decodeTranscriptPayload[TranscriptWorktreeTransitionOutcome](data)
 	case TranscriptMessageOperationalDiagnostic:
-		return decodeTranscriptPayload[TranscriptOperationalDiagnostic](data)
+		return decodeOperationalDiagnosticPayload(data)
 	case TranscriptMessageLiveRunFinished:
 		return decodeTranscriptPayload[TranscriptLiveRunResult](data)
 	default:
@@ -257,6 +259,43 @@ func decodeTranscriptPayload[T transcriptEventPayloadValue](data []byte) (Transc
 	var payload T
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return TranscriptEvent{}, err
+	}
+	return NewTranscriptEvent(payload), nil
+}
+
+func decodeOperationalDiagnosticPayload(data []byte) (TranscriptEvent, error) {
+	var discriminator struct {
+		Code OperationalDiagnosticCode
+	}
+	if err := json.Unmarshal(data, &discriminator); err != nil {
+		return TranscriptEvent{}, err
+	}
+	switch discriminator.Code {
+	case OperationalDiagnosticSleepGuardFailed,
+		OperationalDiagnosticPromptHistoryPersistFailed,
+		OperationalDiagnosticInFlightClearFailed:
+		return decodeStrictTranscriptPayload[TranscriptOperationalDiagnostic](data)
+	case OperationalDiagnosticProviderTurnStateInvalid,
+		OperationalDiagnosticProviderTurnStateConflict:
+		return decodeStrictTranscriptPayload[TranscriptProviderStateDiagnostic](data)
+	default:
+		return TranscriptEvent{}, fmt.Errorf("unknown operational diagnostic code %q", discriminator.Code)
+	}
+}
+
+func decodeStrictTranscriptPayload[T transcriptEventPayloadValue](data []byte) (TranscriptEvent, error) {
+	var payload T
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&payload); err != nil {
+		return TranscriptEvent{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err != nil {
+			return TranscriptEvent{}, err
+		}
+		return TranscriptEvent{}, fmt.Errorf("transcript payload contains trailing JSON value")
 	}
 	return NewTranscriptEvent(payload), nil
 }
@@ -350,6 +389,10 @@ func (TranscriptWorktreeTransitionOutcome) transcriptEventKind() TranscriptMessa
 }
 
 func (TranscriptOperationalDiagnostic) transcriptEventKind() TranscriptMessageKind {
+	return TranscriptMessageOperationalDiagnostic
+}
+
+func (TranscriptProviderStateDiagnostic) transcriptEventKind() TranscriptMessageKind {
 	return TranscriptMessageOperationalDiagnostic
 }
 

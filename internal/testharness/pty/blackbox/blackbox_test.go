@@ -249,7 +249,7 @@ func TestResponsesStubAcceptsLosslessResponseDTOAndStaticAdaptiveDefaults(t *tes
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session_id", cacheKey)
+	request.Header.Set("session-id", cacheKey)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -277,7 +277,7 @@ func TestResponsesStubAcceptsCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session_id", sessionID)
+	request.Header.Set("session-id", sessionID)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -306,7 +306,7 @@ func TestResponsesStubAcceptsSupervisorCompactedSessionCacheKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest response: %v", err)
 	}
-	request.Header.Set("session_id", sessionKey)
+	request.Header.Set("session-id", sessionKey)
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST response: %v", err)
@@ -769,6 +769,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	var deltas []string
 	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
+		SessionID:      "session-1",
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(probe)}}),
 	}, func(delta string) {
@@ -803,8 +804,10 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	compactTransport.BaseURLExplicit = true
 	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
-		Model:      "gpt-5",
-		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
+		Model:         "gpt-5",
+		SessionID:     "session-1",
+		CodexDispatch: testCodexDispatch(t, "session-1", llm.CodexRequestKindCompaction),
+		InputItems:    llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -853,6 +856,19 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	if err := model.Verify(); err != nil {
 		t.Fatalf("Verify model metadata: %v", err)
 	}
+}
+
+func testCodexDispatch(t *testing.T, sessionID string, requestKind llm.CodexRequestKind) *llm.CodexDispatchContext {
+	t.Helper()
+	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+		SessionID:   sessionID,
+		RunID:       "run-1",
+		RequestKind: requestKind,
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	return dispatch
 }
 
 func newStubTransport(stub *blackbox.ResponsesStub) *llm.HTTPTransport {

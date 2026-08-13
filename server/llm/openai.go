@@ -20,6 +20,7 @@ type OpenAIRequest struct {
 	SystemPrompt            string
 	PromptCacheKey          string
 	SessionID               string
+	CodexDispatch           *CodexDispatchContext
 	Items                   []ResponseItem
 	Tools                   []Tool
 	ToolChoiceMode          ToolChoiceMode
@@ -47,6 +48,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 		SystemPrompt:            request.SystemPrompt,
 		PromptCacheKey:          request.PromptCacheKey,
 		SessionID:               request.SessionID,
+		CodexDispatch:           request.CodexDispatch,
 		Items:                   CloneResponseItems(request.Items),
 		Tools:                   append([]Tool(nil), request.Tools...),
 		ToolChoiceMode:          request.ToolChoiceMode,
@@ -69,6 +71,8 @@ type OpenAICompactionRequest struct {
 	Instructions   string
 	PromptCacheKey string
 	SessionID      string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext
 	InputItems     []ResponseItem
 }
 
@@ -237,12 +241,19 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if request.Model == "" {
 		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
 	}
+	if request.CodexDispatch != nil {
+		if err := request.CodexDispatch.validateForSession(request.SessionID); err != nil {
+			return CompactionResponse{}, err
+		}
+	}
 
 	providerReq := OpenAICompactionRequest{
 		Model:          request.Model,
 		Instructions:   request.Instructions,
 		PromptCacheKey: request.PromptCacheKey,
 		SessionID:      request.SessionID,
+		FastMode:       request.FastMode,
+		CodexDispatch:  request.CodexDispatch,
 		InputItems:     CloneResponseItems(request.InputItems),
 	}
 	providerResp, err := c.transport.Compact(ctx, providerReq)
@@ -270,7 +281,8 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 	if c == nil || c.transport == nil {
 		return 0, ErrMissingTransport
 	}
-	if err := request.Validate(); err != nil {
+	supportRequest := contextFreeSupportRequest(request)
+	if err := supportRequest.Validate(); err != nil {
 		return 0, err
 	}
 	counter, ok := c.transport.(OpenAIInputTokenCountTransport)
@@ -278,7 +290,7 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 		return 0, fmt.Errorf("openai request token counting is not supported by transport")
 	}
 
-	providerReq := RequestAsOpenAI(request)
+	providerReq := RequestAsOpenAI(supportRequest)
 
 	count, err := counter.CountRequestInputTokens(ctx, providerReq)
 	if err != nil {
@@ -288,6 +300,12 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 		return 0, nil
 	}
 	return count, nil
+}
+
+func contextFreeSupportRequest(request Request) Request {
+	request.SessionID = ""
+	request.CodexDispatch = nil
+	return request
 }
 
 func (c *OpenAIClient) SupportsRequestInputTokenCount(ctx context.Context) (bool, error) {

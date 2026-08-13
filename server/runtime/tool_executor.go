@@ -484,3 +484,14 @@ func activeRunIDForStep(engine *Engine, stepID string) string {
 	}
 	return snapshot.RunID
 }
+
+func activeRunStepID(engine *Engine) string {
+	if engine == nil {
+		return ""
+	}
+	snapshot := engine.ActiveRun()
+	if snapshot == nil {
+		return ""
+	}
+	return snapshot.StepID
+}

@@ -112,7 +112,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, compactionInstructionsInput{}, true); err != nil {
+	if _, _, err := compactNowInActiveTestRun(t, eng, compactionModeManual, compactionInstructionsInput{}, true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 

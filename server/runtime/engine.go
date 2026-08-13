@@ -1022,6 +1022,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 		return llm.Response{}, err
 	}
 	var lastErr error
+	publishedProviderDiagnostics := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 2)
 	for i := 0; ; i++ {
 		var (
 			resp                    llm.Response
@@ -1080,6 +1081,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			}
 		}
 		attemptDone.Store(true)
+		e.publishProviderTurnStateDiagnostics(stepID, req.CodexDispatch, publishedProviderDiagnostics)
 		if attemptErr != nil && ctx.Err() != nil {
 			return llm.Response{}, ctx.Err()
 		}

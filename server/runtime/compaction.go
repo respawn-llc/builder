@@ -343,7 +343,7 @@ func (c *defaultContextCompactor) ShouldCompactBeforeUserMessage(ctx context.Con
 		return false, nil
 	}
 	extra := llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}})
-	req, err := e.buildRequestWithExtraItems(ctx, "", extra, true)
+	req, err := e.buildContextFreeRequest(ctx, "", extra, true)
 	if err != nil {
 		return false, err
 	}
@@ -427,7 +427,7 @@ func (e *Engine) usageAtOrAboveLimit(ctx context.Context, limit int) bool {
 }
 
 func (e *Engine) currentInputTokensPrecisely(ctx context.Context) (int, bool) {
-	req, err := e.buildRequest(ctx, "", true)
+	req, err := e.buildContextFreeRequest(ctx, "", nil, true)
 	if err != nil {
 		return 0, false
 	}
@@ -435,55 +435,11 @@ func (e *Engine) currentInputTokensPrecisely(ctx context.Context) (int, bool) {
 }
 
 func (e *Engine) currentInputTokensPreciselyWithoutPromptRefresh(ctx context.Context) (int, bool) {
-	req, err := e.buildRequestWithoutPromptRefresh(ctx)
+	req, err := e.buildContextFreeRequestWithoutPromptRefresh(ctx, true)
 	if err != nil {
 		return 0, false
 	}
 	return e.requestInputTokensPreciselyTracked(ctx, req, true)
-}
-
-func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Request, error) {
-	locked, err := e.ensureLocked()
-	if err != nil {
-		return llm.Request{}, err
-	}
-	workflowMode, err := e.workflowCompletionMode(ctx)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	requestTools, err := e.requestTools(ctx, workflowMode)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	systemPrompt, err := e.systemPromptWithoutBackfill(locked)
-	if err != nil {
-		return llm.Request{}, err
-	}
-	nativeWebSearch, nativeErr := e.enableNativeWebSearch(ctx)
-	if nativeErr != nil {
-		return llm.Request{}, nativeErr
-	}
-	toolChoiceMode := toolChoiceModeForWorkflowCompletion(workflowMode, e.workflowUseRequiredToolCalls())
-	req, err := llm.RequestFromLockedContract(locked, systemPrompt, e.transcriptRuntimeState().SnapshotItems(), requestTools, llm.ToolControls{
-		ChoiceMode:            toolChoiceMode,
-		EnableNativeWebSearch: nativeWebSearch,
-	})
-	if err != nil {
-		return llm.Request{}, err
-	}
-	req.ReasoningEffort = e.ThinkingLevel()
-	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
-	if e.supportsPromptCacheKey(ctx) {
-		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
-			req.PromptCacheKey = cacheKey
-			req.PromptCacheScope = transcript.CacheWarningScopeConversation
-		}
-	}
-	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
-		return llm.Request{}, err
-	}
-	return req, nil
 }
 
 func (e *Engine) currentInputTokensPreciselyIfDueWithPriority(ctx context.Context, limit int, critical bool) (int, bool) {
@@ -495,7 +451,7 @@ func (e *Engine) currentInputTokensPreciselyIfDueWithPriority(ctx context.Contex
 	if !e.shouldRefreshCurrentPreciseInputTokens(limit, critical) {
 		return 0, false
 	}
-	req, err := e.buildRequest(ctx, "", true)
+	req, err := e.buildContextFreeRequest(ctx, "", nil, true)
 	if err != nil {
 		return 0, false
 	}
@@ -742,13 +698,25 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot, caps)
+	requestKind := llm.CodexRequestKind("")
 	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions)
+		requestKind = llm.CodexRequestKindCompaction
+	}
+	dispatchFactory, err := e.activeDispatchRequestFactory(stepID, requestKind)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
+	}
+	if enginePlan.engineKind == compactionEngineRemote {
+		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
 		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, "")
+			if factoryErr != nil {
+				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
+			}
+			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, localFactory)
 		}
 	} else {
-		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
 	}
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)

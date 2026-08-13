@@ -75,7 +75,14 @@ func (m *uiModel) applyAdmittedTranscriptMessageState(
 	case clientui.TranscriptMessageWorktreeTransitionOutcome:
 		return m.reconcileTranscriptWorktreeTransitionOutcome(message.Payload().(clientui.TranscriptWorktreeTransitionOutcome))
 	case clientui.TranscriptMessageOperationalDiagnostic:
-		return m.applyTranscriptOperationalDiagnostic(message.Payload().(clientui.TranscriptOperationalDiagnostic))
+		switch payload := message.Payload().(type) {
+		case clientui.TranscriptOperationalDiagnostic:
+			return m.applyTranscriptOperationalDiagnostic(payload)
+		case clientui.TranscriptProviderStateDiagnostic:
+			return m.applyTranscriptProviderStateDiagnostic(payload)
+		default:
+			panic(fmt.Sprintf("unsupported transcript operational diagnostic payload %T", payload))
+		}
 	}
 	return nil
 }
@@ -382,4 +389,23 @@ func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.Trans
 	default:
 		panic(fmt.Sprintf("unsupported transcript operational diagnostic %q", diagnostic.Code))
 	}
+}
+
+func (m *uiModel) applyTranscriptProviderStateDiagnostic(diagnostic clientui.TranscriptProviderStateDiagnostic) tea.Cmd {
+	var message string
+	switch diagnostic.Code {
+	case clientui.OperationalDiagnosticProviderTurnStateInvalid:
+		message = "Provider routing state was invalid. Kent ignored it and continued; retry if model work behaves unexpectedly."
+	case clientui.OperationalDiagnosticProviderTurnStateConflict:
+		message = "Provider routing state changed unexpectedly. Kent kept the first value and continued; retry if model work behaves unexpectedly."
+	default:
+		panic(fmt.Sprintf("unsupported provider-state operational diagnostic %q", diagnostic.Code))
+	}
+	return m.sendTransientStatusWithNoticeID(
+		message,
+		uiStatusNoticeError,
+		transientStatusDuration,
+		uiStatusNoticeReplace,
+		"",
+	)
 }

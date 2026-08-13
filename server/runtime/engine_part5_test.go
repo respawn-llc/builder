@@ -31,7 +31,7 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 	}}}
-	if _, err := eng.runReviewerSuggestions(context.Background(), "review", client); err != nil {
+	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, client); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -132,7 +132,7 @@ func TestReviewerSystemPromptFileMissingFailsWithoutSnapshot(t *testing.T) {
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	_, err := eng.runReviewerSuggestions(context.Background(), "step-1", &fakeClient{})
+	_, err := eng.buildReviewerRequest(context.Background(), &fakeClient{})
 	if !errors.Is(err, errReadReviewerSystemPromptFile) {
 		t.Fatalf("expected errReadReviewerSystemPromptFile, got %v", err)
 	}
@@ -423,19 +423,22 @@ func TestReviewerSuggestionsRemainVisibleWhenFollowUpReturnsNoAnswer(t *testing.
 		engine:     engine,
 		stepRunner: missingReviewerFollowUpRunner{},
 	}
-	_, err := pipeline.RunFollowUp(
-		context.Background(),
-		"11111111-1111-4111-8111-111111111111",
-		llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")},
-		0,
-		false,
-		&fakeClient{responses: []llm.Response{{
-			Assistant: llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: textutil.Value(`{"suggestions":["fix"]}`),
-			},
-		}}},
-	)
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, runErr := pipeline.RunFollowUp(
+			ctx,
+			stepID,
+			llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original")},
+			0,
+			false,
+			&fakeClient{responses: []llm.Response{{
+				Assistant: llm.Message{
+					Role:    llm.RoleAssistant,
+					Content: textutil.Value(`{"suggestions":["fix"]}`),
+				},
+			}}},
+		)
+		return runErr
+	})
 	if err == nil {
 		t.Fatal("missing Reviewer follow-up answer unexpectedly succeeded")
 	}

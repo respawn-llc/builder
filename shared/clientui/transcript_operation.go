@@ -22,12 +22,19 @@ const (
 	OperationalDiagnosticSleepGuardFailed           OperationalDiagnosticCode = "sleep_guard_failed"
 	OperationalDiagnosticPromptHistoryPersistFailed OperationalDiagnosticCode = "prompt_history_persist_failed"
 	OperationalDiagnosticInFlightClearFailed        OperationalDiagnosticCode = "in_flight_clear_failed"
+	OperationalDiagnosticProviderTurnStateInvalid   OperationalDiagnosticCode = "provider_turn_state_invalid"
+	OperationalDiagnosticProviderTurnStateConflict  OperationalDiagnosticCode = "provider_turn_state_conflict"
 )
 
 type TranscriptOperationalDiagnostic struct {
 	Code   OperationalDiagnosticCode
 	StepID *runtimeids.StepID
 	Detail string
+}
+
+type TranscriptProviderStateDiagnostic struct {
+	Code   OperationalDiagnosticCode
+	StepID *runtimeids.StepID
 }
 
 func (o TranscriptWorktreeTransitionOutcome) Validate() error {
@@ -84,6 +91,19 @@ func (d TranscriptOperationalDiagnostic) Validate() error {
 	}
 	if strings.TrimSpace(d.Detail) == "" {
 		return fmt.Errorf("operational diagnostic detail is required")
+	}
+	return nil
+}
+
+func (d TranscriptProviderStateDiagnostic) Validate() error {
+	switch d.Code {
+	case OperationalDiagnosticProviderTurnStateInvalid,
+		OperationalDiagnosticProviderTurnStateConflict:
+	default:
+		return fmt.Errorf("unknown provider-state diagnostic code %q", d.Code)
+	}
+	if d.StepID != nil && d.StepID.IsZero() {
+		return fmt.Errorf("provider-state diagnostic step id is invalid")
 	}
 	return nil
 }

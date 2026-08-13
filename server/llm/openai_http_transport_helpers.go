@@ -25,7 +25,7 @@ func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 	return base
 }
 
-func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID string) []option.RequestOption {
+func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID string, projection codexDispatchProjection, dispatch *CodexDispatchContext) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithHeader("originator", t.ProviderIdentifier),
 		option.WithHeader("User-Agent", t.providerUserAgent()),
@@ -33,11 +33,17 @@ func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMo
 	if strings.TrimSpace(authHeader) != "" {
 		opts = append([]option.RequestOption{option.WithHeader("Authorization", authHeader)}, opts...)
 	}
-	if strings.TrimSpace(sessionID) != "" {
-		opts = append(opts, option.WithHeader("session_id", sessionID))
+	if sessionID != "" {
+		opts = append(opts, option.WithHeader("session-id", sessionID))
 	}
 	if mode.IsOAuth && mode.AccountID != "" {
 		opts = append(opts, option.WithHeader("ChatGPT-Account-Id", mode.AccountID))
+	}
+	if mode.IsOAuth && projection.RoutingHint != "" {
+		opts = append(opts, option.WithHeader("x-codex-routing-hint", projection.RoutingHint))
+	}
+	if turnState := dispatch.turnStateForRetry(); mode.IsOAuth && turnState != "" {
+		opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
 	}
 	return opts
 }

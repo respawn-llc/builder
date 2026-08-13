@@ -60,6 +60,17 @@ export const englishResources = {
         permissionDeniedBody: "Kent will keep attention notifications inside the app.",
       },
     },
+    operationalDiagnostic: {
+      providerTurnStateInvalid: {
+        title: "Provider routing data was ignored",
+        body: "Kent ignored invalid provider routing data and continued. Retry if model work behaves unexpectedly.",
+      },
+      providerTurnStateConflict: {
+        title: "Provider routing data changed",
+        body: "Kent kept the first provider routing value and continued. Retry if model work behaves unexpectedly.",
+      },
+      retryAction: "Retry model work",
+    },
     labels: {
       filter: "Labels",
       filterCount: "Labels · {{count}}",

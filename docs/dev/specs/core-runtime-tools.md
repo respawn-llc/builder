@@ -163,6 +163,49 @@
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity. Exact counting of a built request preserves its tool mode and complete tool set; standalone estimation uses automatic choice.
 
+### OpenAI-Family Dispatch Identity
+
+- Every OpenAI-family generation, streaming-generation, and compaction dispatch sends `originator`, `User-Agent`, and `session-id`, including a dispatch to an explicit custom OpenAI-compatible endpoint without authentication.
+- `session-id` is the dispatch's Kent Session identity. It must contain 1 through 8,192 bytes, must have no leading or trailing space or horizontal tab, and must be valid as an outbound HTTP header value.
+- Kent rejects a missing or invalid dispatch Session identity before authentication resolution, credential refresh, or any network request.
+- Authenticated dispatches retain their existing `Authorization` and ChatGPT account-identity headers. An explicit custom OpenAI-compatible endpoint may remain anonymous; anonymous dispatch sends the common identity headers without an `Authorization` header.
+- The legacy `session_id` header is invalid. Kent provides no compatibility mode or duplicate legacy header.
+- Token counting, model-context resolution, and offline request inspection are context-free support operations. They send no Session identity, Codex dispatch metadata, routing hint, or provider turn state.
+- For ChatGPT Codex OAuth, Kent validates the remaining Codex dispatch context after the existing authentication resolution and before any provider support or model request.
+- Only ChatGPT Codex OAuth dispatches send canonical Codex turn metadata, `x-codex-routing-hint`, or `x-codex-turn-state`. API-key and anonymous OpenAI-compatible dispatches send none of them.
+- Canonical Codex turn metadata is one object at `client_metadata["x-codex-turn-metadata"]`. Kent sends no flat turn-metadata fields, `x-codex-window-id` header, `x-codex-turn-metadata` header, installation identity, workspace identity, timing telemetry, or agent-lineage labels.
+- Canonical Codex turn metadata contains `session_id`, `thread_id`, `turn_id`, and `window_id`. It contains `request_kind` only when the operation has an approved request kind.
+- A main-agent or subagent dispatch maps its own Kent Session ID to `session_id` and `thread_id`, its live Agent Turn Run ID to `turn_id`, and `<Session ID>:<compaction generation>` to `window_id`.
+- Each subagent uses its own Session and Agent Turn identities. Kent sends no parent, root, or subagent-source lineage in Codex turn metadata.
+- A Reviewer dispatch maps `<Kent Session ID>/supervisor` to `session_id` and `thread_id`, copies the enclosing main Agent Turn Run ID to `turn_id`, and maps `<Kent Session ID>/supervisor:<main compaction generation>` to `window_id`.
+- Ordinary main-agent, subagent, and Reviewer generation uses request kind `turn`. Responses compaction uses `compaction`. Local generation-based compaction omits request kind.
+- Inline compaction uses the enclosing Agent Turn Run ID. Standalone compaction uses its own live exclusive Run ID.
+- A compaction dispatch uses the current pre-compaction window. The compaction generation advances only after successful compaction; failure or cancellation leaves it unchanged.
+- `x-codex-routing-hint` is `model=<selected model>` and adds `;tier=<effective service tier>` only when the request uses a service tier.
+- A model is representable in the routing hint only when it is nonempty, has no leading or trailing space or horizontal tab, contains no semicolon, produces a routing hint of at most 8,192 bytes, and is valid as an outbound HTTP header value.
+- Kent rejects an unrepresentable routing model before any provider support or model request. The routing tier must equal the service tier sent in the request.
+
+### ChatGPT Codex Turn State
+
+- ChatGPT Codex provider turn state is opaque retry-local routing state. Kent never trims, decodes, canonicalizes, joins, logs, persists, or presents its value.
+- A provider turn-state candidate is valid only when it contains 1 through 8,192 bytes, has no leading or trailing space or horizontal tab, and is valid as an outbound HTTP header value.
+- Kent observes candidates from every `x-codex-turn-state` initial-response header value in provider order and from each delivered `response.metadata` event in event order.
+- A metadata event may represent `x-codex-turn-state` as one string or an ordered nonempty array of strings. Field-name comparison is case-insensitive.
+- A missing turn-state field is normal absence. A null value, non-string value or array element, empty array, malformed header container, invalid event shape, or invalid candidate is unusable provider state.
+- A second case-insensitive `x-codex-turn-state` member in one metadata event makes the entire event unusable, including when the duplicate members have equal values or different casing. That event contributes no candidate.
+- An unusable metadata container, value shape, or duplicate member contributes no candidates and never replaces accepted state. Kent continues observing later response sources for a valid candidate.
+- Candidate order is observation order across response headers and metadata events and value order within each source.
+- The first valid candidate in one logical dispatch wins. A later byte-equal valid candidate is a no-op; a later distinct valid candidate is a conflict; an invalid candidate never replaces an accepted value.
+- A bounded retry of the same unchanged logical dispatch replays the accepted value exactly as `x-codex-turn-state`.
+- Every changed-payload request starts with empty provider turn state. This includes a tool continuation, a later Agent Turn, a Reviewer request, an inline or standalone compaction request, missing-tool-output repair, every context-overflow collapse repair, local summary or tool-call repair, and any other request rebuild.
+- Provider turn-state absence, invalidity, or conflict never changes the original model success, provider error, stream error, or cancellation result.
+- Absence produces no diagnostic. Invalid state produces `provider_turn_state_invalid`; conflicting state produces `provider_turn_state_conflict`.
+- Kent emits one unconditional redacted operator warning per logical dispatch and diagnostic code. The warning may identify the operation and response source but must not contain provider state, credentials, account data, request or response bodies, model output, or encrypted payloads.
+- Kent best-effort publishes each diagnostic code once per logical dispatch to attached clients through the live operational-diagnostic feed. The diagnostic is not persisted or replayed, has no acknowledgement or delivery guarantee, and may be missed by an absent, disconnected, or overflowed client.
+- A provider-state operational diagnostic contains its exact code and may contain Step identity. It has no detail field.
+- Existing detailed operational diagnostics require a nonblank detail. Clients validate the operational-diagnostic payload as a closed union by exact code, reject unknown codes, reject detail on provider-state diagnostics, and reject a missing or blank detail on detailed diagnostics.
+- Clients own all human-facing provider-state diagnostic copy.
+
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.

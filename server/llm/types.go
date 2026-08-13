@@ -522,6 +522,7 @@ type Request struct {
 	PromptCacheKey          string                       `json:"prompt_cache_key,omitempty"`
 	PromptCacheScope        transcript.CacheWarningScope `json:"prompt_cache_scope,omitempty"`
 	SessionID               string                       `json:"session_id,omitempty"`
+	CodexDispatch           *CodexDispatchContext        `json:"-"`
 	Items                   []ResponseItem               `json:"items,omitempty"`
 	Tools                   []Tool                       `json:"tools,omitempty"`
 	ToolChoiceMode          ToolChoiceMode               `json:"tool_choice_mode"`
@@ -567,6 +568,11 @@ func (r Request) Validate() error {
 		}
 		if !r.StructuredOutput.Schema.Prepared() {
 			return fmt.Errorf("%w: structured_output.schema must be prepared", ErrInvalidRequest)
+		}
+	}
+	if r.CodexDispatch != nil {
+		if err := r.CodexDispatch.validateForSession(r.SessionID); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -706,6 +712,8 @@ type CompactionRequest struct {
 	Instructions   string
 	PromptCacheKey string
 	SessionID      string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext `json:"-"`
 	InputItems     []ResponseItem
 }
 

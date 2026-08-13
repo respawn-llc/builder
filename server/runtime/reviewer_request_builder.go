@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 
 	"core/server/llm"
 	"core/shared/jsoncontract"
@@ -59,4 +60,32 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		return llm.Request{}, err
 	}
 	return req, nil
+}
+
+func (e *Engine) buildReviewerDispatchRequest(
+	ctx context.Context,
+	stepID string,
+	reviewerClient llm.Client,
+) (llm.Request, error) {
+	req, err := e.buildReviewerRequest(ctx, reviewerClient)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	runID := activeRunIDForStep(e, stepID)
+	if runID == "" {
+		return llm.Request{}, fmt.Errorf(
+			"%w: enclosing Agent Turn Run identity is required for Reviewer dispatch",
+			llm.ErrInvalidRequest,
+		)
+	}
+	factory, err := newDispatchRequestFactory(dispatchRequestIdentity{
+		SessionID:            reviewerSessionID(e.store.Meta().SessionID),
+		RunID:                runID,
+		CompactionGeneration: e.compactionRuntimeState().Count(),
+		RequestKind:          llm.CodexRequestKindTurn,
+	})
+	if err != nil {
+		return llm.Request{}, err
+	}
+	return factory.generation(req)
 }

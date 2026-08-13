@@ -28,6 +28,79 @@ func TestBuildTokenCountRequestForItemsUsesAutomaticToolChoice(t *testing.T) {
 	if llm.HasEffectiveAdvertisedTools(req.Tools, req.EnableNativeWebSearch) {
 		t.Fatalf("standalone token-count request advertised tools: %+v", req)
 	}
+	if req.SessionID != "" || req.CodexDispatch != nil {
+		t.Fatalf("standalone token-count request carries dispatch identity: %+v", req)
+	}
+}
+
+func TestCurrentExactTokenCountBuildsWithoutActiveRunOrDispatchIdentity(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{
+		inputTokenCountFn: func(request llm.Request) int {
+			if request.SessionID != "" || request.CodexDispatch != nil {
+				t.Fatalf("exact-token support request carries dispatch identity: %+v", request)
+			}
+			return 123
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t),
+		Config{Model: "gpt-5", ContextWindowTokens: 400_000},
+	)
+
+	count, ok := engine.currentInputTokensPrecisely(context.Background())
+	if !ok || count != 123 {
+		t.Fatalf("current exact token count = (%d, %t), want (123, true)", count, ok)
+	}
+}
+
+func TestCurrentExactTokenCountWithoutPromptRefreshBuildsWithoutDispatchIdentity(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{
+		inputTokenCountFn: func(request llm.Request) int {
+			if request.SessionID != "" || request.CodexDispatch != nil {
+				t.Fatalf("exact-token support request carries dispatch identity: %+v", request)
+			}
+			return 321
+		},
+	}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t),
+		Config{Model: "gpt-5", ContextWindowTokens: 400_000},
+	)
+
+	count, ok := engine.currentInputTokensPreciselyWithoutPromptRefresh(context.Background())
+	if !ok || count != 321 {
+		t.Fatalf("current exact token count = (%d, %t), want (321, true)", count, ok)
+	}
+}
+
+func TestModelContextResolutionRunsWithoutActiveRun(t *testing.T) {
+	t.Parallel()
+	client := &preciseCompactionClient{contextWindow: 272_000}
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		client,
+		newTestToolRegistry(t),
+		Config{Model: "gpt-5"},
+	)
+
+	if active := engine.ActiveRun(); active != nil {
+		t.Fatalf("active Run = %+v, want none", active)
+	}
+	if got := engine.resolveContextWindowTokens(context.Background()); got != 272_000 {
+		t.Fatalf("resolved context window = %d, want 272000", got)
+	}
+	if client.resolveCalls != 1 {
+		t.Fatalf("model-context support calls = %d, want one", client.resolveCalls)
+	}
 }
 
 func TestCriticalExactCountRefreshesAfterCommittedToolCompletion(t *testing.T) {

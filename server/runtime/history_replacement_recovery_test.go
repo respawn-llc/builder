@@ -479,9 +479,9 @@ func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testin
 		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -538,9 +538,9 @@ func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) 
 			usage.InputTokens != fixture.previousUsage.InputTokens
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -591,9 +591,9 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		return locked != nil && !locked.HasSystemPrompt && !locked.HasReviewerPrompt
 	}, observerErr)
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,
@@ -628,12 +628,13 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		fixture.store.Meta().PromptCacheLineageGeneration,
 		0,
 	)
-	if request.SessionID != fixture.store.Meta().SessionID ||
+	if request.SessionID != "" ||
+		request.CodexDispatch != nil ||
 		request.PromptCacheKey != expectedCacheKey ||
 		request.PromptCacheKey == preCompactionCacheKey ||
 		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
 		t.Fatalf(
-			"post-compaction request identity = session:%q cache-key:%q scope:%q",
+			"post-compaction context-free request identity = session:%q cache-key:%q scope:%q",
 			request.SessionID,
 			request.PromptCacheKey,
 			request.PromptCacheScope,
@@ -830,9 +831,9 @@ func TestRemoteCompactionTaskAwarenessErrorDoesNotReplaceHistory(t *testing.T) {
 	}
 	before := engine.transcriptRuntimeState().SnapshotItems()
 
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

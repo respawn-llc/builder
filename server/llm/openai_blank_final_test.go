@@ -80,7 +80,7 @@ func TestOpenAIBlankFinalClientPresence(t *testing.T) {
 					ProviderPhase: test.providerPhase,
 				},
 			})
-			response, err := client.Generate(context.Background(), Request{
+			response, err := client.Generate(context.Background(), Request{SessionID: "test-session",
 				Model:          "gpt-5",
 				ToolChoiceMode: ToolChoiceModeAutomatic,
 			})
@@ -158,7 +158,7 @@ func TestOpenAIBlankFinalStreamingAfterCommentary(t *testing.T) {
 				`{"type":"response.completed","response":{"output":[{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"working"}]},{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer",`+test.finalResponse+`"status":"completed"}]}}`,
 				`[DONE]`,
 			)
-			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+			response, err := NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{SessionID: "test-session",
 				Model:          "gpt-5",
 				ToolChoiceMode: ToolChoiceModeAutomatic,
 			}, StreamCallbacks{})
@@ -199,7 +199,7 @@ func TestOpenAIBlankFinalStreamingRejectsPendingUnmaterializedOutput(t *testing.
 				`[DONE]`,
 			}
 			transport := newOpenAIStreamTestTransport(t, events...)
-			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: "test-session",
 				Model:          "gpt-5",
 				ToolChoiceMode: ToolChoiceModeAutomatic,
 			}, StreamCallbacks{})
@@ -215,7 +215,7 @@ func TestOpenAIBlankFinalRejectsMalformedContentShape(t *testing.T) {
 		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_invalid","type":"message","role":"assistant","phase":"final_answer","content":{}}}`,
 		`[DONE]`,
 	)
-	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+	if _, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: "test-session",
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 	}, StreamCallbacks{}); err == nil {
@@ -231,7 +231,7 @@ func TestOpenAIBlankFinalStreamingPresence(t *testing.T) {
 		`[DONE]`,
 	)
 
-	response, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
+	response, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: "test-session",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:          "gpt-5",
 	}, StreamCallbacks{})
@@ -246,7 +246,7 @@ func TestOpenAIBlankFinalStreamingPresence(t *testing.T) {
 	}
 
 	client := NewOpenAIClient(transport)
-	clientResponse, err := client.GenerateStreamWithEvents(context.Background(), Request{
+	clientResponse, err := client.GenerateStreamWithEvents(context.Background(), Request{SessionID: "test-session",
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 	}, StreamCallbacks{})
@@ -265,7 +265,7 @@ func TestOpenAIBlankFinalStreamingPresence(t *testing.T) {
 		`{"type":"response.completed","response":{"output":[{"id":"msg_omitted","type":"message","role":"assistant","phase":"final_answer"}]}}`,
 		`[DONE]`,
 	)
-	omittedResponse, err := NewOpenAIClient(omittedTransport).GenerateStreamWithEvents(context.Background(), Request{
+	omittedResponse, err := NewOpenAIClient(omittedTransport).GenerateStreamWithEvents(context.Background(), Request{SessionID: "test-session",
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 	}, StreamCallbacks{})

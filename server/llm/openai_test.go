@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"testing"
 
 	"core/shared/textutil"
@@ -30,6 +32,16 @@ type capturingInputTokenTransport struct {
 	request OpenAIRequest
 }
 
+type capturingCompactionTransport struct {
+	streamingOnlyTransport
+	request OpenAICompactionRequest
+}
+
+func (t *capturingCompactionTransport) Compact(_ context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error) {
+	t.request = request
+	return OpenAICompactionResponse{}, nil
+}
+
 func (t *capturingInputTokenTransport) CountRequestInputTokens(_ context.Context, request OpenAIRequest) (int, error) {
 	t.request = request
 	return 123, nil
@@ -38,10 +50,19 @@ func (t *capturingInputTokenTransport) CountRequestInputTokens(_ context.Context
 func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *testing.T) {
 	transport := &capturingInputTokenTransport{}
 	client := NewOpenAIClient(transport)
+	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID: "different-session",
+		RunID:     "run-1",
+	})
+	if err != nil {
+		t.Fatalf("dispatch context: %v", err)
+	}
 	request := Request{
 		Model:                 "gpt-5",
 		ToolChoiceMode:        ToolChoiceModeRequired,
 		EnableNativeWebSearch: true,
+		SessionID:             "session-1",
+		CodexDispatch:         dispatch,
 		Tools:                 []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}
 	count, err := client.CountRequestInputTokens(context.Background(), request)
@@ -56,6 +77,9 @@ func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *t
 	}
 	if len(transport.request.Tools) != 1 || transport.request.Tools[0].Name != "shell" {
 		t.Fatalf("captured tools = %+v", transport.request.Tools)
+	}
+	if transport.request.SessionID != "" || transport.request.CodexDispatch != nil {
+		t.Fatalf("token-count support request carries dispatch identity: %+v", transport.request)
 	}
 }
 
@@ -86,6 +110,210 @@ func TestRequestAsOpenAIClonesPreparedSchemaCarriers(t *testing.T) {
 	if !projected.StructuredOutput.Schema.Prepared() {
 		t.Fatal("projected structured output lost its prepared schema")
 	}
+}
+
+func TestCodexDispatchContextProjectsApprovedTurnEnvelope(t *testing.T) {
+	context, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:            "session-1",
+		RunID:                "run-1",
+		CompactionGeneration: 3,
+		RequestKind:          CodexRequestKindTurn,
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+
+	metadata, err := context.TurnMetadataJSON()
+	if err != nil {
+		t.Fatalf("TurnMetadataJSON: %v", err)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(metadata), &envelope); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	want := map[string]any{
+		"session_id":   "session-1",
+		"thread_id":    "session-1",
+		"turn_id":      "run-1",
+		"window_id":    "session-1:3",
+		"request_kind": "turn",
+	}
+	if len(envelope) != len(want) {
+		t.Fatalf("metadata = %#v, want %#v", envelope, want)
+	}
+	for key, wantValue := range want {
+		if got := envelope[key]; got != wantValue {
+			t.Fatalf("metadata[%q] = %#v, want %#v", key, got, wantValue)
+		}
+	}
+}
+
+func TestCodexDispatchContextOmitsAbsentRequestKind(t *testing.T) {
+	context, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:            "session-1",
+		RunID:                "run-1",
+		CompactionGeneration: 0,
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	metadata, err := context.TurnMetadataJSON()
+	if err != nil {
+		t.Fatalf("TurnMetadataJSON: %v", err)
+	}
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(metadata), &envelope); err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if _, exists := envelope["request_kind"]; exists {
+		t.Fatalf("metadata unexpectedly contains request_kind: %#v", envelope)
+	}
+}
+
+func TestCodexDispatchContextRejectsInvalidFacts(t *testing.T) {
+	tests := []struct {
+		name  string
+		facts CodexDispatchFacts
+	}{
+		{name: "blank session", facts: CodexDispatchFacts{RunID: "run-1"}},
+		{name: "blank run", facts: CodexDispatchFacts{SessionID: "session-1"}},
+		{name: "negative generation", facts: CodexDispatchFacts{SessionID: "session-1", RunID: "run-1", CompactionGeneration: -1}},
+		{name: "unknown kind", facts: CodexDispatchFacts{SessionID: "session-1", RunID: "run-1", RequestKind: "review"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewCodexDispatchContext(test.facts); err == nil {
+				t.Fatal("expected invalid facts to fail")
+			}
+		})
+	}
+}
+
+func TestCodexDispatchContextRejectsRequestSessionMismatch(t *testing.T) {
+	context, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID: "session-1",
+		RunID:     "run-1",
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	request := Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SessionID:      "session-2",
+		CodexDispatch:  context,
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("expected request/session mismatch to fail")
+	}
+}
+
+func TestNewCodexDispatchContextAllocatesDistinctState(t *testing.T) {
+	facts := CodexDispatchFacts{SessionID: "session-1", RunID: "run-1"}
+	first, err := NewCodexDispatchContext(facts)
+	if err != nil {
+		t.Fatalf("first context: %v", err)
+	}
+	second, err := NewCodexDispatchContext(facts)
+	if err != nil {
+		t.Fatalf("second context: %v", err)
+	}
+	if first.SameState(second) {
+		t.Fatal("new contexts unexpectedly share dispatch state")
+	}
+	fresh, err := first.Fresh()
+	if err != nil {
+		t.Fatalf("Fresh: %v", err)
+	}
+	if first.SameState(fresh) {
+		t.Fatal("fresh context unexpectedly shares dispatch state")
+	}
+	firstMetadata, err := first.TurnMetadataJSON()
+	if err != nil {
+		t.Fatalf("first metadata: %v", err)
+	}
+	freshMetadata, err := fresh.TurnMetadataJSON()
+	if err != nil {
+		t.Fatalf("fresh metadata: %v", err)
+	}
+	if firstMetadata != freshMetadata {
+		t.Fatalf("fresh metadata = %s, want %s", freshMetadata, firstMetadata)
+	}
+}
+
+func TestOpenAIClientCompactRejectsCodexDispatchSessionMismatch(t *testing.T) {
+	dispatchContext, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID: "session-1",
+		RunID:     "run-1",
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	client := NewOpenAIClient(streamingOnlyTransport{})
+	_, err = client.Compact(context.Background(), CompactionRequest{
+		Model:         "gpt-5",
+		SessionID:     "session-2",
+		CodexDispatch: dispatchContext,
+	})
+	if err == nil {
+		t.Fatal("expected compaction request/session mismatch to fail")
+	}
+}
+
+func TestOpenAIClientCompactProjectsEffectiveFastMode(t *testing.T) {
+	transport := &capturingCompactionTransport{}
+	client := NewOpenAIClient(transport)
+
+	if _, err := client.Compact(context.Background(), CompactionRequest{
+		Model:     "gpt-5.6-sol",
+		SessionID: "session-1",
+		FastMode:  true,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if !transport.request.FastMode {
+		t.Fatal("provider compaction request lost effective Fast Mode")
+	}
+}
+
+func TestCodexDispatchDoesNotAffectRequestJSONOrPreciseTokenFingerprint(t *testing.T) {
+	base := Request{
+		Model:          "gpt-5",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SessionID:      "session-1",
+	}
+	context, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:            base.SessionID,
+		RunID:                "run-1",
+		CompactionGeneration: 2,
+		RequestKind:          CodexRequestKindTurn,
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	withContext := base
+	withContext.CodexDispatch = context
+
+	baseJSON, baseFingerprint := requestJSONAndFingerprint(t, base)
+	contextJSON, contextFingerprint := requestJSONAndFingerprint(t, withContext)
+	if string(contextJSON) != string(baseJSON) || contextFingerprint != baseFingerprint {
+		t.Fatalf("Codex context changed request JSON/fingerprint:\nbase=%s\ncontext=%s", baseJSON, contextJSON)
+	}
+
+	context.state.acceptTurnState("opaque-state")
+	stateJSON, stateFingerprint := requestJSONAndFingerprint(t, withContext)
+	if string(stateJSON) != string(baseJSON) || stateFingerprint != baseFingerprint {
+		t.Fatalf("retry-local state changed request JSON/fingerprint:\nbase=%s\nstate=%s", baseJSON, stateJSON)
+	}
+}
+
+func requestJSONAndFingerprint(t *testing.T, request Request) ([]byte, [sha256.Size]byte) {
+	t.Helper()
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	return payload, sha256.Sum256(payload)
 }
 
 func TestOpenAIClientGenerateStreamDoesNotReplayFinalTextAsDelta(t *testing.T) {

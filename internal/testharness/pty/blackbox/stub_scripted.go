@@ -89,7 +89,7 @@ func (s *ResponsesStub) serveScripted(
 		return scriptedllm.RequestNotAdmitted, fmt.Errorf("unsupported scripted Responses route %q", route)
 	}
 
-	lineage, err := parseScriptedLineage(request.Header.Get("session_id"))
+	lineage, err := parseScriptedLineage(request.Header.Get("session-id"))
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}

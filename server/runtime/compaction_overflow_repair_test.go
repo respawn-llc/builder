@@ -209,6 +209,7 @@ func TestLocalCompactionCollapsesToolPayloadAfterOverflow(t *testing.T) {
 	if len(client.calls) != 2 {
 		t.Fatalf("local compaction model calls = %d, want 2", len(client.calls))
 	}
+	assertFreshGenerationDispatchesWithSameMetadata(t, client.calls, "")
 	if len(client.calls[1].Items) != len(client.calls[0].Items) {
 		t.Fatalf("expected repair to preserve item count, first=%d second=%d", len(client.calls[0].Items), len(client.calls[1].Items))
 	}
@@ -313,6 +314,7 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 	if len(client.calls) != 4 {
 		t.Fatalf("local compaction model calls = %d, want 4", len(client.calls))
 	}
+	assertFreshGenerationDispatchesWithSameMetadata(t, client.calls, "")
 	wantCollapsedByCall := []int{0, 1, 2, 4}
 	for callIdx, call := range client.calls {
 		collapsed := 0
@@ -330,6 +332,80 @@ func TestLocalCompactionUsesTenTwentyFortyPercentRepairScheduleFromConfiguredCon
 		}
 		if !reasoningPreserved {
 			t.Fatalf("reasoning item changed or missing on compaction repair call %d: %+v", callIdx+1, call.Items)
+		}
+	}
+}
+
+func assertFreshGenerationDispatchesWithSameMetadata(t *testing.T, calls []llm.Request, requestKind llm.CodexRequestKind) {
+	t.Helper()
+	if len(calls) < 2 {
+		t.Fatalf("generation calls = %d, want at least two", len(calls))
+	}
+	var metadata string
+	for index, call := range calls {
+		if call.CodexDispatch == nil {
+			t.Fatalf("generation call %d omitted Codex dispatch", index+1)
+		}
+		got, err := call.CodexDispatch.TurnMetadataJSON()
+		if err != nil {
+			t.Fatalf("generation call %d metadata: %v", index+1, err)
+		}
+		if index == 0 {
+			metadata = got
+		} else {
+			if got != metadata {
+				t.Fatalf("generation call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
+			}
+			if calls[index-1].CodexDispatch.SameState(call.CodexDispatch) {
+				t.Fatalf("generation call %d reused changed-payload dispatch state", index+1)
+			}
+		}
+	}
+	if requestKind == "" {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(metadata), &fields); err != nil {
+			t.Fatalf("decode local compaction metadata: %v", err)
+		}
+		if _, present := fields["request_kind"]; present {
+			t.Fatalf("local compaction metadata included request kind: %s", metadata)
+		}
+	}
+}
+
+func assertFreshCompactionDispatchesWithSameMetadata(t *testing.T, calls []llm.CompactionRequest, requestKind llm.CodexRequestKind) {
+	t.Helper()
+	if len(calls) < 2 {
+		t.Fatalf("compaction calls = %d, want at least two", len(calls))
+	}
+	var metadata string
+	for index, call := range calls {
+		if call.CodexDispatch == nil {
+			t.Fatalf("compaction call %d omitted Codex dispatch", index+1)
+		}
+		got, err := call.CodexDispatch.TurnMetadataJSON()
+		if err != nil {
+			t.Fatalf("compaction call %d metadata: %v", index+1, err)
+		}
+		if index == 0 {
+			metadata = got
+		} else {
+			if got != metadata {
+				t.Fatalf("compaction call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
+			}
+			if calls[index-1].CodexDispatch.SameState(call.CodexDispatch) {
+				t.Fatalf("compaction call %d reused changed-payload dispatch state", index+1)
+			}
+		}
+	}
+	if requestKind == llm.CodexRequestKindCompaction {
+		var fields struct {
+			RequestKind llm.CodexRequestKind `json:"request_kind"`
+		}
+		if err := json.Unmarshal([]byte(metadata), &fields); err != nil {
+			t.Fatalf("decode remote compaction metadata: %v", err)
+		}
+		if fields.RequestKind != requestKind {
+			t.Fatalf("remote compaction request kind = %q, want %q", fields.RequestKind, requestKind)
 		}
 	}
 }

@@ -375,7 +375,7 @@ func (s *ResponsesStub) consume(route Route, body []byte, headers http.Header) (
 		return nil, fmt.Errorf("developer message count mismatch: got=%d want=%d", responseDeveloperMessageCount(body), *required.DeveloperMessageCount)
 	}
 	if required.SessionCacheKey && !hasMatchingSessionCacheKey(body, headers) {
-		return nil, errors.New("required response session_id and prompt_cache_key relation was not present")
+		return nil, errors.New("required response session-id and prompt_cache_key relation was not present")
 	}
 	s.index++
 	s.requiredInFlight = true
@@ -718,7 +718,7 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 	if json.Unmarshal(body, &request) != nil || request.PromptCacheKey == nil {
 		return false
 	}
-	session, err := parseSessionCacheKey(headers.Get("session_id"))
+	session, err := parseSessionCacheKey(headers.Get("session-id"))
 	if err != nil {
 		return false
 	}

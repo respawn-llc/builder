@@ -697,15 +697,15 @@ func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	opts := transport.buildRequestOptions("Bearer x", OpenAIAuthMode{
 		IsOAuth:   true,
 		AccountID: "acc-1",
-	}, "session-1")
+	}, "session-1", codexDispatchProjection{RoutingHint: "model=gpt-5"}, nil)
 
-	if len(opts) != 5 {
-		t.Fatalf("expected 5 request options, got %d", len(opts))
+	if len(opts) != 6 {
+		t.Fatalf("expected 6 request options, got %d", len(opts))
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "session-1")) != 4 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "session-1", codexDispatchProjection{}, nil)) != 4 {
 		t.Fatal("expected non-oauth options to include auth/session/caching headers")
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "")) != 3 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 3 {
 		t.Fatal("expected non-oauth options to include auth/caching headers")
 	}
 }
@@ -714,13 +714,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	requestHeaders := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestHeaders <- r.Header.Clone()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_identity_1",
-			"object":"response",
-			"output":[],
-			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
-		}`))
+		writeCompletedResponseJSON(w)
 	}))
 	defer server.Close()
 
@@ -729,7 +723,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	transport.Client = server.Client()
 	transport.ProviderIdentifier = "acme_agent"
 
-	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}); err != nil {
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: "session-1"}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	headers := <-requestHeaders
@@ -738,6 +732,9 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	}
 	if got, want := headers.Get("User-Agent"), "acme_agent/"+config.Version; got != want {
 		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+	if got := headers.Get("session-id"); got != "session-1" {
+		t.Fatalf("session-id = %q, want session-1", got)
 	}
 }
 
@@ -755,13 +752,13 @@ func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing
 
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 2 {
 		t.Fatal("expected empty auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 2 {
 		t.Fatal("expected whitespace auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "session-1")) != 3 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "session-1", codexDispatchProjection{}, nil)) != 3 {
 		t.Fatal("expected session header to remain when Authorization is omitted")
 	}
 }
@@ -796,20 +793,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_anon_1",
-			"object":"response",
-			"output":[
-				{
-					"type":"message",
-					"id":"msg_anon_1",
-					"role":"assistant",
-					"status":"completed",
-					"content":[{"type":"output_text","text":"hello from anonymous compatible server"}]
-				}
-			],
-			"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}
-		}`))
+		_, _ = w.Write([]byte(`{"id":"resp_anon_1","object":"response","output":[{"type":"message","id":"msg_anon_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello from anonymous compatible server"}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`))
 	}))
 	defer server.Close()
 	targetURL, err := url.Parse(server.URL)
@@ -836,8 +820,9 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	}
 
 	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model: "vendor-custom-model",
-		Items: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
+		Model:     "vendor-custom-model",
+		SessionID: "session-1",
+		Items:     PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)

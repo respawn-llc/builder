@@ -436,7 +436,7 @@ func TestScriptedResponsesSetsSSEContentTypeBeforeStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	request.Header.Set("session_id", runtimeids.NewSessionID().String())
+	request.Header.Set("session-id", runtimeids.NewSessionID().String())
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
