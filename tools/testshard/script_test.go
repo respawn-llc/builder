@@ -23,11 +23,11 @@ func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
 
 	runScript := func() {
 		t.Helper()
-		command := exec.Command("bash", "scripts/test.sh", "server")
+		command := exec.Command("bash", "scripts/test.sh", "server", "--inherit-env")
 		command.Dir = repoRoot
-		command.Env = append(
-			os.Environ(),
+		command.Env = append(environmentWithout("KENT_PROTOBUF_OUTPUTS_READY"),
 			"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"KENT_PROTOBUF_TEST_BYPASS_LOCK=1",
 			"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
 			"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
 			"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,
@@ -66,6 +66,27 @@ func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
 			t.Fatalf("cached fixture path changed: got %q, want %q", got, firstPaths[index])
 		}
 	}
+}
+
+func environmentWithout(names ...string) []string {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	environment := make([]string, 0, len(os.Environ()))
+	for _, item := range os.Environ() {
+		name := item
+		for index, character := range item {
+			if character == '=' {
+				name = item[:index]
+				break
+			}
+		}
+		if _, exists := excluded[name]; !exists {
+			environment = append(environment, item)
+		}
+	}
+	return environment
 }
 
 func assertPrebuiltExecutable(t *testing.T, recordPath string, name string) string {
