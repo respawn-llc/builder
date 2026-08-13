@@ -298,6 +298,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
+		WithWorkflowTaskReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
 	s.safeBundles().Sessions.sessionServices[scopeKey] = service
 	return service
@@ -390,6 +391,13 @@ func (s *Core) SessionViewClient() apicontract.SessionViewService {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionViews
+}
+
+func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
+	if s == nil {
+		return nil
+	}
+	return chatSettingsService{core: s}
 }
 
 func (s *Core) ProjectID() string {

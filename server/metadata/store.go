@@ -2063,6 +2063,43 @@ func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID str
 	return sessionExecutionTargetFromRow(row), nil
 }
 
+type SessionChatSettingsScope struct {
+	ProjectID     string
+	WorkspaceID   *string
+	WorkspaceRoot string
+}
+
+func (s *Store) ResolveSessionChatSettingsScope(
+	ctx context.Context,
+	sessionID string,
+) (SessionChatSettingsScope, error) {
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
+	if err != nil {
+		return SessionChatSettingsScope{}, err
+	}
+	projectID := strings.TrimSpace(row.ProjectID)
+	workspaceRoot := strings.TrimSpace(row.WorkspaceRoot)
+	if projectID == "" {
+		return SessionChatSettingsScope{}, errors.New("session project id is required")
+	}
+	if workspaceRoot == "" {
+		return SessionChatSettingsScope{}, errors.New("session workspace root is required")
+	}
+	var workspaceID *string
+	if row.ExecutionTargetWorkspaceBinding.Valid {
+		value := strings.TrimSpace(row.ExecutionTargetWorkspaceBinding.String)
+		if value == "" {
+			return SessionChatSettingsScope{}, errors.New("session workspace binding is invalid")
+		}
+		workspaceID = &value
+	}
+	return SessionChatSettingsScope{
+		ProjectID:     projectID,
+		WorkspaceID:   workspaceID,
+		WorkspaceRoot: workspaceRoot,
+	}, nil
+}
+
 func (s *Store) ResolveOptionalSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
 	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
 	if err != nil {

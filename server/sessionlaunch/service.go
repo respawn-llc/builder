@@ -31,10 +31,15 @@ type promptHistoryReader interface {
 	ReadPromptHistory(ctx context.Context, sessionID string) ([]string, error)
 }
 
+type workflowTaskReader interface {
+	WorkflowTaskIDForSession(context.Context, string) (*string, error)
+}
+
 type Service struct {
 	planner                     launch.Planner
 	authStates                  authStateReader
 	promptHistory               promptHistoryReader
+	workflowTasks               workflowTaskReader
 	runtime                     *sessionruntime.Authority
 	plans                       *requestmemo.Memo[sessionPlanMemoRequest, PlanResult]
 	workspaceID                 string
@@ -72,6 +77,14 @@ func (s *Service) WithPromptHistoryReader(reader promptHistoryReader) *Service {
 		return nil
 	}
 	s.promptHistory = reader
+	return s
+}
+
+func (s *Service) WithWorkflowTaskReader(reader workflowTaskReader) *Service {
+	if s == nil {
+		return nil
+	}
+	s.workflowTasks = reader
 	return s
 }
 
@@ -233,6 +246,158 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 		return WorkspaceChatDraftResolution{}, err
 	}
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
+}
+
+func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
+	resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	draft := resolved.Draft
+	policy := serverapi.ChatSettingsAutoCompactionOptional
+	if s.planner.Config.Settings.CompactionMode == config.CompactionModeNone {
+		policy = serverapi.ChatSettingsAutoCompactionDisabled
+	}
+	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: resolved.Catalog,
+		Agent:   draft.Agent,
+		Settings: session.ChatSettings{
+			Supervisor:     draft.Supervisor,
+			Thinking:       draft.Thinking,
+			Fast:           draft.Fast,
+			Questions:      draft.Questions,
+			AutoCompaction: draft.AutoCompaction,
+		},
+		PersistedQuestionsPolicy: resolved.PersistedQuestionsPolicy,
+		CompactionPolicy:         policy,
+	})
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	response := serverapi.ChatSettingsReadResponse{Settings: settings}
+	if err := response.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) MaterializedChatSettings(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (serverapi.ChatSettingsReadResponse, error) {
+	if sessionID.IsZero() {
+		return serverapi.ChatSettingsReadResponse{}, errors.New("Session ID is required")
+	}
+	if s == nil || s.planner.PersistedSessions == nil {
+		return serverapi.ChatSettingsReadResponse{}, errors.New("persisted Session resolver is required")
+	}
+	record, err := s.planner.PersistedSessions.ResolvePersistedSession(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if record.Meta == nil {
+		return serverapi.ChatSettingsReadResponse{}, errors.New("persisted Session metadata is required")
+	}
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		planner.Config, err = planner.ReloadConfig()
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+	}
+	authState := auth.EmptyState()
+	if s.authStates != nil {
+		authState, err = s.authStates.StoredState(ctx)
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+	}
+	catalog, err := launch.PrepareChatAgentCatalog(
+		planner.Config,
+		authState,
+		launch.ChatAgentCatalogOptions{},
+	)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	state, err := session.ChatSettingsStateFromMeta(*record.Meta)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	baselineEntry, ok := catalog.Lookup(state.Agent)
+	if !ok {
+		baselineEntry, ok = catalog.Lookup(config.DefaultSubagentRole)
+	}
+	if !ok {
+		return serverapi.ChatSettingsReadResponse{}, errors.New("prepared Chat Agent catalog is missing default")
+	}
+	effective, err := session.ResolveEffectiveChatSettings(
+		state.Settings,
+		nil,
+		baselineEntry.Settings.Baseline,
+	)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	questionsPolicy := effective.Questions
+	taskID, err := s.workflowTaskID(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	workflowLocked := taskID != nil
+	policy := serverapi.ChatSettingsAutoCompactionOptional
+	if planner.Config.Settings.CompactionMode == config.CompactionModeNone {
+		policy = serverapi.ChatSettingsAutoCompactionDisabled
+	} else if workflowLocked {
+		policy = serverapi.ChatSettingsAutoCompactionRequired
+	}
+	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog:                  catalog,
+		Agent:                    state.Agent,
+		Settings:                 effective,
+		PersistedQuestionsPolicy: questionsPolicy,
+		WorkflowLocked:           workflowLocked,
+		CachingLocked:            record.Meta.Locked != nil,
+		CompactionPolicy:         policy,
+		Locked:                   record.Meta.Locked,
+	})
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	facts := &serverapi.ChatSettingsSessionFacts{
+		SessionID: sessionID,
+		TaskID:    taskID,
+	}
+	if record.Meta.PreviousSessionID != nil {
+		previous := *record.Meta.PreviousSessionID
+		facts.PreviousSessionID = &previous
+	}
+	response := serverapi.ChatSettingsReadResponse{
+		Settings: settings,
+		Session:  facts,
+	}
+	if err := response.ValidateForTarget(serverapi.SessionChatSettingsTarget(sessionID)); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) workflowTaskID(ctx context.Context, sessionID string) (*string, error) {
+	if s.workflowTasks == nil {
+		return nil, nil
+	}
+	taskID, err := s.workflowTasks.WorkflowTaskIDForSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if taskID == nil {
+		return nil, nil
+	}
+	validated, err := runtimeids.ParseTaskID(*taskID)
+	if err != nil {
+		return nil, err
+	}
+	return &validated, nil
 }
 
 func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {

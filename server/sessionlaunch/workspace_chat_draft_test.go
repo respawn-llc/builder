@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"core/server/auth"
+	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
 
@@ -66,9 +68,52 @@ func TestWorkspaceChatDraftDefaultFastUsesLoadedConfiguration(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	stored := &WorkspaceChatDraft{
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "medium",
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	resolved, err := ResolveWorkspaceChatDraft(draftInput(settings), stored)
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceChatDraft: %v", err)
+	}
+	if resolved.Draft.Questions {
+		t.Fatal("existing effective draft capability repair changed")
+	}
+	if !resolved.PersistedQuestionsPolicy {
+		t.Fatal("persisted Questions policy was not retained")
+	}
+	projected, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: resolved.Catalog,
+		Agent:   resolved.Draft.Agent,
+		Settings: session.ChatSettings{
+			Supervisor:     resolved.Draft.Supervisor,
+			Thinking:       resolved.Draft.Thinking,
+			Fast:           resolved.Draft.Fast,
+			Questions:      resolved.Draft.Questions,
+			AutoCompaction: resolved.Draft.AutoCompaction,
+		},
+		PersistedQuestionsPolicy: resolved.PersistedQuestionsPolicy,
+		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
+	})
+	if err != nil {
+		t.Fatalf("ProjectChatSettings: %v", err)
+	}
+	if projected.Questions.Capable || !projected.Questions.Enabled ||
+		projected.Questions.Editability != serverapi.ChatSettingsEditable {
+		t.Fatalf("Questions projection = %+v", projected.Questions)
+	}
+}
+
 type draftPersistence struct {
-	draft *WorkspaceChatDraft
-	reads int
+	draft  *WorkspaceChatDraft
+	reads  int
+	writes int
 }
 
 func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error) {
@@ -154,6 +199,7 @@ func TestWorkspaceChatDraftOwnerPreservesDraftAcrossMaterializerFailures(t *test
 	}
 }
 func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error {
+	f.writes++
 	f.draft = d
 	return nil
 }

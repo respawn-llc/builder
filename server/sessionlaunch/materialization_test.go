@@ -80,6 +80,54 @@ func TestServiceMaterializationUsesStoredAuthWithoutRefreshingProviderCredential
 	}
 }
 
+func TestServiceMaterializedChatSettingsReadsPersistedStateWithoutRuntime(t *testing.T) {
+	service, metadataStore, cfg, _ := newWorkspaceChatMaterializationService(t)
+	service.
+		WithAuthStateReader(failingAuthStateReader{}).
+		WithWorkflowTaskReader(metadataStore)
+	sessionID, err := service.materializeWorkspaceChatSession(t.Context())
+	if err != nil {
+		t.Fatalf("materializeWorkspaceChatSession: %v", err)
+	}
+	record, err := metadataStore.ResolvePersistedSession(t.Context(), sessionID.String())
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	store, err := session.OpenResolved(record, metadataStore.AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("OpenResolved: %v", err)
+	}
+	thinking := "high"
+	fast := false
+	questions := true
+	autoCompaction := false
+	if _, err := store.MutateChatSettings(session.ChatSettingsMutation{
+		Thinking:       &thinking,
+		Fast:           &fast,
+		Questions:      &questions,
+		AutoCompaction: &autoCompaction,
+	}); err != nil {
+		t.Fatalf("MutateChatSettings: %v", err)
+	}
+	service.planner.ReloadConfig = func() (config.App, error) {
+		cfg.Settings.ThinkingLevel = "medium"
+		return cfg, nil
+	}
+
+	response, err := service.MaterializedChatSettings(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("MaterializedChatSettings: %v", err)
+	}
+	if response.Session == nil ||
+		response.Session.SessionID != sessionID ||
+		response.Settings.SelectedAgent.Role != "default" ||
+		response.Settings.SelectedAgent.Thinking != "high" ||
+		response.Settings.Questions.Enabled != questions ||
+		response.Settings.AutoCompaction.Stored != autoCompaction {
+		t.Fatalf("response = %+v", response)
+	}
+}
+
 func TestServiceMaterializationDoesNotValidateProviderReadiness(t *testing.T) {
 	service, metadataStore, cfg, binding := newWorkspaceChatMaterializationService(t)
 	cfg.Settings.ProviderOverride = "unsupported-provider"

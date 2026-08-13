@@ -723,6 +723,12 @@ func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionView
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) ChatSettingsClient() apicontract.ChatSettingsService {
+	if c := d.activeCore(); c != nil {
+		return c.ChatSettingsClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()

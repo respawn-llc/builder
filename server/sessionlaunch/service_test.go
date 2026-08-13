@@ -62,6 +62,49 @@ func newSessionLaunchTestService(cfg config.App, containerDir string) *Service {
 	}))
 }
 
+func TestServiceLazyChatSettingsReturnsReadOnlyCompleteProjection(t *testing.T) {
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.ThinkingLevel = "medium"
+	settings.Reviewer.Model = settings.Model
+	settings.Reviewer.ThinkingLevel = settings.ThinkingLevel
+	settings.Reviewer.ModelContextWindow = settings.ModelContextWindow
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{ProviderID: "anthropic"}
+	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	stored := &WorkspaceChatDraft{
+		Message:        "composer stays elsewhere",
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "medium",
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	persistence := &draftPersistence{draft: stored}
+	service := NewService(launch.Planner{
+		Config: config.App{Settings: settings},
+	}).
+		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(persistence), "workspace-1")
+
+	response, err := service.LazyChatSettings(t.Context())
+	if err != nil {
+		t.Fatalf("LazyChatSettings: %v", err)
+	}
+	if response.Session != nil ||
+		response.Settings.AgentLocked ||
+		response.Settings.WorkflowLocked ||
+		response.Settings.CachingLocked {
+		t.Fatalf("lazy facts = %+v", response)
+	}
+	if response.Settings.Questions.Capable ||
+		!response.Settings.Questions.Enabled ||
+		response.Settings.Questions.Editability != serverapi.ChatSettingsEditable {
+		t.Fatalf("Questions = %+v", response.Settings.Questions)
+	}
+	if persistence.reads != 1 || persistence.writes != 0 {
+		t.Fatalf("draft reads=%d writes=%d", persistence.reads, persistence.writes)
+	}
+}
+
 type sessionLaunchBoundaryResolver struct{ root string }
 
 func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {
