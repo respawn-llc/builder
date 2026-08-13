@@ -262,8 +262,7 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 	case runtime.EventSleepGuardFailed,
 		runtime.EventPromptHistoryPersistFailed,
 		runtime.EventInFlightClearFailed,
-		runtime.EventProviderTurnStateInvalid,
-		runtime.EventProviderTurnStateConflict:
+		runtime.EventProviderTurnStateInvalid:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -667,27 +666,20 @@ func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.Trans
 		parsed := mustTranscriptStepID(evt.StepID, "operational diagnostic")
 		stepID = &parsed
 	}
-	detailed := func(code clientui.OperationalDiagnosticCode) []clientui.TranscriptEvent {
+	diagnostic := func(code clientui.OperationalDiagnosticCode, detail string) []clientui.TranscriptEvent {
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
-			Code: code, StepID: stepID, Detail: strings.TrimSpace(evt.Error),
-		})}
-	}
-	providerState := func(code clientui.OperationalDiagnosticCode) []clientui.TranscriptEvent {
-		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptProviderStateDiagnostic{
-			Code: code, StepID: stepID,
+			Code: code, StepID: stepID, Detail: detail,
 		})}
 	}
 	switch evt.Kind {
 	case runtime.EventSleepGuardFailed:
-		return detailed(clientui.OperationalDiagnosticSleepGuardFailed)
+		return diagnostic(clientui.OperationalDiagnosticSleepGuardFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventPromptHistoryPersistFailed:
-		return detailed(clientui.OperationalDiagnosticPromptHistoryPersistFailed)
+		return diagnostic(clientui.OperationalDiagnosticPromptHistoryPersistFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventInFlightClearFailed:
-		return detailed(clientui.OperationalDiagnosticInFlightClearFailed)
+		return diagnostic(clientui.OperationalDiagnosticInFlightClearFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventProviderTurnStateInvalid:
-		return providerState(clientui.OperationalDiagnosticProviderTurnStateInvalid)
-	case runtime.EventProviderTurnStateConflict:
-		return providerState(clientui.OperationalDiagnosticProviderTurnStateConflict)
+		return diagnostic(clientui.OperationalDiagnosticProviderTurnStateInvalid, "")
 	default:
 		panic(fmt.Sprintf("runtime event %q is not an operational diagnostic", evt.Kind))
 	}

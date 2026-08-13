@@ -886,29 +886,3 @@ func TestInFlightClearFailureIsOperationalDiagnosticOnly(t *testing.T) {
 		t.Fatalf("diagnostic code = %q, want %q", diagnostic.Code, clientui.OperationalDiagnosticInFlightClearFailed)
 	}
 }
-
-func TestProviderTurnStateFailureIsCodeOnlyOperationalDiagnostic(t *testing.T) {
-	for _, test := range []struct {
-		event runtime.EventKind
-		code  clientui.OperationalDiagnosticCode
-	}{
-		{runtime.EventProviderTurnStateInvalid, clientui.OperationalDiagnosticProviderTurnStateInvalid},
-		{runtime.EventProviderTurnStateConflict, clientui.OperationalDiagnosticProviderTurnStateConflict},
-	} {
-		messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
-			Kind:   test.event,
-			StepID: transcriptProjectionStepID,
-			Error:  "must not cross the client boundary",
-		})
-		if len(messages) != 1 {
-			t.Fatalf("%q messages = %+v, want one", test.event, messages)
-		}
-		diagnostic, ok := messages[0].Payload().(clientui.TranscriptProviderStateDiagnostic)
-		if !ok {
-			t.Fatalf("%q payload = %T, want code-only provider-state diagnostic", test.event, messages[0].Payload())
-		}
-		if diagnostic.Code != test.code || diagnostic.StepID == nil {
-			t.Fatalf("%q diagnostic = %+v", test.event, diagnostic)
-		}
-	}
-}

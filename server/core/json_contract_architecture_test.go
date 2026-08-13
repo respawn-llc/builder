@@ -97,44 +97,6 @@ func decodeAnotherHeader(raw []byte) {
 		)
 	})
 
-	t.Run("KENT-570 bounded provider metadata exclusion", func(t *testing.T) {
-		pkgs, root := jsonContractArchitectureFixture(t, "server/llm/parser.go", `package llm
-
-import (
-	"bytes"
-	"encoding/json"
-)
-
-func decodeCodexTurnStateMetadata(raw []byte) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	_, _ = decoder.Token()
-}
-`)
-		if violations := collectJSONContractArchitectureViolations(pkgs, root); len(violations) != 0 {
-			t.Fatalf("exact KENT-570 exclusion violations = %v, want none", violations)
-		}
-	})
-
-	t.Run("KENT-570 exclusion is exact", func(t *testing.T) {
-		pkgs, root := jsonContractArchitectureFixture(t, "server/llm/parser.go", `package llm
-
-import (
-	"bytes"
-	"encoding/json"
-)
-
-func decodeAnotherProviderMetadata(raw []byte) {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	_, _ = decoder.Token()
-}
-`)
-		assertJSONContractArchitectureViolation(
-			t,
-			collectJSONContractArchitectureViolations(pkgs, root),
-			jsonContractArchitectureJSONToken,
-		)
-	})
-
 	t.Run("XML token reader", func(t *testing.T) {
 		pkgs, root := jsonContractArchitectureFixture(t, "cli/kent/plist.go", `package kent
 
@@ -445,7 +407,7 @@ func collectJSONContractArchitectureViolations(pkgs []*packages.Package, repoRoo
 					if ok {
 						called := jsonContractArchitectureCalledFunction(pkg, call)
 						if called != nil && called.Pkg() != nil && called.Pkg().Path() == "encoding/json" && called.Name() == "Token" {
-							if !jsonContractArchitectureExactTokenExclusion(pkg.PkgPath, function.Name.Name) {
+							if pkg.PkgPath != "core/server/session" || function.Name.Name != "decodeEventLogHeaderFields" {
 								appendViolation(newJSONContractArchitectureViolation(
 									pkg,
 									call.Pos(),
@@ -494,11 +456,6 @@ func collectJSONContractArchitectureViolations(pkgs []*packages.Package, repoRoo
 		return violations[i].String() < violations[j].String()
 	})
 	return violations
-}
-
-func jsonContractArchitectureExactTokenExclusion(packagePath string, functionName string) bool {
-	return (packagePath == "core/server/session" && functionName == "decodeEventLogHeaderFields") ||
-		(packagePath == "core/server/llm" && functionName == "decodeCodexTurnStateMetadata")
 }
 
 func jsonContractArchitectureTaintedFunctions(pkg *packages.Package) map[*types.Func]bool {

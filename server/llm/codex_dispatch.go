@@ -11,8 +11,6 @@ import (
 	"golang.org/x/net/http/httpguts"
 )
 
-const maxCodexHeaderValueBytes = 8 * 1024
-
 const codexTurnStateHeader = "x-codex-turn-state"
 
 type CodexRequestKind string
@@ -48,15 +46,13 @@ type CodexDispatchState struct {
 type CodexTurnStateDiagnosticCategory string
 
 const (
-	CodexTurnStateDiagnosticInvalid  CodexTurnStateDiagnosticCategory = "provider_turn_state_invalid"
-	CodexTurnStateDiagnosticConflict CodexTurnStateDiagnosticCategory = "provider_turn_state_conflict"
+	CodexTurnStateDiagnosticInvalid CodexTurnStateDiagnosticCategory = "provider_turn_state_invalid"
 )
 
 type codexTurnStateSource string
 
 const (
 	codexTurnStateSourceHTTPHeader codexTurnStateSource = "http_header"
-	codexTurnStateSourceMetadata   codexTurnStateSource = "response_metadata"
 )
 
 type codexTurnMetadata struct {
@@ -147,37 +143,15 @@ func (c *CodexDispatchContext) observeTurnStateCandidate(value string, source co
 		c.state.hasTurnState = true
 		c.state.mu.Unlock()
 		return
-	case c.state.turnState != value:
-		shouldWarn := c.state.recordDiagnosticLocked(CodexTurnStateDiagnosticConflict)
-		requestKind := c.facts.RequestKind
-		c.state.mu.Unlock()
-		c.warnUnusableTurnState(shouldWarn, CodexTurnStateDiagnosticConflict, source, requestKind)
-		return
 	default:
 		c.state.mu.Unlock()
 		return
 	}
 }
 
-func (c *CodexDispatchContext) observeInvalidTurnStateContainer(source codexTurnStateSource) {
-	if c == nil || c.state == nil {
-		return
-	}
-	c.state.mu.Lock()
-	shouldWarn := c.state.recordDiagnosticLocked(CodexTurnStateDiagnosticInvalid)
-	requestKind := c.facts.RequestKind
-	c.state.mu.Unlock()
-	c.warnUnusableTurnState(
-		shouldWarn,
-		CodexTurnStateDiagnosticInvalid,
-		source,
-		requestKind,
-	)
-}
-
 func (s *CodexDispatchState) recordDiagnosticLocked(category CodexTurnStateDiagnosticCategory) bool {
 	if s.diagnostics == nil {
-		s.diagnostics = make(map[CodexTurnStateDiagnosticCategory]struct{}, 2)
+		s.diagnostics = make(map[CodexTurnStateDiagnosticCategory]struct{}, 1)
 	}
 	if _, exists := s.diagnostics[category]; exists {
 		return false
@@ -211,16 +185,10 @@ func (c *CodexDispatchContext) TurnStateDiagnostics() []CodexTurnStateDiagnostic
 	}
 	c.state.mu.Lock()
 	defer c.state.mu.Unlock()
-	result := make([]CodexTurnStateDiagnosticCategory, 0, len(c.state.diagnostics))
-	for _, category := range []CodexTurnStateDiagnosticCategory{
-		CodexTurnStateDiagnosticInvalid,
-		CodexTurnStateDiagnosticConflict,
-	} {
-		if _, exists := c.state.diagnostics[category]; exists {
-			result = append(result, category)
-		}
+	if _, exists := c.state.diagnostics[CodexTurnStateDiagnosticInvalid]; exists {
+		return []CodexTurnStateDiagnosticCategory{CodexTurnStateDiagnosticInvalid}
 	}
-	return result
+	return nil
 }
 
 func (c *CodexDispatchContext) validate() error {
@@ -297,9 +265,6 @@ func validateCodexHeaderValue(value string) error {
 	if len(value) == 0 {
 		return fmt.Errorf("value is required")
 	}
-	if len(value) > maxCodexHeaderValueBytes {
-		return fmt.Errorf("value exceeds %d bytes", maxCodexHeaderValueBytes)
-	}
 	if value[0] == ' ' || value[0] == '\t' || value[len(value)-1] == ' ' || value[len(value)-1] == '\t' {
 		return fmt.Errorf("value has leading or trailing SP/HTAB")
 	}
@@ -326,8 +291,8 @@ func buildCodexRoutingHint(model string, serviceTier *responses.ResponseNewParam
 	if serviceTier != nil {
 		hint += ";tier=" + string(*serviceTier)
 	}
-	if err := validateCodexHeaderValue(hint); err != nil {
-		return "", fmt.Errorf("%w: Codex routing hint is not wire-realizable: %v", ErrInvalidRequest, err)
+	if !httpguts.ValidHeaderFieldValue(hint) {
+		return "", fmt.Errorf("%w: Codex routing hint is not a valid HTTP header field value", ErrInvalidRequest)
 	}
 	return hint, nil
 }

@@ -259,7 +259,11 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 }
 
 func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
-	factory, err := e.activeDispatchRequestFactory(activeRunStepID(e), nil)
+	run := e.ActiveRun()
+	if run == nil {
+		return "", fmt.Errorf("%w: active Run identity is required for local compaction", llm.ErrInvalidRequest)
+	}
+	factory, err := e.activeDispatchRequestFactory(run.StepID, nil)
 	if err != nil {
 		return "", err
 	}

@@ -137,9 +137,6 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			Code:   OperationalDiagnosticSleepGuardFailed,
 			Detail: "operating system rejected sleep prevention",
 		}), TranscriptMessageOperationalDiagnostic},
-		{"provider-state operational diagnostic", NewTranscriptEvent(TranscriptProviderStateDiagnostic{
-			Code: OperationalDiagnosticProviderTurnStateConflict,
-		}), TranscriptMessageOperationalDiagnostic},
 		{"live run finished", NewTranscriptEvent(TranscriptLiveRunResult{
 			Status: LiveRunStatusCompleted, ResultKind: LiveRunResultNoFinalAnswer,
 			StartedAt: time.Unix(1_700_000_000, 0), FinishedAt: time.Unix(1_700_000_001, 0),

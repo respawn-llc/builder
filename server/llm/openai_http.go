@@ -229,22 +229,19 @@ func consumeResponsesStream(
 ) (OpenAIResponse, error) {
 	accumulator := newResponseStreamAccumulator(callbacks, windowTokens)
 	headersObserved := false
-	observeCodexTurnStateResponseHeaders(dispatch, rawResp, &headersObserved)
+	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	for stream.Next() {
-		observeCodexTurnStateResponseHeaders(dispatch, rawResp, &headersObserved)
+		observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 		if callbacks.OnStreamActivity != nil {
 			callbacks.OnStreamActivity()
 		}
 		event := stream.Current()
-		if event.Type == "response.metadata" {
-			dispatch.observeTurnStateMetadata(event.RawJSON())
-		}
 		accumulator.Consume(event)
 		if err := accumulator.Err(providerID, newOpenAIResponseStatus(rawResp)); err != nil {
 			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerID).Map(err, rawResp, "read responses stream events")
 		}
 	}
-	observeCodexTurnStateResponseHeaders(dispatch, rawResp, &headersObserved)
+	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	if err := stream.Err(); err != nil {
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return responseFromStreamAccumulator(accumulator, providerID, rawResp)
@@ -436,20 +433,17 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 		turnStateObserver = request.CodexDispatch
 	}
 	headersObserved := false
-	observeCodexTurnStateResponseHeaders(turnStateObserver, rawResp, &headersObserved)
+	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	for stream.Next() {
-		observeCodexTurnStateResponseHeaders(turnStateObserver, rawResp, &headersObserved)
+		observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 		watchdog.ping()
 		event := stream.Current()
-		if event.Type == "response.metadata" {
-			turnStateObserver.observeTurnStateMetadata(event.RawJSON())
-		}
 		accumulator.Consume(event)
 		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
 			return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
 		}
 	}
-	observeCodexTurnStateResponseHeaders(turnStateObserver, rawResp, &headersObserved)
+	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	if err := stream.Err(); err != nil {
 		if errors.Is(context.Cause(watchdog.ctx), ErrModelStreamStalled) {
 			return OpenAICompactionResponse{}, fmt.Errorf("model stream stalled: %w", ErrModelStreamStalled)

@@ -22,27 +22,6 @@ func TestTranscriptWorktreeAndOperationalOutcomesStayTyped(t *testing.T) {
 	if err := diagnostic.Validate(); err != nil {
 		t.Fatalf("validate operational diagnostic: %v", err)
 	}
-
-	for _, code := range []OperationalDiagnosticCode{
-		OperationalDiagnosticProviderTurnStateInvalid,
-		OperationalDiagnosticProviderTurnStateConflict,
-	} {
-		providerState := TranscriptProviderStateDiagnostic{Code: code}
-		if err := providerState.Validate(); err != nil {
-			t.Fatalf("validate provider-state diagnostic %q: %v", code, err)
-		}
-		data, err := json.Marshal(providerState)
-		if err != nil {
-			t.Fatalf("marshal provider-state diagnostic %q: %v", code, err)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(data, &fields); err != nil {
-			t.Fatalf("decode provider-state diagnostic %q fields: %v", code, err)
-		}
-		if _, exists := fields["Detail"]; exists {
-			t.Fatalf("provider-state diagnostic %q structurally owns Detail: %s", code, data)
-		}
-	}
 }
 
 func TestTranscriptOperationOutcomesRejectUntypedFailure(t *testing.T) {

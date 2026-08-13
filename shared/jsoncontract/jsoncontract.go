@@ -4,29 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io"
 
 	invjsonschema "github.com/invopop/jsonschema"
 	validator "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 const schemaResource = "schema.json"
-
-func DecodeStrict(data []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err != nil {
-			return err
-		}
-		return fmt.Errorf("unexpected trailing JSON value")
-	}
-	return nil
-}
 
 // Customize applies narrow, owner-specific changes through invopop's schema
 // document before the contract is compiled.

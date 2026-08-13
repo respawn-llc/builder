@@ -22,8 +22,6 @@ func (e *Engine) publishProviderTurnStateDiagnostics(
 		switch category {
 		case llm.CodexTurnStateDiagnosticInvalid:
 			kind = EventProviderTurnStateInvalid
-		case llm.CodexTurnStateDiagnosticConflict:
-			kind = EventProviderTurnStateConflict
 		default:
 			panic("unknown provider turn-state diagnostic category")
 		}

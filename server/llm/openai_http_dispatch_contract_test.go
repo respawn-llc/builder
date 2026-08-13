@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -47,7 +46,6 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	invalidSessionIDs := map[string]*string{
 		"missing": nil, "present empty": textutil.Value(""), "leading SP": textutil.Value(" session-1"),
 		"trailing HTAB": textutil.Value("session-1\t"), "control byte": textutil.Value("session-\n1"),
-		"oversized": textutil.Value(strings.Repeat("s", maxCodexHeaderValueBytes+1)),
 	}
 	authModes := map[string]func() (*HTTPTransport, func() int32){
 		"api key": func() (*HTTPTransport, func() int32) {
@@ -212,7 +210,6 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 	invalidModels := map[string]string{
 		"empty": "", "leading SP": " gpt-5", "trailing HTAB": "gpt-5\t",
 		"semicolon": "gpt-5;tier=priority", "control byte": "gpt-\n5",
-		"oversized routing hint": strings.Repeat("m", maxCodexHeaderValueBytes-len("model=")+1),
 	}
 	for methodName, dispatchRequest := range methods {
 		for invalidName, model := range invalidModels {

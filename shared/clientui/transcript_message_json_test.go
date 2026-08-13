@@ -113,50 +113,6 @@ func TestTranscriptMessageJSONRejectsUninitializedSerialization(t *testing.T) {
 	}
 }
 
-func TestOperationalDiagnosticJSONDecodesClosedDetailUnion(t *testing.T) {
-	const stepID = "22222222-2222-4222-8222-222222222222"
-	tests := []struct {
-		name       string
-		payload    string
-		wantType   any
-		wantDecode bool
-		wantValid  bool
-	}{
-		{"detailed", `{"Code":"sleep_guard_failed","Detail":"failed"}`, TranscriptOperationalDiagnostic{}, true, true},
-		{"provider conflict with step", `{"Code":"provider_turn_state_conflict","StepID":"` + stepID + `"}`, TranscriptProviderStateDiagnostic{}, true, true},
-		{"provider detail forbidden", `{"Code":"provider_turn_state_invalid","Detail":"secret"}`, nil, false, false},
-		{"detailed missing detail", `{"Code":"sleep_guard_failed"}`, TranscriptOperationalDiagnostic{}, true, false},
-		{"detailed blank detail", `{"Code":"sleep_guard_failed","Detail":" "}`, TranscriptOperationalDiagnostic{}, true, false},
-		{"unknown code", `{"Code":"future_code"}`, nil, false, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			data := []byte(`{"sequence":2,"kind":"operational_diagnostic","payload":` + test.payload + `}`)
-			var message TranscriptMessage
-			err := json.Unmarshal(data, &message)
-			if !test.wantDecode {
-				if err == nil {
-					t.Fatalf("decoded forbidden operational diagnostic: %s", data)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("decode operational diagnostic: %v", err)
-			}
-			if reflect.TypeOf(message.Payload()) != reflect.TypeOf(test.wantType) {
-				t.Fatalf("payload type = %T, want %T", message.Payload(), test.wantType)
-			}
-			err = message.ValidatePayload()
-			if test.wantValid && err != nil {
-				t.Fatalf("validate operational diagnostic: %v", err)
-			}
-			if !test.wantValid && err == nil {
-				t.Fatal("semantically invalid operational diagnostic validated")
-			}
-		})
-	}
-}
-
 func assertPromptStateWire(t *testing.T, data []byte, want string, hydration bool) {
 	t.Helper()
 	var envelope struct {

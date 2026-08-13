@@ -73,13 +73,6 @@ export type { WorktreeErrorDetail } from "./clientWorktree";
 export { workflowIDSchema } from "./schemas/workflowID";
 export { nonBlankString } from "./schemas/common";
 export {
-  decodeOperationalDiagnostic,
-  operationalDiagnosticSchema,
-  type DetailedOperationalDiagnostic,
-  type OperationalDiagnostic,
-  type ProviderStateOperationalDiagnostic,
-} from "./schemas/operationalDiagnostic";
-export {
   decodeWorktreeSetupRetainedError,
   parseTaskSetupRecoveryDetail,
   type TaskSetupRecovery,
