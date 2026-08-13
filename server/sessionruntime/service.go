@@ -70,38 +70,23 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 }
 
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-	prepared := req
-	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	return servicecontract.WithValidated(prepared, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
-		sessionID, err := runtimeids.ParseSessionID(validated.Value().SessionID)
-		if err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		if s == nil || s.metadataStore == nil {
-			return serverapi.SessionRuntimeActivateResponse{}, errors.New("metadata store is required")
-		}
-		resolved, err := s.metadataStore.ResolveActiveProjectSession(ctx, sessionID.String())
-		if err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		return s.ActivateSessionRuntimeValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{
-			SessionID:       resolved.SessionID,
-			ActiveProjectID: resolved.OwningProjectID,
-			OwningProjectID: resolved.OwningProjectID,
-			ExecutionTarget: resolved.ExecutionTarget,
-		})
-	})
-}
-
-func (s *API) ActivateSessionRuntimeValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionRuntimeActivateRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	ownerID := strings.TrimSpace(req.OwnerID)
+	if ownerID == "" {
+		return serverapi.SessionRuntimeActivateResponse{}, runtimeOwnerIDRequiredError()
+	}
 	if s == nil || s.authority == nil {
 		return serverapi.SessionRuntimeActivateResponse{}, errors.New("session runtime authority is required")
 	}
-	sessionID := authorization.SessionID
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
 	attachment, err := s.authority.openRuntime(ctx, RuntimeOpenRequest{
 		SessionID: sessionID,
-		OwnerID:   req.OwnerID,
+		OwnerID:   ownerID,
 	}, func(_ context.Context, store *session.Store) (*AgentRuntimePlan, error) {
 		persisted := store.Meta().ChatSettings
 		if persisted != nil && req.ThinkingOverrideExplicit {
@@ -137,7 +122,7 @@ func (s *API) ActivateSessionRuntimeValidated(ctx context.Context, validated ser
 		autoCompaction := effective.AutoCompaction
 		req.QuestionsEnabled = &questions
 		req.AutoCompactionEnabled = &autoCompaction
-		plan, planErr := s.interactiveRuntimePlan(ctx, req, authorization)
+		plan, planErr := s.interactiveRuntimePlan(ctx, req, sessionID.String())
 		if planErr != nil {
 			return nil, planErr
 		}
@@ -155,16 +140,18 @@ func (s *API) ActivateSessionRuntimeValidated(ctx context.Context, validated ser
 	}, nil
 }
 
-func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionRuntimeActivateRequest, authorization servicecontract.AuthorizedSessionInActiveProject) (AgentRuntimePlan, error) {
+func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionRuntimeActivateRequest, sessionID string) (AgentRuntimePlan, error) {
 	if s == nil || s.metadataStore == nil {
 		return AgentRuntimePlan{}, errors.New("metadata store is required")
 	}
-	sessionID := authorization.SessionID.String()
-	target := authorization.ExecutionTarget
+	target, err := s.metadataStore.ResolveSessionExecutionTarget(ctx, sessionID)
+	if err != nil {
+		return AgentRuntimePlan{}, err
+	}
 	if err := context.Cause(ctx); err != nil {
 		return AgentRuntimePlan{}, err
 	}
-	projectWorkspaceBoundary, err := s.metadataStore.ResolveProjectWorkspaceBoundary(ctx, authorization.OwningProjectID)
+	projectWorkspaceBoundary, err := s.metadataStore.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
 	if err != nil {
 		return AgentRuntimePlan{}, err
 	}
@@ -225,25 +212,20 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 }
 
 func (s *API) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-	prepared := req
-	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	return servicecontract.WithValidated(prepared, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionRuntimeReleaseRequest]) (serverapi.SessionRuntimeReleaseResponse, error) {
-		sessionID, err := runtimeids.ParseSessionID(validated.Value().Attachment.SessionID)
-		if err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		return s.ReleaseSessionRuntimeValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{
-			SessionID: sessionID,
-		})
-	})
-}
-
-func (s *API) ReleaseSessionRuntimeValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionRuntimeReleaseRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, err
+	}
+	ownerID := strings.TrimSpace(req.OwnerID)
+	if ownerID == "" {
+		return serverapi.SessionRuntimeReleaseResponse{}, runtimeOwnerIDRequiredError()
+	}
 	if s == nil || s.authority == nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("session runtime authority is required")
 	}
-	sessionID := authorization.SessionID
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.Attachment.SessionID))
+	if err != nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, err
+	}
 	resource, err := runtimeids.NewSessionResourceRef(sessionID, runtimeids.ResourceGeneration(req.Attachment.Generation))
 	if err != nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, err
@@ -261,7 +243,7 @@ func (s *API) ReleaseSessionRuntimeValidated(ctx context.Context, validated serv
 	}
 	result, err := s.authority.ReleaseRuntime(ctx, RuntimeReleaseRequest{
 		Resource:  resource,
-		OwnerID:   req.OwnerID,
+		OwnerID:   ownerID,
 		DropOwner: req.DropOwner,
 		Policy:    policy,
 	})
@@ -275,7 +257,7 @@ func (s *API) ReleaseSessionRuntimeValidated(ctx context.Context, validated serv
 }
 
 var errUnknownToolID = errors.New("unknown tool id")
-var ErrRuntimeOwnerIDRequired = serverapi.ErrRuntimeOwnerIDRequired
+var ErrRuntimeOwnerIDRequired = errors.New("runtime owner id is required")
 
 func parseToolIDs(raw []string) ([]toolspec.ID, error) {
 	if len(raw) == 0 {
@@ -290,6 +272,10 @@ func parseToolIDs(raw []string) ([]toolspec.ID, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func runtimeOwnerIDRequiredError() error {
+	return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 }
 
 func runtimeUnavailableErr(sessionID string) error {
