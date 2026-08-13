@@ -159,6 +159,33 @@ func CollectRecords(store *session.Store) ([]session.EventRecord, error) {
 	return records, nil
 }
 
+func CollectRecordsAndMessages(store *session.Store) ([]session.EventRecord, []session.MessageRecord, error) {
+	records, err := CollectRecords(store)
+	if err != nil {
+		return nil, nil, err
+	}
+	messages, err := MessageRecords(records)
+	if err != nil {
+		return nil, nil, err
+	}
+	return records, messages, nil
+}
+
+func MessageRecords(records []session.EventRecord) ([]session.MessageRecord, error) {
+	messages := make([]session.MessageRecord, 0, len(records))
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			return nil, err
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok {
+			messages = append(messages, message)
+		}
+	}
+	return messages, nil
+}
+
 // AgentRole constructs a present continuation agent-role fixture. Test-only.
 func AgentRole(value string) *string {
 	return &value

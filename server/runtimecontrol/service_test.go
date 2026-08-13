@@ -2571,21 +2571,9 @@ func countDirectShellCommandMessages(t *testing.T, store *session.Store, command
 
 func runtimeControlMessageRecords(t *testing.T, store *session.Store) []session.MessageRecord {
 	t.Helper()
-	records, err := sessiontest.CollectRecords(store)
+	_, messages, err := sessiontest.CollectRecordsAndMessages(store)
 	if err != nil {
-		t.Fatalf("collect event records: %v", err)
-	}
-	messages := make([]session.MessageRecord, 0)
-	for _, record := range records {
-		payload, payloadErr := record.Payload()
-		if payloadErr != nil {
-			t.Fatalf("read event record payload: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if !ok {
-			continue
-		}
-		messages = append(messages, message)
+		t.Fatalf("collect message records: %v", err)
 	}
 	return messages
 }

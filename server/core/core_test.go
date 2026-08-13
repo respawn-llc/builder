@@ -557,18 +557,8 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 		t.Fatalf("cleared lazy Chat exposed Sessions: %+v", page.Sessions)
 	}
 
-	draft := metadata.WorkspaceChatDraftDocument{
-		Message:        "unsent complete draft",
-		Agent:          "default",
-		Supervisor:     "all",
-		Thinking:       "medium",
-		Fast:           true,
-		Questions:      false,
-		AutoCompaction: false,
-	}
-	if err := appCore.MetadataStore().ReplaceWorkspaceChatDraft(t.Context(), binding.WorkspaceID, &draft); err != nil {
-		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
-	}
+	draft := workspaceChatDraft("unsent complete draft", false)
+	persistWorkspaceChatDraft(t, appCore, binding, draft)
 	materialized, err := client.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
 	if err != nil {
 		t.Fatalf("MaterializeWorkspaceChat: %v", err)
@@ -652,6 +642,24 @@ func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	}
 	if page := list(); len(page.Sessions) != 2 {
 		t.Fatalf("ignored committed response list = %+v, want two Sessions", page.Sessions)
+	}
+}
+
+func workspaceChatDraft(message string, questions bool) metadata.WorkspaceChatDraftDocument {
+	return metadata.WorkspaceChatDraftDocument{
+		Message:        message,
+		Agent:          brand.DefaultSubagentRole,
+		Supervisor:     "all",
+		Thinking:       "medium",
+		Fast:           true,
+		Questions:      questions,
+		AutoCompaction: false,
+	}
+}
+
+func persistWorkspaceChatDraft(t *testing.T, appCore *Core, binding metadata.Binding, draft metadata.WorkspaceChatDraftDocument) {
+	if err := appCore.MetadataStore().ReplaceWorkspaceChatDraft(t.Context(), binding.WorkspaceID, &draft); err != nil {
+		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
 	}
 }
 

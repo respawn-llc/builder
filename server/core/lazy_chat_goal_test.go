@@ -326,8 +326,9 @@ func newLazyGoalFixture(t *testing.T, enabledTools map[toolspec.ID]bool, client 
 		appCore: appCore,
 		binding: binding,
 		launch:  launch,
-		draft:   writeLazyGoalDraft(t, appCore, binding),
+		draft:   workspaceChatDraft("unsent composer draft", true),
 	}
+	persistWorkspaceChatDraft(t, appCore, binding, fixture.draft)
 	t.Cleanup(func() {
 		if fixture.released || fixture.activation == nil {
 			return
@@ -407,7 +408,14 @@ func (f *lazyGoalFixture) requireDraftAndTranscript(t *testing.T, wantRecords *i
 	if state.Message != f.draft.Message {
 		t.Fatalf("composer draft = %q, want %q", state.Message, f.draft.Message)
 	}
-	records, messages := f.collectMessageRecords(t, record.SessionDir)
+	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open materialized Session: %v", err)
+	}
+	records, messages, err := sessiontest.CollectRecordsAndMessages(store)
+	if err != nil {
+		t.Fatalf("collect message records: %v", err)
+	}
 	if wantRecords != nil && len(records) != *wantRecords {
 		t.Fatalf("materialized transcript records = %d, want %d", len(records), *wantRecords)
 	}
@@ -428,10 +436,16 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	_, records := f.collectMessageRecords(t, record.SessionDir)
+	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open materialized Session: %v", err)
+	}
+	_, messages, err := sessiontest.CollectRecordsAndMessages(store)
+	if err != nil {
+		t.Fatalf("collect message records: %v", err)
+	}
 	goalNotices, userMessages := 0, 0
-	for _, event := range records {
-		message := event
+	for _, message := range messages {
 		if message.MessageType != nil && *message.MessageType == session.MessageTypeGoal {
 			goalNotices++
 		}
@@ -442,29 +456,6 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	if goalNotices != 1 || userMessages != 0 {
 		t.Fatalf("materialized Goal records = notices:%d user_messages:%d, want one notice and no user message", goalNotices, userMessages)
 	}
-}
-
-func (f *lazyGoalFixture) collectMessageRecords(t *testing.T, sessionDir string) ([]session.EventRecord, []session.MessageRecord) {
-	store, err := session.Open(sessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
-	messages := make([]session.MessageRecord, 0, len(records))
-	for _, event := range records {
-		payload, payloadErr := event.Payload()
-		if payloadErr != nil {
-			t.Fatalf("event payload: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if ok {
-			messages = append(messages, message)
-		}
-	}
-	return records, messages
 }
 
 func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
@@ -479,20 +470,4 @@ func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
 	if len(page.Sessions) != 1 {
 		t.Fatalf("retained Session list = %+v, want one", page.Sessions)
 	}
-}
-
-func writeLazyGoalDraft(t *testing.T, appCore *Core, binding metadata.Binding) metadata.WorkspaceChatDraftDocument {
-	draft := metadata.WorkspaceChatDraftDocument{
-		Message:        "unsent composer draft",
-		Agent:          brand.DefaultSubagentRole,
-		Supervisor:     "all",
-		Thinking:       "medium",
-		Fast:           true,
-		Questions:      true,
-		AutoCompaction: false,
-	}
-	if err := appCore.MetadataStore().ReplaceWorkspaceChatDraft(t.Context(), binding.WorkspaceID, &draft); err != nil {
-		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
-	}
-	return draft
 }
