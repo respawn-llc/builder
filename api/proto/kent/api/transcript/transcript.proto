@@ -139,6 +139,7 @@ enum NoticeReason {
   NOTICE_REASON_LEGACY_UNTYPED_NOTICE = 3;
   NOTICE_REASON_RUNTIME_DIAGNOSTIC = 4;
   NOTICE_REASON_TOOL_OUTPUT_REPAIR = 5;
+  NOTICE_REASON_PROVIDER_MODEL_MISMATCH = 6;
 }
 
 enum NoticeSeverity {
@@ -250,6 +251,11 @@ message ToolOutputRepair {
   int32 count = 2 [(buf.validate.field).int32.gte = 1];
 }
 
+message ProviderModelMismatch {
+  string requested_model = 1 [(buf.validate.field).string.min_len = 1];
+  string served_model = 2 [(buf.validate.field).string.min_len = 1];
+}
+
 message BackgroundNoticeIdentity {
   string activity_id = 1 [(buf.validate.field).string.uuid = true];
   string process_id = 2 [(buf.validate.field).string.min_len = 1];
@@ -279,15 +285,17 @@ message NoticeRow {
   optional BackgroundNoticeIdentity background = 13;
   optional string condensed_text = 14 [(buf.validate.field).string.min_len = 1];
   optional string compact_label = 15 [(buf.validate.field).string.min_len = 1];
+  optional ProviderModelMismatch provider_model_mismatch = 16;
   option (buf.validate.message).cel = {
     id: "kent.transcript.notice_reason_payload"
     message: "notice payload must match reason"
     expression:
-      "(this.reason == 1 && has(this.cache_warning) && !has(this.legacy_text) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
-      "(this.reason == 2 && has(this.compaction) && has(this.message_type) && this.message_type == 5 && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
-      "(this.reason == 3 && (has(this.legacy_text) || has(this.message_type)) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
-      "(this.reason == 4 && has(this.diagnostic) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair)) || "
-      "(this.reason == 5 && has(this.tool_output_repair) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.diagnostic) && !has(this.background))"
+      "(this.reason == 1 && has(this.cache_warning) && !has(this.legacy_text) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.provider_model_mismatch) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 2 && has(this.compaction) && has(this.message_type) && this.message_type == 5 && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.tool_output_repair) && !has(this.provider_model_mismatch) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 3 && (has(this.legacy_text) || has(this.message_type)) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.provider_model_mismatch) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 4 && has(this.diagnostic) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.provider_model_mismatch)) || "
+      "(this.reason == 5 && has(this.tool_output_repair) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.provider_model_mismatch) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 6 && has(this.provider_model_mismatch) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background))"
   };
 }
 

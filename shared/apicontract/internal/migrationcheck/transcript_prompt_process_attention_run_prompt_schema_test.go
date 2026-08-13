@@ -140,6 +140,21 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(notice); err == nil {
 		t.Fatal("accepted notice reason with mismatched payload")
 	}
+	providerMismatch := &transcriptpb.NoticeRow{
+		Reason:   transcriptpb.NoticeReason_NOTICE_REASON_PROVIDER_MODEL_MISMATCH,
+		Severity: transcriptpb.NoticeSeverity_NOTICE_SEVERITY_WARNING,
+		ProviderModelMismatch: &transcriptpb.ProviderModelMismatch{
+			RequestedModel: "requested-model",
+			ServedModel:    "served-model",
+		},
+	}
+	if err := protoapi.ValidateGeneratedMessage(providerMismatch); err != nil {
+		t.Fatalf("valid provider-model mismatch notice: %v", err)
+	}
+	providerMismatch.ProviderModelMismatch = nil
+	if err := protoapi.ValidateGeneratedMessage(providerMismatch); err == nil {
+		t.Fatal("accepted provider-model mismatch reason without mismatch facts")
+	}
 
 	background := &transcriptpb.BackgroundActivity{
 		ActivityId:        validUUID,
@@ -415,7 +430,7 @@ func TestNewSliceClosedScalarCoverageIsExact(t *testing.T) {
 		transcriptpb.NoticeReason_NOTICE_REASON_UNSPECIFIED.Descriptor(): {
 			"NOTICE_REASON_UNSPECIFIED", "NOTICE_REASON_CACHE_WARNING", "NOTICE_REASON_COMPACTION",
 			"NOTICE_REASON_LEGACY_UNTYPED_NOTICE", "NOTICE_REASON_RUNTIME_DIAGNOSTIC",
-			"NOTICE_REASON_TOOL_OUTPUT_REPAIR",
+			"NOTICE_REASON_TOOL_OUTPUT_REPAIR", "NOTICE_REASON_PROVIDER_MODEL_MISMATCH",
 		},
 		transcriptpb.NoticeSeverity_NOTICE_SEVERITY_UNSPECIFIED.Descriptor(): {
 			"NOTICE_SEVERITY_UNSPECIFIED", "NOTICE_SEVERITY_INFO",
