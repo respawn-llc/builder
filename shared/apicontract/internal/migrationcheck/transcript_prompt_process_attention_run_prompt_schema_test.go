@@ -206,6 +206,17 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
 		t.Fatal("accepted OpenAI base URL with Anthropic provider override")
 	}
+	shellSettings := &sessionlaunchpb.ShellSettings{}
+	if err := protoapi.ValidateGeneratedMessage(shellSettings); err == nil {
+		t.Fatal("accepted unspecified shell postprocessing mode")
+	}
+	shellSettings = &sessionlaunchpb.ShellSettings{
+		PostprocessingMode: sessionlaunchpb.ShellPostprocessingMode_SHELL_POSTPROCESSING_MODE_BUILTIN,
+		PostprocessHook:    stringPointer(" "),
+	}
+	if err := protoapi.ValidateGeneratedMessage(shellSettings); err == nil {
+		t.Fatal("accepted blank present shell postprocess hook")
+	}
 
 	streamCompletion := &sharedpb.StreamCompletion{Code: int32Pointer(0)}
 	if err := protoapi.ValidateGeneratedMessage(streamCompletion); err == nil {

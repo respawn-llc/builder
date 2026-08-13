@@ -186,8 +186,18 @@ message TimeoutSettings {
 }
 
 message ShellSettings {
-  ShellPostprocessingMode postprocessing_mode = 1 [(buf.validate.field).enum.defined_only = true];
-  optional string postprocess_hook = 2;
+  ShellPostprocessingMode postprocessing_mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string postprocess_hook = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.shell_postprocess_hook_nonblank"
+      message: "postprocess_hook must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message WorktreeSettings {
@@ -354,7 +364,14 @@ message SessionPlan {
     not_in: [0]
   }];
   optional string configured_model_name = 4 [(buf.validate.field).string.min_len = 1];
-  optional string session_name = 5 [(buf.validate.field).string.min_len = 1];
+  optional string session_name = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.session_plan_name_nonblank"
+      message: "session_name must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
   repeated string prompt_history = 6 [(buf.validate.field).repeated.max_items = 100];
   bool model_contract_locked = 7;
   bool questions_enabled = 8;
