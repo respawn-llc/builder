@@ -2169,6 +2169,66 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowListRejectsPaddedProjectScope(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	projectID := " " + binding.ProjectID + " "
+
+	_, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID})
+	if !isWorkflowServiceRequestFieldError(err, "project_id") {
+		t.Fatalf("ListWorkflows error = %v, want project_id validation error", err)
+	}
+}
+
+func TestWorkflowGraphStoreSaveRequestOwnsNestedWorkflowIdentityAndCanonicalValues(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	groupID := workflowServiceGraphEntityID("mapper-group-" + workflowID.String())
+	nodeID := workflowServiceGraphEntityID("mapper-node-" + workflowID.String())
+	transitionGroupID := workflowServiceGraphEntityID("mapper-transition-" + workflowID.String())
+	edgeID := workflowServiceGraphEntityID("mapper-edge-" + workflowID.String())
+	graph := serverapi.WorkflowGraphDraft{
+		NodeGroups: []serverapi.WorkflowGraphDraftNodeGroup{{
+			ID: groupID, Key: "group", DisplayName: "Group",
+		}},
+		Nodes: []serverapi.WorkflowGraphDraftNode{{
+			ID: nodeID, Key: "node", Kind: string(serverapi.WorkflowNodeKindAgent), DisplayName: "Node",
+			GroupID: &groupID, CompletionMode: " tool ",
+		}},
+		TransitionGroups: []serverapi.WorkflowGraphDraftTransitionGroup{{
+			ID: transitionGroupID, SourceNodeID: nodeID, TransitionID: "done", DisplayName: "Done",
+		}},
+		Edges: []serverapi.WorkflowGraphDraftEdge{{
+			ID: edgeID, TransitionGroupID: transitionGroupID, Key: "done", TargetNodeID: nodeID,
+			ContextSource: serverapi.WorkflowContextSource{Kind: " previous_target ", NodeKey: " ignored "},
+			Parameters: []serverapi.WorkflowParameter{{
+				Key: "value", Description: "description", Purpose: " purpose ",
+			}},
+		}},
+	}
+
+	request, err := workflowGraphStoreSaveRequest(workflowID, 3, nil, graph, nil)
+	if err != nil {
+		t.Fatalf("workflowGraphStoreSaveRequest: %v", err)
+	}
+	if len(request.NodeGroups) != 1 || request.NodeGroups[0].WorkflowID != workflowID ||
+		len(request.Nodes) != 1 || request.Nodes[0].WorkflowID != workflowID ||
+		len(request.TransitionGroups) != 1 || request.TransitionGroups[0].WorkflowID != workflowID ||
+		len(request.Edges) != 1 || request.Edges[0].WorkflowID != workflowID {
+		t.Fatalf("nested workflow identities = groups %+v nodes %+v transitions %+v edges %+v, want %s",
+			request.NodeGroups, request.Nodes, request.TransitionGroups, request.Edges, workflowID)
+	}
+	if request.Nodes[0].CompletionMode != "tool" {
+		t.Fatalf("completion mode = %q, want canonical tool", request.Nodes[0].CompletionMode)
+	}
+	if request.Edges[0].ContextSource.Kind != workflow.ContextSourcePreviousTarget ||
+		request.Edges[0].ContextSource.NodeKey != "" {
+		t.Fatalf("context source = %+v, want canonical previous_target", request.Edges[0].ContextSource)
+	}
+	if len(request.Edges[0].Parameters) != 1 ||
+		request.Edges[0].Parameters[0] != (workflow.Parameter{Key: "value", Description: "description", Purpose: "purpose"}) {
+		t.Fatalf("parameters = %+v, want canonical values", request.Edges[0].Parameters)
+	}
+}
+
 func TestServiceWorkflowDeletePreviewsBlocksAndPublishesDeletion(t *testing.T) {
 	ctx, service, projectID, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
@@ -2795,7 +2855,7 @@ func addWorkflowGraphAtomicParallelNodeGroup(
 	return getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID), groupID
 }
 
-func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testing.T) {
+func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	original, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2811,11 +2871,9 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 		t.Fatalf("UpdateWorkflow: %v", err)
 	}
 
-	blankGroupID := ""
 	graph := serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-		ID:             "node-prefixed",
+		ID:             workflowServiceGraphEntityID("semantically-invalid-" + workflowID.String()),
 		Kind:           string(serverapi.WorkflowNodeKindAgent),
-		GroupID:        &blankGroupID,
 		CompletionMode: "tool",
 	}}}
 	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
@@ -2824,7 +2882,7 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 		Graph:           graph,
 	})
 	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave stale malformed Draft: %v", err)
+		t.Fatalf("PreviewWorkflowGraphSave stale semantic Draft: %v", err)
 	}
 	if preview.CurrentVersion != current.Definition.Workflow.Version ||
 		!workflowServiceHasGraphSaveBlocker(preview.Blockers, "version_changed") {
@@ -2837,7 +2895,7 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 		Graph:           graph,
 	})
 	if err != nil {
-		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", err)
+		t.Fatalf("SaveWorkflowGraph stale semantic Draft: %v", err)
 	}
 	if saved.Saved ||
 		saved.CurrentVersion != current.Definition.Workflow.Version ||
@@ -2845,21 +2903,27 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testi
 		t.Fatalf("save = %+v, want current-version blocker", saved)
 	}
 
-	_, err = service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+	preview, err = service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version,
 		Graph:           graph,
 	})
-	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
-		t.Fatalf("current-version preview error = %v, want group_id validation", err)
+	if err != nil {
+		t.Fatalf("current-version preview: %v", err)
 	}
-	_, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+	if !workflowServiceHasGraphSaveBlocker(preview.Blockers, "validation_failed") {
+		t.Fatalf("current-version preview = %+v, want validation blocker", preview)
+	}
+	saved, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version,
 		Graph:           graph,
 	})
-	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
-		t.Fatalf("current-version save error = %v, want group_id validation", err)
+	if err != nil {
+		t.Fatalf("current-version save: %v", err)
+	}
+	if saved.Saved || !workflowServiceHasGraphSaveBlocker(saved.Blockers, "validation_failed") {
+		t.Fatalf("current-version save = %+v, want validation blocker", saved)
 	}
 }
 
@@ -2952,7 +3016,7 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
 			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             "node-prefixed",
+				ID:             workflowServiceGraphEntityID("ordered-semantic-" + workflowID.String()),
 				Kind:           string(serverapi.WorkflowNodeKindAgent),
 				CompletionMode: "tool",
 			}}},
@@ -3073,7 +3137,7 @@ func TestServiceWorkflowGraphPreviewOrdersVersionGateWithSameWorkflowMetadataMut
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
 			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             "node-prefixed",
+				ID:             workflowServiceGraphEntityID("preview-semantic-" + workflowID.String()),
 				Kind:           string(serverapi.WorkflowNodeKindAgent),
 				CompletionMode: "tool",
 			}}},

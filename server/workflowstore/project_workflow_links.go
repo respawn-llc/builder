@@ -29,7 +29,7 @@ func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID str
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	link, err := s.linkWorkflowInTx(ctx, q, now, strings.TrimSpace(projectID), workflowID, policy)
+	link, err := s.linkWorkflowInTx(ctx, q, now, projectID, workflowID, policy)
 	if err != nil {
 		return ProjectWorkflowLinkRecord{}, err
 	}
@@ -97,7 +97,7 @@ func (s *Store) shouldSetWorkflowLinkDefault(ctx context.Context, q *sqlitegen.Q
 	case "", WorkflowLinkDefaultNever:
 		return false, nil
 	default:
-		return false, fmt.Errorf("invalid workflow link default policy")
+		panic(fmt.Sprintf("validated workflow link default policy is invalid: %q", policy))
 	}
 }
 

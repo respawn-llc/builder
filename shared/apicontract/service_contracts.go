@@ -429,6 +429,23 @@ type WorkflowService interface {
 }
 
 type WorkflowTrustedService interface {
+	CreateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowCreateRequest]) (serverapi.WorkflowCreateResponse, error)
+	CreateAndLinkWorkflowToProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowCreateAndLinkProjectRequest]) (serverapi.WorkflowCreateAndLinkProjectResponse, error)
+	UpdateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowUpdateRequest]) (serverapi.WorkflowGetResponse, error)
+	ListWorkflowsValidated(ctx context.Context, req Validated[serverapi.WorkflowListRequest]) (serverapi.WorkflowListResponse, error)
+	GetWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowGetRequest]) (serverapi.WorkflowGetResponse, error)
+	LinkWorkflowToProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowLinkProjectRequest]) (serverapi.WorkflowLinkProjectResponse, error)
+	ListProjectWorkflowLinksValidated(ctx context.Context, req Validated[serverapi.WorkflowListProjectLinksRequest]) (serverapi.WorkflowListProjectLinksResponse, error)
+	SetDefaultProjectWorkflowLinkValidated(ctx context.Context, req Validated[serverapi.WorkflowSetDefaultProjectLinkRequest]) (serverapi.WorkflowSetDefaultProjectLinkResponse, error)
+	UnlinkWorkflowFromProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowUnlinkProjectRequest]) (serverapi.WorkflowUnlinkProjectResponse, error)
+	PreviewWorkflowDeleteValidated(ctx context.Context, req Validated[serverapi.WorkflowDeletePreviewRequest]) (serverapi.WorkflowDeletePreviewResponse, error)
+	DeleteWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowDeleteRequest]) (serverapi.WorkflowDeleteResponse, error)
+	ValidateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowValidateRequest]) (serverapi.WorkflowValidateResponse, error)
+	ValidateWorkflowScriptPathValidated(ctx context.Context, req Validated[serverapi.WorkflowScriptPathValidateRequest]) (serverapi.WorkflowValidateResponse, error)
+	ValidateWorkflowGraphDraftValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphValidateDraftRequest]) (serverapi.WorkflowGraphValidateDraftResponse, error)
+	DeriveWorkflowGraphWiringValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphDeriveWiringRequest]) (serverapi.WorkflowGraphDeriveWiringResponse, error)
+	PreviewWorkflowGraphSaveValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphSavePreviewRequest]) (serverapi.WorkflowGraphSavePreviewResponse, error)
+	SaveWorkflowGraphValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphSaveRequest]) (serverapi.WorkflowGraphSaveResponse, error)
 	CreateWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskCreateRequest]) (serverapi.WorkflowTaskCreateResponse, error)
 	ReorderWorkflowProjectLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error)
 	UpdateWorkflowTaskLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error)

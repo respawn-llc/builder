@@ -228,6 +228,36 @@ func TestSessionViewLifecycleLaunchAndRuntimeResourceRoutesUseTrustedOwners(t *t
 	}
 }
 
+func TestWorkflowCatalogGraphAndProjectLinkRoutesUseTrustedOwners(t *testing.T) {
+	methods := []string{
+		protocol.MethodWorkflowCreate,
+		protocol.MethodWorkflowCreateAndLinkProject,
+		protocol.MethodWorkflowUpdate,
+		protocol.MethodWorkflowList,
+		protocol.MethodWorkflowGet,
+		protocol.MethodWorkflowLinkProject,
+		protocol.MethodWorkflowListProjectLinks,
+		protocol.MethodWorkflowSetDefaultProjectLink,
+		protocol.MethodWorkflowUnlinkProject,
+		protocol.MethodWorkflowDeletePreview,
+		protocol.MethodWorkflowDelete,
+		protocol.MethodWorkflowValidate,
+		protocol.MethodWorkflowScriptPathValidate,
+		protocol.MethodWorkflowGraphValidateDraft,
+		protocol.MethodWorkflowGraphDeriveWiring,
+		protocol.MethodWorkflowGraphSavePreview,
+		protocol.MethodWorkflowGraphSave,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			executable := inboundExecutableRoutes[method]
+			if executable.handlerClassification.owner != inboundHandlerTrustedOwner {
+				t.Fatalf("handler owner = %q, want trusted owner", executable.handlerClassification.owner)
+			}
+		})
+	}
+}
+
 func TestRuntimeControlAndLiveRoutesUseTrustedOwners(t *testing.T) {
 	methods := []string{
 		protocol.MethodRuntimeSetSessionName,

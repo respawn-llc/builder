@@ -44,9 +44,6 @@ type WorkflowDeleteBlocker struct {
 }
 
 func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids.WorkflowID) (WorkflowDeleteImpact, error) {
-	if workflowID.IsZero() {
-		return WorkflowDeleteImpact{}, ErrWorkflowIDRequired
-	}
 	row, err := s.queries.GetWorkflowDeleteImpact(ctx, workflowID)
 	if err != nil {
 		return WorkflowDeleteImpact{}, err
@@ -55,9 +52,6 @@ func (s *Store) PreviewWorkflowDelete(ctx context.Context, workflowID runtimeids
 }
 
 func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (WorkflowDeleteResult, error) {
-	if req.WorkflowID.IsZero() {
-		return WorkflowDeleteResult{}, ErrWorkflowIDRequired
-	}
 	impact, err := s.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, err

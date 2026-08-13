@@ -115,9 +115,6 @@ func (s *Store) RunWorkflowGraphSaveOperation(
 	workflowID runtimeids.WorkflowID,
 	operation func(context.Context) (WorkflowGraphSaveResult, error),
 ) (WorkflowGraphSaveResult, error) {
-	if workflowID.IsZero() {
-		return WorkflowGraphSaveResult{}, ErrWorkflowIDRequired
-	}
 	if operation == nil {
 		return WorkflowGraphSaveResult{}, errors.New("workflow graph save operation is required")
 	}
@@ -172,12 +169,6 @@ func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphS
 
 func (s *Store) planWorkflowGraphSave(ctx context.Context, q *sqlitegen.Queries, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
 	workflowID := req.WorkflowID
-	if workflowID.IsZero() {
-		return WorkflowGraphSavePlan{}, ErrWorkflowIDRequired
-	}
-	if req.ExpectedVersion < 0 {
-		return WorkflowGraphSavePlan{}, errors.New("expected version must be non-negative")
-	}
 	current, err := q.GetWorkflow(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
@@ -442,22 +433,6 @@ func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription str
 		policy = normalizeWorkflowExecutionTargetPolicy(*metadata.ExecutionTargetPolicy)
 	}
 	prepared := WorkflowGraphSaveMetadata{Name: strings.TrimSpace(metadata.Name), Description: strings.TrimSpace(metadata.Description), ExecutionTargetPolicy: &policy}
-	if prepared.Name == "" {
-		return nil, false, ErrWorkflowNameRequired
-	}
-	if policy.Mode != workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil {
-		return nil, false, errors.New("execution target custom ref is only valid for custom_ref policy")
-	}
-	if policy.Mode == workflow.ExecutionTargetModeCustomRef && policy.CustomRef != nil && strings.TrimSpace(*policy.CustomRef) == "" {
-		return nil, false, errors.New("execution target custom ref must be non-blank when present")
-	}
-	if policy.Mode != workflow.ExecutionTargetModeNone &&
-		policy.Mode != workflow.ExecutionTargetModeHead &&
-		policy.Mode != workflow.ExecutionTargetModeDefaultBranch &&
-		policy.Mode != workflow.ExecutionTargetModeCustomRef &&
-		policy.Mode != workflow.ExecutionTargetModeAskOnFirstExecution {
-		return nil, false, errors.New("execution target policy mode is invalid")
-	}
 	changed := prepared.Name != currentName || prepared.Description != currentDescription || !workflowExecutionTargetPoliciesEqual(*prepared.ExecutionTargetPolicy, currentPolicy)
 	return &prepared, changed, nil
 }
@@ -472,16 +447,6 @@ func workflowExecutionTargetPoliciesEqual(a workflow.ExecutionTargetPolicy, b wo
 	return *a.CustomRef == *b.CustomRef
 }
 
-func validateWorkflowGraphRecordWorkflowID(expected runtimeids.WorkflowID, actual runtimeids.WorkflowID, kind string, recordID string) error {
-	if actual.IsZero() {
-		return fmt.Errorf("workflow %s %w", kind, ErrWorkflowIDRequired)
-	}
-	if actual != expected {
-		return fmt.Errorf("workflow %s %q belongs to workflow %q: %w", kind, recordID, actual, ErrBelongsToOtherWorkflow)
-	}
-	return nil
-}
-
 func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName string, executionTargetPolicy workflow.ExecutionTargetPolicy, req WorkflowGraphSaveRequest) (preparedWorkflowGraphSave, workflow.Definition, error) {
 	prepared := preparedWorkflowGraphSave{
 		nodeGroups:       append([]NodeGroupRecord(nil), req.NodeGroups...),
@@ -489,73 +454,13 @@ func prepareWorkflowGraphSave(workflowID runtimeids.WorkflowID, displayName stri
 		transitionGroups: append([]TransitionGroupRecord(nil), req.TransitionGroups...),
 		edges:            append([]EdgeRecord(nil), req.Edges...),
 	}
-	groupsByKey := map[workflow.ModelKey]string{}
-	groupsByID := map[string]bool{}
 	for i, group := range prepared.nodeGroups {
-		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "node group", group.ID); err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		group.ID = strings.TrimSpace(group.ID)
-		if group.ID == "" {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, errors.New("workflow node group id is required")
-		}
-		group.Key = workflow.ModelKey(strings.TrimSpace(string(group.Key)))
-		if group.Key == "" {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, errors.New("workflow node group key is required")
-		}
-		group.DisplayName = strings.TrimSpace(group.DisplayName)
 		group.SortOrder = int64(i * 100)
-		if groupsByID[group.ID] {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("duplicate workflow node group id %q", group.ID)
-		}
-		if existingID, exists := groupsByKey[group.Key]; exists {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("duplicate workflow node group key %q between %q and %q", group.Key, existingID, group.ID)
-		}
-		groupsByID[group.ID] = true
-		groupsByKey[group.Key] = group.ID
 		prepared.nodeGroups[i] = group
 	}
 
 	for i, node := range prepared.nodes {
-		if err := validateWorkflowGraphRecordWorkflowID(workflowID, node.WorkflowID, "node", string(node.ID)); err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		if node.GroupID != nil {
-			trimmed := strings.TrimSpace(*node.GroupID)
-			node.GroupID = &trimmed
-		}
-		node.GroupKey = strings.TrimSpace(node.GroupKey)
-		if node.GroupID == nil && node.GroupKey != "" {
-			groupID, ok := groupsByKey[workflow.ModelKey(node.GroupKey)]
-			if !ok {
-				return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group key %q is not in the saved graph", node.GroupKey)
-			}
-			node.GroupID = &groupID
-		}
-		if node.GroupID != nil && !groupsByID[*node.GroupID] {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, fmt.Errorf("workflow node group %q is not in the saved graph", *node.GroupID)
-		}
-		if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		node.CompletionMode = nodeCompletionMode(node)
 		prepared.nodes[i] = node
-	}
-	for i, group := range prepared.transitionGroups {
-		if err := validateWorkflowGraphRecordWorkflowID(workflowID, group.WorkflowID, "transition group", string(group.ID)); err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		prepared.transitionGroups[i] = group
-	}
-	for i, edge := range prepared.edges {
-		if err := validateWorkflowGraphRecordWorkflowID(workflowID, edge.WorkflowID, "edge", string(edge.ID)); err != nil {
-			return preparedWorkflowGraphSave{}, workflow.Definition{}, err
-		}
-		edge.ContextSource = workflow.CanonicalContextSource(edge.ContextSource)
-		for parameterIndex := range edge.Parameters {
-			edge.Parameters[parameterIndex] = edge.Parameters[parameterIndex].Canonical()
-		}
-		prepared.edges[i] = edge
 	}
 	def, err := workflowDefinitionFromPreparedGraph(prepared, workflowID, displayName, executionTargetPolicy)
 	if err != nil {
@@ -969,9 +874,6 @@ func upsertWorkflowNodeGroup(ctx context.Context, q *sqlitegen.Queries, group No
 }
 
 func upsertWorkflowNode(ctx context.Context, q *sqlitegen.Queries, node NodeRecord, sortOrder int64, op string) error {
-	if err := validateNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
-		return err
-	}
 	joinProviders, err := workflow.MarshalString(node.JoinInputProviders)
 	if err != nil {
 		return err

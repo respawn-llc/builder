@@ -169,6 +169,24 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodRuntimeDiscardQueuedUserMessage,
 		protocol.MethodRuntimeRecordPromptHistory:
 		handler.owner = inboundHandlerTrustedOwner
+	case protocol.MethodWorkflowCreate,
+		protocol.MethodWorkflowCreateAndLinkProject,
+		protocol.MethodWorkflowUpdate,
+		protocol.MethodWorkflowList,
+		protocol.MethodWorkflowGet,
+		protocol.MethodWorkflowLinkProject,
+		protocol.MethodWorkflowListProjectLinks,
+		protocol.MethodWorkflowSetDefaultProjectLink,
+		protocol.MethodWorkflowUnlinkProject,
+		protocol.MethodWorkflowDeletePreview,
+		protocol.MethodWorkflowDelete,
+		protocol.MethodWorkflowValidate,
+		protocol.MethodWorkflowScriptPathValidate,
+		protocol.MethodWorkflowGraphValidateDraft,
+		protocol.MethodWorkflowGraphDeriveWiring,
+		protocol.MethodWorkflowGraphSavePreview,
+		protocol.MethodWorkflowGraphSave:
+		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRuntimeGoalShow,
 		protocol.MethodRuntimeGoalSet,
 		protocol.MethodRuntimeGoalPause,
@@ -862,6 +880,25 @@ func registerProjectAndSmallServiceRoutes(executables map[string]inboundExecutab
 	executables[protocol.MethodProjectRebindWorkspace] = trustedServiceUnary(protocol.MethodProjectRebindWorkspace, projectClient, apicontract.ProjectViewTrustedService.RebindWorkspaceValidated)
 	executables[protocol.MethodProjectGetOverview] = trustedServiceUnary(protocol.MethodProjectGetOverview, projectClient, apicontract.ProjectViewTrustedService.GetProjectOverviewValidated)
 	executables[protocol.MethodSessionPage] = trustedServiceUnary(protocol.MethodSessionPage, projectClient, apicontract.ProjectViewTrustedService.ListSessionPageValidated)
+
+	workflowClient := func(deps GatewayDependencies) any { return deps.WorkflowClient() }
+	executables[protocol.MethodWorkflowCreate] = trustedServiceUnary(protocol.MethodWorkflowCreate, workflowClient, apicontract.WorkflowTrustedService.CreateWorkflowValidated)
+	executables[protocol.MethodWorkflowCreateAndLinkProject] = trustedServiceUnary(protocol.MethodWorkflowCreateAndLinkProject, workflowClient, apicontract.WorkflowTrustedService.CreateAndLinkWorkflowToProjectValidated)
+	executables[protocol.MethodWorkflowUpdate] = trustedServiceUnary(protocol.MethodWorkflowUpdate, workflowClient, apicontract.WorkflowTrustedService.UpdateWorkflowValidated)
+	executables[protocol.MethodWorkflowList] = trustedServiceUnary(protocol.MethodWorkflowList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowsValidated)
+	executables[protocol.MethodWorkflowGet] = trustedServiceUnary(protocol.MethodWorkflowGet, workflowClient, apicontract.WorkflowTrustedService.GetWorkflowValidated)
+	executables[protocol.MethodWorkflowLinkProject] = trustedServiceUnary(protocol.MethodWorkflowLinkProject, workflowClient, apicontract.WorkflowTrustedService.LinkWorkflowToProjectValidated)
+	executables[protocol.MethodWorkflowListProjectLinks] = trustedServiceUnary(protocol.MethodWorkflowListProjectLinks, workflowClient, apicontract.WorkflowTrustedService.ListProjectWorkflowLinksValidated)
+	executables[protocol.MethodWorkflowSetDefaultProjectLink] = trustedServiceUnary(protocol.MethodWorkflowSetDefaultProjectLink, workflowClient, apicontract.WorkflowTrustedService.SetDefaultProjectWorkflowLinkValidated)
+	executables[protocol.MethodWorkflowUnlinkProject] = trustedServiceUnary(protocol.MethodWorkflowUnlinkProject, workflowClient, apicontract.WorkflowTrustedService.UnlinkWorkflowFromProjectValidated)
+	executables[protocol.MethodWorkflowDeletePreview] = trustedServiceUnary(protocol.MethodWorkflowDeletePreview, workflowClient, apicontract.WorkflowTrustedService.PreviewWorkflowDeleteValidated)
+	executables[protocol.MethodWorkflowDelete] = trustedServiceUnary(protocol.MethodWorkflowDelete, workflowClient, apicontract.WorkflowTrustedService.DeleteWorkflowValidated)
+	executables[protocol.MethodWorkflowValidate] = trustedServiceUnary(protocol.MethodWorkflowValidate, workflowClient, apicontract.WorkflowTrustedService.ValidateWorkflowValidated)
+	executables[protocol.MethodWorkflowScriptPathValidate] = trustedServiceUnary(protocol.MethodWorkflowScriptPathValidate, workflowClient, apicontract.WorkflowTrustedService.ValidateWorkflowScriptPathValidated)
+	executables[protocol.MethodWorkflowGraphValidateDraft] = trustedServiceUnary(protocol.MethodWorkflowGraphValidateDraft, workflowClient, apicontract.WorkflowTrustedService.ValidateWorkflowGraphDraftValidated)
+	executables[protocol.MethodWorkflowGraphDeriveWiring] = trustedServiceUnary(protocol.MethodWorkflowGraphDeriveWiring, workflowClient, apicontract.WorkflowTrustedService.DeriveWorkflowGraphWiringValidated)
+	executables[protocol.MethodWorkflowGraphSavePreview] = trustedServiceUnary(protocol.MethodWorkflowGraphSavePreview, workflowClient, apicontract.WorkflowTrustedService.PreviewWorkflowGraphSaveValidated)
+	executables[protocol.MethodWorkflowGraphSave] = trustedServiceUnary(protocol.MethodWorkflowGraphSave, workflowClient, apicontract.WorkflowTrustedService.SaveWorkflowGraphValidated)
 
 	executables[protocol.MethodAuthGetStatus] = trustedServiceUnary(
 		protocol.MethodAuthGetStatus,

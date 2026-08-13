@@ -1858,6 +1858,9 @@ func (r WorkflowListRequest) Validate() error {
 		if err := validateRequired("project_id", *r.ProjectID); err != nil {
 			return err
 		}
+		if strings.TrimSpace(*r.ProjectID) != *r.ProjectID {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "project_id", "project_id must not contain surrounding whitespace")
+		}
 	}
 	if r.WorkflowID != nil {
 		if err := validateRequiredWorkflowID(*r.WorkflowID); err != nil {
@@ -2079,6 +2082,14 @@ func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 }
 
 func (r WorkflowGraphSavePreviewRequest) Validate() error {
+	return validateWorkflowGraphSavePreviewRequest(r)
+}
+
+func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
+	return validateWorkflowGraphSavePreviewRequest(r)
+}
+
+func validateWorkflowGraphSavePreviewRequest(r WorkflowGraphSavePreviewRequest) error {
 	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
 		return err
 	}
@@ -2086,13 +2097,6 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 		return err
 	}
 	return validateWorkflowGraphEntityIDs(r.Graph)
-}
-
-func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
-	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
-		return err
-	}
-	return validateWorkflowGraphDraftCollectionBounds(r.Graph)
 }
 
 func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
@@ -2109,14 +2113,15 @@ func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) e
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
-	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).Validate(); err != nil {
-		return err
-	}
-	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
+	return validateWorkflowGraphSaveRequest(r)
 }
 
 func (r WorkflowGraphSaveRequest) ValidateRPC() error {
-	if err := (WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}).ValidateRPC(); err != nil {
+	return validateWorkflowGraphSaveRequest(r)
+}
+
+func validateWorkflowGraphSaveRequest(r WorkflowGraphSaveRequest) error {
+	if err := validateWorkflowGraphSavePreviewRequest(WorkflowGraphSavePreviewRequest{WorkflowID: r.WorkflowID, ExpectedVersion: r.ExpectedVersion, Metadata: r.Metadata, Graph: r.Graph}); err != nil {
 		return err
 	}
 	return validateWorkflowGraphSaveConfirmation(r.Confirmation)
