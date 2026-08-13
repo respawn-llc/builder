@@ -1895,105 +1895,6 @@ func (r WorkflowGetRequest) Validate() error {
 	return validateRequiredWorkflowID(r.WorkflowID)
 }
 
-func validateWorkflowNodeCompletionMode(kind string, completionMode string) error {
-	trimmedMode := strings.TrimSpace(completionMode)
-	if trimmedMode == "" {
-		return nil
-	}
-	if strings.TrimSpace(kind) != "agent" {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "completion_mode", "completion_mode is only valid for agent nodes")
-	}
-	switch trimmedMode {
-	case "auto", "structured_output", "tool", "shell_command", "unstructured_output":
-		return nil
-	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "completion_mode", "completion_mode must be auto|structured_output|tool|shell_command|unstructured_output")
-	}
-}
-
-func validateWorkflowEdgeSelectionShape(fieldPrefix string, assigneeSelection string, thinkingSelection string, parameters []WorkflowParameter) error {
-	for _, field := range []struct {
-		name  string
-		value string
-	}{
-		{fieldPrefix + ".assignee_selection", assigneeSelection},
-		{fieldPrefix + ".thinking_selection", thinkingSelection},
-	} {
-		switch strings.TrimSpace(field.value) {
-		case "configured", "previous_node":
-		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidMode, field.name, field.name+" must be configured or previous_node")
-		}
-	}
-	seenKeys := map[string]struct{}{}
-	seenPurposes := map[string]struct{}{}
-	for index, parameter := range parameters {
-		name := fmt.Sprintf("%s[%d]", fieldPrefix, index)
-		purpose := strings.TrimSpace(parameter.Purpose)
-		switch purpose {
-		case "ordinary", "target_assignee", "target_thinking":
-		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".purpose", "parameter purpose is invalid")
-		}
-		if err := validateModelKey(name+".key", parameter.Key); err != nil {
-			return err
-		}
-		if workflowkey.ReservedParameter(strings.TrimSpace(parameter.Key)) {
-			return workflowRequestError(WorkflowRequestErrorInvalidKey, name+".key", "parameter key is reserved")
-		}
-		if _, exists := seenKeys[parameter.Key]; exists {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".key", "parameter keys must be unique")
-		}
-		seenKeys[parameter.Key] = struct{}{}
-		if purpose != "ordinary" {
-			if _, exists := seenPurposes[purpose]; exists {
-				return workflowRequestError(WorkflowRequestErrorInvalidValue, name+".purpose", "protected parameter purposes must be unique")
-			}
-			seenPurposes[purpose] = struct{}{}
-		}
-		description := strings.TrimSpace(parameter.Description)
-		if purpose == "ordinary" && description == "" {
-			return workflowRequestError(WorkflowRequestErrorRequired, name+".description", "ordinary parameter description is required")
-		}
-		if len([]rune(description)) > workflowcontract.MaxParameterDescriptionChars {
-			return workflowRequestError(WorkflowRequestErrorTooLong, name+".description", "parameter description is too long")
-		}
-	}
-	if strings.TrimSpace(assigneeSelection) == "previous_node" {
-		if _, exists := seenPurposes["target_assignee"]; !exists {
-			return workflowRequestError(WorkflowRequestErrorRequired, fieldPrefix+".parameters", "assignee selection requires a target-assignee parameter")
-		}
-	}
-	if strings.TrimSpace(thinkingSelection) == "previous_node" {
-		if _, exists := seenPurposes["target_thinking"]; !exists {
-			return workflowRequestError(WorkflowRequestErrorRequired, fieldPrefix+".parameters", "thinking selection requires a target-thinking parameter")
-		}
-	}
-	return nil
-}
-
-func validateWorkflowContextSource(source WorkflowContextSource) error {
-	switch strings.TrimSpace(source.Kind) {
-	case "", "immediate_source":
-		if strings.TrimSpace(source.NodeKey) != "" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for immediate_source")
-		}
-		return nil
-	case "selected_node":
-		if err := validateModelKey("context_source.node_key", source.NodeKey); err != nil {
-			return err
-		}
-		return nil
-	case "previous_target", "previous_target_or_new":
-		if strings.TrimSpace(source.NodeKey) != "" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.node_key", "context_source.node_key must be empty for target-derived context sources")
-		}
-		return nil
-	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "context_source.kind", "context_source.kind is invalid")
-	}
-}
-
 func (r WorkflowLinkProjectRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
@@ -2096,10 +1997,7 @@ func validateWorkflowGraphSavePreviewRequest(r WorkflowGraphSavePreviewRequest) 
 	if err := validateWorkflowGraphSavePreviewFields(r); err != nil {
 		return err
 	}
-	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
-		return err
-	}
-	return validateWorkflowGraphEntityIDs(r.Graph)
+	return validateWorkflowGraphDraftEnvelope(r.Graph)
 }
 
 func validateWorkflowGraphSavePreviewFields(r WorkflowGraphSavePreviewRequest) error {
@@ -2336,22 +2234,37 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.group_id", "group_id must be non-blank when present")
 		}
-		if err := validateWorkflowNodeCompletionMode(node.Kind, node.CompletionMode); err != nil {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.completion_mode", err.Error())
-		}
-		if node.ScriptPath != nil && strings.TrimSpace(node.Kind) != "script" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.script_path", "script_path is only valid on script nodes")
-		}
 		if len(node.JoinInputProviders) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.join_input_providers", fmt.Sprintf("join_input_providers must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
 	}
 	for _, edge := range graph.Edges {
-		if err := validateWorkflowContextSource(edge.ContextSource); err != nil {
-			return err
+		switch strings.TrimSpace(edge.AssigneeSelection) {
+		case "configured", "previous_node":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "graph.edges.assignee_selection", "graph.edges.assignee_selection must be configured or previous_node")
 		}
-		if err := validateWorkflowEdgeSelectionShape("graph.edges", edge.AssigneeSelection, edge.ThinkingSelection, edge.Parameters); err != nil {
-			return err
+		switch strings.TrimSpace(edge.ThinkingSelection) {
+		case "configured", "previous_node":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "graph.edges.thinking_selection", "graph.edges.thinking_selection must be configured or previous_node")
+		}
+		switch strings.TrimSpace(edge.ContextMode) {
+		case "new_session", "continue_session", "compact_and_continue_session":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidMode, "graph.edges.context_mode", "graph.edges.context_mode is invalid")
+		}
+		switch strings.TrimSpace(edge.ContextSource.Kind) {
+		case "", "immediate_source", "selected_node", "previous_target", "previous_target_or_new":
+		default:
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.edges.context_source.kind", "context source kind is invalid")
+		}
+		for _, parameter := range edge.Parameters {
+			switch strings.TrimSpace(parameter.Purpose) {
+			case "ordinary", "target_assignee", "target_thinking":
+			default:
+				return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.edges.parameters.purpose", "parameter purpose is invalid")
+			}
 		}
 		if len(edge.Parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.edges.parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
@@ -2390,49 +2303,6 @@ func validateGraphEntityID(field, value string) error {
 			field,
 			field+" must be canonical UUIDv4 text",
 		)
-	}
-	return nil
-}
-
-func validateWorkflowGraphEntityIDs(graph WorkflowGraphDraft) error {
-	for _, group := range graph.NodeGroups {
-		if err := validateGraphEntityID("graph.node_groups.id", group.ID); err != nil {
-			return err
-		}
-	}
-	for _, node := range graph.Nodes {
-		if err := validateGraphEntityID("graph.nodes.id", node.ID); err != nil {
-			return err
-		}
-		if node.GroupID != nil {
-			if err := validateGraphEntityID("graph.nodes.group_id", *node.GroupID); err != nil {
-				return err
-			}
-		}
-		for _, provider := range node.JoinInputProviders {
-			if err := validateGraphEntityID("graph.nodes.join_input_providers.provider_edge_id", provider.ProviderEdgeID); err != nil {
-				return err
-			}
-		}
-	}
-	for _, group := range graph.TransitionGroups {
-		if err := validateGraphEntityID("graph.transition_groups.id", group.ID); err != nil {
-			return err
-		}
-		if err := validateGraphEntityID("graph.transition_groups.source_node_id", group.SourceNodeID); err != nil {
-			return err
-		}
-	}
-	for _, edge := range graph.Edges {
-		for _, field := range []struct{ name, value string }{
-			{"graph.edges.id", edge.ID},
-			{"graph.edges.transition_group_id", edge.TransitionGroupID},
-			{"graph.edges.target_node_id", edge.TargetNodeID},
-		} {
-			if err := validateGraphEntityID(field.name, field.value); err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }

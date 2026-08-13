@@ -54,7 +54,7 @@ func TestWorkflowEdgeContractRoundTripsSelectionModesAndParameterPurposes(t *tes
 	}
 }
 
-func TestWorkflowGraphRequestsRejectBlankAndInvalidEdgeSelectionsAndPurposes(t *testing.T) {
+func TestWorkflowGraphRequestsRejectInvalidEdgeUnionValues(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
 	valid := WorkflowGraphDraft{Edges: []WorkflowGraphDraftEdge{{
 		ID: "edge", TransitionGroupID: "group", Key: "edge", TargetNodeID: "target",
@@ -86,11 +86,8 @@ func TestWorkflowGraphRequestsRejectBlankAndInvalidEdgeSelectionsAndPurposes(t *
 		name   string
 		mutate func(*WorkflowGraphDraftEdge)
 	}{
-		{"blank assignee selection", func(edge *WorkflowGraphDraftEdge) { edge.AssigneeSelection = "" }},
 		{"invalid assignee selection", func(edge *WorkflowGraphDraftEdge) { edge.AssigneeSelection = "invalid" }},
-		{"blank thinking selection", func(edge *WorkflowGraphDraftEdge) { edge.ThinkingSelection = "" }},
 		{"invalid thinking selection", func(edge *WorkflowGraphDraftEdge) { edge.ThinkingSelection = "invalid" }},
-		{"blank parameter purpose", func(edge *WorkflowGraphDraftEdge) { edge.Parameters[0].Purpose = "" }},
 		{"invalid parameter purpose", func(edge *WorkflowGraphDraftEdge) { edge.Parameters[0].Purpose = "invalid" }},
 	}
 	for _, request := range validators {
@@ -105,6 +102,48 @@ func TestWorkflowGraphRequestsRejectBlankAndInvalidEdgeSelectionsAndPurposes(t *
 						t.Fatalf("%s accepted invalid edge: %+v", request.name, graph.Edges[0])
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestWorkflowGraphRequestEnvelopeDefersSemanticShapeToWorkflowValidation(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	graph := WorkflowGraphDraft{Edges: []WorkflowGraphDraftEdge{{
+		ID:                "not-a-canonical-id",
+		TransitionGroupID: "missing-group",
+		Key:               "duplicate",
+		TargetNodeID:      "missing-target",
+		AssigneeSelection: "previous_node",
+		ThinkingSelection: "configured",
+		ContextMode:       "new_session",
+		ContextSource:     WorkflowContextSource{Kind: "selected_node"},
+		Parameters: []WorkflowParameter{
+			{Key: "duplicate", Purpose: "target_assignee"},
+			{Key: "duplicate", Purpose: "target_assignee"},
+		},
+	}}}
+	for name, validate := range map[string]func() error{
+		"validate draft": func() error {
+			return (WorkflowGraphValidateDraftRequest{
+				WorkflowID: workflowID,
+				Graph:      graph,
+				Modes:      []WorkflowValidationMode{WorkflowValidationModeDraft},
+			}).Validate()
+		},
+		"derive wiring": func() error {
+			return (WorkflowGraphDeriveWiringRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+		"preview save": func() error {
+			return (WorkflowGraphSavePreviewRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+		"save": func() error {
+			return (WorkflowGraphSaveRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validate(); err != nil {
+				t.Fatalf("envelope validation rejected semantic graph shape: %v", err)
 			}
 		})
 	}

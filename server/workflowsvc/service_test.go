@@ -2598,6 +2598,43 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 	}
 }
 
+func TestServiceWorkflowGraphDraftReportsProtectedParameterAndContextSemantics(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow: %v", err)
+	}
+	graph := serverapi.WorkflowGraphDraftFromDefinition(current.Definition)
+	if len(graph.Edges) == 0 {
+		t.Fatal("workflow fixture has no edges")
+	}
+	graph.Edges[0].AssigneeSelection = "previous_node"
+	graph.Edges[0].ContextSource = serverapi.WorkflowContextSource{Kind: "selected_node"}
+
+	result, err := service.ValidateWorkflowGraphDraft(ctx, serverapi.WorkflowGraphValidateDraftRequest{
+		WorkflowID: workflowID,
+		Graph:      graph,
+		Modes:      []serverapi.WorkflowValidationMode{serverapi.WorkflowValidationModeDraft},
+	})
+	if err != nil {
+		t.Fatalf("ValidateWorkflowGraphDraft: %v", err)
+	}
+	draft := result.Results[serverapi.WorkflowValidationModeDraft]
+	codes := make(map[string]bool, len(draft.Errors))
+	for _, validationErr := range draft.Errors {
+		codes[validationErr.Code] = true
+	}
+	for _, code := range []string{
+		string(workflow.CodeMissingProtectedParameter),
+		string(workflow.CodeInvalidContextSource),
+	} {
+		if !codes[code] {
+			t.Fatalf("draft errors = %+v, want code %q", draft.Errors, code)
+		}
+	}
+}
+
 func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterministically(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
