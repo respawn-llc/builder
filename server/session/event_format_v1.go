@@ -693,12 +693,31 @@ func validateEventRecordV2(record EventRecord) error {
 	}
 	isQuestion := completion.Name == askQuestionToolName
 	successfulQuestion := isQuestion && !completion.IsError
+	if err := validateV2QuestionAnswerPlacement(
+		completion.Name,
+		completion.IsError,
+		completion.QuestionAnswer != nil,
+	); err != nil {
+		return err
+	}
 	switch {
-	case successfulQuestion && completion.QuestionAnswer == nil:
-		return errors.New("successful ask_question completion requires typed Question-answer facts")
 	case successfulQuestion && record.CommittedAtUnixMs() == nil:
 		return errors.New("successful ask_question completion requires a committed timestamp")
-	case completion.QuestionAnswer != nil && !successfulQuestion:
+	default:
+		return nil
+	}
+}
+
+func validateV2QuestionAnswerPlacement(
+	toolName string,
+	isError bool,
+	answerPresent bool,
+) error {
+	successfulQuestion := toolName == askQuestionToolName && !isError
+	switch {
+	case successfulQuestion && !answerPresent:
+		return errors.New("successful ask_question completion requires typed Question-answer facts")
+	case answerPresent && !successfulQuestion:
 		return errors.New("typed Question-answer facts require a successful ask_question completion")
 	default:
 		return nil
@@ -772,6 +791,9 @@ func decodeEventRecordPayloadV1(
 	if decode == nil {
 		return nil, fmt.Errorf("event record payload decoder is required")
 	}
+	if err := validateEventKind(kind); err != nil {
+		return nil, err
+	}
 	var payload EventRecordPayload
 	switch kind {
 	case EventKindMessage:
@@ -843,9 +865,26 @@ func decodeEventRecordPayloadV1(
 		}
 		payload = warning
 	default:
-		return nil, fmt.Errorf("unsupported event kind %q", kind)
+		panic(fmt.Sprintf("validated event kind %q has no payload decoder", kind))
 	}
 	return payload, nil
+}
+
+func validateEventKind(kind EventKind) error {
+	switch kind {
+	case EventKindMessage,
+		EventKindToolCompletion,
+		EventKindLocalEntry,
+		EventKindHistoryReplace,
+		EventKindCacheRequest,
+		EventKindCacheResponse,
+		EventKindCacheWarning,
+		EventKindReviewerFeedback,
+		EventKindReviewerError:
+		return nil
+	default:
+		return fmt.Errorf("unsupported event kind %q", kind)
+	}
 }
 
 func normalizeOptionalEventIdentity(name string, value *string) (*string, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"core/shared/transcript"
@@ -189,6 +190,94 @@ func TestQuestionHistoryCursorStreamsLargeReplacementBoundaryWithoutMaterializin
 	}
 }
 
+func TestQuestionHistoryCursorLargeIgnoredScalarAllocationIsSizeIndependent(t *testing.T) {
+	smallDir := writeQuestionHistoryCursorIgnoredRecord(t, 1<<10)
+	largeDir := writeQuestionHistoryCursorIgnoredRecord(t, 16<<20)
+	allocated := func(sessionDir string) uint64 {
+		runtime.GC()
+		var before runtime.MemStats
+		var after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		cursor, err := OpenQuestionHistoryCursor(sessionDir, 2)
+		if err != nil {
+			t.Fatalf("open ignored-record cursor: %v", err)
+		}
+		record, nextErr := cursor.Next()
+		closeErr := cursor.Close()
+		if nextErr != nil || closeErr != nil || record != nil {
+			t.Fatalf(
+				"consume ignored record: record=%#v next error=%v close error=%v",
+				record,
+				nextErr,
+				closeErr,
+			)
+		}
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	smallAllocated := allocated(smallDir)
+	largeAllocated := allocated(largeDir)
+	if largeAllocated > smallAllocated+(1<<20) {
+		t.Fatalf(
+			"large ignored record allocated %d bytes vs small %d; want size-independent bounded allocation",
+			largeAllocated,
+			smallAllocated,
+		)
+	}
+}
+
+func TestQuestionHistoryCursorRejectsSkippedV2TypedAnswerCorruption(t *testing.T) {
+	tests := []struct {
+		name     string
+		toolName string
+		isError  bool
+	}{
+		{name: "failed Question", toolName: askQuestionToolName, isError: true},
+		{name: "non-Question tool", toolName: "exec_command"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			line := v2CompletionFixtureLine(
+				t,
+				test.toolName,
+				test.isError,
+				[]byte(`{"ToolName":"ask_question","Question":"Choose"}`),
+				[]byte(`{"freeform":"answer"}`),
+				int64Pointer(1),
+			)
+			writeRawVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, [][]byte{line})
+			cursor, err := OpenQuestionHistoryCursor(dir, 1)
+			if err != nil {
+				t.Fatalf("open cursor: %v", err)
+			}
+			defer cursor.Close()
+			if _, err := cursor.Next(); err == nil {
+				t.Fatal("corrupt skipped v2 completion did not terminate cursor")
+			}
+		})
+	}
+}
+
+func TestQuestionHistoryCursorRejectsCandidateTrailingGarbage(t *testing.T) {
+	dir := t.TempDir()
+	record := mustQuestionHistoryCursorRecord(t, 1, "question")
+	line, err := encodeEventRecordV2(record)
+	if err != nil {
+		t.Fatalf("encode Question completion: %v", err)
+	}
+	line = append(line, []byte(` garbage`)...)
+	writeRawVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, [][]byte{line})
+	cursor, err := OpenQuestionHistoryCursor(dir, 1)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer cursor.Close()
+	if _, err := cursor.Next(); err == nil {
+		t.Fatal("candidate with trailing garbage did not fail")
+	}
+}
+
 func TestQuestionHistoryCursorIgnoresIncompleteConcurrentTail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
@@ -214,6 +303,27 @@ func TestQuestionHistoryCursorIgnoresIncompleteConcurrentTail(t *testing.T) {
 	if err != nil || record == nil || record.Seq() != 1 {
 		t.Fatalf("Next = %#v, %v", record, err)
 	}
+}
+
+func questionHistoryCursorIgnoredRecord(t *testing.T, scalarBytes int) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	buffer.WriteString(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","items":[{"type":"other","raw":"`)
+	buffer.Write(bytes.Repeat([]byte{'x'}, scalarBytes))
+	buffer.WriteString(`"}]}}`)
+	return buffer.Bytes()
+}
+
+func writeQuestionHistoryCursorIgnoredRecord(t *testing.T, scalarBytes int) string {
+	t.Helper()
+	dir := t.TempDir()
+	writeRawVersionedEventLog(
+		t,
+		filepath.Join(dir, eventsFile),
+		EventLogVersionV2,
+		[][]byte{questionHistoryCursorIgnoredRecord(t, scalarBytes)},
+	)
+	return dir
 }
 
 func TestQuestionHistoryCursorSurfacesCompleteDecodeFailure(t *testing.T) {

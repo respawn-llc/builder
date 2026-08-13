@@ -35,6 +35,7 @@ func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
 	if fileSize == 0 {
 		return -1, nil
 	}
+	buffer := make([]byte, eventLogScanChunkSize)
 	position := fileSize
 	for position > 0 {
 		chunkSize := eventLogScanChunkSize
@@ -42,7 +43,7 @@ func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
 			chunkSize = position
 		}
 		start := position - chunkSize
-		chunk := make([]byte, chunkSize)
+		chunk := buffer[:chunkSize]
 		if _, err := fp.ReadAt(chunk, start); err != nil {
 			return -1, fmt.Errorf("scan events file for newline: %w", err)
 		}
