@@ -71,6 +71,47 @@ func (a *Authority) CurrentWorkflowTaskExecutionReadSnapshot() (map[workflow.Tas
 	return cloneTaskExecutionSnapshots(current.executions), nil
 }
 
+// CurrentWorkflowTaskInterruptibility captures exact point-in-time Interrupt
+// eligibility without waiting for Runtime ownership. A Task is conservatively
+// ineligible when its exact state cannot be sampled immediately.
+func (a *Authority) CurrentWorkflowTaskInterruptibility(taskIDs []workflow.TaskID) (map[workflow.TaskID]bool, error) {
+	if a == nil {
+		return nil, errors.New("session runtime authority is required")
+	}
+	interruptible := make(map[workflow.TaskID]bool, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if strings.TrimSpace(string(taskID)) == "" {
+			return nil, errors.New("workflow task id is required")
+		}
+		if _, duplicate := interruptible[taskID]; duplicate {
+			return nil, errors.New("workflow task id is duplicated")
+		}
+		interruptible[taskID] = false
+	}
+	if !a.mu.TryLock() {
+		return interruptible, nil
+	}
+	defer a.mu.Unlock()
+	for _, byWorkflow := range a.workflowExecutions {
+		for _, byTask := range byWorkflow {
+			for taskID := range interruptible {
+				for _, execution := range byTask[taskID] {
+					if execution.phase != executionPhaseRunning || !execution.prompts.mu.TryRLock() {
+						continue
+					}
+					hasPending := len(execution.prompts.pending) != 0
+					execution.prompts.mu.RUnlock()
+					if !hasPending {
+						interruptible[taskID] = true
+						break
+					}
+				}
+			}
+		}
+	}
+	return interruptible, nil
+}
+
 func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
 	var snapshotErr error

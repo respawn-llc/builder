@@ -3626,13 +3626,18 @@ func (s workflowViewStatusObservationSource) ObserveWorkflowTaskExecutions(taskI
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
+	interruptible, err := s.authority.CurrentWorkflowTaskInterruptibility(taskIDs)
+	if err != nil {
+		return workflowexecution.WorkflowTaskExecutionObservation{}, err
+	}
 	quiescence, err := s.quiescence.CurrentTaskQuiescence(taskIDs)
 	if err != nil {
 		return workflowexecution.WorkflowTaskExecutionObservation{}, err
 	}
 	return workflowexecution.WorkflowTaskExecutionObservation{
-		Executions: executions,
-		Quiescence: quiescence,
+		Executions:    executions,
+		Quiescence:    quiescence,
+		Interruptible: interruptible,
 	}, nil
 }
 

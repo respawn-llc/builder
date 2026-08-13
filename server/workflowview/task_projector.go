@@ -27,6 +27,7 @@ type TaskFactsInput struct {
 	CurrentNodes      []workflow.CurrentNode
 	LiveExecutions    []sessionruntime.TaskExecution
 	ConcurrencyQueued []workflow.CurrentNodeReference
+	Interruptible     bool
 	Definition        definitionSnapshot
 	CanDelete         bool
 }
@@ -78,6 +79,7 @@ func (*TaskProjector) ProjectTaskFacts(input TaskFactsInput) TaskFacts {
 			input.CurrentNodes,
 			input.LiveExecutions,
 			input.ConcurrencyQueued,
+			input.Interruptible,
 			input.CanDelete,
 		),
 		Done: done,
@@ -198,14 +200,10 @@ func taskActions(
 	currentNodes []workflow.CurrentNode,
 	live []sessionruntime.TaskExecution,
 	concurrencyQueued []workflow.CurrentNodeReference,
+	hasInterruptibleExecution bool,
 	canDelete bool,
 ) serverapi.WorkflowTaskActions {
 	hasLiveExecution := len(live) != 0
-	hasInterruptibleExecution := false
-	for _, execution := range live {
-		hasInterruptibleExecution = hasInterruptibleExecution ||
-			(!execution.Queued && !execution.HasPendingPrompts())
-	}
 	actions := serverapi.WorkflowTaskActions{
 		CanStart:     !done && !hasLiveExecution && status.Kind == serverapi.WorkflowTaskStatusKindBacklog,
 		CanInterrupt: !done && hasInterruptibleExecution,
