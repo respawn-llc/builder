@@ -223,8 +223,6 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		return nil
 	case rpccontract.ScopeGoalSession:
 		return e.gateway.requireGoalSessionAccess(ctx, state, scopeParams.sessionID)
-	case rpccontract.ScopeRuntimeLiveSessionRequired:
-		return e.gateway.requireRuntimeLiveSession(ctx, scopeParams.sessionID)
 	case rpccontract.ScopeRuntimeLiveSessionOptional:
 		return nil
 	case rpccontract.ScopeProcessActiveProject:
@@ -255,7 +253,6 @@ func routeScopeParamsFor(route rpccontract.Route, params any) (routeScopeParams,
 		rpccontract.ScopeSessionAttachedProject,
 		rpccontract.ScopeAttachedSession,
 		rpccontract.ScopeGoalSession,
-		rpccontract.ScopeRuntimeLiveSessionRequired,
 		rpccontract.ScopeRuntimeLiveSessionOptional:
 		sessionID, ok := routeSessionID(params)
 		if !ok {
@@ -464,21 +461,6 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
-}
-
-func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID string) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return serverapi.ErrRuntimeUnavailable
-	}
-	metadataStore := g.deps.MetadataStore()
-	if metadataStore == nil {
-		return serverapi.ErrRuntimeUnavailable
-	}
-	if _, err := metadataStore.ResolvePersistedSession(ctx, trimmedSessionID); err != nil {
-		return fmt.Errorf("%w: %w", serverapi.ErrRuntimeUnavailable, err)
-	}
-	return nil
 }
 
 func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {

@@ -24,9 +24,13 @@ func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.Se
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error) {
+		return s.LiveSteerValidated(ctx, validated)
+	})
+}
+
+func (s *Service) LiveSteerValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error) {
+	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
@@ -139,9 +143,13 @@ func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (
 }
 
 func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveWaitResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error) {
+		return s.LiveWaitValidated(ctx, validated)
+	})
+}
+
+func (s *Service) LiveWaitValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error) {
+	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err

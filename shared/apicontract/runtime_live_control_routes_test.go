@@ -18,7 +18,7 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 	}{
 		{
 			method:       protocol.MethodRuntimeLiveSteer,
-			scope:        ScopeRuntimeLiveSessionRequired,
+			scope:        ScopeNone,
 			connection:   ConnectionControl,
 			requestType:  reflect.TypeOf(serverapi.RuntimeLiveSteerRequest{}),
 			responseType: reflect.TypeOf(serverapi.RuntimeLiveSteerResponse{}),
@@ -32,7 +32,7 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 		},
 		{
 			method:       protocol.MethodRuntimeLiveWait,
-			scope:        ScopeRuntimeLiveSessionRequired,
+			scope:        ScopeNone,
 			connection:   ConnectionDedicated,
 			requestType:  reflect.TypeOf(serverapi.RuntimeLiveWaitRequest{}),
 			responseType: reflect.TypeOf(serverapi.RuntimeLiveWaitResponse{}),

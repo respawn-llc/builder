@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"strings"
 
+	"core/server/metadata"
 	"core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -294,11 +296,28 @@ func authorizeSessionAttachment(
 	validated apicontract.Validated[protocol.AttachSessionRequest],
 ) (apicontract.AuthorizedSessionAttachment, error) {
 	request := validated.Value()
-	sessionID, err := runtimeids.ParseSessionID(request.SessionID)
+	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
+	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
+		activeProjectID = strings.TrimSpace(state.attachedProject)
+	}
+	return resolveAuthorizedSessionAttachment(ctx, g.deps.MetadataStore(), activeProjectID, request.SessionID)
+}
+
+type sessionAttachmentMetadata interface {
+	ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error)
+	LookupWorkspaceBindingByID(context.Context, string) (metadata.Binding, error)
+}
+
+func resolveAuthorizedSessionAttachment(
+	ctx context.Context,
+	metadataStore sessionAttachmentMetadata,
+	activeProjectID string,
+	rawSessionID string,
+) (apicontract.AuthorizedSessionAttachment, error) {
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
 	if err != nil {
 		return apicontract.AuthorizedSessionAttachment{}, err
 	}
-	metadataStore := g.deps.MetadataStore()
 	if metadataStore == nil {
 		return apicontract.AuthorizedSessionAttachment{}, errors.New("metadata store is required")
 	}
@@ -310,11 +329,8 @@ func authorizeSessionAttachment(
 	if err != nil {
 		return apicontract.AuthorizedSessionAttachment{}, err
 	}
-	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
-	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
-		activeProjectID = strings.TrimSpace(state.attachedProject)
-	}
-	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
+	if trimmedActiveProjectID := strings.TrimSpace(activeProjectID); trimmedActiveProjectID != "" &&
+		strings.TrimSpace(binding.ProjectID) != trimmedActiveProjectID {
 		return apicontract.AuthorizedSessionAttachment{}, sessionOutsideActiveProjectError{sessionID: sessionID.String()}
 	}
 	return apicontract.AuthorizedSessionAttachment{
@@ -454,6 +470,26 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	processOutput := executables[protocol.MethodProcessSubscribeOutput]
 	processOutput.executeSubscription = executeProcessOutputSubscription
 	executables[protocol.MethodProcessSubscribeOutput] = processOutput
+	executables[protocol.MethodRuntimeLiveSteer] = inboundTrustedUnary[serverapi.RuntimeLiveSteerRequest, noAuthorizationFacts, serverapi.RuntimeLiveSteerResponse](
+		protocol.MethodRuntimeLiveSteer,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		func(context.Context, *Gateway, *connectionState, apicontract.Validated[serverapi.RuntimeLiveSteerRequest]) (noAuthorizationFacts, error) {
+			return noAuthorizationFacts{}, nil
+		},
+		handleRuntimeLiveSteer,
+	)
+	executables[protocol.MethodRuntimeLiveWait] = inboundTrustedUnary[serverapi.RuntimeLiveWaitRequest, noAuthorizationFacts, serverapi.RuntimeLiveWaitResponse](
+		protocol.MethodRuntimeLiveWait,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		func(context.Context, *Gateway, *connectionState, apicontract.Validated[serverapi.RuntimeLiveWaitRequest]) (noAuthorizationFacts, error) {
+			return noAuthorizationFacts{}, nil
+		},
+		handleRuntimeLiveWait,
+	)
 	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, noAuthorizationFacts, serverapi.SessionRuntimeActivateResponse](
 		protocol.MethodSessionRuntimeActivate,
 		apicontract.SemanticValidationRequired,
@@ -471,6 +507,34 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		handleSessionRuntimeRelease,
 	)
 	return executables
+}
+
+func handleRuntimeLiveSteer(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.RuntimeLiveSteerRequest],
+	_ noAuthorizationFacts,
+) (serverapi.RuntimeLiveSteerResponse, error) {
+	trusted, ok := g.deps.RuntimeLiveControlClient().(apicontract.RuntimeLiveControlTrustedService)
+	if !ok {
+		return serverapi.RuntimeLiveSteerResponse{}, errors.New("Runtime Live Control trusted service is required")
+	}
+	return trusted.LiveSteerValidated(ctx, request)
+}
+
+func handleRuntimeLiveWait(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.RuntimeLiveWaitRequest],
+	_ noAuthorizationFacts,
+) (serverapi.RuntimeLiveWaitResponse, error) {
+	trusted, ok := g.deps.RuntimeLiveControlClient().(apicontract.RuntimeLiveControlTrustedService)
+	if !ok {
+		return serverapi.RuntimeLiveWaitResponse{}, errors.New("Runtime Live Control trusted service is required")
+	}
+	return trusted.LiveWaitValidated(ctx, request)
 }
 
 func handleWorktreeWorkspaceList(

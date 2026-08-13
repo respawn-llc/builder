@@ -157,6 +157,16 @@ type RuntimeLiveControlService interface {
 	LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error)
 }
 
+type RuntimeLiveControlTrustedService interface {
+	LiveSteerValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error)
+	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error)
+}
+
+type RuntimeLiveControlGatewayService interface {
+	RuntimeLiveControlService
+	RuntimeLiveControlTrustedService
+}
+
 type SessionTranscriptService interface {
 	SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
 }

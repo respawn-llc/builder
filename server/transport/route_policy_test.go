@@ -224,8 +224,8 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
 		SessionID:       missing,
 		Text:            "steer",
-	}); !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-		t.Fatalf("missing required live session error = %v, want ErrRuntimeUnavailable", err)
+	}); err != nil {
+		t.Fatalf("missing live steer must defer to Runtime Authority: %v", err)
 	}
 	if err := executor.authorizeScope(ctx, &connectionState{}, stopRoute, serverapi.RuntimeLiveStopRequest{
 		ClientRequestID: "8b0364cc-5c6c-412e-a4e8-31380661d1e1",
