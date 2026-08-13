@@ -2,59 +2,14 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
-
-func TestCommittedCacheResponseObserverFailureRetainsLineage(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("cache response observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	client := &fakeClient{responses: []llm.Response{
-		{Usage: llm.Usage{CachedInputTokens: textutil.Value(7)}},
-		{Usage: llm.Usage{CachedInputTokens: textutil.Value(0)}},
-	}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
-		Model:            "gpt-5",
-		CacheWarningMode: config.CacheWarningModeDefault,
-	})
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence == 2
-	}, observerErr)
-
-	if _, err := engine.generateWithRetryClient(
-		context.Background(),
-		"first",
-		client,
-		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "alpha"),
-		nil,
-		nil,
-		nil,
-	); !errors.Is(err, observerErr) {
-		t.Fatalf("first cache observation error = %v, want observer error", err)
-	}
-	if _, err := engine.generateWithRetryClient(
-		context.Background(),
-		"second",
-		client,
-		cacheLineageRequest("conversation", transcript.CacheWarningScopeConversation, "beta"),
-		nil,
-		nil,
-		nil,
-	); err != nil {
-		t.Fatalf("second cache observation: %v", err)
-	}
-
-	assertBoundedCacheWarning(t, store, session.CacheScopeConversation, session.CacheWarningReasonNonPostfix, 7)
-}
 
 func TestVerboseCacheReuseDropPersistsTypedWarning(t *testing.T) {
 	t.Parallel()

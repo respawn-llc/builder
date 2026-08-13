@@ -135,14 +135,15 @@ func NavigationTargetSessionID(meta Meta) *runtimeids.SessionID {
 }
 
 type UsageState struct {
-	InputTokens             int  `json:"input_tokens,omitempty"`
-	OutputTokens            int  `json:"output_tokens,omitempty"`
-	WindowTokens            int  `json:"window_tokens,omitempty"`
-	CachedInputTokens       int  `json:"cached_input_tokens,omitempty"`
-	HasCachedInputTokens    bool `json:"has_cached_input_tokens,omitempty"`
-	EstimatedProviderTokens int  `json:"estimated_provider_tokens,omitempty"`
-	TotalInputTokens        int  `json:"total_input_tokens,omitempty"`
-	TotalCachedInputTokens  int  `json:"total_cached_input_tokens,omitempty"`
+	InputTokens                     int    `json:"input_tokens,omitempty"`
+	OutputTokens                    int    `json:"output_tokens,omitempty"`
+	WindowTokens                    int    `json:"window_tokens,omitempty"`
+	CachedInputTokens               int    `json:"cached_input_tokens,omitempty"`
+	HasCachedInputTokens            bool   `json:"has_cached_input_tokens,omitempty"`
+	EstimatedProviderTokens         int    `json:"estimated_provider_tokens,omitempty"`
+	TotalInputTokens                int    `json:"total_input_tokens,omitempty"`
+	TotalCachedInputTokens          int    `json:"total_cached_input_tokens,omitempty"`
+	HistoryReplacementEventSequence *int64 `json:"history_replacement_event_sequence,omitempty"`
 }
 
 type WorktreeReminderMode string

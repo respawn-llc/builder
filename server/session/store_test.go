@@ -1,6 +1,8 @@
 package session
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -699,16 +701,30 @@ func TestAppendTypedBatchReportsUncommittedEventLogFailure(t *testing.T) {
 	if meta := storeTestMeta(store); meta.FirstPromptPreview != "" {
 		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
 	}
+	var persistenceErr *EventLogPersistenceError
+	if !errors.As(err, &persistenceErr) ||
+		persistenceErr.Certainty != EventLogCommitNotCommitted {
+		t.Fatalf("event-log failure = %v, want typed not-committed certainty", err)
+	}
+	if _, _, nextErr := log.AppendRecord(&stepID, sessionTestMessage(MessageRoleUser, "must remain latched")); !errors.Is(nextErr, persistenceErr) {
+		t.Fatalf("later append error = %v, want latched %v", nextErr, persistenceErr)
+	}
 }
 
-func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
+func TestAppendTypedBatchKeepsCommittedSuccessWhenProjectionFails(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
+	projectionErr := errors.New("append projection unavailable")
+	var projected AppendProjection
 	store, err := Create(
 		t.TempDir(),
 		"workspace",
 		t.TempDir(),
 		testSessionCategory,
 		WithPersistenceObserver(observer),
+		WithAppendProjector(func(_ context.Context, projection AppendProjection) error {
+			projected = projection
+			return projectionErr
+		}),
 	)
 	if err != nil {
 		t.Fatalf("create observed store: %v", err)
@@ -718,13 +734,12 @@ func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	}
 
 	log := mustMaterializeSessionTestEventLog(t, store)
-	observer.err = os.ErrPermission
 	stepID := "s1"
 	events, receipt, err := log.AppendRecordsAtomic(&stepID, []EventRecordPayload{
-		sessionTestMessage(MessageRoleUser, "committed despite observer failure"),
+		sessionTestMessage(MessageRoleUser, "committed despite projection failure"),
 	})
-	if err == nil {
-		t.Fatal("append typed batch did not surface the observer failure")
+	if err != nil {
+		t.Fatalf("append typed batch returned projection failure: %v", err)
 	}
 	if !receipt.Committed {
 		t.Fatalf("append typed batch receipt = %+v, want committed", receipt)
@@ -732,8 +747,16 @@ func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	if len(events) != 1 || events[0].Seq() != 1 {
 		t.Fatalf("committed events = %+v, want one sequence-1 event", events)
 	}
-	if meta := storeTestMeta(store); meta.FirstPromptPreview != "committed despite observer failure" {
-		t.Fatalf("metadata after committed observer failure = %+v", meta)
+	if meta := storeTestMeta(store); meta.FirstPromptPreview != "committed despite projection failure" {
+		t.Fatalf("metadata after committed projection = %+v", meta)
+	}
+	if projected.SessionID.String() != store.Meta().SessionID ||
+		projected.FirstSequence != 1 ||
+		projected.LastSequence != 1 ||
+		projected.FirstPromptPreview == nil ||
+		*projected.FirstPromptPreview != "committed despite projection failure" ||
+		!projected.ConversationEstablished {
+		t.Fatalf("append projection = %+v", projected)
 	}
 }
 

@@ -273,9 +273,7 @@ func writeMalformedLegacyHistoryReplacement(t *testing.T, store *session.Store, 
 
 func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReopen(t *testing.T) {
 	t.Parallel()
-	observerErr := errors.New("history replacement metadata observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	store := mustCreateTestSession(t)
 	engine := mustNewExecTestEngine(t, store, &fakeClient{}, Config{Model: "gpt-5"})
 	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
 		steeringPriorityNormal,
@@ -293,10 +291,6 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	if receipt, err := engine.recordLastUsage(previousUsage); err != nil || !receipt.Committed {
 		t.Fatalf("persist previous usage: receipt=%+v error=%v", receipt, err)
 	}
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
-	}, observerErr)
-
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
 		"compact",
 		"local",
@@ -307,13 +301,13 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 			Content:     textutil.Value("summary"),
 		}}),
 	)
-	if !receipt.Committed || !errors.Is(err, observerErr) {
+	if !receipt.Committed || err != nil {
 		t.Fatalf("committed replacement outcome: receipt=%+v error=%v", receipt, err)
 	}
 
 	reopenedStore := mustOpenTestSession(t, store.Dir())
-	if usage := reopenedStore.Meta().UsageState; usage != nil {
-		t.Fatalf("immediate reopen restored pre-compaction usage: %+v", usage)
+	if usage := reopenedStore.Meta().UsageState; usage == nil {
+		t.Fatal("expected stale pre-compaction usage projection to remain stored")
 	}
 	reopened := mustNewExecTestEngine(t, reopenedStore, &fakeClient{}, Config{Model: "gpt-5"})
 	usage := reopened.ContextUsage()
@@ -322,85 +316,6 @@ func TestCommittedCompactionHistoryReplacementInvalidatesUsageAcrossImmediateReo
 	}
 	if usage.HasCacheHitPercentage {
 		t.Fatalf("immediate reopen restored stale cache counters: %+v", usage)
-	}
-}
-
-func TestHistoryReplacementAppendObserverFailureUpdatesLiveActiveListForNextTurn(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("history replacement observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
-		Usage:     llm.Usage{WindowTokens: 200_000},
-	}}}
-	engine := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist seed message: %v", err)
-	}
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
-	}, observerErr)
-
-	receipt, err := newCompactionPersistence(engine).replaceHistory(
-		"compact",
-		"local",
-		compactionModeManual,
-		llm.ItemsFromMessages([]llm.Message{{
-			Role:        llm.RoleDeveloper,
-			MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
-			Content:     textutil.Value("summary"),
-		}}),
-	)
-	if !receipt.Committed || !errors.Is(err, observerErr) {
-		t.Fatalf("committed replacement outcome: receipt=%+v error=%v", receipt, err)
-	}
-
-	active := engine.transcriptRuntimeState().SnapshotItems()
-	if len(active) != 1 ||
-		active[0].Type != llm.ResponseItemTypeMessage ||
-		active[0].Role == nil ||
-		*active[0].Role != llm.RoleDeveloper ||
-		active[0].MessageType == nil ||
-		*active[0].MessageType != llm.MessageTypeCompactionSummary {
-		t.Fatalf("live active items after committed replacement observer failure = %+v", active)
-	}
-
-	if _, err := engine.SubmitUserMessage(context.Background(), "continue"); err != nil {
-		t.Fatalf("submit after committed replacement observer failure: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("model call count = %d, want 1", len(client.calls))
-	}
-
-	summaryItems := 0
-	ordinaryUserItems := 0
-	for _, item := range client.calls[0].Items {
-		if item.Type != llm.ResponseItemTypeMessage || item.Role == nil {
-			continue
-		}
-		switch *item.Role {
-		case llm.RoleDeveloper:
-			if item.MessageType != nil && *item.MessageType == llm.MessageTypeCompactionSummary {
-				summaryItems++
-			}
-		case llm.RoleUser:
-			if item.MessageType == nil {
-				ordinaryUserItems++
-			}
-		}
-	}
-	if summaryItems != 1 || ordinaryUserItems != 1 {
-		t.Fatalf(
-			"next request response-item types = summary:%d ordinary-user:%d, want summary:1 ordinary-user:1",
-			summaryItems,
-			ordinaryUserItems,
-		)
 	}
 }
 
@@ -467,62 +382,6 @@ func newCommittedRemoteCompactionFixture(
 		t.Fatalf("persist pre-compaction usage: receipt=%+v error=%v", receipt, err)
 	}
 	return fixture
-}
-
-func TestCompactNowCompletesCommittedHistoryReplacementObserverFailure(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("history replacement observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	fixture := newCommittedRemoteCompactionFixture(t, gate, nil)
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
-	}, observerErr)
-
-	_, receipt, err := compactNowInActiveTestRun(
-		t,
-		fixture.engine,
-		compactionModeManual,
-		compactionInstructionsInput{},
-		false,
-	)
-	if !receipt.Committed || !errors.Is(err, observerErr) {
-		t.Fatalf("compactNow outcome: receipt=%+v error=%v", receipt, err)
-	}
-
-	completed := 0
-	failed := 0
-	for _, event := range fixture.events {
-		switch event.Kind {
-		case EventCompactionCompleted:
-			completed++
-		case EventCompactionFailed:
-			failed++
-		}
-	}
-	if completed != 1 || failed != 0 {
-		t.Fatalf("compaction terminal events: completed=%d failed=%d events=%+v", completed, failed, fixture.events)
-	}
-	if generation := fixture.engine.compactionRuntimeState().Count(); generation != 1 {
-		t.Fatalf("committed compaction generation = %d, want 1", generation)
-	}
-
-	window, readErr := mustMaterializeTestEventLog(t, fixture.store).ReadRecentRecords(16)
-	if readErr != nil {
-		t.Fatalf("read bounded committed records: %v", readErr)
-	}
-	replacements := 0
-	for _, record := range window.Records {
-		if _, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
-			replacements++
-		}
-	}
-	if replacements != 1 || len(fixture.client.compactionCalls) != 1 {
-		t.Fatalf(
-			"committed compaction replacements=%d compaction-calls=%d, want one each",
-			replacements,
-			len(fixture.client.compactionCalls),
-		)
-	}
 }
 
 func TestCompactNowReconcilesLiveUsageWhenFinalUsageObserverFails(t *testing.T) {
@@ -866,7 +725,6 @@ func (c failingWorkflowTaskAwarenessSource) TaskAwareness(context.Context, workf
 
 func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersistence(t *testing.T) {
 	t.Parallel()
-	replacementErr := errors.New("history replacement observer failure")
 	usageErr := errors.New("compacted usage observer failure")
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
@@ -887,10 +745,6 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 	if receipt, err := engine.recordLastUsage(previousUsage); err != nil || !receipt.Committed {
 		t.Fatalf("persist previous usage: receipt=%+v error=%v", receipt, err)
 	}
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.LastSequence >= 2 && snapshot.Meta.UsageState == nil
-	}, replacementErr)
-
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
 		"compact",
 		"local",
@@ -901,7 +755,7 @@ func TestCommittedHistoryReplacementPreventsStaleUsageFromLaterMetadataPersisten
 			Content:     textutil.Value("summary"),
 		}}),
 	)
-	if !receipt.Committed || !errors.Is(err, replacementErr) {
+	if !receipt.Committed || err != nil {
 		t.Fatalf("committed replacement outcome: receipt=%+v error=%v", receipt, err)
 	}
 

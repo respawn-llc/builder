@@ -8753,6 +8753,63 @@ func (q *Queries) MoveProjectLabelOrdinalsToTemporaryBand(ctx context.Context, a
 	return err
 }
 
+const projectSessionAppend = `-- name: ProjectSessionAppend :execrows
+UPDATE sessions
+SET
+    first_prompt_preview = CASE
+        WHEN first_prompt_preview = '' AND ?1 IS NOT NULL
+            THEN ?1
+        ELSE first_prompt_preview
+    END,
+    updated_at_unix_ms = MAX(updated_at_unix_ms, ?2),
+    launch_visible = CASE
+        WHEN launch_visible <> 0 OR ?1 IS NOT NULL THEN 1
+        ELSE 0
+    END,
+    metadata_json = json_set(
+        metadata_json,
+        '$.conversation_established',
+        CASE
+            WHEN json_extract(metadata_json, '$.conversation_established') = 1
+                OR ?3 <> 0
+                THEN json('true')
+            ELSE json('false')
+        END,
+        '$.generated_recovered_warning_issued',
+        CASE
+            WHEN json_extract(metadata_json, '$.generated_recovered_warning_issued') = 1
+                OR ?4 <> 0
+                THEN json('true')
+            ELSE json('false')
+        END
+    )
+WHERE id = ?5
+`
+
+type ProjectSessionAppendParams struct {
+	FirstPromptPreview              interface{}
+	UpdatedAtUnixMs                 interface{}
+	ConversationEstablished         interface{}
+	GeneratedRecoveredWarningIssued interface{}
+	ID                              string
+}
+
+func (q *Queries) ProjectSessionAppend(ctx context.Context, arg ProjectSessionAppendParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, projectSessionAppend,
+		arg.FirstPromptPreview,
+		arg.UpdatedAtUnixMs,
+		arg.ConversationEstablished,
+		arg.GeneratedRecoveredWarningIssued,
+		arg.ID,
+	)
+	err = recordQueryError(ctx, err, projectSessionAppend, 5)
+
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recoverExecutableCurrentNodes = `-- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',

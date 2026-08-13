@@ -762,14 +762,15 @@ func (e *Engine) recordLastUsageWithBaseline(usage llm.Usage, baselineEstimate i
 	if e != nil && e.store != nil {
 		cachedInputTokens, hasCachedInputTokens := textutil.OptionalValue(normalizedUsage.CachedInputTokens)
 		receipt, persistenceErr = e.store.SetUsageState(&session.UsageState{
-			InputTokens:             normalizedUsage.InputTokens,
-			OutputTokens:            normalizedUsage.OutputTokens,
-			WindowTokens:            normalizedUsage.WindowTokens,
-			CachedInputTokens:       cachedInputTokens,
-			HasCachedInputTokens:    hasCachedInputTokens,
-			EstimatedProviderTokens: baselineEstimate,
-			TotalInputTokens:        totalInputTokens,
-			TotalCachedInputTokens:  totalCachedInputTokens,
+			InputTokens:                     normalizedUsage.InputTokens,
+			OutputTokens:                    normalizedUsage.OutputTokens,
+			WindowTokens:                    normalizedUsage.WindowTokens,
+			CachedInputTokens:               cachedInputTokens,
+			HasCachedInputTokens:            hasCachedInputTokens,
+			EstimatedProviderTokens:         baselineEstimate,
+			TotalInputTokens:                totalInputTokens,
+			TotalCachedInputTokens:          totalCachedInputTokens,
+			HistoryReplacementEventSequence: e.compactionRuntimeState().HistoryReplacementSequence(),
 		})
 		if !receipt.Committed {
 			return receipt, persistenceErr

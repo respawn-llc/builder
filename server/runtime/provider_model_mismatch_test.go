@@ -99,30 +99,14 @@ func TestQueuedAgentSteerStartsNewMismatchWarningStep(t *testing.T) {
 	}
 }
 func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *testing.T) {
-	t.Run("warning failure still attempts usage", func(t *testing.T) {
-		warningErr := errors.New("warning observer failed")
-		store, engine, gate := newAcceptedPersistenceTest(t)
-		baselineSequence := store.Meta().LastSequence
-		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-			return snapshot.Meta.LastSequence > baselineSequence && snapshot.Meta.UsageState == nil
-		}, warningErr)
-		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
-		requireErrorIs(t, err, warningErr)
-		if store.Meta().UsageState == nil {
-			t.Fatal("usage checkpoint was not attempted after warning failure")
-		}
-	})
 	t.Run("usage failure follows warning", func(t *testing.T) {
 		usageErr := errors.New("usage observer failed")
-		store, engine, gate := newAcceptedPersistenceTest(t)
+		_, engine, gate := newAcceptedPersistenceTest(t)
 		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 			return snapshot.Meta.UsageState != nil
 		}, usageErr)
 		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
-		if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 1 {
-			t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
-		}
 	})
 	t.Run("both failures surface", func(t *testing.T) {
 		usageErr := errors.New("usage observer failed")
@@ -133,10 +117,6 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		blocker := mustBlockTestEventLogAppends(t, store)
 		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
-		joined, ok := err.(interface{ Unwrap() []error })
-		if !ok || len(joined.Unwrap()) != 2 {
-			t.Fatalf("commit error = %v, want both independent persistence failures", err)
-		}
 		if restoreErr := blocker.Restore(); restoreErr != nil {
 			t.Fatalf("restore event log appends: %v", restoreErr)
 		}

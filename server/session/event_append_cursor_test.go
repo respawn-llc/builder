@@ -1,7 +1,8 @@
 package session
 
 import (
-	"os"
+	"context"
+	"errors"
 	"testing"
 )
 
@@ -35,7 +36,7 @@ func TestAppendEventWithEndByteCursorReturnsReadableCommittedPosition(t *testing
 	}
 }
 
-func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit(t *testing.T) {
+func TestAppendEventWithEndByteCursorRetainsPositionWhenProjectionFailsAfterCommit(t *testing.T) {
 	observer := &recordingPersistenceObserver{}
 	store, err := Create(
 		t.TempDir(),
@@ -43,18 +44,20 @@ func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit
 		t.TempDir(),
 		testSessionCategory,
 		WithPersistenceObserver(observer),
+		WithAppendProjector(func(context.Context, AppendProjection) error {
+			return errors.New("projection failed")
+		}),
 	)
 	if err != nil {
 		t.Fatalf("create observed store: %v", err)
 	}
 	eventLog := mustMaterializeSessionTestEventLog(t, store)
-	observer.err = os.ErrPermission
 	appended, err := eventLog.AppendRecordWithEndByteCursor(
 		stringPointer("step-1"),
-		sessionTestMessage(MessageRoleUser, "committed despite observer failure"),
+		sessionTestMessage(MessageRoleUser, "committed despite projection failure"),
 	)
-	if err == nil {
-		t.Fatal("positioned append did not surface observer failure")
+	if err != nil {
+		t.Fatalf("positioned append returned projection failure: %v", err)
 	}
 	if !appended.Committed || appended.EndByteCursor == nil || *appended.EndByteCursor <= 0 {
 		t.Fatalf("positioned append = %#v, want committed event with retained cursor", appended)
@@ -66,7 +69,6 @@ func TestAppendEventWithEndByteCursorRetainsPositionWhenObserverFailsAfterCommit
 	if len(window.Records) != 1 || window.Records[0].Seq() != appended.Record.Seq() {
 		t.Fatalf("records after observer failure = %#v, want committed event %d", window.Records, appended.Record.Seq())
 	}
-	observer.err = nil
 	if _, _, err := eventLog.AppendRecord(
 		stringPointer("step-2"),
 		sessionTestMessage(MessageRoleUser, "later mutation"),

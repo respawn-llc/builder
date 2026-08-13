@@ -36,8 +36,31 @@ type compactionRuntimeState struct {
 	soonReminderIssued             bool
 	manualEligible                 bool
 	historyReplacementMode         *session.CompactionMode
+	historyReplacementSequence     *int64
 	workflowPostCompletionBoundary bool
 	active                         *TranscriptCompactionState
+}
+
+func (s *compactionRuntimeState) SetHistoryReplacementSequence(sequence int64) {
+	if s == nil || sequence <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.historyReplacementSequence = &sequence
+	s.mu.Unlock()
+}
+
+func (s *compactionRuntimeState) HistoryReplacementSequence() *int64 {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.historyReplacementSequence == nil {
+		return nil
+	}
+	sequence := *s.historyReplacementSequence
+	return &sequence
 }
 
 func (s *compactionRuntimeState) ManualCompactionEligible() bool {

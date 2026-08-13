@@ -86,6 +86,7 @@ type forkReplayCountingPersistence struct {
 	mu                sync.Mutex
 	parentID          string
 	childObservations int
+	childProjections  int
 }
 
 func newForkReplayCountingPersistence() *forkReplayCountingPersistence {
@@ -120,6 +121,17 @@ func (p *forkReplayCountingPersistence) ResolvePersistedSession(
 func (p *forkReplayCountingPersistence) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
+		WithAppendProjector(func(ctx context.Context, projection AppendProjection) error {
+			if err := p.base.ProjectAppend(ctx, projection); err != nil {
+				return err
+			}
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.parentID != "" && projection.SessionID.String() != p.parentID {
+				p.childProjections++
+			}
+			return nil
+		}),
 		WithPersistedSessionResolver(p),
 	}
 }
@@ -129,12 +141,13 @@ func (p *forkReplayCountingPersistence) startChildCapture(parentID string) {
 	defer p.mu.Unlock()
 	p.parentID = parentID
 	p.childObservations = 0
+	p.childProjections = 0
 }
 
 func (p *forkReplayCountingPersistence) childObservationCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.childObservations
+	return p.childObservations + p.childProjections
 }
 
 func TestCloneSessionStreamsLargeHistoryAcrossChunks(t *testing.T) {

@@ -1,7 +1,10 @@
 package session
 
 import (
+	"context"
 	"time"
+
+	"core/shared/runtimeids"
 )
 
 type EventLogAppendObservation struct {
@@ -20,12 +23,25 @@ type DurabilityObserver interface {
 	ObserveEventLogSync(EventLogSyncObservation)
 }
 
+type AppendProjection struct {
+	SessionID                       runtimeids.SessionID
+	FirstSequence                   int64
+	LastSequence                    int64
+	AppendedAt                      time.Time
+	FirstPromptPreview              *string
+	ConversationEstablished         bool
+	GeneratedRecoveredWarningIssued bool
+}
+
+type AppendProjector func(context.Context, AppendProjection) error
+
 type StoreOption func(*storeOptions)
 
 type storeOptions struct {
 	observer           PersistenceObserver
 	resolver           PersistedSessionResolver
 	durabilityObserver DurabilityObserver
+	appendProjector    AppendProjector
 	now                func() time.Time
 }
 
@@ -44,6 +60,12 @@ func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption
 func WithDurabilityObserver(observer DurabilityObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.durabilityObserver = observer
+	}
+}
+
+func WithAppendProjector(projector AppendProjector) StoreOption {
+	return func(options *storeOptions) {
+		options.appendProjector = projector
 	}
 }
 

@@ -74,6 +74,7 @@ func NewPersistence() *Persistence {
 func (p *Persistence) Options() []session.StoreOption {
 	return []session.StoreOption{
 		session.WithPersistenceObserver(p),
+		session.WithAppendProjector(p.ProjectAppend),
 		session.WithPersistedSessionResolver(p),
 	}
 }
@@ -83,6 +84,29 @@ func (p *Persistence) ObservePersistedStore(_ context.Context, snapshot session.
 		SessionDir: snapshot.SessionDir,
 		Meta:       cloneMeta(&snapshot.Meta),
 	})
+	return nil
+}
+
+func (p *Persistence) ProjectAppend(_ context.Context, projection session.AppendProjection) error {
+	record, ok := p.records.Get(projection.SessionID.String())
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	meta := cloneMeta(record.Meta)
+	if projection.FirstPromptPreview != nil && meta.FirstPromptPreview == "" {
+		meta.FirstPromptPreview = *projection.FirstPromptPreview
+	}
+	if projection.ConversationEstablished {
+		meta.ConversationEstablished = true
+	}
+	if projection.GeneratedRecoveredWarningIssued {
+		meta.GeneratedRecoveredWarningIssued = true
+	}
+	if projection.AppendedAt.After(meta.UpdatedAt) {
+		meta.UpdatedAt = projection.AppendedAt
+	}
+	record.Meta = meta
+	p.records.Put(projection.SessionID.String(), record)
 	return nil
 }
 
@@ -104,6 +128,14 @@ func cloneMeta(meta *session.Meta) *session.Meta {
 		return nil
 	}
 	cloned := *meta
+	if meta.UsageState != nil {
+		usage := *meta.UsageState
+		if meta.UsageState.HistoryReplacementEventSequence != nil {
+			sequence := *meta.UsageState.HistoryReplacementEventSequence
+			usage.HistoryReplacementEventSequence = &sequence
+		}
+		cloned.UsageState = &usage
+	}
 	return &cloned
 }
 

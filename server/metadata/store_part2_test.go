@@ -2,19 +2,22 @@ package metadata
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
-	"database/sql"
-	"errors"
-	"os"
-	"path/filepath"
-	"testing"
-	"time"
 )
 
 func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
@@ -48,6 +51,55 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 	_, err := store.ResolvePersistedSession(ctx, "session-escape")
 	if !errors.Is(err, ErrPathEscapesPersistenceRoot) {
 		t.Fatalf("expected escaping artifact relpath error, got %v", err)
+	}
+}
+
+func TestProjectSessionAppendPreservesIndependentMetadata(t *testing.T) {
+	ctx := t.Context()
+	store, cfg, binding := newMetadataTestStore(t)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if _, err := sess.SetUsageState(&session.UsageState{InputTokens: 42, WindowTokens: 1000}); err != nil {
+		t.Fatalf("SetUsageState: %v", err)
+	}
+	if _, _, err := sess.SetGoal("preserve projection siblings", session.GoalActorUser); err != nil {
+		t.Fatalf("SetGoal: %v", err)
+	}
+	if err := sess.SetInputDraft("preserved draft"); err != nil {
+		t.Fatalf("SetInputDraft: %v", err)
+	}
+	before, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession before projection: %v", err)
+	}
+	preview := "projected preview"
+	sessionID, err := runtimeids.ParseSessionID(sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	if err := store.projectSessionAppend(ctx, session.AppendProjection{
+		SessionID:                       sessionID,
+		FirstSequence:                   1,
+		LastSequence:                    2,
+		AppendedAt:                      before.Meta.UpdatedAt.Add(time.Minute),
+		FirstPromptPreview:              &preview,
+		ConversationEstablished:         true,
+		GeneratedRecoveredWarningIssued: true,
+	}); err != nil {
+		t.Fatalf("projectSessionAppend: %v", err)
+	}
+	after, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession after projection: %v", err)
+	}
+	if after.Meta.FirstPromptPreview != preview ||
+		!after.Meta.ConversationEstablished ||
+		!after.Meta.GeneratedRecoveredWarningIssued {
+		t.Fatalf("projected metadata = %+v", after.Meta)
+	}
+	if after.Meta.InputDraft != before.Meta.InputDraft ||
+		!reflect.DeepEqual(after.Meta.Goal, before.Meta.Goal) ||
+		!reflect.DeepEqual(after.Meta.UsageState, before.Meta.UsageState) {
+		t.Fatalf("append projection overwrote independent metadata: before=%+v after=%+v", before.Meta, after.Meta)
 	}
 }
 

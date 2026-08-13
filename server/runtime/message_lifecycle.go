@@ -151,6 +151,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				cache.RecordResponse(persistedCacheResponseObservedFromSessionRecord(payload))
 			}
 		case session.HistoryReplacementRecord:
+			e.compactionRuntimeState().SetHistoryReplacementSequence(record.Seq())
 			replacement := historyReplacementPayloadFromSessionRecord(payload)
 			e.resetLocalDiagnostics()
 			manualEligible = false

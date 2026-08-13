@@ -245,6 +245,7 @@ func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
 	}
 	return []session.StoreOption{
 		session.WithPersistenceObserver(sessionObserver{store: s}),
+		session.WithAppendProjector(s.observeSessionAppend),
 		session.WithPersistedSessionResolver(s),
 	}
 }
@@ -258,6 +259,7 @@ func (s *Store) WorkspaceChatMaterializationStoreOptions(workspaceID string) []s
 			store:       s,
 			workspaceID: strings.TrimSpace(workspaceID),
 		}),
+		session.WithAppendProjector(s.observeSessionAppend),
 		session.WithPersistedSessionResolver(s),
 	}
 }
@@ -2563,7 +2565,15 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	if err := unmarshalStoredJSON(row.UsageStateJson, usageState); err != nil {
 		return session.Meta{}, fmt.Errorf("decode usage state json: %w", err)
 	}
-	if *usageState == (session.UsageState{}) {
+	if usageState.InputTokens == 0 &&
+		usageState.OutputTokens == 0 &&
+		usageState.WindowTokens == 0 &&
+		usageState.CachedInputTokens == 0 &&
+		!usageState.HasCachedInputTokens &&
+		usageState.EstimatedProviderTokens == 0 &&
+		usageState.TotalInputTokens == 0 &&
+		usageState.TotalCachedInputTokens == 0 &&
+		usageState.HistoryReplacementEventSequence == nil {
 		usageState = nil
 	}
 	// An attached workspace row is authoritative; detached sessions use the

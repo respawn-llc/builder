@@ -1,9 +1,12 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"core/shared/runtimeids"
 	"core/shared/transcript"
 )
 
@@ -14,13 +17,12 @@ type recordAppendOutcome struct {
 }
 
 type EventRecordAppendInput struct {
-	StepID              *string
-	Payload             EventRecordPayload
-	committedAtUnixMs   *transcript.CommittedAtUnixMs
-	preserveCommittedAt bool
+	StepID                    *string
+	Payload                   EventRecordPayload
+	committedAtUnixMs         *transcript.CommittedAtUnixMs
+	preserveCommittedAt       bool
+	generatedRecoveredWarning bool
 }
-
-type recordMetadataTransition func(*Meta) (bool, error)
 
 type EventRecordAppendResult struct {
 	Record EventRecord
@@ -34,7 +36,7 @@ func (c MaterializedEventLog) AppendRecord(
 ) (EventRecord, CommitReceipt, error) {
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
 		StepID: stepID, Payload: payload,
-	}}, nil)
+	}})
 	if len(outcome.records) != 1 {
 		return EventRecord{}, CommitReceipt{Committed: outcome.committed}, errors.Join(
 			err,
@@ -59,7 +61,7 @@ func (c MaterializedEventLog) AppendRecordsAtomic(
 }
 
 func (c MaterializedEventLog) AppendRecordBatchAtomic(inputs []EventRecordAppendInput) ([]EventRecord, CommitReceipt, error) {
-	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
+	outcome, err := c.appendRecordInputsAtomic(inputs)
 	return outcome.records, CommitReceipt{Committed: outcome.committed}, err
 }
 
@@ -102,7 +104,7 @@ func (c MaterializedEventLog) appendReplayRecords(
 			preserveCommittedAt: true,
 		}
 	}
-	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
+	outcome, err := c.appendRecordInputsAtomic(inputs)
 	if err == nil && requireEndByteCursor &&
 		(outcome.endByteCursor == nil || *outcome.endByteCursor <= 0) {
 		err = errors.New(
@@ -118,10 +120,7 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 ) (EventRecord, CommitReceipt, error) {
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
 		StepID: stepID, Payload: record,
-	}}, func(meta *Meta) (bool, error) {
-		meta.UsageState = nil
-		return true, nil
-	})
+	}})
 	if len(outcome.records) != 1 {
 		return EventRecord{}, CommitReceipt{Committed: outcome.committed}, errors.Join(
 			err,
@@ -137,15 +136,13 @@ func (c MaterializedEventLog) AppendCompactionHistoryReplacement(
 func (c MaterializedEventLog) AppendGeneratedRecoveredWarning(
 	record LocalEntryRecord,
 ) (CommitReceipt, error) {
+	if c.store != nil && c.store.Meta().GeneratedRecoveredWarningIssued {
+		return CommitReceipt{Committed: true}, nil
+	}
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
-		Payload: record,
-	}}, func(meta *Meta) (bool, error) {
-		if meta.GeneratedRecoveredWarningIssued {
-			return false, nil
-		}
-		meta.GeneratedRecoveredWarningIssued = true
-		return true, nil
-	})
+		Payload:                   record,
+		generatedRecoveredWarning: true,
+	}})
 	receipt := CommitReceipt{Committed: outcome.committed}
 	if err != nil {
 		return receipt, err
@@ -174,7 +171,7 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 	}
 	outcome, err := c.appendRecordInputsAtomic([]EventRecordAppendInput{{
 		StepID: stepID, Payload: payload,
-	}}, nil)
+	}})
 	result := EventRecordAppendResult{
 		CommitReceipt: CommitReceipt{Committed: outcome.committed},
 		EndByteCursor: outcome.endByteCursor,
@@ -197,7 +194,6 @@ func (c MaterializedEventLog) AppendRecordWithEndByteCursor(
 
 func (c MaterializedEventLog) appendRecordInputsAtomic(
 	inputs []EventRecordAppendInput,
-	transition recordMetadataTransition,
 ) (outcome recordAppendOutcome, resultErr error) {
 	if c.store == nil {
 		return recordAppendOutcome{}, errors.New(
@@ -212,11 +208,23 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	defer s.mutationMu.Unlock()
 	lock, lockPath, err := acquireEventLogPersistenceLock(s.sessionDir)
 	if err != nil {
-		return recordAppendOutcome{}, err
+		failure := &EventLogPersistenceError{
+			Certainty: EventLogCommitNotCommitted,
+			Cause:     fmt.Errorf("acquire event-log persistence lock: %w", err),
+		}
+		s.mu.Lock()
+		s.eventLogFailure = failure
+		s.mu.Unlock()
+		return recordAppendOutcome{}, failure
 	}
 	defer joinEventLogPersistenceLockRelease(&resultErr, lock, lockPath)
 	s.mu.Lock()
 	log := s.materializedEventLog
+	if s.eventLogFailure != nil {
+		failure := s.eventLogFailure
+		s.mu.Unlock()
+		return recordAppendOutcome{}, failure
+	}
 	if c.log == nil || log != c.log {
 		s.mu.Unlock()
 		return recordAppendOutcome{}, errors.New(
@@ -260,113 +268,94 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		records = append(records, record)
 	}
 
-	previousMeta := cloneMeta(s.meta)
-	previousFreshness := s.conversationFreshness
-	if err := s.captureFirstPromptPreviewFromRecordsLocked(records); err != nil {
-		s.mu.Unlock()
-		return recordAppendOutcome{records: records}, err
-	}
-	if err := s.advanceConversationFreshnessFromRecordsLocked(records); err != nil {
-		s.meta = previousMeta
-		s.mu.Unlock()
-		return recordAppendOutcome{records: records}, err
-	}
-	if transition != nil {
-		applied, err := transition(&s.meta)
-		if err != nil {
-			s.meta = previousMeta
-			s.conversationFreshness = previousFreshness
-			s.mu.Unlock()
-			return recordAppendOutcome{records: records}, err
-		}
-		if !applied {
-			s.meta = previousMeta
-			s.conversationFreshness = previousFreshness
-			s.mu.Unlock()
-			return recordAppendOutcome{}, nil
-		}
-	}
-	if err := s.requireMetadataPersistenceLocked(); err != nil {
-		s.meta = previousMeta
-		s.conversationFreshness = previousFreshness
-		s.mu.Unlock()
-		return recordAppendOutcome{records: records}, err
-	}
-
-	postMeta := cloneMeta(s.meta)
-	postMeta.UpdatedAt = appendNow
-	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
+	projection, err := s.appendProjectionFromRecordsLocked(records, inputs, appendNow)
 	if err != nil {
-		s.meta = previousMeta
-		s.conversationFreshness = previousFreshness
+		s.mu.Unlock()
+		return recordAppendOutcome{records: records}, err
+	}
+	endOffset, err := log.appendRecords(records)
+	if err != nil {
+		var persistenceErr *EventLogPersistenceError
+		if errors.As(err, &persistenceErr) {
+			s.eventLogFailure = persistenceErr
+		}
 		s.mu.Unlock()
 		return recordAppendOutcome{records: records}, err
 	}
 	endByteCursor := &endOffset
-	s.meta = postMeta
-	observation, err := s.persistMetaAfterRecoveryVerifiedLocked()
-	if err != nil {
-		s.mu.Unlock()
-		return recordAppendOutcome{
-			records:       records,
-			committed:     true,
-			endByteCursor: endByteCursor,
-		}, err
-	}
+	s.applyCommittedAppendProjectionLocked(projection)
+	projector := s.options.appendProjector
 	s.mu.Unlock()
+	if projector != nil {
+		_ = projector(context.Background(), projection)
+	}
 
 	outcome = recordAppendOutcome{
 		records:       records,
 		committed:     true,
 		endByteCursor: endByteCursor,
 	}
-	return outcome, s.observePersistence(observation)
+	return outcome, nil
 }
 
-func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {
-	return log.appendRecords(records)
-}
-
-func (s *Store) captureFirstPromptPreviewFromRecordsLocked(records []EventRecord) error {
-	if s.meta.FirstPromptPreview != "" {
-		return nil
+func (s *Store) appendProjectionFromRecordsLocked(
+	records []EventRecord,
+	inputs []EventRecordAppendInput,
+	appendedAt time.Time,
+) (AppendProjection, error) {
+	sessionID, err := runtimeids.ParseSessionID(s.meta.SessionID)
+	if err != nil {
+		return AppendProjection{}, fmt.Errorf("parse append projection session id: %w", err)
 	}
-	for _, record := range records {
+	projection := AppendProjection{
+		SessionID:     sessionID,
+		FirstSequence: records[0].Seq(),
+		LastSequence:  records[len(records)-1].Seq(),
+		AppendedAt:    appendedAt,
+	}
+	for index, record := range records {
 		payload, err := record.Payload()
 		if err != nil {
-			return err
+			return AppendProjection{}, err
 		}
 		message, ok := payload.(MessageRecord)
-		if !ok || !hasVisibleUserMessageFields(
-			message.Role,
-			message.MessageType,
-			message.Content,
-		) {
-			continue
+		if ok && hasVisibleUserMessageFields(message.Role, message.MessageType, message.Content) {
+			projection.ConversationEstablished = true
+			if s.meta.FirstPromptPreview == "" && projection.FirstPromptPreview == nil {
+				preview := normalizeFirstPromptPreview(*message.Content)
+				if preview != "" {
+					projection.FirstPromptPreview = &preview
+				}
+			}
 		}
-		preview := normalizeFirstPromptPreview(*message.Content)
-		if preview != "" {
-			s.meta.FirstPromptPreview = preview
-			return nil
+		if inputs[index].generatedRecoveredWarning {
+			projection.GeneratedRecoveredWarningIssued = true
 		}
 	}
-	return nil
+	return projection, nil
 }
 
-func (s *Store) advanceConversationFreshnessFromRecordsLocked(records []EventRecord) error {
-	if s.conversationFreshness == ConversationFreshnessEstablished {
-		return nil
+func (s *Store) applyCommittedAppendProjectionLocked(projection AppendProjection) {
+	applyAppendProjectionToMeta(&s.meta, projection)
+	if projection.ConversationEstablished {
+		s.conversationFreshness = ConversationFreshnessEstablished
 	}
-	for _, record := range records {
-		visible, err := hasVisibleUserMessageRecord(record)
-		if err != nil {
-			return err
-		}
-		if visible {
-			s.conversationFreshness = ConversationFreshnessEstablished
-			s.meta.ConversationEstablished = true
-			return nil
-		}
+}
+
+func applyAppendProjectionToMeta(meta *Meta, projection AppendProjection) {
+	if meta == nil {
+		return
 	}
-	return nil
+	if projection.FirstPromptPreview != nil && meta.FirstPromptPreview == "" {
+		meta.FirstPromptPreview = *projection.FirstPromptPreview
+	}
+	if projection.ConversationEstablished {
+		meta.ConversationEstablished = true
+	}
+	if projection.GeneratedRecoveredWarningIssued {
+		meta.GeneratedRecoveredWarningIssued = true
+	}
+	if projection.AppendedAt.After(meta.UpdatedAt) {
+		meta.UpdatedAt = projection.AppendedAt
+	}
 }

@@ -62,6 +62,7 @@ type Store struct {
 	options                 storeOptions
 	materializedEventLog    *currentEventLog
 	eventLogMaterialization *eventLogMaterializationSnapshot
+	eventLogFailure         *EventLogPersistenceError
 }
 
 type persistenceObservation struct {
@@ -1392,7 +1393,7 @@ func normalizeUsageState(state *UsageState) *UsageState {
 	if normalized.TotalCachedInputTokens > normalized.TotalInputTokens {
 		normalized.TotalCachedInputTokens = normalized.TotalInputTokens
 	}
-	if normalized.InputTokens == 0 && normalized.OutputTokens == 0 && normalized.WindowTokens == 0 && normalized.CachedInputTokens == 0 && !normalized.HasCachedInputTokens && normalized.EstimatedProviderTokens == 0 && normalized.TotalInputTokens == 0 && normalized.TotalCachedInputTokens == 0 {
+	if normalized.InputTokens == 0 && normalized.OutputTokens == 0 && normalized.WindowTokens == 0 && normalized.CachedInputTokens == 0 && !normalized.HasCachedInputTokens && normalized.EstimatedProviderTokens == 0 && normalized.TotalInputTokens == 0 && normalized.TotalCachedInputTokens == 0 && normalized.HistoryReplacementEventSequence == nil {
 		return nil
 	}
 	return &normalized
@@ -1401,6 +1402,21 @@ func normalizeUsageState(state *UsageState) *UsageState {
 func usageStatesEqual(left, right *UsageState) bool {
 	left = normalizeUsageState(left)
 	right = normalizeUsageState(right)
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.InputTokens == right.InputTokens &&
+		left.OutputTokens == right.OutputTokens &&
+		left.WindowTokens == right.WindowTokens &&
+		left.CachedInputTokens == right.CachedInputTokens &&
+		left.HasCachedInputTokens == right.HasCachedInputTokens &&
+		left.EstimatedProviderTokens == right.EstimatedProviderTokens &&
+		left.TotalInputTokens == right.TotalInputTokens &&
+		left.TotalCachedInputTokens == right.TotalCachedInputTokens &&
+		optionalInt64Equal(left.HistoryReplacementEventSequence, right.HistoryReplacementEventSequence)
+}
+
+func optionalInt64Equal(left, right *int64) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}

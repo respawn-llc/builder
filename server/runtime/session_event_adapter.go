@@ -218,15 +218,16 @@ func sessionLocalEntryRecordFromRuntime(
 		return session.LocalEntryRecord{}, err
 	}
 	record := session.LocalEntryRecord{
-		Visibility:       visibility,
-		Role:             entry.Role,
-		Text:             textutil.OptionalExactString(entry.Text),
-		DurationMs:       textutil.Pointer(entry.DurationMs),
-		CondensedText:    textutil.Pointer(entry.CondensedText),
-		DiagnosticKey:    textutil.Pointer(entry.DiagnosticKey),
-		NoticeID:         textutil.Pointer(entry.NoticeID),
-		AfterToolCallID:  textutil.Pointer(entry.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+		Visibility:            visibility,
+		Role:                  entry.Role,
+		Text:                  textutil.OptionalExactString(entry.Text),
+		DurationMs:            textutil.Pointer(entry.DurationMs),
+		CondensedText:         textutil.Pointer(entry.CondensedText),
+		DiagnosticKey:         textutil.Pointer(entry.DiagnosticKey),
+		NoticeID:              textutil.Pointer(entry.NoticeID),
+		AfterToolCallID:       textutil.Pointer(entry.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
 	return record, nil
 }

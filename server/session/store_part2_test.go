@@ -374,7 +374,7 @@ func TestReadEventsIgnoresTrailingTruncatedEOFLine(t *testing.T) {
 	}
 }
 
-func TestAppendEventRepairsTruncatedTailBeforeAppend(t *testing.T) {
+func TestAppendEventDoesNotRepairTruncatedTailLive(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
 	if _, _, err := log.AppendRecord(stringPointer("s1"), sessionTestMessage(MessageRoleUser, "u1")); err != nil {
@@ -393,23 +393,11 @@ func TestAppendEventRepairsTruncatedTailBeforeAppend(t *testing.T) {
 		t.Fatalf("close events file: %v", err)
 	}
 
-	e2, _, err := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2"))
-	if err != nil {
-		t.Fatalf("append event 2: %v", err)
+	if _, receipt, err := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2")); err != nil || !receipt.Committed {
+		t.Fatalf("live append after external tail damage: receipt=%+v error=%v", receipt, err)
 	}
-	if e2.Seq() != 2 {
-		t.Fatalf("expected seq=2, got %d", e2.Seq())
-	}
-
-	events, err := collectEvents(store)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	if len(events) != 2 {
-		t.Fatalf("events len = %d, want 2", len(events))
-	}
-	if events[0].Seq() != 1 || events[1].Seq() != 2 {
-		t.Fatalf("unexpected event sequence: %+v", events)
+	if _, err := collectEvents(store); err == nil {
+		t.Fatal("live append silently repaired externally damaged tail")
 	}
 }
 

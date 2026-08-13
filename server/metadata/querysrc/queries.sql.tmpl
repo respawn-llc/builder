@@ -2016,6 +2016,38 @@ ON CONFLICT(id) DO UPDATE SET
     usage_state_json = excluded.usage_state_json,
     metadata_json = excluded.metadata_json;
 
+-- name: ProjectSessionAppend :execrows
+UPDATE sessions
+SET
+    first_prompt_preview = CASE
+        WHEN first_prompt_preview = '' AND sqlc.narg(first_prompt_preview) IS NOT NULL
+            THEN sqlc.narg(first_prompt_preview)
+        ELSE first_prompt_preview
+    END,
+    updated_at_unix_ms = MAX(updated_at_unix_ms, sqlc.arg(updated_at_unix_ms)),
+    launch_visible = CASE
+        WHEN launch_visible <> 0 OR sqlc.narg(first_prompt_preview) IS NOT NULL THEN 1
+        ELSE 0
+    END,
+    metadata_json = json_set(
+        metadata_json,
+        '$.conversation_established',
+        CASE
+            WHEN json_extract(metadata_json, '$.conversation_established') = 1
+                OR sqlc.arg(conversation_established) <> 0
+                THEN json('true')
+            ELSE json('false')
+        END,
+        '$.generated_recovered_warning_issued',
+        CASE
+            WHEN json_extract(metadata_json, '$.generated_recovered_warning_issued') = 1
+                OR sqlc.arg(generated_recovered_warning_issued) <> 0
+                THEN json('true')
+            ELSE json('false')
+        END
+    )
+WHERE id = sqlc.arg(id);
+
 -- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects

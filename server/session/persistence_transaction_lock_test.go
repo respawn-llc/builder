@@ -9,6 +9,7 @@ import (
 
 type blockingAfterPersistenceObserver struct {
 	downstream PersistenceObserver
+	projector  AppendProjector
 	mu         sync.Mutex
 	blockNext  bool
 	blocked    chan struct{}
@@ -17,11 +18,38 @@ type blockingAfterPersistenceObserver struct {
 
 func newBlockingAfterPersistenceObserver(
 	downstream PersistenceObserver,
+	projector AppendProjector,
 ) *blockingAfterPersistenceObserver {
 	return &blockingAfterPersistenceObserver{
 		downstream: downstream,
+		projector:  projector,
 		blocked:    make(chan struct{}),
 		release:    make(chan struct{}),
+	}
+}
+
+func (o *blockingAfterPersistenceObserver) ProjectAppend(
+	ctx context.Context,
+	projection AppendProjection,
+) error {
+	if o.projector != nil {
+		if err := o.projector(ctx, projection); err != nil {
+			return err
+		}
+	}
+	o.mu.Lock()
+	block := o.blockNext
+	o.blockNext = false
+	o.mu.Unlock()
+	if !block {
+		return nil
+	}
+	close(o.blocked)
+	select {
+	case <-o.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -56,7 +84,7 @@ func (o *blockingAfterPersistenceObserver) ObservePersistedStore(
 
 func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
-	observer := newBlockingAfterPersistenceObserver(persistence)
+	observer := newBlockingAfterPersistenceObserver(persistence, persistence.ProjectAppend)
 	root := t.TempDir()
 	store, err := Create(
 		root,
@@ -64,6 +92,7 @@ func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 		"/tmp/work",
 		testSessionCategory,
 		WithPersistenceObserver(observer),
+		WithAppendProjector(observer.ProjectAppend),
 		WithPersistedSessionResolver(persistence),
 	)
 	if err != nil {
@@ -98,6 +127,7 @@ func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	go func() {
 		opened, err := OpenByID(root, store.Meta().SessionID,
 			WithPersistenceObserver(observer),
+			WithAppendProjector(observer.ProjectAppend),
 			WithPersistedSessionResolver(persistence),
 		)
 		openDone <- openOutcome{store: opened, err: err}

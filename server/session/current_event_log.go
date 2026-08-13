@@ -23,6 +23,7 @@ type currentEventLog struct {
 	path               string
 	firstEventOffset   int64
 	lastSequence       int64
+	needsSeparator     bool
 	mode               currentEventLogMode
 	durabilityObserver DurabilityObserver
 }
@@ -120,8 +121,9 @@ func openCurrentEventLog(
 		return nil, fmt.Errorf("stat current event log: %w", err)
 	}
 	size := info.Size()
+	needsSeparator := false
 	if mode == currentEventLogAuthoritative {
-		size, _, err = repairCurrentEventLogTail(fp, size, firstEventOffset)
+		size, needsSeparator, err = repairCurrentEventLogTail(fp, size, firstEventOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -134,12 +136,14 @@ func openCurrentEventLog(
 	if lastRecord != nil {
 		lastSequence = lastRecord.Seq()
 	}
-	return &currentEventLog{
+	log := &currentEventLog{
 		path:             path,
 		firstEventOffset: firstEventOffset,
 		lastSequence:     lastSequence,
+		needsSeparator:   needsSeparator,
 		mode:             mode,
-	}, nil
+	}
+	return log, nil
 }
 
 func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64, resultErr error) {
@@ -180,64 +184,53 @@ func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64,
 		expectedSequence++
 	}
 
+	payload, err := encodeCurrentEventRecordLines(records, l.needsSeparator)
+	if err != nil {
+		return 0, err
+	}
 	fp, err := os.OpenFile(l.path, os.O_APPEND|os.O_RDWR, 0)
 	if err != nil {
-		return 0, fmt.Errorf("open current event log for append: %w", err)
+		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "open current event log for append", err)
 	}
+	closed := false
 	defer func() {
+		if closed {
+			return
+		}
 		if closeErr := fp.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, fmt.Errorf("close current event log append: %w", closeErr))
+			certainty := EventLogCommitNotCommitted
+			if endOffset > 0 {
+				certainty = EventLogCommitUnknown
+			}
+			resultErr = errors.Join(resultErr, eventLogPersistenceError(certainty, "close current event log append", closeErr))
 		}
 	}()
-	_, firstEventOffset, err := readCurrentEventLogHeader(fp)
-	if err != nil {
-		return 0, err
-	}
-	if firstEventOffset != l.firstEventOffset {
-		return 0, fmt.Errorf(
-			"current event log header offset changed from %d to %d",
-			l.firstEventOffset,
-			firstEventOffset,
-		)
-	}
 	info, err := fp.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat current event log before append: %w", err)
-	}
-	currentSize, needsSeparator, err := repairCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
-	if err != nil {
-		return 0, err
-	}
-	lastRecord, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
-	if err != nil {
-		return 0, err
-	}
-	persistedSequence := int64(0)
-	if lastRecord != nil {
-		persistedSequence = lastRecord.Seq()
-	}
-	if persistedSequence != l.lastSequence {
-		return 0, fmt.Errorf(
-			"current event log append sequence authority changed from %d to %d",
-			l.lastSequence,
-			persistedSequence,
-		)
-	}
-
-	payload, err := encodeCurrentEventRecordLines(records, needsSeparator)
-	if err != nil {
-		return 0, err
+		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "stat current event log before append", err)
 	}
 	written, err := writeAll(fp, payload)
-	endOffset = currentSize + int64(written)
+	endOffset = info.Size() + int64(written)
 	if err != nil {
-		return endOffset, err
+		return endOffset, eventLogPersistenceError(EventLogCommitUnknown, "write current event log append", err)
 	}
 	if err := l.syncAppend(fp); err != nil {
-		return endOffset, fmt.Errorf("fsync current event log: %w", err)
+		return endOffset, eventLogPersistenceError(EventLogCommitUnknown, "fsync current event log", err)
 	}
+	// Sync is the event-log commit boundary. A later close failure cannot
+	// change the committed append result.
+	_ = fp.Close()
+	closed = true
 	l.lastSequence = records[len(records)-1].Seq()
+	l.needsSeparator = false
 	return endOffset, nil
+}
+
+func eventLogPersistenceError(certainty EventLogCommitCertainty, operation string, cause error) error {
+	return &EventLogPersistenceError{
+		Certainty: certainty,
+		Cause:     fmt.Errorf("%s: %w", operation, cause),
+	}
 }
 
 func (l *currentEventLog) syncAppend(fp *os.File) (resultErr error) {

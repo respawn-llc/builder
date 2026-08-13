@@ -1068,6 +1068,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if provenanceErr != nil {
 		return receipt, errors.Join(appendErr, provenanceErr)
 	}
+	e.compactionRuntimeState().SetHistoryReplacementSequence(appended.Seq())
 	for index := range replacement.projectedEntries {
 		replacement.projectedEntries[index].StepID = strings.TrimSpace(stepID)
 	}

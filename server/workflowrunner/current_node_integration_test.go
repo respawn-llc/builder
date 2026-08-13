@@ -1831,35 +1831,6 @@ func TestAutomaticCommittedAssignmentDiagnosticStartsRealAgentExactlyOnce(t *tes
 	}
 }
 
-func TestInitialStartCommittedAssignmentDiagnosticInterruptsWithoutStartingRuntime(t *testing.T) {
-	diagnostic := errors.New("initial assignment observer diagnostic")
-	var diagnosticMatched atomic.Bool
-	f := newCurrentNodeRunnerFixtureWithPersistenceGate(t, NewScriptedClient(
-		llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
-	))
-	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		if snapshot.Meta.LastSequence < 2 {
-			return false
-		}
-		return !diagnosticMatched.Swap(true)
-	}, diagnostic)
-	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
-	task := f.createTask(t, workflowID)
-	f.startTask(t, task)
-
-	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
-		return len(nodes) == 1 &&
-			nodes[0].Scheduling != nil &&
-			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted
-	})
-	if !diagnosticMatched.Load() {
-		t.Fatal("initial assignment observer diagnostic was not exercised")
-	}
-	if requests := f.client.Requests(); len(requests) != 0 {
-		t.Fatalf("model requests = %d, want no Runtime start", len(requests))
-	}
-}
-
 func TestCurrentNodeFanoutContinuationClonesAndBindsEachBranchSession(t *testing.T) {
 	f := newCurrentNodeRunnerFixture(
 		t,

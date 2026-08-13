@@ -35,6 +35,18 @@ func (p *testSessionMetadata) ResolvePersistedSession(_ context.Context, session
 	return record, nil
 }
 
+func (p *testSessionMetadata) ProjectAppend(_ context.Context, projection AppendProjection) error {
+	record, ok := p.sharedStore().Get(projection.SessionID.String())
+	if !ok {
+		return ErrSessionNotFound
+	}
+	meta := cloneTestMeta(record.Meta)
+	applyAppendProjectionToMeta(meta, projection)
+	record.Meta = meta
+	p.sharedStore().Put(projection.SessionID.String(), record)
+	return nil
+}
+
 func (p *testSessionMetadata) sharedStore() *recordstore.Store[PersistedSessionRecord] {
 	p.once.Do(func() {
 		p.store = recordstore.NewWithRecords(p.records, cloneTestPersistedSessionRecord)
@@ -52,6 +64,14 @@ func cloneTestMeta(meta *Meta) *Meta {
 		return nil
 	}
 	cloned := *meta
+	if meta.UsageState != nil {
+		usage := *meta.UsageState
+		if meta.UsageState.HistoryReplacementEventSequence != nil {
+			sequence := *meta.UsageState.HistoryReplacementEventSequence
+			usage.HistoryReplacementEventSequence = &sequence
+		}
+		cloned.UsageState = &usage
+	}
 	return &cloned
 }
 
@@ -62,6 +82,7 @@ func storeTestMeta(store *Store) Meta {
 func (p *testSessionMetadata) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
+		WithAppendProjector(p.ProjectAppend),
 		WithPersistedSessionResolver(p),
 	}
 }
