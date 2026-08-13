@@ -38,6 +38,14 @@ type CurrentNodeRunner interface {
 
 type CurrentNodeAssignmentSteerer interface {
 	SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error)
+	PrepareManualMoveAssignments(
+		context.Context,
+		[]workflowstore.CurrentNodeStartContext,
+	) (
+		workflowstore.ManualMoveTargetAssignmentPreparation,
+		map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+		error,
+	)
 }
 
 type CurrentNodeAssignmentSteer interface {

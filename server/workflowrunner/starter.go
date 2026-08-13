@@ -224,11 +224,13 @@ func (s *Starter) prepareCurrentNodeAgentAssignment(
 	if steerErr != nil {
 		return nil, prepared.cleanup(steerErr)
 	}
+	uncommittedCleanup := prepared.cleanup
 	prepared.cleanup = func(err error) error { return err }
 	return &currentNodeAgentAssignmentSteer{
-		reference:  input.CurrentNode.Reference,
-		completion: steer,
-		prepared:   prepared,
+		reference:          input.CurrentNode.Reference,
+		completion:         steer,
+		prepared:           prepared,
+		uncommittedCleanup: uncommittedCleanup,
 		retainSourceRuntime: admission.RuntimeAvailable &&
 			input.ContextMode == workflow.ContextModeContinueSession &&
 			!input.EnteringEdge.RequiresApproval &&
@@ -249,6 +251,14 @@ func (s *Starter) PrepareManualMoveAssignments(
 	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
 	steers := make(map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer, len(inputs))
 	var diagnostics []error
+	cleanupPrepared := func(cause error) error {
+		for _, steer := range steers {
+			if assignment, ok := steer.(*currentNodeAgentAssignmentSteer); ok {
+				cause = assignment.cleanupUncommitted(cause)
+			}
+		}
+		return cause
+	}
 	for _, input := range inputs {
 		if input.Node.Kind == workflow.NodeKindScript {
 			continue
@@ -256,30 +266,30 @@ func (s *Starter) PrepareManualMoveAssignments(
 		if input.Node.Kind != workflow.NodeKindAgent {
 			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference)
 		}
+		key, err := input.CurrentNode.Reference.Key()
+		if err != nil {
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(err)
+		}
 		prepared, err := s.prepareCurrentNodeAgentAssignment(ctx, input, false)
 		if err != nil {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(err)
 		}
+		steers[key] = prepared
 		receipt, waitErr := prepared.Wait(ctx)
 		if !receipt.Committed {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.Join(waitErr, errors.New("Manual Move workflow assignment was not committed"))
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(errors.Join(waitErr, errors.New("Manual Move workflow assignment was not committed")))
 		}
 		if waitErr != nil {
 			diagnostics = append(diagnostics, waitErr)
 		}
-		key, err := input.CurrentNode.Reference.Key()
-		if err != nil {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
-		}
 		assignment, ok := prepared.(workflowexecution.CurrentNodeSessionAssignmentSteer)
 		if !ok {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, fmt.Errorf("Manual Move Agent target %v assignment has no Session", input.CurrentNode.Reference)
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(fmt.Errorf("Manual Move Agent target %v assignment has no Session", input.CurrentNode.Reference))
 		}
 		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
 			CurrentNode: input.CurrentNode.Reference,
 			SessionID:   assignment.SessionID(),
 		})
-		steers[key] = prepared
 	}
 	return workflowstore.ManualMoveTargetAssignmentPreparation{
 		Assignments: assignments,
@@ -291,7 +301,17 @@ type currentNodeAgentAssignmentSteer struct {
 	reference           workflow.CurrentNodeReference
 	completion          runtime.WorkflowAssignmentSteer
 	prepared            preparedCurrentNodeAgentSession
+	uncommittedCleanup  func(error) error
 	retainSourceRuntime bool
+}
+
+func (s *currentNodeAgentAssignmentSteer) cleanupUncommitted(err error) error {
+	if s == nil || s.uncommittedCleanup == nil {
+		return err
+	}
+	cleanup := s.uncommittedCleanup
+	s.uncommittedCleanup = nil
+	return cleanup(err)
 }
 
 func (s *currentNodeAgentAssignmentSteer) SessionID() runtimeids.SessionID {

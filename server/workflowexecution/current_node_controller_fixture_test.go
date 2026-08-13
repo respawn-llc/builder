@@ -95,6 +95,17 @@ func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
 	return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, steers, nil
 }
 
+func prepareNoOpManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+	error,
+) {
+	return noOpCurrentNodeAssignmentSteerer{}.PrepareManualMoveAssignments(ctx, inputs)
+}
+
 type completedCurrentNodeAssignmentSteer struct {
 	receipt session.CommitReceipt
 	err     error
@@ -119,6 +130,13 @@ func (s deadlineRecordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignmen
 		}, nil
 	}
 	return &deadlineRecordingCurrentNodeAssignmentSteer{deadline: s.deadline}, nil
+}
+
+func (deadlineRecordingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 type deadlineRecordingCurrentNodeAssignmentSteer struct {
@@ -165,6 +183,13 @@ func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 		receipt: s.receipt,
 		err:     s.err,
 	}, nil
+}
+
+func (lateCommitCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 type lateCommitCurrentNodeAssignmentSteer struct {
@@ -228,6 +253,13 @@ func (s *blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 	}, nil
 }
 
+func (*blockingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
+}
+
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference
@@ -278,6 +310,13 @@ func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ con
 		receipt.Committed = true
 	}
 	return completedCurrentNodeAssignmentSteer{receipt: receipt, err: s.waitErr}, nil
+}
+
+func (*recordingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {

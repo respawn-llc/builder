@@ -512,16 +512,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 				ctx context.Context,
 				contexts []workflowstore.CurrentNodeStartContext,
 			) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
-				preparer, ok := c.steerer.(interface {
-					PrepareManualMoveAssignments(
-						context.Context,
-						[]workflowstore.CurrentNodeStartContext,
-					) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error)
-				})
-				if !ok {
-					return workflowstore.ManualMoveTargetAssignmentPreparation{}, errors.New("current node assignment steerer cannot prepare Manual Move assignments")
-				}
-				preparation, steers, err := preparer.PrepareManualMoveAssignments(ctx, contexts)
+				preparation, steers, err := c.steerer.PrepareManualMoveAssignments(ctx, contexts)
 				if err != nil {
 					return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
 				}

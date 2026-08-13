@@ -356,6 +356,17 @@ func (workflowServiceCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
 	return workflowServiceCommittedAssignment{}, nil
 }
 
+func (workflowServiceCommittedAssignmentSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
 type workflowServiceCommittedAssignment struct{}
 
 func (workflowServiceCommittedAssignment) Wait(context.Context) (session.CommitReceipt, error) {

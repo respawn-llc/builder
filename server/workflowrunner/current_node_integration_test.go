@@ -149,6 +149,17 @@ func (s *committedDiagnosticCurrentNodeAssignmentSteerer) SteerCurrentNodeAssign
 	return agent, nil
 }
 
+func (s *committedDiagnosticCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return s.delegate.PrepareManualMoveAssignments(ctx, inputs)
+}
+
 func workflowPostCompletionCompactionResponse(summary string) llm.CompactionResponse {
 	return llm.CompactionResponse{
 		OutputItems: []llm.ResponseItem{
@@ -1258,6 +1269,87 @@ func TestManualMoveAssignmentPreparationFailureLeavesOriginCurrent(t *testing.T)
 	}
 	if len(f.client.Requests()) != 0 {
 		t.Fatalf("model requests after assignment failure = %d, want none", len(f.client.Requests()))
+	}
+}
+
+func TestManualMoveUncommittedFreshAssignmentCleansSessionAndLeavesOriginCurrent(t *testing.T) {
+	cause := errors.New("assignment persistence failed")
+	f := newCurrentNodeRunnerFixtureWithPersistenceGate(
+		t,
+		NewScriptedClient(llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true}),
+	)
+	scriptPath := filepath.Join(t.TempDir(), "fail.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 23\n"), 0o755); err != nil {
+		t.Fatalf("write failing Script: %v", err)
+	}
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Manual Move uncommitted assignment cleanup",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindScript, scriptPath: scriptPath},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the task."},
+	)
+	task := f.createTask(t, workflowID)
+	origin := f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(origin) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var target workflow.NodeID
+	for _, node := range definition.Nodes {
+		if node.Kind() == workflow.NodeKindAgent {
+			target = workflow.NodeIDOf(node)
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("workflow has no Agent target")
+	}
+	f.persistenceGate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+		return snapshot.Meta.LastSequence >= 2
+	}, cause)
+	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: target,
+	})
+	if err != nil {
+		t.Fatalf("prepare Manual Move: %v", err)
+	}
+	moved, err := f.controller.ApplyManualMove(context.Background(), prepared, nil)
+	if !errors.Is(err, cause) {
+		t.Fatalf("Manual Move error = %v, want %v", err, cause)
+	}
+	if moved.Outcome != "" {
+		t.Fatalf("Manual Move result = %+v, want unapplied zero result", moved)
+	}
+	nodes, err := f.store.ListCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list Current Nodes: %v", err)
+	}
+	if len(nodes) != 1 || !nodes[0].Reference.Equal(origin) {
+		t.Fatalf("Current Nodes after uncommitted assignment = %+v, want origin %v", nodes, origin)
+	}
+	sessionIDs, err := f.metadata.ListProjectSessionIDs(context.Background(), f.projectID)
+	if err != nil {
+		t.Fatalf("list project Sessions: %v", err)
+	}
+	if len(sessionIDs) != 0 {
+		t.Fatalf("project Sessions after uncommitted assignment = %+v, want none", sessionIDs)
+	}
+	sessionDirs, err := os.ReadDir(filepath.Join(f.cfg.PersistenceRoot, "projects", f.projectID, "sessions"))
+	if err != nil {
+		t.Fatalf("read project Session directory: %v", err)
+	}
+	if len(sessionDirs) != 0 {
+		t.Fatalf("durable Session directories after uncommitted assignment = %d, want none", len(sessionDirs))
 	}
 }
 
