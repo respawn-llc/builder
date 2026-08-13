@@ -18,6 +18,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	brand "core/shared/config"
 	"core/shared/protocol"
@@ -265,6 +266,42 @@ func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T
 	_, err = appCore.RunPromptClient().RunPrompt(context.Background(), serverapi.RunPromptRequest{}, nil)
 	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		t.Fatalf("RunPrompt error = %v, want ErrWorkspaceNotRegistered", err)
+	}
+	sessionLaunchTrusted, ok := appCore.SessionLaunchClient().(apicontract.SessionLaunchTrustedService)
+	if !ok {
+		t.Fatal("expected unregistered Session Launch client to support trusted gateway calls")
+	}
+	_, err = apicontract.WithValidated(
+		serverapi.SessionPlanRequest{
+			ClientRequestID: "unregistered-plan",
+			Mode:            serverapi.SessionLaunchModeInteractive,
+			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		},
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+			return sessionLaunchTrusted.PlanSessionValidated(context.Background(), validated)
+		},
+	)
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("trusted PlanSession error = %v, want ErrWorkspaceNotRegistered", err)
+	}
+	runPromptTrusted, ok := appCore.RunPromptClient().(apicontract.RunPromptTrustedService)
+	if !ok {
+		t.Fatal("expected unregistered Run Prompt client to support trusted gateway calls")
+	}
+	_, err = apicontract.WithValidated(
+		serverapi.RunPromptRequest{
+			ClientRequestID: "unregistered-run",
+			Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			Prompt:          "hello",
+		},
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.RunPromptRequest]) (serverapi.RunPromptResponse, error) {
+			return runPromptTrusted.RunPromptValidated(context.Background(), validated, nil)
+		},
+	)
+	if !errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		t.Fatalf("trusted RunPrompt error = %v, want ErrWorkspaceNotRegistered", err)
 	}
 	if _, err := appCore.ProjectViewClient().ListProjects(context.Background(), serverapi.ProjectListRequest{}); err != nil {
 		t.Fatalf("ListProjects via core client: %v", err)

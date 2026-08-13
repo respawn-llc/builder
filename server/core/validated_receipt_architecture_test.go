@@ -45,6 +45,9 @@ func TestValidatedReceiptsCannotEscapeSynchronousCallbacks(t *testing.T) {
 					if immediateConsumers[typed] {
 						return true
 					}
+					if functionReceivesValidatedReceipt(pkg, typed.Type) {
+						return true
+					}
 					if containsValidatedReceiptOrTrustedCall(pkg, typed.Body) {
 						violations = append(violations, validatedViolation(pkg, typed.Pos(), "Validated receipt or trusted invocation must remain in an immediate WithValidated callback"))
 					}
@@ -64,6 +67,18 @@ func TestValidatedReceiptsCannotEscapeSynchronousCallbacks(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("validated receipt architecture violations:\n%s", strings.Join(violations, "\n"))
 	}
+}
+
+func functionReceivesValidatedReceipt(pkg *packages.Package, function *ast.FuncType) bool {
+	if function == nil || function.Params == nil {
+		return false
+	}
+	for _, field := range function.Params.List {
+		if validatedReceiptType(pkg.TypesInfo.TypeOf(field.Type)) {
+			return true
+		}
+	}
+	return false
 }
 
 func validatedViolation(pkg *packages.Package, pos token.Pos, message string) string {
@@ -164,6 +179,11 @@ func containsValidatedReceiptOrTrustedCall(pkg *packages.Package, node ast.Node)
 	found := false
 	ast.Inspect(node, func(candidate ast.Node) bool {
 		if found {
+			return false
+		}
+		if function, ok := candidate.(*ast.FuncLit); ok &&
+			candidate != node &&
+			functionReceivesValidatedReceipt(pkg, function.Type) {
 			return false
 		}
 		if expression, ok := candidate.(ast.Expr); ok && validatedReceiptType(pkg.TypesInfo.TypeOf(expression)) {

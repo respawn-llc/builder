@@ -86,6 +86,10 @@ type AttentionNotificationService interface {
 	SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
 }
 
+type AttentionNotificationTrustedService interface {
+	SubscribeAttentionNotificationsValidated(ctx context.Context, req Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error)
+}
+
 type PromptControlService interface {
 	AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error)
 	SubscribeFollowUp(ctx context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error)
@@ -97,6 +101,11 @@ type RunPromptService interface {
 
 type RunPromptTrustedService interface {
 	RunPromptValidated(ctx context.Context, req Validated[serverapi.RunPromptRequest], progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
+}
+
+type RunPromptGatewayService interface {
+	RunPromptService
+	RunPromptTrustedService
 }
 
 type ServerStatusService interface {
@@ -149,6 +158,11 @@ type SessionLaunchTrustedService interface {
 	WorkspaceChatDraftValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error)
 }
 
+type SessionLaunchGatewayService interface {
+	SessionLaunchService
+	SessionLaunchTrustedService
+}
+
 type SessionLifecycleService interface {
 	GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error)
 	PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error)
@@ -189,12 +203,6 @@ type WorktreeService interface {
 	LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error)
 	DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error)
 	SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
-}
-
-type AuthorizedProjectWorkspaceBinding struct {
-	ProjectID     string
-	WorkspaceID   string
-	CanonicalRoot string
 }
 
 type WorktreeTrustedService interface {

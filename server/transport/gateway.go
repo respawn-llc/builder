@@ -231,10 +231,10 @@ func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, api
 		return nil, apicontract.Route{}, false
 	}
 	executable, ok := inboundExecutableRoutes[route.Method]
-	if !ok {
+	if !ok || executable.executeProgress == nil {
 		return nil, apicontract.Route{}, false
 	}
-	return (*Gateway).serveRunPrompt, executable.route, true
+	return executable.executeProgress, executable.route, true
 }
 
 func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Gateway, error) {
@@ -509,12 +509,16 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	if err != nil {
 		return responseForError(req.ID, err)
 	}
-	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+	return handlerSuccessResponse(req.ID, resp)
+}
+
+func handlerSuccessResponse(id string, response any) protocol.Response {
+	if validator, ok := response.(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
-			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+			return responseForError(id, fmt.Errorf("handler returned an invalid response: %w", err))
 		}
 	}
-	return protocol.NewSuccessResponse(req.ID, resp)
+	return protocol.NewSuccessResponse(id, response)
 }
 
 func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, error) {

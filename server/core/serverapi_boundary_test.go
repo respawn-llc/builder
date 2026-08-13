@@ -460,7 +460,7 @@ func isRouteMethod(signature *types.Signature) bool {
 		return false
 	}
 	for index := 1; index < signature.Params().Len(); index++ {
-		if !isServerAPIType(signature.Params().At(index).Type()) {
+		if !isServiceContractParameterType(signature.Params().At(index).Type()) {
 			return false
 		}
 	}
@@ -472,6 +472,20 @@ func isRouteMethod(signature *types.Signature) bool {
 	default:
 		return false
 	}
+}
+
+func isServiceContractParameterType(typ types.Type) bool {
+	if isServerAPIType(typ) {
+		return true
+	}
+	typ = types.Unalias(typ)
+	named, ok := typ.(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil ||
+		named.Obj().Pkg().Path() != "core/shared/apicontract" {
+		return false
+	}
+	return named.Obj().Name() == "Validated" ||
+		strings.HasPrefix(named.Obj().Name(), "Authorized")
 }
 
 func isServerAPIType(typ types.Type) bool {

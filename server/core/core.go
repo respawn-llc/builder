@@ -32,7 +32,15 @@ func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.Se
 	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
+func (unregisteredSessionLaunchClient) PlanSessionValidated(context.Context, apicontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
 func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
+func (unregisteredSessionLaunchClient) WorkspaceChatDraftValidated(context.Context, apicontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
 	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
@@ -46,9 +54,17 @@ func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromp
 	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
+func (unregisteredRunPromptClient) RunPromptValidated(context.Context, apicontract.Validated[serverapi.RunPromptRequest], serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
 type unavailableAttentionNotificationClient struct{}
 
 func (unavailableAttentionNotificationClient) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return nil, serverapi.ErrStreamUnavailable
+}
+
+func (unavailableAttentionNotificationClient) SubscribeAttentionNotificationsValidated(context.Context, apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
 	return nil, serverapi.ErrStreamUnavailable
 }
 
@@ -439,6 +455,10 @@ type configuredCoreOnboardingFinalizeService struct {
 }
 
 func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
+}
+
+func (s configuredCoreOnboardingFinalizeService) FinalizeOnboardingValidated(context.Context, apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
 	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
 }
 

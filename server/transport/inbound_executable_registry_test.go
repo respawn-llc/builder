@@ -115,6 +115,10 @@ func TestInboundExecutableRegistryUsesPreparedCustomDecoders(t *testing.T) {
 	}{
 		{method: protocol.MethodOnboardingFinalize, want: requestDecoderOnboardingFinalize},
 		{method: protocol.MethodSessionGetExecutionEnvironment, want: requestDecoderSessionExecutionEnvironment},
+		{method: protocol.MethodRunPrompt, want: requestDecoderDefault},
+		{method: protocol.MethodSessionPlan, want: requestDecoderDefault},
+		{method: protocol.MethodAttachProject, want: requestDecoderDefault},
+		{method: protocol.MethodSessionWorkspaceChatDraft, want: requestDecoderDefault},
 	}
 	for _, test := range tests {
 		if got := inboundExecutableRoutes[test.method].decoder; got != test.want {

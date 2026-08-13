@@ -28,13 +28,15 @@ const (
 )
 
 type inboundExecutableRoute struct {
-	route             apicontract.Route
-	requestType       reflect.Type
-	authorizationType reflect.Type
-	validation        apicontract.ValidationPolicy
-	validator         requestValidatorKind
-	decoder           requestDecoderKind
-	executeUnary      func(*Gateway, context.Context, *connectionState, protocol.Request) protocol.Response
+	route               apicontract.Route
+	requestType         reflect.Type
+	authorizationType   reflect.Type
+	validation          apicontract.ValidationPolicy
+	validator           requestValidatorKind
+	decoder             requestDecoderKind
+	executeUnary        func(*Gateway, context.Context, *connectionState, protocol.Request) protocol.Response
+	executeProgress     gatewayProgressHandler
+	executeSubscription gatewaySubscriptionHandler
 }
 
 type erasedInboundRequest struct {
@@ -63,24 +65,38 @@ func inboundUnary[Req any, Authz any](
 		decoder:           decoder,
 	}
 	executable.executeUnary = func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
-		decoded, err := decodeInboundRequest[Req](g, route, decoder, wire.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		decoded = prepare(decoded, state)
-		response, err := apicontract.WithValidated(decoded, policy, func(validated apicontract.Validated[Req]) (protocol.Response, error) {
-			authz, err := authorize(ctx, g, state, validated)
-			if err != nil {
-				return protocol.Response{}, validatedOwnerError{cause: err}
-			}
-			return executeLegacyUnary(g, ctx, state, wire, validated.Value(), authz), nil
-		})
-		if err != nil {
-			return responseForValidationOrOwnerError(wire.ID, err)
-		}
-		return response
+		return executeInboundUnary(g, ctx, state, wire, route, policy, decoder, prepare, authorize)
 	}
 	return executable
+}
+
+func executeInboundUnary[Req any, Authz any](
+	g *Gateway,
+	ctx context.Context,
+	state *connectionState,
+	wire protocol.Request,
+	route apicontract.Route,
+	policy apicontract.ValidationPolicy,
+	decoder requestDecoderKind,
+	prepare func(Req, *connectionState) Req,
+	authorize func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (Authz, error),
+) protocol.Response {
+	decoded, err := decodeInboundRequest[Req](g, route, decoder, wire.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	decoded = prepare(decoded, state)
+	response, err := apicontract.WithValidated(decoded, policy, func(validated apicontract.Validated[Req]) (protocol.Response, error) {
+		authz, err := authorize(ctx, g, state, validated)
+		if err != nil {
+			return protocol.Response{}, validatedOwnerError{cause: err}
+		}
+		return executeLegacyUnary(g, ctx, state, wire, validated.Value(), authz), nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(wire.ID, err)
+	}
+	return response
 }
 
 func inboundProgress[Req any, Authz any](
@@ -258,6 +274,24 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		nil,
 		authorizeRouteScope[serverapi.SessionExecutionEnvironmentRequest](mustInboundRoute(protocol.MethodSessionGetExecutionEnvironment, apicontract.KindUnary)),
 	)
+	sessionEnvironment := executables[protocol.MethodSessionGetExecutionEnvironment]
+	sessionEnvironment.executeUnary = executeSessionExecutionEnvironment
+	executables[protocol.MethodSessionGetExecutionEnvironment] = sessionEnvironment
+	sessionPlan := executables[protocol.MethodSessionPlan]
+	sessionPlan.executeUnary = executeSessionPlan
+	executables[protocol.MethodSessionPlan] = sessionPlan
+	workspaceChatDraft := executables[protocol.MethodSessionWorkspaceChatDraft]
+	workspaceChatDraft.executeUnary = executeWorkspaceChatDraft
+	executables[protocol.MethodSessionWorkspaceChatDraft] = workspaceChatDraft
+	attachProject := executables[protocol.MethodAttachProject]
+	attachProject.executeUnary = executeAttachProject
+	executables[protocol.MethodAttachProject] = attachProject
+	runPrompt := executables[protocol.MethodRunPrompt]
+	runPrompt.executeProgress = executeRunPrompt
+	executables[protocol.MethodRunPrompt] = runPrompt
+	attentionSubscription := executables[protocol.MethodAttentionNotificationSubscribe]
+	attentionSubscription.executeSubscription = executeAttentionNotificationSubscription
+	executables[protocol.MethodAttentionNotificationSubscribe] = attentionSubscription
 	executables[protocol.MethodWorktreeWorkspaceList] = inboundUnary[serverapi.WorktreeWorkspaceListRequest, apicontract.AuthorizedProjectWorkspaceBinding](
 		protocol.MethodWorktreeWorkspaceList,
 		apicontract.SemanticValidationRequired,
@@ -276,15 +310,133 @@ func executeOnboardingFinalize(g *Gateway, ctx context.Context, state *connectio
 	}
 	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
 		client := g.deps.OnboardingFinalizeClient()
-		if trusted, ok := client.(apicontract.OnboardingFinalizeTrustedService); ok {
-			return trusted.FinalizeOnboardingValidated(ctx, validated)
+		trusted, ok := client.(apicontract.OnboardingFinalizeTrustedService)
+		if !ok {
+			return serverapi.OnboardingFinalizeResponse{}, validatedOwnerError{cause: errors.New("onboarding finalize trusted service is required")}
 		}
-		return client.FinalizeOnboarding(ctx, validated.Value())
+		response, err := trusted.FinalizeOnboardingValidated(ctx, validated)
+		if err != nil {
+			return serverapi.OnboardingFinalizeResponse{}, validatedOwnerError{cause: err}
+		}
+		return response, nil
 	})
 	if err != nil {
-		return responseForError(wire.ID, err)
+		return responseForValidationOrOwnerError(wire.ID, err)
 	}
-	return protocol.NewSuccessResponse(wire.ID, response)
+	return handlerSuccessResponse(wire.ID, response)
+}
+
+func executeSessionExecutionEnvironment(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
+	route := mustInboundRoute(protocol.MethodSessionGetExecutionEnvironment, apicontract.KindUnary)
+	request, err := decodeInboundRequest[serverapi.SessionExecutionEnvironmentRequest](g, route, requestDecoderSessionExecutionEnvironment, wire.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+		if err := newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, validated.Value()); err != nil {
+			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
+		}
+		trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
+		if !ok {
+			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: errors.New("Session View trusted service is required")}
+		}
+		response, err := trusted.GetSessionExecutionEnvironmentValidated(ctx, validated)
+		if err != nil {
+			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
+		}
+		return response, nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(wire.ID, err)
+	}
+	return handlerSuccessResponse(wire.ID, response)
+}
+
+func executeSessionPlan(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
+	route := mustInboundRoute(wire.Method, apicontract.KindUnary)
+	request, err := decodeInboundRequest[serverapi.SessionPlanRequest](g, route, requestDecoderDefault, wire.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+		if err := newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, validated.Value()); err != nil {
+			return serverapi.SessionPlanResponse{}, validatedOwnerError{cause: err}
+		}
+		client, err := g.sessionLaunchClientForState(ctx, state)
+		if err != nil {
+			return serverapi.SessionPlanResponse{}, validatedOwnerError{cause: err}
+		}
+		trusted, ok := client.(apicontract.SessionLaunchTrustedService)
+		if !ok {
+			return serverapi.SessionPlanResponse{}, validatedOwnerError{cause: errors.New("Session Launch trusted service is required")}
+		}
+		response, err := trusted.PlanSessionValidated(ctx, validated)
+		if err != nil {
+			return serverapi.SessionPlanResponse{}, validatedOwnerError{cause: err}
+		}
+		return response, nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(wire.ID, err)
+	}
+	return handlerSuccessResponse(wire.ID, response)
+}
+
+func executeWorkspaceChatDraft(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
+	route := mustInboundRoute(wire.Method, apicontract.KindUnary)
+	request, err := decodeInboundRequest[serverapi.WorkspaceChatDraftRequest](g, route, requestDecoderDefault, wire.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
+		if err := newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, validated.Value()); err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, validatedOwnerError{cause: err}
+		}
+		client, err := g.sessionLaunchClientForState(ctx, state)
+		if err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, validatedOwnerError{cause: err}
+		}
+		trusted, ok := client.(apicontract.SessionLaunchTrustedService)
+		if !ok {
+			return serverapi.WorkspaceChatDraftResponse{}, validatedOwnerError{cause: errors.New("Session Launch trusted service is required")}
+		}
+		response, err := trusted.WorkspaceChatDraftValidated(ctx, validated)
+		if err != nil {
+			return serverapi.WorkspaceChatDraftResponse{}, validatedOwnerError{cause: err}
+		}
+		return response, nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(wire.ID, err)
+	}
+	return handlerSuccessResponse(wire.ID, response)
+}
+
+func executeAttachProject(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
+	route := mustInboundRoute(protocol.MethodAttachProject, apicontract.KindUnary)
+	request, err := decodeInboundRequest[protocol.AttachProjectRequest](g, route, requestDecoderDefault, wire.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[protocol.AttachProjectRequest]) (protocol.AttachResponse, error) {
+		params := validated.Value()
+		if err := g.deps.ProjectExists(ctx, params.ProjectID); err != nil {
+			return protocol.AttachResponse{}, validatedOwnerError{cause: err}
+		}
+		workspaceID, root, err := g.resolveAttachedProjectWorkspace(ctx, params)
+		if err != nil {
+			return protocol.AttachResponse{}, validatedOwnerError{cause: err}
+		}
+		state.attachedProject = params.ProjectID
+		state.attachedWorkspaceID = workspaceID
+		state.attachedWorkspaceRoot = root
+		state.attachedSession = nil
+		return protocol.ProjectAttachResponseForRequest(params, workspaceID, root)
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(wire.ID, err)
+	}
+	return handlerSuccessResponse(wire.ID, response)
 }
 
 func erasedInboundExecutable(route apicontract.Route) inboundExecutableRoute {

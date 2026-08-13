@@ -36,15 +36,26 @@ func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep apic
 }
 
 type gatewayOnboardingService struct {
-	handler func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	handler      func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	rawCalls     int
+	trustedCalls int
 }
 
-func (s gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+func (s *gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	s.rawCalls++
 	if s.handler != nil {
 		return s.handler(ctx, req)
 	}
 	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, err
+	}
+	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
+}
+
+func (s *gatewayOnboardingService) FinalizeOnboardingValidated(ctx context.Context, req apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
+	s.trustedCalls++
+	if s.handler != nil {
+		return s.handler(ctx, req.Value())
 	}
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
 }
@@ -67,7 +78,7 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			appCore, _ := newGatewayTestCore(t, true, tt.authReady)
 			defer func() { _ = appCore.Close() }()
-			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+			gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: &gatewayOnboardingService{}}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
 			if err != nil {
 				t.Fatalf("NewGateway: %v", err)
 			}
@@ -91,6 +102,31 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 				t.Fatalf("decoded error = %v, want invalid_request", decoded)
 			}
 		})
+	}
+}
+
+func TestGatewayOnboardingFinalizeCallsOnlyTrustedOwner(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	service := &gatewayOnboardingService{}
+	gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: service}, protocol.ServerIdentity{
+		ProtocolVersion: protocol.Version,
+		ServerID:        "server-1",
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	response := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "finalize",
+		Method:  protocol.MethodOnboardingFinalize,
+		Params:  []byte(`{}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("Onboarding Finalize response error = %+v", response.Error)
+	}
+	if service.rawCalls != 0 || service.trustedCalls != 1 {
+		t.Fatalf("Onboarding Finalize calls raw=%d trusted=%d, want raw=0 trusted=1", service.rawCalls, service.trustedCalls)
 	}
 }
 
@@ -149,7 +185,7 @@ func TestRemoteOnboardingFinalizePreservesStructuredSentinels(t *testing.T) {
 	defer func() { _ = appCore.Close() }()
 	gateway, err := NewGateway(&gatewayOnboardingOverride{
 		Core: appCore,
-		finalize: gatewayOnboardingService{
+		finalize: &gatewayOnboardingService{
 			handler: func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
 				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: "/tmp/config.toml"}, nil)
 			},

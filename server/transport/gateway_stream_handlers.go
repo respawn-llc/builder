@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -19,6 +20,10 @@ type gatewaySubscription[Event any] interface {
 }
 
 func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) bool {
+	return executeRunPrompt(g, conn, ctx, state, route, req)
+}
+
+func executeRunPrompt(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) bool {
 	if err := req.Validate(); err != nil {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, err.Error()))
 	}
@@ -33,13 +38,9 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
-	decoded, preflightResp, failed := g.preflightRouteRequest(ctx, state, route, req)
-	if failed {
-		return sendResponse(ctx, conn, preflightResp)
-	}
-	params, ok := decoded.(serverapi.RunPromptRequest)
-	if !ok {
-		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInternalError, "run prompt route contract mismatch"))
+	params, err := decodeInboundRequest[serverapi.RunPromptRequest](g, route, requestDecoderDefault, req.Params)
+	if err != nil {
+		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -62,15 +63,28 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 			}
 		}
 	})
-	runClient, err := g.runPromptClientForState(runCtx, state)
+	resp, err := rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[serverapi.RunPromptRequest]) (serverapi.RunPromptResponse, error) {
+		if err := newRoutePolicyExecutor(g).authorizeScope(runCtx, state, route, validated.Value()); err != nil {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: err}
+		}
+		runClient, err := g.runPromptClientForState(runCtx, state)
+		if err != nil {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: err}
+		}
+		trusted, ok := runClient.(rpccontract.RunPromptTrustedService)
+		if !ok {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: errors.New("Run Prompt trusted service is required")}
+		}
+		response, err := trusted.RunPromptValidated(runCtx, validated, progress)
+		if err != nil {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: err}
+		}
+		return response, nil
+	})
 	if err != nil {
-		return sendResponse(ctx, conn, responseForError(req.ID, err))
+		return sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
 	}
-	resp, err := runClient.RunPrompt(runCtx, params, progress)
-	if err != nil {
-		return sendResponse(ctx, conn, responseForError(req.ID, err))
-	}
-	return sendResponse(ctx, conn, protocol.NewSuccessResponse(req.ID, resp))
+	return sendResponse(ctx, conn, handlerSuccessResponse(req.ID, resp))
 }
 
 func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request) {
@@ -97,6 +111,15 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
+	executable, ok := inboundExecutableRoutes[req.Method]
+	if !ok {
+		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
+		return
+	}
+	if executable.executeSubscription != nil {
+		executable.executeSubscription(g, conn, ctx, state, route, req)
+		return
+	}
 	handler, ok := gatewaySubscriptionHandlers[req.Method]
 	if !ok {
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
@@ -107,6 +130,31 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		return
 	}
 	handler(g, conn, ctx, state, route, req)
+}
+
+func executeAttentionNotificationSubscription(g *Gateway, conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	params, err := decodeInboundRequest[serverapi.AttentionNotificationSubscribeRequest](g, route, requestDecoderDefault, req.Params)
+	if err != nil {
+		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
+		return
+	}
+	_, err = rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (struct{}, error) {
+		trusted, ok := g.deps.AttentionNotificationClient().(rpccontract.AttentionNotificationTrustedService)
+		if !ok {
+			return struct{}{}, validatedOwnerError{cause: errors.New("Attention Notification trusted service is required")}
+		}
+		subscription, err := trusted.SubscribeAttentionNotificationsValidated(ctx, validated)
+		if err != nil {
+			return struct{}{}, validatedOwnerError{cause: err}
+		}
+		serveInstalledGatewaySubscription(conn, ctx, route, req, subscription, func(event clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+			return protocol.AttentionNotificationEventParams{Event: event}
+		})
+		return struct{}{}, nil
+	})
+	if err != nil {
+		_ = sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
+	}
 }
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
@@ -190,6 +238,17 @@ func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
+	serveInstalledGatewaySubscription(conn, ctx, route, req, sub, wire)
+}
+
+func serveInstalledGatewaySubscription[Event any, Wire any, Sub gatewaySubscription[Event]](
+	conn rpcwire.Conn,
+	ctx context.Context,
+	route rpccontract.Route,
+	req protocol.Request,
+	sub Sub,
+	wire func(Event) Wire,
+) {
 	defer func() { _ = sub.Close() }()
 	if !sendResponse(ctx, conn, protocol.NewSuccessResponse(req.ID, protocol.SubscribeResponse{Stream: route.EventMethod})) {
 		return
