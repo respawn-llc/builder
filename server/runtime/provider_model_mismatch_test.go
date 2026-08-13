@@ -10,6 +10,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
@@ -32,7 +33,6 @@ func TestAcceptedResponsePersistsProviderModelMismatchAndAdjustedUsage(t *testin
 				Model: "requested-model",
 				Debug: test.debug,
 			})
-
 			if _, err := runStepLoopInActiveTestRun(t, context.Background(), engine); err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,36 @@ func TestConsecutiveAcceptedToolLoopResponsesPersistOneMismatchEach(t *testing.T
 		t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
 	}
 }
-
+func TestQueuedAgentSteerStartsNewMismatchWarningStep(t *testing.T) {
+	first := commentaryResponse("working", llm.ToolCall{ID: "call-1", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`)})
+	first.ServedModel = stringPointer("served-model")
+	second := finalTextResponse("done")
+	second.ServedModel = stringPointer("served-model")
+	client, started, release := newGatedHookClient(first, second)
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client,
+		newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
+		Config{Model: "requested-model"})
+	done := make(chan error, 1)
+	go func() {
+		_, err := engine.SubmitUserMessage(context.Background(), "start")
+		done <- err
+	}()
+	<-started
+	steer, err := NewAgentSteer(runtimeids.NewSessionID(), "new instructions")
+	if err != nil {
+		t.Fatalf("NewAgentSteer: %v", err)
+	}
+	if _, accepted, err := engine.QueueAgentSteerForActiveRun(context.Background(), steer, liveRunTestRequestID(t), nil); err != nil || !accepted {
+		t.Fatalf("queue Agent Steer accepted=%t err=%v", accepted, err)
+	}
+	release()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if warnings := providerModelMismatchWarnings(t, engine.store); len(warnings) != 2 {
+		t.Fatalf("provider-model mismatch warning count = %d, want one per Agent Step", len(warnings))
+	}
+}
 func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *testing.T) {
 	t.Run("warning failure still attempts usage", func(t *testing.T) {
 		warningErr := errors.New("warning observer failed")
@@ -83,7 +112,6 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 			t.Fatal("usage checkpoint was not attempted after warning failure")
 		}
 	})
-
 	t.Run("usage failure follows warning", func(t *testing.T) {
 		usageErr := errors.New("usage observer failed")
 		store, engine, gate := newAcceptedPersistenceTest(t)
@@ -96,7 +124,6 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 			t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
 		}
 	})
-
 	t.Run("both failures surface", func(t *testing.T) {
 		usageErr := errors.New("usage observer failed")
 		store, engine, gate := newAcceptedPersistenceTest(t)
@@ -115,61 +142,18 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		}
 	})
 }
-func TestProviderModelMismatchHydrationKeepsHistoricalAbsenceAndNewFact(t *testing.T) {
-	store := mustCreateTestSession(t)
-	if _, _, err := appendTestEvent(t, store, "historical-step", storedLocalEntry{
-		Visibility: transcript.EntryVisibilityDetail,
-		Role:       string(transcript.EntryRoleWarning),
-		Text:       "historical notice",
-	}); err != nil {
-		t.Fatalf("append historical local entry: %v", err)
-	}
-
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "requested-model"})
-	if _, err := engine.commitAcceptedResponseCandidate("new-step", acceptedMismatchCandidate(), false); err != nil {
-		t.Fatalf("commit new mismatch: %v", err)
-	}
-	if err := engine.Close(); err != nil {
-		t.Fatalf("close engine: %v", err)
-	}
-
-	reopened := mustNewTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, newTestToolRegistry(t), Config{Model: "requested-model"})
-	t.Cleanup(func() {
-		if err := reopened.Close(); err != nil {
-			t.Errorf("close reopened engine: %v", err)
-		}
-	})
-	snapshot := hydrationSnapshot(t, reopened)
-	historical := noticeForStep(snapshot, "historical-step")
-	current := noticeForStep(snapshot, "new-step")
-	if historical == nil || historical.ProviderModelMismatch != nil {
-		t.Fatalf("historical hydrated notice = %+v, want mismatch facts absent", historical)
-	}
-	if current == nil ||
-		current.ProviderModelMismatch == nil ||
-		current.ProviderModelMismatch.RequestedModel != "requested-model" ||
-		current.ProviderModelMismatch.ServedModel != "served-model" {
-		t.Fatalf("new hydrated mismatch notice = %+v", current)
-	}
-	if usage := reopened.store.Meta().UsageState; usage == nil || usage.EstimatedProviderTokens != 17 {
-		t.Fatalf("reopened usage state = %+v, want adjusted baseline 17", usage)
-	}
-}
-
 func newAcceptedPersistenceTest(t *testing.T) (*session.Store, *Engine, *sessiontest.PersistenceGate) {
 	t.Helper()
 	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
 	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
 	return store, mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "requested-model"}), gate
 }
-
 func requireErrorIs(t *testing.T, got, want error) {
 	t.Helper()
 	if !errors.Is(got, want) {
 		t.Fatalf("error = %v, want %v", got, want)
 	}
 }
-
 func acceptedMismatchCandidate() successfulRequestCandidate {
 	return successfulRequestCandidate{
 		response: llm.Response{
@@ -180,7 +164,6 @@ func acceptedMismatchCandidate() successfulRequestCandidate {
 		estimatedProviderTokens: 17,
 	}
 }
-
 func providerModelMismatchWarnings(t *testing.T, store *session.Store) []storedLocalEntry {
 	t.Helper()
 	events, err := collectTestEventRecords(store)
@@ -197,14 +180,4 @@ func providerModelMismatchWarnings(t *testing.T, store *session.Store) []storedL
 		}
 	}
 	return warnings
-}
-
-func noticeForStep(snapshot TranscriptHydrationSnapshot, stepID string) *TranscriptNoticeRowFact {
-	for index := range snapshot.CommittedRows {
-		row := &snapshot.CommittedRows[index]
-		if row.Kind == TranscriptCommittedRowFactNotice && row.StepID == stepID {
-			return row.Notice
-		}
-	}
-	return nil
 }

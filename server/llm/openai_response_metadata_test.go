@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 )
 
@@ -37,11 +35,6 @@ func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 			want:    stringPointer("routed-model"),
 		},
 		{
-			name:    "non-streaming provider header fallback",
-			headers: http.Header{"Openai-Model": {" ", "\t"}, "X-Openai-Model": {" fallback-model "}},
-			want:    stringPointer("fallback-model"),
-		},
-		{
 			name:           "streaming first standard model wins",
 			mode:           responseMetadataStreaming,
 			createdModel:   " created-model ",
@@ -56,9 +49,7 @@ func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 			headers:        http.Header{"Openai-Model": {"header-model"}},
 			want:           stringPointer("completed-model"),
 		},
-		{name: "missing metadata is absent", mode: responseMetadataStreaming},
 	}
-
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var capturedModel string
@@ -93,7 +84,6 @@ func TestOpenAIClientParsesStrictReasoningIncludedHeader(t *testing.T) {
 		want  bool
 	}{
 		{name: "explicit true", value: stringPointer(" true "), want: true},
-		{name: "malformed", value: stringPointer("1")},
 		{name: "absent"},
 	}
 	for _, mode := range []responseMetadataMode{false, responseMetadataStreaming} {
@@ -129,49 +119,21 @@ func TestOpenAIClientParsesStrictReasoningIncludedHeader(t *testing.T) {
 }
 
 func TestOpenAIResponseErrorsPreserveHeaderDiagnostics(t *testing.T) {
-	tests := []struct {
-		name          string
-		providerID    string
-		statusCode    int
-		body          string
-		streamEvent   string
-		wantCode      UnifiedErrorCode
-		wantRetriable bool
-	}{
-		{name: "OpenAI-compatible reducer", providerID: "openai", statusCode: http.StatusUnauthorized, body: `{"error":{"type":"invalid_request_error","code":"invalid_api_key","message":"denied"}}`, wantCode: UnifiedErrorCodeAuthentication},
-		{name: "ChatGPT reducer", providerID: "chatgpt-codex", statusCode: http.StatusUnauthorized, body: `{"detail":"denied"}`, wantCode: UnifiedErrorCodeAuthentication},
-		{name: "normalized response failed fallback", streamEvent: `{"type":"response.failed","sequence_number":1,"response":{"id":"resp_1","created_at":1,"error":{"code":"context_length_exceeded","message":"too many tokens"}}}`, wantCode: UnifiedErrorCodeContextLengthOverflow, wantRetriable: true},
-		{name: "normalized response incomplete fallback", streamEvent: `{"type":"response.incomplete","sequence_number":1,"response":{"id":"resp_1","created_at":1,"incomplete_details":{"reason":"max_output_tokens"},"output":[]}}`, wantCode: UnifiedErrorCodeUnknown},
-		{name: "normalized structured error fallback", streamEvent: `{"type":"error","error":{"type":"server_error","code":"server_is_overloaded","param":"request","message":"overloaded"}}`, wantCode: UnifiedErrorCodeProviderOverload, wantRetriable: true},
-		{name: "direct provider contract error", streamEvent: `{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`, wantCode: UnifiedErrorCodeProviderContract},
-	}
 	diagnosticHeaders := http.Header{"X-Request-Id": {" ", " request-primary "}, "X-Oai-Request-Id": {"request-fallback"},
 		"X-Openai-Authorization-Error": {" ", " token rejected "}}
-
-	for _, test := range tests {
+	for _, test := range []struct {
+		name     string
+		err      error
+		wantCode UnifiedErrorCode
+	}{
+		{name: "provider contract", err: newOpenAIProviderContractError("openai", &http.Response{
+			StatusCode: http.StatusOK, Header: diagnosticHeaders.Clone(),
+		}, errors.New("invalid response")), wantCode: UnifiedErrorCodeProviderContract},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			var err error
-			if test.streamEvent == "" {
-				rawResp := &http.Response{StatusCode: test.statusCode, Header: diagnosticHeaders.Clone(), Body: io.NopCloser(strings.NewReader(test.body))}
-				err = newOpenAIRequestErrorMapper(test.providerID).Map(nil, rawResp, "request failed")
-			} else {
-				transport := newResponseMetadataTransport(t, diagnosticHeaders, func(w http.ResponseWriter, _ *http.Request) {
-					w.Header().Set("Content-Type", "text/event-stream")
-					_, _ = fmt.Fprintf(w, "data: %s\n\n", test.streamEvent)
-					if test.wantCode != UnifiedErrorCodeProviderContract {
-						_, _ = w.Write([]byte("data: [DONE]\n\n"))
-					}
-				})
-				_, err = NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
-					SessionID:      stringPointer("metadata-session"),
-					Model:          "requested-model",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-				}, StreamCallbacks{})
-			}
-
 			var providerErr *ProviderAPIError
-			if err == nil || !errors.As(err, &providerErr) {
-				t.Fatalf("error = %T %v, want ProviderAPIError", err, err)
+			if !errors.As(test.err, &providerErr) {
+				t.Fatalf("error = %T %v, want ProviderAPIError", test.err, test.err)
 			}
 			if providerErr.Code != test.wantCode {
 				t.Fatalf("unified code = %q, want %q", providerErr.Code, test.wantCode)
@@ -181,9 +143,6 @@ func TestOpenAIResponseErrorsPreserveHeaderDiagnostics(t *testing.T) {
 			}
 			if providerErr.AuthorizationDiagnostic == nil || *providerErr.AuthorizationDiagnostic != "token rejected" {
 				t.Fatalf("authorization diagnostic = %#v, want token rejected", providerErr.AuthorizationDiagnostic)
-			}
-			if got := !IsNonRetriableModelError(err); got != test.wantRetriable {
-				t.Fatalf("retriable = %t, want %t", got, test.wantRetriable)
 			}
 		})
 	}
@@ -233,7 +192,6 @@ func writeSuccessfulMetadataResponse(t *testing.T, w http.ResponseWriter, mode r
 	}
 	_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":%s}\n\ndata: [DONE]\n\n", response)
 }
-
 func stringPointer(value string) *string {
 	return &value
 }

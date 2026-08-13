@@ -286,7 +286,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
-				if err := s.commitPendingUserSteer(stepID, options); err != nil {
+				if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
 					return llm.Request{}, err
 				}
 				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
@@ -398,7 +398,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 				return stepLoopResult{ExecutedToolCall: true}, nil
 			}
-			if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+			if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -433,7 +433,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 
 		if len(localToolCalls) == 0 {
 			if phaseTurn.MissingAssistantPhase {
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -442,12 +442,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(commentaryWithoutToolCallsWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
 			}
-			flushed, err := s.flushPendingUserInjections(stepID, options)
+			flushed, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -589,7 +589,7 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status
 	return err
 }
 
-func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
+func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {
 	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
@@ -598,10 +598,13 @@ func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options 
 	if result.disposition == userInjectionFlushStopped {
 		return 0, &queuedUserFlushStoppedError{}
 	}
+	if result.startedStep {
+		*mismatchWarningCommitted = false
+	}
 	return result.flushed, nil
 }
 
-func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
+func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) error {
 	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
@@ -609,6 +612,9 @@ func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options step
 	}
 	if result.disposition == userInjectionFlushStopped {
 		return &queuedUserFlushStoppedError{}
+	}
+	if result.startedStep {
+		*mismatchWarningCommitted = false
 	}
 	return nil
 }

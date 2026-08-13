@@ -9,11 +9,13 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/clientui"
+	"core/shared/theme"
+	"core/shared/transcript"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -39,6 +41,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedScreenRows        []string
 		expectedWarningAppends    int
 		expectedDetailWarnings    int
+		assertDetailWarnings      bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
 		completionInFrameSequence bool
@@ -140,6 +143,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:           []string{transcriptrender.AssistantSymbol + " normal mismatch answer"},
 			expectedDetailWarnings:    1,
+			assertDetailWarnings:      true,
 			allowsAltScroll:           true,
 			allowsFullScreen:          true,
 			completionInFrameSequence: true,
@@ -431,8 +435,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("expected full-window append: %v", err)
 				}
 			}
-			if got := countAppendRowsWithSymbol(allAppends, transcriptrender.WarningSymbol); got != tc.expectedWarningAppends {
-				t.Fatalf("warning append count = %d, want %d", got, tc.expectedWarningAppends)
+			if got := countProviderModelMismatchAppendRows(allAppends); got != tc.expectedWarningAppends {
+				t.Fatalf("provider-model mismatch append count = %d, want %d", got, tc.expectedWarningAppends)
 			}
 			for _, content := range tc.forbiddenAnyAppends {
 				if err := contentNotAppended(allAppends, content); err != nil {
@@ -447,7 +451,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
 			}
-			if tc.expectedDetailWarnings > 0 {
+			if tc.assertDetailWarnings {
 				assertScenarioDetailWarningRows(t, capture, tc.expectedDetailWarnings)
 			}
 		})
@@ -551,7 +555,7 @@ func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected
 	if err != nil {
 		t.Fatalf("replay detail screen: %v", err)
 	}
-	if got := countScreenRowsWithCell(screens[0], transcriptrender.WarningSymbol); got != expected {
+	if got := countProviderModelMismatchScreenRows(screens[0]); got != expected {
 		t.Fatalf("detail warning row count = %d, want %d", got, expected)
 	}
 }
@@ -725,18 +729,52 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 	return nil
 }
 
-func countAppendRowsWithSymbol(appends []logicalAppendRow, expected string) int {
-	expectedRune, _ := utf8.DecodeRuneInString(expected)
+func countProviderModelMismatchAppendRows(appends []logicalAppendRow) int {
+	warningColor := transcriptrender.ColorForRole(transcriptrender.ColorRoleWarning, "dark")
+	expectedText := providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
 	count := 0
 	for _, row := range appends {
-		for _, value := range []rune(row.text()) {
-			if value == expectedRune {
+		if row.text() != expectedText {
+			continue
+		}
+		for _, segment := range row.segments {
+			write := segment.Operation.Write
+			if write != nil && colorMatches(write.Foreground, warningColor) {
 				count++
 				break
 			}
 		}
 	}
 	return count
+}
+
+func countProviderModelMismatchScreenRows(screen pty.ScreenSnapshot) int {
+	expectedText := " " + providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
+	count := 0
+	for _, row := range screen.Cells {
+		var text strings.Builder
+		for _, cell := range row {
+			text.WriteString(cell.Content)
+		}
+		if strings.TrimRight(text.String(), " ") == expectedText {
+			count++
+		}
+	}
+	return count
+}
+
+func providerModelMismatchRenderedText(mode transcriptrender.Mode) string {
+	return transcriptrender.RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeProviderModelMismatch, Severity: clientui.TranscriptNoticeWarning,
+			ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{RequestedModel: "gpt-5", ServedModel: "served-model"}},
+	}, 80, "dark", mode).Lines[0].Plain()
+}
+
+func colorMatches(actual string, expected theme.Color) bool {
+	return strings.EqualFold(actual, expected.ANSI) ||
+		strings.EqualFold(actual, expected.ANSI256) ||
+		strings.EqualFold(actual, expected.TrueColor)
 }
 
 func contentAppendedAtLeastOnce(appends []logicalAppendRow, content string) error {
