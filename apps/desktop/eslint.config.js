@@ -6,7 +6,10 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import testingLibrary from "eslint-plugin-testing-library";
 import tseslint from "typescript-eslint";
 
-import { createArchitecturePolicy } from "./eslint-architecture.config.js";
+import {
+  createArchitecturePolicy,
+  generatedServerApiContractFiles,
+} from "./eslint-architecture.config.js";
 import { appArchitecture } from "./eslint-app-plugin.js";
 
 const parserProjects = [
@@ -19,7 +22,15 @@ const parserProjects = [
 
 export default tseslint.config(
   {
-    ignores: ["**/dist", "eslint-fixtures/architecture", "src-tauri/target", "node_modules"],
+    // Protobuf-ES output is reproducibly regenerated and is not handwritten product code.
+    // The package entrypoint, descriptor policy, codecs, and generators remain fully linted.
+    ignores: [
+      "**/dist",
+      "eslint-fixtures/architecture",
+      generatedServerApiContractFiles,
+      "src-tauri/target",
+      "node_modules",
+    ],
   },
   {
     linterOptions: {
@@ -35,18 +46,12 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
     files: ["**/*.{js,mjs,cjs}"],
   },
-  {
-    files: ["packages/server-api-contract/src/gen/**/*.ts"],
-    ...tseslint.configs.disableTypeChecked,
-    rules: {},
-  },
   ...createArchitecturePolicy({
     rootPath: import.meta.dirname,
     parserProjects,
   }),
   {
     files: ["**/*.{ts,tsx}"],
-    ignores: ["packages/server-api-contract/src/gen/**/*.ts"],
     languageOptions: {
       parserOptions: {
         project: parserProjects,

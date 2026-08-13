@@ -52,6 +52,40 @@ func TestGenerateDerivesAggregateExportsFromSchemaFileGraph(t *testing.T) {
 	}
 }
 
+func TestGenerateSeparatesPublicDomainAndTestFixtureExports(t *testing.T) {
+	foundation := schemaFile("kent/api/shared/foundation.proto", "kent.api.shared")
+	fixture := schemaFile("fixture/method_policy_fixture.proto", "fixture")
+
+	production := generateRegistryFile(t, "registry/registry.ts", foundation, fixture)
+	if strings.Contains(production, "fixture/method_policy_fixture_pb.js") {
+		t.Fatal("public registry exported a test fixture schema")
+	}
+	if !strings.Contains(production, "kent/api/shared/foundation_pb.js") {
+		t.Fatal("public registry omitted a Kent domain schema")
+	}
+
+	testOnly := generateRegistryFile(t, "test-registry/registry.ts", foundation, fixture)
+	if strings.Contains(testOnly, "kent/api/shared/foundation_pb.js") {
+		t.Fatal("test-only registry exported a Kent domain schema")
+	}
+	if !strings.Contains(testOnly, "fixture/method_policy_fixture_pb.js") {
+		t.Fatal("test-only registry omitted a fixture schema")
+	}
+}
+
+func TestGenerateRejectsUnclassifiedGeneratedSchema(t *testing.T) {
+	unknown := schemaFile("other/unknown.proto", "other")
+
+	request := generatorRequest(unknown)
+	plugin, err := (protogen.Options{}).New(request)
+	if err != nil {
+		t.Fatalf("create generator plugin: %v", err)
+	}
+	if err := generate(plugin); err == nil {
+		t.Fatal("generator accepted a schema outside the Kent domain and fixture roots")
+	}
+}
+
 func TestGenerateProvidesDescriptorAggregate(t *testing.T) {
 	foundation := schemaFile("kent/api/shared/foundation.proto", "kent.api.shared")
 
@@ -79,15 +113,16 @@ func TestGenerateOrdersAggregateBySchemaPath(t *testing.T) {
 }
 
 func generateRegistry(t *testing.T, files ...*descriptorpb.FileDescriptorProto) string {
+	return generateRegistryFile(t, "registry/registry.ts", files...)
+}
+
+func generateRegistryFile(
+	t *testing.T,
+	outputName string,
+	files ...*descriptorpb.FileDescriptorProto,
+) string {
 	t.Helper()
-	fileNames := make([]string, 0, len(files))
-	for _, file := range files {
-		fileNames = append(fileNames, file.GetName())
-	}
-	request := &pluginpb.CodeGeneratorRequest{
-		FileToGenerate: slices.Clone(fileNames),
-		ProtoFile:      slices.Clone(files),
-	}
+	request := generatorRequest(files...)
 	plugin, err := (protogen.Options{}).New(request)
 	if err != nil {
 		t.Fatalf("create generator plugin: %v", err)
@@ -100,12 +135,23 @@ func generateRegistry(t *testing.T, files ...*descriptorpb.FileDescriptorProto) 
 		t.Fatalf("generator response: %s", response.GetError())
 	}
 	for _, file := range response.File {
-		if file.GetName() == "registry/registry.ts" {
+		if file.GetName() == outputName {
 			return file.GetContent()
 		}
 	}
-	t.Fatal("generator did not emit the aggregate registry")
+	t.Fatalf("generator did not emit %s", outputName)
 	return ""
+}
+
+func generatorRequest(files ...*descriptorpb.FileDescriptorProto) *pluginpb.CodeGeneratorRequest {
+	fileNames := make([]string, 0, len(files))
+	for _, file := range files {
+		fileNames = append(fileNames, file.GetName())
+	}
+	return &pluginpb.CodeGeneratorRequest{
+		FileToGenerate: slices.Clone(fileNames),
+		ProtoFile:      slices.Clone(files),
+	}
 }
 
 func schemaFile(name string, protobufPackage string) *descriptorpb.FileDescriptorProto {

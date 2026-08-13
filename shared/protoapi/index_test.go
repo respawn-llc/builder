@@ -11,6 +11,7 @@ import (
 	"core/shared/protoapi"
 	fixturepb "core/shared/protoapi/gen/fixture"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	"core/shared/protoapi/gen/testregistry"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -74,67 +75,35 @@ func TestOperationIndexReadsTypedMethodOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(operations) < 5 {
-		t.Fatalf("operation count = %d, want at least the 5 policy fixtures", len(operations))
+	if len(operations) == 0 {
+		t.Fatal("production operation index is empty")
 	}
-
-	var unary *protoapi.Operation
-	var subscription *protoapi.Operation
-	var event *protoapi.Operation
-	for index := range operations {
-		operation := &operations[index]
-		switch operation.ActiveName {
-		case "fixture.naming_service.http2_server":
-			unary = operation
-		case "fixture.naming_service.watch":
-			subscription = operation
-		case "fixture.naming_service.watch_event":
-			event = operation
+	for _, operation := range operations {
+		if operation.Descriptor.ParentFile().Package().Parent() != "kent.api" &&
+			operation.Descriptor.ParentFile().Package() != "kent.api" {
+			t.Fatalf("production operation index contains %s", operation.Descriptor.FullName())
 		}
-	}
-	if unary == nil || subscription == nil || event == nil {
-		t.Fatalf("indexed operations = %+v", operations)
-	}
-	if unary.LegacyWireName == nil || *unary.LegacyWireName != "fixture.HTTP2Server" {
-		t.Fatalf("unary legacy wire name = %v", unary.LegacyWireName)
-	}
-	if unary.Options.Kind != sharedpb.OperationKind_OPERATION_KIND_UNARY ||
-		unary.Options.AuthenticationStage != sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER ||
-		unary.Options.ScopePolicy != sharedpb.ScopePolicy_SCOPE_POLICY_SESSION_ACTIVE_PROJECT ||
-		unary.Options.Direction != sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER ||
-		unary.Options.UnaryConnection != sharedpb.UnaryConnection_UNARY_CONNECTION_DEDICATED {
-		t.Fatalf("unary options = %+v", unary.Options)
-	}
-	if unary.Event != nil || unary.Completion != nil {
-		t.Fatalf("unary associations = event %v, completion %v", unary.Event, unary.Completion)
-	}
-	if subscription.Options.UnaryConnection != sharedpb.UnaryConnection_UNARY_CONNECTION_UNSPECIFIED {
-		t.Fatalf("subscription unary connection = %v", subscription.Options.UnaryConnection)
-	}
-	if subscription.Event == nil ||
-		subscription.Event.ActiveName != event.ActiveName ||
-		subscription.Event.Descriptor.FullName() != event.Descriptor.FullName() {
-		t.Fatalf("subscription event = %+v, event = %+v", subscription.Event, event)
-	}
-	if subscription.Completion == nil ||
-		subscription.Completion.ActiveName != "fixture.naming_service.watch_complete" {
-		t.Fatalf("subscription completion = %+v", subscription.Completion)
 	}
 }
 
 func TestOperationLookupUsesOnlyActiveNames(t *testing.T) {
-	operation, exists, err := protoapi.OperationByName("fixture.naming_service.http2_server")
+	operation, exists, err := protoapi.OperationByName("kent.api.server.server_service.get_readiness")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !exists || operation.ActiveName != "fixture.naming_service.http2_server" {
+	if !exists || operation.ActiveName != "kent.api.server.server_service.get_readiness" {
 		t.Fatalf("active lookup = %+v, %v", operation, exists)
 	}
 
-	if _, exists, err := protoapi.OperationByName("fixture.HTTP2Server"); err != nil {
+	if _, exists, err := protoapi.OperationByName("server.GetReadiness"); err != nil {
 		t.Fatal(err)
 	} else if exists {
 		t.Fatal("legacy wire name unexpectedly resolved through active lookup")
+	}
+	if _, exists, err := protoapi.OperationByName("fixture.naming_service.http2_server"); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Fatal("test fixture operation unexpectedly resolved through production lookup")
 	}
 }
 
@@ -305,19 +274,35 @@ func TestDescriptorPathsReportTheCompleteSortedSchemaSet(t *testing.T) {
 		t.Fatalf("descriptor paths are not sorted: %v", got)
 	}
 
-	want := repositorySchemaPaths(t)
+	want := repositorySchemaPaths(t, filepath.Join("kent", "api"))
 	if !slices.Equal(got, want) {
 		t.Fatalf("descriptor paths = %v, want complete schema set %v", got, want)
 	}
 }
 
-func repositorySchemaPaths(t *testing.T) []string {
+func TestGeneratedFixtureRegistryReportsOnlyTheFixtureSchemaSet(t *testing.T) {
+	got := make([]string, 0)
+	for path := range testregistry.Paths {
+		got = append(got, path)
+	}
+	if !slices.IsSorted(got) {
+		t.Fatalf("fixture descriptor paths are not sorted: %v", got)
+	}
+
+	want := repositorySchemaPaths(t, "fixture")
+	if !slices.Equal(got, want) {
+		t.Fatalf("fixture descriptor paths = %v, want fixture schema set %v", got, want)
+	}
+}
+
+func repositorySchemaPaths(t *testing.T, relativeRoot string) []string {
 	t.Helper()
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve test source path")
 	}
-	schemaRoot := filepath.Join(filepath.Dir(filename), "..", "..", "api", "proto")
+	protoRoot := filepath.Join(filepath.Dir(filename), "..", "..", "api", "proto")
+	schemaRoot := filepath.Join(protoRoot, relativeRoot)
 	paths := make([]string, 0)
 	if err := filepath.WalkDir(schemaRoot, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -326,7 +311,7 @@ func repositorySchemaPaths(t *testing.T) []string {
 		if entry.IsDir() || filepath.Ext(path) != ".proto" {
 			return nil
 		}
-		relativePath, err := filepath.Rel(schemaRoot, path)
+		relativePath, err := filepath.Rel(protoRoot, path)
 		if err != nil {
 			return err
 		}

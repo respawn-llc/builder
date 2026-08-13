@@ -102,6 +102,7 @@ func TestDescriptorPolicyRejectsInMemoryDescriptorViolationsIndependently(t *tes
 				file.Service[0].Method[0].InputType = proto.String(".kent.api.v1.policy.Request")
 				file.Service[0].Method[0].OutputType = proto.String(".kent.api.v1.policy.Response")
 				file.MessageType[0].Field[0].TypeName = proto.String(".kent.api.v1.policy.State")
+				rewritePolicyFixtureMessageTypePackage(file, "kent.api.policy", "kent.api.v1.policy")
 			},
 			want: issuePackageVersionSegment,
 		},
@@ -112,6 +113,7 @@ func TestDescriptorPolicyRejectsInMemoryDescriptorViolationsIndependently(t *tes
 				file.Service[0].Method[0].InputType = proto.String(".kent.api.v2.policy.Request")
 				file.Service[0].Method[0].OutputType = proto.String(".kent.api.v2.policy.Response")
 				file.MessageType[0].Field[0].TypeName = proto.String(".kent.api.v2.policy.State")
+				rewritePolicyFixtureMessageTypePackage(file, "kent.api.policy", "kent.api.v2.policy")
 			},
 			want: issuePackageVersionSegment,
 		},
@@ -155,6 +157,159 @@ func TestDescriptorPolicyRejectsInMemoryDescriptorViolationsIndependently(t *tes
 			}
 			assertOnlyDescriptorPolicyIssue(t, checkDescriptorPolicy(fixture), test.want)
 		})
+	}
+}
+
+func TestDescriptorPolicyRejectsMalformedResultConventionsForResultBearingOperations(t *testing.T) {
+	tests := []struct {
+		name   string
+		kind   sharedpb.OperationKind
+		mutate func(*descriptorpb.FileDescriptorProto)
+	}{
+		{
+			name: "unary output",
+			kind: sharedpb.OperationKind_OPERATION_KIND_UNARY,
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				file.Service[0].Method[0].OutputType = proto.String(".kent.api.policy.PlainResponse")
+			},
+		},
+		{
+			name: "progress output",
+			kind: sharedpb.OperationKind_OPERATION_KIND_PROGRESS,
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				descriptorMessageByName(t, file, "Response").Field =
+					descriptorMessageByName(t, file, "Response").Field[:1]
+			},
+		},
+		{
+			name: "subscription start output",
+			kind: sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION,
+			mutate: func(file *descriptorpb.FileDescriptorProto) {
+				descriptorMessageByName(t, file, "Error").Field[0].Options = nil
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			file := validInMemoryPolicyDescriptor()
+			method := file.Service[0].Method[0]
+			options := proto.GetExtension(method.Options, sharedpb.E_KentMethod).(*sharedpb.KentMethodOptions)
+			setPolicyFixtureOperationKind(options, test.kind)
+			test.mutate(file)
+
+			fixture, err := parseDescriptorPolicyFiles(policyFixtureFiles(t, file))
+			if err != nil {
+				t.Fatalf("parse descriptor fixture: %v", err)
+			}
+			assertOnlyDescriptorPolicyIssue(
+				t,
+				checkDescriptorPolicy(fixture),
+				issueInvalidOperationResultConvention,
+			)
+		})
+	}
+}
+
+func TestDescriptorPolicyExcludesNotificationEventAndCompletionOutputsFromResultConvention(t *testing.T) {
+	file := validInMemoryPolicyDescriptor()
+	subscription := file.Service[0].Method[0]
+	subscription.Name = proto.String("Subscribe")
+	subscriptionOptions := proto.GetExtension(
+		subscription.Options,
+		sharedpb.E_KentMethod,
+	).(*sharedpb.KentMethodOptions)
+	setPolicyFixtureOperationKind(
+		subscriptionOptions,
+		sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION,
+	)
+	subscriptionOptions.Event = &sharedpb.OperationAssociation{
+		Package: "kent.api.policy",
+		Service: "PolicyService",
+		Method:  "Event",
+	}
+	subscriptionOptions.Completion = &sharedpb.OperationAssociation{
+		Package: "kent.api.policy",
+		Service: "PolicyService",
+		Method:  "Complete",
+	}
+
+	for _, method := range []*descriptorpb.MethodDescriptorProto{
+		policyFixtureMethod("Event", "legacy.event"),
+		policyFixtureMethod("Complete", "legacy.complete"),
+	} {
+		method.OutputType = proto.String(".kent.api.policy.PlainResponse")
+		options := proto.GetExtension(method.Options, sharedpb.E_KentMethod).(*sharedpb.KentMethodOptions)
+		setPolicyFixtureOperationKind(options, sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION)
+		file.Service[0].Method = append(file.Service[0].Method, method)
+	}
+
+	fixture, err := parseDescriptorPolicyFiles(policyFixtureFiles(t, file))
+	if err != nil {
+		t.Fatalf("parse descriptor fixture: %v", err)
+	}
+	if err := checkDescriptorPolicy(fixture); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDescriptorPolicyRejectsUnspecifiedAndUnknownOperationKinds(t *testing.T) {
+	for _, kind := range []sharedpb.OperationKind{
+		sharedpb.OperationKind_OPERATION_KIND_UNSPECIFIED,
+		sharedpb.OperationKind(99),
+	} {
+		t.Run(kind.String(), func(t *testing.T) {
+			file := validInMemoryPolicyDescriptor()
+			method := file.Service[0].Method[0]
+			options := proto.GetExtension(method.Options, sharedpb.E_KentMethod).(*sharedpb.KentMethodOptions)
+			options.Kind = kind
+
+			fixture, err := parseDescriptorPolicyFiles(policyFixtureFiles(t, file))
+			if err != nil {
+				t.Fatalf("parse descriptor fixture: %v", err)
+			}
+			assertOnlyDescriptorPolicyIssue(
+				t,
+				checkDescriptorPolicy(fixture),
+				issueInvalidOperationResultConvention,
+			)
+		})
+	}
+}
+
+func setPolicyFixtureOperationKind(
+	options *sharedpb.KentMethodOptions,
+	kind sharedpb.OperationKind,
+) {
+	options.Kind = kind
+	switch kind {
+	case sharedpb.OperationKind_OPERATION_KIND_UNARY:
+		options.UnaryConnection = sharedpb.UnaryConnection_UNARY_CONNECTION_MULTIPLEXED
+	case sharedpb.OperationKind_OPERATION_KIND_PROGRESS,
+		sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION,
+		sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION:
+		options.UnaryConnection = sharedpb.UnaryConnection_UNARY_CONNECTION_UNSPECIFIED
+	default:
+		panic("unsupported result-convention fixture operation kind")
+	}
+}
+
+func rewritePolicyFixtureMessageTypePackage(
+	file *descriptorpb.FileDescriptorProto,
+	from string,
+	to string,
+) {
+	for _, message := range file.MessageType {
+		for _, field := range message.Field {
+			switch field.GetTypeName() {
+			case "." + from + ".Success":
+				field.TypeName = proto.String("." + to + ".Success")
+			case "." + from + ".Error":
+				field.TypeName = proto.String("." + to + ".Error")
+			case "." + from + ".InternalDetails":
+				field.TypeName = proto.String("." + to + ".InternalDetails")
+			}
+		}
 	}
 }
 
@@ -452,6 +607,18 @@ func validInMemoryPolicyDescriptor() *descriptorpb.FileDescriptorProto {
 	}
 	enumOptions := &descriptorpb.FieldOptions{}
 	proto.SetExtension(enumOptions, validate.E_Field, enumRules)
+	resultRoleOptions := func(role sharedpb.ResultFieldRole) *descriptorpb.FieldOptions {
+		options := &descriptorpb.FieldOptions{}
+		proto.SetExtension(options, sharedpb.E_KentResultField, &sharedpb.KentResultFieldOptions{
+			Role: role,
+		})
+		return options
+	}
+	errorDetailOptions := &descriptorpb.FieldOptions{}
+	proto.SetExtension(errorDetailOptions, sharedpb.E_KentResultField, &sharedpb.KentResultFieldOptions{
+		Role:      sharedpb.ResultFieldRole_RESULT_FIELD_ROLE_ERROR_DETAIL,
+		ErrorCode: proto.String("internal"),
+	})
 	return &descriptorpb.FileDescriptorProto{
 		Name:       proto.String("kent/api/policy/fixture.proto"),
 		Package:    proto.String("kent.api.policy"),
@@ -476,7 +643,59 @@ func validInMemoryPolicyDescriptor() *descriptorpb.FileDescriptorProto {
 					Options:  enumOptions,
 				}},
 			},
-			{Name: proto.String("Response")},
+			{Name: proto.String("Success")},
+			{Name: proto.String("InternalDetails")},
+			{
+				Name: proto.String("Error"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name:    proto.String("code"),
+						Number:  proto.Int32(1),
+						Label:   descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:    descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
+						Options: resultRoleOptions(sharedpb.ResultFieldRole_RESULT_FIELD_ROLE_ERROR_CODE),
+					},
+					{
+						Name:       proto.String("internal"),
+						Number:     proto.Int32(2),
+						Label:      descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:       descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName:   proto.String(".kent.api.policy.InternalDetails"),
+						OneofIndex: proto.Int32(0),
+						Options:    errorDetailOptions,
+					},
+				},
+				OneofDecl: []*descriptorpb.OneofDescriptorProto{{
+					Name: proto.String("detail"),
+				}},
+			},
+			{
+				Name: proto.String("Response"),
+				Field: []*descriptorpb.FieldDescriptorProto{
+					{
+						Name:       proto.String("success"),
+						Number:     proto.Int32(1),
+						Label:      descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:       descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName:   proto.String(".kent.api.policy.Success"),
+						OneofIndex: proto.Int32(0),
+						Options:    resultRoleOptions(sharedpb.ResultFieldRole_RESULT_FIELD_ROLE_SUCCESS),
+					},
+					{
+						Name:       proto.String("error"),
+						Number:     proto.Int32(2),
+						Label:      descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
+						Type:       descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(),
+						TypeName:   proto.String(".kent.api.policy.Error"),
+						OneofIndex: proto.Int32(0),
+						Options:    resultRoleOptions(sharedpb.ResultFieldRole_RESULT_FIELD_ROLE_ERROR),
+					},
+				},
+				OneofDecl: []*descriptorpb.OneofDescriptorProto{{
+					Name: proto.String("outcome"),
+				}},
+			},
+			{Name: proto.String("PlainResponse")},
 		},
 		Service: []*descriptorpb.ServiceDescriptorProto{{
 			Name: proto.String("PolicyService"),

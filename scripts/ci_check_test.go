@@ -70,27 +70,59 @@ func TestProtobufCICheckRejectsInvalidDescriptorMetadata(t *testing.T) {
 	}
 }
 
-func TestProtobufCICheckRequiresProtocolVersionEditWithSchemaChange(t *testing.T) {
-	fixture := newProtobufCIFixture(t)
-	writeFixtureFile(
-		t,
-		fixture.repositoryRoot,
-		"api/proto/kent/api/shared/added.proto",
-		[]byte("syntax = \"proto3\";\n"),
-	)
-
-	if output, err := fixture.run(t); err == nil {
-		t.Fatalf("Protobuf CI check accepted schema change without protocol version edit\n%s", output)
+func TestProtobufCICheckRequiresStrictProtocolVersionIncreaseWithSchemaChange(t *testing.T) {
+	testCases := []struct {
+		name           string
+		currentVersion []byte
+	}{
+		{name: "same", currentVersion: []byte("{\"version\":\"1\"}\n")},
+		{name: "downgrade", currentVersion: []byte("{\"version\":\"0\"}\n")},
+		{name: "malformed base", currentVersion: []byte("{\"version\":\"2\"}\n")},
+		{name: "malformed current", currentVersion: []byte("{")},
+		{name: "non-numeric base", currentVersion: []byte("{\"version\":\"2\"}\n")},
+		{name: "non-numeric current", currentVersion: []byte("{\"version\":\"next\"}\n")},
+		{name: "non-canonical base", currentVersion: []byte("{\"version\":\"2\"}\n")},
+		{name: "non-canonical current", currentVersion: []byte("{\"version\":\"02\"}\n")},
 	}
 
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newProtobufCIFixture(t)
+			switch testCase.name {
+			case "malformed base":
+				fixture.setBaseVersion(t, []byte("{"))
+			case "non-numeric base":
+				fixture.setBaseVersion(t, []byte("{\"version\":\"old\"}\n"))
+			case "non-canonical base":
+				fixture.setBaseVersion(t, []byte("{\"version\":\"01\"}\n"))
+			}
+			fixture.addSchema(t)
+			writeFixtureFile(
+				t,
+				fixture.repositoryRoot,
+				"shared/protocol/version.json",
+				testCase.currentVersion,
+			)
+
+			if output, err := fixture.run(t); err == nil {
+				t.Fatalf("Protobuf CI check accepted %s protocol version\n%s", testCase.name, output)
+			}
+		})
+	}
+}
+
+func TestProtobufCICheckAcceptsStrictProtocolVersionIncreaseWithSchemaChange(t *testing.T) {
+	fixture := newProtobufCIFixture(t)
+	fixture.addSchema(t)
 	writeFixtureFile(
 		t,
 		fixture.repositoryRoot,
 		"shared/protocol/version.json",
 		[]byte("{\"version\":\"2\"}\n"),
 	)
+
 	if output, err := fixture.run(t); err != nil {
-		t.Fatalf("Protobuf CI check rejected schema and protocol version edits: %v\n%s", err, output)
+		t.Fatalf("Protobuf CI check rejected strict protocol version increase: %v\n%s", err, output)
 	}
 }
 
@@ -202,6 +234,44 @@ func (fixture protobufCIFixture) run(t *testing.T, extraEnvironment ...string) (
 		}, extraEnvironment...)...,
 	)
 	return command.CombinedOutput()
+}
+
+func (fixture *protobufCIFixture) setBaseVersion(t *testing.T, version []byte) {
+	t.Helper()
+
+	writeFixtureFile(
+		t,
+		fixture.repositoryRoot,
+		"shared/protocol/version.json",
+		version,
+	)
+	runFixtureCommand(t, fixture.repositoryRoot, "git", "add", "shared/protocol/version.json")
+	runFixtureCommand(
+		t,
+		fixture.repositoryRoot,
+		"git",
+		"-c",
+		"user.name=Kent Test",
+		"-c",
+		"user.email=kent-test@example.invalid",
+		"commit",
+		"-qm",
+		"change base protocol version",
+	)
+	fixture.baseRevision = strings.TrimSpace(
+		string(runFixtureCommand(t, fixture.repositoryRoot, "git", "rev-parse", "HEAD")),
+	)
+}
+
+func (fixture protobufCIFixture) addSchema(t *testing.T) {
+	t.Helper()
+
+	writeFixtureFile(
+		t,
+		fixture.repositoryRoot,
+		"api/proto/kent/api/shared/added.proto",
+		[]byte("syntax = \"proto3\";\n"),
+	)
 }
 
 func runFixtureCommand(t *testing.T, directory string, name string, arguments ...string) []byte {

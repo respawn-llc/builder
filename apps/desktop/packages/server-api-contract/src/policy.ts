@@ -88,24 +88,38 @@ export function pascalCaseToLowerSnake(identifier: string): string {
   const result: string[] = [];
   for (let index = 0; index < identifier.length; index += 1) {
     const code = identifier.charCodeAt(index);
-    if (!isAsciiUpper(code) && !isAsciiLower(code) && !isAsciiDigit(code)) {
-      throw new Error(`invalid identifier character at code unit ${String(index)}`);
-    }
-    if (isAsciiUpper(code) && index > 0) {
-      const previous = identifier.charCodeAt(index - 1);
-      const hasFollowingLower =
-        index + 1 < identifier.length && isAsciiLower(identifier.charCodeAt(index + 1));
-      if (
-        isAsciiLower(previous) ||
-        isAsciiDigit(previous) ||
-        (isAsciiUpper(previous) && hasFollowingLower)
-      ) {
-        result.push("_");
-      }
-    }
+    validateIdentifierCode(code, index);
+    appendIdentifierBoundary(result, identifier, index, code);
     result.push(String.fromCharCode(isAsciiUpper(code) ? code + 32 : code));
   }
   return result.join("");
+}
+
+function validateIdentifierCode(code: number, index: number): void {
+  if (!isAsciiUpper(code) && !isAsciiLower(code) && !isAsciiDigit(code)) {
+    throw new Error(`invalid identifier character at code unit ${String(index)}`);
+  }
+}
+
+function appendIdentifierBoundary(
+  result: string[],
+  identifier: string,
+  index: number,
+  code: number,
+): void {
+  if (!isAsciiUpper(code) || index === 0) {
+    return;
+  }
+  const previous = identifier.charCodeAt(index - 1);
+  const hasFollowingLower =
+    index + 1 < identifier.length && isAsciiLower(identifier.charCodeAt(index + 1));
+  if (
+    isAsciiLower(previous) ||
+    isAsciiDigit(previous) ||
+    (isAsciiUpper(previous) && hasFollowingLower)
+  ) {
+    result.push("_");
+  }
 }
 
 export function activeOperationName(
@@ -118,92 +132,125 @@ export function activeOperationName(
 }
 
 export function validateKentMethodOptions(options: KentMethodOptions): void {
-  if (options.kind === OperationKind.UNSPECIFIED) {
-    throw new Error("operation kind is required");
-  }
-  switch (options.authenticationStage) {
+  validateAuthenticationStage(options.authenticationStage);
+  validateScopePolicy(options.scopePolicy);
+  validateDirection(options.direction);
+  validateOperationKind(options);
+}
+
+function validateAuthenticationStage(stage: AuthenticationStage): void {
+  switch (stage) {
     case AuthenticationStage.NONE:
     case AuthenticationStage.PRE_SERVER:
     case AuthenticationStage.SERVER:
-      break;
+      return;
     case AuthenticationStage.UNSPECIFIED:
       throw new Error("authentication stage is required");
     default:
-      throw new Error(`authentication stage ${String(options.authenticationStage)} is invalid`);
+      throw new Error(`authentication stage ${String(stage)} is invalid`);
   }
-  switch (options.scopePolicy) {
-    case ScopePolicy.NONE:
-    case ScopePolicy.ATTACH_PROJECT:
-    case ScopePolicy.ATTACH_SESSION:
-    case ScopePolicy.PROJECT_VIEW:
-    case ScopePolicy.PROJECT_WORKSPACE:
-    case ScopePolicy.PROJECT_WORKSPACE_BINDING:
-    case ScopePolicy.SESSION_ACTIVE_PROJECT:
-    case ScopePolicy.SESSION_ACTIVE_PROJECT_IF_SET:
-    case ScopePolicy.SESSION_ATTACHED_PROJECT:
-    case ScopePolicy.ATTACHED_SESSION:
-    case ScopePolicy.GOAL_SESSION:
-    case ScopePolicy.RUNTIME_LIVE_SESSION_REQUIRED:
-    case ScopePolicy.RUNTIME_LIVE_SESSION_OPTIONAL:
-    case ScopePolicy.PROCESS_ACTIVE_PROJECT:
-    case ScopePolicy.PROCESS_LIST_ACTIVE_PROJECT:
-    case ScopePolicy.NOTIFICATION:
-      break;
-    case ScopePolicy.UNSPECIFIED:
-      throw new Error("scope policy is required");
-    default:
-      throw new Error(`scope policy ${String(options.scopePolicy)} is invalid`);
+}
+
+const validScopePolicies: ReadonlySet<ScopePolicy> = new Set([
+  ScopePolicy.NONE,
+  ScopePolicy.ATTACH_PROJECT,
+  ScopePolicy.ATTACH_SESSION,
+  ScopePolicy.PROJECT_VIEW,
+  ScopePolicy.PROJECT_WORKSPACE,
+  ScopePolicy.PROJECT_WORKSPACE_BINDING,
+  ScopePolicy.SESSION_ACTIVE_PROJECT,
+  ScopePolicy.SESSION_ACTIVE_PROJECT_IF_SET,
+  ScopePolicy.SESSION_ATTACHED_PROJECT,
+  ScopePolicy.ATTACHED_SESSION,
+  ScopePolicy.GOAL_SESSION,
+  ScopePolicy.RUNTIME_LIVE_SESSION_REQUIRED,
+  ScopePolicy.RUNTIME_LIVE_SESSION_OPTIONAL,
+  ScopePolicy.PROCESS_ACTIVE_PROJECT,
+  ScopePolicy.PROCESS_LIST_ACTIVE_PROJECT,
+  ScopePolicy.NOTIFICATION,
+]);
+
+function validateScopePolicy(policy: ScopePolicy): void {
+  if (policy === ScopePolicy.UNSPECIFIED) {
+    throw new Error("scope policy is required");
   }
-  switch (options.direction) {
+  if (!validScopePolicies.has(policy)) {
+    throw new Error(`scope policy ${String(policy)} is invalid`);
+  }
+}
+
+function validateDirection(direction: Direction): void {
+  switch (direction) {
     case Direction.CLIENT_TO_SERVER:
     case Direction.SERVER_TO_CLIENT:
-      break;
+      return;
     case Direction.UNSPECIFIED:
       throw new Error("direction is required");
     default:
-      throw new Error(`direction ${String(options.direction)} is invalid`);
+      throw new Error(`direction ${String(direction)} is invalid`);
   }
+}
+
+function validateOperationKind(options: KentMethodOptions): void {
   switch (options.kind) {
     case OperationKind.UNARY:
-      switch (options.unaryConnection) {
-        case UnaryConnection.MULTIPLEXED:
-        case UnaryConnection.DEDICATED:
-          break;
-        case UnaryConnection.UNSPECIFIED:
-          throw new Error("unary connection is required for unary operation");
-        default:
-          throw new Error(`unary connection ${String(options.unaryConnection)} is invalid`);
-      }
-      if (options.event !== undefined || options.completion !== undefined) {
-        throw new Error("unary operation must not declare event or completion association");
-      }
+      validateUnaryOperation(options);
       break;
     case OperationKind.SUBSCRIPTION:
-      if (options.unaryConnection !== UnaryConnection.UNSPECIFIED) {
-        throw new Error("non-unary operation must not declare unary connection");
-      }
-      if (options.event === undefined || options.completion === undefined) {
-        throw new Error("subscription operation requires event and completion associations");
-      }
+      validateSubscriptionOperation(options);
       break;
     case OperationKind.PROGRESS:
-      if (options.unaryConnection !== UnaryConnection.UNSPECIFIED) {
-        throw new Error("non-unary operation must not declare unary connection");
-      }
-      if (options.event === undefined || options.completion !== undefined) {
-        throw new Error("progress operation requires only an event association");
-      }
+      validateProgressOperation(options);
       break;
     case OperationKind.NOTIFICATION:
-      if (options.unaryConnection !== UnaryConnection.UNSPECIFIED) {
-        throw new Error("non-unary operation must not declare unary connection");
-      }
-      if (options.event !== undefined || options.completion !== undefined) {
-        throw new Error("notification operation must not declare event or completion association");
-      }
+      validateNotificationOperation(options);
       break;
+    case OperationKind.UNSPECIFIED:
+      throw new Error("operation kind is required");
     default:
       throw new Error(`operation kind ${String(options.kind)} is invalid`);
+  }
+}
+
+function validateUnaryOperation(options: KentMethodOptions): void {
+  switch (options.unaryConnection) {
+    case UnaryConnection.MULTIPLEXED:
+    case UnaryConnection.DEDICATED:
+      break;
+    case UnaryConnection.UNSPECIFIED:
+      throw new Error("unary connection is required for unary operation");
+    default:
+      throw new Error(`unary connection ${String(options.unaryConnection)} is invalid`);
+  }
+  if (options.event !== undefined || options.completion !== undefined) {
+    throw new Error("unary operation must not declare event or completion association");
+  }
+}
+
+function validateSubscriptionOperation(options: KentMethodOptions): void {
+  validateNonUnaryConnection(options);
+  if (options.event === undefined || options.completion === undefined) {
+    throw new Error("subscription operation requires event and completion associations");
+  }
+}
+
+function validateProgressOperation(options: KentMethodOptions): void {
+  validateNonUnaryConnection(options);
+  if (options.event === undefined || options.completion !== undefined) {
+    throw new Error("progress operation requires only an event association");
+  }
+}
+
+function validateNotificationOperation(options: KentMethodOptions): void {
+  validateNonUnaryConnection(options);
+  if (options.event !== undefined || options.completion !== undefined) {
+    throw new Error("notification operation must not declare event or completion association");
+  }
+}
+
+function validateNonUnaryConnection(options: KentMethodOptions): void {
+  if (options.unaryConnection !== UnaryConnection.UNSPECIFIED) {
+    throw new Error("non-unary operation must not declare unary connection");
   }
 }
 

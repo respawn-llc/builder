@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+export LC_ALL=C
 
 readonly schema_path="api/proto"
 readonly version_path="shared/protocol/version.json"
@@ -46,7 +47,51 @@ fi
 if [ "$schema_changed" = false ]; then
 	exit 0
 fi
-if git diff --quiet "$base_revision" -- "$version_path"; then
-	echo "changes under ${schema_path}/ require an edit to ${version_path}" >&2
+
+parse_version() {
+	local source_name="$1"
+	local source_path="$2"
+	local version
+
+	if ! version="$(jq -er '
+		if type == "object" and
+			(.version | type) == "string"
+		then .version
+		else error("expected {\"version\":\"<canonical numeric value>\"}")
+		end
+	' "$source_path" 2>/dev/null)"; then
+		echo "${source_name} ${version_path} is malformed" >&2
+		return 1
+	fi
+	case "$version" in
+	"" | *[!0-9]*)
+		echo "${source_name} ${version_path} version must be numeric" >&2
+		return 1
+		;;
+	0 | [1-9]*)
+		;;
+	*)
+		echo "${source_name} ${version_path} version is not canonical: ${version}" >&2
+		return 1
+		;;
+	esac
+	echo "$version"
+}
+
+base_version="$(
+	git show "${base_revision}:${version_path}" |
+		parse_version "base" -
+)" || exit 1
+current_version="$(parse_version "current" "$version_path")" || exit 1
+
+version_increased=false
+if [ "${#current_version}" -gt "${#base_version}" ]; then
+	version_increased=true
+elif [ "${#current_version}" -eq "${#base_version}" ] &&
+	[[ "$current_version" > "$base_version" ]]; then
+	version_increased=true
+fi
+if [ "$version_increased" = false ]; then
+	echo "changes under ${schema_path}/ require ${version_path} to increase from ${base_version}; current value is ${current_version}" >&2
 	exit 1
 fi

@@ -72,22 +72,25 @@ type descriptorPolicyOperationIdentity struct {
 	ActiveName     string
 	LegacyWireName *string
 	DescriptorPath string
+	Kind           sharedpb.OperationKind
+	Output         protoreflect.MessageDescriptor
 }
 
 type descriptorPolicyIssueCode string
 
 const (
-	issuePackageVersionSegment         descriptorPolicyIssueCode = "package_version_segment"
-	issueEnumAllowsUnknownValues       descriptorPolicyIssueCode = "enum_allows_unknown_values"
-	issueUnsafeJavaScriptIntegerBounds descriptorPolicyIssueCode = "unsafe_javascript_integer_bounds"
-	issueForbiddenOperationAny         descriptorPolicyIssueCode = "forbidden_operation_any"
-	issueForbiddenOperationRawJSON     descriptorPolicyIssueCode = "forbidden_operation_raw_json"
-	issueForbiddenOperationBytes       descriptorPolicyIssueCode = "forbidden_operation_bytes"
-	issueForbiddenOperationMap         descriptorPolicyIssueCode = "forbidden_operation_map"
-	issueGenericApplicationRequestID   descriptorPolicyIssueCode = "generic_application_request_id"
-	issueForbiddenEnvelopeBytes        descriptorPolicyIssueCode = "forbidden_envelope_bytes"
-	issueDuplicateActiveOperationName  descriptorPolicyIssueCode = "duplicate_active_operation_name"
-	issueDuplicateLegacyWireName       descriptorPolicyIssueCode = "duplicate_legacy_wire_name"
+	issuePackageVersionSegment            descriptorPolicyIssueCode = "package_version_segment"
+	issueEnumAllowsUnknownValues          descriptorPolicyIssueCode = "enum_allows_unknown_values"
+	issueUnsafeJavaScriptIntegerBounds    descriptorPolicyIssueCode = "unsafe_javascript_integer_bounds"
+	issueForbiddenOperationAny            descriptorPolicyIssueCode = "forbidden_operation_any"
+	issueForbiddenOperationRawJSON        descriptorPolicyIssueCode = "forbidden_operation_raw_json"
+	issueForbiddenOperationBytes          descriptorPolicyIssueCode = "forbidden_operation_bytes"
+	issueForbiddenOperationMap            descriptorPolicyIssueCode = "forbidden_operation_map"
+	issueGenericApplicationRequestID      descriptorPolicyIssueCode = "generic_application_request_id"
+	issueForbiddenEnvelopeBytes           descriptorPolicyIssueCode = "forbidden_envelope_bytes"
+	issueDuplicateActiveOperationName     descriptorPolicyIssueCode = "duplicate_active_operation_name"
+	issueDuplicateLegacyWireName          descriptorPolicyIssueCode = "duplicate_legacy_wire_name"
+	issueInvalidOperationResultConvention descriptorPolicyIssueCode = "invalid_operation_result_convention"
 )
 
 type descriptorPolicyIssue struct {
@@ -128,6 +131,7 @@ func checkDescriptorPolicy(descriptors descriptorPolicySet) error {
 		}
 	}
 	checkDuplicateOperationNames(descriptors.Operations, &issues)
+	checkOperationResultConventions(descriptors.Operations, &issues)
 	if len(issues) == 0 {
 		return nil
 	}
@@ -144,6 +148,32 @@ func checkDescriptorPolicy(descriptors descriptorPolicySet) error {
 		return issues[left].Code < issues[right].Code
 	})
 	return &descriptorPolicyError{Issues: issues}
+}
+
+func checkOperationResultConventions(
+	operations []descriptorPolicyOperationIdentity,
+	issues *[]descriptorPolicyIssue,
+) {
+	for _, operation := range operations {
+		switch operation.Kind {
+		case sharedpb.OperationKind_OPERATION_KIND_UNARY,
+			sharedpb.OperationKind_OPERATION_KIND_PROGRESS,
+			sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
+			if protoapi.IsOperationResultDescriptor(operation.Output) {
+				continue
+			}
+			*issues = append(*issues, descriptorPolicyIssue{
+				Code:        issueInvalidOperationResultConvention,
+				MessagePath: operation.DescriptorPath,
+			})
+		case sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION:
+		default:
+			*issues = append(*issues, descriptorPolicyIssue{
+				Code:        issueInvalidOperationResultConvention,
+				MessagePath: operation.DescriptorPath,
+			})
+		}
+	}
 }
 
 func checkPackageVersionSegments(packageName string, issues *[]descriptorPolicyIssue) {
@@ -321,6 +351,8 @@ func parseDescriptorPolicyFiles(files []protoreflect.FileDescriptor) (descriptor
 					ActiveName:     activeName,
 					LegacyWireName: legacyWireName,
 					DescriptorPath: string(method.FullName()),
+					Kind:           options.Kind,
+					Output:         method.Output(),
 				})
 			}
 		}

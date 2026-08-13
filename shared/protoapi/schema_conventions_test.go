@@ -1,6 +1,8 @@
 package protoapi_test
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -13,6 +15,56 @@ import (
 )
 
 const javaScriptSafeIntegerMaximum int64 = 1<<53 - 1
+
+type protovalidateParityCase struct {
+	Name              string  `json:"name"`
+	OptionalLabel     *string `json:"optional_label"`
+	OptionalPresence  *string `json:"optional_presence"`
+	EmptyPresent      bool    `json:"empty_present"`
+	OccurredAtSeconds int64   `json:"occurred_at_seconds"`
+	ElapsedSeconds    int64   `json:"elapsed_seconds"`
+	State             int32   `json:"state"`
+	ProviderID        string  `json:"provider_id"`
+	UUIDv4            string  `json:"uuid_v4"`
+	SignedSafe        int64   `json:"signed_safe"`
+	UnsignedSafe      uint64  `json:"unsigned_safe"`
+	Valid             bool    `json:"valid"`
+}
+
+func TestProtovalidateParityCorpus(t *testing.T) {
+	data, err := os.ReadFile("testdata/protovalidate-parity.json")
+	if err != nil {
+		t.Fatalf("read parity corpus: %v", err)
+	}
+	var cases []protovalidateParityCase
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatalf("decode parity corpus: %v", err)
+	}
+	for _, test := range cases {
+		t.Run(test.Name, func(t *testing.T) {
+			var empty *emptypb.Empty
+			if test.EmptyPresent {
+				empty = &emptypb.Empty{}
+			}
+			message := &fixturepb.SchemaConventionsFixture{
+				OptionalLabel:    test.OptionalLabel,
+				OptionalPresence: test.OptionalPresence,
+				Empty:            empty,
+				OccurredAt:       &timestamppb.Timestamp{Seconds: test.OccurredAtSeconds},
+				Elapsed:          &durationpb.Duration{Seconds: test.ElapsedSeconds},
+				State:            fixturepb.ConventionState(test.State),
+				ProviderId:       test.ProviderID,
+				UuidV4:           test.UUIDv4,
+				SignedSafe:       test.SignedSafe,
+				UnsignedSafe:     test.UnsignedSafe,
+			}
+			err := protovalidate.Validate(message)
+			if got := err == nil; got != test.Valid {
+				t.Fatalf("valid = %t, want %t (error: %v)", got, test.Valid, err)
+			}
+		})
+	}
+}
 
 func TestSchemaConventionsAcceptValidValuesAndOptionalAbsence(t *testing.T) {
 	message := validSchemaConventionsFixture()

@@ -5,12 +5,36 @@ import (
 	"testing"
 
 	"core/shared/protoapi"
+	processpb "core/shared/protoapi/gen/kent/api/process"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 	correlation := "connection-call-1"
+	readinessResultPayload, err := proto.Marshal(&serverpb.GetReadinessResult{
+		Outcome: &serverpb.GetReadinessResult_Success{
+			Success: &serverpb.GetReadinessSuccess{Readiness: &serverpb.Readiness{
+				Ready:           true,
+				ServerId:        "server-1",
+				ServerVersion:   "1.0.0",
+				ServerBuild:     "build-1",
+				ProtocolVersion: "1",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal result payload: %v", err)
+	}
+	outputChunkPayload, err := proto.Marshal(&processpb.OutputChunk{
+		ProcessId:       "process-1",
+		OffsetBytes:     0,
+		NextOffsetBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("marshal event payload: %v", err)
+	}
 	tests := []struct {
 		name     string
 		envelope *sharedpb.Envelope
@@ -18,38 +42,38 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 		{
 			name: "call with correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation:   "fixture.naming_service.api_status",
+				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: &correlation,
-				Payload:     []byte{0x08, 0x01},
+				Payload:     []byte{},
 			}}},
 		},
 		{
 			name: "call without correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "fixture.naming_service.http2_server",
-				Payload:   []byte{0x08, 0x02},
+				Operation: "kent.api.process.output_service.event",
+				Payload:   outputChunkPayload,
 			}}},
 		},
 		{
 			name: "result with correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation:   "fixture.naming_service.api_status",
+				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: &correlation,
-				Payload:     []byte{0x08, 0x03},
+				Payload:     readinessResultPayload,
 			}}},
 		},
 		{
 			name: "result without correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation: "fixture.naming_service.http2_server",
-				Payload:   []byte{0x08, 0x04},
+				Operation: "kent.api.process.output_service.event",
+				Payload:   []byte{},
 			}}},
 		},
 		{
 			name: "notification or event",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "fixture.naming_service.watch_event",
-				Payload:   []byte{0x08, 0x05},
+				Operation: "kent.api.process.output_service.event",
+				Payload:   outputChunkPayload,
 			}}},
 		},
 		{
@@ -104,13 +128,13 @@ func TestEnvelopeRejectsMalformedVariants(t *testing.T) {
 		{
 			name: "call missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "fixture.naming_service.api_status",
+				Operation: "kent.api.server.server_service.get_readiness",
 			}}},
 		},
 		{
 			name: "call empty correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation:   "fixture.naming_service.api_status",
+				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: new(string),
 				Payload:     []byte{1},
 			}}},
@@ -118,14 +142,14 @@ func TestEnvelopeRejectsMalformedVariants(t *testing.T) {
 		{
 			name: "result missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation:   "fixture.naming_service.api_status",
+				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: &correlation,
 			}}},
 		},
 		{
 			name: "notification missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "fixture.naming_service.watch_event",
+				Operation: "kent.api.process.output_service.event",
 			}}},
 		},
 		{
@@ -168,13 +192,13 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 		{
 			name: "call missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "fixture.naming_service.api_status",
+				Operation: "kent.api.server.server_service.get_readiness",
 			}}},
 		},
 		{
 			name: "call empty correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation:   "fixture.naming_service.api_status",
+				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: new(string),
 				Payload:     []byte{1},
 			}}},
@@ -188,7 +212,7 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 		{
 			name: "result missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation: "fixture.naming_service.api_status",
+				Operation: "kent.api.server.server_service.get_readiness",
 			}}},
 		},
 		{
@@ -200,7 +224,7 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 		{
 			name: "notification missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "fixture.naming_service.watch_event",
+				Operation: "kent.api.process.output_service.event",
 			}}},
 		},
 		{
@@ -229,4 +253,78 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnvelopeAllowsPresentZeroByteEmptyPayloadAndRejectsOtherZeroBytePayloads(t *testing.T) {
+	emptyPayloadFrames := []struct {
+		name     string
+		envelope *sharedpb.Envelope
+	}{
+		{
+			name: "call input",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+				Operation: "kent.api.server.server_service.get_readiness",
+				Payload:   []byte{},
+			}}},
+		},
+		{
+			name: "result output",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+				Operation: "kent.api.process.output_service.event",
+				Payload:   []byte{},
+			}}},
+		},
+		{
+			name: "notification input",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
+				Operation: "kent.api.server.server_service.get_readiness",
+				Payload:   []byte{},
+			}}},
+		},
+	}
+	for _, test := range emptyPayloadFrames {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, err := protoapi.MarshalEnvelope(test.envelope)
+			if err != nil {
+				t.Fatalf("marshal Empty payload envelope: %v", err)
+			}
+			if _, err := protoapi.UnmarshalEnvelope(encoded); err != nil {
+				t.Fatalf("unmarshal marshaled Empty payload envelope: %v", err)
+			}
+
+			rawEncoded, err := proto.Marshal(test.envelope)
+			if err != nil {
+				t.Fatalf("marshal raw Empty payload envelope: %v", err)
+			}
+			if _, err := protoapi.UnmarshalEnvelope(rawEncoded); err != nil {
+				t.Fatalf("unmarshal raw Empty payload envelope: %v", err)
+			}
+		})
+	}
+
+	t.Run("absent Empty payload", func(t *testing.T) {
+		envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+			Operation: "kent.api.server.server_service.get_readiness",
+		}}}
+		if _, err := protoapi.MarshalEnvelope(envelope); err == nil {
+			t.Fatal("absent Empty payload unexpectedly marshaled")
+		}
+	})
+
+	t.Run("zero-byte non-Empty payload", func(t *testing.T) {
+		envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
+			Operation: "kent.api.process.output_service.event",
+			Payload:   []byte{},
+		}}}
+		if _, err := protoapi.MarshalEnvelope(envelope); err == nil {
+			t.Fatal("zero-byte WatchEvent payload unexpectedly marshaled")
+		}
+		rawEncoded, err := proto.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("marshal raw zero-byte WatchEvent envelope: %v", err)
+		}
+		if _, err := protoapi.UnmarshalEnvelope(rawEncoded); err == nil {
+			t.Fatal("raw zero-byte WatchEvent payload unexpectedly unmarshaled")
+		}
+	})
 }

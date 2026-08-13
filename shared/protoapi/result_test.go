@@ -262,18 +262,3 @@ func TestTransportFailureIsDistinctFromOperationFailureWithoutStringParsing(t *t
 		t.Fatal("transport failure unexpectedly classified as an operation result")
 	}
 }
-
-func TestOperationDescriptorsDeclareResultConventions(t *testing.T) {
-	service := fixturepb.File_fixture_method_policy_fixture_proto.
-		Services().
-		ByName(protoreflect.Name("NamingService"))
-	for _, methodName := range []protoreflect.Name{"HTTP2Server", "APIStatus", "Watch"} {
-		method := service.Methods().ByName(methodName)
-		if method == nil {
-			t.Fatalf("method %s not found", methodName)
-		}
-		if !protoapi.IsOperationResultDescriptor(method.Output()) {
-			t.Fatalf("%s output %s does not declare the result convention", methodName, method.Output().FullName())
-		}
-	}
-}

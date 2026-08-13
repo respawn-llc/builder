@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import {
 } from "@bufbuild/protobuf/wkt";
 import { createValidator } from "@bufbuild/protovalidate";
 
+import * as publicContract from "../dist/index.js";
 import {
   activeOperationName,
   classifyOperationResult,
@@ -33,16 +34,19 @@ import {
   validateKentMethodOptions,
 } from "../dist/index.js";
 import {
-  schema_fixture_method_policy_fixture as methodPolicyFixture,
-  schema_fixture_newer_forward_error_fixture as forwardErrorFixture,
-  schema_fixture_schema_conventions_fixture as schemaConventionsFixture,
   schema_kent_api_attention_attention as attention,
   schema_kent_api_process_process as process,
   schema_kent_api_prompt_prompt as prompt,
   schema_kent_api_run_prompt_run_prompt as runPrompt,
   schema_kent_api_shared_foundation as foundation,
+  schema_kent_api_server_server as server,
   schema_kent_api_transcript_transcript as transcript,
 } from "../dist/index.js";
+import {
+  schema_fixture_method_policy_fixture as methodPolicyFixture,
+  schema_fixture_newer_forward_error_fixture as forwardErrorFixture,
+  schema_fixture_schema_conventions_fixture as schemaConventionsFixture,
+} from "../dist/gen/test-registry/registry.js";
 const {
   AuthenticationStage,
   CallSchema,
@@ -86,6 +90,11 @@ const {
 } = transcript;
 const { OutputChunkSchema } = process;
 const {
+  GetReadinessResultSchema,
+  GetReadinessSuccessSchema,
+  ReadinessSchema,
+} = server;
+const {
   Kind: AttentionKind,
   NotificationIDSchema: AttentionNotificationIDSchema,
   NotificationSchema: AttentionNotificationSchema,
@@ -98,6 +107,7 @@ const {
 
 const validator = createValidator();
 const javaScriptSafeIntegerMaximum = 9007199254740991n;
+const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
 test("new schema slice executes generated validation in TypeScript", () => {
   assert.equal(prompt.QuestionSchema, QuestionSchema);
@@ -188,6 +198,39 @@ function assertConventionInvalid(message) {
   const result = validator.validate(SchemaConventionsFixtureSchema, message);
   assert.equal(result.kind, "invalid");
 }
+
+test("Protovalidate matches the shared Go/TypeScript parity corpus", async () => {
+  const corpusPath = path.resolve(
+    packageRoot,
+    "../../../../shared/protoapi/testdata/protovalidate-parity.json",
+  );
+  const cases = JSON.parse(await readFile(corpusPath, "utf8"));
+
+  for (const parityCase of cases) {
+    const message = create(SchemaConventionsFixtureSchema, {
+      optionalLabel: parityCase.optional_label ?? undefined,
+      optionalPresence: parityCase.optional_presence ?? undefined,
+      empty: parityCase.empty_present ? create(EmptySchema) : undefined,
+      occurredAt: create(TimestampSchema, {
+        seconds: BigInt(parityCase.occurred_at_seconds),
+      }),
+      elapsed: create(DurationSchema, {
+        seconds: BigInt(parityCase.elapsed_seconds),
+      }),
+      state: parityCase.state,
+      providerId: parityCase.provider_id,
+      uuidV4: parityCase.uuid_v4,
+      signedSafe: BigInt(parityCase.signed_safe),
+      unsignedSafe: BigInt(parityCase.unsigned_safe),
+    });
+    const result = validator.validate(SchemaConventionsFixtureSchema, message);
+    assert.equal(
+      result.kind === "valid",
+      parityCase.valid,
+      `${parityCase.name}: ${result.kind === "invalid" ? result.error.message : "valid"}`,
+    );
+  }
+});
 
 test("schema conventions accept valid values and optional absence", () => {
   const message = validSchemaConventionsFixture();
@@ -369,31 +412,16 @@ test("operation names reject invalid packages and identifiers", () => {
 
 test("the operation index reads typed method options", () => {
   const indexed = operations();
-  assert.ok(indexed.length >= 5);
-
-  const unary = operationByName("fixture.naming_service.http2_server");
-  const subscription = operationByName("fixture.naming_service.watch");
-  const event = operationByName("fixture.naming_service.watch_event");
-  assert.ok(unary);
-  assert.ok(subscription);
-  assert.ok(event);
-  assert.equal(unary.legacyWireName, "fixture.HTTP2Server");
-  assert.equal(unary.options.kind, OperationKind.UNARY);
-  assert.equal(unary.options.authenticationStage, AuthenticationStage.SERVER);
-  assert.equal(unary.options.scopePolicy, ScopePolicy.SESSION_ACTIVE_PROJECT);
-  assert.equal(unary.options.direction, Direction.CLIENT_TO_SERVER);
-  assert.equal(unary.options.event, undefined);
-  assert.equal(unary.options.completion, undefined);
-  assert.equal(unary.options.unaryConnection, UnaryConnection.DEDICATED);
-  assert.equal(unary.options.legacyWireName, "fixture.HTTP2Server");
-  assert.equal(subscription.options.unaryConnection, UnaryConnection.UNSPECIFIED);
-  assert.equal(subscription.event?.activeName, event.activeName);
-  assert.equal(subscription.completion?.activeName, "fixture.naming_service.watch_complete");
+  assert.ok(indexed.length > 0);
+  assert.ok(indexed.every((operation) =>
+    operation.descriptor.parent.file.proto.package.startsWith("kent.api.")
+  ));
 });
 
 test("active lookup excludes legacy wire names", () => {
-  assert.ok(operationByName("fixture.naming_service.http2_server"));
-  assert.equal(operationByName("fixture.HTTP2Server"), undefined);
+  assert.ok(operationByName("kent.api.server.server_service.get_readiness"));
+  assert.equal(operationByName("server.GetReadiness"), undefined);
+  assert.equal(operationByName("fixture.naming_service.http2_server"), undefined);
 });
 
 test("method policy rejects missing and invalid options", () => {
@@ -472,10 +500,9 @@ test("descriptor paths report the complete sorted schema set", async () => {
   const got = descriptorPaths();
   assert.deepEqual(got, [...got].sort());
 
-  const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-  const schemaRoot = path.resolve(packageRoot, "../../../../api/proto");
+  const schemaRoot = path.resolve(packageRoot, "../../../../api/proto/kent/api");
   const want = await protobufPaths(schemaRoot);
-  assert.deepEqual(got, want);
+  assert.deepEqual(got, want.map((entry) => `kent/api/${entry}`));
 });
 
 async function protobufPaths(root, relative = "") {
@@ -495,6 +522,10 @@ async function protobufPaths(root, relative = "") {
 
 test("the package entry point exposes generated domain schemas", () => {
   assert.equal(foundation.FoundationImportsSchema, FoundationImportsSchema);
+  assert.equal(publicContract.schema_fixture_method_policy_fixture, undefined);
+});
+
+test("the generated test registry exposes fixture schemas separately", () => {
   assert.equal(methodPolicyFixture.NamingService, NamingService);
   assert.equal(forwardErrorFixture.FutureCreateResultSchema, FutureCreateResultSchema);
   assert.equal(
@@ -505,42 +536,67 @@ test("the package entry point exposes generated domain schemas", () => {
 
 test("binary envelopes round-trip every frame variant", () => {
   const correlation = "connection-call-1";
+  const readinessResultPayload = toBinary(
+    GetReadinessResultSchema,
+    create(GetReadinessResultSchema, {
+      outcome: {
+        case: "success",
+        value: create(GetReadinessSuccessSchema, {
+          readiness: create(ReadinessSchema, {
+            ready: true,
+            serverId: "server-1",
+            serverVersion: "1.0.0",
+            serverBuild: "build-1",
+            protocolVersion: "1",
+          }),
+        }),
+      },
+    }),
+  );
+  const outputChunkPayload = toBinary(
+    OutputChunkSchema,
+    create(OutputChunkSchema, {
+      processId: "process-1",
+      offsetBytes: 0n,
+      nextOffsetBytes: 1n,
+    }),
+  );
   const frames = [
     {
       case: "call",
       value: create(CallSchema, {
-        operation: "fixture.naming_service.api_status",
+        operation: "kent.api.server.server_service.get_readiness",
         correlation,
-        payload: Uint8Array.of(8, 1),
+        payload: new Uint8Array(),
       }),
     },
     {
       case: "call",
       value: create(CallSchema, {
-        operation: "fixture.naming_service.http2_server",
-        payload: Uint8Array.of(8, 2),
+        operation: "kent.api.process.output_service.event",
+        payload: outputChunkPayload,
       }),
     },
     {
       case: "result",
       value: create(ResultSchema, {
-        operation: "fixture.naming_service.api_status",
+        operation: "kent.api.server.server_service.get_readiness",
         correlation,
-        payload: Uint8Array.of(8, 3),
+        payload: readinessResultPayload,
       }),
     },
     {
       case: "result",
       value: create(ResultSchema, {
-        operation: "fixture.naming_service.http2_server",
-        payload: Uint8Array.of(8, 4),
+        operation: "kent.api.process.output_service.event",
+        payload: new Uint8Array(),
       }),
     },
     {
       case: "notificationEvent",
       value: create(NotificationEventSchema, {
-        operation: "fixture.naming_service.watch_event",
-        payload: Uint8Array.of(8, 5),
+        operation: "kent.api.process.output_service.event",
+        payload: outputChunkPayload,
       }),
     },
     {
@@ -578,14 +634,16 @@ test("binary envelopes reject malformed variants", () => {
     create(EnvelopeSchema, {
       frame: {
         case: "call",
-        value: create(CallSchema, { operation: "fixture.naming_service.api_status" }),
+        value: create(CallSchema, {
+          operation: "kent.api.server.server_service.get_readiness",
+        }),
       },
     }),
     create(EnvelopeSchema, {
       frame: {
         case: "call",
         value: create(CallSchema, {
-          operation: "fixture.naming_service.api_status",
+          operation: "kent.api.server.server_service.get_readiness",
           correlation: "",
           payload: Uint8Array.of(1),
         }),
@@ -594,14 +652,16 @@ test("binary envelopes reject malformed variants", () => {
     create(EnvelopeSchema, {
       frame: {
         case: "result",
-        value: create(ResultSchema, { operation: "fixture.naming_service.api_status" }),
+        value: create(ResultSchema, {
+          operation: "kent.api.server.server_service.get_readiness",
+        }),
       },
     }),
     create(EnvelopeSchema, {
       frame: {
         case: "notificationEvent",
         value: create(NotificationEventSchema, {
-          operation: "fixture.naming_service.watch_event",
+          operation: "kent.api.process.output_service.event",
         }),
       },
     }),
@@ -643,14 +703,16 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
     create(EnvelopeSchema, {
       frame: {
         case: "call",
-        value: create(CallSchema, { operation: "fixture.naming_service.api_status" }),
+        value: create(CallSchema, {
+          operation: "kent.api.server.server_service.get_readiness",
+        }),
       },
     }),
     create(EnvelopeSchema, {
       frame: {
         case: "call",
         value: create(CallSchema, {
-          operation: "fixture.naming_service.api_status",
+          operation: "kent.api.server.server_service.get_readiness",
           correlation: "",
           payload: Uint8Array.of(1),
         }),
@@ -665,7 +727,9 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
     create(EnvelopeSchema, {
       frame: {
         case: "result",
-        value: create(ResultSchema, { operation: "fixture.naming_service.api_status" }),
+        value: create(ResultSchema, {
+          operation: "kent.api.server.server_service.get_readiness",
+        }),
       },
     }),
     create(EnvelopeSchema, {
@@ -678,7 +742,7 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
       frame: {
         case: "notificationEvent",
         value: create(NotificationEventSchema, {
-          operation: "fixture.naming_service.watch_event",
+          operation: "kent.api.process.output_service.event",
         }),
       },
     }),
@@ -703,6 +767,62 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
     const encoded = toBinary(EnvelopeSchema, envelope);
     assert.throws(() => unmarshalEnvelope(encoded));
   }
+});
+
+test("binary envelopes allow present zero-byte Empty payloads only", () => {
+  const emptyPayloadFrames = [
+    {
+      case: "call",
+      value: create(CallSchema, {
+        operation: "kent.api.server.server_service.get_readiness",
+        payload: new Uint8Array(),
+      }),
+    },
+    {
+      case: "result",
+      value: create(ResultSchema, {
+        operation: "kent.api.process.output_service.event",
+        payload: new Uint8Array(),
+      }),
+    },
+    {
+      case: "notificationEvent",
+      value: create(NotificationEventSchema, {
+        operation: "kent.api.server.server_service.get_readiness",
+        payload: new Uint8Array(),
+      }),
+    },
+  ];
+  for (const frame of emptyPayloadFrames) {
+    const emptyPayload = create(EnvelopeSchema, { frame });
+    const encoded = marshalEnvelope(emptyPayload);
+    assert.deepEqual(toBinary(EnvelopeSchema, unmarshalEnvelope(encoded)), encoded);
+
+    const rawEncoded = toBinary(EnvelopeSchema, emptyPayload);
+    assert.deepEqual(toBinary(EnvelopeSchema, unmarshalEnvelope(rawEncoded)), rawEncoded);
+  }
+
+  const absentPayload = create(EnvelopeSchema, {
+    frame: {
+      case: "call",
+      value: create(CallSchema, {
+        operation: "kent.api.server.server_service.get_readiness",
+      }),
+    },
+  });
+  assert.throws(() => marshalEnvelope(absentPayload));
+
+  const nonEmptyMessagePayload = create(EnvelopeSchema, {
+    frame: {
+      case: "notificationEvent",
+      value: create(NotificationEventSchema, {
+        operation: "kent.api.process.output_service.event",
+        payload: new Uint8Array(),
+      }),
+    },
+  });
+  assert.throws(() => marshalEnvelope(nonEmptyMessagePayload));
+  assert.throws(() => unmarshalEnvelope(toBinary(EnvelopeSchema, nonEmptyMessagePayload)));
 });
 
 test("operation results distinguish success, known typed failures, and unknown generic failures", () => {
@@ -863,10 +983,4 @@ test("transport failures remain distinct without string parsing", () => {
       }),
     ),
   );
-});
-
-test("operation descriptors declare result conventions", () => {
-  assert.equal(isOperationResultDescriptor(NamingService.method.hTTP2Server.output), true);
-  assert.equal(isOperationResultDescriptor(NamingService.method.aPIStatus.output), true);
-  assert.equal(isOperationResultDescriptor(NamingService.method.watch.output), true);
 });

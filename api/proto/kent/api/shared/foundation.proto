@@ -42,18 +42,18 @@ message Envelope {
 message Call {
   string operation = 1 [(buf.validate.field).string.min_len = 1];
   optional string correlation = 2 [(buf.validate.field).string.min_len = 1];
-  bytes payload = 3 [(buf.validate.field).bytes.min_len = 1];
+  optional bytes payload = 3;
 }
 
 message Result {
   string operation = 1 [(buf.validate.field).string.min_len = 1];
   optional string correlation = 2 [(buf.validate.field).string.min_len = 1];
-  bytes payload = 3 [(buf.validate.field).bytes.min_len = 1];
+  optional bytes payload = 3;
 }
 
 message NotificationEvent {
   string operation = 1 [(buf.validate.field).string.min_len = 1];
-  bytes payload = 2 [(buf.validate.field).bytes.min_len = 1];
+  optional bytes payload = 2;
 }
 
 enum TransportFailureCode {
