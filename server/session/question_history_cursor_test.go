@@ -278,6 +278,58 @@ func TestQuestionHistoryCursorRejectsCandidateTrailingGarbage(t *testing.T) {
 	}
 }
 
+func TestQuestionHistoryCursorDecodesEscapedQuestionToolName(t *testing.T) {
+	dir := t.TempDir()
+	line := []byte(`{"seq":1,"kind":"tool_completed","payload":{"call_id":"call","name":"ask_\u0071uestion","output_kind":"function","is_error":false,"output":"answer","presentation":{"ToolName":"ask_question","Question":"Choose"},"question_answer":{"freeform":"answer"}},"committed_at_unix_ms":1}`)
+	writeRawVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, [][]byte{line})
+	cursor, err := OpenQuestionHistoryCursor(dir, 1)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer cursor.Close()
+	record, err := cursor.Next()
+	if err != nil || record == nil || record.Seq() != 1 {
+		t.Fatalf("escaped Question completion = %#v, %v", record, err)
+	}
+}
+
+func TestQuestionHistoryCursorAcceptsLongIgnoredNumber(t *testing.T) {
+	dir := t.TempDir()
+	number := bytes.Repeat([]byte{'7'}, 16<<10)
+	line := append([]byte(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","items":[],"ignored":`), number...)
+	line = append(line, []byte(`}}`)...)
+	writeRawVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, [][]byte{line})
+	cursor, err := OpenQuestionHistoryCursor(dir, 2)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer cursor.Close()
+	record, err := cursor.Next()
+	if err != nil || record != nil {
+		t.Fatalf("long ignored number = %#v, %v", record, err)
+	}
+}
+
+func TestQuestionHistoryCursorRejectsExcessiveIgnoredNesting(t *testing.T) {
+	dir := t.TempDir()
+	const depth = 10_001
+	var line bytes.Buffer
+	line.WriteString(`{"seq":1,"kind":"history_replaced","payload":`)
+	line.Write(bytes.Repeat([]byte{'['}, depth))
+	line.WriteString(`null`)
+	line.Write(bytes.Repeat([]byte{']'}, depth))
+	line.WriteByte('}')
+	writeRawVersionedEventLog(t, filepath.Join(dir, eventsFile), EventLogVersionV2, [][]byte{line.Bytes()})
+	cursor, err := OpenQuestionHistoryCursor(dir, 2)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer cursor.Close()
+	if _, err := cursor.Next(); err == nil {
+		t.Fatal("excessively nested ignored payload did not fail")
+	}
+}
+
 func TestQuestionHistoryCursorIgnoresIncompleteConcurrentTail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
