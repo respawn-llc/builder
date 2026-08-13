@@ -368,10 +368,7 @@ func boundedPersistedUserMessageCount(t *testing.T, store *session.Store) int {
 		if !ok {
 			continue
 		}
-		message, restoreErr := llmMessageFromSessionRecord(payload)
-		if restoreErr != nil {
-			t.Fatalf("restore queued-input message: %v", restoreErr)
-		}
+		message := llmMessageFromSessionRecord(payload)
 		if message.Role == llm.RoleUser {
 			userMessages++
 		}

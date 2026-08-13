@@ -252,18 +252,12 @@ func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ToolCompletionRecord:
-			value, restoreErr := storedToolCompletionFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore tool completion: %v", restoreErr)
-			}
+			value := storedToolCompletionFromSessionRecord(payload)
 			if value.CallID == result.CallID {
 				completion = &value
 			}
 		case session.LocalEntryRecord:
-			value, restoreErr := storedLocalEntryFromSessionRecord(payload)
-			if restoreErr != nil {
-				t.Fatalf("restore local entry: %v", restoreErr)
-			}
+			value := storedLocalEntryFromSessionRecord(payload)
 			if value.AfterToolCallID != nil && *value.AfterToolCallID == result.CallID {
 				feedback = &value
 			}

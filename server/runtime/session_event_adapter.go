@@ -81,7 +81,7 @@ func sessionMessageRecordFromLLM(message llm.Message) (session.MessageRecord, er
 	return record, nil
 }
 
-func llmMessageFromSessionRecord(record session.MessageRecord) (llm.Message, error) {
+func llmMessageFromSessionRecord(record session.MessageRecord) llm.Message {
 	message := llm.Message{
 		Role:                 llm.Role(record.Role),
 		MessageType:          convertOptionalString[session.MessageType, llm.MessageType](record.MessageType),
@@ -117,7 +117,7 @@ func llmMessageFromSessionRecord(record session.MessageRecord) (llm.Message, err
 			})
 		}
 	}
-	return message, nil
+	return message
 }
 
 func sessionToolCompletionRecordFromRuntime(
@@ -155,12 +155,12 @@ func sessionToolCompletionRecordFromRuntime(
 
 func storedToolCompletionFromSessionRecord(
 	record session.ToolCompletionRecord,
-) (storedToolCompletion, error) {
+) storedToolCompletion {
 	var presentation *transcript.ToolCallMeta
 	if len(record.Presentation) > 0 {
 		decoded, ok := transcript.DecodeToolCallMeta(record.Presentation)
 		if !ok {
-			return storedToolCompletion{}, errors.New("session tool completion presentation is invalid")
+			panic("decoded session tool completion has invalid presentation")
 		}
 		presentation = decoded
 	}
@@ -192,7 +192,7 @@ func storedToolCompletionFromSessionRecord(
 		CondensedText: textutil.Pointer(record.CondensedText),
 		Presentation:  presentation,
 		ProviderItems: providerItems,
-	}, nil
+	}
 }
 
 func sessionToolCompletionRecordFromStored(
@@ -265,13 +265,13 @@ func runtimeEntryVisibilityFromSession(
 	case session.EntryVisibilityHidden:
 		return transcript.EntryVisibilityHidden
 	default:
-		return transcript.EntryVisibilityAuto
+		panic(fmt.Sprintf("decoded session local entry has unsupported visibility %q", visibility))
 	}
 }
 
 func storedLocalEntryFromSessionRecord(
 	record session.LocalEntryRecord,
-) (storedLocalEntry, error) {
+) storedLocalEntry {
 	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
 		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
@@ -283,7 +283,7 @@ func storedLocalEntryFromSessionRecord(
 		NoticeID:         textutil.Pointer(record.NoticeID),
 		AfterToolCallID:  textutil.Pointer(record.AfterToolCallID),
 		ToolOutputRepair: textutil.Pointer(record.ToolOutputRepair),
-	}, nil
+	}
 }
 
 func sessionCacheRequestRecordFromRuntime(
@@ -398,7 +398,7 @@ func sessionHistoryReplacementRecordFromRuntime(
 
 func historyReplacementPayloadFromSessionRecord(
 	record session.HistoryReplacementRecord,
-) (historyReplacementPayload, error) {
+) historyReplacementPayload {
 	payload := historyReplacementPayload{
 		Engine:                            record.Engine,
 		Mode:                              string(record.Mode),
@@ -414,7 +414,7 @@ func historyReplacementPayloadFromSessionRecord(
 			payload.Items = append(payload.Items, llmResponseItemFromSessionHistory(item))
 		}
 	}
-	return payload, nil
+	return payload
 }
 
 func sessionProviderHistoryItemFromLLM(

@@ -86,10 +86,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 		if !ok {
 			continue
 		}
-		persisted, restoreErr := llmMessageFromSessionRecord(messageRecord)
-		if restoreErr != nil {
-			t.Fatalf("restore persisted message: %v", restoreErr)
-		}
+		persisted := llmMessageFromSessionRecord(messageRecord)
 		if persisted.Role != llm.RoleAssistant ||
 			persisted.Phase == nil ||
 			*persisted.Phase != llm.MessagePhaseFinal {

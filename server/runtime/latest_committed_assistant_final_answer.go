@@ -24,11 +24,7 @@ func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.Materializ
 		}
 		switch payload := payload.(type) {
 		case session.MessageRecord:
-			message, restoreErr := llmMessageFromSessionRecord(payload)
-			if restoreErr != nil {
-				matchErr = fmt.Errorf("restore session message record seq %d: %w", record.Seq(), restoreErr)
-				return true
-			}
+			message := llmMessageFromSessionRecord(payload)
 			if message.Role != llm.RoleAssistant ||
 				message.Phase == nil ||
 				*message.Phase != llm.MessagePhaseFinal {
@@ -47,11 +43,6 @@ func LatestCommittedAssistantFinalAnswerFromEventLog(eventLog session.Materializ
 			matchErr = nil
 			return true
 		case session.HistoryReplacementRecord:
-			_, restoreErr := historyReplacementPayloadFromSessionRecord(payload)
-			if restoreErr != nil {
-				matchErr = fmt.Errorf("restore session history replacement record seq %d: %w", record.Seq(), restoreErr)
-				return true
-			}
 			answer = nil
 			matchErr = nil
 			return true

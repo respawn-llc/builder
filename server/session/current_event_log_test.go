@@ -423,36 +423,61 @@ func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 }
 
 func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), eventsFile)
-	if _, err := createCurrentEventLog(path); err != nil {
-		t.Fatalf("create current event log: %v", err)
+	tests := []struct {
+		name string
+		line []byte
+	}{
+		{
+			name: "unsupported event kind",
+			line: []byte(`{"seq":1,"kind":"unsupported","payload":{}}`),
+		},
+		{
+			name: "invalid message role",
+			line: []byte(`{"seq":1,"kind":"message","payload":{"role":"invalid","content":"hello"}}`),
+		},
+		{
+			name: "invalid tool completion presentation",
+			line: []byte(`{"seq":1,"kind":"tool_completed","payload":{"call_id":"call-1","name":"exec_command","output_kind":"function","is_error":false,"output":"done","presentation":{}}}`),
+		},
+		{
+			name: "invalid history replacement item",
+			line: []byte(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"auto","items":[{"type":"message"}]}}`),
+		},
 	}
-	appendCurrentTestBytes(t, path, []byte(`{"seq":1,"kind":"unsupported","payload":{}}`))
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read invalid current event log: %v", err)
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), eventsFile)
+			if _, err := createCurrentEventLog(path); err != nil {
+				t.Fatalf("create current event log: %v", err)
+			}
+			appendCurrentTestBytes(t, path, test.line)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read invalid current event log: %v", err)
+			}
 
-	if _, err := openCurrentEventLog(path, currentEventLogReadOnly); err == nil {
-		t.Fatal("expected read-only strict contract error")
-	}
-	afterReadOnly, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read current event log after read-only rejection: %v", err)
-	}
-	if !bytes.Equal(afterReadOnly, before) {
-		t.Fatal("read-only strict contract rejection mutated current event log")
-	}
+			if _, err := openCurrentEventLog(path, currentEventLogReadOnly); err == nil {
+				t.Fatal("expected read-only strict contract error")
+			}
+			afterReadOnly, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read current event log after read-only rejection: %v", err)
+			}
+			if !bytes.Equal(afterReadOnly, before) {
+				t.Fatal("read-only strict contract rejection mutated current event log")
+			}
 
-	if _, err := openCurrentEventLog(path, currentEventLogAuthoritative); err == nil {
-		t.Fatal("expected authoritative strict contract error")
-	}
-	afterAuthoritative, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read current event log after authoritative rejection: %v", err)
-	}
-	if !bytes.Equal(afterAuthoritative, before) {
-		t.Fatal("authoritative strict contract rejection mutated current event log")
+			if _, err := openCurrentEventLog(path, currentEventLogAuthoritative); err == nil {
+				t.Fatal("expected authoritative strict contract error")
+			}
+			afterAuthoritative, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read current event log after authoritative rejection: %v", err)
+			}
+			if !bytes.Equal(afterAuthoritative, before) {
+				t.Fatal("authoritative strict contract rejection mutated current event log")
+			}
+		})
 	}
 }
 

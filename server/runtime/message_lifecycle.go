@@ -57,10 +57,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		}
 		switch payload := payload.(type) {
 		case session.MessageRecord:
-			msg, err := llmMessageFromSessionRecord(payload)
-			if err != nil {
-				return fmt.Errorf("restore session message record: %w", err)
-			}
+			msg := llmMessageFromSessionRecord(payload)
 			if err := rollbackLocator.ObserveMessage(record.Seq(), msg); err != nil {
 				return err
 			}
@@ -109,18 +106,12 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 					generation.completed[payload.CallID] = struct{}{}
 				}
 			}
-			completion, err := storedToolCompletionFromSessionRecord(payload)
-			if err != nil {
-				return fmt.Errorf("restore session tool completion record: %w", err)
-			}
+			completion := storedToolCompletionFromSessionRecord(payload)
 			if err := recoveredHandoff.ApplyToolCompletion(completion); err != nil {
 				return err
 			}
 		case session.LocalEntryRecord:
-			entry, err := storedLocalEntryFromSessionRecord(payload)
-			if err != nil {
-				return fmt.Errorf("restore session local entry record: %w", err)
-			}
+			entry := storedLocalEntryFromSessionRecord(payload)
 			if entry.DiagnosticKey != nil {
 				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
 			}
@@ -160,10 +151,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				cache.RecordResponse(persistedCacheResponseObservedFromSessionRecord(payload))
 			}
 		case session.HistoryReplacementRecord:
-			replacement, err := historyReplacementPayloadFromSessionRecord(payload)
-			if err != nil {
-				return fmt.Errorf("restore session history replacement record: %w", err)
-			}
+			replacement := historyReplacementPayloadFromSessionRecord(payload)
 			e.resetLocalDiagnostics()
 			manualEligible = false
 			provenance, provenanceErr := transcriptProvenanceFromRecord(record)

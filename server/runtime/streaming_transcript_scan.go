@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -76,10 +75,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 	}
 	switch payload := payload.(type) {
 	case session.MessageRecord:
-		msg, err := llmMessageFromSessionRecord(payload)
-		if err != nil {
-			return fmt.Errorf("restore session message record: %w", err)
-		}
+		msg := llmMessageFromSessionRecord(payload)
 		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 		if provenanceErr != nil {
 			return provenanceErr
@@ -88,14 +84,8 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			s.applyReconstructedMessage(reconstructed, &provenance, stepID)
 		}
 	case session.ToolCompletionRecord:
-		completion, err := storedToolCompletionFromSessionRecord(payload)
-		if err != nil {
-			return fmt.Errorf("restore session tool completion record: %w", err)
-		}
-		callID := strings.TrimSpace(completion.CallID)
-		if callID == "" {
-			return nil
-		}
+		completion := storedToolCompletionFromSessionRecord(payload)
+		callID := completion.CallID
 		s.completions[callID] = tools.Result{
 			CallID:        completion.CallID,
 			Name:          toolspec.ID(completion.Name),
@@ -111,15 +101,9 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		}
 		s.completionProvenance[callID] = cloneTranscriptCommittedRowProvenance(&provenance)
 	case session.LocalEntryRecord:
-		entry, err := storedLocalEntryFromSessionRecord(payload)
-		if err != nil {
-			return fmt.Errorf("restore session local entry record: %w", err)
-		}
+		entry := storedLocalEntryFromSessionRecord(payload)
 		if entry.AfterToolCallID != nil {
-			callID := strings.TrimSpace(*entry.AfterToolCallID)
-			if callID == "" {
-				return errors.New("session local entry record: after-tool call identity is empty")
-			}
+			callID := *entry.AfterToolCallID
 			if s.turn.assistant == nil || !s.turnOwnsCall(callID) {
 				return fmt.Errorf(
 					"session local entry record: after-tool call identity is outside the buffered assistant turn (call_id=%q)",
@@ -171,10 +155,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		})
 	case session.HistoryReplacementRecord:
 		s.closeTurn()
-		replacement, err := historyReplacementPayloadFromSessionRecord(payload)
-		if err != nil {
-			return fmt.Errorf("restore session history replacement record: %w", err)
-		}
+		replacement := historyReplacementPayloadFromSessionRecord(payload)
 		s.scan.MarkCompactionBoundary()
 		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 		if provenanceErr != nil {
@@ -204,13 +185,11 @@ func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, pro
 		s.turn.assistantStepID = strings.TrimSpace(stepID)
 		s.turn.callIDs = s.turn.callIDs[:0]
 		for _, call := range msg.ToolCalls {
-			if callID := strings.TrimSpace(call.ID); callID != "" {
-				s.turn.callIDs = append(s.turn.callIDs, callID)
-			}
+			s.turn.callIDs = append(s.turn.callIDs, call.ID)
 		}
 		return
 	}
-	toolCallID, _ := textutil.OptionalTrimmed(msg.ToolCallID)
+	toolCallID, _ := textutil.OptionalExact(msg.ToolCallID)
 	if msg.Role == llm.RoleTool && s.turn.assistant != nil && s.turnOwnsCall(toolCallID) {
 		s.turn.materialized = append(s.turn.materialized, msg)
 		s.turn.materializedProvenance = append(s.turn.materializedProvenance, cloneTranscriptCommittedRowProvenance(provenance))
@@ -298,13 +277,13 @@ func (s *streamingTranscriptScan) closeTurn() {
 		)
 	})
 	for _, rm := range materialized {
-		if callID, present := textutil.OptionalTrimmed(rm.ToolCallID); present {
+		if callID, present := textutil.OptionalExact(rm.ToolCallID); present {
 			s.materialized[callID] = struct{}{}
 		}
 	}
 	s.applyMessage(assistant, assistantProvenance, assistantStepID)
 	for index, entry := range localEntries {
-		callID := strings.TrimSpace(*entry.AfterToolCallID)
+		callID := *entry.AfterToolCallID
 		if _, materialized := s.materialized[callID]; materialized {
 			continue
 		}
@@ -312,9 +291,9 @@ func (s *streamingTranscriptScan) closeTurn() {
 	}
 	for _, materializedEntry := range orderedMaterialized {
 		s.applyMessage(materializedEntry.message, materializedEntry.provenance, materializedEntry.stepID)
-		callID, _ := textutil.OptionalTrimmed(materializedEntry.message.ToolCallID)
+		callID, _ := textutil.OptionalExact(materializedEntry.message.ToolCallID)
 		for localIndex, entry := range localEntries {
-			if entry.AfterToolCallID == nil || strings.TrimSpace(*entry.AfterToolCallID) != callID {
+			if entry.AfterToolCallID == nil || *entry.AfterToolCallID != callID {
 				continue
 			}
 			s.appendLocalEntry(entry, localEntrySteps[localIndex], localEntryProvenance[localIndex])

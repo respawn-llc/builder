@@ -325,10 +325,7 @@ func persistedMessageForTest(t *testing.T, event testPersistedEvent) llm.Message
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.MessageRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	message, err := llmMessageFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore message record: %v", err)
-	}
+	message := llmMessageFromSessionRecord(record)
 	return message
 }
 
@@ -338,10 +335,7 @@ func persistedLocalEntryForTest(t *testing.T, event testPersistedEvent) storedLo
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.LocalEntryRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	entry, err := storedLocalEntryFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore local entry record: %v", err)
-	}
+	entry := storedLocalEntryFromSessionRecord(record)
 	return entry
 }
 
@@ -351,10 +345,7 @@ func persistedToolCompletionForTest(t *testing.T, event testPersistedEvent) stor
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.ToolCompletionRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	completion, err := storedToolCompletionFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore tool completion record: %v", err)
-	}
+	completion := storedToolCompletionFromSessionRecord(record)
 	return completion
 }
 
@@ -364,10 +355,7 @@ func persistedHistoryReplacementForTest(t *testing.T, event testPersistedEvent) 
 	if !ok {
 		t.Fatalf("event %q payload type = %T, want session.HistoryReplacementRecord", event.Kind, mustSessionEventPayload(event.Record))
 	}
-	replacement, err := historyReplacementPayloadFromSessionRecord(record)
-	if err != nil {
-		t.Fatalf("restore history replacement record: %v", err)
-	}
+	replacement := historyReplacementPayloadFromSessionRecord(record)
 	return replacement
 }
 
