@@ -172,6 +172,7 @@ export function ProjectTasksSurface({
       viewMemory.setAnchors(nextAnchors);
       setAnchors(nextAnchors);
       setFinalNavigationRequest((request) => (request?.group === group ? null : request));
+      setTopNavigationRequest((request) => (request?.group === group ? null : request));
     }
     setDisclosure(next);
   };
@@ -231,7 +232,7 @@ export function ProjectTasksSurface({
     anchors,
   );
   const scrollRequest = preferredScrollRequest(
-    topNavigationScrollRequest(topNavigationRequest, data),
+    topNavigationScrollRequest(topNavigationRequest, data, disclosure),
     finalNavigation.scrollRequest,
     createdTaskScrollRequest(pendingTaskReveal, presentation.entries),
   );

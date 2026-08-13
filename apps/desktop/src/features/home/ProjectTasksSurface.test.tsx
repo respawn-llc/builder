@@ -506,6 +506,35 @@ describe("ProjectTasksSurface", () => {
     ).toHaveLength(1);
   });
 
+  it("cancels an in-flight Up when its group collapses before page zero arrives", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 84 };
+    const memory = createProjectTasksViewMemory();
+    memory.setDisclosure({ active: true, backlog: true, done: true });
+    memory.setAnchors({ active: 0, backlog: 0, done: 75 });
+    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
+    const view = renderSurface(memory);
+    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 40, writable: true },
+    });
+    view.rerender(withQueryClient(surface(memory)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
+    expect(memory.read().anchors.done).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
+    fixture.scrollRequests = [];
+    fixture.doneDataOverrides = {};
+    view.rerender(withQueryClient(surface(memory)));
+    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
+
+    expect(screen.getByRole("row", { name: "KNT-4 Done task" })).toBeInTheDocument();
+    expect(
+      fixture.scrollRequests.filter((request) => request?.target === "top"),
+    ).toEqual([]);
+  });
+
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
     fixture.countsError = new Error("Counts unavailable");
     fixture.countsEstablished = false;

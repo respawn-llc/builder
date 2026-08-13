@@ -26,9 +26,11 @@ export function projectTaskTopNavigationRequiresRequest(
 export function topNavigationScrollRequest(
   request: Readonly<{ group: ProjectTaskGroup; key: string }> | null,
   data: ProjectTaskListData,
+  disclosure: ProjectTaskGroupDisclosure,
 ) {
   if (
     request === null ||
+    !disclosure[request.group] ||
     !data[request.group].pageParams.includes(0) ||
     data[request.group].isPlaceholderData
   ) {
