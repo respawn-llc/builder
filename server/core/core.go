@@ -48,6 +48,10 @@ func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context,
 	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
+func (unregisteredSessionLaunchClient) MaterializeWorkspaceChatValidated(context.Context, apicontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
 type unregisteredRunPromptClient struct{}
 
 func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromptRequest, serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
@@ -330,7 +334,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
+		PlanSession:            s.sessionLaunchServiceForProjectContext(projectCtx).PlanLaunchSessionValidated,
 		PromptHistory:          s.safeBundles().Persistence.metadataStore,
 		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
 		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,

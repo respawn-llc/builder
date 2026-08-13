@@ -161,6 +161,9 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodRuntimeGoalClear:
 		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRunPrompt,
+		protocol.MethodSessionPlan,
+		protocol.MethodSessionWorkspaceChatDraft,
+		protocol.MethodSessionWorkspaceChatMaterialize,
 		protocol.MethodAttentionNotificationSubscribe,
 		protocol.MethodPromptFollowUpWatch:
 		handler.owner = inboundHandlerTrustedOwner
@@ -690,6 +693,14 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	workspaceChatDraft := executables[protocol.MethodSessionWorkspaceChatDraft]
 	workspaceChatDraft.executeUnary = executeWorkspaceChatDraft
 	executables[protocol.MethodSessionWorkspaceChatDraft] = workspaceChatDraft
+	executables[protocol.MethodSessionWorkspaceChatMaterialize] = inboundTrustedUnary(
+		protocol.MethodSessionWorkspaceChatMaterialize,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeRouteScope[serverapi.WorkspaceChatMaterializeRequest](mustInboundRoute(protocol.MethodSessionWorkspaceChatMaterialize, apicontract.KindUnary)),
+		handleWorkspaceChatMaterialize,
+	)
 	attachProject := executables[protocol.MethodAttachProject]
 	attachProject.executeUnary = executeAttachProject
 	executables[protocol.MethodAttachProject] = attachProject
@@ -1552,6 +1563,24 @@ func executeWorkspaceChatDraft(g *Gateway, ctx context.Context, state *connectio
 		return responseForValidationOrOwnerError(wire.ID, err)
 	}
 	return handlerSuccessResponse(wire.ID, response)
+}
+
+func handleWorkspaceChatMaterialize(
+	ctx context.Context,
+	g *Gateway,
+	state *connectionState,
+	request apicontract.Validated[serverapi.WorkspaceChatMaterializeRequest],
+	_ noAuthorizationFacts,
+) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	client, err := g.sessionLaunchClientForState(ctx, state)
+	if err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	trusted, ok := client.(apicontract.SessionLaunchTrustedService)
+	if !ok {
+		return serverapi.WorkspaceChatMaterializeResponse{}, errors.New("Session Launch trusted service is required")
+	}
+	return trusted.MaterializeWorkspaceChatValidated(ctx, request)
 }
 
 func executeAttachProject(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {

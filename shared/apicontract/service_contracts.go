@@ -251,6 +251,7 @@ type SessionLaunchService interface {
 type SessionLaunchTrustedService interface {
 	PlanSessionValidated(ctx context.Context, req Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error)
 	WorkspaceChatDraftValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error)
+	MaterializeWorkspaceChatValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error)
 }
 
 type SessionLaunchGatewayService interface {

@@ -124,9 +124,15 @@ func (s *Service) MaterializeWorkspaceChat(
 	ctx context.Context,
 	req serverapi.WorkspaceChatMaterializeRequest,
 ) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
+		return s.MaterializeWorkspaceChatValidated(ctx, validated)
+	})
+}
+
+func (s *Service) MaterializeWorkspaceChatValidated(
+	ctx context.Context,
+	_ servicecontract.Validated[serverapi.WorkspaceChatMaterializeRequest],
+) (serverapi.WorkspaceChatMaterializeResponse, error) {
 	sessionID, err := s.materializeWorkspaceChatSession(ctx)
 	if err != nil {
 		return serverapi.WorkspaceChatMaterializeResponse{}, err

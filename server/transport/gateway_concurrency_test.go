@@ -227,11 +227,15 @@ type gatewayCloseRelease struct {
 
 func (s *gatewayCloseRuntimeService) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
-		return s.ActivateSessionRuntimeValidated(ctx, validated)
+		return s.ActivateSessionRuntimeValidated(ctx, validated, apicontract.AuthorizedSessionInActiveProject{})
 	})
 }
 
-func (s *gatewayCloseRuntimeService) ActivateSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
+func (s *gatewayCloseRuntimeService) ActivateSessionRuntimeValidated(
+	ctx context.Context,
+	validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeActivateResponse, error) {
 	req := validated.Value()
 	s.tracker.active.Add(1)
 	s.tracker.entered <- struct{}{}
@@ -252,7 +256,11 @@ func (s *gatewayCloseRuntimeService) ReleaseSessionRuntime(_ context.Context, re
 	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 }
 
-func (s *gatewayCloseRuntimeService) ReleaseSessionRuntimeValidated(_ context.Context, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest]) (serverapi.SessionRuntimeReleaseResponse, error) {
+func (s *gatewayCloseRuntimeService) ReleaseSessionRuntimeValidated(
+	_ context.Context,
+	validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeReleaseResponse, error) {
 	req := validated.Value()
 	s.releaseStarted <- gatewayCloseRelease{request: req, active: s.tracker.active.Load()}
 	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil

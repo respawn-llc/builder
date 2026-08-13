@@ -202,6 +202,32 @@ func TestProjectAndSmallServiceRoutesUseTrustedOwners(t *testing.T) {
 	}
 }
 
+func TestSessionViewLifecycleLaunchAndRuntimeResourceRoutesUseTrustedOwners(t *testing.T) {
+	methods := []string{
+		protocol.MethodSessionPlan,
+		protocol.MethodSessionWorkspaceChatDraft,
+		protocol.MethodSessionWorkspaceChatMaterialize,
+		protocol.MethodSessionGetMainView,
+		protocol.MethodSessionGetTranscriptPage,
+		protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer,
+		protocol.MethodSessionGetExecutionEnvironment,
+		protocol.MethodSessionGetInitialInput,
+		protocol.MethodSessionPersistInputDraft,
+		protocol.MethodSessionRetargetWorkspace,
+		protocol.MethodSessionResolveTransition,
+		protocol.MethodSessionRuntimeActivate,
+		protocol.MethodSessionRuntimeRelease,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			executable := inboundExecutableRoutes[method]
+			if executable.handlerClassification.owner != inboundHandlerTrustedOwner {
+				t.Fatalf("handler owner = %q, want trusted owner", executable.handlerClassification.owner)
+			}
+		})
+	}
+}
+
 func TestInboundExecutableRegistryExhaustivelyClassifiesScopeAuthorization(t *testing.T) {
 	seenScopes := make(map[apicontract.ScopePolicy]bool)
 	for _, route := range apicontract.Routes() {

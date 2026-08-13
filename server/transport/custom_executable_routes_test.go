@@ -17,13 +17,16 @@ import (
 var errRawCustomRouteCalled = errors.New("raw custom-route service called")
 
 type customRouteSessionLaunchService struct {
-	rawPlanCalls        int
-	trustedPlanCalls    int
-	rawDraftCalls       int
-	trustedDraftCalls   int
-	lastDraft           serverapi.WorkspaceChatDraftRequest
-	sessionPlanResponse serverapi.SessionPlanResponse
-	draftResponse       serverapi.WorkspaceChatDraftResponse
+	rawPlanCalls            int
+	trustedPlanCalls        int
+	rawDraftCalls           int
+	trustedDraftCalls       int
+	rawMaterializeCalls     int
+	trustedMaterializeCalls int
+	lastDraft               serverapi.WorkspaceChatDraftRequest
+	sessionPlanResponse     serverapi.SessionPlanResponse
+	draftResponse           serverapi.WorkspaceChatDraftResponse
+	materializeResponse     serverapi.WorkspaceChatMaterializeResponse
 }
 
 type customRouteRunPromptService struct {
@@ -86,8 +89,14 @@ func (s *customRouteSessionLaunchService) WorkspaceChatDraftValidated(_ context.
 	return s.draftResponse, nil
 }
 
-func (*customRouteSessionLaunchService) MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	return serverapi.WorkspaceChatMaterializeResponse{}, errors.New("unexpected Workspace Chat materialize call")
+func (s *customRouteSessionLaunchService) MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	s.rawMaterializeCalls++
+	return serverapi.WorkspaceChatMaterializeResponse{}, errRawCustomRouteCalled
+}
+
+func (s *customRouteSessionLaunchService) MaterializeWorkspaceChatValidated(context.Context, apicontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	s.trustedMaterializeCalls++
+	return s.materializeResponse, nil
 }
 
 type customRouteSessionViewService struct {
@@ -374,6 +383,38 @@ func TestGatewayWorkspaceChatDraftCallsOnlyTrustedOwner(t *testing.T) {
 	}
 	if launch.rawDraftCalls != 0 || launch.trustedDraftCalls != 1 {
 		t.Fatalf("Workspace Chat Draft calls raw=%d trusted=%d, want raw=0 trusted=1", launch.rawDraftCalls, launch.trustedDraftCalls)
+	}
+}
+
+func TestGatewayWorkspaceChatMaterializeCallsOnlyTrustedOwner(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	launch := &customRouteSessionLaunchService{materializeResponse: serverapi.WorkspaceChatMaterializeResponse{
+		SessionID: runtimeids.NewSessionID(),
+	}}
+	gateway, err := NewGateway(&customRouteGatewayDependencies{Core: appCore, launch: launch}, protocol.ServerIdentity{
+		ProtocolVersion: protocol.Version,
+		ServerID:        "server-1",
+	})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	response := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "draft-materialize",
+		Method:  protocol.MethodSessionWorkspaceChatMaterialize,
+		Params:  []byte(`{}`),
+	})
+	if response.Error != nil {
+		t.Fatalf("Workspace Chat Materialize response error = %+v", response.Error)
+	}
+	if launch.rawMaterializeCalls != 0 || launch.trustedMaterializeCalls != 1 {
+		t.Fatalf(
+			"Workspace Chat Materialize calls raw=%d trusted=%d, want raw=0 trusted=1",
+			launch.rawMaterializeCalls,
+			launch.trustedMaterializeCalls,
+		)
 	}
 }
 
