@@ -1486,6 +1486,16 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
 	taskID := workflow.TaskID(req.TaskID)
+	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, taskID, func(ctx context.Context) (serverapi.WorkflowTaskResumeResponse, error) {
+		return s.resumeWorkflowTaskAuthorized(ctx, req, taskID)
+	})
+}
+
+func (s *Service) resumeWorkflowTaskAuthorized(
+	ctx context.Context,
+	req serverapi.WorkflowTaskResumeRequest,
+	taskID workflow.TaskID,
+) (serverapi.WorkflowTaskResumeResponse, error) {
 	promoted, handled, err := s.currentNodeExecution.PromoteConcurrencyQueuedTask(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
