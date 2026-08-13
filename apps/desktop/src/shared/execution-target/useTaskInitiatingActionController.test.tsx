@@ -5,6 +5,7 @@ import type { TaskInitiatingActionResult } from "./executionTargetContinuation";
 import {
   moveTaskInitiatingAction,
   proceedWithTaskInitiatingAction,
+  resumeTaskInitiatingAction,
   startTaskInitiatingAction,
   type TaskInitiatingAction,
   useTaskInitiatingActionController,
@@ -117,6 +118,71 @@ describe("task initiating action controller", () => {
       await Promise.all([first, second]);
     });
     expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it("runs another action after the active action settles without a continuation", async () => {
+    const first = deferred<TaskInitiatingActionResult>();
+    const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
+      if (action.kind !== "resume") {
+        throw new Error("Controller test only supports Resume actions.");
+      }
+      if (action.taskID === "task-1") {
+        return first.promise;
+      }
+      return {
+        kind: "resume",
+        action,
+        response: {
+          outcome: "applied",
+          applied: {
+            currentNodes: [
+              {
+                effectiveAssignee: null,
+                effectiveThinking: null,
+                nodeID: "node-2",
+                transitionBranchKey: null,
+                sessionID: null,
+              },
+            ],
+          },
+        },
+      };
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const firstAction = resumeTaskInitiatingAction("task-1");
+    const secondAction = resumeTaskInitiatingAction("task-2");
+
+    await act(async () => {
+      const firstRun = result.current.run(firstAction);
+      const secondRun = result.current.run(secondAction);
+      first.resolve({
+        kind: "resume",
+        action: firstAction,
+        response: {
+          outcome: "applied",
+          applied: {
+            currentNodes: [
+              {
+                effectiveAssignee: null,
+                effectiveThinking: null,
+                nodeID: "node-1",
+                transitionBranchKey: null,
+                sessionID: null,
+              },
+            ],
+          },
+        },
+      });
+      await Promise.all([firstRun, secondRun]);
+    });
+
+    expect(execute.mock.calls.map(([action]) => action)).toEqual([firstAction, secondAction]);
   });
 
   it("carries proceed intent through executable Move continuation", async () => {

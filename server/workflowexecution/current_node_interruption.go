@@ -11,6 +11,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 const interruptCleanupTimeout = 300 * time.Second
@@ -214,15 +215,12 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
-			interrupted, durableErr := c.store.InterruptedExecutableCurrentNodes(ctx, selector.TaskID)
+			currentNodes, durableErr := c.store.ListCurrentNodes(ctx, selector.TaskID)
 			if durableErr != nil {
 				return durableErr
 			}
-			for _, currentNode := range interrupted {
-				if selector.SessionID == nil ||
-					(currentNode.SessionID != nil && *currentNode.SessionID == *selector.SessionID) {
-					return nil
-				}
+			if interruptSelectorAlreadyInterrupted(currentNodes, selector.SessionID) {
+				return nil
 			}
 			return ErrNoInterruptibleExecution
 		}
@@ -242,6 +240,25 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
 	})
+}
+
+func interruptSelectorAlreadyInterrupted(
+	currentNodes []workflow.CurrentNode,
+	sessionID *runtimeids.SessionID,
+) bool {
+	selected := false
+	for _, currentNode := range currentNodes {
+		if sessionID != nil &&
+			(currentNode.SessionID == nil || *currentNode.SessionID != *sessionID) {
+			continue
+		}
+		selected = true
+		if currentNode.Scheduling == nil ||
+			currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+			return false
+		}
+	}
+	return selected
 }
 
 // InterruptForManualMove atomically revalidates the mutation, then fences all

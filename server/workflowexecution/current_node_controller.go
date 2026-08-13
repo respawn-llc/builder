@@ -102,6 +102,7 @@ type currentNodePostTurnFinalization struct {
 
 type currentNodeStore interface {
 	StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+	ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 	AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) error
@@ -166,6 +167,7 @@ type CurrentNodeController struct {
 	taskExecutionReads    atomic.Pointer[workflowTaskControllerReadSnapshot]
 	lifecycleBarrier      sync.RWMutex
 	closeMu               sync.Mutex
+	closing               bool
 }
 
 func NewCurrentNodeController(
@@ -929,24 +931,30 @@ func (c *CurrentNodeController) Close() error {
 	}
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
-	c.lifecycleBarrier.Lock()
-
-	var (
-		queuedPreparations  []*taskPreparationBatch
-		runningPreparations []*taskPreparationBatch
-		gates               []currentNodeAdmissionGate
-		liveScopes          []runtimeids.ExecutionScopeID
-	)
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
-		c.lifecycleBarrier.Unlock()
 		return nil
 	}
+	c.closing = true
+	runningPreparations := append([]*taskPreparationBatch(nil), c.preparationRunning...)
+	for _, batch := range runningPreparations {
+		batch.cancel(preparationShutdownCause())
+	}
+	c.mu.Unlock()
+	c.workerCancel()
+	c.lifecycleBarrier.Lock()
+
+	var (
+		queuedPreparations []*taskPreparationBatch
+		gates              []currentNodeAdmissionGate
+		liveScopes         []runtimeids.ExecutionScopeID
+	)
+	c.mu.Lock()
 	c.closed = true
+	c.closing = false
 	queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
 	c.preparationQueue = nil
-	runningPreparations = append([]*taskPreparationBatch(nil), c.preparationRunning...)
 	c.explicitQueue = nil
 	c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
 	c.automaticQueue.clear()
@@ -964,13 +972,9 @@ func (c *CurrentNodeController) Close() error {
 	for _, batch := range queuedPreparations {
 		closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
 	}
-	for _, batch := range runningPreparations {
-		batch.cancel(preparationShutdownCause())
-	}
 	c.mu.Unlock()
 	c.lifecycleBarrier.Unlock()
 
-	c.workerCancel()
 	for _, gate := range gates {
 		gate.lease.Cancel()
 	}
@@ -1016,7 +1020,7 @@ func (c *CurrentNodeController) runTaskMutation(
 	c.lifecycleBarrier.RLock()
 	defer c.lifecycleBarrier.RUnlock()
 	c.mu.Lock()
-	closed := c.closed
+	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if closed {
 		return errors.New("current node workflow controller is closed")

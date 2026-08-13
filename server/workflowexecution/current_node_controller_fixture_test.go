@@ -356,6 +356,7 @@ type currentNodeControllerStore struct {
 	mu                        sync.Mutex
 	started                   workflowstore.StartTaskResult
 	interrupted               []workflow.CurrentNode
+	currentNodes              []workflow.CurrentNode
 	pendingApproval           workflow.PendingApproval
 	approvalApplied           workflowstore.PendingApprovalApplyResult
 	manualMoved               workflowstore.ManualMoveResult
@@ -448,6 +449,13 @@ func (s *currentNodeControllerStore) StartTask(ctx context.Context, _ workflow.T
 }
 
 func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
+}
+
+func (s *currentNodeControllerStore) ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	if s.currentNodes != nil {
+		return append([]workflow.CurrentNode(nil), s.currentNodes...), nil
+	}
 	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
 }
 

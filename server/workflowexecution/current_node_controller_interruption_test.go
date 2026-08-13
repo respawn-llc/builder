@@ -928,6 +928,39 @@ func TestCurrentNodeControllerInterruptNoOpsOnlyForMatchingInterruptedSession(t 
 	}
 }
 
+func TestCurrentNodeControllerTaskInterruptRejectsPartiallyInterruptedTask(t *testing.T) {
+	interrupted := currentNodeReferenceForControllerTest(t, "task-partially-interrupted", "node-interrupted")
+	waiting := currentNodeReferenceForControllerTest(t, string(interrupted.TaskID), "node-waiting")
+	store := &currentNodeControllerStore{
+		currentNodes: []workflow.CurrentNode{
+			{
+				Reference: interrupted,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+			{
+				Reference: waiting,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingAdmitted,
+				},
+			},
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := controller.Interrupt(context.Background(), InterruptSelector{
+		TaskID: interrupted.TaskID,
+	}); !errors.Is(err, ErrNoInterruptibleExecution) {
+		t.Fatalf("Interrupt partially interrupted Task error = %v, want %v", err, ErrNoInterruptibleExecution)
+	}
+}
+
 func TestCurrentNodeControllerProtocolViolationCapStopsAndInterruptsLiveScope(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

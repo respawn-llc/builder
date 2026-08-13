@@ -750,7 +750,8 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		key := start.referenceKey()
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(key)
-		if decision.diagnostic != nil {
+		canceled := context.Cause(c.workerContext) != nil
+		if decision.diagnostic != nil && !canceled {
 			c.workerDiagnostics = errors.Join(
 				c.workerDiagnostics,
 				fmt.Errorf(
@@ -766,13 +767,13 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 				c.replaceTransferredUserInterruption(start, decision.diagnostic)
 				return
 			}
-			if context.Cause(c.workerContext) != nil {
+			if canceled {
 				return
 			}
 			c.handleAdmissionFailure(start, false, decision.diagnostic)
 			return
 		}
-		if interrupted || context.Cause(c.workerContext) != nil {
+		if interrupted || canceled {
 			return
 		}
 		start.assignment = decision.assignment

@@ -48,6 +48,14 @@ export type BoardRouteProps = Readonly<{
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
 
+function boardDragDisabled(
+  actionsDisabled: boolean,
+  initiatingActionRunning: boolean,
+  workflowValidForTaskCreation: boolean,
+): boolean {
+  return actionsDisabled || initiatingActionRunning || !workflowValidForTaskCreation;
+}
+
 const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
@@ -261,7 +269,11 @@ function BoardContent({
     connection.phase !== "connected" ||
     initiatingAction.pending !== null ||
     manualMove.actionsDisabled;
-  const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
+  const dragDisabled = boardDragDisabled(
+    actionsDisabled,
+    initiatingAction.running,
+    board.selectedWorkflow.validForTaskCreation,
+  );
   const {
     activeDrag,
     autoScroll: dragAutoScroll,
