@@ -40,6 +40,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedDetailWarnings    int
 		allowsAltScroll           bool
 		allowsFullScreen          bool
+		completionInFrameSequence bool
 		completionDrain           *time.Duration
 	}{
 		{
@@ -136,10 +137,11 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
 				},
 			}},
-			expectedAppends:        []string{"❮ normal mismatch answer"},
-			expectedDetailWarnings: 1,
-			allowsAltScroll:        true,
-			allowsFullScreen:       true,
+			expectedAppends:           []string{"❮ normal mismatch answer"},
+			expectedDetailWarnings:    1,
+			allowsAltScroll:           true,
+			allowsFullScreen:          true,
+			completionInFrameSequence: true,
 		},
 		{
 			name: "provider_model_mismatch_visible_in_debug_ongoing",
@@ -371,6 +373,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				tc.env,
 				ptyFixtureInputPlan{
 					scheduled: tc.inputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
+					completionInFrameSequence: tc.completionInFrameSequence,
 				},
 				tc.resizes,
 				tc.completionDrain,
@@ -465,9 +468,10 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 }
 
 type ptyFixtureInputPlan struct {
-	scheduled      []pty.InputEvent
-	frameSequences []pty.FrameInputSequence
-	frameResizes   []pty.FrameResizeEvent
+	scheduled                 []pty.InputEvent
+	frameSequences            []pty.FrameInputSequence
+	frameResizes              []pty.FrameResizeEvent
+	completionInFrameSequence bool
 }
 
 func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputPlan ptyFixtureInputPlan, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
@@ -508,7 +512,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
-	if len(inputPlan.frameSequences) == 0 && len(inputPlan.frameResizes) == 0 {
+	if !inputPlan.completionInFrameSequence && len(inputPlan.frameResizes) == 0 {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: completionPhase,
 			After: completionDrain,

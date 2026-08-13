@@ -379,7 +379,7 @@ func targetFinalAppliedToOngoing(model tea.Model, targetSequence uint64) bool {
 		return false
 	}
 	return !appModel.forcedLocalExit &&
-		appModel.ongoingTranscript.lastSequence > targetSequence
+		appModel.ongoingTranscript.lastSequence >= targetSequence
 }
 
 func isTranscriptMessageKind(message clientui.TranscriptMessage, kind clientui.TranscriptMessageKind) bool {
