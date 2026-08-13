@@ -269,6 +269,38 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 	return mustCreateNamedTestSessionAt(t, root, "ws", workspace)
 }
 
+func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
+	reference := workflow.CurrentNodeReference{
+		TaskID: "task-assignment-receipt",
+		NodeID: "node-assignment-receipt",
+	}
+	return WorkflowAssignment{
+		ContextMode:    workflow.ContextModeNewSession,
+		CompletionMode: workflowruntime.CompletionModeTool,
+		Prompt: workflowruntime.PromptContract{
+			Identity:       workflowruntime.CurrentNodePromptIdentity(reference),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Instructions: workflowruntime.TaskInstructions{
+				CurrentNode:      reference,
+				WorkflowID:       runtimeids.NewWorkflowID(),
+				TransitionPrompt: "Perform the assigned workflow step.",
+			},
+		},
+	}
+}
+
+func mustTranscriptHydrationSnapshot(t *testing.T, engine *Engine) TranscriptHydrationSnapshot {
+	t.Helper()
+	var snapshot TranscriptHydrationSnapshot
+	if err := engine.WithTranscriptHydrationSnapshot(func(value TranscriptHydrationSnapshot) error {
+		snapshot = value
+		return nil
+	}); err != nil {
+		t.Fatalf("read transcript hydration snapshot: %v", err)
+	}
+	return snapshot
+}
+
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
 
 type testPersistenceObserver struct {
