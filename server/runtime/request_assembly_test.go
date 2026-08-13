@@ -9,13 +9,12 @@ import (
 	"core/shared/textutil"
 )
 
-type requestAssemblyProbeClient struct {
-	capabilityCalls int
-}
+type requestAssemblyProbeClient struct{ capabilityCalls int }
 
 func (*requestAssemblyProbeClient) Generate(context.Context, llm.Request) (llm.Response, error) {
 	return llm.Response{}, nil
 }
+
 func (c *requestAssemblyProbeClient) ProviderCapabilities(context.Context) (llm.ProviderCapabilities, error) {
 	c.capabilityCalls++
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true}, nil
@@ -33,6 +32,7 @@ func TestDispatchRequestAssemblyRequiresOwningIdentityBeforeProviderWork(t *test
 		t.Fatalf("provider capability calls = %d, want none before identity validation", client.capabilityCalls)
 	}
 }
+
 func TestCompactionWindowAdvancesOnlyAfterCommittedReplacement(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
