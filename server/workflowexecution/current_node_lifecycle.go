@@ -500,7 +500,32 @@ func (c *CurrentNodeController) ApplyManualMove(
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
+		var preparedAssignments map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer
+		moved, err := c.store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			prepared,
+			candidate,
+			func(
+				ctx context.Context,
+				contexts []workflowstore.CurrentNodeStartContext,
+			) ([]workflowstore.ManualMoveTargetAssignment, error) {
+				preparer, ok := c.steerer.(interface {
+					PrepareManualMoveAssignments(
+						context.Context,
+						[]workflowstore.CurrentNodeStartContext,
+					) ([]workflowstore.ManualMoveTargetAssignment, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error)
+				})
+				if !ok {
+					return nil, errors.New("current node assignment steerer cannot prepare Manual Move assignments")
+				}
+				assignments, steers, err := preparer.PrepareManualMoveAssignments(ctx, contexts)
+				if err != nil {
+					return nil, err
+				}
+				preparedAssignments = steers
+				return assignments, nil
+			},
+		)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
@@ -511,8 +536,22 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
-		return moved, assignmentErr
+		for index := range starts {
+			if !starts[index].requiresAssignment {
+				continue
+			}
+			key, err := starts[index].reference.Key()
+			if err != nil {
+				return moved, err
+			}
+			steer := preparedAssignments[key]
+			if steer == nil {
+				return moved, fmt.Errorf("Manual Move target %v has no prepared assignment", starts[index].reference)
+			}
+			starts[index].assignment = newCurrentNodeClassifiedAssignment(starts[index].reference, steer)
+		}
+		c.deliverClassifiedStarts(starts, nil)
+		return moved, nil
 	})
 }
 

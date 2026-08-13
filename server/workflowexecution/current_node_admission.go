@@ -86,6 +86,7 @@ type currentNodeAgentCapacityLease struct {
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
+	requiresAssignment bool
 	assignment         *CurrentNodeClassifiedAssignment
 	assignmentWait     CurrentNodeAssignmentSteer
 	holdFor            *runtimeids.ExecutionScopeID
@@ -1190,6 +1191,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			requiresAssignment: currentNode.AgentExecutionSelection != nil,
 		})
 	}
 	return starts, nil

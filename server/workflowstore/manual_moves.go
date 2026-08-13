@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
+	"time"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
@@ -19,6 +21,18 @@ type ManualMovePreparation struct {
 	currentNodes            []workflow.CurrentNode
 	noOp                    bool
 	requiresExecutionTarget bool
+}
+
+type ManualMoveTargetAssignment struct {
+	CurrentNode workflow.CurrentNodeReference
+	SessionID   runtimeids.SessionID
+}
+
+type ManualMoveTargetAssignmentPreparer func(context.Context, []CurrentNodeStartContext) ([]ManualMoveTargetAssignment, error)
+
+type preparedManualMoveAssignments struct {
+	targets     []workflow.CurrentNode
+	assignments []ManualMoveTargetAssignment
 }
 
 type preparedManualMoveExecutionTarget struct {
@@ -115,6 +129,15 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 }
 
 func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (result ManualMoveResult, resultErr error) {
+	return s.ApplyManualMoveWithTargetAssignments(ctx, prepared, executionTarget, nil)
+}
+
+func (s *Store) ApplyManualMoveWithTargetAssignments(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+	prepareAssignments ManualMoveTargetAssignmentPreparer,
+) (result ManualMoveResult, resultErr error) {
 	defer func() {
 		reportWorkflowInvariantError(s.invariantPolicy, resultErr)
 	}()
@@ -124,6 +147,18 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	executionTargetPreparation, err := s.prepareManualMoveExecutionTarget(ctx, prepared, executionTarget)
 	if err != nil {
 		return ManualMoveResult{}, err
+	}
+	var preparedAssignments preparedManualMoveAssignments
+	if prepareAssignments != nil && !prepared.noOp && executableNodeKind(prepared.target.Kind()) {
+		targets, contexts, err := s.prepareManualMoveAssignmentContexts(ctx, prepared, executionTargetPreparation)
+		if err != nil {
+			return ManualMoveResult{}, err
+		}
+		preparedAssignments.targets = targets
+		preparedAssignments.assignments, err = prepareAssignments(ctx, contexts)
+		if err != nil {
+			return ManualMoveResult{}, err
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -210,6 +245,19 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 		)
 		if err != nil {
 			return ManualMoveResult{}, err
+		}
+		if prepareAssignments != nil {
+			if !sameManualMoveTargets(targets, preparedAssignments.targets) {
+				return ManualMoveResult{}, errors.New("manual move targets changed after assignment preparation")
+			}
+			targets, err = applyManualMoveTargetAssignments(targets, preparedAssignments.assignments)
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
+			targets, err = prepareManualMoveAssignedTargetsForInsert(ctx, q, targets, nowTime)
+			if err != nil {
+				return ManualMoveResult{}, err
+			}
 		}
 		if err := applyPreparedExecutionTargetMutation(ctx, q, task, executionTargetPreparation.mutation, nowTime.UnixMilli()); err != nil {
 			return ManualMoveResult{}, err
@@ -342,6 +390,86 @@ func (s *Store) prepareManualMoveExecutionTarget(
 	return preparedManualMoveExecutionTarget{mutation: targetMutation, targetShape: targetShape}, nil
 }
 
+func (s *Store) prepareManualMoveAssignmentContexts(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget preparedManualMoveExecutionTarget,
+) ([]workflow.CurrentNode, []CurrentNodeStartContext, error) {
+	taskRow, err := s.queries.GetTask(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return nil, nil, err
+	}
+	task, err := taskRecordFromTask(taskRow)
+	if err != nil {
+		return nil, nil, err
+	}
+	definition, workflowRecord, err := workflowDefinitionFromQueries(
+		ctx,
+		s.queries,
+		runtimeids.WorkflowID(taskRow.WorkflowID),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	currentNodes, err := s.listTaskCurrentNodes(ctx, s.queries, prepared.request.TaskID)
+	if err != nil {
+		return nil, nil, err
+	}
+	preview, err := s.resolveManualMove(ctx, s.queries, prepared.request)
+	if err != nil {
+		return nil, nil, err
+	}
+	if preview.Outcome == ManualMovePreviewOutcomeNoOp {
+		return nil, nil, nil
+	}
+	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 1 {
+		return nil, nil, ErrManualMoveTransitionSelectionRequired
+	}
+	choice := preview.Choices[0]
+	valueEnvironment, err := s.manualMoveValueEnvironment(
+		ctx,
+		s.queries,
+		definition,
+		prepared.request.TaskID,
+		currentNodes,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
+		return nil, nil, err
+	}
+	targets, _, _, err := s.materializeManualMoveTargets(
+		ctx,
+		s.queries,
+		definition,
+		choice,
+		currentNodes,
+		valueEnvironment,
+		prepared.request.Values,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	contexts := make([]CurrentNodeStartContext, 0, len(targets))
+	for _, target := range targets {
+		context, err := s.resolveMaterializedCurrentNodeStartContext(
+			ctx,
+			s.queries,
+			task,
+			workflowRecord,
+			definition,
+			target,
+			&executionTarget.mutation.executionRoot,
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+		contexts = append(contexts, context)
+	}
+	return targets, contexts, nil
+}
+
 func validatePreparedManualMoveTargetShape(
 	definition workflow.Definition,
 	choice ManualMoveTransitionChoice,
@@ -454,6 +582,138 @@ func (s *Store) materializeManualMoveTargets(
 		}
 	}
 	return targets, invariants, legacyFallbacks, nil
+}
+
+func applyManualMoveTargetAssignments(
+	targets []workflow.CurrentNode,
+	assignments []ManualMoveTargetAssignment,
+) ([]workflow.CurrentNode, error) {
+	if len(assignments) == 0 {
+		return targets, nil
+	}
+	byReference := make(map[workflow.CurrentNodeReferenceKey]runtimeids.SessionID, len(assignments))
+	for index, assignment := range assignments {
+		if assignment.SessionID.IsZero() {
+			return nil, fmt.Errorf("manual move target assignment at index %d has no Session", index)
+		}
+		key, err := assignment.CurrentNode.Key()
+		if err != nil {
+			return nil, fmt.Errorf("manual move target assignment at index %d: %w", index, err)
+		}
+		if _, duplicate := byReference[key]; duplicate {
+			return nil, fmt.Errorf("manual move target assignment at index %d is duplicated", index)
+		}
+		byReference[key] = assignment.SessionID
+	}
+	result := append([]workflow.CurrentNode(nil), targets...)
+	for index := range result {
+		if result[index].AgentExecutionSelection == nil {
+			continue
+		}
+		key, err := result[index].Reference.Key()
+		if err != nil {
+			return nil, err
+		}
+		sessionID, assigned := byReference[key]
+		if !assigned {
+			return nil, fmt.Errorf("manual move Agent target %v has no prepared assignment", result[index].Reference)
+		}
+		result[index].SessionID = &sessionID
+		delete(byReference, key)
+	}
+	if len(byReference) != 0 {
+		return nil, errors.New("manual move target assignments contain an unknown Current Node")
+	}
+	return result, nil
+}
+
+func sameManualMoveTargets(left, right []workflow.CurrentNode) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	rightByReference := make(map[workflow.CurrentNodeReferenceKey]workflow.CurrentNode, len(right))
+	for _, target := range right {
+		key, err := target.Reference.Key()
+		if err != nil {
+			return false
+		}
+		rightByReference[key] = target
+	}
+	for _, target := range left {
+		key, err := target.Reference.Key()
+		if err != nil {
+			return false
+		}
+		prepared, exists := rightByReference[key]
+		if !exists ||
+			!sameOptionalEdgeID(target.EnteredByEdgeID, prepared.EnteredByEdgeID) ||
+			!maps.Equal(target.CurrentInputValues, prepared.CurrentInputValues) ||
+			!sameMaterializedPriorValues(target.PriorValues, prepared.PriorValues) ||
+			!sameOptionalSessionID(target.SessionID, prepared.SessionID) ||
+			!sameMaterializedContinuationSource(target.ContinuationSource, prepared.ContinuationSource) ||
+			!sameAgentExecutionSelection(target.AgentExecutionSelection, prepared.AgentExecutionSelection) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameOptionalEdgeID(left, right *workflow.EdgeID) bool {
+	return (left == nil && right == nil) ||
+		(left != nil && right != nil && *left == *right)
+}
+
+func sameMaterializedPriorValues(left, right workflow.MaterializedPriorValues) bool {
+	return maps.EqualFunc(
+		left.TransitionParameters,
+		right.TransitionParameters,
+		func(left, right map[string]string) bool {
+			return maps.Equal(left, right)
+		},
+	)
+}
+
+func sameAgentExecutionSelection(left, right *workflow.AgentExecutionSelection) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Assignee == right.Assignee &&
+		left.Origin == right.Origin &&
+		((left.Thinking == nil && right.Thinking == nil) ||
+			(left.Thinking != nil && right.Thinking != nil && *left.Thinking == *right.Thinking))
+}
+
+func prepareManualMoveAssignedTargetsForInsert(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	targets []workflow.CurrentNode,
+	associatedAt time.Time,
+) ([]workflow.CurrentNode, error) {
+	result := append([]workflow.CurrentNode(nil), targets...)
+	for index := range result {
+		if result[index].SessionID == nil {
+			continue
+		}
+		association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+			SessionID:    *result[index].SessionID,
+			CurrentNode:  result[index].Reference,
+			AssociatedAt: associatedAt,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := bindSessionToTask(ctx, q, association); err != nil {
+			return nil, err
+		}
+		if result[index].ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
+			source, err := workflow.NewExactMaterializedContinuationSource(*result[index].SessionID)
+			if err != nil {
+				return nil, err
+			}
+			result[index].ContinuationSource = source
+		}
+	}
+	return result, nil
 }
 
 func manualMoveBasePriorValues(currentNodes []workflow.CurrentNode) workflow.MaterializedPriorValues {

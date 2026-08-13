@@ -146,6 +146,14 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if input.Node.Kind != workflow.NodeKindAgent {
 		return nil, fmt.Errorf("current node %v is not executable", reference)
 	}
+	return s.prepareCurrentNodeAgentAssignment(ctx, input, true)
+}
+
+func (s *Starter) prepareCurrentNodeAgentAssignment(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+	bindSession bool,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	selection, err := currentNodeAgentExecutionSelection(input)
 	if err != nil {
 		return nil, err
@@ -153,7 +161,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	if err := s.validateRole(selection.Assignee); err != nil {
 		return nil, err
 	}
-	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false)
+	prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, false, bindSession)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +226,7 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	}
 	prepared.cleanup = func(err error) error { return err }
 	return &currentNodeAgentAssignmentSteer{
-		reference:  reference,
+		reference:  input.CurrentNode.Reference,
 		completion: steer,
 		prepared:   prepared,
 		retainSourceRuntime: admission.RuntimeAvailable &&
@@ -230,11 +238,60 @@ func (s *Starter) SteerCurrentNodeAssignment(
 	}, nil
 }
 
+func (s *Starter) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	[]workflowstore.ManualMoveTargetAssignment,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+	steers := make(map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer, len(inputs))
+	for _, input := range inputs {
+		if input.Node.Kind == workflow.NodeKindScript {
+			continue
+		}
+		if input.Node.Kind != workflow.NodeKindAgent {
+			return nil, nil, fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference)
+		}
+		prepared, err := s.prepareCurrentNodeAgentAssignment(ctx, input, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		receipt, waitErr := prepared.Wait(ctx)
+		if !receipt.Committed {
+			return nil, nil, errors.Join(waitErr, errors.New("Manual Move workflow assignment was not committed"))
+		}
+		key, err := input.CurrentNode.Reference.Key()
+		if err != nil {
+			return nil, nil, err
+		}
+		assignment, ok := prepared.(workflowexecution.CurrentNodeSessionAssignmentSteer)
+		if !ok {
+			return nil, nil, fmt.Errorf("Manual Move Agent target %v assignment has no Session", input.CurrentNode.Reference)
+		}
+		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   assignment.SessionID(),
+		})
+		steers[key] = prepared
+	}
+	return assignments, steers, nil
+}
+
 type currentNodeAgentAssignmentSteer struct {
 	reference           workflow.CurrentNodeReference
 	completion          runtime.WorkflowAssignmentSteer
 	prepared            preparedCurrentNodeAgentSession
 	retainSourceRuntime bool
+}
+
+func (s *currentNodeAgentAssignmentSteer) SessionID() runtimeids.SessionID {
+	if s == nil {
+		panic("current node agent assignment steer is required")
+	}
+	return s.prepared.plan.Descriptor.SessionID()
 }
 
 func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.CommitReceipt, error) {
@@ -257,6 +314,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	input workflowstore.CurrentNodeStartContext,
 	requireRuntimeClient bool,
 	sessionPrepared bool,
+	bindSession bool,
 ) (preparedCurrentNodeAgentSession, error) {
 	root, err := requireCurrentNodeExecutionRoot(input)
 	if err != nil {
@@ -314,7 +372,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 		); err != nil {
 			return preparedCurrentNodeAgentSession{}, cleanup(err)
 		}
-	} else {
+	} else if bindSession {
 		if _, err := s.store.BindSessionToCurrentNode(ctx, workflowstore.CurrentNodeSessionBindingRequest{
 			Association: workflowstore.TaskSessionAssociationRequest{
 				SessionID:    plan.Descriptor.SessionID(),
@@ -483,6 +541,7 @@ func (s *Starter) currentNodeAgentSessionForStart(
 			input,
 			true,
 			input.CurrentNode.SessionID != nil,
+			true,
 		)
 		return prepared, sessionruntime.OpenAgentResource{}, err
 	}

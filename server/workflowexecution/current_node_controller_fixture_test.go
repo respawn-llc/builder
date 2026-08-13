@@ -65,6 +65,36 @@ func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Conte
 	}, nil
 }
 
+func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	_ context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	[]workflowstore.ManualMoveTargetAssignment,
+	map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+	error,
+) {
+	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+	steers := make(map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, len(inputs))
+	for _, input := range inputs {
+		if input.Node.Kind != workflow.NodeKindAgent {
+			continue
+		}
+		key, err := input.CurrentNode.Reference.Key()
+		if err != nil {
+			return nil, nil, err
+		}
+		sessionID := runtimeids.NewSessionID()
+		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   sessionID,
+		})
+		steers[key] = completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}
+	}
+	return assignments, steers, nil
+}
+
 type completedCurrentNodeAssignmentSteer struct {
 	receipt session.CommitReceipt
 	err     error
@@ -480,6 +510,15 @@ func (s *currentNodeControllerStore) ApplyPendingApproval(context.Context, workf
 }
 
 func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
+	return s.manualMoved, nil
+}
+
+func (s *currentNodeControllerStore) ApplyManualMoveWithTargetAssignments(
+	context.Context,
+	workflowstore.ManualMovePreparation,
+	*workflowstore.ExecutionTargetCandidate,
+	workflowstore.ManualMoveTargetAssignmentPreparer,
+) (workflowstore.ManualMoveResult, error) {
 	return s.manualMoved, nil
 }
 
