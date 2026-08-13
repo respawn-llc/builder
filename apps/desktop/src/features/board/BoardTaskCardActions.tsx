@@ -21,9 +21,10 @@ export function BoardTaskCardActions({
 }>) {
   const { t } = useTranslation();
   const availableActions = {
-    canInterrupt: card.actions.canInterrupt,
-    canResume: card.actions.canResume,
+    canInterrupt: pendingResume || (!pendingInterrupt && card.actions.canInterrupt),
+    canResume: pendingInterrupt || (!pendingResume && card.actions.canResume),
   };
+  const actionPending = pendingInterrupt || pendingResume;
   if (!availableActions.canInterrupt && !availableActions.canResume) {
     return null;
   }
@@ -36,7 +37,7 @@ export function BoardTaskCardActions({
             event.stopPropagation();
             onResume(card.id);
           }}
-          disabled={actionsDisabled || pendingResume}
+          disabled={actionsDisabled || actionPending}
           size="icon-sm"
           variant={card.statusKind === "queued" ? "warning" : "primary-outline"}
         >
@@ -54,7 +55,7 @@ export function BoardTaskCardActions({
             event.stopPropagation();
             onInterrupt(card.id);
           }}
-          disabled={actionsDisabled || pendingInterrupt}
+          disabled={actionsDisabled || actionPending}
           size="icon-sm"
           variant="danger"
         >

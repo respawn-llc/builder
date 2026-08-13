@@ -262,7 +262,9 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    initiatingActionsDisabled || resumeAction.actionsDisabled || manualMove.actionsDisabled;
+    connection.phase !== "connected" ||
+    initiatingAction.pending !== null ||
+    manualMove.actionsDisabled;
   const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
   const {
     activeDrag,
