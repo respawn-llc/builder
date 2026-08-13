@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -17,6 +19,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
@@ -446,6 +449,7 @@ type currentNodeCompletionExecutionStub struct {
 	idleErr                error
 	approvalResult         workflowstore.PendingApprovalApplyResult
 	approvalErr            error
+	manualMoveAssignments  workflowstore.ManualMoveTargetAssignmentPreparer
 }
 
 func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
@@ -568,7 +572,57 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
+	if s.manualMoveAssignments != nil {
+		return s.store.ApplyManualMoveWithTargetAssignments(ctx, prepared, candidate, s.manualMoveAssignments)
+	}
 	return s.store.ApplyManualMove(ctx, prepared, candidate)
+}
+
+func workflowServiceTestManualMoveAssignments(
+	t *testing.T,
+	metadataStore *metadata.Store,
+) workflowstore.ManualMoveTargetAssignmentPreparer {
+	t.Helper()
+	return func(
+		_ context.Context,
+		inputs []workflowstore.CurrentNodeStartContext,
+	) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
+		assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+		for _, input := range inputs {
+			if input.Node.Kind != workflow.NodeKindAgent {
+				continue
+			}
+			if input.CurrentNode.SessionID != nil {
+				assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+					CurrentNode: input.CurrentNode.Reference,
+					SessionID:   *input.CurrentNode.SessionID,
+				})
+				continue
+			}
+			sessionStore, err := session.Create(
+				filepath.Join(metadataStore.PersistenceRoot(), "projects", input.Task.ProjectID, "sessions"),
+				filepath.Base(input.ExecutionRoot.SourceWorkspaceRoot),
+				input.ExecutionRoot.SourceWorkspaceRoot,
+				sessioncontract.SessionCategoryMain,
+				metadataStore.AuthoritativeSessionStoreOptions()...,
+			)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			if err := sessionStore.EnsureDurable(); err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+				CurrentNode: input.CurrentNode.Reference,
+				SessionID:   sessionID,
+			})
+		}
+		return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+	}
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

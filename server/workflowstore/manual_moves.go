@@ -143,17 +143,9 @@ func (s *Store) ApplyManualMove(
 	prepared ManualMovePreparation,
 	executionTarget *ExecutionTargetCandidate,
 ) (ManualMoveResult, error) {
-	if !prepared.noOp && prepared.target != nil && prepared.target.Kind() == workflow.NodeKindAgent {
-		return ManualMoveResult{}, errors.New("Agent Manual Move requires assignment preparation")
+	if !prepared.noOp && executableNodeKind(prepared.target.Kind()) {
+		return ManualMoveResult{}, errors.New("executable Manual Move requires assignment preparation")
 	}
-	return s.applyManualMove(ctx, prepared, executionTarget, nil)
-}
-
-func (s *Store) applyManualMoveWithoutAssignments(
-	ctx context.Context,
-	prepared ManualMovePreparation,
-	executionTarget *ExecutionTargetCandidate,
-) (ManualMoveResult, error) {
 	return s.applyManualMove(ctx, prepared, executionTarget, nil)
 }
 
@@ -732,25 +724,47 @@ func prepareManualMoveAssignedTargetsForInsert(
 		if result[index].SessionID == nil {
 			continue
 		}
-		if result[index].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
-			continue
-		}
-		association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
-			SessionID:    *result[index].SessionID,
-			CurrentNode:  result[index].Reference,
-			AssociatedAt: associatedAt,
-		})
+		previous, hasPrevious, err := currentTaskSessionAssociationBeforeBinding(
+			ctx,
+			q,
+			result[index].Reference,
+		)
 		if err != nil {
 			return nil, err
 		}
-		if err := bindSessionToTask(ctx, q, association); err != nil {
-			return nil, err
-		}
-		source, err := workflow.NewExactMaterializedContinuationSource(*result[index].SessionID)
+		sourceSessionID, err := bindingSourceSessionID(result[index], *result[index].SessionID)
 		if err != nil {
 			return nil, err
 		}
-		result[index].ContinuationSource = source
+		if result[index].ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
+			association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+				SessionID:    *result[index].SessionID,
+				CurrentNode:  result[index].Reference,
+				AssociatedAt: associatedAt,
+			})
+			if err != nil {
+				return nil, err
+			}
+			if err := bindSessionToTask(ctx, q, association); err != nil {
+				return nil, err
+			}
+			source, err := workflow.NewExactMaterializedContinuationSource(sourceSessionID)
+			if err != nil {
+				return nil, err
+			}
+			result[index].ContinuationSource = source
+		}
+		if hasPrevious && previous.SessionID != *result[index].SessionID {
+			if err := retireDependentCurrentTaskSessionAssociations(
+				ctx,
+				q,
+				result[index].Reference,
+				previous.SessionID,
+				sourceSessionID,
+			); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return result, nil
 }

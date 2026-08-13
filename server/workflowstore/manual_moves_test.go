@@ -57,6 +57,61 @@ func TestApplyManualMoveRejectsAgentPlacementWithoutAssignmentPreparation(t *tes
 	}
 }
 
+func TestApplyManualMoveRejectsScriptDestinationWithAgentFanoutWithoutAssignmentPreparation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMixedExecutableFanoutWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	script := nodeByKey(t, definition, "script")
+	transition := workflow.TransitionID("split")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(script),
+		TransitionKey: &transition,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if _, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding)); err == nil {
+		t.Fatal("ApplyManualMove allowed mixed executable fan-out without assignment preparation")
+	}
+	var observed []CurrentNodeStartContext
+	moved, err := applyManualMoveForStoreTestWithPreparation(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(inputs []CurrentNodeStartContext) {
+			observed = append([]CurrentNodeStartContext(nil), inputs...)
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied || len(moved.Mutation.Created) != 2 {
+		t.Fatalf("mixed fan-out Manual Move = %+v, want two applied targets", moved)
+	}
+	var agentContexts int
+	var scriptContexts int
+	for _, input := range observed {
+		switch input.Node.Kind {
+		case workflow.NodeKindAgent:
+			agentContexts++
+		case workflow.NodeKindScript:
+			scriptContexts++
+		}
+	}
+	if agentContexts != 1 || scriptContexts != 1 {
+		t.Fatalf("mixed fan-out assignment contexts = Agent %d Script %d, want one each", agentContexts, scriptContexts)
+	}
+}
+
 func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
@@ -82,7 +137,7 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	if !prepared.RequiresExecutionTarget() {
 		t.Fatal("forward executable move did not require execution-target selection")
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -201,7 +256,7 @@ func TestManualMoveForwardExecutableReplacesApprovalWithoutStartingTarget(t *tes
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -274,7 +329,7 @@ func TestManualMoveForwardExecutableScriptValidatesAndMaterializesTarget(t *test
 	if !prepared.RequiresExecutionTarget() {
 		t.Fatal("script move did not require an execution target")
 	}
-	moved, err := fixture.store.applyManualMoveWithoutAssignments(fixture.ctx, prepared, nil)
+	moved, err := applyManualMoveForStoreTest(t, fixture.ctx, fixture.store, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
@@ -388,7 +443,7 @@ func TestManualMoveToNonExecutableSupersedesPendingApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, nil)
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove: %v", err)
 	}
@@ -426,7 +481,7 @@ func TestManualMoveFanoutTransitionReplacesTaskWithEveryBranch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -502,7 +557,7 @@ func TestManualMoveFromPartiallyArrivedFanoutReplacesTheWholeTaskGroup(t *testin
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -554,7 +609,7 @@ func TestManualMoveFinalRevalidationReturnsNoOpWithoutExecutionTargetMutation(t 
 	}); err != nil {
 		t.Fatalf("CompleteCurrentNode before final apply: %v", err)
 	}
-	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -589,7 +644,7 @@ func TestManualMoveScriptValidationRollsBackReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	if _, err := fixture.store.applyManualMoveWithoutAssignments(fixture.ctx, prepared, nil); err == nil {
+	if _, err := applyManualMoveForStoreTest(t, fixture.ctx, fixture.store, prepared, nil); err == nil {
 		t.Fatal("ApplyManualMove: want invalid script error")
 	}
 	currentNodes, err := fixture.store.ListCurrentNodes(fixture.ctx, fixture.task.ID)
