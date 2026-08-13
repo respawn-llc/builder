@@ -1512,6 +1512,26 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	if len(interrupted) == 0 {
+		currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
+		if err != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, err
+		}
+		for _, currentNode := range currentNodes {
+			if currentNode.Scheduling == nil {
+				continue
+			}
+			switch currentNode.Scheduling.State {
+			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+				return serverapi.WorkflowTaskResumeResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+					NoOp: &serverapi.WorkflowTaskResumeNoOp{
+						CurrentNodes: workflowview.ProjectCurrentNodes(currentNodes),
+					},
+				}, nil
+			}
+		}
+	}
 	if req.ExecutionTarget == nil {
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)
 		if err != nil {

@@ -57,7 +57,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		handle.RequestStop()
 	}
 	var interrupted []workflow.CurrentNodeReference
-	persistenceErr := c.runInternalTaskMutation(cleanupCtx, state.taskID, func(ctx context.Context) error {
+	persistenceErr := c.runTaskMutation(cleanupCtx, state.taskID, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
 		var err error
 		interrupted, err = interruptCurrentNodeReferences(
@@ -89,7 +89,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
-	verifyErr := c.runInternalTaskMutation(cleanupCtx, state.taskID, func(context.Context) error {
+	verifyErr := c.runTaskMutation(cleanupCtx, state.taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, handle := range state.waitHandles {
@@ -214,6 +214,16 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+			interrupted, durableErr := c.store.InterruptedExecutableCurrentNodes(ctx, selector.TaskID)
+			if durableErr != nil {
+				return durableErr
+			}
+			for _, currentNode := range interrupted {
+				if selector.SessionID == nil ||
+					(currentNode.SessionID != nil && *currentNode.SessionID == *selector.SessionID) {
+					return nil
+				}
+			}
 			return ErrNoInterruptibleExecution
 		}
 		if err != nil {

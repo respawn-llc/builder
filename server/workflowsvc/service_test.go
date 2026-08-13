@@ -1391,11 +1391,14 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	}
 }
 
-func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
+func TestServiceTaskResumeNoOpsWhenTaskAlreadyResumed(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
@@ -1405,12 +1408,13 @@ func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
-	if err == nil {
-		t.Fatalf("ResumeWorkflowTask = %+v, want conflict for no interrupted Current Nodes", response)
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
-	var conflict *workflowexecution.TaskResumeConflictError
-	if !errors.As(err, &conflict) || conflict.TaskID != workflow.TaskID(task.Task.ID) {
-		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict for %s", err, err, task.Task.ID)
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		response.NoOp == nil ||
+		len(response.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("ResumeWorkflowTask = %+v, want no-op with current ready node", response)
 	}
 }
 

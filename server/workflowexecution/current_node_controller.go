@@ -1006,23 +1006,6 @@ func (c *CurrentNodeController) runTaskMutation(
 	taskID workflow.TaskID,
 	operation func(context.Context) error,
 ) error {
-	return c.runControllerTaskMutation(ctx, taskID, false, operation)
-}
-
-func (c *CurrentNodeController) runInternalTaskMutation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	operation func(context.Context) error,
-) error {
-	return c.runControllerTaskMutation(ctx, taskID, true, operation)
-}
-
-func (c *CurrentNodeController) runControllerTaskMutation(
-	ctx context.Context,
-	taskID workflow.TaskID,
-	allowClosed bool,
-	operation func(context.Context) error,
-) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
@@ -1035,7 +1018,7 @@ func (c *CurrentNodeController) runControllerTaskMutation(
 	c.mu.Lock()
 	closed := c.closed
 	c.mu.Unlock()
-	if closed && !allowClosed {
+	if closed {
 		return errors.New("current node workflow controller is closed")
 	}
 	return c.mutations.Run(ctx, taskID, func(ctx context.Context) error {

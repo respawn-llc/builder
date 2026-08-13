@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -301,7 +300,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		if err != nil {
 			return nil, err
 		}
-		if !slices.Equal(taskIDs, currentTaskIDs) {
+		if !metadata.StringSetsEqual(taskIDs, currentTaskIDs) {
 			return nil, workflowstore.ErrProjectDeletePreparationInvalidated
 		}
 		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
