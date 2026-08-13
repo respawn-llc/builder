@@ -526,7 +526,22 @@ func decodeResponseFrame(resp protocol.Response, out any) error {
 	if out == nil || len(resp.Result) == 0 {
 		return nil
 	}
-	return json.Unmarshal(resp.Result, out)
+	if err := decodeValidatedJSON(resp.Result, out); err != nil {
+		return err
+	}
+	return nil
+}
+
+func decodeValidatedJSON(data []byte, out any) error {
+	if err := json.Unmarshal(data, out); err != nil {
+		return err
+	}
+	if validator, ok := out.(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return invalidResponseError("RPC", err)
+		}
+	}
+	return nil
 }
 
 func protocolError(resp *protocol.ResponseError) error {

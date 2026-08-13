@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -584,7 +583,7 @@ func TestRemoteLiveWatchRejectsMalformedResponse(t *testing.T) {
 
 	_, err = remote.LiveWatch(context.Background(), serverapi.RuntimeLiveWatchRequest{SessionID: "session-1"})
 	var invalidResponse *InvalidResponseError
-	if err == nil || !strings.Contains(err.Error(), "validate runtime live watch response") || !errors.As(err, &invalidResponse) {
+	if err == nil || !errors.As(err, &invalidResponse) {
 		t.Fatalf("LiveWatch error = %v, want response validation error", err)
 	}
 }
@@ -1679,7 +1678,7 @@ func TestDialRemoteURLForSessionAttachesSessionBeforeUnaryCalls(t *testing.T) {
 		if statusRequest.SessionID != attach.SessionID {
 			t.Fatalf("status session id = %q, want %q", statusRequest.SessionID, attach.SessionID)
 		}
-		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{})); err != nil {
+		if err := websocket.JSON.Send(ws, protocol.NewSuccessResponse(req.ID, serverapi.WorktreeStatusResponse{Worktree: serverapi.WorktreeStatusTarget{RecordedRoot: "/workspace"}})); err != nil {
 			t.Fatalf("send worktree status response: %v", err)
 		}
 	})
