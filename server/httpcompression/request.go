@@ -13,14 +13,6 @@ import (
 
 const MinimumRequestBodySize = 1024
 
-type RequestContentCoding uint8
-
-const (
-	ContentCodingIdentity RequestContentCoding = iota
-	ContentCodingGzip
-	ContentCodingZstd
-)
-
 func Middleware(coding RequestContentCoding) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 		if request == nil {
@@ -68,17 +60,6 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 		}
 		prepared.Header.Set("Content-Encoding", contentCodingHeader(coding))
 		return next(prepared)
-	}
-}
-
-func contentCodingHeader(coding RequestContentCoding) string {
-	switch coding {
-	case ContentCodingGzip:
-		return "gzip"
-	case ContentCodingZstd:
-		return "zstd"
-	default:
-		return ""
 	}
 }
 

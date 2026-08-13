@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"core/internal/testharness/httpclient"
+	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/analyzer"
 	"core/internal/testharness/pty/blackbox"
 	"core/server/llm"
@@ -870,7 +870,7 @@ func newCanonicalOAuthStubClient(t *testing.T, stub *blackbox.ResponsesStub) *ht
 	if err != nil {
 		t.Fatalf("parse Responses stub URL: %v", err)
 	}
-	return &http.Client{Transport: httpclient.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
+	return &http.Client{Transport: pty.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
 		cloned := request.Clone(request.Context())
 		cloned.URL.Scheme = target.Scheme
 		cloned.URL.Host = target.Host

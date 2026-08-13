@@ -136,27 +136,6 @@ func NewRuntimeWiringWithBackground(
 	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
 		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
 	}
-	if locked := store.Meta().Locked; locked != nil {
-		authState := auth.EmptyState()
-		if mgr != nil {
-			if loaded, loadErr := mgr.Load(factoryContext); loadErr == nil {
-				authState = loaded
-			}
-		}
-		settingsForEndpoint := active
-		settingsForEndpoint.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
-		currentCapabilities, resolveErr := llm.ResolveRuntimeProviderCapabilities(authState, settingsForEndpoint)
-		lockedCapabilities, lockedOK := llm.ProviderCapabilitiesFromLocked(locked)
-		_, lockedIsBuiltIn := llm.LookupProviderCapabilityContract(lockedCapabilities.ProviderID)
-		_, currentIsBuiltIn := llm.LookupProviderCapabilityContract(currentCapabilities.ProviderID)
-		if resolveErr == nil &&
-			lockedOK &&
-			lockedIsBuiltIn &&
-			currentIsBuiltIn &&
-			currentCapabilities.ProviderID != lockedCapabilities.ProviderID {
-			mainProvider.ProviderCapabilitiesOverride = &currentCapabilities
-		}
-	}
 	var client llm.Client
 	if opts.Client != nil {
 		client = opts.Client
@@ -185,6 +164,17 @@ func NewRuntimeWiringWithBackground(
 		if err != nil {
 			return nil, err
 		}
+	}
+	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
+	if opts.ProviderCapabilitiesOverride != nil {
+		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
+	}
+	if provider, ok := client.(llm.ProviderCapabilitiesClient); ok {
+		capabilities, capabilitiesErr := provider.ProviderCapabilities(factoryContext)
+		if capabilitiesErr != nil {
+			return nil, fmt.Errorf("resolve runtime provider capabilities from client: %w", capabilitiesErr)
+		}
+		providerCapabilitiesOverride = &capabilities
 	}
 
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
@@ -237,10 +227,6 @@ func NewRuntimeWiringWithBackground(
 			configRoot:                          opts.GlobalConfigDir,
 			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
 		}
-	}
-	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
-	if opts.ProviderCapabilitiesOverride != nil {
-		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
 	}
 	eng, err = runtime.New(store, eventLog, client, toolRegistry, runtime.Config{
 		Model:                           active.Model,
