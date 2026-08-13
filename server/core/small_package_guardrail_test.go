@@ -110,6 +110,7 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/serverattach":           "deep headless RunPrompt attachment policy owner after removing generic target resolution and daemon-launch fallback paths",
 	"cli/app/internal/startupconfig":          "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
 	"internal/testharness/filemode":           "test-only cross-package filesystem assertions and fault setup kept out of production APIs so file-backed behavior tests share one implementation",
+	"internal/testharness/httpclient":         "test-only shared HTTP RoundTripper adapter reused across external-service and model transport tests without adding production APIs",
 	"internal/testharness/recordstore":        "test-only synchronized record storage shared across package-local and external session fixtures without introducing a production API or Go import cycle",
 	"internal/testharness/runtimewirefixture": "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"internal/testharness/workflowfixture":    "one-file Store graph-save fixture shared across Core, Workflow Runner, Workflow View, and Worktree tests; merging into testsetup creates a workflowstore test import cycle",
