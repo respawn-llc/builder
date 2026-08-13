@@ -387,6 +387,7 @@ type currentNodeControllerStore struct {
 	interruptRelease          chan struct{}
 	interruptOnce             sync.Once
 	idleResolved              *workflow.CurrentNode
+	idleResolvedSequence      []workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
@@ -640,6 +641,11 @@ func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Conte
 }
 
 func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
+	if len(s.idleResolvedSequence) != 0 {
+		resolved := s.idleResolvedSequence[0]
+		s.idleResolvedSequence = s.idleResolvedSequence[1:]
+		return resolved, nil
+	}
 	if s.idleResolved == nil {
 		return workflow.CurrentNode{}, sql.ErrNoRows
 	}

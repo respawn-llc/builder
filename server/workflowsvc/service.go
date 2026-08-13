@@ -440,6 +440,9 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowDeleteResponse{}, err
+	}
 	taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err

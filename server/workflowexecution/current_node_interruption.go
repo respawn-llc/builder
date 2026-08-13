@@ -130,7 +130,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.mutations.Run(ctx, selector.TaskID, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, selector.TaskID, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			selected := append([]sessionruntime.ExecutionHandle(nil), selection.Interruptible...)
 			if selector.SessionID == nil {
@@ -257,7 +257,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.mutations.Run(ctx, taskID, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
 		if beforeSelection != nil {
 			if err := beforeSelection(); err != nil {
 				return err
