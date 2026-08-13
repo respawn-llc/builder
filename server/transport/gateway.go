@@ -469,6 +469,10 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
+	executable, ok := inboundExecutableRoutes[req.Method]
+	if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
 		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
 			return responseForError(req.ID, err)
@@ -476,10 +480,6 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)
-	}
-	executable, ok := inboundExecutableRoutes[req.Method]
-	if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
 	return executable.executeUnary(g, ctx, state, req)
 }

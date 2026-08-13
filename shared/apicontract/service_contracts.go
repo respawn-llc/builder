@@ -43,6 +43,11 @@ type OnboardingFinalizeTrustedService interface {
 	FinalizeOnboardingValidated(ctx context.Context, req Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error)
 }
 
+type OnboardingFinalizeGatewayService interface {
+	OnboardingFinalizeService
+	OnboardingFinalizeTrustedService
+}
+
 type ProcessControlService interface {
 	KillProcess(ctx context.Context, req serverapi.ProcessKillRequest) (serverapi.ProcessKillResponse, error)
 	GetInlineOutput(ctx context.Context, req serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error)
@@ -167,6 +172,11 @@ type SessionViewTrustedService interface {
 	GetSessionExecutionEnvironmentValidated(ctx context.Context, req Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error)
 }
 
+type SessionViewGatewayService interface {
+	SessionViewService
+	SessionViewTrustedService
+}
+
 type WorktreeService interface {
 	GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error)
 	ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error)
@@ -185,6 +195,19 @@ type AuthorizedProjectWorkspaceBinding struct {
 	ProjectID     string
 	WorkspaceID   string
 	CanonicalRoot string
+}
+
+type WorktreeTrustedService interface {
+	ListWorkspaceWorktreesValidated(
+		ctx context.Context,
+		req Validated[serverapi.WorktreeWorkspaceListRequest],
+		binding AuthorizedProjectWorkspaceBinding,
+	) (serverapi.WorktreeWorkspaceListResponse, error)
+}
+
+type WorktreeGatewayService interface {
+	WorktreeService
+	WorktreeTrustedService
 }
 
 type WorkflowService interface {

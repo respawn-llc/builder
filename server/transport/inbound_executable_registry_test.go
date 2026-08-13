@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -8,6 +9,16 @@ import (
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
+
+type notificationRejectingGatewayDependencies struct {
+	GatewayDependencies
+	availabilityChecks int
+}
+
+func (d *notificationRejectingGatewayDependencies) RouteDependencyAvailable(apicontract.Dependency) error {
+	d.availabilityChecks++
+	return nil
+}
 
 func TestInboundExecutableRegistryExhaustivelyPartitionsRouteCatalog(t *testing.T) {
 	if err := validateInboundExecutableRegistry(); err != nil {
@@ -34,6 +45,38 @@ func TestInboundExecutableRegistryExhaustivelyPartitionsRouteCatalog(t *testing.
 		default:
 			t.Errorf("route %q has unsupported kind %q", route.Method, route.Kind)
 		}
+	}
+}
+
+func TestGatewayRejectsEveryOutboundNotificationBeforeDependencyExecution(t *testing.T) {
+	deps := &notificationRejectingGatewayDependencies{}
+	gateway := &Gateway{deps: deps}
+	state := &connectionState{handshakeDone: true}
+
+	notificationCount := 0
+	for _, route := range apicontract.Routes() {
+		if route.Kind != apicontract.KindNotification {
+			continue
+		}
+		notificationCount++
+		t.Run(route.Method, func(t *testing.T) {
+			response := gateway.dispatch(context.Background(), state, protocol.Request{
+				JSONRPC: protocol.JSONRPCVersion,
+				ID:      "notification-request",
+				Method:  route.Method,
+				Params:  []byte(`{"malformed-notification-payload":true}`),
+			})
+			if response.Error == nil || response.Error.Code != protocol.ErrCodeMethodNotFound {
+				t.Fatalf("response = %+v, want method-not-found", response)
+			}
+		})
+	}
+
+	if notificationCount == 0 {
+		t.Fatal("shared route catalog contains no outbound notifications")
+	}
+	if deps.availabilityChecks != 0 {
+		t.Fatalf("notification requests reached dependency availability %d times", deps.availabilityChecks)
 	}
 }
 
