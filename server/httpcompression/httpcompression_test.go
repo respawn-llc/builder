@@ -242,6 +242,43 @@ func TestRequestMiddlewareCompressesOnlyReplayableBodiesAtOrAboveThreshold(t *te
 	}
 }
 
+func TestRequestMiddlewareAdvertisesResponseCodingsWithoutBody(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.test", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+
+	var acceptEncoding string
+	if _, err := Middleware(ContentCodingZstd)(request, func(request *http.Request) (*http.Response, error) {
+		acceptEncoding = request.Header.Get("Accept-Encoding")
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("middleware: %v", err)
+	}
+	if acceptEncoding != responseContentCodings {
+		t.Fatalf("Accept-Encoding = %q, want %q", acceptEncoding, responseContentCodings)
+	}
+}
+
+func TestRequestMiddlewarePreservesExplicitAcceptEncoding(t *testing.T) {
+	request, err := http.NewRequest(http.MethodGet, "https://example.test", nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	request.Header.Set("Accept-Encoding", "br")
+
+	var acceptEncoding string
+	if _, err := Middleware(ContentCodingZstd)(request, func(request *http.Request) (*http.Response, error) {
+		acceptEncoding = request.Header.Get("Accept-Encoding")
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("middleware: %v", err)
+	}
+	if acceptEncoding != "br" {
+		t.Fatalf("Accept-Encoding = %q, want br", acceptEncoding)
+	}
+}
+
 func TestRequestMiddlewarePreservesExplicitContentEncoding(t *testing.T) {
 	payload := bytes.Repeat([]byte("payload"), 200)
 	request, err := http.NewRequest(http.MethodPost, "https://example.test", bytes.NewReader(payload))

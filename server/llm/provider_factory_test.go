@@ -3,7 +3,10 @@ package llm
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +97,72 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 	}
 	if transport.ProviderIdentifier != "factory-agent" {
 		t.Fatalf("provider identifier = %q, want factory-agent", transport.ProviderIdentifier)
+	}
+}
+
+func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) {
+	var requestEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestEncoding = r.Header.Get("Content-Encoding")
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	client, err := NewProviderClient(ProviderClientOptions{
+		Model:      "gpt-5.6-sol",
+		Auth:       oauthStaticAuth{},
+		HTTPClient: newRewritingHTTPClient(t, server),
+	})
+	if err != nil {
+		t.Fatalf("NewProviderClient: %v", err)
+	}
+	if _, err := client.Generate(context.Background(), Request{
+		Model:          "gpt-5.6-sol",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SystemPrompt:   strings.Repeat("large request content ", 100),
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if requestEncoding != "zstd" {
+		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
+	}
+}
+
+func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing.T) {
+	var requestEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestEncoding = r.Header.Get("Content-Encoding")
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+	}))
+	defer server.Close()
+
+	manager := auth.NewManager(auth.NewMemoryStore(auth.State{
+		Method: auth.Method{
+			Type:  auth.MethodOAuth,
+			OAuth: &auth.OAuthMethod{AccessToken: "oauth-token", AccountID: "account-1"},
+		},
+	}), nil, nil)
+	client, err := NewProviderClient(ProviderClientOptions{
+		Model:      "gpt-5.6-sol",
+		Auth:       manager,
+		HTTPClient: newRewritingHTTPClient(t, server),
+	})
+	if err != nil {
+		t.Fatalf("NewProviderClient: %v", err)
+	}
+	if _, err := client.Generate(context.Background(), Request{
+		Model:          "gpt-5.6-sol",
+		ToolChoiceMode: ToolChoiceModeAutomatic,
+		SystemPrompt:   strings.Repeat("large request content ", 100),
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if requestEncoding != "zstd" {
+		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
 	}
 }
 

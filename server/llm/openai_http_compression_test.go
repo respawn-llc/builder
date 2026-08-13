@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"core/server/httpcompression"
 	"core/shared/textutil"
 	"github.com/klauspost/compress/zstd"
 )
@@ -33,7 +34,7 @@ func TestGenerateChatGPTCodexCompressesLargeResponsesBodyWithZstd(t *testing.T) 
 	defer server.Close()
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.Client = newRewritingHTTPClient(t, server)
+	transport.Client = httpcompression.NewClient(newRewritingHTTPClient(t, server))
 
 	response, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
