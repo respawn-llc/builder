@@ -164,7 +164,7 @@ func streamChildFromParent(
 	if err != nil {
 		return nil, 0, err
 	}
-	child.eventLogCreationVersion = parentLog.log.version
+	child.eventLogCreationVersion = eventLogVersionPointer(parentLog.log.version)
 	keepChild := false
 	defer func() {
 		if !keepChild {

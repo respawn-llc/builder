@@ -1,9 +1,12 @@
 package session
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"core/shared/transcript"
 )
 
 func TestQuestionHistoryCursorRejectsMissingAndZeroByteLogs(t *testing.T) {
@@ -56,12 +59,12 @@ func TestQuestionHistoryCursorAcceptsVersionedHeaderOnlyLogs(t *testing.T) {
 func TestQuestionHistoryCursorReadsNewestToOldestAcrossRetainedWindows(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
-	writeVersionedEventLog(t, path, EventLogVersionV2, []EventRecord{
-		mustVersionMatrixRecord(t, 1, MessageRoleUser, "oldest"),
+	writeQuestionHistoryCursorLog(t, path, EventLogVersionV2, []EventRecord{
+		mustQuestionHistoryCursorRecord(t, 1, "oldest"),
 		mustHistoryReplacementRecord(t, 2),
-		mustVersionMatrixRecord(t, 3, MessageRoleAssistant, "middle"),
+		mustQuestionHistoryCursorRecord(t, 3, "middle"),
 		mustHistoryReplacementRecord(t, 4),
-		mustVersionMatrixRecord(t, 5, MessageRoleAssistant, "newest"),
+		mustQuestionHistoryCursorRecord(t, 5, "newest"),
 	})
 	cursor, err := OpenQuestionHistoryCursor(dir, 3)
 	if err != nil {
@@ -79,7 +82,7 @@ func TestQuestionHistoryCursorReadsNewestToOldestAcrossRetainedWindows(t *testin
 		}
 		sequences = append(sequences, record.Seq())
 	}
-	if !equalInt64s(sequences, []int64{5, 4, 3, 2, 1}) {
+	if !equalInt64s(sequences, []int64{5, 3, 1}) {
 		t.Fatalf("sequences = %v", sequences)
 	}
 	if cursor.HistoryOmitted() {
@@ -99,7 +102,7 @@ func TestQuestionHistoryCursorMaxHandoffsOneDetectsOmissionWithoutDecodingOlderC
 	if err != nil {
 		t.Fatalf("encode replacement: %v", err)
 	}
-	newest := mustVersionMatrixRecord(t, 3, MessageRoleAssistant, "newest")
+	newest := mustQuestionHistoryCursorRecord(t, 3, "newest")
 	newestLine, err := encodeEventRecordV2(newest)
 	if err != nil {
 		t.Fatalf("encode newest: %v", err)
@@ -133,11 +136,64 @@ func TestQuestionHistoryCursorMaxHandoffsOneDetectsOmissionWithoutDecodingOlderC
 	}
 }
 
+func TestQuestionHistoryCursorStreamsLargeReplacementBoundaryWithoutMaterializingItems(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	header, err := encodeEventLogHeader(EventLogVersionV2)
+	if err != nil {
+		t.Fatalf("encode header: %v", err)
+	}
+	newest := mustQuestionHistoryCursorRecord(t, 2, "newest")
+	newestLine, err := encodeEventRecordV2(newest)
+	if err != nil {
+		t.Fatalf("encode newest: %v", err)
+	}
+	fp, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("create cursor fixture: %v", err)
+	}
+	if _, err := fp.Write(append(header, '\n')); err != nil {
+		t.Fatalf("write header: %v", err)
+	}
+	if _, err := fp.WriteString(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","items":[{"type":"other","raw":"`); err != nil {
+		t.Fatalf("write replacement prefix: %v", err)
+	}
+	chunk := bytes.Repeat([]byte{'x'}, int(eventLogScanChunkSize))
+	for range 2048 {
+		if _, err := fp.Write(chunk); err != nil {
+			t.Fatalf("write replacement item: %v", err)
+		}
+	}
+	if _, err := fp.WriteString(`"}]}}` + "\n"); err != nil {
+		t.Fatalf("write replacement suffix: %v", err)
+	}
+	if _, err := fp.Write(append(newestLine, '\n')); err != nil {
+		t.Fatalf("write newest: %v", err)
+	}
+	if err := fp.Close(); err != nil {
+		t.Fatalf("close cursor fixture: %v", err)
+	}
+
+	cursor, err := OpenQuestionHistoryCursor(dir, 2)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer cursor.Close()
+	record, err := cursor.Next()
+	if err != nil || record == nil || record.Seq() != 2 {
+		t.Fatalf("newest Next = %#v, %v", record, err)
+	}
+	record, err = cursor.Next()
+	if err != nil || record != nil {
+		t.Fatalf("terminal Next = %#v, %v", record, err)
+	}
+}
+
 func TestQuestionHistoryCursorIgnoresIncompleteConcurrentTail(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)
 	writeVersionedEventLog(t, path, EventLogVersionV1, []EventRecord{
-		mustVersionMatrixRecord(t, 1, MessageRoleUser, "complete"),
+		mustQuestionHistoryCursorRecordV1(t, 1, "complete"),
 	})
 	fp, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
@@ -168,7 +224,7 @@ func TestQuestionHistoryCursorSurfacesCompleteDecodeFailure(t *testing.T) {
 		t.Fatalf("encode header: %v", err)
 	}
 	content := append(header, '\n')
-	content = append(content, []byte(`{"seq":1,"kind":"message","payload":BROKEN}`)...)
+	content = append(content, []byte(`{"seq":1,"kind":"tool_completed","payload":BROKEN}`)...)
 	content = append(content, '\n')
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write malformed event log: %v", err)
@@ -186,7 +242,7 @@ func TestQuestionHistoryCursorSurfacesCompleteDecodeFailure(t *testing.T) {
 func TestQuestionHistoryCursorDoesNotWaitForSessionMutationLock(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
-	if _, _, err := log.AppendRecord(nil, sessionTestMessage(MessageRoleUser, "visible")); err != nil {
+	if _, _, err := log.AppendRecord(nil, mustQuestionHistoryCursorPayload(t, "visible")); err != nil {
 		t.Fatalf("append fixture: %v", err)
 	}
 	store.mutationMu.Lock()
@@ -212,6 +268,63 @@ func mustHistoryReplacementRecord(t *testing.T, sequence int64) EventRecord {
 		t.Fatalf("create history replacement: %v", err)
 	}
 	return record
+}
+
+func mustQuestionHistoryCursorRecord(t *testing.T, sequence int64, question string) EventRecord {
+	t.Helper()
+	committedAt := transcript.CommittedAtUnixMs(sequence)
+	record, err := newEventRecord(
+		sequence,
+		nil,
+		mustQuestionHistoryCursorPayload(t, question),
+		&committedAt,
+	)
+	if err != nil {
+		t.Fatalf("create Question-history cursor record: %v", err)
+	}
+	return record
+}
+
+func mustQuestionHistoryCursorRecordV1(t *testing.T, sequence int64, question string) EventRecord {
+	t.Helper()
+	record, err := NewEventRecord(sequence, nil, mustQuestionHistoryCursorPayload(t, question))
+	if err != nil {
+		t.Fatalf("create v1 Question-history cursor record: %v", err)
+	}
+	return record
+}
+
+func mustQuestionHistoryCursorPayload(t *testing.T, question string) ToolCompletionRecord {
+	t.Helper()
+	return ToolCompletionRecord{
+		CallID:     "call-" + question,
+		Name:       askQuestionToolName,
+		OutputKind: ToolOutputKindFunction,
+		Output:     []byte(`"answer"`),
+		Presentation: transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
+			ToolName: askQuestionToolName,
+			Question: question,
+		}),
+		QuestionAnswer: &QuestionAnswerRecord{Freeform: stringPointer("answer")},
+	}
+}
+
+func writeQuestionHistoryCursorLog(
+	t *testing.T,
+	path string,
+	version int,
+	records []EventRecord,
+) {
+	t.Helper()
+	lines := make([][]byte, 0, len(records))
+	for _, record := range records {
+		line, err := encodeEventRecordForVersion(version, record)
+		if err != nil {
+			t.Fatalf("encode v%d Question-history cursor record: %v", version, err)
+		}
+		lines = append(lines, line)
+	}
+	writeRawVersionedEventLog(t, path, version, lines)
 }
 
 func equalInt64s(left, right []int64) bool {

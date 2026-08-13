@@ -171,6 +171,58 @@ func TestQuestionHistorySubscriptionPreservesMultilinePresentedText(t *testing.T
 	_ = projected
 }
 
+func TestQuestionHistorySubscriptionPullsThroughLargeSingleWindow(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("persist Session: %v", err)
+	}
+	eventLog, err := store.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("materialize event log: %v", err)
+	}
+	const malformedCount = 2048
+	payloads := make([]session.EventRecordPayload, 0, malformedCount+1)
+	payloads = append(payloads, questionCompletion(
+		t,
+		"valid",
+		nil,
+		&session.QuestionAnswerRecord{Freeform: sessionViewStringPointer("answer")},
+	))
+	for index := 0; index < malformedCount; index++ {
+		payloads = append(payloads, session.ToolCompletionRecord{
+			CallID:       "call-malformed",
+			Name:         "ask_question",
+			OutputKind:   session.ToolOutputKindFunction,
+			Output:       json.RawMessage(`"flattened"`),
+			Presentation: transcript.EncodeToolCallMeta(transcript.ToolCallMeta{ToolName: "ask_question"}),
+			QuestionAnswer: &session.QuestionAnswerRecord{
+				Freeform: sessionViewStringPointer("ignored"),
+			},
+		})
+	}
+	if _, receipt, err := eventLog.AppendRecordsAtomic(nil, payloads); err != nil || !receipt.Committed {
+		t.Fatalf("append large single-window fixture: receipt=%+v error=%v", receipt, err)
+	}
+
+	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
+			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
+		})
+	if err != nil {
+		t.Fatalf("subscribe Question history: %v", err)
+	}
+	defer sub.Close()
+	_ = nextQuestionHistoryEvent(t, sub)
+	question := nextQuestionHistoryEvent(t, sub)
+	if question.Question == nil || question.Question.Question != "valid" {
+		t.Fatalf("projected Question = %#v", question)
+	}
+	completed := nextQuestionHistoryEvent(t, sub)
+	if completed.Kind != serverapi.QuestionHistoryEventCompleted {
+		t.Fatalf("completed event = %#v", completed)
+	}
+}
+
 type persistedOnlySessionResolver struct {
 	record session.PersistedSessionRecord
 }

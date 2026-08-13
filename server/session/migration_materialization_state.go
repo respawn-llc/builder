@@ -191,14 +191,15 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 
 	switch classification {
 	case eventLogSourceMissing, eventLogSourceEmpty:
-		version := s.eventLogCreationVersion
-		if version == 0 {
-			version = EventLogVersionV2
+		if s.eventLogCreationVersion == nil {
+			return eventLogPreparationResult{}, false, errors.New(
+				"event-log materialization invariant violated: creation version is absent",
+			)
 		}
 		if err := installHeaderOnlyCurrentEventLog(
 			eventsPath,
 			workspace,
-			version,
+			*s.eventLogCreationVersion,
 			func() {
 				// Rename is the migration commit point. This transition must
 				// precede workspace cleanup and directory sync.

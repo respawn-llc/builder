@@ -61,9 +61,13 @@ type Store struct {
 	persistedMetaVersion    uint64
 	options                 storeOptions
 	materializedEventLog    *currentEventLog
-	eventLogCreationVersion int
+	eventLogCreationVersion *int
 	eventLogMaterialization *eventLogMaterializationSnapshot
 	recoveryErr             error
+}
+
+func eventLogVersionPointer(version int) *int {
+	return &version
 }
 
 type persistenceObservation struct {
@@ -268,7 +272,7 @@ func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceConta
 		},
 		conversationFreshness:   ConversationFreshnessFresh,
 		persisted:               false,
-		eventLogCreationVersion: EventLogVersionV2,
+		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}, nil
 }
 
@@ -320,7 +324,7 @@ func openPersistedSession(
 		eventsFP:                filepath.Join(sessionDir, eventsFile),
 		persisted:               true,
 		options:                 storeOpts,
-		eventLogCreationVersion: EventLogVersionV2,
+		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}
 	if resolvedMeta == nil {
 		return nil, errPersistedSessionResolverRequired
