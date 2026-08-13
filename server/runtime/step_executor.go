@@ -348,7 +348,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
-			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			_, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
 			if err != nil {
 				return stepLoopResult{}, err
 			}

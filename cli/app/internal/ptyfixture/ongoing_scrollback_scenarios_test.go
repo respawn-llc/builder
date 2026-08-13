@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
