@@ -170,6 +170,24 @@ func (s *Store) applyManualMove(
 	executionTarget *ExecutionTargetCandidate,
 	prepareAssignments ManualMoveTargetAssignmentPreparer,
 ) (result ManualMoveResult, resultErr error) {
+	task, err := s.queries.GetTask(ctx, string(prepared.request.TaskID))
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	workflowID := runtimeids.WorkflowID(task.WorkflowID)
+	_, err = s.RunWorkflowGraphSaveOperation(ctx, workflowID, func(ctx context.Context) (WorkflowGraphSaveResult, error) {
+		result, resultErr = s.applyManualMoveWithinWorkflowLane(ctx, prepared, executionTarget, prepareAssignments)
+		return WorkflowGraphSaveResult{}, resultErr
+	})
+	return result, err
+}
+
+func (s *Store) applyManualMoveWithinWorkflowLane(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+	prepareAssignments ManualMoveTargetAssignmentPreparer,
+) (result ManualMoveResult, resultErr error) {
 	defer func() {
 		reportWorkflowInvariantError(s.invariantPolicy, resultErr)
 	}()

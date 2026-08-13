@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"core/server/workflow"
 )
@@ -122,20 +124,12 @@ func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *tes
 		prepared,
 		noneManualMoveExecutionTargetCandidate(binding),
 		func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
-			updated := definition
-			updated.Edges = append([]workflow.Edge(nil), definition.Edges...)
-			for index := range updated.Edges {
-				if updated.Edges[index].TargetNodeID == workflow.NodeIDOf(target) {
-					updated.Edges[index].PromptTemplate = "Updated assignment instructions."
-					break
-				}
+			version, versionErr := store.incrementWorkflowVersion(ctx, store.queries, workflowID)
+			if versionErr != nil {
+				return ManualMoveTargetAssignmentPreparation{}, versionErr
 			}
-			saved, saveErr := store.SaveWorkflowGraph(ctx, NewWorkflowGraphSaveRequest(updated, record.Version))
-			if saveErr != nil {
-				return ManualMoveTargetAssignmentPreparation{}, saveErr
-			}
-			if !saved.Saved || saved.Version != record.Version+1 {
-				return ManualMoveTargetAssignmentPreparation{}, errors.New("workflow edit did not commit")
+			if version != record.Version+1 {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("workflow version did not advance")
 			}
 			return ManualMoveTargetAssignmentPreparation{
 				Abort: func(err error) error {
@@ -157,6 +151,91 @@ func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *tes
 	}
 	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(origin.Reference) {
 		t.Fatalf("Current Nodes after Workflow edit = %+v, want origin %v", currentNodes, origin.Reference)
+	}
+}
+
+func TestManualMoveRetainedAssignmentBlocksWorkflowSaveUntilMoveCommits(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	assignmentPrepared := make(chan struct{})
+	releaseAssignment := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseAssignment) })
+	})
+	moveDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			prepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				close(assignmentPrepared)
+				<-releaseAssignment
+				return ManualMoveTargetAssignmentPreparation{}, nil
+			},
+		)
+		moveDone <- moveErr
+	}()
+	select {
+	case <-assignmentPrepared:
+	case <-time.After(time.Second):
+		t.Fatal("Manual Move did not reach assignment preparation")
+	}
+	updated := definition
+	updated.Edges = append([]workflow.Edge(nil), definition.Edges...)
+	for index := range updated.Edges {
+		if updated.Edges[index].TargetNodeID == workflow.NodeIDOf(target) {
+			updated.Edges[index].PromptTemplate = "Updated assignment instructions."
+			break
+		}
+	}
+	saveDone := make(chan WorkflowGraphSaveResult, 1)
+	saveErr := make(chan error, 1)
+	go func() {
+		saved, err := store.SaveWorkflowGraph(ctx, NewWorkflowGraphSaveRequest(updated, record.Version))
+		if err != nil {
+			saveErr <- err
+			return
+		}
+		saveDone <- saved
+	}()
+	select {
+	case err := <-saveErr:
+		t.Fatalf("SaveWorkflowGraph returned while Manual Move assignment was pending: %v", err)
+	case saved := <-saveDone:
+		t.Fatalf("SaveWorkflowGraph returned while Manual Move assignment was pending: %+v", saved)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseAssignment) })
+	if err := <-moveDone; err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	select {
+	case err := <-saveErr:
+		t.Fatalf("SaveWorkflowGraph after Manual Move: %v", err)
+	case saved := <-saveDone:
+		if !saved.Saved || saved.Version != record.Version+1 {
+			t.Fatalf("SaveWorkflowGraph after Manual Move = %+v, want version %d", saved, record.Version+1)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SaveWorkflowGraph remained blocked after Manual Move")
 	}
 }
 
