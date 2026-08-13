@@ -242,34 +242,38 @@ func (s *Starter) PrepareManualMoveAssignments(
 	ctx context.Context,
 	inputs []workflowstore.CurrentNodeStartContext,
 ) (
-	[]workflowstore.ManualMoveTargetAssignment,
+	workflowstore.ManualMoveTargetAssignmentPreparation,
 	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
 	error,
 ) {
 	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
 	steers := make(map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer, len(inputs))
+	var diagnostics []error
 	for _, input := range inputs {
 		if input.Node.Kind == workflow.NodeKindScript {
 			continue
 		}
 		if input.Node.Kind != workflow.NodeKindAgent {
-			return nil, nil, fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference)
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference)
 		}
 		prepared, err := s.prepareCurrentNodeAgentAssignment(ctx, input, false)
 		if err != nil {
-			return nil, nil, err
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 		}
 		receipt, waitErr := prepared.Wait(ctx)
 		if !receipt.Committed {
-			return nil, nil, errors.Join(waitErr, errors.New("Manual Move workflow assignment was not committed"))
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.Join(waitErr, errors.New("Manual Move workflow assignment was not committed"))
+		}
+		if waitErr != nil {
+			diagnostics = append(diagnostics, waitErr)
 		}
 		key, err := input.CurrentNode.Reference.Key()
 		if err != nil {
-			return nil, nil, err
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 		}
 		assignment, ok := prepared.(workflowexecution.CurrentNodeSessionAssignmentSteer)
 		if !ok {
-			return nil, nil, fmt.Errorf("Manual Move Agent target %v assignment has no Session", input.CurrentNode.Reference)
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, fmt.Errorf("Manual Move Agent target %v assignment has no Session", input.CurrentNode.Reference)
 		}
 		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
 			CurrentNode: input.CurrentNode.Reference,
@@ -277,7 +281,10 @@ func (s *Starter) PrepareManualMoveAssignments(
 		})
 		steers[key] = prepared
 	}
-	return assignments, steers, nil
+	return workflowstore.ManualMoveTargetAssignmentPreparation{
+		Assignments: assignments,
+		Diagnostic:  errors.Join(diagnostics...),
+	}, steers, nil
 }
 
 type currentNodeAgentAssignmentSteer struct {

@@ -402,7 +402,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -467,7 +467,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -545,7 +545,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -678,7 +678,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove backward: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
 		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
 	})
@@ -777,7 +777,7 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
@@ -898,7 +898,7 @@ WHERE task_id = ?
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
@@ -1000,7 +1000,7 @@ WHERE task_id = ?
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
@@ -1140,7 +1140,7 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("PreviewManualMove error = %T %v, want RetainedTargetUnavailableError", err, err)
 	}
-	_, err = store.ApplyManualMove(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
+	_, err = store.applyManualMoveWithoutAssignments(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("ApplyManualMove error = %T %v, want RetainedTargetUnavailableError", err, err)
 	}
@@ -1170,7 +1170,7 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	if err != nil {
 		t.Fatalf("PrepareManualMove fallback retry: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
 	if err != nil {
 		t.Fatalf("ApplyManualMove fallback: %v", err)
 	}
@@ -1313,7 +1313,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := store.applyManualMoveWithoutAssignments(ctx, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,

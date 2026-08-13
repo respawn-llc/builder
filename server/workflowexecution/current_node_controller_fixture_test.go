@@ -69,7 +69,7 @@ func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
 	_ context.Context,
 	inputs []workflowstore.CurrentNodeStartContext,
 ) (
-	[]workflowstore.ManualMoveTargetAssignment,
+	workflowstore.ManualMoveTargetAssignmentPreparation,
 	map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
 	error,
 ) {
@@ -81,7 +81,7 @@ func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
 		}
 		key, err := input.CurrentNode.Reference.Key()
 		if err != nil {
-			return nil, nil, err
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 		}
 		sessionID := runtimeids.NewSessionID()
 		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
@@ -92,7 +92,7 @@ func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
 			receipt: session.CommitReceipt{Committed: true},
 		}
 	}
-	return assignments, steers, nil
+	return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, steers, nil
 }
 
 type completedCurrentNodeAssignmentSteer struct {

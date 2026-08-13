@@ -80,6 +80,11 @@ type failingManualMoveAssignmentSteerer struct {
 	cause    error
 }
 
+type diagnosticManualMoveAssignmentSteerer struct {
+	delegate   *Starter
+	diagnostic error
+}
+
 func (s failingManualMoveAssignmentSteerer) SteerCurrentNodeAssignment(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
@@ -91,11 +96,34 @@ func (s failingManualMoveAssignmentSteerer) PrepareManualMoveAssignments(
 	context.Context,
 	[]workflowstore.CurrentNodeStartContext,
 ) (
-	[]workflowstore.ManualMoveTargetAssignment,
+	workflowstore.ManualMoveTargetAssignmentPreparation,
 	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
 	error,
 ) {
-	return nil, nil, s.cause
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, s.cause
+}
+
+func (s diagnosticManualMoveAssignmentSteerer) SteerCurrentNodeAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return s.delegate.SteerCurrentNodeAssignment(ctx, reference)
+}
+
+func (s diagnosticManualMoveAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	preparation, steers, err := s.delegate.PrepareManualMoveAssignments(ctx, inputs)
+	if err != nil {
+		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
+	}
+	preparation.Diagnostic = s.diagnostic
+	return preparation, steers, nil
 }
 
 func (s *committedDiagnosticCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
@@ -1231,6 +1259,72 @@ func TestManualMoveAssignmentPreparationFailureLeavesOriginCurrent(t *testing.T)
 	if len(f.client.Requests()) != 0 {
 		t.Fatalf("model requests after assignment failure = %d, want none", len(f.client.Requests()))
 	}
+}
+
+func TestManualMoveCommittedAssignmentDiagnosticAppliesAndStartsTarget(t *testing.T) {
+	diagnostic := errors.New("assignment observer diagnostic")
+	f := newCurrentNodeRunnerFixtureWithAssignmentSteerer(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+		func(starter *Starter) workflowexecution.CurrentNodeAssignmentSteerer {
+			return diagnosticManualMoveAssignmentSteerer{
+				delegate:   starter,
+				diagnostic: diagnostic,
+			}
+		},
+	)
+	scriptPath := filepath.Join(t.TempDir(), "fail.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 23\n"), 0o755); err != nil {
+		t.Fatalf("write failing Script: %v", err)
+	}
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Manual Move committed assignment diagnostic",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindScript, scriptPath: scriptPath},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review the task."},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var target workflow.NodeID
+	for _, node := range definition.Nodes {
+		if node.Kind() == workflow.NodeKindAgent {
+			target = workflow.NodeIDOf(node)
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("workflow has no Agent target")
+	}
+	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: target,
+	})
+	if err != nil {
+		t.Fatalf("prepare Manual Move: %v", err)
+	}
+	moved, err := f.controller.ApplyManualMove(context.Background(), prepared, nil)
+	if !errors.Is(err, diagnostic) {
+		t.Fatalf("Manual Move error = %v, want committed diagnostic %v", err, diagnostic)
+	}
+	if moved.Outcome != workflowstore.ManualMoveResultOutcomeApplied {
+		t.Fatalf("Manual Move result = %+v, want applied", moved)
+	}
+	f.waitForModelRequests(t, 1)
 }
 
 func TestCompactAndContinueSessionEstablishesTargetRoleGeneration(t *testing.T) {

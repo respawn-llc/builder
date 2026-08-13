@@ -28,7 +28,12 @@ type ManualMoveTargetAssignment struct {
 	SessionID   runtimeids.SessionID
 }
 
-type ManualMoveTargetAssignmentPreparer func(context.Context, []CurrentNodeStartContext) ([]ManualMoveTargetAssignment, error)
+type ManualMoveTargetAssignmentPreparation struct {
+	Assignments []ManualMoveTargetAssignment
+	Diagnostic  error
+}
+
+type ManualMoveTargetAssignmentPreparer func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error)
 
 type preparedManualMoveAssignments struct {
 	targets     []workflow.CurrentNode
@@ -69,7 +74,10 @@ func (s *Store) ManualMoveTask(ctx context.Context, req ManualMoveRequest) (Manu
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	return s.ApplyManualMove(ctx, prepared, nil)
+	if prepared.noOp || !executableNodeKind(prepared.target.Kind()) {
+		return s.applyManualMove(ctx, prepared, nil, nil)
+	}
+	return ManualMoveResult{}, errors.New("executable Manual Move requires lifecycle assignment preparation")
 }
 
 func (s *Store) PrepareManualMove(ctx context.Context, req ManualMoveRequest) (preparation ManualMovePreparation, resultErr error) {
@@ -128,11 +136,40 @@ func currentNodeDefinitionNodeFromTask(ctx context.Context, q *sqlitegen.Queries
 	return currentNodeDefinitionNode(definition, nodeID)
 }
 
-func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparation, executionTarget *ExecutionTargetCandidate) (result ManualMoveResult, resultErr error) {
-	return s.ApplyManualMoveWithTargetAssignments(ctx, prepared, executionTarget, nil)
+// ApplyManualMove applies moves that cannot create Agent work. Agent
+// placement must flow through ApplyManualMoveWithTargetAssignments.
+func (s *Store) ApplyManualMove(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (ManualMoveResult, error) {
+	if !prepared.noOp && prepared.target != nil && prepared.target.Kind() == workflow.NodeKindAgent {
+		return ManualMoveResult{}, errors.New("Agent Manual Move requires assignment preparation")
+	}
+	return s.applyManualMove(ctx, prepared, executionTarget, nil)
+}
+
+func (s *Store) applyManualMoveWithoutAssignments(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (ManualMoveResult, error) {
+	return s.applyManualMove(ctx, prepared, executionTarget, nil)
 }
 
 func (s *Store) ApplyManualMoveWithTargetAssignments(
+	ctx context.Context,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+	prepareAssignments ManualMoveTargetAssignmentPreparer,
+) (result ManualMoveResult, resultErr error) {
+	if !prepared.noOp && executableNodeKind(prepared.target.Kind()) && prepareAssignments == nil {
+		return ManualMoveResult{}, errors.New("executable Manual Move requires assignment preparation")
+	}
+	return s.applyManualMove(ctx, prepared, executionTarget, prepareAssignments)
+}
+
+func (s *Store) applyManualMove(
 	ctx context.Context,
 	prepared ManualMovePreparation,
 	executionTarget *ExecutionTargetCandidate,
@@ -155,10 +192,11 @@ func (s *Store) ApplyManualMoveWithTargetAssignments(
 			return ManualMoveResult{}, err
 		}
 		preparedAssignments.targets = targets
-		preparedAssignments.assignments, err = prepareAssignments(ctx, contexts)
+		assignmentPreparation, err := prepareAssignments(ctx, contexts)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
+		preparedAssignments.assignments = assignmentPreparation.Assignments
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

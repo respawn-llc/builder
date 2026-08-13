@@ -500,7 +500,10 @@ func (c *CurrentNodeController) ApplyManualMove(
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		var preparedAssignments map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer
+		var (
+			preparedAssignments  map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer
+			assignmentDiagnostic error
+		)
 		moved, err := c.store.ApplyManualMoveWithTargetAssignments(
 			ctx,
 			prepared,
@@ -508,22 +511,23 @@ func (c *CurrentNodeController) ApplyManualMove(
 			func(
 				ctx context.Context,
 				contexts []workflowstore.CurrentNodeStartContext,
-			) ([]workflowstore.ManualMoveTargetAssignment, error) {
+			) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
 				preparer, ok := c.steerer.(interface {
 					PrepareManualMoveAssignments(
 						context.Context,
 						[]workflowstore.CurrentNodeStartContext,
-					) ([]workflowstore.ManualMoveTargetAssignment, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error)
+					) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error)
 				})
 				if !ok {
-					return nil, errors.New("current node assignment steerer cannot prepare Manual Move assignments")
+					return workflowstore.ManualMoveTargetAssignmentPreparation{}, errors.New("current node assignment steerer cannot prepare Manual Move assignments")
 				}
-				assignments, steers, err := preparer.PrepareManualMoveAssignments(ctx, contexts)
+				preparation, steers, err := preparer.PrepareManualMoveAssignments(ctx, contexts)
 				if err != nil {
-					return nil, err
+					return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
 				}
 				preparedAssignments = steers
-				return assignments, nil
+				assignmentDiagnostic = preparation.Diagnostic
+				return preparation, nil
 			},
 		)
 		if err != nil {
@@ -551,7 +555,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 			starts[index].assignment = newCurrentNodeClassifiedAssignment(starts[index].reference, steer)
 		}
 		c.deliverClassifiedStarts(starts, nil)
-		return moved, nil
+		return moved, assignmentDiagnostic
 	})
 }
 
