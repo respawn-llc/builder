@@ -81,6 +81,7 @@ export type VirtualizedFrameProps = Readonly<{
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
   canApplyPixelOffset: boolean;
   scrollCommand?: VirtualizedFrameScrollCommand | undefined;
+  onScrollCommandApplied?: ((key: string) => void) | undefined;
   onScrollMetricsChange?: ((metrics: VirtualizedFrameScrollMetrics) => void) | undefined;
 }>;
 
@@ -106,6 +107,7 @@ export function VirtualizedFrame({
   pixelOffsetRequest,
   canApplyPixelOffset,
   scrollCommand,
+  onScrollCommandApplied,
   onScrollMetricsChange,
 }: VirtualizedFrameProps) {
   const validatedPixelOffsetRequest = requireVirtualizedPixelOffsetRequest(pixelOffsetRequest);
@@ -282,7 +284,8 @@ export function VirtualizedFrame({
       });
     }
     lastScrollCommandKeyRef.current = scrollCommand.key;
-  }, [entries, scrollCommand, virtualizer]);
+    onScrollCommandApplied?.(scrollCommand.key);
+  }, [entries, onScrollCommandApplied, scrollCommand, virtualizer]);
 
   useLayoutEffect(() => {
     const currentEntries = entries.flatMap((entry, index) =>

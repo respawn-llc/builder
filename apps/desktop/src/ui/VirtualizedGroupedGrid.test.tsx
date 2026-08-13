@@ -445,6 +445,32 @@ describe("VirtualizedGroupedGrid", () => {
     });
   });
 
+  it("applies a caller-owned entry scroll request and reports completion", () => {
+    const onScrollRequestApplied = vi.fn();
+
+    render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={entries}
+        estimateSize={() => 40}
+        onScrollRequestApplied={onScrollRequestApplied}
+        scrollRequest={{
+          align: "end",
+          entryKey: "task-1",
+          key: "created-task-1",
+          target: "entry",
+        }}
+      />,
+    );
+
+    expect(virtualizer.scrollToIndex).toHaveBeenCalledWith(2, {
+      align: "end",
+      behavior: "auto",
+    });
+    expect(onScrollRequestApplied).toHaveBeenCalledWith("created-task-1");
+  });
+
   it("updates navigation visibility when the scrollport viewport resizes", () => {
     let clientHeight = 100;
     const setGeometry = (element: HTMLDivElement | null) => {

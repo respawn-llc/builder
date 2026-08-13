@@ -17,6 +17,7 @@ import {
   VirtualizedFrame,
   type VirtualizedFrameEntry,
   type VirtualizedFrameLoadTrigger,
+  type VirtualizedFrameScrollCommand,
   type VirtualizedFrameScrollMetrics,
 } from "./VirtualizedFrame";
 import type { VirtualizedPixelOffsetRequest } from "./virtualizedPixelOffsetRequest";
@@ -50,7 +51,7 @@ export type VirtualizedGroupedGridEntry =
       kind: "boundary";
       key: string;
       groupKey: string;
-      direction: "initial" | "previous" | "next";
+      direction: "initial" | "previous" | "next" | "replacement";
       state?: VirtualizedInfiniteListBoundaryState | undefined;
       hasMore?: boolean | undefined;
       isFetching?: boolean | undefined;
@@ -87,6 +88,8 @@ export type VirtualizedGroupedGridProps = Readonly<{
   paddingStart?: number | undefined;
   onScrollElementChange?: ((element: HTMLDivElement | null) => void) | undefined;
   pixelOffsetRequest?: VirtualizedPixelOffsetRequest | undefined;
+  onScrollRequestApplied?: ((key: string) => void) | undefined;
+  scrollRequest?: VirtualizedFrameScrollCommand | undefined;
   navigation?:
     | Readonly<{
         upLabel: string;
@@ -115,6 +118,8 @@ export function VirtualizedGroupedGrid({
   paddingStart = 0,
   onScrollElementChange,
   pixelOffsetRequest,
+  onScrollRequestApplied,
+  scrollRequest,
   navigation,
 }: VirtualizedGroupedGridProps) {
   requirePositiveColumnCount(columnCount);
@@ -154,6 +159,7 @@ export function VirtualizedGroupedGrid({
         initialScrollAlign="start"
         loadTriggers={loadTriggers}
         onScrollElementChange={onScrollElementChange}
+        onScrollCommandApplied={onScrollRequestApplied}
         onScrollMetricsChange={handleScrollMetricsChange}
         paddingEnd={paddingEnd}
         paddingStart={paddingStart}
@@ -162,7 +168,7 @@ export function VirtualizedGroupedGrid({
         role="grid"
         rowRole="row"
         rowSpacing={rowSpacing}
-        scrollCommand={navigationState.scrollCommand}
+        scrollCommand={scrollRequest ?? navigationState.scrollCommand}
         testId={testId}
       />
       {navigation === undefined || !scrollMetrics.overflows ? null : (
@@ -376,7 +382,13 @@ function groupedLoadTriggers(
   entries: readonly VirtualizedGroupedGridEntry[],
 ): readonly VirtualizedFrameLoadTrigger[] {
   return entries.flatMap((entry) => {
-    if (entry.kind !== "boundary" || entry.direction === "initial") return [];
+    if (
+      entry.kind !== "boundary" ||
+      entry.direction === "initial" ||
+      entry.direction === "replacement"
+    ) {
+      return [];
+    }
     return [
       {
         key: `${entry.groupKey}:${entry.direction}:${entry.loadKey ?? entry.key}`,

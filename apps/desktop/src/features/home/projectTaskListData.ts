@@ -44,6 +44,7 @@ export type ProjectTaskGroupData = Readonly<{
   isFetchingNextPage: boolean;
   isFetchingPreviousPage: boolean;
   isPending: boolean;
+  isPlaceholderData: boolean;
   pageParams: readonly number[];
   pages: readonly TaskListPage[];
   refetch(): Promise<unknown>;
@@ -204,6 +205,7 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
+    isPlaceholderData: query.isPlaceholderData,
     pageParams: query.data?.pageParams ?? [],
     pages,
     refetch: query.refetch,
@@ -224,6 +226,7 @@ const emptyProjectTaskGroupData: ProjectTaskGroupData = {
   isFetchingNextPage: false,
   isFetchingPreviousPage: false,
   isPending: false,
+  isPlaceholderData: false,
   pageParams: [],
   pages: [],
   refetch: async () => undefined,

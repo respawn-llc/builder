@@ -12,6 +12,8 @@ import {
   type SidebarRootController,
 } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
+import type * as UI from "@/ui";
+import type { VirtualizedFrameScrollCommand } from "@/ui/VirtualizedFrame";
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
 
@@ -40,11 +42,15 @@ const fixture = vi.hoisted<{
   };
   counts: ProjectTaskGroupCounts["counts"];
   countsError: Error | null;
+  countsEstablished: boolean;
   countsPending: boolean;
+  backlogTasks: readonly TaskListItem[];
+  doneDataOverrides: Partial<ProjectTaskListData.ProjectTaskGroupData>;
   invalidations: unknown[];
   open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
   assignmentRequests: number;
+  scrollRequests: (VirtualizedFrameScrollCommand | undefined)[];
 }>(() => ({
   activeDestination: null,
   board: {
@@ -72,7 +78,10 @@ const fixture = vi.hoisted<{
   },
   counts: { active: 2, backlog: 1, done: 1 },
   countsError: null,
+  countsEstablished: true,
   countsPending: false,
+  backlogTasks: [taskFixture("backlog-1", "KNT-3", "Backlog task")],
+  doneDataOverrides: {},
   invalidations: [],
   open: vi.fn<SidebarRootController["open"]>(() => ({
     lifecycle: Promise.resolve("closed"),
@@ -80,6 +89,7 @@ const fixture = vi.hoisted<{
   })),
   labelCatalogRequests: 0,
   assignmentRequests: 0,
+  scrollRequests: [],
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -117,21 +127,42 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
     useProjectTaskListData: ({
       anchors,
     }: Readonly<{ anchors: ProjectTaskListData.ProjectTaskGroupAnchors }>) => ({
-      counts: countsQuery(fixture.counts, fixture.countsError, fixture.countsPending),
+      counts: countsQuery(
+        fixture.counts,
+        fixture.countsError,
+        fixture.countsPending,
+        fixture.countsEstablished,
+      ),
       active: groupData(
         mockedActiveTasks ?? [
           task("active-1", "KNT-1", "Active task"),
           task("active-2", "KNT-2", "Running task"),
         ],
       ),
-      backlog: groupData([task("backlog-1", "KNT-3", "Backlog task")]),
-      done: groupData(
-        anchors.done === 75
-          ? [task("done-final", "KNT-84", "Final done task")]
-          : [task("done-1", "KNT-4", "Done task")],
-        anchors.done,
-      ),
+      backlog: groupData(fixture.backlogTasks, anchors.backlog),
+      done: {
+        ...groupData(
+          anchors.done === 75
+            ? [task("done-final", "KNT-84", "Final done task")]
+            : [task("done-1", "KNT-4", "Done task")],
+          anchors.done,
+        ),
+        ...fixture.doneDataOverrides,
+      },
     }),
+  };
+});
+
+vi.mock("@/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof UI>();
+  return {
+    ...actual,
+    VirtualizedGroupedGrid: (
+      props: React.ComponentProps<typeof actual.VirtualizedGroupedGrid>,
+    ) => {
+      fixture.scrollRequests.push(props.scrollRequest);
+      return <actual.VirtualizedGroupedGrid {...props} />;
+    },
   };
 });
 
@@ -159,12 +190,16 @@ describe("ProjectTasksSurface", () => {
     };
     fixture.counts = { active: 2, backlog: 1, done: 1 };
     fixture.countsError = null;
+    fixture.countsEstablished = true;
     fixture.countsPending = false;
+    fixture.backlogTasks = [task("backlog-1", "KNT-3", "Backlog task")];
+    fixture.doneDataOverrides = {};
     fixture.activeDestination = null;
     fixture.open.mockReset();
     fixture.invalidations = [];
     fixture.labelCatalogRequests = 0;
     fixture.assignmentRequests = 0;
+    fixture.scrollRequests = [];
     mockedActiveTasks = undefined;
   });
 
@@ -300,7 +335,7 @@ describe("ProjectTasksSurface", () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const memory = createProjectTasksViewMemory();
     memory.setAnchors({ active: 0, backlog: 80, done: 0 });
-    renderSurface(memory);
+    const view = renderSurface(memory);
     fireEvent.click(screen.getByRole("button", { name: "New Task" }));
     const destination = openedDestination();
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
@@ -317,6 +352,17 @@ describe("ProjectTasksSurface", () => {
       refetchType: "active",
     });
     expect(fixture.open).not.toHaveBeenCalled();
+
+    fixture.counts = { active: 0, backlog: 1, done: 0 };
+    fixture.backlogTasks = [task("task-created", "KNT-5", "Created task")];
+    view.rerender(withQueryClient(surface(memory)));
+    expect(fixture.scrollRequests).toContainEqual(
+      expect.objectContaining({
+        align: "end",
+        entryKey: "task-created",
+        target: "entry",
+      }),
+    );
   });
 
   it("preserves collapsed Backlog after New Task success and exposes no persistent New Task action", async () => {
@@ -371,10 +417,52 @@ describe("ProjectTasksSurface", () => {
     expect(memory.read().anchors.done).toBe(75);
     view.rerender(withQueryClient(surface(memory)));
     expect(screen.getByRole("row", { name: "KNT-84 Final done task" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
+    expect(memory.read().anchors.done).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    expect(memory.read().anchors.done).toBe(75);
+  });
+
+  it("shows final-page replacement loading and lets a failed jump retry", async () => {
+    fixture.counts = { active: 0, backlog: 0, done: 84 };
+    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
+    const memory = createProjectTasksViewMemory();
+    memory.setDisclosure({ active: true, backlog: true, done: true });
+    const view = renderSurface(memory);
+    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 40, writable: true },
+    });
+    view.rerender(withQueryClient(surface(memory)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    view.rerender(withQueryClient(surface(memory)));
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+
+    const refetch = vi.fn();
+    fixture.doneDataOverrides = {
+      error: new Error("Final page unavailable"),
+      isError: true,
+      isFetching: false,
+      isPlaceholderData: true,
+      refetch,
+    };
+    view.rerender(withQueryClient(surface(memory)));
+    expect(screen.getByRole("alert")).toHaveTextContent("Final page unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(refetch).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    expect(refetch).toHaveBeenCalledTimes(2);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
     fixture.countsError = new Error("Counts unavailable");
+    fixture.countsEstablished = false;
 
     renderSurface();
 
@@ -382,6 +470,17 @@ describe("ProjectTasksSurface", () => {
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Delivery" })).not.toBeInTheDocument();
     expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
+  });
+
+  it("retains rows and exact counts with retry feedback when count refresh fails", () => {
+    fixture.countsError = new Error("Counts refresh unavailable");
+
+    renderSurface();
+
+    expect(screen.getByRole("grid", { name: "Project tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: "KNT-1 Active task" })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Counts refresh unavailable");
   });
 
   it("renders canonical six-column content and opens Task Detail with the containing sidebar mode", () => {
@@ -536,9 +635,10 @@ function countsQuery(
   counts: ProjectTaskGroupCounts["counts"],
   error: Error | null,
   pending: boolean,
+  established: boolean,
 ) {
   return {
-    data: error === null && !pending ? { projectID: "project-1", counts, generatedAt: 1 } : undefined,
+    data: established ? { projectID: "project-1", counts, generatedAt: 1 } : undefined,
     error,
     isError: error !== null,
     isFetching: false,
@@ -561,10 +661,27 @@ function groupData(tasks: readonly TaskListItem[], anchor = 0) {
     isFetchingNextPage: false,
     isFetchingPreviousPage: false,
     isPending: false,
+    isPlaceholderData: false,
     pageParams: [anchor],
     pages: [],
     refetch: vi.fn(),
     tasks,
+  };
+}
+
+function taskFixture(id: string, shortID: string, title: string): TaskListItem {
+  return {
+    id,
+    shortID,
+    workflowID: "workflow-1",
+    workflowName: "Delivery",
+    title,
+    createdAt: 1,
+    updatedAt: 1,
+    columnKeys: null,
+    status: { kind: "active", nativeState: "active", nodeIDs: [], attentionTypes: [] },
+    labels: [],
+    dependencyProgress: null,
   };
 }
 

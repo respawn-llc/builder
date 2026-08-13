@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowPickerItem } from "@/api";
@@ -32,8 +32,9 @@ import {
   type ProjectTaskGroup,
   type ProjectTaskGroupData,
 } from "./projectTaskListData";
+import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-import { projectTaskColumnCount, projectTaskColumnEntry, projectTaskEntry } from "./ProjectTaskRow";
+import { projectTaskColumnCount } from "./ProjectTaskRow";
 
 export function ProjectTasksSurface({
   projectID,
@@ -56,6 +57,14 @@ export function ProjectTasksSurface({
   const [finalNavigationRequest, setFinalNavigationRequest] = useState<
     Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null
   >(null);
+  const [pendingTaskReveal, setPendingTaskReveal] = useState<
+    Readonly<{ key: string; taskID: string }> | null
+  >(null);
+  const scrollRequestSequence = useRef(0);
+  const nextScrollRequestKey = useCallback((prefix: string) => {
+    scrollRequestSequence.current += 1;
+    return `${prefix}-${scrollRequestSequence.current.toString()}`;
+  }, []);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
@@ -117,12 +126,16 @@ export function ProjectTasksSurface({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
       mode: sidebarMode,
-      onCreated: async () => {
+      onCreated: async (taskID) => {
         const memory = viewMemory.read();
         if (memory.disclosure.backlog) {
           const nextAnchors = { ...memory.anchors, backlog: 0 };
           viewMemory.setAnchors(nextAnchors);
           setAnchors(nextAnchors);
+          setPendingTaskReveal({
+            key: nextScrollRequestKey(`created-${taskID}`),
+            taskID,
+          });
         }
         await queryClient.invalidateQueries({
           queryKey: queryKeys.projectTaskListsRoot(projectID),
@@ -150,6 +163,7 @@ export function ProjectTasksSurface({
       const nextAnchors = { ...anchors, [group]: 0 };
       viewMemory.setAnchors(nextAnchors);
       setAnchors(nextAnchors);
+      setFinalNavigationRequest((request) => (request?.group === group ? null : request));
     }
     setDisclosure(next);
   };
@@ -157,7 +171,7 @@ export function ProjectTasksSurface({
     (group: ProjectTaskGroup, count: number) => {
       const offset = projectTaskFinalPageAnchor(count);
       const nextAnchors = { ...anchors, [group]: offset };
-      const key = `final-${group}-${offset.toString()}`;
+      const key = nextScrollRequestKey(`final-${group}-${offset.toString()}`);
       viewMemory.setAnchors(nextAnchors);
       setAnchors(nextAnchors);
       setFinalNavigationRequest({
@@ -165,8 +179,11 @@ export function ProjectTasksSurface({
         key,
         offset,
       });
+      if (anchors[group] === offset) {
+        void data[group].refetch();
+      }
     },
-    [anchors, viewMemory],
+    [anchors, data, nextScrollRequestKey, viewMemory],
   );
   const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
   const activeTaskDetailMode =
@@ -200,6 +217,16 @@ export function ProjectTasksSurface({
     disclosure,
     request: finalNavigationRequest,
   });
+  const scrollRequest = preferredScrollRequest(
+    finalNavigation.scrollRequest,
+    createdTaskScrollRequest(pendingTaskReveal, presentation.entries),
+  );
+  const onScrollRequestApplied = scrollRequestAppliedHandler({
+    finalNavigationRequest,
+    pendingTaskReveal,
+    setFinalNavigationRequest,
+    setPendingTaskReveal,
+  });
   return (
     <ProjectTasksContent
       boardBoundary={boardBoundary}
@@ -214,59 +241,15 @@ export function ProjectTasksSurface({
         if (finalNavigation.request === null) return;
         requestFinalEntry(finalNavigation.request.group, finalNavigation.request.count);
       }}
+      onScrollRequestApplied={onScrollRequestApplied}
       onScrollElementChange={onScrollElementChange}
       projectID={projectID}
+      scrollRequest={scrollRequest}
       taskCount={presentation.taskCount}
       viewMemory={viewMemory}
       workflows={workflows}
     />
   );
-}
-
-function projectTasksPresentation({
-  counts,
-  data,
-  disclosure,
-  labelEditorTaskID,
-  onLabelsActivate,
-  onTaskActivate,
-  onToggle,
-  projectID,
-  taskDetailID,
-  t,
-}: Readonly<{
-  counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
-  data: ReturnType<typeof useProjectTaskListData>;
-  disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
-  labelEditorTaskID: string | null;
-  onLabelsActivate: (taskID: string) => void;
-  onTaskActivate: (taskID: string) => void;
-  onToggle: (group: ProjectTaskGroup) => void;
-  projectID: string;
-  taskDetailID: string | null;
-  t: ReturnType<typeof useTranslation>["t"];
-}>): Readonly<{
-  entries: readonly VirtualizedGroupedGridEntry[];
-  taskCount: number | null;
-}> {
-  if (counts === undefined) {
-    return { entries: [projectTaskColumnEntry(t)], taskCount: null };
-  }
-  return {
-    entries: groupedEntries({
-      counts,
-      data,
-      disclosure,
-      labelEditorTaskID,
-      onLabelsActivate,
-      onTaskActivate,
-      onToggle,
-      projectID,
-      taskDetailID,
-      t,
-    }),
-    taskCount: counts.active + counts.backlog + counts.done,
-  };
 }
 
 function finalNavigationState({
@@ -284,13 +267,28 @@ function finalNavigationState({
   request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
   requestKey: string | null;
   requiresRequest: boolean;
+  scrollRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined;
 }> {
   if (counts === undefined) {
-    return { entryKey: "columns", request: null, requestKey: null, requiresRequest: false };
+    return {
+      entryKey: "columns",
+      request: null,
+      requestKey: null,
+      requiresRequest: false,
+      scrollRequest: undefined,
+    };
   }
   const group = [...projectTaskGroups].reverse().find((candidate) => counts[candidate] > 0) ?? null;
   if (group === null) {
-    return { entryKey: "columns", request: null, requestKey: null, requiresRequest: false };
+    return {
+      entryKey: "columns",
+      request: null,
+      requestKey: null,
+      requiresRequest: false,
+      scrollRequest: undefined,
+    };
   }
   if (!disclosure[group]) {
     return finalNavigationReady(`group-${group}`);
@@ -308,19 +306,33 @@ function expandedFinalNavigationState(
   request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
   requestKey: string | null;
   requiresRequest: boolean;
+  scrollRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined;
 }> {
   const finalOffset = projectTaskFinalPageAnchor(count);
-  const finalPageReady = data.pageParams.includes(finalOffset);
+  const finalPageReady = data.pageParams.includes(finalOffset) && !data.isPlaceholderData;
   const finalTaskID = finalPageReady
     ? (data.tasks.at(-1)?.id ?? `group-${group}`)
     : `group-${group}`;
-  const pendingRequest =
-    request?.group === group && request.offset === finalOffset ? request.key : null;
+  const requestInFlight =
+    request?.group === group &&
+    request.offset === finalOffset &&
+    !data.isError;
   return {
     entryKey: finalTaskID,
-    request: pendingRequest === null && !finalPageReady ? { count, group } : null,
-    requestKey: finalPageReady ? pendingRequest : null,
+    request: !requestInFlight && !finalPageReady ? { count, group } : null,
+    requestKey: null,
     requiresRequest: !finalPageReady,
+    scrollRequest:
+      finalPageReady && request !== null
+        ? {
+            align: "end",
+            entryKey: finalTaskID,
+            key: request.key,
+            target: "entry",
+          }
+        : undefined,
   };
 }
 
@@ -329,8 +341,65 @@ function finalNavigationReady(entryKey: string): Readonly<{
   request: null;
   requestKey: null;
   requiresRequest: false;
+  scrollRequest: undefined;
 }> {
-  return { entryKey, request: null, requestKey: null, requiresRequest: false };
+  return {
+    entryKey,
+    request: null,
+    requestKey: null,
+    requiresRequest: false,
+    scrollRequest: undefined,
+  };
+}
+
+function createdTaskScrollRequest(
+  reveal: Readonly<{ key: string; taskID: string }> | null,
+  entries: readonly VirtualizedGroupedGridEntry[],
+) {
+  if (
+    reveal === null ||
+    !entries.some((entry) => entry.kind === "task" && entry.key === reveal.taskID)
+  ) {
+    return undefined;
+  }
+  return {
+    align: "end" as const,
+    entryKey: reveal.taskID,
+    key: reveal.key,
+    target: "entry" as const,
+  };
+}
+
+function preferredScrollRequest(
+  finalRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined,
+  createdTaskRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined,
+) {
+  return finalRequest ?? createdTaskRequest;
+}
+
+function scrollRequestAppliedHandler({
+  finalNavigationRequest,
+  pendingTaskReveal,
+  setFinalNavigationRequest,
+  setPendingTaskReveal,
+}: Readonly<{
+  finalNavigationRequest: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
+  pendingTaskReveal: Readonly<{ key: string; taskID: string }> | null;
+  setFinalNavigationRequest: (request: null) => void;
+  setPendingTaskReveal: (request: null) => void;
+}>): (key: string) => void {
+  return (key) => {
+    if (finalNavigationRequest?.key === key) {
+      setFinalNavigationRequest(null);
+    }
+    if (pendingTaskReveal?.key === key) {
+      setPendingTaskReveal(null);
+    }
+  };
 }
 
 function ProjectTasksContent({
@@ -343,8 +412,10 @@ function ProjectTasksContent({
   onLinkWorkflow,
   onNewTask,
   onRequestFinalEntry,
+  onScrollRequestApplied,
   onScrollElementChange,
   projectID,
+  scrollRequest,
   taskCount,
   viewMemory,
   workflows,
@@ -358,8 +429,12 @@ function ProjectTasksContent({
   onLinkWorkflow: () => void;
   onNewTask: () => void;
   onRequestFinalEntry: () => void;
+  onScrollRequestApplied: (key: string) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
+  scrollRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
   workflows: readonly WorkflowPickerItem[];
@@ -368,7 +443,7 @@ function ProjectTasksContent({
   if (boardBoundary !== undefined) {
     return <InfiniteListBoundary direction="initial" state={boardBoundary} />;
   }
-  if (countsBoundary?.state === "error") {
+  if (countsBoundary?.state === "error" && taskCount === null) {
     return <InfiniteListBoundary direction="initial" state={countsBoundary} />;
   }
   if (workflows.length === 0) {
@@ -416,10 +491,12 @@ function ProjectTasksContent({
           }}
           canApplyPixelOffset={entries.some((entry) => entry.kind === "task")}
           onScrollElementChange={onScrollElementChange}
+          onScrollRequestApplied={onScrollRequestApplied}
           pixelOffsetRequest={createVirtualizedPixelOffsetRequest(
             `restore-${memory.scrollRequestSequence.toString()}`,
             memory.verticalOffsetPx,
           )}
+          scrollRequest={scrollRequest}
           testId="project-task-list-grid"
         />
       )}
@@ -497,167 +574,4 @@ function ProjectTasksEmpty({
       title={title}
     />
   );
-}
-
-function groupedEntries({
-  counts,
-  data,
-  disclosure,
-  labelEditorTaskID,
-  onLabelsActivate,
-  onTaskActivate,
-  onToggle,
-  projectID,
-  taskDetailID,
-  t,
-}: Readonly<{
-  counts: Readonly<Record<ProjectTaskGroup, number>>;
-  data: ReturnType<typeof useProjectTaskListData>;
-  disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
-  labelEditorTaskID: string | null;
-  onLabelsActivate: (taskID: string) => void;
-  onTaskActivate: (taskID: string) => void;
-  onToggle: (group: ProjectTaskGroup) => void;
-  projectID: string;
-  taskDetailID: string | null;
-  t: ReturnType<typeof useTranslation>["t"];
-}>): readonly VirtualizedGroupedGridEntry[] {
-  return [
-    projectTaskColumnEntry(t),
-    ...projectTaskGroups.flatMap((group) => {
-      const count = counts[group];
-      if (count === 0) return [];
-      const groupData = data[group];
-      const entries: VirtualizedGroupedGridEntry[] = [
-        {
-          kind: "group-header",
-          key: `group-${group}`,
-          groupKey: group,
-          label: t(`home.prototype.statusGroups.${group}`),
-          count,
-          ariaLabel: t("home.prototype.taskGroupCount", {
-            count,
-            group: t(`home.prototype.statusGroups.${group}`),
-          }),
-          expanded: disclosure[group],
-          onToggle: () => {
-            onToggle(group);
-          },
-          className: "border-b border-[var(--color-outline)] bg-[var(--color-island-2)] px-[var(--space-3)]",
-        },
-      ];
-      if (!disclosure[group]) return entries;
-      const initial = groupBoundary(groupData, "initial", t);
-      if (initial !== undefined) {
-        entries.push(boundaryEntry({ data: groupData, direction: "initial", group, state: initial, t }));
-      } else {
-        if (
-          groupData.hasPreviousPage ||
-          groupData.isFetchingPreviousPage ||
-          groupData.isFetchPreviousPageError
-        ) {
-          entries.push(
-            boundaryEntry({
-              data: groupData,
-              direction: "previous",
-              group,
-              state: groupBoundary(groupData, "previous", t),
-              t,
-            }),
-          );
-        }
-        entries.push(
-          ...groupData.tasks.map((task) =>
-            projectTaskEntry({
-              group,
-              labelEditorTaskID,
-              onLabelsActivate,
-              onTaskActivate,
-              projectID,
-              task,
-              taskDetailID,
-              t,
-            }),
-          ),
-        );
-        if (groupData.hasNextPage || groupData.isFetchingNextPage || groupData.isFetchNextPageError) {
-          entries.push(
-            boundaryEntry({
-              data: groupData,
-              direction: "next",
-              group,
-              state: groupBoundary(groupData, "next", t),
-              t,
-            }),
-          );
-        }
-      }
-      return entries;
-    }),
-  ];
-}
-
-function boundaryEntry({
-  data,
-  direction,
-  group,
-  state,
-  t,
-}: Readonly<{
-  data: ProjectTaskGroupData;
-  direction: "initial" | "previous" | "next";
-  group: ProjectTaskGroup;
-  state: VirtualizedInfiniteListBoundaryState | undefined;
-  t: ReturnType<typeof useTranslation>["t"];
-}>): VirtualizedGroupedGridEntry {
-  return {
-    kind: "boundary",
-    key: `${group}-${direction}`,
-    groupKey: group,
-    direction,
-    state,
-    hasMore: direction === "previous" ? data.hasPreviousPage : data.hasNextPage,
-    isFetching: direction === "previous" ? data.isFetchingPreviousPage : data.isFetchingNextPage,
-    loadingLabel: t("app.loadingMore"),
-    onLoadMore:
-      direction === "previous"
-        ? () => {
-            void data.fetchPreviousPage();
-          }
-        : () => {
-            void data.fetchNextPage();
-          },
-  };
-}
-
-function groupBoundary(
-  data: ProjectTaskGroupData,
-  direction: "initial" | "previous" | "next",
-  t: ReturnType<typeof useTranslation>["t"],
-): VirtualizedInfiniteListBoundaryState | undefined {
-  const initial = direction === "initial";
-  const failed = initial
-    ? data.isError && data.tasks.length === 0
-    : direction === "previous"
-      ? data.isFetchPreviousPageError
-      : data.isFetchNextPageError;
-  const loading = initial
-    ? data.isPending
-    : direction === "previous"
-      ? data.isFetchingPreviousPage
-      : data.isFetchingNextPage;
-  return directionalBoundary({
-    failed,
-    loading,
-    loadingLabel: t("states.loading"),
-    message: failed ? errorMessage(data.error) : "",
-    onRetry: () => {
-      void (initial
-        ? data.refetch()
-        : direction === "previous"
-          ? data.fetchPreviousPage()
-          : data.fetchNextPage());
-    },
-    retryLabel: t("app.retry"),
-  });
 }
