@@ -289,6 +289,52 @@ func authorizeProcessActiveProject[Req any](
 	}
 }
 
+func authorizeSessionActiveProject[Req any](
+	sessionID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (apicontract.AuthorizedSessionInActiveProject, error) {
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[Req]) (apicontract.AuthorizedSessionInActiveProject, error) {
+		activeProjectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return apicontract.AuthorizedSessionInActiveProject{}, err
+		}
+		metadataStore := g.deps.MetadataStore()
+		if metadataStore == nil {
+			return apicontract.AuthorizedSessionInActiveProject{}, errors.New("metadata store is required")
+		}
+		resolved, err := metadataStore.ResolveActiveProjectSession(ctx, sessionID(validated.Value()))
+		if err != nil {
+			return apicontract.AuthorizedSessionInActiveProject{}, err
+		}
+		if resolved.OwningProjectID != strings.TrimSpace(activeProjectID) {
+			return apicontract.AuthorizedSessionInActiveProject{}, sessionOutsideActiveProjectError{
+				sessionID: resolved.SessionID.String(),
+			}
+		}
+		return apicontract.AuthorizedSessionInActiveProject{
+			SessionID:       resolved.SessionID,
+			ActiveProjectID: strings.TrimSpace(activeProjectID),
+			OwningProjectID: resolved.OwningProjectID,
+			ExecutionTarget: resolved.ExecutionTarget,
+		}, nil
+	}
+}
+
+func authorizeOptionalSessionActiveProject[Req any](
+	sessionID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (apicontract.OptionalAuthorizedSessionInActiveProject, error) {
+	required := authorizeSessionActiveProject(sessionID)
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[Req]) (apicontract.OptionalAuthorizedSessionInActiveProject, error) {
+		if strings.TrimSpace(sessionID(validated.Value())) == "" {
+			return apicontract.AbsentAuthorizedSessionInActiveProject(), nil
+		}
+		authorization, err := required(ctx, g, state, validated)
+		if err != nil {
+			return apicontract.OptionalAuthorizedSessionInActiveProject{}, err
+		}
+		return apicontract.PresentAuthorizedSessionInActiveProject(authorization), nil
+	}
+}
+
 func authorizeSessionAttachment(
 	ctx context.Context,
 	g *Gateway,
@@ -385,6 +431,7 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		case apicontract.KindNotification:
 		}
 	}
+	registerActiveProjectSessionRoutes(executables)
 	executables[protocol.MethodOnboardingFinalize] = inboundUnary[serverapi.OnboardingFinalizeRequest, noAuthorizationFacts](
 		protocol.MethodOnboardingFinalize,
 		apicontract.SemanticValidationRequired,
@@ -395,12 +442,12 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	onboarding := executables[protocol.MethodOnboardingFinalize]
 	onboarding.executeUnary = executeOnboardingFinalize
 	executables[protocol.MethodOnboardingFinalize] = onboarding
-	executables[protocol.MethodSessionGetExecutionEnvironment] = inboundUnary[serverapi.SessionExecutionEnvironmentRequest, noAuthorizationFacts](
+	executables[protocol.MethodSessionGetExecutionEnvironment] = inboundUnary[serverapi.SessionExecutionEnvironmentRequest, apicontract.AuthorizedSessionInActiveProject](
 		protocol.MethodSessionGetExecutionEnvironment,
 		apicontract.SemanticValidationRequired,
 		requestDecoderSessionExecutionEnvironment,
 		nil,
-		authorizeRouteScope[serverapi.SessionExecutionEnvironmentRequest](mustInboundRoute(protocol.MethodSessionGetExecutionEnvironment, apicontract.KindUnary)),
+		authorizeSessionActiveProject(func(req serverapi.SessionExecutionEnvironmentRequest) string { return req.SessionID.String() }),
 	)
 	sessionEnvironment := executables[protocol.MethodSessionGetExecutionEnvironment]
 	sessionEnvironment.executeUnary = executeSessionExecutionEnvironment
@@ -490,23 +537,98 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		},
 		handleRuntimeLiveWait,
 	)
-	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, noAuthorizationFacts, serverapi.SessionRuntimeActivateResponse](
+	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, apicontract.AuthorizedSessionInActiveProject, serverapi.SessionRuntimeActivateResponse](
 		protocol.MethodSessionRuntimeActivate,
 		apicontract.SemanticValidationRequired,
 		requestDecoderDefault,
 		prepareSessionRuntimeActivate,
-		authorizeRouteScope[serverapi.SessionRuntimeActivateRequest](mustInboundRoute(protocol.MethodSessionRuntimeActivate, apicontract.KindUnary)),
+		authorizeSessionActiveProject(func(req serverapi.SessionRuntimeActivateRequest) string { return req.SessionID }),
 		handleSessionRuntimeActivate,
 	)
-	executables[protocol.MethodSessionRuntimeRelease] = inboundTrustedUnary[serverapi.SessionRuntimeReleaseRequest, noAuthorizationFacts, serverapi.SessionRuntimeReleaseResponse](
+	executables[protocol.MethodSessionRuntimeRelease] = inboundTrustedUnary[serverapi.SessionRuntimeReleaseRequest, apicontract.AuthorizedSessionInActiveProject, serverapi.SessionRuntimeReleaseResponse](
 		protocol.MethodSessionRuntimeRelease,
 		apicontract.SemanticValidationRequired,
 		requestDecoderDefault,
 		prepareSessionRuntimeRelease,
-		authorizeRouteScope[serverapi.SessionRuntimeReleaseRequest](mustInboundRoute(protocol.MethodSessionRuntimeRelease, apicontract.KindUnary)),
+		authorizeSessionActiveProject(func(req serverapi.SessionRuntimeReleaseRequest) string { return req.Attachment.SessionID }),
 		handleSessionRuntimeRelease,
 	)
 	return executables
+}
+
+func registerActiveProjectSessionRoutes(executables map[string]inboundExecutableRoute) {
+	registerRequiredSessionUnary := func(method string, executable inboundExecutableRoute) {
+		executables[method] = executable
+	}
+	registerOptionalSessionUnary := func(method string, executable inboundExecutableRoute) {
+		executables[method] = executable
+	}
+
+	registerRequiredSessionUnary(protocol.MethodSessionGetMainView, activeProjectSessionUnary[serverapi.SessionMainViewRequest](protocol.MethodSessionGetMainView, func(req serverapi.SessionMainViewRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodSessionGetTranscriptPage, activeProjectSessionUnary[serverapi.SessionTranscriptPageRequest](protocol.MethodSessionGetTranscriptPage, func(req serverapi.SessionTranscriptPageRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, activeProjectSessionUnary[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest](protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, func(req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodSessionPersistInputDraft, activeProjectSessionUnary[serverapi.SessionPersistInputDraftRequest](protocol.MethodSessionPersistInputDraft, func(req serverapi.SessionPersistInputDraftRequest) string { return req.SessionID }))
+	registerOptionalSessionUnary(protocol.MethodSessionGetInitialInput, optionalActiveProjectSessionUnary[serverapi.SessionInitialInputRequest](protocol.MethodSessionGetInitialInput, func(req serverapi.SessionInitialInputRequest) string { return req.SessionID }))
+	registerOptionalSessionUnary(protocol.MethodSessionResolveTransition, optionalActiveProjectSessionUnary[serverapi.SessionResolveTransitionRequest](protocol.MethodSessionResolveTransition, func(req serverapi.SessionResolveTransitionRequest) string { return req.SessionID }))
+
+	registerRequiredSessionUnary(protocol.MethodWorktreeStatus, activeProjectSessionUnary[serverapi.WorktreeStatusRequest](protocol.MethodWorktreeStatus, func(req serverapi.WorktreeStatusRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeList, activeProjectSessionUnary[serverapi.WorktreeListRequest](protocol.MethodWorktreeList, func(req serverapi.WorktreeListRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeSelectorResolve, activeProjectSessionUnary[serverapi.WorktreeSelectorPreviewRequest](protocol.MethodWorktreeSelectorResolve, func(req serverapi.WorktreeSelectorPreviewRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeDeletePreview, activeProjectSessionUnary[serverapi.WorktreeDeletePreviewRequest](protocol.MethodWorktreeDeletePreview, func(req serverapi.WorktreeDeletePreviewRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeCreateTargetResolve, activeProjectSessionUnary[serverapi.WorktreeCreateTargetResolveRequest](protocol.MethodWorktreeCreateTargetResolve, func(req serverapi.WorktreeCreateTargetResolveRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeCreate, activeProjectSessionUnary[serverapi.WorktreeCreateRequest](protocol.MethodWorktreeCreate, func(req serverapi.WorktreeCreateRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeEnter, activeProjectSessionUnary[serverapi.WorktreeEnterRequest](protocol.MethodWorktreeEnter, func(req serverapi.WorktreeEnterRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeLeave, activeProjectSessionUnary[serverapi.WorktreeLeaveRequest](protocol.MethodWorktreeLeave, func(req serverapi.WorktreeLeaveRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodWorktreeDelete, activeProjectSessionUnary[serverapi.WorktreeDeleteRequest](protocol.MethodWorktreeDelete, func(req serverapi.WorktreeDeleteRequest) string { return req.SessionID }))
+
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetSessionName, activeProjectSessionUnary[serverapi.RuntimeSetSessionNameRequest](protocol.MethodRuntimeSetSessionName, func(req serverapi.RuntimeSetSessionNameRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetThinkingLevel, activeProjectSessionUnary[serverapi.RuntimeSetThinkingLevelRequest](protocol.MethodRuntimeSetThinkingLevel, func(req serverapi.RuntimeSetThinkingLevelRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetFastModeEnabled, activeProjectSessionUnary[serverapi.RuntimeSetFastModeEnabledRequest](protocol.MethodRuntimeSetFastModeEnabled, func(req serverapi.RuntimeSetFastModeEnabledRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetReviewerEnabled, activeProjectSessionUnary[serverapi.RuntimeSetReviewerEnabledRequest](protocol.MethodRuntimeSetReviewerEnabled, func(req serverapi.RuntimeSetReviewerEnabledRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetAutoCompactionEnabled, activeProjectSessionUnary[serverapi.RuntimeSetAutoCompactionEnabledRequest](protocol.MethodRuntimeSetAutoCompactionEnabled, func(req serverapi.RuntimeSetAutoCompactionEnabledRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetQuestionsEnabled, activeProjectSessionUnary[serverapi.RuntimeSetQuestionsEnabledRequest](protocol.MethodRuntimeSetQuestionsEnabled, func(req serverapi.RuntimeSetQuestionsEnabledRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeAppendCommittedEntry, activeProjectSessionUnary[serverapi.RuntimeAppendCommittedEntryRequest](protocol.MethodRuntimeAppendCommittedEntry, func(req serverapi.RuntimeAppendCommittedEntryRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeShouldCompactBeforeUserMessage, activeProjectSessionUnary[serverapi.RuntimeShouldCompactBeforeUserMessageRequest](protocol.MethodRuntimeShouldCompactBeforeUserMessage, func(req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserTurn, activeProjectSessionUnary[serverapi.RuntimeSubmitUserTurnRequest](protocol.MethodRuntimeSubmitUserTurn, func(req serverapi.RuntimeSubmitUserTurnRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserShellCommand, activeProjectSessionUnary[serverapi.RuntimeSubmitUserShellCommandRequest](protocol.MethodRuntimeSubmitUserShellCommand, func(req serverapi.RuntimeSubmitUserShellCommandRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeCompactContext, activeProjectSessionUnary[serverapi.RuntimeCompactContextRequest](protocol.MethodRuntimeCompactContext, func(req serverapi.RuntimeCompactContextRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeInterrupt, activeProjectSessionUnary[serverapi.RuntimeInterruptRequest](protocol.MethodRuntimeInterrupt, func(req serverapi.RuntimeInterruptRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeDiscardQueuedUserMessage, activeProjectSessionUnary[serverapi.RuntimeDiscardQueuedUserMessageRequest](protocol.MethodRuntimeDiscardQueuedUserMessage, func(req serverapi.RuntimeDiscardQueuedUserMessageRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeRecordPromptHistory, activeProjectSessionUnary[serverapi.RuntimeRecordPromptHistoryRequest](protocol.MethodRuntimeRecordPromptHistory, func(req serverapi.RuntimeRecordPromptHistoryRequest) string { return req.SessionID }))
+
+	registerRequiredSessionUnary(protocol.MethodAskListPending, activeProjectSessionUnary[serverapi.AskListPendingBySessionRequest](protocol.MethodAskListPending, func(req serverapi.AskListPendingBySessionRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodPromptAnswerBatch, activeProjectSessionUnary[serverapi.PromptAnswerBatchRequest](protocol.MethodPromptAnswerBatch, func(req serverapi.PromptAnswerBatchRequest) string { return req.SessionID.String() }))
+	registerRequiredSessionUnary(protocol.MethodApprovalListPending, activeProjectSessionUnary[serverapi.ApprovalListPendingBySessionRequest](protocol.MethodApprovalListPending, func(req serverapi.ApprovalListPendingBySessionRequest) string { return req.SessionID }))
+
+	promptFollowUp := inboundSubscription[serverapi.PromptFollowUpWatchRequest, apicontract.AuthorizedSessionInActiveProject](
+		protocol.MethodPromptFollowUpWatch,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.PromptFollowUpWatchRequest) string { return req.SessionID.String() }),
+	)
+	promptFollowUp.executeSubscription = executePromptFollowUpSubscription
+	executables[protocol.MethodPromptFollowUpWatch] = promptFollowUp
+}
+
+func activeProjectSessionUnary[Req any](method string, sessionID func(Req) string) inboundExecutableRoute {
+	return inboundUnary[Req, apicontract.AuthorizedSessionInActiveProject](
+		method,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(sessionID),
+	)
+}
+
+func optionalActiveProjectSessionUnary[Req any](method string, sessionID func(Req) string) inboundExecutableRoute {
+	return inboundUnary[Req, apicontract.OptionalAuthorizedSessionInActiveProject](
+		method,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeOptionalSessionActiveProject(sessionID),
+	)
 }
 
 func handleRuntimeLiveSteer(
@@ -628,7 +750,7 @@ func prepareSessionRuntimeRelease(source serverapi.SessionRuntimeReleaseRequest,
 	return prepared
 }
 
-func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], _ noAuthorizationFacts) (serverapi.SessionRuntimeActivateResponse, error) {
+func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], _ apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
 	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
 	if !ok {
 		return serverapi.SessionRuntimeActivateResponse{}, errors.New("Session Runtime trusted service is required")
@@ -644,7 +766,7 @@ func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connec
 	return response, nil
 }
 
-func handleSessionRuntimeRelease(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], _ noAuthorizationFacts) (serverapi.SessionRuntimeReleaseResponse, error) {
+func handleSessionRuntimeRelease(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], _ apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
 	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
 	if !ok {
 		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("Session Runtime trusted service is required")
@@ -687,7 +809,9 @@ func executeSessionExecutionEnvironment(g *Gateway, ctx context.Context, state *
 		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
 	}
 	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
-		if err := newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, validated.Value()); err != nil {
+		if _, err := authorizeSessionActiveProject(
+			func(req serverapi.SessionExecutionEnvironmentRequest) string { return req.SessionID.String() },
+		)(ctx, g, state, validated); err != nil {
 			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
 		}
 		trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
@@ -851,6 +975,26 @@ func validateInboundExecutableRegistry() error {
 			}
 		default:
 			return fmt.Errorf("route %q has unknown validation policy", method)
+		}
+		switch executable.route.Scope {
+		case apicontract.ScopeSessionActiveProject:
+			if executable.authorizationType != reflect.TypeOf(apicontract.AuthorizedSessionInActiveProject{}) {
+				return fmt.Errorf(
+					"route %q scope %q authorization type = %v, want AuthorizedSessionInActiveProject",
+					method,
+					executable.route.Scope,
+					executable.authorizationType,
+				)
+			}
+		case apicontract.ScopeSessionActiveProjectIfSet:
+			if executable.authorizationType != reflect.TypeOf(apicontract.OptionalAuthorizedSessionInActiveProject{}) {
+				return fmt.Errorf(
+					"route %q scope %q authorization type = %v, want OptionalAuthorizedSessionInActiveProject",
+					method,
+					executable.route.Scope,
+					executable.authorizationType,
+				)
+			}
 		}
 	}
 	for _, route := range apicontract.Routes() {

@@ -188,6 +188,32 @@ func executeProcessOutputSubscription(g *Gateway, conn rpcwire.Conn, ctx context
 	}
 }
 
+func executePromptFollowUpSubscription(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	params, err := decodeInboundRequest[serverapi.PromptFollowUpWatchRequest](g, route, requestDecoderDefault, req.Params)
+	if err != nil {
+		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
+		return
+	}
+	_, err = rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[serverapi.PromptFollowUpWatchRequest]) (struct{}, error) {
+		if _, err := authorizeSessionActiveProject(
+			func(request serverapi.PromptFollowUpWatchRequest) string { return request.SessionID.String() },
+		)(ctx, g, state, validated); err != nil {
+			return struct{}{}, validatedOwnerError{cause: err}
+		}
+		subscription, err := g.deps.PromptControlClient().SubscribeFollowUp(ctx, validated.Value())
+		if err != nil {
+			return struct{}{}, validatedOwnerError{cause: err}
+		}
+		serveInstalledGatewaySubscription(conn, ctx, route, req, subscription, func(evt serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
+			return protocol.PromptFollowUpEventParams{Event: protocol.PromptFollowUpEvent{Kind: string(evt.Kind)}}
+		})
+		return struct{}{}, nil
+	})
+	if err != nil {
+		_ = sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
+	}
+}
+
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
 	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
 	if !state.clientCapabilities.TranscriptLiveRunFinished {

@@ -2063,6 +2063,39 @@ func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID str
 	return sessionExecutionTargetFromRow(row), nil
 }
 
+type ActiveProjectSession struct {
+	SessionID       runtimeids.SessionID
+	OwningProjectID string
+	ExecutionTarget clientui.SessionExecutionTarget
+}
+
+func (s *Store) ResolveActiveProjectSession(ctx context.Context, rawSessionID string) (ActiveProjectSession, error) {
+	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	if err != nil {
+		return ActiveProjectSession{}, err
+	}
+	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID.String())
+	if err != nil {
+		return ActiveProjectSession{}, err
+	}
+	if strings.TrimSpace(row.SessionID) != sessionID.String() {
+		return ActiveProjectSession{}, fmt.Errorf(
+			"resolved session identity mismatch: requested %q, loaded %q",
+			sessionID.String(),
+			row.SessionID,
+		)
+	}
+	projectID := strings.TrimSpace(row.ProjectID)
+	if projectID == "" {
+		return ActiveProjectSession{}, fmt.Errorf("session %q owning project id is required", sessionID)
+	}
+	return ActiveProjectSession{
+		SessionID:       sessionID,
+		OwningProjectID: projectID,
+		ExecutionTarget: sessionExecutionTargetFromRow(row),
+	}, nil
+}
+
 func (s *Store) ResolveOptionalSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
 	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID)
 	if err != nil {

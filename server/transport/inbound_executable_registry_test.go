@@ -129,6 +129,29 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 			t.Errorf("%s registered with zero authorization facts", method)
 		}
 	}
+
+	for _, route := range apicontract.Routes() {
+		executable, registered := inboundExecutableRoutes[route.Method]
+		if !registered {
+			continue
+		}
+		switch route.Scope {
+		case apicontract.ScopeSessionActiveProject:
+			if executable.authorizationType != reflect.TypeOf(apicontract.AuthorizedSessionInActiveProject{}) {
+				t.Errorf("%s authorization type = %v, want AuthorizedSessionInActiveProject", route.Method, executable.authorizationType)
+			}
+			if executable.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
+				t.Errorf("%s registered with zero authorization facts", route.Method)
+			}
+		case apicontract.ScopeSessionActiveProjectIfSet:
+			if executable.authorizationType != reflect.TypeOf(apicontract.OptionalAuthorizedSessionInActiveProject{}) {
+				t.Errorf("%s authorization type = %v, want OptionalAuthorizedSessionInActiveProject", route.Method, executable.authorizationType)
+			}
+			if executable.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
+				t.Errorf("%s registered with zero authorization facts", route.Method)
+			}
+		}
+	}
 }
 
 func TestInboundExecutableRegistryUsesPreparedCustomDecoders(t *testing.T) {
@@ -151,5 +174,28 @@ func TestInboundExecutableRegistryUsesPreparedCustomDecoders(t *testing.T) {
 
 	if got := inboundExecutableRoutes[protocol.MethodWorktreeWorkspaceList].requestType; got != reflect.TypeOf(serverapi.WorktreeWorkspaceListRequest{}) {
 		t.Fatalf("worktree Workspace list request type = %v", got)
+	}
+}
+
+func TestOptionalActiveProjectSessionAuthorizationSkipsAllDependenciesWhenSessionIsAbsent(t *testing.T) {
+	request := serverapi.SessionInitialInputRequest{}
+	_, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.SessionInitialInputRequest]) (struct{}, error) {
+			authorization, err := authorizeOptionalSessionActiveProject(
+				func(req serverapi.SessionInitialInputRequest) string { return req.SessionID },
+			)(t.Context(), nil, nil, validated)
+			if err != nil {
+				return struct{}{}, err
+			}
+			if _, present := authorization.Authorization(); present {
+				t.Fatal("absent Session request produced present authorization")
+			}
+			return struct{}{}, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("authorize optional absent Session: %v", err)
 	}
 }
