@@ -69,7 +69,7 @@ func validatedGatewayClientCall[Req any, Resp any, Trusted any](
 	return func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
 		route := mustGatewayRoute(wire.Method, apicontract.KindUnary)
 		policy := apicontract.SemanticValidationRequired
-		if route.ValidationMethod == apicontract.ValidationMethodNone {
+		if apicontract.ValidationMethodFor(*new(Req)) == apicontract.ValidationMethodNone {
 			policy = apicontract.NoSemanticValidation
 		}
 		return validatedUnaryHandler(
@@ -137,7 +137,11 @@ func decodeInboundRequest[Req any](g *Gateway, route apicontract.Route, decoder 
 	var err error
 	switch decoder {
 	case requestDecoderDefault:
-		decoded, err = route.DecodeRequest(raw)
+		var request Req
+		if len(raw) != 0 {
+			err = json.Unmarshal(raw, &request)
+		}
+		decoded = request
 	case requestDecoderOnboardingFinalize:
 		decoded, err = g.onboardingFinalizeRequestContract.Decode(raw)
 	case requestDecoderSessionExecutionEnvironment:

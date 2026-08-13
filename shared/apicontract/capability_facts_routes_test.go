@@ -19,7 +19,7 @@ func TestCapabilityFactsRouteContract(t *testing.T) {
 	if route.RequestType != reflect.TypeOf(serverapi.CapabilityFactsRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.CapabilityFactsResponse{}) {
 		t.Fatalf("capability facts route types = %v / %v", route.RequestType, route.ResponseType)
 	}
-	if route.ValidationMethod == ValidationMethodNone {
+	if ValidationMethodFor(serverapi.CapabilityFactsRequest{}) == ValidationMethodNone {
 		t.Fatal("capability facts route must validate its request")
 	}
 }

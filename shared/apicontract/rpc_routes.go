@@ -1,8 +1,6 @@
 package apicontract
 
 import (
-	"encoding/json"
-	"fmt"
 	"reflect"
 	"sort"
 
@@ -102,9 +100,6 @@ type Route struct {
 	CompleteMethod     string
 	CompleteType       reflect.Type
 	DedicatedRequestID string
-	DecodeRequest      func(json.RawMessage) (any, error)
-	WithValidated      func(any, ValidationPolicy, func(any, any) (any, error)) (any, error)
-	ValidationMethod   ValidationMethod
 }
 
 const (
@@ -115,17 +110,14 @@ const (
 func unary[Req any, Resp any](method string, auth AuthPolicy, scope ScopePolicy, connection ConnectionStrategy, dependency Dependency) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindUnary,
-		Auth:             auth,
-		Scope:            scope,
-		Connection:       connection,
-		Dependency:       dependency,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*Resp)(nil)).Elem(),
-		DecodeRequest:    decodeRequest[Req],
-		WithValidated:    validateRequest[Req],
-		ValidationMethod: ValidationMethodFor(*new(Req)),
+		Method:       method,
+		Kind:         KindUnary,
+		Auth:         auth,
+		Scope:        scope,
+		Connection:   connection,
+		Dependency:   dependency,
+		RequestType:  reqType,
+		ResponseType: reflect.TypeOf((*Resp)(nil)).Elem(),
 	}
 }
 
@@ -138,66 +130,35 @@ func dedicatedUnary[Req any, Resp any](method string, requestID string, scope Sc
 func subscription[Req any, Event any](method string, auth AuthPolicy, scope ScopePolicy, dependency Dependency, eventMethod string, completeMethod string) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindSubscription,
-		Auth:             auth,
-		Scope:            scope,
-		Connection:       ConnectionSubscription,
-		Dependency:       dependency,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*protocol.SubscribeResponse)(nil)).Elem(),
-		EventMethod:      eventMethod,
-		EventType:        reflect.TypeOf((*Event)(nil)).Elem(),
-		CompleteMethod:   completeMethod,
-		CompleteType:     reflect.TypeOf((*protocol.StreamCompleteParams)(nil)).Elem(),
-		DecodeRequest:    decodeRequest[Req],
-		WithValidated:    validateRequest[Req],
-		ValidationMethod: ValidationMethodFor(*new(Req)),
+		Method:         method,
+		Kind:           KindSubscription,
+		Auth:           auth,
+		Scope:          scope,
+		Connection:     ConnectionSubscription,
+		Dependency:     dependency,
+		RequestType:    reqType,
+		ResponseType:   reflect.TypeOf((*protocol.SubscribeResponse)(nil)).Elem(),
+		EventMethod:    eventMethod,
+		EventType:      reflect.TypeOf((*Event)(nil)).Elem(),
+		CompleteMethod: completeMethod,
+		CompleteType:   reflect.TypeOf((*protocol.StreamCompleteParams)(nil)).Elem(),
 	}
 }
 
 func progress[Req any, Resp any, Event any](method string, scope ScopePolicy, dependency Dependency, eventMethod string) Route {
 	reqType := reflect.TypeOf((*Req)(nil)).Elem()
 	return Route{
-		Method:           method,
-		Kind:             KindProgress,
-		Auth:             AuthServer,
-		Scope:            scope,
-		Connection:       ConnectionProgress,
-		Dependency:       dependency,
-		RequestType:      reqType,
-		ResponseType:     reflect.TypeOf((*Resp)(nil)).Elem(),
-		EventMethod:      eventMethod,
-		EventType:        reflect.TypeOf((*Event)(nil)).Elem(),
-		DecodeRequest:    decodeRequest[Req],
-		WithValidated:    validateRequest[Req],
-		ValidationMethod: ValidationMethodFor(*new(Req)),
+		Method:       method,
+		Kind:         KindProgress,
+		Auth:         AuthServer,
+		Scope:        scope,
+		Connection:   ConnectionProgress,
+		Dependency:   dependency,
+		RequestType:  reqType,
+		ResponseType: reflect.TypeOf((*Resp)(nil)).Elem(),
+		EventMethod:  eventMethod,
+		EventType:    reflect.TypeOf((*Event)(nil)).Elem(),
 	}
-}
-
-func decodeRequest[Req any](raw json.RawMessage) (any, error) {
-	var request Req
-	if len(raw) == 0 {
-		return request, nil
-	}
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, fmt.Errorf("decode params: %w", err)
-	}
-	return request, nil
-}
-
-func validateRequest[Req any](
-	value any,
-	policy ValidationPolicy,
-	consume func(any, any) (any, error),
-) (any, error) {
-	request, ok := value.(Req)
-	if !ok {
-		return nil, fmt.Errorf("decoded request type %T does not match %T", value, *new(Req))
-	}
-	return WithValidated(request, policy, func(validated Validated[Req]) (any, error) {
-		return consume(validated, validated.Value())
-	})
 }
 
 func notification[Event any](method string) Route {

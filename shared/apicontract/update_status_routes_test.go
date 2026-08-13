@@ -24,7 +24,7 @@ func TestUpdateStatusRouteContract(t *testing.T) {
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.UpdateStatusRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.UpdateStatusResponse{}) ||
-		route.ValidationMethod == apicontract.ValidationMethodNone {
+		apicontract.ValidationMethodFor(serverapi.UpdateStatusRequest{}) == apicontract.ValidationMethodNone {
 		t.Fatalf("update status route types/validation = %+v", route)
 	}
 }

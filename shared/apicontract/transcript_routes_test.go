@@ -25,7 +25,7 @@ func TestTranscriptSubscriptionRouteContract(t *testing.T) {
 	if route.EventMethod != protocol.MethodSessionTranscriptEvent || route.CompleteMethod != protocol.MethodSessionTranscriptComplete {
 		t.Fatalf("transcript subscription event methods = %q / %q", route.EventMethod, route.CompleteMethod)
 	}
-	if route.ValidationMethod == ValidationMethodNone {
+	if ValidationMethodFor(serverapi.TranscriptSubscribeRequest{}) == ValidationMethodNone {
 		t.Fatal("transcript subscription route must validate its request")
 	}
 }
@@ -48,7 +48,7 @@ func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
 	if route.RequestType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}) {
 		t.Fatalf("route request/response = %v / %v", route.RequestType, route.ResponseType)
 	}
-	if route.ValidationMethod == ValidationMethodNone {
+	if ValidationMethodFor(serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{}) == ValidationMethodNone {
 		t.Fatal("latest committed assistant final answer route must validate its request")
 	}
 }

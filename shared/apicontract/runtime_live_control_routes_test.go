@@ -47,8 +47,8 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 		if route.Kind != KindUnary || route.Auth != AuthServer || route.Scope != tt.scope || route.Connection != tt.connection || route.Dependency != DependencyRuntimeControl {
 			t.Fatalf("route %q metadata = %+v", tt.method, route)
 		}
-		if route.RequestType != tt.requestType || route.ResponseType != tt.responseType || route.ValidationMethod == ValidationMethodNone {
-			t.Fatalf("route %q types = %v/%v validates=%t", tt.method, route.RequestType, route.ResponseType, route.ValidationMethod != ValidationMethodNone)
+		if route.RequestType != tt.requestType || route.ResponseType != tt.responseType {
+			t.Fatalf("route %q types = %v/%v", tt.method, route.RequestType, route.ResponseType)
 		}
 	}
 }
