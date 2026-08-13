@@ -434,6 +434,7 @@ type currentNodeCompletionExecutionStub struct {
 	promoted               []workflow.CurrentNode
 	promotionHandled       bool
 	promotionErr           error
+	resumePreflight        workflowexecution.TaskResumePreflight
 	resumeEligibilityErr   error
 	resumeEligibilityCalls int
 	startPreparations      chan<- workflowexecution.TaskStartPreparation
@@ -448,6 +449,23 @@ type currentNodeCompletionExecutionStub struct {
 	approvalErr            error
 }
 
+func (s *currentNodeCompletionExecutionStub) configuredResumePreflight(
+	taskID workflow.TaskID,
+) (workflowexecution.TaskResumePreflight, bool) {
+	if s.resumePreflight.Outcome != "" {
+		return s.resumePreflight, true
+	}
+	if s.resumePreflight.CurrentNodes == nil {
+		return workflowexecution.TaskResumePreflight{}, false
+	}
+	preflight := s.resumePreflight
+	preflight.CurrentNodes = append([]workflow.CurrentNode(nil), preflight.CurrentNodes...)
+	for index := range preflight.CurrentNodes {
+		preflight.CurrentNodes[index].Reference.TaskID = taskID
+	}
+	return preflight, true
+}
+
 func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
 	context.Context,
 	workflow.TaskID,
@@ -455,9 +473,44 @@ func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
 	return append([]workflow.CurrentNode(nil), s.promoted...), s.promotionHandled, s.promotionErr
 }
 
-func (s *currentNodeCompletionExecutionStub) EnsureTaskResumeEligible(context.Context, workflow.TaskID) error {
+func (s *currentNodeCompletionExecutionStub) PreflightTaskResume(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (workflowexecution.TaskResumePreflight, error) {
 	s.resumeEligibilityCalls++
-	return s.resumeEligibilityErr
+	if s.resumeEligibilityErr != nil {
+		return workflowexecution.TaskResumePreflight{}, s.resumeEligibilityErr
+	}
+	if preflight, configured := s.configuredResumePreflight(taskID); configured {
+		return preflight, nil
+	}
+	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	if err != nil {
+		return workflowexecution.TaskResumePreflight{}, err
+	}
+	if len(selected) != 0 {
+		return workflowexecution.TaskResumePreflight{
+			Outcome:      workflowexecution.TaskResumePreflightResumable,
+			CurrentNodes: selected,
+		}, nil
+	}
+	currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return workflowexecution.TaskResumePreflight{}, err
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.Scheduling == nil {
+			continue
+		}
+		switch currentNode.Scheduling.State {
+		case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+			return workflowexecution.TaskResumePreflight{
+				Outcome:      workflowexecution.TaskResumePreflightNoOp,
+				CurrentNodes: currentNodes,
+			}, nil
+		}
+	}
+	return workflowexecution.TaskResumePreflight{}, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTask(

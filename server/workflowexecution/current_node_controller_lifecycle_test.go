@@ -1034,7 +1034,8 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	<-assignmentStarted
 	unrelatedDone := make(chan error, 1)
 	go func() {
-		unrelatedDone <- controller.EnsureTaskResumeEligible(context.Background(), unrelated.TaskID)
+		_, err := controller.PreflightTaskResume(context.Background(), unrelated.TaskID)
+		unrelatedDone <- err
 	}()
 	select {
 	case unrelatedErr := <-unrelatedDone:

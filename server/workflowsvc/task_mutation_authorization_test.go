@@ -429,7 +429,18 @@ type taskMutationAuthorizationExecutionStub struct {
 
 func newTaskMutationAuthorizationExecutionStub(service *Service) *taskMutationAuthorizationExecutionStub {
 	return &taskMutationAuthorizationExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store: service.store,
+			resumePreflight: workflowexecution.TaskResumePreflight{
+				Outcome: workflowexecution.TaskResumePreflightResumable,
+				CurrentNodes: []workflow.CurrentNode{{
+					Reference: workflow.CurrentNodeReference{
+						TaskID: workflow.TaskID("authorization-preflight"),
+						NodeID: workflow.NodeID("authorization-preflight"),
+					},
+				}},
+			},
+		},
 	}
 }
 

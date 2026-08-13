@@ -35,7 +35,7 @@ type Service struct {
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
 		PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
-		EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
+		PreflightTaskResume(context.Context, workflow.TaskID) (workflowexecution.TaskResumePreflight, error)
 		ResumeTask(context.Context, workflow.TaskID) (workflowexecution.TaskResumeResult, error)
 		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
@@ -179,7 +179,7 @@ type Option func(*Service)
 func WithCurrentNodeExecution(execution interface {
 	StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
 	PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
-	EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
+	PreflightTaskResume(context.Context, workflow.TaskID) (workflowexecution.TaskResumePreflight, error)
 	ResumeTask(context.Context, workflow.TaskID) (workflowexecution.TaskResumeResult, error)
 	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
@@ -1508,30 +1508,26 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 			},
 		}, nil
 	}
-	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	preflight, err := s.currentNodeExecution.PreflightTaskResume(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
-	if len(interrupted) == 0 {
-		currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
-		if err != nil {
-			return serverapi.WorkflowTaskResumeResponse{}, err
-		}
-		for _, currentNode := range currentNodes {
-			if currentNode.Scheduling == nil {
-				continue
-			}
-			switch currentNode.Scheduling.State {
-			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
-				return serverapi.WorkflowTaskResumeResponse{
-					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
-					NoOp: &serverapi.WorkflowTaskResumeNoOp{
-						CurrentNodes: workflowview.ProjectCurrentNodes(currentNodes),
-					},
-				}, nil
-			}
-		}
+	switch preflight.Outcome {
+	case workflowexecution.TaskResumePreflightNoOp:
+		return serverapi.WorkflowTaskResumeResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskResumeNoOp{
+				CurrentNodes: workflowview.ProjectCurrentNodes(preflight.CurrentNodes),
+			},
+		}, nil
+	case workflowexecution.TaskResumePreflightResumable:
+	default:
+		return serverapi.WorkflowTaskResumeResponse{}, fmt.Errorf(
+			"task resume preflight returned invalid outcome %q",
+			preflight.Outcome,
+		)
 	}
+	interrupted := preflight.CurrentNodes
 	if req.ExecutionTarget == nil {
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)
 		if err != nil {
@@ -1543,9 +1539,6 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 				SelectionRequired: selectionRequired,
 			}, nil
 		}
-	}
-	if err := s.currentNodeExecution.EnsureTaskResumeEligible(ctx, taskID); err != nil {
-		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
 	target, err := s.preflightInitiatingActionTarget(ctx, taskID, req.ExecutionTarget, req.BranchName)
 	if err != nil {

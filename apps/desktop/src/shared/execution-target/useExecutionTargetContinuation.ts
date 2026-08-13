@@ -11,6 +11,7 @@ import {
 } from "@/api";
 import {
   initialExecutionTargetSelectionDraft,
+  taskInitiatingActionID,
   type ExecutionTargetSelectionDraft,
   type TaskInitiatingAction,
   type TaskInitiatingActionResult,
@@ -57,8 +58,8 @@ export function useTaskInitiatingActionController({
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
   const pendingRef = useRef<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
-  const initialRunRef = useRef<Promise<void> | null>(null);
-  const initialActionRef = useRef<TaskInitiatingAction | null>(null);
+  const scheduledRunsRef = useRef(new Map<string, Promise<void>>());
+  const runTailRef = useRef<Promise<void>>(Promise.resolve());
   const updatePending = useCallback((next: PendingTaskInitiatingAction | null) => {
     pendingRef.current = next;
     setPending(next);
@@ -95,46 +96,54 @@ export function useTaskInitiatingActionController({
 
   const executeRun = useCallback(
     async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
-      setRunning(true);
-      const operation = (async () => {
-        try {
-          await handleResult(await execute(action, selection));
-        } catch (error) {
-          if (action.kind !== "move") throw error;
-          const failure = decodeWorktreeSetupRetainedError(error);
-          if (failure === null) throw error;
-          updatePending({ kind: "setup_recovery", action, failure,
-            ...(selection === undefined ? {} : { retrySelection: selection }) });
-        }
-      })();
-      initialRunRef.current = operation;
-      initialActionRef.current = action;
-      const settle = () => {
-        if (initialRunRef.current === operation) {
-          initialRunRef.current = null;
-          initialActionRef.current = null;
-          setRunning(false);
-        }
-      };
-      void operation.then(settle, settle);
-      await operation;
+      try {
+        await handleResult(await execute(action, selection));
+      } catch (error) {
+        if (action.kind !== "move") throw error;
+        const failure = decodeWorktreeSetupRetainedError(error);
+        if (failure === null) throw error;
+        updatePending({ kind: "setup_recovery", action, failure,
+          ...(selection === undefined ? {} : { retrySelection: selection }) });
+      }
     },
     [execute, handleResult, updatePending],
   );
   const run = useCallback(
     async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
-      const active = initialRunRef.current;
-      if (active !== null) {
-        if (initialActionRef.current === action) {
-          await active;
-          return;
-        }
-        await active;
-        if (pendingRef.current !== null) {
+      const actionID = taskInitiatingActionID(action).toJSONValue();
+      const scheduled = scheduledRunsRef.current.get(actionID);
+      if (scheduled !== undefined) {
+        return scheduled;
+      }
+      const executeScheduled = async () => {
+        const pendingAction = pendingRef.current?.action;
+        if (
+          pendingAction !== undefined &&
+          taskInitiatingActionID(pendingAction).toJSONValue() !== actionID
+        ) {
           throw new Error("Finish or dismiss the pending Task action before starting another one.");
         }
+        await executeRun(action, selection);
+      };
+      const operation =
+        scheduledRunsRef.current.size === 0
+          ? executeScheduled()
+          : runTailRef.current.catch(() => undefined).then(executeScheduled);
+      if (scheduledRunsRef.current.size === 0) {
+        setRunning(true);
       }
-      return executeRun(action, selection);
+      scheduledRunsRef.current.set(actionID, operation);
+      runTailRef.current = operation;
+      const settle = () => {
+        if (scheduledRunsRef.current.get(actionID) === operation) {
+          scheduledRunsRef.current.delete(actionID);
+        }
+        if (scheduledRunsRef.current.size === 0) {
+          setRunning(false);
+        }
+      };
+      void operation.then(settle, settle);
+      return operation;
     },
     [executeRun],
   );

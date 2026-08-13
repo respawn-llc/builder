@@ -161,6 +161,18 @@ type TaskResumeResult struct {
 	CurrentNodes []workflow.CurrentNode
 }
 
+type TaskResumePreflightOutcome string
+
+const (
+	TaskResumePreflightResumable TaskResumePreflightOutcome = "resumable"
+	TaskResumePreflightNoOp      TaskResumePreflightOutcome = "no_op"
+)
+
+type TaskResumePreflight struct {
+	Outcome      TaskResumePreflightOutcome
+	CurrentNodes []workflow.CurrentNode
+}
+
 func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) (TaskResumeResult, error) {
 	return c.resumeTask(ctx, taskID, nil, nil)
 }
@@ -232,19 +244,31 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
-func (c *CurrentNodeController) EnsureTaskResumeEligible(
+func (c *CurrentNodeController) PreflightTaskResume(
 	ctx context.Context,
 	taskID workflow.TaskID,
-) error {
+) (TaskResumePreflight, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return TaskResumePreflight{}, errors.New("current node workflow controller is required")
 	}
-	return c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumePreflight, error) {
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
-			return err
+			return TaskResumePreflight{}, err
 		}
-		return classification.eligibilityError()
+		if len(classification.alreadyResumed) != 0 {
+			return TaskResumePreflight{
+				Outcome:      TaskResumePreflightNoOp,
+				CurrentNodes: classification.alreadyResumed,
+			}, nil
+		}
+		if err := classification.eligibilityError(); err != nil {
+			return TaskResumePreflight{}, err
+		}
+		return TaskResumePreflight{
+			Outcome:      TaskResumePreflightResumable,
+			CurrentNodes: classification.resumable,
+		}, nil
 	})
 }
 

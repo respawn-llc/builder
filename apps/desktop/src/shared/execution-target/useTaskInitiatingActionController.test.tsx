@@ -185,6 +185,89 @@ describe("task initiating action controller", () => {
     expect(execute.mock.calls.map(([action]) => action)).toEqual([firstAction, secondAction]);
   });
 
+  it("serializes every distinct action queued behind one active action", async () => {
+    const first = deferred<TaskInitiatingActionResult>();
+    const second = deferred<TaskInitiatingActionResult>();
+    const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
+      if (action.kind !== "resume") {
+        throw new Error("Controller test only supports Resume actions.");
+      }
+      if (action.taskID === "task-1") return first.promise;
+      if (action.taskID === "task-2") return second.promise;
+      return appliedResume(action);
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const actions = [
+      resumeTaskInitiatingAction("task-1"),
+      resumeTaskInitiatingAction("task-2"),
+      resumeTaskInitiatingAction("task-3"),
+    ] as const;
+
+    const runs: Promise<void>[] = [];
+    act(() => {
+      for (const action of actions) {
+        runs.push(result.current.run(action));
+      }
+    });
+    expect(execute.mock.calls.map(([action]) => action)).toEqual([actions[0]]);
+    await act(async () => {
+      first.resolve(appliedResume(actions[0]));
+      await first.promise;
+    });
+    await vi.waitFor(() => {
+      expect(execute.mock.calls.map(([action]) => action)).toEqual(actions.slice(0, 2));
+    });
+    await act(async () => {
+      second.resolve(appliedResume(actions[1]));
+      await Promise.all(runs);
+    });
+
+    expect(execute.mock.calls.map(([action]) => action)).toEqual(actions);
+  });
+
+  it("keeps a pending action exclusive across equivalent action objects", async () => {
+    const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
+      if (action.kind !== "start") {
+        throw new Error("Controller test only supports Start actions.");
+      }
+      return {
+        kind: "start",
+        action,
+        response: {
+          outcome: "dependency_confirmation_required",
+          unsatisfiedDependencyCount: 1,
+        },
+      };
+    });
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute,
+        onApplied: vi.fn(),
+        onAppliedError: vi.fn(),
+      }),
+    );
+    const action = startTaskInitiatingAction("task-1");
+    await act(async () => result.current.run(action));
+
+    await act(async () => {
+      await result.current.run({ ...action });
+    });
+    await act(async () => {
+      await expect(result.current.run(startTaskInitiatingAction("task-2"))).rejects.toThrow(
+        "Finish or dismiss the pending Task action before starting another one.",
+      );
+    });
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(result.current.pending).toMatchObject({ action: { taskID: "task-1" } });
+  });
+
   it("carries proceed intent through executable Move continuation", async () => {
     let callCount = 0;
     const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {
@@ -328,6 +411,29 @@ function deferred<T>(): Readonly<{
         throw new Error("Deferred promise resolver is unavailable.");
       }
       resolvePromise(value);
+    },
+  };
+}
+
+function appliedResume(
+  action: Extract<TaskInitiatingAction, { kind: "resume" }>,
+): TaskInitiatingActionResult {
+  return {
+    kind: "resume",
+    action,
+    response: {
+      outcome: "applied",
+      applied: {
+        currentNodes: [
+          {
+            effectiveAssignee: null,
+            effectiveThinking: null,
+            nodeID: `node-${action.taskID}`,
+            transitionBranchKey: null,
+            sessionID: null,
+          },
+        ],
+      },
     },
   };
 }
