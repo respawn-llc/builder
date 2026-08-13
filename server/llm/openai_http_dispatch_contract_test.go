@@ -95,10 +95,12 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	var capturedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedHeaders = r.Header.Clone()
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		capturedBody = body
 		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
