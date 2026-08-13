@@ -350,6 +350,90 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	}
 }
 
+func TestWorkflowLegacyProvenanceRepairMigrationUsesSelectedNodeForCurrentNodeSource(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-entering-source", associatedAtOffset: 1},
+	}, 3)
+	const selectedSessionID = "session-selected-source"
+	selectedNodeID := legacyProvenanceGraphID(t)
+	var workflowID []byte
+	var targetAssociatedAt int64
+	if err := fixture.db.QueryRow(`
+SELECT node.workflow_id, association.associated_at_unix_ms
+FROM workflow_nodes node
+JOIN session_workflow_node_associations association
+  ON association.node_id = node.id
+WHERE node.id = ?
+  AND association.task_id = ?
+  AND association.session_id = ?`,
+		fixture.targetNodeID,
+		fixture.taskID,
+		fixture.targetSessionID,
+	).Scan(&workflowID, &targetAssociatedAt); err != nil {
+		t.Fatalf("read fixture Workflow and target association: %v", err)
+	}
+	execSeed(t, fixture.db, "selected source Node", `
+INSERT INTO workflow_nodes (
+    id, workflow_id, node_key, kind, display_name, subagent_role, completion_mode
+) VALUES (?, ?, 'selected_source', 'agent', 'Selected source', 'default', 'tool')`,
+		selectedNodeID,
+		workflowID,
+	)
+	seedLegacyWorkflowSession(
+		t,
+		fixture.db,
+		"project-legacy-provenance-repair",
+		"workspace-selected-source",
+		selectedSessionID,
+		time.Now().UTC().UnixMilli(),
+	)
+	execSeed(t, fixture.db, "selected source Session owner", `
+UPDATE sessions SET task_id = ? WHERE id = ?`, fixture.taskID, selectedSessionID)
+	execSeed(t, fixture.db, "selected source association", `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'historical', NULL, ?)`,
+		fixture.taskID,
+		selectedSessionID,
+		selectedNodeID,
+		targetAssociatedAt-1,
+	)
+	execSeed(t, fixture.db, "select prior source Node", `
+UPDATE workflow_edges
+SET context_source_kind = 'selected_node',
+    context_source_node_key = 'selected_source'
+WHERE id = (
+    SELECT entered_by_edge_id
+    FROM task_current_nodes
+    WHERE task_id = ?
+)`, fixture.taskID)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID string
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(
+		&sourceKind,
+		&sourceSessionID,
+		&legacyMaterialized,
+	); err != nil {
+		t.Fatalf("read selected-node repaired Current Node: %v", err)
+	}
+	if sourceKind != "exact" || sourceSessionID != selectedSessionID || legacyMaterialized != 0 {
+		t.Fatalf(
+			"selected-node Current Node = kind %q Session %q legacy %d; want selected source Session",
+			sourceKind,
+			sourceSessionID,
+			legacyMaterialized,
+		)
+	}
+}
+
 func TestWorkflowLegacyProvenanceRepairMigrationRepairsOnlyFanoutBranchesWithBranchLocalProof(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{

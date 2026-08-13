@@ -31,12 +31,20 @@ JOIN workflow_transition_groups entering_transition
 JOIN workflow_nodes source_node
   ON source_node.id = entering_transition.source_node_id
  AND source_node.workflow_id = task.workflow_id
+LEFT JOIN workflow_nodes selected_source_node
+  ON selected_source_node.workflow_id = task.workflow_id
+ AND selected_source_node.node_key = entering_edge.context_source_node_key
+ AND entering_edge.context_source_kind = 'selected_node'
 JOIN workflow_nodes target_node
   ON target_node.id = current_node.node_id
  AND target_node.workflow_id = task.workflow_id
 JOIN session_workflow_node_associations source_association
   ON source_association.task_id = current_node.task_id
- AND source_association.node_id = source_node.id
+ AND source_association.node_id = CASE
+        WHEN entering_edge.context_source_kind = 'selected_node'
+        THEN selected_source_node.id
+        ELSE source_node.id
+     END
 LEFT JOIN session_workflow_node_associations target_association
   ON target_association.task_id = current_node.task_id
  AND target_association.session_id = current_node.session_id
