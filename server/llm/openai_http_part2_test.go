@@ -431,7 +431,8 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	transport.Client = newRewritingHTTPClient(t, server)
 
 	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model: "gpt-5",
+		Model:     "gpt-5",
+		SessionID: textutil.Value("test-session"),
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
 		}),
@@ -477,14 +478,13 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	transport.BaseURLExplicit = true
 	transport.Client = server.Client()
 
-	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model:          "gpt-5.6-sol",
-		Instructions:   "preserved instructions",
-		PromptCacheKey: "session-cache-lineage",
-		InputItems: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("history first")},
-		}),
+	request := testOAuthCompactionRequest(t, "gpt-5.6-sol")
+	request.Instructions = "preserved instructions"
+	request.PromptCacheKey = "session-cache-lineage"
+	request.InputItems = PrepareOpenAIInputItems([]ResponseItem{
+		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("history first")},
 	})
+	resp, err := transport.Compact(context.Background(), request)
 	if err != nil {
 		t.Fatalf("oauth compact request failed: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestOAuthCompactRequestRejectsCompletedStreamWithoutCompactionOutput(t *tes
 	})
 	transport := newOAuthCompactTestTransport(server)
 
-	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := transport.Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if err == nil || !strings.Contains(err.Error(), "compaction_count=0 output_count=0 types=map[]") {
 		t.Fatalf("error = %v, want diagnostic zero-compaction contract failure", err)
 	}
@@ -539,7 +539,7 @@ func TestOAuthCompactRequestUsesStreamedCompactionWhenCompletedOutputIsEmpty(t *
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","id":"cmp_streamed","encrypted_content":"enc_streamed"}}`,
 		`{"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":4,"total_tokens":13},"output":[]}}`,
 	})
-	resp, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	resp, err := newOAuthCompactTestTransport(server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if err != nil {
 		t.Fatalf("compact request failed: %v", err)
 	}
@@ -555,7 +555,7 @@ func TestOAuthCompactRequestRejectsMultipleCompactionOutputs(t *testing.T) {
 	server := newOAuthCompactStreamServer(t, []string{
 		`{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"},{"type":"compaction","id":"cmp_2","encrypted_content":"enc_2"}]}}`,
 	})
-	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if err == nil || !strings.Contains(err.Error(), "compaction_count=2 output_count=2") || !strings.Contains(err.Error(), "compaction:2") {
 		t.Fatalf("error = %v, want diagnostic multiple-compaction contract failure", err)
 	}
@@ -565,7 +565,7 @@ func TestOAuthCompactRequestRejectsCompactionWithoutEncryptedContent(t *testing.
 	server := newOAuthCompactStreamServer(t, []string{
 		`{"type":"response.completed","response":{"output":[{"type":"compaction","id":"cmp_1"}]}}`,
 	})
-	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if err == nil || !strings.Contains(err.Error(), "missing encrypted_content") || !strings.Contains(err.Error(), "compaction_count=1 output_count=1") {
 		t.Fatalf("error = %v, want missing-encrypted-content contract failure", err)
 	}
@@ -575,7 +575,7 @@ func TestOAuthCompactRequestRejectsStreamWithoutResponseCompleted(t *testing.T) 
 	server := newOAuthCompactStreamServer(t, []string{
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}}`,
 	})
-	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if err == nil || !strings.Contains(err.Error(), openAIResponsesStreamEndedBeforeTerminalMessage) {
 		t.Fatalf("error = %v, want missing response.completed failure", err)
 	}
@@ -589,7 +589,7 @@ func TestOAuthCompactRequestPreservesProviderHTTPErrorDiagnostics(t *testing.T) 
 	}))
 	t.Cleanup(server.Close)
 
-	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := newOAuthCompactTestTransport(server).Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	var providerErr *ProviderAPIError
 	if !errors.As(err, &providerErr) {
 		t.Fatalf("error = %v, want ProviderAPIError", err)
@@ -614,7 +614,7 @@ func TestOAuthCompactRequestHonorsCancellationWithoutTransportRetry(t *testing.T
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := newOAuthCompactTestTransport(server).Compact(ctx, OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+		_, err := newOAuthCompactTestTransport(server).Compact(ctx, testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 		done <- err
 	}()
 	select {
@@ -656,7 +656,7 @@ func TestOAuthCompactRequestFailsWhenStreamStalls(t *testing.T) {
 	transport := newOAuthCompactTestTransport(server)
 	transport.Client.Timeout = 50 * time.Millisecond
 
-	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5.6-sol"})
+	_, err := transport.Compact(context.Background(), testOAuthCompactionRequest(t, "gpt-5.6-sol"))
 	if !errors.Is(err, ErrModelStreamStalled) {
 		t.Fatalf("error = %v, want bounded stream stall failure", err)
 	}
@@ -684,6 +684,23 @@ func newOAuthCompactTestTransport(server *httptest.Server) *HTTPTransport {
 	transport.BaseURLExplicit = true
 	transport.Client = server.Client()
 	return transport
+}
+
+func testOAuthCompactionRequest(t *testing.T, model string) OpenAICompactionRequest {
+	t.Helper()
+	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:   "test-session",
+		RunID:       "test-run",
+		RequestKind: CodexRequestKindCompaction.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("dispatch context: %v", err)
+	}
+	return OpenAICompactionRequest{
+		Model:         model,
+		SessionID:     textutil.Value("test-session"),
+		CodexDispatch: dispatch,
+	}
 }
 
 func newRewritingHTTPClient(t *testing.T, server *httptest.Server) *http.Client {

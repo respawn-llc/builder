@@ -75,7 +75,7 @@ func (s *ResponsesStub) serveScripted(
 		return scriptedllm.RequestNotAdmitted, fmt.Errorf("unsupported scripted Responses route %q", route)
 	}
 
-	lineage, err := parseScriptedLineage(request.Header.Get("session_id"))
+	lineage, err := parseScriptedLineage(request.Header.Get("session-id"))
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}
@@ -83,7 +83,7 @@ func (s *ResponsesStub) serveScripted(
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}
-	llmRequest.SessionID = lineage.sessionID
+	llmRequest.SessionID = textutil.Value(lineage.sessionID)
 	enriched, state, err := s.beginScriptedLineage(lineage, canonical)
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err

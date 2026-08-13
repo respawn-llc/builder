@@ -163,6 +163,8 @@
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity.
 
+OpenAI-family request identity, ChatGPT Codex routing, and provider turn state are defined in [OpenAI Provider Dispatch](openai-provider-dispatch.md).
+
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.

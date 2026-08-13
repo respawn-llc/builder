@@ -19,7 +19,8 @@ type OpenAIRequest struct {
 	EnableNativeWebSearch   bool
 	SystemPrompt            string
 	PromptCacheKey          string
-	SessionID               string
+	SessionID               *string
+	CodexDispatch           *CodexDispatchContext
 	Items                   []ResponseItem
 	Tools                   []Tool
 	ToolChoiceMode          ToolChoiceMode
@@ -47,6 +48,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 		SystemPrompt:            request.SystemPrompt,
 		PromptCacheKey:          request.PromptCacheKey,
 		SessionID:               request.SessionID,
+		CodexDispatch:           request.CodexDispatch,
 		Items:                   CloneResponseItems(request.Items),
 		Tools:                   append([]Tool(nil), request.Tools...),
 		ToolChoiceMode:          request.ToolChoiceMode,
@@ -68,7 +70,9 @@ type OpenAICompactionRequest struct {
 	Model          string
 	Instructions   string
 	PromptCacheKey string
-	SessionID      string
+	SessionID      *string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext
 	InputItems     []ResponseItem
 }
 
@@ -229,12 +233,17 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if request.Model == "" {
 		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
 	}
+	if err := validateSessionDispatchPairing(request.SessionID, request.CodexDispatch); err != nil {
+		return CompactionResponse{}, err
+	}
 
 	providerReq := OpenAICompactionRequest{
 		Model:          request.Model,
 		Instructions:   request.Instructions,
 		PromptCacheKey: request.PromptCacheKey,
 		SessionID:      request.SessionID,
+		FastMode:       request.FastMode,
+		CodexDispatch:  request.CodexDispatch,
 		InputItems:     CloneResponseItems(request.InputItems),
 	}
 	providerResp, err := c.transport.Compact(ctx, providerReq)

@@ -20,6 +20,7 @@ import (
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -42,6 +43,13 @@ type OpenAIAuthMetadataProvider interface {
 type OpenAIAuthMode struct {
 	IsOAuth   bool
 	AccountID string
+}
+
+type openAIDispatchPreparation struct {
+	authHeader   string
+	mode         OpenAIAuthMode
+	providerCaps ProviderCapabilities
+	projection   *codexDispatchProjection
 }
 
 type HTTPTransport struct {
@@ -86,42 +94,60 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
+	preparation, err := t.prepareDispatch(
+		ctx,
+		request.SessionID,
+		request.Model,
+		request.CodexDispatch,
+		request.FastMode,
+	)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
 
-	authHeader, mode, err := t.resolveAuth(ctx)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
 
-	payload, err := t.buildPayload(request, mode, providerCaps)
-	if err != nil {
-		return OpenAIResponse{}, err
+	requestClient := t.Client
+	if preparation.mode.IsOAuth {
+		requestClient = t.streamingHTTPClient()
 	}
-
 	service := responses.NewResponseService(
-		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.Client),
+		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
+		option.WithHTTPClient(requestClient),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
+	if preparation.mode.IsOAuth {
+		stream := service.NewStreaming(ctx, payload, reqOpts...)
+		defer func() { _ = stream.Close() }()
+		return consumeResponsesStream(
+			ctx,
+			stream,
+			rawResp,
+			request.CodexDispatch,
+			preparation.providerCaps.ProviderID,
+			windowTokens,
+			StreamCallbacks{},
+		)
+	}
+
 	decoded, err := service.New(ctx, payload, reqOpts...)
 	if err != nil {
-		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses request failed")
+		return OpenAIResponse{}, newOpenAIRequestErrorMapper(preparation.providerCaps.ProviderID).Map(err, rawResp, "openai responses request failed")
 	}
 	if decoded == nil {
 		return OpenAIResponse{}, fmt.Errorf("openai responses request failed: empty response")
 	}
-
 	outputItems, assistantText, _, providerPhase, toolCalls, reasoning, reasoningItems, parseErr := parseOutputItems(decoded.Output)
 	if parseErr != nil {
-		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+		return OpenAIResponse{}, newOpenAIProviderContractError(preparation.providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
 	}
 	return OpenAIResponse{
 		AssistantText:  assistantText,
@@ -148,57 +174,87 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
+	preparation, err := t.prepareDispatch(
+		ctx,
+		request.SessionID,
+		request.Model,
+		request.CodexDispatch,
+		request.FastMode,
+	)
+	if err != nil {
+		return OpenAIResponse{}, err
+	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
 
-	authHeader, mode, err := t.resolveAuth(ctx)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
-
-	payload, err := t.buildPayload(request, mode, providerCaps)
+	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
 
 	service := responses.NewResponseService(
-		option.WithBaseURL(t.serviceBaseURL(mode)),
+		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts := t.buildRequestOptions(preparation.authHeader, preparation.mode, request.SessionID, preparation.projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
 	stream := service.NewStreaming(ctx, payload, reqOpts...)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
+	var turnStateObserver *CodexDispatchContext
+	if preparation.mode.IsOAuth {
+		turnStateObserver = request.CodexDispatch
+	}
+	return consumeResponsesStream(
+		ctx,
+		stream,
+		rawResp,
+		turnStateObserver,
+		preparation.providerCaps.ProviderID,
+		windowTokens,
+		callbacks,
+	)
+}
+
+func consumeResponsesStream(
+	ctx context.Context,
+	stream *ssestream.Stream[responses.ResponseStreamEventUnion],
+	rawResp *http.Response,
+	dispatch *CodexDispatchContext,
+	providerID string,
+	windowTokens int,
+	callbacks StreamCallbacks,
+) (OpenAIResponse, error) {
 	accumulator := newResponseStreamAccumulator(callbacks, windowTokens)
+	headersObserved := false
+	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	for stream.Next() {
+		observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 		if callbacks.OnStreamActivity != nil {
 			callbacks.OnStreamActivity()
 		}
-		accumulator.Consume(stream.Current())
-		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
-			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
+		event := stream.Current()
+		accumulator.Consume(event)
+		if err := accumulator.Err(providerID, newOpenAIResponseStatus(rawResp)); err != nil {
+			return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerID).Map(err, rawResp, "read responses stream events")
 		}
 	}
+	observeCodexTurnStateResponseHeader(dispatch, rawResp, &headersObserved)
 	if err := stream.Err(); err != nil {
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
-			return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
+			return responseFromStreamAccumulator(accumulator, providerID, rawResp)
 		}
 		responseStatus := newOpenAIResponseStatus(rawResp)
 		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
-				providerCaps.ProviderID,
+				providerID,
 				responseStatus.Code,
 				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
 			))
 		}
-		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
+		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerID).Map(err, rawResp, "read responses stream events")
 	}
 	if !accumulator.hasCompleted() {
 		responseStatus := newOpenAIResponseStatus(rawResp)
@@ -206,12 +262,12 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
 		}
 		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
-			providerCaps.ProviderID,
+			providerID,
 			responseStatus.Code,
 			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
 		))
 	}
-	return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
+	return responseFromStreamAccumulator(accumulator, providerID, rawResp)
 }
 
 func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, providerID string, rawResp *http.Response) (OpenAIResponse, error) {
@@ -290,54 +346,104 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
+	preparation, err := t.prepareDispatch(
+		ctx,
+		request.SessionID,
+		request.Model,
+		request.CodexDispatch,
+		request.FastMode,
+	)
+	if err != nil {
+		return OpenAICompactionResponse{}, err
+	}
+	variant, err := t.providerVariantForMode(preparation.mode)
+	if err != nil {
+		return OpenAICompactionResponse{}, err
+	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
-
-	authHeader, mode, err := t.resolveAuth(ctx)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
-	variant, err := t.providerVariantForMode(mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
 	switch variant.RemoteCompactionProtocol {
 	case remoteCompactionResponsesTriggerV2:
-		return t.compactResponsesTriggerV2(ctx, request, authHeader, mode, providerCaps, windowTokens)
+		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, preparation.providerCaps, windowTokens, preparation.projection)
 	default:
-		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", providerCaps.ProviderID)
+		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", preparation.providerCaps.ProviderID)
 	}
 }
 
-func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, providerCaps ProviderCapabilities, windowTokens int) (OpenAICompactionResponse, error) {
+func (t *HTTPTransport) prepareDispatch(
+	ctx context.Context,
+	sessionID *string,
+	model string,
+	dispatch *CodexDispatchContext,
+	fastMode bool,
+) (openAIDispatchPreparation, error) {
+	if sessionID == nil {
+		return openAIDispatchPreparation{}, fmt.Errorf("%w: Session identity is required for dispatch", ErrInvalidRequest)
+	}
+	if err := validateSessionDispatchPairing(sessionID, dispatch); err != nil {
+		return openAIDispatchPreparation{}, err
+	}
+	authHeader, mode, err := t.resolveAuth(ctx)
+	if err != nil {
+		return openAIDispatchPreparation{}, err
+	}
+	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	if err != nil {
+		return openAIDispatchPreparation{}, err
+	}
+	projection, err := validateOpenAIDispatchForMode(
+		*sessionID,
+		model,
+		dispatch,
+		mode,
+		effectiveServiceTier(fastMode, providerCaps),
+	)
+	if err != nil {
+		return openAIDispatchPreparation{}, err
+	}
+	return openAIDispatchPreparation{
+		authHeader:   authHeader,
+		mode:         mode,
+		providerCaps: providerCaps,
+		projection:   projection,
+	}, nil
+}
+
+func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, providerCaps ProviderCapabilities, windowTokens int, projection *codexDispatchProjection) (OpenAICompactionResponse, error) {
 	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
+	applyCodexClientMetadata(&payload, projection)
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)
 	defer watchdog.stop()
 	stream := service.NewStreaming(watchdog.ctx, payload, reqOpts...)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	accumulator := newResponseStreamAccumulator(StreamCallbacks{}, windowTokens)
+	var turnStateObserver *CodexDispatchContext
+	if mode.IsOAuth {
+		turnStateObserver = request.CodexDispatch
+	}
+	headersObserved := false
+	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	for stream.Next() {
+		observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 		watchdog.ping()
-		accumulator.Consume(stream.Current())
+		event := stream.Current()
+		accumulator.Consume(event)
 		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
 			return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
 		}
 	}
+	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	if err := stream.Err(); err != nil {
 		if errors.Is(context.Cause(watchdog.ctx), ErrModelStreamStalled) {
 			return OpenAICompactionResponse{}, fmt.Errorf("model stream stalled: %w", ErrModelStreamStalled)
@@ -407,7 +513,7 @@ func (t *HTTPTransport) ResolveModelContextWindow(ctx context.Context, model str
 			option.WithHTTPClient(t.Client),
 			option.WithMaxRetries(0),
 		)
-		reqOpts := t.buildRequestOptions(authHeader, mode, "")
+		reqOpts := t.buildRequestOptions(authHeader, mode, nil, nil, nil)
 		var rawResp *http.Response
 		reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 		modelResponse, modelErr := service.Get(ctx, strings.TrimSpace(model), reqOpts...)

@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"testing"
 
 	"core/server/llm"
@@ -80,9 +79,9 @@ func assertInactiveGoalCompaction(t *testing.T, engine *Engine, name string) {
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

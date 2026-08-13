@@ -379,6 +379,14 @@ func (m *uiModel) applyTranscriptOperationalDiagnostic(diagnostic clientui.Trans
 			uiStatusNoticeReplace,
 			"",
 		)
+	case clientui.OperationalDiagnosticProviderTurnStateInvalid:
+		return m.sendTransientStatusWithNoticeID(
+			"Provider routing state was invalid. Kent ignored it and continued; retry if model work behaves unexpectedly.",
+			uiStatusNoticeError,
+			transientStatusDuration,
+			uiStatusNoticeReplace,
+			"",
+		)
 	default:
 		panic(fmt.Sprintf("unsupported transcript operational diagnostic %q", diagnostic.Code))
 	}

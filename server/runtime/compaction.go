@@ -453,13 +453,25 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot, caps)
+	var requestKind *llm.CodexRequestKind
 	if enginePlan.engineKind == compactionEngineRemote {
-		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions)
+		requestKind = llm.CodexRequestKindCompaction.Optional()
+	}
+	dispatchFactory, err := e.activeDispatchRequestFactory(stepID, requestKind)
+	if err != nil {
+		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
+	}
+	if enginePlan.engineKind == compactionEngineRemote {
+		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
 		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, nil)
+			if factoryErr != nil {
+				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
+			}
+			result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, localFactory)
 		}
 	} else {
-		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode)
+		result, err = e.compactLocal(ctx, stepID, input, providerID, instructions, mode, dispatchFactory)
 	}
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)

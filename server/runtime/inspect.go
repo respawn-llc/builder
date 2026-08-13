@@ -29,5 +29,5 @@ func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool)
 	if err := (&defaultStepExecutor{engine: eng}).prepareModelTurn(ctx, stepID); err != nil {
 		return llm.Request{}, err
 	}
-	return eng.buildRequest(ctx, stepID, allowTools)
+	return eng.buildContextFreeRequest(ctx, stepID, nil, allowTools)
 }
