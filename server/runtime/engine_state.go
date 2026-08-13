@@ -713,14 +713,15 @@ func mustJSON(v any) json.RawMessage {
 }
 
 type storedLocalEntry struct {
-	Visibility       transcript.EntryVisibility         `json:"visibility,omitempty"`
-	Role             string                             `json:"role"`
-	Text             string                             `json:"text"`
-	DurationMs       *int64                             `json:"duration_ms,omitempty"`
-	CondensedText    *string                            `json:"condensed_text,omitempty"`
-	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
-	NoticeID         *string                            `json:"notice_id,omitempty"`
-	ToolOutputRepair *transcript.ToolOutputRepairNotice `json:"tool_output_repair,omitempty"`
+	Visibility            transcript.EntryVisibility              `json:"visibility,omitempty"`
+	Role                  string                                  `json:"role"`
+	Text                  string                                  `json:"text"`
+	DurationMs            *int64                                  `json:"duration_ms,omitempty"`
+	CondensedText         *string                                 `json:"condensed_text,omitempty"`
+	DiagnosticKey         *string                                 `json:"diagnostic_key,omitempty"`
+	NoticeID              *string                                 `json:"notice_id,omitempty"`
+	ToolOutputRepair      *transcript.ToolOutputRepairNotice      `json:"tool_output_repair,omitempty"`
+	ProviderModelMismatch *transcript.ProviderModelMismatchNotice `json:"provider_model_mismatch,omitempty"`
 	// AfterToolCallID keeps atomically persisted operator feedback visually
 	// attached after the tool result that caused it.
 	AfterToolCallID *string `json:"after_tool_call_id,omitempty"`
@@ -751,6 +752,10 @@ func (e *Engine) recordLastUsage(usage llm.Usage) (session.CommitReceipt, error)
 	if e != nil {
 		baselineEstimate = e.transcriptRuntimeState().EstimatedProviderTokens()
 	}
+	return e.recordLastUsageWithBaseline(usage, baselineEstimate)
+}
+
+func (e *Engine) recordLastUsageWithBaseline(usage llm.Usage, baselineEstimate int) (session.CommitReceipt, error) {
 	normalizedUsage, totalInputTokens, totalCachedInputTokens := e.usageTrackingState().Next(usage)
 	receipt := session.CommitReceipt{Committed: true}
 	var persistenceErr error

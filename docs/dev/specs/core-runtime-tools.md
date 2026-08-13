@@ -162,6 +162,23 @@
 - Every generation request has a required tool-choice mode: automatic or required. Missing or unknown modes are invalid.
 - Required tool choice validates against the complete advertised tool set, including local, custom, and enabled provider-hosted tools. An empty set is invalid. A provider that cannot represent required choice returns a policy error before dispatch. Automatic and required requests use the same bounded provider- and transport-failure retry policy; a retry preserves the request's tool-choice mode and advertised tools, and Kent never falls back from required to automatic choice.
 - Tool-choice mode changes only tool selection. It never changes the advertised tools or their order, parallel-tool behavior, or prompt-cache identity.
+- When an accepted OpenAI-compatible Responses result reports its served model, Kent compares that model exactly with the model in the Session Contract.
+- The standard response model is authoritative when present. A provider-specific routed-model report supplies the served model only when the standard response model is absent.
+- When the served model differs from the Session Contract model, Kent commits one durable provider-model mismatch warning for the Agent Step without changing the Session Contract.
+- The provider-model mismatch warning carries the Session Contract model and the served model as typed facts.
+- The provider-model mismatch warning is user-only and never enters provider history.
+- A missing served model is a match and creates no warning.
+- A failed provider attempt creates no provider-model mismatch warning.
+- When an accepted response explicitly reports that provider usage already includes past reasoning, Kent excludes that already-accounted reasoning from the context estimate layered on the provider usage checkpoint.
+- An absent, false, or malformed reasoning-included report means that provider usage does not include past reasoning.
+- Past reasoning for this accounting rule consists only of encrypted reasoning items strictly before the latest ordinary user instruction or typed Agent Steer in the accepted request. Reasoning after that boundary belongs to the current Agent Step and is not layered onto provider usage again.
+- After an accepted response, failure to persist either the provider-model mismatch warning or the adjusted usage checkpoint does not prevent Kent from attempting to persist the other. Each result known to be committed remains authoritative. If both persistence operations fail, Kent surfaces both failures. Kent does not roll back or retry either operation and adds no repair or recovery guarantee for this failure.
+- Reasoning-included metadata never changes transcript content or the history sent to the provider.
+- Provider-model and reasoning-included response metadata are supported for authenticated ChatGPT, API-key OpenAI, and OpenAI-compatible Responses providers.
+- Kent sends none of these response metadata values to the provider.
+- An authentication failure preserves a provider-supplied authorization diagnostic and its correlated provider request ID when present.
+- The existing actionable authentication error surfaces the provider authorization diagnostic and correlated provider request ID when present while preserving its authentication classification.
+- A provider-supplied authorization diagnostic never changes authentication state by itself.
 
 ## Compaction
 

@@ -190,6 +190,14 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if queuedTargetFinal.terminalAppliedBy(next) {
 		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(queuedTargetFinal.sequence)
 	}
+	if !emitScenarioFinalApplied {
+		sequence, ok := model.scenario.pendingTargetFinalSequence()
+		if ok &&
+			targetFinalAppliedToOngoing(next, sequence) &&
+			model.scenario.claimScenarioFinalApplied(sequence) {
+			emitScenarioFinalApplied = true
+		}
+	}
 	if emitScenarioFinalApplied {
 		model.emitScenarioFinalApplied()
 	}
@@ -358,6 +366,20 @@ func (candidate ptyOngoingTargetFinalDrainCandidate) terminalAppliedBy(model tea
 		!appModel.ongoingTranscript.queueOverflowed &&
 		len(appModel.ongoingTranscript.queue) == 0 &&
 		appModel.ongoingTranscript.lastSequence >= candidate.sequence
+}
+
+func targetFinalAppliedToOngoing(model tea.Model, targetSequence uint64) bool {
+	appModel, ok := model.(*uiModel)
+	if !ok ||
+		appModel.ongoingTranscript == nil ||
+		!appModel.ongoingTranscript.normalOwned ||
+		appModel.ongoingTranscript.queueOverflowed ||
+		!appModel.nativeOngoingSurfaceActive() ||
+		len(appModel.ongoingTranscript.queue) != 0 {
+		return false
+	}
+	return !appModel.forcedLocalExit &&
+		appModel.ongoingTranscript.lastSequence > targetSequence
 }
 
 func isTranscriptMessageKind(message clientui.TranscriptMessage, kind clientui.TranscriptMessageKind) bool {

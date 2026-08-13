@@ -322,11 +322,14 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error)
 	if entry.Role == "" {
 		return storedLocalEntry{}, errors.New("role is required")
 	}
-	if entry.Text == "" && entry.ToolOutputRepair == nil {
-		return storedLocalEntry{}, errors.New("text or tool-output repair facts are required")
+	if entry.Text == "" && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil {
+		return storedLocalEntry{}, errors.New("text or typed notice facts are required")
 	}
 	if entry.ToolOutputRepair != nil && !entry.ToolOutputRepair.Valid() {
 		return storedLocalEntry{}, errors.New("tool-output repair facts are invalid")
+	}
+	if entry.ProviderModelMismatch != nil && !entry.ProviderModelMismatch.Valid() {
+		return storedLocalEntry{}, errors.New("provider-model mismatch facts are invalid")
 	}
 	return entry, nil
 }
@@ -335,13 +338,14 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	condensedText, _ := textutil.OptionalExact(entry.CondensedText)
 	noticeID, _ := textutil.OptionalExact(entry.NoticeID)
 	return &ChatEntry{
-		Visibility:       normalizeRuntimeEntryVisibility(entry.Visibility),
-		Role:             strings.TrimSpace(entry.Role),
-		Text:             strings.TrimSpace(entry.Text),
-		DurationMs:       textutil.Pointer(entry.DurationMs),
-		CondensedText:    condensedText,
-		NoticeID:         noticeID,
-		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+		Visibility:            normalizeRuntimeEntryVisibility(entry.Visibility),
+		Role:                  strings.TrimSpace(entry.Role),
+		Text:                  strings.TrimSpace(entry.Text),
+		DurationMs:            textutil.Pointer(entry.DurationMs),
+		CondensedText:         condensedText,
+		NoticeID:              noticeID,
+		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
 }
 

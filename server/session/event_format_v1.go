@@ -191,6 +191,12 @@ func newEventRecord(
 			repair := *typed.ToolOutputRepair
 			typed.ToolOutputRepair = &repair
 		}
+		if typed.ProviderModelMismatch != nil {
+			mismatch := *typed.ProviderModelMismatch
+			mismatch.RequestedModel = strings.TrimSpace(mismatch.RequestedModel)
+			mismatch.ServedModel = strings.TrimSpace(mismatch.ServedModel)
+			typed.ProviderModelMismatch = &mismatch
+		}
 		payload = typed
 	case ReviewerFeedbackRecord:
 		typed.Suggestions = append([]string(nil), typed.Suggestions...)
@@ -297,15 +303,16 @@ const (
 )
 
 type LocalEntryRecord struct {
-	Visibility       EntryVisibility                    `json:"visibility"`
-	Role             string                             `json:"role"`
-	Text             *string                            `json:"text"`
-	DurationMs       *int64                             `json:"duration_ms,omitempty"`
-	CondensedText    *string                            `json:"condensed_text,omitempty"`
-	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
-	NoticeID         *string                            `json:"notice_id,omitempty"`
-	AfterToolCallID  *string                            `json:"after_tool_call_id,omitempty"`
-	ToolOutputRepair *transcript.ToolOutputRepairNotice `json:"tool_output_repair,omitempty"`
+	Visibility            EntryVisibility                         `json:"visibility"`
+	Role                  string                                  `json:"role"`
+	Text                  *string                                 `json:"text"`
+	DurationMs            *int64                                  `json:"duration_ms,omitempty"`
+	CondensedText         *string                                 `json:"condensed_text,omitempty"`
+	DiagnosticKey         *string                                 `json:"diagnostic_key,omitempty"`
+	NoticeID              *string                                 `json:"notice_id,omitempty"`
+	AfterToolCallID       *string                                 `json:"after_tool_call_id,omitempty"`
+	ToolOutputRepair      *transcript.ToolOutputRepairNotice      `json:"tool_output_repair,omitempty"`
+	ProviderModelMismatch *transcript.ProviderModelMismatchNotice `json:"provider_model_mismatch,omitempty"`
 }
 
 type ReviewerFeedbackRecord struct {
@@ -460,14 +467,17 @@ func (r LocalEntryRecord) validate() error {
 	if strings.TrimSpace(r.Role) == "" {
 		return fmt.Errorf("role is required")
 	}
-	if r.Text == nil && r.ToolOutputRepair == nil {
-		return fmt.Errorf("text or tool-output repair facts are required")
+	if r.Text == nil && r.ToolOutputRepair == nil && r.ProviderModelMismatch == nil {
+		return fmt.Errorf("text or typed notice facts are required")
 	}
 	if r.Text != nil && strings.TrimSpace(*r.Text) == "" {
 		return fmt.Errorf("text must be non-empty when present")
 	}
 	if r.ToolOutputRepair != nil && !r.ToolOutputRepair.Valid() {
 		return fmt.Errorf("tool-output repair facts are invalid")
+	}
+	if r.ProviderModelMismatch != nil && !r.ProviderModelMismatch.Valid() {
+		return fmt.Errorf("provider-model mismatch facts are invalid")
 	}
 	if r.DurationMs != nil && *r.DurationMs < 0 {
 		return fmt.Errorf("duration_ms must not be negative")

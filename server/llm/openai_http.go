@@ -124,13 +124,15 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
 	}
 	return OpenAIResponse{
-		AssistantText:  assistantText,
-		ProviderPhase:  providerPhase,
-		ToolCalls:      toolCalls,
-		Reasoning:      normalizeReasoningEntries(reasoning),
-		ReasoningItems: reasoningItems,
-		OutputItems:    outputItems,
-		Usage:          usageFromSDK(decoded.Usage, windowTokens),
+		AssistantText:     assistantText,
+		ProviderPhase:     providerPhase,
+		ServedModel:       servedModelMetadata(rawResp, string(decoded.Model)),
+		ReasoningIncluded: reasoningIncludedMetadata(rawResp),
+		ToolCalls:         toolCalls,
+		Reasoning:         normalizeReasoningEntries(reasoning),
+		ReasoningItems:    reasoningItems,
+		OutputItems:       outputItems,
+		Usage:             usageFromSDK(decoded.Usage, windowTokens),
 	}, nil
 }
 
@@ -222,6 +224,8 @@ func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, provi
 			newOpenAIProviderContractError(providerID, newOpenAIResponseStatus(rawResp), err),
 		)
 	}
+	response.ServedModel = servedModelMetadata(rawResp, optionalStringValue(response.ServedModel))
+	response.ReasoningIncluded = reasoningIncludedMetadata(rawResp)
 	return response, nil
 }
 

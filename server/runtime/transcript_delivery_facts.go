@@ -75,23 +75,24 @@ type TranscriptReasoningTraceRowFact struct {
 }
 
 type TranscriptNoticeRowFact struct {
-	Reason               string
-	Severity             string
-	LegacyText           *string
-	NoticeID             *string
-	MessageType          llm.MessageType
-	SourcePath           string
-	WorktreeContext      *session.WorktreeContext
-	CondensedText        string
-	CompactLabel         string
-	BackgroundActivityID string
-	BackgroundProcessID  string
-	BackgroundExitCode   *int
-	DiagnosticCode       string
-	DiagnosticDetail     string
-	CacheWarning         *TranscriptCacheWarningFact
-	Compaction           *TranscriptCompactionNoticeFact
-	ToolOutputRepair     *transcript.ToolOutputRepairNotice
+	Reason                string
+	Severity              string
+	LegacyText            *string
+	NoticeID              *string
+	MessageType           llm.MessageType
+	SourcePath            string
+	WorktreeContext       *session.WorktreeContext
+	CondensedText         string
+	CompactLabel          string
+	BackgroundActivityID  string
+	BackgroundProcessID   string
+	BackgroundExitCode    *int
+	DiagnosticCode        string
+	DiagnosticDetail      string
+	CacheWarning          *TranscriptCacheWarningFact
+	Compaction            *TranscriptCompactionNoticeFact
+	ToolOutputRepair      *transcript.ToolOutputRepairNotice
+	ProviderModelMismatch *transcript.ProviderModelMismatchNotice
 }
 
 type TranscriptReviewerFeedbackRowFact struct {
@@ -635,6 +636,12 @@ func transcriptToolEntryHasRecoverableText(entry ChatEntry) bool {
 }
 
 func transcriptNoticeEntryIntegrity(entry ChatEntry) transcript.RowIntegrity {
+	if entry.ProviderModelMismatch != nil {
+		if entry.ProviderModelMismatch.Valid() {
+			return transcript.RowIntegrityValid
+		}
+		return transcript.RowIntegrityUnrecoverableMalformed
+	}
 	if entry.ToolOutputRepair != nil {
 		if entry.ToolOutputRepair.Valid() {
 			return transcript.RowIntegrityValid
@@ -742,6 +749,17 @@ func firstNonBlankTranscriptValue(values ...string) string {
 }
 
 func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
+	if entry.ProviderModelMismatch != nil {
+		return TranscriptCommittedRowFact{
+			Kind:       TranscriptCommittedRowFactNotice,
+			Visibility: normalizeRuntimeEntryVisibility(entry.Visibility),
+			Notice: &TranscriptNoticeRowFact{
+				Reason:                transcript.NoticeReasonProviderModelMismatch,
+				Severity:              transcript.NoticeSeverityWarning,
+				ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
+			},
+		}
+	}
 	if entry.ToolOutputRepair != nil {
 		return TranscriptCommittedRowFact{
 			Kind:       TranscriptCommittedRowFactNotice,

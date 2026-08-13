@@ -47,6 +47,38 @@ func TestDetailModeTransitionLoadsServerBackedTranscriptPage(t *testing.T) {
 	}
 }
 
+func TestDetailTranscriptWindowClonesProviderModelMismatchFacts(t *testing.T) {
+	source := clientui.TranscriptPage{
+		SessionID: detailTestSessionID,
+		Entries: []clientui.TranscriptCommittedRow{{
+			Visibility: transcript.EntryVisibilityDetail,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       clientui.TranscriptRowNotice,
+			Notice: &clientui.TranscriptNoticeRow{
+				Reason:   clientui.TranscriptNoticeProviderModelMismatch,
+				Severity: clientui.TranscriptNoticeWarning,
+				ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
+					RequestedModel: "requested-model",
+					ServedModel:    "served-model",
+				},
+			},
+		}},
+	}
+	var window uiDetailTranscriptWindow
+	window.replace(source)
+
+	source.Entries[0].Notice.ProviderModelMismatch.ServedModel = "mutated-source"
+	first := window.page()
+	if got := first.Entries[0].Notice.ProviderModelMismatch.ServedModel; got != "served-model" {
+		t.Fatalf("stored mismatch served model = %q after source mutation", got)
+	}
+	first.Entries[0].Notice.ProviderModelMismatch.ServedModel = "mutated-page"
+	second := window.page()
+	if got := second.Entries[0].Notice.ProviderModelMismatch.ServedModel; got != "served-model" {
+		t.Fatalf("stored mismatch served model = %q after returned-page mutation", got)
+	}
+}
+
 func TestDetailModeReentryShowsCachedPageWhileRefreshingNewestPage(t *testing.T) {
 	sessionViews := newControlledTranscriptPageClient()
 	cached := clientui.TranscriptPage{

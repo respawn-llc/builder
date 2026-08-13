@@ -114,6 +114,9 @@ func renderCommittedRow(
 		if row.Notice != nil && row.Notice.Severity == clientui.TranscriptNoticeError {
 			options.forceFull = true
 		}
+		if row.Notice != nil && row.Notice.Reason == clientui.TranscriptNoticeProviderModelMismatch {
+			options.forceFull = true
+		}
 		if isReviewerNotice(row.Notice) {
 			options.compactEllipsis = compactEllipsisNever
 		}
@@ -732,6 +735,12 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		}
 		return role, toolOutputRepairNoticeText(row.ToolOutputRepair)
 	}
+	if row.Reason == clientui.TranscriptNoticeProviderModelMismatch && row.ProviderModelMismatch != nil {
+		if !isError {
+			role = StyleRoleWarning
+		}
+		return role, ProviderModelMismatchNoticeText(row.ProviderModelMismatch)
+	}
 	if isError && row.Reason == clientui.TranscriptNoticeLegacyUntypedNotice && row.LegacyText != nil {
 		return role, *row.LegacyText
 	}
@@ -775,6 +784,14 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		text = firstNonEmpty(row.Diagnostic.Detail, string(row.Diagnostic.Code), text)
 	}
 	return role, text
+}
+
+func ProviderModelMismatchNoticeText(mismatch *transcript.ProviderModelMismatchNotice) string {
+	return fmt.Sprintf(
+		"The provider served the request with %s instead of %s",
+		mismatch.ServedModel,
+		mismatch.RequestedModel,
+	)
 }
 
 func toolOutputRepairNoticeText(repair *transcript.ToolOutputRepairNotice) string {

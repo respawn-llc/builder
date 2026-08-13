@@ -42,6 +42,30 @@ func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMo
 	return opts
 }
 
+func servedModelMetadata(rawResp *http.Response, standardModel string) *string {
+	if model := strings.TrimSpace(standardModel); model != "" {
+		return textutil.Value(model)
+	}
+	if rawResp == nil {
+		return nil
+	}
+	for _, headerName := range []string{"openai-model", "x-openai-model"} {
+		for _, value := range rawResp.Header.Values(headerName) {
+			if model := strings.TrimSpace(value); model != "" {
+				return textutil.Value(model)
+			}
+		}
+	}
+	return nil
+}
+
+func reasoningIncludedMetadata(rawResp *http.Response) bool {
+	if rawResp == nil {
+		return false
+	}
+	return strings.TrimSpace(rawResp.Header.Get("x-reasoning-included")) == "true"
+}
+
 func (t *HTTPTransport) resolveContextWindowFallback(ctx context.Context, model string) int {
 	if t.ContextWindowTokens > 0 {
 		return t.ContextWindowTokens

@@ -55,13 +55,15 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 }
 
 type OpenAIResponse struct {
-	AssistantText  *string
-	ProviderPhase  *ProviderPhase
-	ToolCalls      []ToolCall
-	Reasoning      []ReasoningEntry
-	ReasoningItems []ReasoningItem
-	OutputItems    []ResponseItem
-	Usage          Usage
+	AssistantText     *string
+	ProviderPhase     *ProviderPhase
+	ServedModel       *string
+	ReasoningIncluded bool
+	ToolCalls         []ToolCall
+	Reasoning         []ReasoningEntry
+	ReasoningItems    []ReasoningItem
+	OutputItems       []ResponseItem
+	Usage             Usage
 }
 
 type OpenAICompactionRequest struct {
@@ -142,12 +144,14 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
 		},
-		ProviderPhase:  providerResp.ProviderPhase,
-		ToolCalls:      providerResp.ToolCalls,
-		Reasoning:      append([]ReasoningEntry(nil), providerResp.Reasoning...),
-		ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-		OutputItems:    CloneResponseItems(providerResp.OutputItems),
-		Usage:          providerResp.Usage,
+		ProviderPhase:     providerResp.ProviderPhase,
+		ServedModel:       textutil.Pointer(providerResp.ServedModel),
+		ReasoningIncluded: providerResp.ReasoningIncluded,
+		ToolCalls:         providerResp.ToolCalls,
+		Reasoning:         append([]ReasoningEntry(nil), providerResp.Reasoning...),
+		ReasoningItems:    append([]ReasoningItem(nil), providerResp.ReasoningItems...),
+		OutputItems:       CloneResponseItems(providerResp.OutputItems),
+		Usage:             providerResp.Usage,
 	}, nil
 }
 

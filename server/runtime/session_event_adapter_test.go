@@ -308,6 +308,28 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProviderModelMismatchLocalEntryAdapterRoundTrip(t *testing.T) {
+	entry := storedLocalEntry{
+		Visibility: transcript.EntryVisibilityDetail,
+		Role:       string(transcript.EntryRoleWarning),
+		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
+			RequestedModel: "requested-model",
+			ServedModel:    "served-model",
+		},
+	}
+	record, err := sessionLocalEntryRecordFromRuntime(entry)
+	if err != nil {
+		t.Fatalf("adapt provider-model mismatch: %v", err)
+	}
+	restored, err := storedLocalEntryFromSessionRecord(record)
+	if err != nil {
+		t.Fatalf("restore provider-model mismatch: %v", err)
+	}
+	if !reflect.DeepEqual(restored, entry) {
+		t.Fatalf("restored provider-model mismatch = %+v, want %+v", restored, entry)
+	}
+}
+
 func TestSessionHistoryReplacementRecordAdapterRejectsInvalidOptionalFacts(t *testing.T) {
 	t.Parallel()
 	base := historyReplacementPayload{

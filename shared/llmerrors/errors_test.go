@@ -3,6 +3,7 @@ package llmerrors
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -29,4 +30,68 @@ func TestHasHTTPStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProviderAPIErrorDiagnosticsDoNotChangeClassification(t *testing.T) {
+	requestID := "request-1"
+	diagnostic := "token rejected"
+	err := &ProviderAPIError{
+		ProviderID:              "chatgpt-codex",
+		StatusCode:              401,
+		Code:                    UnifiedErrorCodeAuthentication,
+		ProviderRequestID:       &requestID,
+		AuthorizationDiagnostic: &diagnostic,
+	}
+	if !IsAuthenticationError(err) {
+		t.Fatal("diagnostic authentication error lost authentication classification")
+	}
+	if !IsNonRetriableModelError(err) {
+		t.Fatal("diagnostic authentication error changed retry classification")
+	}
+}
+
+func TestUserFacingAuthenticationErrorIncludesProviderDiagnosticsWhenPresent(t *testing.T) {
+	tests := []struct {
+		name       string
+		requestID  *string
+		diagnostic *string
+	}{
+		{name: "neither"},
+		{name: "diagnostic only", diagnostic: stringPointer("token rejected")},
+		{name: "request ID only", requestID: stringPointer("request-1")},
+		{name: "both", requestID: stringPointer("request-1"), diagnostic: stringPointer("token rejected")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := UserFacingError(&ProviderAPIError{
+				ProviderID:              "chatgpt-codex",
+				StatusCode:              401,
+				Code:                    UnifiedErrorCodeAuthentication,
+				ProviderRequestID:       test.requestID,
+				AuthorizationDiagnostic: test.diagnostic,
+			})
+			base := authenticationFailedWarning("chatgpt-codex", 401)
+			if !strings.HasPrefix(got, base) {
+				t.Fatalf("user-facing error = %q, want actionable authentication prefix %q", got, base)
+			}
+			wantDiagnostic := test.diagnostic != nil
+			if strings.Contains(got, providerAuthorizationDiagnosticPrefix) != wantDiagnostic {
+				t.Fatalf("authorization diagnostic presence = %t, want %t; error=%q", strings.Contains(got, providerAuthorizationDiagnosticPrefix), wantDiagnostic, got)
+			}
+			wantRequestID := test.requestID != nil
+			if strings.Contains(got, providerRequestIDPrefix) != wantRequestID {
+				t.Fatalf("request ID presence = %t, want %t; error=%q", strings.Contains(got, providerRequestIDPrefix), wantRequestID, got)
+			}
+			if test.diagnostic != nil && !strings.Contains(got, *test.diagnostic) {
+				t.Fatalf("user-facing error omitted diagnostic value: %q", got)
+			}
+			if test.requestID != nil && !strings.Contains(got, *test.requestID) {
+				t.Fatalf("user-facing error omitted request ID value: %q", got)
+			}
+		})
+	}
+}
+
+func stringPointer(value string) *string {
+	return &value
 }

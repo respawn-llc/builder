@@ -13,6 +13,7 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/transcript"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -21,6 +22,13 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
 	scenarioSlots := make(chan struct{}, 4)
+	modelMismatchCompletionDrain := time.Second
+	modelMismatchNotice := transcriptrender.ProviderModelMismatchNoticeText(
+		&transcript.ProviderModelMismatchNotice{
+			RequestedModel: "gpt-5",
+			ServedModel:    "served-model",
+		},
+	)
 
 	for _, tc := range []struct {
 		name                      string
@@ -35,6 +43,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
+		expectedDetailScreenRows  []string
 		allowsAltScroll           bool
 		allowsFullScreen          bool
 		completionDrain           *time.Duration
@@ -107,6 +116,51 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				Dimensions:      pty.MustDimensions(18, 72),
 				CompletionBytes: []byte{0x03, 0x03},
 			}},
+		},
+		{
+			name: "provider_model_mismatch_hidden_from_normal_ongoing",
+			env:  []string{"KENT_DEBUG=0"},
+			script: map[string]any{
+				"prompt":       "normal model mismatch",
+				"served_model": "served-model",
+				"final":        "normal mismatch answer",
+			},
+			frameInputs: []pty.FrameInputSequence{{
+				Phase: pty.PhaseScenarioComplete,
+				Inputs: []pty.FrameInput{
+					{
+						Readiness:  pty.ReadinessRendererFrame,
+						AfterPhase: phasePointer(pty.PhaseScenarioFinalApplied),
+						Bytes:      []byte(detailFrameShiftTab),
+					},
+					{
+						Readiness:  pty.ReadinessRendererFrame,
+						AfterPhase: phasePointer(pty.PhaseDetailInitialPageApplied),
+						Bytes:      []byte(detailFrameUp),
+					},
+					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte(detailFrameTab)},
+					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
+				},
+			}},
+			expectedAppends:          []string{"❮ normal mismatch answer"},
+			forbiddenAnyAppends:      []string{modelMismatchNotice},
+			expectedDetailScreenRows: []string{" ⚠ " + modelMismatchNotice},
+			allowsAltScroll:          true,
+			allowsFullScreen:         true,
+		},
+		{
+			name: "provider_model_mismatch_visible_in_debug_ongoing",
+			env:  []string{"KENT_DEBUG=1"},
+			script: map[string]any{
+				"prompt":       "debug model mismatch",
+				"served_model": "served-model",
+				"final":        "debug mismatch answer",
+			},
+			expectedAppends: []string{
+				"❮ debug mismatch answer",
+				"⚠ " + modelMismatchNotice,
+			},
+			completionDrain: &modelMismatchCompletionDrain,
 		},
 		{
 			name: "parallel_tools_order_and_long_output",
@@ -391,6 +445,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
 			}
+			if len(tc.expectedDetailScreenRows) > 0 {
+				assertScenarioDetailScreenRows(t, capture, tc.expectedDetailScreenRows)
+			}
 		})
 	}
 }
@@ -455,7 +512,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
-	if len(inputPlan.frameResizes) == 0 {
+	if len(inputPlan.frameSequences) == 0 && len(inputPlan.frameResizes) == 0 {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: completionPhase,
 			After: completionDrain,
@@ -477,6 +534,29 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	return capture, observationsPath
+}
+
+func assertScenarioDetailScreenRows(t *testing.T, capture pty.Capture, expected []string) {
+	t.Helper()
+	if len(capture.FrameInputDispatches) < 4 {
+		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
+	}
+	exitDispatch := capture.FrameInputDispatches[2]
+	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
+		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
+	}})
+	if err != nil {
+		t.Fatalf("replay detail screen: %v", err)
+	}
+	for _, row := range expected {
+		if err := screenRowAppearsExactlyOnce(screens[0], row); err != nil {
+			t.Fatalf("expected detail screen row: %v", err)
+		}
+	}
+}
+
+func phasePointer(phase pty.PhaseKind) *pty.PhaseKind {
+	return &phase
 }
 
 func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error) {

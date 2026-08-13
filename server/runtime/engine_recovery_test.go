@@ -35,7 +35,9 @@ func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
 			events = append(events, event)
 			if event.Kind == EventAssistantMessage && !failureArmed {
 				failureArmed = true
-				gate.FailNext(clearErr)
+				gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
+					return snapshot.Meta.PendingModelRecovery == nil
+				}, clearErr)
 			}
 		},
 	})

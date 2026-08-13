@@ -282,7 +282,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		var reasoningSteerErr error
-		resp, err := e.generateWithMissingToolOutputRepair(
+		candidate, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
@@ -313,9 +313,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if reasoningSteerErr != nil {
 			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
-		if _, err := e.recordLastUsage(resp.Usage); err != nil {
-			return stepLoopResult{}, err
-		}
+		resp := candidate.response
 
 		prepared, err := s.prepareCompletedResponse(ctx, stepID, resp)
 		if err != nil {
@@ -354,9 +352,15 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
+			if err := e.commitAcceptedResponseCandidate(stepID, candidate); err != nil {
+				return stepLoopResult{}, err
+			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
+			if err := e.commitAcceptedResponseCandidate(stepID, candidate); err != nil {
+				return stepLoopResult{}, err
+			}
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
 		}
