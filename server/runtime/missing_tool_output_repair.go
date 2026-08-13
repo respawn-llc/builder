@@ -245,20 +245,3 @@ func isMissingToolOutputProviderError(err error, items []llm.ResponseItem) bool 
 	}
 	return itemsHaveDanglingToolCalls(items)
 }
-
-// errorIsRepairableMissingToolOutput reports whether a provider error is a
-// transient HTTP 400 caused by interrupted tool calls that lack outputs, so the
-// append-only model request path can repair the request before retrying.
-func (e *Engine) errorIsRepairableMissingToolOutput(err error) bool {
-	if err == nil || !llm.HasHTTPStatus(err, 400) {
-		return false
-	}
-	if e == nil || e.store == nil {
-		return false
-	}
-	chat := e.transcriptRuntimeState().chatProjection()
-	if chat == nil {
-		return false
-	}
-	return len(chat.danglingToolCalls()) > 0
-}

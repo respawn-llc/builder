@@ -3,9 +3,10 @@
 #
 # Builds and runs cmd/dumpmodelrequest, which resolves a session by ID, reconstructs
 # the production request-prep path, and writes diagnostic OpenAI-compatible JSON
-# (plus the provider-agnostic llm.Request) to a file. Token accounting and
-# compaction/context decisions remain estimate-only. JSON escaping may differ
-# from the SDK HTTP body. No proxy, mock, or live OpenAI request is involved.
+# (plus the provider-agnostic llm.Request) to a file. The inspection captures
+# request shape and does not reproduce live provider token accounting or
+# compaction/context decisions. JSON escaping may differ from the SDK HTTP body.
+# No proxy, mock, or live OpenAI request is involved.
 #
 # Usage:
 #   ./scripts/dump-model-request.sh -session <id> [options]
