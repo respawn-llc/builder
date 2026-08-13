@@ -15,10 +15,6 @@ import (
 const (
 	estimatedInlineImagePayloadTokens = 256
 	estimatedInlineFilePayloadTokens  = 512
-	// Request metadata is not part of the transcript estimate. Keep a fixed
-	// envelope allowance for provider framing that cannot be represented by the
-	// provider-agnostic request fields.
-	estimatedRequestEnvelopeTokens = 512
 )
 
 func (e *Engine) providerCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
@@ -173,44 +169,6 @@ func estimateItemsTokens(items []llm.ResponseItem) int {
 		return 0
 	}
 	return totalTokens
-}
-
-func estimateRequestTokens(request llm.Request) int {
-	requestTokens := estimateItemsTokens(request.Items)
-	requestWithoutItems := request
-	requestWithoutItems.Items = nil
-	encoded, err := json.Marshal(requestWithoutItems)
-	if err != nil {
-		panic(fmt.Sprintf("estimate request tokens: marshal request: %v", err))
-	}
-	requestTokens += estimateTokensFromBytes(len(encoded))
-	for _, tool := range request.Tools {
-		requestTokens += estimateTokensFromBytes(len(tool.Name))
-		requestTokens += estimateTokensFromBytes(len(tool.Description))
-		requestTokens += estimateTokensFromBytes(len(tool.Schema.JSON()))
-		if tool.Custom != nil {
-			custom, err := json.Marshal(tool.Custom)
-			if err != nil {
-				panic(fmt.Sprintf("estimate request tokens: marshal custom tool: %v", err))
-			}
-			requestTokens += estimateTokensFromBytes(len(custom))
-		}
-	}
-	if request.StructuredOutput != nil {
-		requestTokens += estimateTokensFromBytes(len(request.StructuredOutput.Name))
-		requestTokens += estimateTokensFromBytes(len(request.StructuredOutput.Description))
-		requestTokens += estimateTokensFromBytes(len(request.StructuredOutput.Schema.JSON()))
-	}
-	return requestTokens + estimatedRequestEnvelopeTokens
-}
-
-func (e *Engine) estimatePostCompactionInputTokens(ctx context.Context) int {
-	fallback := estimateItemsTokens(e.transcriptRuntimeState().SnapshotItems()) + estimatedRequestEnvelopeTokens
-	request, err := e.buildRequest(ctx, "", true)
-	if err != nil {
-		return fallback
-	}
-	return estimateRequestTokens(request)
 }
 
 func estimateStructuredOutputTokens(raw json.RawMessage) (int, bool) {
