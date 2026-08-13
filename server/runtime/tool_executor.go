@@ -249,6 +249,9 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	}
 	if toolID == toolspec.ToolCompleteNode {
 		result, diagnostic := t.executeCompleteNodeTool(ctx, stepID, call)
+		if isWorkflowCompletionOperationalError(diagnostic) {
+			return result, diagnostic, true, diagnostic
+		}
 		return result, diagnostic, true, nil
 	}
 	if inputErr != nil {
@@ -451,6 +454,13 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(
 	}
 	completed, err := e.completeWorkflowCurrentNode(ctx, parsed)
 	if err != nil && !completed.IsApplied() {
+		if isWorkflowCompletionOperationalError(err) {
+			result.IsError = true
+			result.Output = workflowruntime.ToolErrorPayload(err)
+			result.Summary = textutil.Value("workflow completion failed")
+			result.Terminal = true
+			return result, err
+		}
 		return e.workflowCompletionRejectedResult(ctx, result, err), nil
 	}
 	e.recordWorkflowTerminalState(WorkflowCompletionSourceTool)

@@ -35,18 +35,20 @@ type TranscriptCommittedRow struct {
 }
 
 type TranscriptUserRow struct {
-	StepID           runtimeids.StepID
-	Text             string
-	CondensedText    *string
-	RollbackTargetID *string
+	StepID            runtimeids.StepID
+	Text              string
+	CondensedText     *string
+	RollbackTargetID  *string
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
 }
 
 type TranscriptAssistantRow struct {
-	StepID        runtimeids.StepID
-	StreamID      *runtimeids.AssistantStreamID
-	Text          string
-	CondensedText *string
-	Phase         transcript.AssistantPhase
+	StepID            runtimeids.StepID
+	StreamID          *runtimeids.AssistantStreamID
+	Text              string
+	CondensedText     *string
+	Phase             transcript.AssistantPhase
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
 }
 
 type TranscriptToolRow struct {
@@ -368,7 +370,7 @@ func (r TranscriptUserRow) Validate() error {
 	if err := validateOptionalNonEmptyString("transcript user row condensed text", r.CondensedText); err != nil {
 		return err
 	}
-	return nil
+	return transcript.ValidateCommittedAtUnixMs(r.CommittedAtUnixMs)
 }
 
 func (r TranscriptAssistantRow) Validate() error {
@@ -386,7 +388,7 @@ func (r TranscriptAssistantRow) Validate() error {
 	}
 	switch r.Phase {
 	case transcript.AssistantPhaseCommentary, transcript.AssistantPhaseFinal:
-		return nil
+		return transcript.ValidateCommittedAtUnixMs(r.CommittedAtUnixMs)
 	default:
 		return fmt.Errorf("unknown transcript assistant row phase %q", r.Phase)
 	}

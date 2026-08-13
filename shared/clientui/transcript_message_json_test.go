@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 	"core/shared/transcript"
 )
 
@@ -244,6 +245,154 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		}
 		if decoded.Kind() != event.Kind() || reflect.TypeOf(decoded.Payload()) != reflect.TypeOf(event.Payload()) {
 			t.Fatalf("round-trip %q produced %T", event.Kind(), decoded.Payload())
+		}
+	}
+}
+
+func TestTranscriptMessageJSONCommittedTimeFieldIsTypedAndOptional(t *testing.T) {
+	stepID := transcriptTestStepID(t)
+	committedAt, err := transcript.NewCommittedAtUnixMs(-1)
+	if err != nil {
+		t.Fatalf("create committed time: %v", err)
+	}
+	presentRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowUser,
+			User:       &TranscriptUserRow{StepID: stepID, Text: "user", CommittedAtUnixMs: &committedAt},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowAssistant,
+			Assistant: &TranscriptAssistantRow{
+				StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal,
+				CommittedAtUnixMs: &committedAt,
+			},
+		},
+	}
+	for _, row := range presentRows {
+		event := NewTranscriptEvent(row)
+		data, err := json.Marshal(NewTranscriptMessage(2, event))
+		if err != nil {
+			t.Fatalf("marshal %q: %v", event.Kind(), err)
+		}
+		var roundTrip TranscriptMessage
+		if err := json.Unmarshal(data, &roundTrip); err != nil {
+			t.Fatalf("unmarshal %q: %v", event.Kind(), err)
+		}
+		got := roundTrip.Payload().(TranscriptCommittedRow)
+		if got.Kind != row.Kind {
+			t.Fatalf("round-trip kind = %q, want %q", got.Kind, row.Kind)
+		}
+		switch got.Kind {
+		case TranscriptRowUser:
+			if got.User.CommittedAtUnixMs == nil || got.User.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("round-trip user timestamp = %v, want %d", got.User.CommittedAtUnixMs, committedAt.UnixMs())
+			}
+		case TranscriptRowAssistant:
+			if got.Assistant.CommittedAtUnixMs == nil || got.Assistant.CommittedAtUnixMs.UnixMs() != committedAt.UnixMs() {
+				t.Fatalf("round-trip assistant timestamp = %v, want %d", got.Assistant.CommittedAtUnixMs, committedAt.UnixMs())
+			}
+		}
+	}
+	absentRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowUser,
+			User:       &TranscriptUserRow{StepID: stepID, Text: "user"},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowAssistant,
+			Assistant:  &TranscriptAssistantRow{StepID: stepID, Text: "assistant", Phase: transcript.AssistantPhaseFinal},
+		},
+	}
+	for _, row := range absentRows {
+		data, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(row)))
+		if err != nil {
+			t.Fatalf("marshal absent %q: %v", row.Kind, err)
+		}
+		if transcriptMessagePayloadHasCommittedTimeField(t, data) {
+			t.Fatalf("absent %q row emitted timestamp: %s", row.Kind, data)
+		}
+	}
+	nonMessageRows := []TranscriptCommittedRow{
+		{
+			Visibility: transcript.EntryVisibilityDetail,
+			Kind:       TranscriptRowTool,
+			Tool:       &TranscriptToolRow{StepID: stepID, ToolCallID: "call", ToolName: "shell"},
+		},
+		{
+			Visibility: transcript.EntryVisibilityDetail,
+			Kind:       TranscriptRowReasoningTrace,
+			ReasoningTrace: &TranscriptReasoningTraceRow{
+				StepID: stepID, CompactText: "reasoning", Text: "reasoning",
+			},
+		},
+		{
+			Visibility: transcript.EntryVisibilityHidden,
+			Kind:       TranscriptRowNotice,
+			Notice: &TranscriptNoticeRow{
+				Reason: transcript.NoticeReasonRuntimeDiagnostic, Severity: transcript.NoticeSeverityInfo,
+				LegacyText: textutil.Value("notice"),
+			},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoingCollapsed,
+			Kind:       TranscriptRowReviewerFeedback,
+			ReviewerFeedback: &TranscriptReviewerFeedbackRow{
+				ID:              runtimeids.NewReviewerFeedbackID(),
+				StepID:          stepID,
+				Suggestions:     []string{"suggestion"},
+				SuggestionCount: 1,
+			},
+		},
+		{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Kind:       TranscriptRowReviewerError,
+			ReviewerError: &TranscriptReviewerErrorRow{
+				ID:     runtimeids.NewReviewerErrorID(),
+				StepID: stepID,
+				Detail: "error",
+			},
+		},
+	}
+	for _, row := range nonMessageRows {
+		data, err := json.Marshal(NewTranscriptMessage(2, NewTranscriptEvent(row)))
+		if err != nil {
+			t.Fatalf("marshal non-message %q: %v", row.Kind, err)
+		}
+		if transcriptMessagePayloadHasCommittedTimeField(t, data) {
+			t.Fatalf("non-message %q row emitted timestamp: %s", row.Kind, data)
+		}
+	}
+}
+func transcriptMessagePayloadHasCommittedTimeField(t *testing.T, data []byte) bool {
+	t.Helper()
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("decode transcript message envelope: %v", err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["payload"], &payload); err != nil {
+		t.Fatalf("decode transcript message payload: %v", err)
+	}
+	for _, raw := range payload {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &nested); err != nil {
+			continue
+		}
+		if _, present := nested["committed_at_unix_ms"]; present {
+			return true
+		}
+	}
+	return false
+}
+
+func TestTranscriptMessageJSONRejectsExplicitNullCommittedTime(t *testing.T) {
+	for _, data := range []string{`{"sequence":2,"kind":"committed_row","payload":{"Visibility":"ongoing","Kind":"user","User":{"StepID":"22222222-2222-4222-8222-222222222222","Text":"user","committed_at_unix_ms":null}}}`, `{"sequence":2,"kind":"committed_row","payload":{"Visibility":"ongoing","Kind":"assistant","Assistant":{"StepID":"22222222-2222-4222-8222-222222222222","Text":"assistant","Phase":"final_answer","committed_at_unix_ms":null}}}`} {
+		if err := json.Unmarshal([]byte(data), new(TranscriptMessage)); err == nil {
+			t.Fatalf("explicit null committed time accepted: %s", data)
 		}
 	}
 }

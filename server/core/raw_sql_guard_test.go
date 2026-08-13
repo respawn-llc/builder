@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"go/types"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
@@ -109,36 +108,18 @@ func forward() {
 	})
 }
 
-func TestProductionDarwinGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
-	t.Parallel()
-	assertProductionGeneratedQueryBoundaries(t, "darwin", "arm64")
-}
-
-func TestProductionLinuxGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
-	t.Parallel()
-	assertProductionGeneratedQueryBoundaries(t, "linux", "amd64")
-}
-
-func TestProductionWindowsGoUsesGeneratedDatabaseQuerySeams(t *testing.T) {
-	t.Parallel()
-	assertProductionGeneratedQueryBoundaries(t, "windows", "amd64")
-}
-
-func assertProductionGeneratedQueryBoundaries(t *testing.T, goos string, goarch string) {
-	t.Helper()
+func TestProductionGoUsesGeneratedDatabaseQuerySeamsOnSupportedPlatforms(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, goos, goarch, "./server/...", "./cli/...", "./shared/...")
-	assertCoreRepositoryModule(t, pkgs)
-	violations := make([]string, 0)
-	for _, pkg := range pkgs {
-		if !isProductionRepositoryPackage(pkg) {
-			continue
+	for _, platform := range [][2]string{{"darwin", "arm64"}, {"linux", "amd64"}, {"windows", "amd64"}} {
+		pkgs := testharness.LoadTypedPackagesForPlatform(t, repoRoot, false, platform[0], platform[1], "./server/...", "./cli/...", "./shared/...")
+		for _, pkg := range pkgs {
+			if !isProductionRepositoryPackage(pkg) {
+				continue
+			}
+			if violations := generatedQueryBoundaryViolations(pkg, repoRoot); len(violations) > 0 {
+				t.Fatalf("%s/%s production database query boundary violations:\n%s", platform[0], platform[1], strings.Join(violations, "\n"))
+			}
 		}
-		violations = append(violations, generatedQueryBoundaryViolations(pkg, repoRoot)...)
-	}
-	sort.Strings(violations)
-	if len(violations) > 0 {
-		t.Fatalf("%s/%s production database query boundary violations:\n%s", goos, goarch, strings.Join(violations, "\n"))
 	}
 }
 
@@ -616,7 +597,7 @@ func returnsDatabaseQueryResult(results *types.Tuple) bool {
 	case 1:
 		return isDatabaseSQLNamedType(results.At(0).Type(), "Row")
 	case 2:
-		return isErrorType(results.At(1).Type()) &&
+		return errorType(results.At(1).Type()) &&
 			(isDatabaseSQLNamedType(results.At(0).Type(), "Rows") ||
 				isDatabaseSQLNamedType(results.At(0).Type(), "Result") ||
 				isDatabaseSQLNamedType(results.At(0).Type(), "Stmt"))

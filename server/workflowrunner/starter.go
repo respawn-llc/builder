@@ -445,6 +445,23 @@ func (s *Starter) startCurrentNodeAgent(
 			if turnErr == nil {
 				return nil
 			}
+			var unresolved workflow.LegacyContinuationSourceUnresolvedError
+			if errors.As(turnErr, &unresolved) {
+				finalizer, ok := controller.(workflowruntime.OperationalCompletionBlockFinalizer)
+				if !ok {
+					return errors.Join(
+						turnErr,
+						errors.New("workflow controller cannot finalize an operational completion block"),
+					)
+				}
+				return errors.Join(
+					turnErr,
+					finalizer.FinalizeCurrentNodeOperationalCompletionBlock(
+						context.WithoutCancel(runCtx),
+						scope.ID(),
+					),
+				)
+			}
 			reason := ReasonRuntimeFailed
 			if errors.Is(turnErr, context.Canceled) || context.Cause(runCtx) != nil {
 				reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)

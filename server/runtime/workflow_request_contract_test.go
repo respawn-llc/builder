@@ -116,13 +116,6 @@ func TestWorkflowCanUseAutomaticToolChoice(t *testing.T) {
 				t.Fatalf("workflow tool choice mode = %q, want automatic", request.ToolChoiceMode)
 			}
 
-			countRequest, err := engine.buildContextFreeRequestWithoutPromptRefresh(context.Background(), true)
-			if err != nil {
-				t.Fatalf("build workflow token-count request: %v", err)
-			}
-			if countRequest.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
-				t.Fatalf("workflow token-count tool choice mode = %q, want automatic", countRequest.ToolChoiceMode)
-			}
 		})
 	}
 }

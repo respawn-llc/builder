@@ -319,8 +319,8 @@ INSERT INTO sessions (
 	if err != nil {
 		t.Fatalf("read upgraded migration version: %v", err)
 	}
-	if version != 84 {
-		t.Fatalf("upgraded migration version = %d, want 84", version)
+	if version != 85 {
+		t.Fatalf("upgraded migration version = %d, want 85", version)
 	}
 }
 

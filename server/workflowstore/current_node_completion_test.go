@@ -11,6 +11,7 @@ import (
 	"core/server/metadata"
 	"core/server/workflow"
 	"core/shared/config"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
@@ -709,6 +710,139 @@ func TestCompleteCurrentNodePreviousTargetOrNewContextFallsBackToNewSession(t *t
 	}
 }
 
+func TestCompleteLegacyCurrentNodePreviousTargetOrNewFallsBackToFreshAgentSessionInProduction(t *testing.T) {
+	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+	markCurrentNodeContinuationSourceLegacy(t, fixture)
+
+	reworkResult, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.audit.Reference,
+		TransitionID: "rework",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode legacy audit: %v", err)
+	}
+	if len(reworkResult.Mutation.Created) != 1 ||
+		reworkResult.Mutation.Created[0].SessionID != nil ||
+		reworkResult.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
+		t.Fatalf(
+			"legacy previous-target-or-new result = %+v, want fresh Agent target",
+			reworkResult.Mutation.Created,
+		)
+	}
+}
+
+func TestCompleteLegacyCurrentNodePreviousTargetReturnsTypedErrorWithoutMutationInProduction(t *testing.T) {
+	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
+	markCurrentNodeContinuationSourceLegacy(t, fixture)
+
+	_, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.audit.Reference,
+		TransitionID: "rework",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+	var unresolved workflow.LegacyContinuationSourceUnresolvedError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("CompleteCurrentNode error = %v, want LegacyContinuationSourceUnresolvedError", err)
+	}
+	currentNodes, listErr := fixture.store.ListCurrentNodes(fixture.ctx, fixture.audit.Reference.TaskID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(fixture.audit.Reference) {
+		t.Fatalf("Current Nodes after unresolved legacy source = %+v, want unchanged audit node", currentNodes)
+	}
+}
+
+func TestCompleteLegacyCurrentNodeFailsFastInDebug(t *testing.T) {
+	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+	fixture.store.invariantPolicy = invariant.NewPolicy(invariant.WithMode(invariant.ModePanic))
+	markCurrentNodeContinuationSourceLegacy(t, fixture)
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("CompleteCurrentNode did not panic for unresolved legacy source in debug")
+		}
+	}()
+	_, _ = fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.audit.Reference,
+		TransitionID: "rework",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+}
+
+func TestCompleteLegacyCurrentNodePreviousTargetOrNewTerminalReturnsTypedErrorWithoutMutation(t *testing.T) {
+	sourceReference, err := workflow.NewCurrentNodeReference("task-terminal-legacy", "node-source", nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	source, err := workflow.NewCurrentNodeWithMaterializedSource(
+		sourceReference,
+		nil,
+		workflow.MaterializedPriorValues{},
+		nil,
+		workflow.LegacyMaterializedContinuationSource(),
+		nil,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("NewExecutableCurrentNode: %v", err)
+	}
+	sourceNode := workflow.AgentNode{
+		NodeIdentity: workflow.NodeIdentity{ID: "node-source", Key: "source", DisplayName: "Source"},
+		SubagentRole: "default",
+	}
+	targetNode := workflow.TerminalNode{
+		NodeIdentity: workflow.NodeIdentity{ID: "node-terminal", Key: "done", DisplayName: "Done"},
+	}
+	edge := workflow.Edge{
+		ID:            "edge-terminal",
+		TargetNodeID:  workflow.NodeIDOf(targetNode),
+		ContextMode:   workflow.ContextModeContinueSession,
+		ContextSource: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew},
+	}
+
+	_, err = resolveTransitionContext(
+		t.Context(),
+		nil,
+		workflow.Definition{},
+		edge,
+		sourceReference.TaskID,
+		&source,
+		nil,
+		sourceNode,
+		targetNode,
+		false,
+	)
+	var unresolved workflow.LegacyContinuationSourceUnresolvedError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("resolve terminal legacy source error = %v, want LegacyContinuationSourceUnresolvedError", err)
+	}
+}
+
+func TestCompleteLegacyCurrentNodeFallbackReportsOneDiagnostic(t *testing.T) {
+	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTargetOrNew)
+	markCurrentNodeContinuationSourceLegacy(t, fixture)
+	records := testsetup.CaptureSlogRecords(t)
+
+	if _, err := fixture.store.CompleteCurrentNode(fixture.ctx, CurrentNodeCompletionRequest{
+		Source:       fixture.audit.Reference,
+		TransitionID: "rework",
+		OutputValues: map[string]string{"summary": "review again"},
+	}); err != nil {
+		t.Fatalf("CompleteCurrentNode legacy fallback: %v", err)
+	}
+	var diagnostics int
+	for _, record := range records.Records() {
+		if record.Fields[string(invariant.FieldOperation)] == legacyContinuationSourceOperation {
+			diagnostics++
+		}
+	}
+	if diagnostics != 1 {
+		t.Fatalf("legacy fallback diagnostics = %d, want exactly 1", diagnostics)
+	}
+}
+
 type reworkContextCompletionFixture struct {
 	ctx        context.Context
 	store      *Store
@@ -717,6 +851,21 @@ type reworkContextCompletionFixture struct {
 	workflowID runtimeids.WorkflowID
 	review     workflow.CurrentNode
 	audit      workflow.CurrentNode
+}
+
+func markCurrentNodeContinuationSourceLegacy(t *testing.T, fixture reworkContextCompletionFixture) {
+	t.Helper()
+	if _, err := fixture.store.db.ExecContext(fixture.ctx, `
+UPDATE task_current_nodes
+SET continuation_source_kind = NULL,
+    continuation_source_session_id = NULL,
+    legacy_materialized = 1
+WHERE task_id = ? AND node_id = ?`,
+		string(fixture.audit.Reference.TaskID),
+		testGraphEntityBlob(t, string(fixture.audit.Reference.NodeID)),
+	); err != nil {
+		t.Fatalf("mark Current Node continuation source legacy: %v", err)
+	}
 }
 
 func newReworkContextCompletionFixture(t *testing.T, contextSource workflow.ContextSourceKind) reworkContextCompletionFixture {

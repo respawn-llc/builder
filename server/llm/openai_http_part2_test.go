@@ -193,14 +193,20 @@ func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 
 func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{
-		Model: "gpt-5.3-codex", ToolChoiceMode: ToolChoiceModeAutomatic, FastMode: true,
+	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
+		Model:    "gpt-5.3-codex",
+		FastMode: true,
 	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
 	if err != nil {
 		t.Fatalf("build payload: %v", err)
 	}
-	if got := mustMarshalObject(t, payload)["service_tier"]; got != "priority" {
-		t.Fatalf("service_tier = %#v, want priority", got)
+	if payload.ServiceTier != responses.ResponseNewParamsServiceTierPriority {
+		t.Fatalf("expected priority service tier for openai provider, got %q", payload.ServiceTier)
+	}
+
+	jsonPayload := mustMarshalObject(t, payload)
+	if got := jsonPayload["service_tier"]; got != "priority" {
+		t.Fatalf("expected service_tier=priority, got %#v", got)
 	}
 }
 
@@ -407,7 +413,6 @@ func TestParseOutputItems_UsesTrailingAssistantPhaseBlock(t *testing.T) {
 
 func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	var captured map[string]any
-	var capturedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/responses" {
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
@@ -417,7 +422,6 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		capturedHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]}}` + "\n\n"))
 	}))
@@ -426,8 +430,9 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
 
-	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{SessionID: textutil.Value("test-session"),
-		Model: "gpt-5",
+	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{
+		Model:     "gpt-5",
+		SessionID: textutil.Value("test-session"),
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
 		}),
@@ -441,15 +446,6 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	if captured["stream"] != true {
 		t.Fatalf("stream = %#v, want true", captured["stream"])
 	}
-	if got := capturedHeaders.Get("session-id"); got != "test-session" {
-		t.Fatalf("session-id = %q, want test-session", got)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "" {
-		t.Fatalf("routing hint = %q, want absent", got)
-	}
-	if _, exists := captured["client_metadata"]; exists {
-		t.Fatalf("client_metadata = %#v, want absent", captured["client_metadata"])
-	}
 	input, ok := captured["input"].([]any)
 	if !ok || len(input) != 2 {
 		t.Fatalf("input = %#v, want history plus trigger", captured["input"])
@@ -462,7 +458,6 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 
 func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing.T) {
 	var captured map[string]any
-	var capturedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/backend-api/codex/responses" {
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
@@ -472,7 +467,6 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		capturedHeaders = r.Header.Clone()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("event: response.completed\n" +
 			`data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]}}` + "\n\n"))
@@ -513,16 +507,6 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	if got := captured["prompt_cache_key"]; got != "session-cache-lineage" {
 		t.Fatalf("prompt_cache_key = %#v, want existing session lineage", got)
 	}
-	if got := capturedHeaders.Get("session-id"); got != "test-session" {
-		t.Fatalf("session-id = %q, want test-session", got)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol" {
-		t.Fatalf("routing hint = %q, want model=gpt-5.6-sol", got)
-	}
-	metadata := requireCodexTurnMetadata(t, captured)
-	if metadata["request_kind"] != "compaction" {
-		t.Fatalf("request_kind = %#v, want compaction", metadata["request_kind"])
-	}
 	input, ok := captured["input"].([]any)
 	if !ok || len(input) != 2 {
 		t.Fatalf("input = %#v, want history plus final compaction trigger", captured["input"])
@@ -534,66 +518,6 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	trigger, _ := input[1].(map[string]any)
 	if len(trigger) != 1 || trigger["type"] != "compaction_trigger" {
 		t.Fatalf("final input = %#v, want exact compaction trigger", trigger)
-	}
-}
-
-func TestOAuthCompactRequestProjectsEffectiveServiceTier(t *testing.T) {
-	tests := []struct {
-		name            string
-		fastMode        bool
-		wantServiceTier any
-		wantRoutingHint string
-	}{
-		{
-			name:            "standard",
-			wantServiceTier: nil,
-			wantRoutingHint: "model=gpt-5.6-sol",
-		},
-		{
-			name:            "priority",
-			fastMode:        true,
-			wantServiceTier: "priority",
-			wantRoutingHint: "model=gpt-5.6-sol;tier=priority",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			var captured map[string]any
-			var capturedHeaders http.Header
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				capturedHeaders = r.Header.Clone()
-				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = w.Write([]byte(`data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15},"output":[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]}}` + "\n\n"))
-			}))
-			t.Cleanup(server.Close)
-
-			transport := newOAuthCompactTestTransport(server)
-			request := testOAuthCompactionRequest(t, "gpt-5.6-sol")
-			request.FastMode = test.fastMode
-
-			if _, err := transport.Compact(context.Background(), request); err != nil {
-				t.Fatalf("compact: %v", err)
-			}
-			if got := capturedHeaders.Get("x-codex-routing-hint"); got != test.wantRoutingHint {
-				t.Fatalf("routing hint = %q, want %q", got, test.wantRoutingHint)
-			}
-			gotServiceTier, exists := captured["service_tier"]
-			if test.wantServiceTier == nil {
-				if exists {
-					t.Fatalf("service_tier = %#v, want omitted", gotServiceTier)
-				}
-			} else if !exists || gotServiceTier != test.wantServiceTier {
-				t.Fatalf("service_tier = %#v, want %#v", gotServiceTier, test.wantServiceTier)
-			}
-			if got := requireCodexTurnMetadata(t, captured)["request_kind"]; got != "compaction" {
-				t.Fatalf("request_kind = %#v, want compaction", got)
-			}
-		})
 	}
 }
 
@@ -793,114 +717,6 @@ func newRewritingHTTPClient(t *testing.T, server *httptest.Server) *http.Client 
 	})}
 }
 
-func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	canonicalItems := PrepareOpenAIInputItems([]ResponseItem{
-		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
-		{Type: ResponseItemTypeFunctionCall, ID: textutil.Value("call_1"), CallID: textutil.Value("call_1"), Name: textutil.Value("shell"), Arguments: json.RawMessage(`{"command":"pwd"}`)},
-		{
-			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: textutil.Value("call_1"),
-			Name:   textutil.Value(string(toolspec.ToolViewImage)),
-			Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
-		},
-		{Type: ResponseItemTypeReasoning, ID: textutil.Value("rs_1"), EncryptedContent: textutil.Value("enc_reasoning")},
-		{Type: ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_compaction")},
-	})
-
-	compactPayload, err := newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, requireProviderCapabilities(t, transport, OpenAIAuthMode{})).BuildCompactV2(OpenAICompactionRequest{SessionID: textutil.Value("test-session"),
-		Model:        "gpt-5",
-		Instructions: "compaction instructions",
-		InputItems:   canonicalItems,
-	})
-	if err != nil {
-		t.Fatalf("build compact payload: %v", err)
-	}
-	countPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:        "gpt-5",
-		SystemPrompt: "compaction instructions",
-		Items:        canonicalItems,
-	}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-
-	compactJSON := mustMarshalJSONMap(t, compactPayload)
-	countJSON := mustMarshalJSONMap(t, countPayload)
-	compactInput := compactJSON["input"].([]any)
-	compactInput = compactInput[:len(compactInput)-1]
-	if !reflect.DeepEqual(compactInput, countJSON["input"]) {
-		t.Fatalf("expected input shape parity between compact and input-token-count payloads\ncompact=%#v\ncount=%#v", compactJSON["input"], countJSON["input"])
-	}
-	if compactJSON["instructions"] != countJSON["instructions"] {
-		t.Fatalf("expected instructions parity between compact and input-token-count payloads, compact=%#v count=%#v", compactJSON["instructions"], countJSON["instructions"])
-	}
-}
-
-func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	request := OpenAIRequest{
-		Model:                 "gpt-5",
-		ToolChoiceMode:        ToolChoiceModeRequired,
-		EnableNativeWebSearch: true,
-		Tools: []Tool{
-			{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})},
-			{Name: "patch", Schema: mustTestFunctionSchema(t, struct{}{})},
-		},
-	}
-	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
-	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
-	if err != nil {
-		t.Fatalf("build generation payload: %v", err)
-	}
-	count, err := transport.buildInputTokenCountParams(request, caps)
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-	generationJSON := mustMarshalJSONMap(t, generation)
-	countJSON := mustMarshalJSONMap(t, count)
-	if countJSON["tool_choice"] != "required" {
-		t.Fatalf("count tool_choice = %#v, want required", countJSON["tool_choice"])
-	}
-	if !reflect.DeepEqual(generationJSON["tools"], countJSON["tools"]) {
-		t.Fatalf("effective tools differ\ngeneration=%#v\ncount=%#v", generationJSON["tools"], countJSON["tools"])
-	}
-	if countJSON["parallel_tool_calls"] != true {
-		t.Fatalf("count parallel_tool_calls = %#v, want true", countJSON["parallel_tool_calls"])
-	}
-}
-
-func TestBuildInputTokenCountForwardsPreparedStructuredOutputLikeGeneration(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	request := OpenAIRequest{
-		Model:          "gpt-5",
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-		StructuredOutput: &StructuredOutput{
-			Name:        "workflow_completion",
-			Description: "Complete the current workflow node.",
-			Schema:      mustTestStructuredSchema(t, testWorkflowStructuredOutput{}),
-		},
-	}
-	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
-	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
-	if err != nil {
-		t.Fatalf("build generation payload: %v", err)
-	}
-	count, err := transport.buildInputTokenCountParams(request, caps)
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-	generationJSON := mustMarshalJSONMap(t, generation)
-	countJSON := mustMarshalJSONMap(t, count)
-	if !reflect.DeepEqual(generationJSON["text"], countJSON["text"]) {
-		t.Fatalf(
-			"structured output differs between generation and token count\ngeneration=%#v\ncount=%#v",
-			generationJSON["text"],
-			countJSON["text"],
-		)
-	}
-}
-
 func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	unpreparedItems := []ResponseItem{unmaterializedViewImageInputFileOutput()}
@@ -925,10 +741,7 @@ func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testin
 	_, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
 	checkErr("buildPayload", err)
 
-	_, err = transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, caps)
-	checkErr("buildInputTokenCountParams", err)
-
-	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", InputItems: unpreparedItems})
+	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{Model: "gpt-5", InputItems: unpreparedItems})
 	checkErr("buildCompactPayload", err)
 }
 
@@ -938,66 +751,6 @@ func unmaterializedViewImageInputFileOutput() ResponseItem {
 		CallID: textutil.Value("call_1"),
 		Name:   textutil.Value(string(toolspec.ToolViewImage)),
 		Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
-	}
-}
-
-func TestBuildInputTokenCountParams_AppliesConfiguredModelVerbosity(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	transport.ModelVerbosity = "medium"
-	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-
-	jsonPayload := mustMarshalJSONMap(t, payload)
-	text, ok := jsonPayload["text"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected text config in payload, got %#v", jsonPayload["text"])
-	}
-	if got := text["verbosity"]; got != "medium" {
-		t.Fatalf("expected text.verbosity=medium, got %#v", got)
-	}
-}
-
-func TestCountRequestInputTokensTargetsResponsesInputTokensPath(t *testing.T) {
-	var capturedHeaders http.Header
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses/input_tokens" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		capturedHeaders = r.Header.Clone()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"object":"response.input_tokens","input_tokens":12345}`))
-	}))
-	defer server.Close()
-
-	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL + "/v1"
-	transport.Client = server.Client()
-
-	count, err := transport.CountRequestInputTokens(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:        "gpt-5",
-		SystemPrompt: "sys",
-		Items: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("count request input tokens failed: %v", err)
-	}
-	if count != 12345 {
-		t.Fatalf("expected input token count 12345, got %d", count)
-	}
-	if got := capturedHeaders.Get("session-id"); got != "" {
-		t.Fatalf("session-id = %q, want absent", got)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "" {
-		t.Fatalf("routing hint = %q, want absent", got)
 	}
 }
 

@@ -70,20 +70,6 @@ func (s *ResponsesStub) serveScripted(
 			"id": request.PathValue("model"), "object": "model", "created": 0,
 			"owned_by": "kent", "context_window": window,
 		})
-	case RouteInputTokens:
-		llmRequest, _, err := decodeScriptedRequest(body)
-		if err != nil {
-			return scriptedllm.RequestNotAdmitted, err
-		}
-		count, err := s.scripted.client.CountRequestInputTokens(ctx, llmRequest)
-		if err != nil {
-			return scriptedllm.RequestNotAdmitted, err
-		}
-		return scriptedllm.RequestNotAdmitted, writeJSON(
-			writer,
-			http.StatusOK,
-			map[string]any{"object": "response.input_tokens", "input_tokens": count},
-		)
 	case RouteResponses:
 	default:
 		return scriptedllm.RequestNotAdmitted, fmt.Errorf("unsupported scripted Responses route %q", route)

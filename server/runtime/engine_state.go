@@ -307,7 +307,6 @@ func (e *Engine) setThinkingValue(value string) error {
 	e.mu.Lock()
 	e.cfg.ThinkingLevel = strings.TrimSpace(value)
 	e.mu.Unlock()
-	e.markCurrentRequestShapeDirty()
 	return nil
 }
 
@@ -337,7 +336,6 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 	}
 	e.mu.Unlock()
 	if changed {
-		e.markCurrentRequestShapeDirty()
 	}
 	return changed
 }

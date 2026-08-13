@@ -14,25 +14,24 @@ import (
 	"testing"
 )
 
-func TestShouldCompactBeforeUserMessageSkipsExactCountWhenProviderOverrideDisablesIt(t *testing.T) {
+func TestShouldCompactBeforeUserMessageUsesEstimateWithProviderOverride(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 
-	client := &preciseCompactionClient{inputTokenCount: 960, contextWindow: 1000}
+	client := &contextWindowClient{contextWindow: 1000}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:                 "gpt-5",
 		AutoCompactTokenLimit: 950,
 		ContextWindowTokens:   1000,
 		ProviderCapabilitiesOverride: &llm.ProviderCapabilities{
-			ProviderID:                     "openai",
-			SupportsResponsesAPI:           true,
-			SupportsResponsesCompact:       true,
-			SupportsRequestInputTokenCount: false,
-			SupportsPromptCacheKey:         true,
-			SupportsNativeWebSearch:        true,
-			SupportsReasoningEncrypted:     true,
-			SupportsServerSideContextEdit:  true,
-			IsOpenAIFirstParty:             true,
+			ProviderID:                    "openai",
+			SupportsResponsesAPI:          true,
+			SupportsResponsesCompact:      true,
+			SupportsPromptCacheKey:        true,
+			SupportsNativeWebSearch:       true,
+			SupportsReasoningEncrypted:    true,
+			SupportsServerSideContextEdit: true,
+			IsOpenAIFirstParty:            true,
 		},
 		PreSubmitCompactionLeadTokens: 50,
 	})
@@ -47,26 +46,21 @@ func TestShouldCompactBeforeUserMessageSkipsExactCountWhenProviderOverrideDisabl
 	if !shouldCompact {
 		t.Fatal("expected fallback estimator to trigger pre-submit compaction when provider override disables exact counting")
 	}
-	if client.countCalls != 0 {
-		t.Fatalf("count calls=%d, want 0 when provider override disables exact counting", client.countCalls)
-	}
 }
 
-func TestShouldCompactBeforeUserMessageSkipsExactCountWhenLockedContractDisablesIt(t *testing.T) {
+func TestShouldCompactBeforeUserMessageUsesEstimateWithLockedContract(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model: "gpt-5",
 		ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:                        "openai",
-			SupportsRequestInputTokenCount:    false,
-			HasSupportsRequestInputTokenCount: true,
+			ProviderID: "openai",
 		},
 	}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 
-	client := &preciseCompactionClient{inputTokenCount: 960, contextWindow: 1000}
+	client := &contextWindowClient{contextWindow: 1000}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
 		Model:                         "gpt-5",
 		AutoCompactTokenLimit:         950,
@@ -83,9 +77,6 @@ func TestShouldCompactBeforeUserMessageSkipsExactCountWhenLockedContractDisables
 	}
 	if !shouldCompact {
 		t.Fatal("expected fallback estimator to trigger pre-submit compaction when locked contract disables exact counting")
-	}
-	if client.countCalls != 0 {
-		t.Fatalf("count calls=%d, want 0 when locked contract disables exact counting", client.countCalls)
 	}
 }
 
@@ -303,7 +294,7 @@ func TestForkedSessionAfterReminderPreservesCompactionSoonReminderIssuedState(t 
 	}
 }
 
-func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) {
+func TestCompactionSoonReminderStaysSuppressed(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name           string
@@ -318,7 +309,7 @@ func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			store := mustCreateTestSession(t)
 
-			client := &preciseCompactionClient{inputTokenCount: 890, contextWindow: 2_000}
+			client := &contextWindowClient{contextWindow: 2_000}
 			eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 				Model:                 "gpt-5",
 				ContextWindowTokens:   2_000,
@@ -340,9 +331,6 @@ func TestCompactionSoonReminderSkipsPreciseCountingWhenSuppressed(t *testing.T) 
 
 			if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "suppressed"); err != nil {
 				t.Fatalf("suppressed reminder check: %v", err)
-			}
-			if client.countCalls != 0 {
-				t.Fatalf("expected suppressed reminder path to skip precise token counting, got %d calls", client.countCalls)
 			}
 			if got := len(eng.ChatSnapshot().Entries); got != 1 {
 				t.Fatalf("expected no reminder entry while suppressed, got %d entries", got)
@@ -478,25 +466,12 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-				Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+				Usage:     llm.Usage{InputTokens: 890, WindowTokens: 2_000},
 			},
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{InputTokens: 920, WindowTokens: 2_000},
 			},
-		},
-		inputTokenCountFn: func(req llm.Request) int {
-			hasToolResult := false
-			for _, msg := range requestMessages(req) {
-				if msg.Role == llm.RoleTool {
-					hasToolResult = true
-					break
-				}
-			}
-			if hasToolResult {
-				return 890
-			}
-			return 100
 		},
 	}
 

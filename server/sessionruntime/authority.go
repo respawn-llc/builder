@@ -32,6 +32,7 @@ func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
 type AuthorityOptions struct {
 	ExecutionFinalized ExecutionFinalized
 	PersistenceRoot    string
+	Debug              bool
 	AuthManager        *auth.Manager
 	Background         *shelltool.Manager
 	StoreOptions       []session.StoreOption

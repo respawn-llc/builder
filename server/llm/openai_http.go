@@ -488,64 +488,6 @@ func requireSingleEncryptedCompactionOutput(items []ResponseItem) (ResponseItem,
 	return compactions[0], nil
 }
 
-func (t *HTTPTransport) CountRequestInputTokens(ctx context.Context, request OpenAIRequest) (int, error) {
-	if t.Client == nil {
-		t.Client = NewHTTPClient(120 * time.Second)
-	}
-
-	authHeader, mode, err := t.resolveAuth(ctx)
-	if err != nil {
-		return 0, err
-	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
-	if err != nil {
-		return 0, err
-	}
-
-	payload, err := t.buildInputTokenCountParams(request, providerCaps)
-	if err != nil {
-		return 0, err
-	}
-
-	service := responses.NewInputTokenService(
-		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.Client),
-		option.WithMaxRetries(0),
-	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, nil, nil, nil)
-	var rawResp *http.Response
-	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
-
-	decoded, err := service.Count(ctx, payload, reqOpts...)
-	if err != nil {
-		return 0, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses input_tokens request failed")
-	}
-	if decoded == nil {
-		return 0, fmt.Errorf("openai responses input_tokens request failed: empty response")
-	}
-	resolvedWindow := parseContextWindowTokens(decoded.RawJSON())
-	if resolvedWindow <= 0 {
-		resolvedWindow = parseContextWindowTokensFromHeaders(rawResp)
-	}
-	t.cacheModelContextWindow(request.Model, resolvedWindow)
-	if decoded.InputTokens < 0 {
-		return 0, nil
-	}
-	return int(decoded.InputTokens), nil
-}
-
-func (t *HTTPTransport) SupportsRequestInputTokenCount(ctx context.Context) (bool, error) {
-	_, mode, err := t.resolveAuth(ctx)
-	if err != nil {
-		return false, err
-	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
-	if err != nil {
-		return false, err
-	}
-	return providerCaps.SupportsRequestInputTokenCount, nil
-}
-
 func (t *HTTPTransport) ResolveModelContextWindow(ctx context.Context, model string) (int, error) {
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
