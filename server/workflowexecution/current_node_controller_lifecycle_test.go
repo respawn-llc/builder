@@ -333,6 +333,36 @@ func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) 
 	}
 }
 
+func TestObserveWorkflowTaskExecutionsDoesNotWaitForControllerLifecycleLock(t *testing.T) {
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{
+		authority: authority,
+	}
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+	taskID := workflow.TaskID("task-status-stale-read")
+
+	controller.mu.Lock()
+	readDone := make(chan error, 1)
+	go func() {
+		observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+		if err == nil && observation.Quiescence[taskID] {
+			err = errors.New("unobserved Task unexpectedly reported quiescent")
+		}
+		readDone <- err
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("ObserveWorkflowTaskExecutions while lifecycle lock held: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Task status observation waited for Controller lifecycle lock")
+	}
+	controller.mu.Unlock()
+}
+
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	source := currentNodeReferenceForControllerTest(t, "task-retained-session-completion", "node-source")
