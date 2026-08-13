@@ -241,7 +241,13 @@ message DefaultFacts {
   string primary_model_id = 1 [(buf.validate.field).string.min_len = 1];
   ThinkingDefaultFact thinking = 2 [(buf.validate.field).required = true];
   VerbosityDefaultFact verbosity = 3;
-  string compaction_mode = 4 [(buf.validate.field).string.min_len = 1];
+  string compaction_mode = 4 [(buf.validate.field).string = {
+    in: [
+      "native",
+      "local",
+      "none"
+    ]
+  }];
 }
 
 message RecommendationFacts {}

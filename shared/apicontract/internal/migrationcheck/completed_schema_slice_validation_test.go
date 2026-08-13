@@ -5,6 +5,7 @@ import (
 
 	"core/shared/protoapi"
 	authpb "core/shared/protoapi/gen/kent/api/auth"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	connectionpb "core/shared/protoapi/gen/kent/api/connection"
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
@@ -13,6 +14,34 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
+
+func TestOnboardingModelChoiceRejectsBlankIdentifiers(t *testing.T) {
+	for _, choice := range []*onboardingpb.ModelChoice{
+		{
+			Kind:    onboardingpb.ModelKind_MODEL_KIND_KNOWN,
+			ModelId: stringPointer(" "),
+		},
+		{
+			Kind:  onboardingpb.ModelKind_MODEL_KIND_CUSTOM,
+			Alias: stringPointer(" "),
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(choice); err == nil {
+			t.Fatal("blank onboarding model identifier accepted")
+		}
+	}
+}
+
+func TestCapabilityDefaultsRejectUnknownCompactionMode(t *testing.T) {
+	defaults := &capabilitypb.DefaultFacts{
+		PrimaryModelId: "model",
+		Thinking:       &capabilitypb.ThinkingDefaultFact{Mode: "none"},
+		CompactionMode: "bogus",
+	}
+	if err := protoapi.ValidateGeneratedMessage(defaults); err == nil {
+		t.Fatal("unknown capability compaction mode accepted")
+	}
+}
 
 func TestSessionPlanActiveSettingsRejectInvalidZeroValues(t *testing.T) {
 	valid := validGeneratedActiveSettings()

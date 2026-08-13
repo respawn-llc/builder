@@ -118,8 +118,22 @@ message ModelChoice {
       not_in: [0]
     }
   ];
-  optional string model_id = 2 [(buf.validate.field).string.min_len = 1];
-  optional string alias = 3 [(buf.validate.field).string.min_len = 1];
+  optional string model_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.onboarding.model_id_nonblank"
+      message: "model_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string alias = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.onboarding.model_alias_nonblank"
+      message: "alias must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 
   option (buf.validate.message).cel = {
     id: "kent.onboarding.model_choice"
