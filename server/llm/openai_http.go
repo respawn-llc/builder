@@ -128,10 +128,21 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
-	decoded, err := service.New(ctx, payload, reqOpts...)
 	if mode.IsOAuth {
-		request.CodexDispatch.observeTurnStateHTTPHeaders(responseHeaders(rawResp))
+		stream := service.NewStreaming(ctx, payload, reqOpts...)
+		defer stream.Close()
+		return consumeResponsesStream(
+			ctx,
+			stream,
+			rawResp,
+			request.CodexDispatch,
+			providerCaps.ProviderID,
+			windowTokens,
+			StreamCallbacks{},
+		)
 	}
+
+	decoded, err := service.New(ctx, payload, reqOpts...)
 	if err != nil {
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses request failed")
 	}

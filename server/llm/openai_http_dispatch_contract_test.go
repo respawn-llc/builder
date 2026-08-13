@@ -101,7 +101,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 			return
 		}
 		capturedBody = body
-		writeCompletedResponseJSON(w)
+		writeCompletedResponseSSE(w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -135,6 +135,9 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	if _, exists := capturedBody["service_tier"]; exists {
 		t.Fatalf("standard service_tier = %#v, want omitted", capturedBody["service_tier"])
 	}
+	if capturedBody["stream"] != true {
+		t.Fatalf("standard stream = %#v, want true", capturedBody["stream"])
+	}
 	assertCanonicalGenerationMetadata(t, capturedBody)
 	request.FastMode = true
 	if _, err = transport.Generate(context.Background(), request); err != nil {
@@ -157,6 +160,9 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	}
 	if got := capturedBody["service_tier"]; got != "priority" {
 		t.Fatalf("service_tier = %#v, want priority", got)
+	}
+	if capturedBody["stream"] != true {
+		t.Fatalf("priority stream = %#v, want true", capturedBody["stream"])
 	}
 	assertCanonicalGenerationMetadata(t, capturedBody)
 }

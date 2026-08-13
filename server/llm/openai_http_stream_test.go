@@ -57,66 +57,6 @@ func newOpenAIStreamTestTransportForServer(server *httptest.Server) *HTTPTranspo
 	return transport
 }
 
-func TestOAuthGenerateAndGenerateStreamUseTheSameResponsesWireMode(t *testing.T) {
-	requestModes := make(chan bool, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Errorf("read request body: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(body, &payload); err != nil {
-			t.Errorf("decode request body: %v", err)
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		stream, _ := payload["stream"].(bool)
-		requestModes <- stream
-		if stream {
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = io.WriteString(w, "data: "+completedStreamEventJSON+"\n\ndata: [DONE]\n\n")
-			return
-		}
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-
-	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
-	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
-		SessionID:   "test-session",
-		RunID:       "test-run",
-		RequestKind: CodexRequestKindTurn.Optional(),
-	})
-	if err != nil {
-		t.Fatalf("dispatch context: %v", err)
-	}
-	request := OpenAIRequest{
-		Model:          "gpt-5",
-		SessionID:      textutil.Value("test-session"),
-		CodexDispatch:  dispatch,
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-	}
-	if _, err := transport.Generate(context.Background(), request); err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if _, err := transport.GenerateStreamWithEvents(context.Background(), request, StreamCallbacks{}); err != nil {
-		t.Fatalf("GenerateStreamWithEvents: %v", err)
-	}
-
-	nonstreamMode := <-requestModes
-	streamMode := <-requestModes
-	if nonstreamMode || !streamMode {
-		t.Fatalf("Responses wire modes differ: Generate stream=%t, GenerateStreamWithEvents stream=%t", nonstreamMode, streamMode)
-	}
-}
-
-const completedStreamEventJSON = `{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}`
-
 func newOpenAIRawStreamTestTransport(t *testing.T, stream string) *HTTPTransport {
 	t.Helper()
 	server := newOpenAIRawStreamTestServer(t, stream)

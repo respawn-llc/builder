@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -136,6 +135,7 @@ func TestSequentialAgentTurnsIsolateProviderDispatches(t *testing.T) {
 		{
 			name: "cancellation",
 			firstReply: func(w http.ResponseWriter, request *http.Request, started chan<- struct{}) {
+				w.Header().Set("Content-Type", "text/event-stream")
 				w.WriteHeader(http.StatusOK)
 				if flusher, ok := w.(http.Flusher); ok {
 					flusher.Flush()
@@ -240,8 +240,7 @@ func writeDispatchIsolationSuccess(w http.ResponseWriter) {
 }
 
 func writeDispatchIsolationResponse(w http.ResponseWriter, output string) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(w, "{\"id\":\"resp_success\",\"object\":\"response\",\"output\":%s,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}", output)
+	writeRuntimeCompletedResponseSSE(w, []byte(output))
 }
 
 func assertDistinctDispatchHandles(t *testing.T, first llm.Request, second llm.Request) {

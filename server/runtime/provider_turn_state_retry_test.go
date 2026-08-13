@@ -82,7 +82,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *test
 					_, _ = w.Write([]byte(`{"error":{"message":"retry me","type":"server_error"}}`))
 					return
 				}
-				writeRuntimeCompletedResponseJSON(w, nil)
+				writeRuntimeCompletedResponseSSE(w, nil)
 			})
 			var server *httptest.Server
 			if protocol == "http2" {
@@ -142,7 +142,7 @@ func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing
 			_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
 			return
 		}
-		writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
+		writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
 	}))
 	t.Cleanup(server.Close)
 	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
@@ -247,14 +247,14 @@ func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 						_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
 						return
 					}
-					writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","status":"completed"}]`))
+					writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","status":"completed"}]`))
 					return
 				}
 				if strings.HasPrefix(test.name, "remote ") {
 					writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]`))
 					return
 				}
-				writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"summary","annotations":[]}]}]`))
+				writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"summary","annotations":[]}]}]`))
 			}))
 			t.Cleanup(server.Close)
 
@@ -290,22 +290,13 @@ func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 }
 
 func writeRuntimeCompletedResponseSSE(w http.ResponseWriter, output []byte) {
+	if output == nil {
+		output = []byte(`[]`)
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	_, _ = fmt.Fprintf(
 		w,
 		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}}\n\ndata: [DONE]\n\n",
-		output,
-	)
-}
-
-func writeRuntimeCompletedResponseJSON(w http.ResponseWriter, output []byte) {
-	if output == nil {
-		output = []byte(`[]`)
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(
-		w,
-		"{\"id\":\"resp_1\",\"object\":\"response\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}",
 		output,
 	)
 }
