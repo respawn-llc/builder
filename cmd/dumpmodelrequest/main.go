@@ -94,20 +94,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 type capturedRequest struct {
-	SessionID   string              `json:"session_id"`
-	Provider    string              `json:"provider"`
-	Model       string              `json:"model"`
-	GeneratedAt string              `json:"generated_at"`
-	Semantics   inspectionSemantics `json:"semantics"`
-	WirePayload json.RawMessage     `json:"wire_payload"`
-	WireRaw     string              `json:"wire_payload_raw"`
-	Request     llm.Request         `json:"request"`
-}
-
-type inspectionSemantics struct {
-	RequestAssembly string `json:"request_assembly"`
-	TokenAccounting string `json:"token_accounting"`
-	Compaction      string `json:"compaction"`
+	SessionID   string          `json:"session_id"`
+	Provider    string          `json:"provider"`
+	Model       string          `json:"model"`
+	GeneratedAt string          `json:"generated_at"`
+	WirePayload json.RawMessage `json:"wire_payload"`
+	WireRaw     string          `json:"wire_payload_raw"`
+	Request     llm.Request     `json:"request"`
 }
 
 // captureSessionRequest reproduces the production request-assembly path for a
@@ -296,11 +289,6 @@ func captureSessionRequest(
 		Provider:    string(caps.ProviderID),
 		Model:       req.Model,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Semantics: inspectionSemantics{
-			RequestAssembly: "production_equivalent",
-			TokenAccounting: "estimate_only",
-			Compaction:      "estimate_only",
-		},
 		WirePayload: prettyWire,
 		WireRaw:     string(wireBytes),
 		Request:     req,

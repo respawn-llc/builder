@@ -247,12 +247,8 @@ func isMissingToolOutputProviderError(err error, items []llm.ResponseItem) bool 
 }
 
 // errorIsRepairableMissingToolOutput reports whether a provider error is a
-// transient HTTP 400 caused by interrupted tool calls that lack outputs, i.e.
-// one the append-only model request path will repair on retry. Callers use this
-// to avoid recording a permanent failure for a request that is about to be
-// repaired (for example, the precise token-count probe must not disable exact
-// counting for the rest of the active list just because one probe observed a
-// repairable malformed request).
+// transient HTTP 400 caused by interrupted tool calls that lack outputs, so the
+// append-only model request path can repair the request before retrying.
 func (e *Engine) errorIsRepairableMissingToolOutput(err error) bool {
 	if err == nil || !llm.HasHTTPStatus(err, 400) {
 		return false
