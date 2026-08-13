@@ -19,6 +19,7 @@ const (
 	MethodAuthAcknowledgeNoAuth                         = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                                 = "auth.getStatus"
 	MethodCapabilityFactsGet                            = "capability.facts.get"
+	MethodChatContextGet                                = "chat.context.get"
 	MethodPromptCommandCatalogGet                       = "promptCommands.catalog.get"
 	MethodOnboardingFinalize                            = "onboarding.finalize"
 	MethodAttachProject                                 = "project.attach"

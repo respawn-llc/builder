@@ -25,7 +25,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 func TestNewBuildsReusableServerCore(t *testing.T) {
@@ -440,12 +439,18 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 }
 func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	workspace := t.TempDir()
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: t.TempDir()}})
+	configRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configRoot, "config.toml"),
+		[]byte("tools.ask_question = false\n\n[subagents.worker]\ntools.ask_question = true\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write draft service config: %v", err)
+	}
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: configRoot}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved.Config.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
-	resolved.Config.Settings.Subagents["worker"] = brand.SubagentRole{Settings: brand.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}}, Sources: map[string]string{"tools." + toolspec.ConfigName(toolspec.ToolAskQuestion): "test"}}
 	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -500,27 +505,20 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 
 func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	workspace := t.TempDir()
+	configRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configRoot, "config.toml"),
+		[]byte("priority_request_mode = true\ntools.ask_question = true\n\n[provider_capabilities]\nprovider_id = \"openai\"\nsupports_responses_api = true\nis_openai_first_party = true\n\n[subagents.worker]\nthinking_level = \"high\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write materialization config: %v", err)
+	}
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
 		WorkspaceRoot: workspace,
-		LoadOptions:   brand.LoadOptions{ConfigRoot: t.TempDir()},
+		LoadOptions:   brand.LoadOptions{ConfigRoot: configRoot},
 	})
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
-	}
-	resolved.Config.Settings.PriorityRequestMode = true
-	resolved.Config.Settings.ProviderCapabilities = brand.ProviderCapabilitiesOverride{
-		ProviderID:           "openai",
-		SupportsResponsesAPI: true,
-		IsOpenAIFirstParty:   true,
-	}
-	resolved.Config.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
-	workerSettings := resolved.Config.Settings
-	workerSettings.ThinkingLevel = "high"
-	resolved.Config.Settings.Subagents = map[string]brand.SubagentRole{
-		"worker": {
-			Settings: workerSettings,
-			Sources:  map[string]string{"thinking_level": "file"},
-		},
 	}
 	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
 	if err != nil {

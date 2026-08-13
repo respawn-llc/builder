@@ -16,6 +16,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/onboarding"
@@ -752,6 +753,24 @@ func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ct
 		return c.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, workspaceRoot)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, workspaceID)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) SessionChatContextOwner() chatcontext.SessionOwner {
+	if c := d.activeCore(); c != nil {
+		return c.SessionChatContextOwner()
+	}
+	return nil
 }
 func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {

@@ -27,6 +27,7 @@ type stubExclusiveStepLifecycle struct {
 	snapshotFn   func() *RunSnapshot
 	snapshot     *RunSnapshot
 	activeStepID string
+	drainFn      func(context.Context) error
 }
 
 type stubBackgroundNoticeScheduler struct {
@@ -159,7 +160,10 @@ func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply fun
 	return apply()
 }
 
-func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(context.Context) error {
+func (s *stubExclusiveStepLifecycle) DrainAgentStepBoundary(ctx context.Context) error {
+	if s.drainFn != nil {
+		return s.drainFn(ctx)
+	}
 	return nil
 }
 func (s *stubExclusiveStepLifecycle) EndAgentStepBoundary() {}

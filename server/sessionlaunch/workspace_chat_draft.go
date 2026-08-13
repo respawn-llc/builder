@@ -26,6 +26,7 @@ type WorkspaceChatDraftResolverInput struct {
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
 	draft           WorkspaceChatDraft
+	settings        config.Settings
 	fast, questions bool
 	thinking        map[string]struct{}
 }
@@ -255,33 +256,15 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 		if _, exists := result[selector]; exists {
 			continue
 		}
-		role := selector
-		prepared, err := launch.PrepareRunPromptOverridesWithContext(
-			config.App{Settings: input.Settings, Source: input.Source},
-			serverapi.RunPromptOverrides{AgentRole: &role},
-			input.AuthState,
-			launch.RunPromptPreparationContext{
-				SkipProviderReadinessValidation: input.SkipProviderReadinessValidation,
-			},
-		)
+		target, fastAvailable, err := resolveWorkspaceChatDraftTarget(input, selector)
 		if err != nil {
 			return nil, err
 		}
-		target := prepared.BaseTarget
-		if selector != config.DefaultSubagentRole {
-			target = nil
-			if prepared.NamedTarget != nil {
-				target = &launch.PreparedBaseTarget{Settings: prepared.NamedTarget.Settings, Source: prepared.NamedTarget.Source, EnabledTools: prepared.NamedTarget.EnabledTools}
-			}
-		}
-		if target == nil {
-			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
-		}
 		var preparedSettings launch.PreparedChatSettings
 		if input.SkipProviderReadinessValidation {
-			preparedSettings, err = launch.PrepareChatSettingsForTargetWithoutProviderReadiness(*target)
+			preparedSettings, err = launch.PrepareChatSettingsForTargetWithoutProviderReadiness(target)
 		} else {
-			preparedSettings, err = launch.PrepareChatSettingsForPreparedTarget(*target, prepared.FastAvailable)
+			preparedSettings, err = launch.PrepareChatSettingsForPreparedTarget(target, fastAvailable)
 		}
 		if err != nil {
 			return nil, err
@@ -300,12 +283,43 @@ func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (
 				Questions:      baseline.Questions,
 				AutoCompaction: baseline.AutoCompaction,
 			},
+			settings:  target.Settings,
 			fast:      preparedSettings.FastAvailable,
 			questions: preparedSettings.QuestionsAvailable,
 			thinking:  thinkingLevels,
 		}
 	}
 	return result, nil
+}
+
+func resolveWorkspaceChatDraftTarget(input WorkspaceChatDraftResolverInput, selector string) (launch.PreparedBaseTarget, bool, error) {
+	role := selector
+	prepared, err := launch.PrepareRunPromptOverridesWithContext(
+		config.App{Settings: input.Settings, Source: input.Source},
+		serverapi.RunPromptOverrides{AgentRole: &role},
+		input.AuthState,
+		launch.RunPromptPreparationContext{
+			SkipProviderReadinessValidation: input.SkipProviderReadinessValidation,
+		},
+	)
+	if err != nil {
+		return launch.PreparedBaseTarget{}, false, err
+	}
+	target := prepared.BaseTarget
+	if selector != config.DefaultSubagentRole {
+		target = nil
+		if prepared.NamedTarget != nil {
+			target = &launch.PreparedBaseTarget{
+				Settings:     prepared.NamedTarget.Settings,
+				Source:       prepared.NamedTarget.Source,
+				EnabledTools: prepared.NamedTarget.EnabledTools,
+			}
+		}
+	}
+	if target == nil {
+		return launch.PreparedBaseTarget{}, false, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
+	}
+	return *target, prepared.FastAvailable, nil
 }
 func workspaceChatDraftSettingsEqual(a, b WorkspaceChatDraft) bool {
 	return a.Agent == b.Agent && a.Supervisor == b.Supervisor && a.Thinking == b.Thinking && a.Fast == b.Fast && a.Questions == b.Questions && a.AutoCompaction == b.AutoCompaction

@@ -7,6 +7,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -66,9 +67,10 @@ type ProcessBundle struct {
 }
 
 type ProjectBundle struct {
-	cfg          config.App
-	projectID    string
-	projectViews apicontract.ProjectViewService
+	cfg            config.App
+	freshWorkspace chatcontext.FixedRootWorkspaceResolver
+	projectID      string
+	projectViews   apicontract.ProjectViewService
 }
 
 type PromptBundle struct {
@@ -89,16 +91,17 @@ type RuntimeBundle struct {
 }
 
 type SessionBundle struct {
-	mu               sync.Mutex
-	runPromptMu      sync.Mutex
-	sessionLaunchMap map[string]apicontract.SessionLaunchService
-	sessionServices  map[string]*sessionlaunch.Service
-	runPromptMap     map[string]apicontract.RunPromptService
-	draftOwner       *sessionlaunch.WorkspaceChatDraftOwner
-	sessionLaunch    apicontract.SessionLaunchService
-	sessionViews     apicontract.SessionViewService
-	sessionLifecycle apicontract.SessionLifecycleService
-	runPrompt        apicontract.RunPromptService
+	mu                  sync.Mutex
+	runPromptMu         sync.Mutex
+	sessionLaunchMap    map[string]apicontract.SessionLaunchService
+	sessionServices     map[string]*sessionlaunch.Service
+	runPromptMap        map[string]apicontract.RunPromptService
+	draftOwner          *sessionlaunch.WorkspaceChatDraftOwner
+	sessionLaunch       apicontract.SessionLaunchService
+	sessionViews        apicontract.SessionViewService
+	sessionContextOwner chatcontext.SessionOwner
+	sessionLifecycle    apicontract.SessionLifecycleService
+	runPrompt           apicontract.RunPromptService
 }
 
 type WorktreeBundle struct {
@@ -278,8 +281,9 @@ func newProcessBundle(processService *processview.ProcessViewService) *ProcessBu
 
 func newProjectBundle(cfg config.App, projectViews apicontract.ProjectViewService) *ProjectBundle {
 	return &ProjectBundle{
-		cfg:          cfg,
-		projectViews: projectViews,
+		cfg:            cfg,
+		freshWorkspace: chatcontext.NewFixedRootWorkspaceResolver(cfg.PersistenceRoot),
+		projectViews:   projectViews,
 	}
 }
 
@@ -313,14 +317,15 @@ func newWorkflowBundle(workflowService *workflowsvc.Service, controller *workflo
 
 func newSessionBundle(sessionViewService *sessionview.Service, sessionLifecycleService *sessionservice.SessionLifecycleService, metadataStore *metadata.Store) *SessionBundle {
 	return &SessionBundle{
-		sessionLaunchMap: make(map[string]apicontract.SessionLaunchService),
-		sessionServices:  make(map[string]*sessionlaunch.Service),
-		runPromptMap:     make(map[string]apicontract.RunPromptService),
-		draftOwner:       sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
-		sessionLaunch:    unregisteredSessionLaunchClient{},
-		sessionViews:     sessionViewService,
-		sessionLifecycle: sessionLifecycleService,
-		runPrompt:        unregisteredRunPromptClient{},
+		sessionLaunchMap:    make(map[string]apicontract.SessionLaunchService),
+		sessionServices:     make(map[string]*sessionlaunch.Service),
+		runPromptMap:        make(map[string]apicontract.RunPromptService),
+		draftOwner:          sessionlaunch.NewWorkspaceChatDraftOwner(metadataStore),
+		sessionLaunch:       unregisteredSessionLaunchClient{},
+		sessionViews:        sessionViewService,
+		sessionContextOwner: sessionViewService,
+		sessionLifecycle:    sessionLifecycleService,
+		runPrompt:           unregisteredRunPromptClient{},
 	}
 }
 

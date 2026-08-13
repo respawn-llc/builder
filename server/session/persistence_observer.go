@@ -108,8 +108,9 @@ func (e EventLogReconciliationConflictError) Unwrap() error {
 }
 
 type PersistedStoreSnapshot struct {
-	SessionDir string
-	Meta       Meta
+	SessionDir   string
+	Meta         Meta
+	ContextFacts SessionContextFacts
 }
 
 type PersistenceObserver interface {

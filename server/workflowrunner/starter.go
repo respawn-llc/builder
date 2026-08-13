@@ -585,6 +585,10 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, disposable, err
 		}
 		thinkingMutation := workflowThinkingMutationFor(input, selection)
+		authState, authErr := s.loadEffectiveAuthState(ctx, plan.Locked)
+		if authErr != nil {
+			return launch.SessionPlan{}, disposable, authErr
+		}
 		if thinkingMutation.Kind() != launch.WorkflowThinkingMutationUnchanged {
 			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 				var applyErr error
@@ -592,7 +596,7 @@ func (s *Starter) planCurrentNodeSession(
 					plan,
 					store,
 					serverapi.RunPromptOverrides{},
-					auth.EmptyState(),
+					authState,
 					launch.RunPromptOverrideOptions{WorkflowThinking: thinkingMutation},
 				)
 				return applyErr
@@ -600,7 +604,8 @@ func (s *Starter) planCurrentNodeSession(
 				return launch.SessionPlan{}, disposable, err
 			}
 		}
-		return plan, disposable, nil
+		plan, err = launch.ApplyContextPolicy(plan, authState)
+		return plan, disposable, err
 	}
 	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
@@ -612,7 +617,8 @@ func (s *Starter) planCurrentNodeSession(
 	thinkingMutation := workflowThinkingMutationFor(input, selection)
 	if policy.assignee != currentNodeSessionAssigneeEstablishTarget &&
 		thinkingMutation.Kind() == launch.WorkflowThinkingMutationUnchanged {
-		return plan, disposable, nil
+		plan, err = s.applyContextPolicy(ctx, plan)
+		return plan, disposable, err
 	}
 	options := launch.RunPromptOverrideOptions{}
 	if selection.Origin == workflow.AssigneeOriginTransitionSelected {
@@ -623,18 +629,41 @@ func (s *Starter) planCurrentNodeSession(
 	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		overrides = workflowPromptOverrides(selection.Assignee)
 	}
+	authState, err := s.loadEffectiveAuthState(ctx, plan.Locked)
+	if err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
 	err = s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
 		var applyErr error
 		plan, _, applyErr = planner.ApplyRunPromptOverridesWithStore(
 			plan,
 			store,
 			overrides,
-			auth.EmptyState(),
+			authState,
 			options,
 		)
 		return applyErr
 	})
+	if err != nil {
+		return launch.SessionPlan{}, disposable, err
+	}
+	plan, err = launch.ApplyContextPolicy(plan, authState)
 	return plan, disposable, err
+}
+
+func (s *Starter) applyContextPolicy(ctx context.Context, plan launch.SessionPlan) (launch.SessionPlan, error) {
+	authState, err := s.loadEffectiveAuthState(ctx, plan.Locked)
+	if err != nil {
+		return launch.SessionPlan{}, err
+	}
+	return launch.ApplyContextPolicy(plan, authState)
+}
+
+func (s *Starter) loadEffectiveAuthState(ctx context.Context, locked *session.LockedContract) (auth.State, error) {
+	if locked != nil || s.authManager == nil {
+		return auth.EmptyState(), nil
+	}
+	return s.authManager.Load(ctx)
 }
 
 type currentNodeSessionAssigneePolicy = workflow.AssigneeSessionPolicy

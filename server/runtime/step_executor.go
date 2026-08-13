@@ -384,7 +384,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			patchEditsApplied = patchEditsApplied || applied
@@ -399,7 +399,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		if assistantMsg.Content == nil && responseContainsProgress(resp) {
-			if err := s.completeAgentStepBoundary(ctx); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -760,6 +760,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	assistantProvenance := assistantCommitResult.provenance
 	if !acceptedCalls.hasCalls() {
 		e.compactionRuntimeState().SetManualCompactionEligible(true)
+		e.persistManualCompactEligibilityBestEffort(stepID, true)
 	}
 	return preparedCompletedResponse{
 		next:                         completedResponseNextAccepted,
@@ -829,15 +830,16 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if calls.hasCalls() {
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
+		if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
 }
 
-func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) error {
+func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

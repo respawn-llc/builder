@@ -27,7 +27,6 @@ const (
 	compactionModeManual                 compactionMode = "manual"
 	compactionModeWorkflowPostCompletion compactionMode = "workflow_post_completion"
 
-	defaultContextWindowTokens             = 200_000
 	compactionSoonReminderPercent          = 85
 	compactionPreservedUserMessageMaxChars = 4_000
 
@@ -218,7 +217,7 @@ func (c *defaultContextCompactor) TriggerHandoff(ctx context.Context, stepID str
 	if !planningSnapshot.autoCompactionEnabled {
 		return "", false, errHandoffDisabledByUser
 	}
-	if planner.mode(planningSnapshot.compactionMode) == "none" {
+	if planner.mode(planningSnapshot.policy) == "none" {
 		return "", false, errors.New("User explicitly disabled compaction in configuration.")
 	}
 	if !e.compactionRuntimeState().SoonReminderIssued() {
@@ -242,7 +241,7 @@ func (c *defaultContextCompactor) compactContext(ctx context.Context, mode compa
 	err := runExclusiveStepWhenIdle(ctx, c.steps, activeKind, reservation, func(stepCtx context.Context, stepID string) error {
 		if requireEligibility {
 			planningSnapshot := e.compactionPlanningSnapshot()
-			if e.compactionPlannerState().mode(planningSnapshot.compactionMode) == "none" {
+			if e.compactionPlannerState().mode(planningSnapshot.policy) == "none" {
 				return errCompactionDisabledModeNone
 			}
 			if !e.compactionRuntimeState().ManualCompactionEligible() {
@@ -330,40 +329,6 @@ func (c *defaultContextCompactor) ShouldCompactBeforeUserMessage(ctx context.Con
 	return estimatedCurrentTotal+promptEstimate >= limit, nil
 }
 
-func (e *Engine) resolveContextWindowTokens(ctx context.Context) int {
-	if configured := e.configuredContextWindowTokens(); configured > 0 {
-		return configured
-	}
-
-	model := e.currentModel()
-	if resolver, ok := e.llm.(llm.ModelContextWindowClient); ok {
-		resolved, err := resolver.ResolveModelContextWindow(ctx, model)
-		if err == nil && resolved > 0 {
-			e.setContextWindowTokens(resolved)
-			return resolved
-		}
-	}
-	return e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
-}
-
-func (e *Engine) configuredContextWindowTokens() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.cfg.ContextWindowTokens > 0 {
-		return e.cfg.ContextWindowTokens
-	}
-	return 0
-}
-
-func (e *Engine) setContextWindowTokens(tokens int) {
-	if tokens <= 0 {
-		return
-	}
-	e.mu.Lock()
-	e.cfg.ContextWindowTokens = tokens
-	e.mu.Unlock()
-}
-
 func (e *Engine) currentModel() string {
 	if model := e.lockedContractState().Model(); model != "" {
 		return model
@@ -410,7 +375,7 @@ func (e *Engine) compactNow(ctx context.Context, stepID string, mode compactionM
 func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mode compactionMode, instructionsInput compactionInstructionsInput, includePreservedUserMessage bool, accept CommandAcceptance) (compactionResult, session.CommitReceipt, error) {
 	planningSnapshot := e.compactionPlanningSnapshot()
 	planner := e.compactionPlannerState()
-	if planner.mode(planningSnapshot.compactionMode) == "none" {
+	if planner.mode(planningSnapshot.policy) == "none" {
 		if mode == compactionModeAuto {
 			return compactionResult{}, session.CommitReceipt{}, nil
 		}
@@ -421,8 +386,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	if len(input) == 0 {
 		return compactionResult{}, session.CommitReceipt{}, nil
 	}
-
-	_ = e.resolveContextWindowTokens(ctx)
 
 	caps, err := e.providerCapabilities(ctx)
 	if err != nil {
@@ -452,7 +415,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		preservedUserMessageText = lastVisibleUserMessageSinceLatestCompaction(input)
 	}
 	var result compactionResult
-	enginePlan := planner.enginePlan(planningSnapshot, caps)
+	enginePlan := planner.enginePlan(planningSnapshot)
 	var requestKind *llm.CodexRequestKind
 	if enginePlan.engineKind == compactionEngineRemote {
 		requestKind = llm.CodexRequestKindCompaction.Optional()
@@ -513,6 +476,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		return compactionResult{}, replacementReceipt, compactionFailure(result, replacementErr)
 	}
 	e.compactionRuntimeState().SetManualCompactionEligible(false)
+	e.persistCompletedCompactionFactsBestEffort(stepID, e.compactionRuntimeState().Count())
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: string(transcript.EntryRoleDeveloperErrorFeedback), Text: fmt.Sprintf(
@@ -653,16 +617,12 @@ func (e *Engine) compactionPlanningSnapshot() compactionPlanningSnapshot {
 	}
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         autoEnabled,
-		compactionMode:                e.cfg.CompactionMode,
-		autoCompactTokenLimit:         e.cfg.AutoCompactTokenLimit,
 		preSubmitCompactionLeadTokens: e.cfg.PreSubmitCompactionLeadTokens,
-		contextWindowTokens:           e.cfg.ContextWindowTokens,
-		effectiveContextWindowPercent: e.cfg.EffectiveContextWindowPercent,
+		policy:                        e.contextPolicy,
 		maxOutputTokens:               e.cfg.MaxTokens,
 	}
 	e.mu.Unlock()
 	snapshot.lockedMaxOutputTokens = e.lockedContractState().MaxOutputToken()
-	snapshot.lastUsage = e.usageTrackingState().Last()
 	snapshot.currentUsedTokens = e.currentTokenUsage()
 	return snapshot
 }

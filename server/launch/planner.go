@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -101,6 +102,24 @@ type SessionPlan struct {
 	QuestionsEnabled                    bool
 	AutoCompactionEnabled               bool
 	ThinkingOverrideExplicit            bool
+}
+
+// ApplyContextPolicy resolves Context policy only after the plan's final Agent
+// role, settings overrides, and persisted Session continuity are known.
+func ApplyContextPolicy(plan SessionPlan, authState auth.State) (SessionPlan, error) {
+	capabilities, locked := llm.ProviderCapabilitiesFromLocked(plan.Locked)
+	if !locked {
+		var err error
+		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, plan.ActiveSettings)
+		if err != nil {
+			return SessionPlan{}, err
+		}
+	}
+	plan.ActiveSettings = chatcontext.ApplyPolicy(
+		plan.ActiveSettings,
+		chatcontext.ResolvePolicy(plan.ActiveSettings, capabilities, plan.Locked),
+	)
+	return plan, nil
 }
 
 func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
@@ -242,6 +261,56 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 	}, nil
 }
 
+// ResolveReadOnlyPromptFacingSnapshotPlan reconstructs the current persisted
+// Agent-role projection without backfills or other Store mutations.
+func ResolveReadOnlyPromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
+	return resolvePromptFacingSnapshotPlan(app, store, skipContinuationAgentRoleValidation)
+}
+
+type ReadOnlySessionContextSettings struct {
+	Settings              config.Settings
+	AutoCompactionEnabled bool
+}
+
+// ResolveReadOnlySessionContextSettings projects current persisted Agent-role
+// and Chat settings from a bounded Meta snapshot.
+func ResolveReadOnlySessionContextSettings(app config.App, meta session.Meta, skipContinuationAgentRoleValidation bool) (ReadOnlySessionContextSettings, error) {
+	active, _, chatSettings, err := resolveReadOnlySessionContextSettings(app, meta, skipContinuationAgentRoleValidation)
+	if err != nil {
+		return ReadOnlySessionContextSettings{}, err
+	}
+	return ReadOnlySessionContextSettings{
+		Settings:              active,
+		AutoCompactionEnabled: chatSettings.AutoCompaction,
+	}, nil
+}
+
+func resolveReadOnlySessionContextSettings(
+	app config.App,
+	meta session.Meta,
+	skipContinuationAgentRoleValidation bool,
+) (config.Settings, config.SourceReport, session.ChatSettings, error) {
+	baseActive := EffectiveSettings(app.Settings, meta.Locked)
+	active, source := baseActive, app.Source
+	if meta.Continuation != nil {
+		var err error
+		active, source, err = applyPersistedSubagentRoleSettings(baseActive, source, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
+		if err != nil {
+			return config.Settings{}, config.SourceReport{}, session.ChatSettings{}, err
+		}
+		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
+			if baseURL, present := textutil.OptionalTrimmed(meta.Continuation.OpenAIBaseURL); present {
+				active.OpenAIBaseURL = baseURL
+			}
+		}
+	}
+	active, chatSettings, err := applySessionChatSettings(meta, active)
+	if err != nil {
+		return config.Settings{}, config.SourceReport{}, session.ChatSettings{}, err
+	}
+	return active, source, chatSettings, nil
+}
+
 // ResolvePromptFacingSnapshotPlan reconstructs the request-facing session plan
 // from a persisted store without creating or selecting a session. It is shared
 // by diagnostic paths that need the same settings, source, tools, and
@@ -272,24 +341,11 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	meta := store.Meta()
 	baseActive := EffectiveSettings(app.Settings, meta.Locked)
 	baseSource := app.Source
-	active, source := baseActive, baseSource
-	if meta.Continuation != nil {
-		var err error
-		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
-		if err != nil {
-			return SessionPlan{}, err
-		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
-			if baseURL, present := textutil.OptionalTrimmed(meta.Continuation.OpenAIBaseURL); present {
-				active.OpenAIBaseURL = baseURL
-			}
-		}
-	}
-	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
+	active, source, chatSettings, err := resolveReadOnlySessionContextSettings(app, meta, skipContinuationAgentRoleValidation)
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	active, chatSettings, err := applySessionChatSettings(meta, active)
+	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
 	if err != nil {
 		return SessionPlan{}, err
 	}

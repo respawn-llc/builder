@@ -8,7 +8,9 @@ import (
 	"strings"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/launch"
+	"core/server/llm"
 	"core/server/requestmemo"
 	"core/server/runtimeview"
 	"core/server/session"
@@ -23,6 +25,7 @@ import (
 )
 
 type authStateReader interface {
+	Load(context.Context) (auth.State, error)
 	CurrentState(context.Context) (auth.State, error)
 	StoredState(context.Context) (auth.State, error)
 }
@@ -58,6 +61,33 @@ type sessionPlanMemoRequest struct {
 
 func NewService(planner launch.Planner) *Service {
 	return &Service{planner: planner, plans: requestmemo.New[sessionPlanMemoRequest, PlanResult]()}
+}
+
+func (s *Service) ReadWorkspaceChatContext(ctx context.Context) (serverapi.ChatContext, error) {
+	resolution, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	selected, ok := resolution.limits[normalizeWorkspaceChatDraftAgent(resolution.Draft.Agent)]
+	if !ok {
+		return serverapi.ChatContext{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved settings", resolution.Draft.Agent)
+	}
+	authState := auth.EmptyState()
+	if s.authStates != nil {
+		authState, err = s.authStates.Load(ctx)
+		if err != nil {
+			return serverapi.ChatContext{}, err
+		}
+	}
+	capabilities, err := llm.ProviderCapabilitiesForSettings(authState, selected.settings)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	policy := chatcontext.ResolvePolicy(selected.settings, capabilities, nil)
+	return chatcontext.Project(chatcontext.ProjectionInput{
+		Policy:                policy,
+		AutoCompactionEnabled: resolution.Draft.AutoCompaction,
+	}), nil
 }
 func (s *Service) WithAuthStateReader(reader authStateReader) *Service {
 	if s == nil {
@@ -675,6 +705,17 @@ func (s *Service) finalizeLaunchPlan(
 	if err != nil {
 		return PlanResult{}, err
 	}
+	authState := auth.EmptyState()
+	if plan.Locked == nil && s.authStates != nil {
+		authState, err = s.authStates.Load(ctx)
+		if err != nil {
+			return PlanResult{}, err
+		}
+	}
+	plan, err = launch.ApplyContextPolicy(plan, authState)
+	if err != nil {
+		return PlanResult{}, err
+	}
 	if s.promptHistory != nil {
 		history, err := s.promptHistory.ReadPromptHistory(ctx, plan.Descriptor.SessionID().String())
 		if err != nil {
@@ -713,3 +754,4 @@ func sameSessionPlanMemoRequest(a sessionPlanMemoRequest, b sessionPlanMemoReque
 }
 
 var _ servicecontract.SessionLaunchService = (*Service)(nil)
+var _ chatcontext.WorkspaceOwner = (*Service)(nil)
