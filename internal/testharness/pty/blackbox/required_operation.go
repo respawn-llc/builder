@@ -47,10 +47,9 @@ const (
 type Route string
 
 const (
-	RouteResponses   Route = "responses"
-	RouteCompact     Route = "compact"
-	RouteInputTokens Route = "input_tokens"
-	RouteModel       Route = "model_metadata"
+	RouteResponses Route = "responses"
+	RouteCompact   Route = "compact"
+	RouteModel     Route = "model_metadata"
 )
 
 func (operation RequiredOperation) Validate() error {
@@ -58,7 +57,7 @@ func (operation RequiredOperation) Validate() error {
 		return errors.New("model operation id must be UUIDv4")
 	}
 	switch operation.Route {
-	case RouteResponses, RouteCompact, RouteInputTokens, RouteModel:
+	case RouteResponses, RouteCompact, RouteModel:
 	default:
 		return fmt.Errorf("unsupported model route %q", operation.Route)
 	}

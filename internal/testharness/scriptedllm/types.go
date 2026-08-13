@@ -16,7 +16,6 @@ type Script struct {
 	Capabilities        *llm.ProviderCapabilities
 	Steps               []Step
 	Compactions         []llm.CompactionResponse
-	InputTokenCount     *int
 	ContextWindowTokens *int
 	AllowConcurrent     bool
 }

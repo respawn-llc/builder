@@ -760,14 +760,6 @@ type StreamEventsClient interface {
 	GenerateStreamWithEvents(ctx context.Context, request Request, callbacks StreamCallbacks) (Response, error)
 }
 
-type RequestInputTokenCountClient interface {
-	CountRequestInputTokens(ctx context.Context, request Request) (int, error)
-}
-
-type RequestInputTokenCountSupportClient interface {
-	SupportsRequestInputTokenCount(ctx context.Context) (bool, error)
-}
-
 type ModelContextWindowClient interface {
 	ResolveModelContextWindow(ctx context.Context, model string) (int, error)
 }

@@ -394,14 +394,9 @@ func TestScriptedResponsesHandlesMultipleResultsStreamingErrorsAndMetadata(t *te
 			t.Fatalf("Verify cancellation error = %v, want context.Canceled", err)
 		}
 	})
-	t.Run("tokens model and compaction", func(t *testing.T) {
-		tokens, window := 23, 123456
-		stub := startScriptedStub(t, scriptedllm.Script{InputTokenCount: &tokens, ContextWindowTokens: &window})
-		provider := providerClientWithWindow(t, stub, 0)
-		count, err := provider.(llm.RequestInputTokenCountClient).CountRequestInputTokens(context.Background(), request("", prepared(messageItem("count"))))
-		if err != nil || count != tokens {
-			t.Fatalf("input tokens = %d, %v", count, err)
-		}
+	t.Run("model and compaction", func(t *testing.T) {
+		window := 123456
+		stub := startScriptedStub(t, scriptedllm.Script{ContextWindowTokens: &window})
 		modelResponse, err := http.Get(stub.URL() + "/models/gpt-5")
 		if err != nil {
 			t.Fatalf("GET model: %v", err)

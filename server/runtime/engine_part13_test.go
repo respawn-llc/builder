@@ -23,7 +23,7 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)},
 				ToolCalls: []llm.ToolCall{{ID: "call_1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}},
-				Usage:     llm.Usage{InputTokens: 100, WindowTokens: 2_000},
+				Usage:     llm.Usage{InputTokens: 890, WindowTokens: 2_000},
 			},
 			{
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)},
@@ -33,19 +33,6 @@ func TestRunStepLoopDoesNotDuplicateCompactionSoonReminderAfterAutoCompactionIsD
 				Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("next"), Phase: textutil.Value(llm.MessagePhaseFinal)},
 				Usage:     llm.Usage{InputTokens: 930, WindowTokens: 2_000},
 			},
-		},
-		inputTokenCountFn: func(req llm.Request) int {
-			hasToolResult := false
-			for _, msg := range requestMessages(req) {
-				if msg.Role == llm.RoleTool {
-					hasToolResult = true
-					break
-				}
-			}
-			if hasToolResult {
-				return 890
-			}
-			return 930
 		},
 	}
 
@@ -102,10 +89,10 @@ func countCompactionSoonReminderWarnings(_ *Engine, snapshot ChatSnapshot) int {
 	return count
 }
 
-func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testing.T) {
+func TestCompactionSoonReminderUsesResponseBaselineAfterTranscriptMutation(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	client := &preciseCompactionClient{inputTokenCount: 840, contextWindow: 2_000}
+	client := &contextWindowClient{contextWindow: 2_000}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 1_000,
@@ -118,25 +105,17 @@ func TestCompactionSoonReminderRechecksPreciselyAfterTranscriptMutation(t *testi
 	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-1"); err != nil {
 		t.Fatalf("reminder below exact threshold: %v", err)
 	}
-	if client.countCalls != 1 {
-		t.Fatalf("expected first reminder probe to count precisely once, got %d", client.countCalls)
+	if !eng.compactionRuntimeState().SoonReminderIssued() {
+		t.Fatal("expected response-derived usage to issue the reminder")
 	}
-	if eng.compactionRuntimeState().SoonReminderIssued() {
-		t.Fatal("did not expect handoff tool to become enabled below the exact reminder threshold")
-	}
-
-	client.inputTokenCount = 860
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleAssistant, Content: textutil.Value("mutation")}})); err != nil {
 		t.Fatalf("append mutation: %v", err)
 	}
 	if err := newCompactionReminderCoordinator(eng).maybeAppend(context.Background(), "step-2"); err != nil {
 		t.Fatalf("reminder above exact threshold after mutation: %v", err)
 	}
-	if client.countCalls != 2 {
-		t.Fatalf("expected transcript mutation to force a fresh precise reminder check, got %d calls", client.countCalls)
-	}
 	if !eng.compactionRuntimeState().SoonReminderIssued() {
-		t.Fatal("expected reminder to enable trigger_handoff after exact recount")
+		t.Fatal("expected reminder to remain issued after transcript growth")
 	}
 }
 
@@ -234,7 +213,6 @@ func TestPrepareModelTurnSkipsAutoCompactionAfterPendingHandoffCompaction(t *tes
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("handoff summary")},
 			Usage:     llm.Usage{InputTokens: 1_900, WindowTokens: 2_000},
 		}},
-		inputTokenCount: 1_900,
 	}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{
 		CompactionMode:        "local",
@@ -271,7 +249,6 @@ func TestPrepareModelTurnMaterializesWorktreeReminderAfterPendingHandoffCompacti
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("handoff summary")},
 			Usage:     llm.Usage{InputTokens: 1_900, WindowTokens: 2_000},
 		}},
-		inputTokenCount: 1_900,
 	}
 	eng := mustNewHandoffTestEngine(t, store, client, Config{
 		CompactionMode:        "local",

@@ -196,11 +196,9 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	if err := store.MarkModelDispatchLocked(session.LockedContract{
 		Model: "operator-alias",
 		ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:                        "custom-provider",
-			SupportsResponsesAPI:              true,
-			SupportsRequestInputTokenCount:    true,
-			HasSupportsRequestInputTokenCount: true,
-			SupportsProviderVerbosity:         &lockedVerbosity,
+			ProviderID:                "custom-provider",
+			SupportsResponsesAPI:      true,
+			SupportsProviderVerbosity: &lockedVerbosity,
 		},
 	}); err != nil {
 		t.Fatalf("lock session: %v", err)
@@ -275,9 +273,6 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	}
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)
-	}
-	if _, err := mainClient.(llm.RequestInputTokenCountClient).CountRequestInputTokens(context.Background(), request); err != nil {
-		t.Fatalf("count input tokens through resumed main client: %v", err)
 	}
 
 	observed := recorder.Snapshot().Observed
