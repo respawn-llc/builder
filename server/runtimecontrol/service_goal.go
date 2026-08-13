@@ -12,22 +12,19 @@ import (
 	"core/server/runtimecommand"
 	"core/server/runtimeview"
 	"core/server/session"
-	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error) {
-		return s.ShowGoalValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ShowGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, err
+	}
 	if s == nil || s.persisted == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
-	sessionID := validated.SessionID(validated.Value().SessionID).String()
+	sessionID := strings.TrimSpace(req.SessionID)
 	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve persisted session %q: %w", sessionID, err)
@@ -43,18 +40,17 @@ func (s *Service) ShowGoalValidated(ctx context.Context, validated servicecontra
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-		return s.SetGoalValidated(ctx, validated)
-	})
-}
-
-func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-	req := validated.Value()
-	sessionID := validated.SessionID(req.SessionID)
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
 	memoReq := goalSetMemoRequest{
 		SessionID: sessionID.String(),
-		Objective: req.Objective,
-		Actor:     req.Actor,
+		Objective: strings.TrimSpace(req.Objective),
+		Actor:     strings.TrimSpace(req.Actor),
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
@@ -69,42 +65,29 @@ func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontrac
 }
 
 func (s *Service) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-		return s.PauseGoalValidated(ctx, validated)
-	})
-}
-
-func (s *Service) PauseGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusPaused)
+	return s.setGoalStatus(ctx, req, session.GoalStatusPaused)
 }
 
 func (s *Service) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-		return s.ResumeGoalValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ResumeGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusActive)
+	return s.setGoalStatus(ctx, req, session.GoalStatusActive)
 }
 
 func (s *Service) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-		return s.CompleteGoalValidated(ctx, validated)
-	})
+	return s.setGoalStatus(ctx, req, session.GoalStatusComplete)
 }
 
-func (s *Service) CompleteGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusComplete)
-}
-
-func (s *Service) setGoalStatusValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
-	req := validated.Value()
-	sessionID := validated.SessionID(req.SessionID)
+func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
 	memoReq := goalStatusMemoRequest{
 		SessionID: sessionID.String(),
 		Status:    string(status),
-		Actor:     req.Actor,
+		Actor:     strings.TrimSpace(req.Actor),
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
@@ -134,15 +117,14 @@ func optionalGoalExecutionID(raw string) *string {
 }
 
 func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-		return s.ClearGoalValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ClearGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
-	req := validated.Value()
-	sessionID := validated.SessionID(req.SessionID)
-	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: req.Actor}
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
 	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
 			SessionID: sessionID,

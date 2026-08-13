@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"core/server/session"
 	"core/server/sessionruntime"
 	servicecontract "core/shared/apicontract"
+	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
@@ -143,6 +145,10 @@ type sessionOnlyMemoRequest struct {
 	SessionID string
 }
 
+type runtimeInterruptMemoRequest struct {
+	SessionID string
+}
+
 type localEntryMemoRequest struct {
 	SessionID  string
 	Role       string
@@ -227,17 +233,6 @@ func (s *Service) runAgentExecution(
 		return errors.New("session runtime authority is required")
 	}
 	return s.execution.RunAgentExecution(ctx, sessionID, run)
-}
-
-func (s *Service) runAgentExecutionID(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	run func(context.Context, *runtime.Engine) error,
-) error {
-	if s == nil || s.execution == nil {
-		return errors.New("session runtime authority is required")
-	}
-	return s.execution.RunAgentExecutionID(ctx, sessionID, run)
 }
 
 func (s *Service) WithRuntimeActivityResolver(resolver RuntimeActivityResolver) *Service {
@@ -395,26 +390,17 @@ func (a *runtimeCommandAttempt) Finish() {
 }
 
 func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetSessionNameRequest]) (struct{}, error) {
-		return struct{}{}, s.SetSessionNameValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) SetSessionNameValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetSessionNameRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Name}
-	_, err = s.sessionNames.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntimeID(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+	_, err := s.sessionNames.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if err := engine.SetSessionName(req.Name); err != nil {
 				return err
 			}
 			if publisher, ok := s.activity.(sessionIdentityPublisher); ok {
-				return publisher.PublishSessionIdentity(sessionID.String())
+				return publisher.PublishSessionIdentity(req.SessionID)
 			}
 			return nil
 		})
@@ -423,24 +409,18 @@ func (s *Service) SetSessionNameValidated(ctx context.Context, validated service
 }
 
 func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetThinkingLevelRequest]) (struct{}, error) {
-		return struct{}{}, s.SetThinkingLevelValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) SetThinkingLevelValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetThinkingLevelRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	level := strings.TrimSpace(req.Level)
+	if level == "" {
+		return errors.New("thinking level is required")
+	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: level}
-	_, err = memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
+	_, err := memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.thinkingLevels, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
 		_, accepted, mutationErr := s.mutateChatSettings(
 			ctx,
-			sessionID,
+			req.SessionID,
 			func(ctx context.Context, store *session.Store, _ *runtime.Engine) (session.ChatSettingsMutation, error) {
 				prepared, err := s.prepareChatSettings(ctx, store)
 				if err != nil {
@@ -464,22 +444,14 @@ func (s *Service) SetThinkingLevelValidated(ctx context.Context, validated servi
 }
 
 func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetFastModeEnabledRequest]) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return s.SetFastModeEnabledValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) SetFastModeEnabledValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetFastModeEnabledRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetFastModeEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.fastModes, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetFastModeEnabledResponse, bool, error) {
 		result, accepted, err := s.mutateChatSettings(
 			ctx,
-			sessionID,
+			req.SessionID,
 			func(ctx context.Context, store *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
 				if req.Enabled {
 					if engine != nil {
@@ -514,15 +486,7 @@ func (s *Service) SetFastModeEnabledValidated(ctx context.Context, validated ser
 }
 
 func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetReviewerEnabledRequest]) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return s.SetReviewerEnabledValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) SetReviewerEnabledValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetReviewerEnabledRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetReviewerEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
@@ -530,7 +494,7 @@ func (s *Service) SetReviewerEnabledValidated(ctx context.Context, validated ser
 		mode := "off"
 		result, accepted, err := s.mutateChatSettings(
 			ctx,
-			sessionID,
+			req.SessionID,
 			func(ctx context.Context, store *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
 				if req.Enabled {
 					prepared, prepareErr := s.prepareChatSettings(ctx, store)
@@ -575,25 +539,17 @@ func (s *Service) SetReviewerEnabledValidated(ctx context.Context, validated ser
 }
 
 func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetAutoCompactionEnabledRequest]) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return s.SetAutoCompactionEnabledValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) SetAutoCompactionEnabledValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetAutoCompactionEnabledRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.autoCompacts, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetAutoCompactionEnabledResponse, bool, error) {
 		result, accepted, mutationErr := s.mutateChatSettings(
 			ctx,
-			sessionID,
+			req.SessionID,
 			func(ctx context.Context, _ *session.Store, engine *runtime.Engine) (session.ChatSettingsMutation, error) {
 				if !req.Enabled {
-					if err := s.rejectWorkflowAutoCompactionDisable(ctx, sessionID.String(), engine); err != nil {
+					if err := s.rejectWorkflowAutoCompactionDisable(ctx, req.SessionID, engine); err != nil {
 						return session.ChatSettingsMutation{}, err
 					}
 				}
@@ -615,22 +571,14 @@ func (s *Service) SetAutoCompactionEnabledValidated(ctx context.Context, validat
 }
 
 func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetQuestionsEnabledRequest]) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return s.SetQuestionsEnabledValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) SetQuestionsEnabledValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSetQuestionsEnabledRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
 	}
 	memoReq := sessionBoolMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Enabled: req.Enabled}
 	return memoizedChatSettingsMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq.SessionID, memoReq, s.questions, sameSessionBoolMemoRequest, func(ctx context.Context) (serverapi.RuntimeSetQuestionsEnabledResponse, bool, error) {
 		result, accepted, err := s.mutateChatSettings(
 			ctx,
-			sessionID,
+			req.SessionID,
 			func(context.Context, *session.Store, *runtime.Engine) (session.ChatSettingsMutation, error) {
 				return session.ChatSettingsMutation{Questions: &req.Enabled}, nil
 			},
@@ -664,14 +612,14 @@ func (s *Service) prepareChatSettings(ctx context.Context, store *session.Store)
 
 func (s *Service) mutateChatSettings(
 	ctx context.Context,
-	sessionID runtimeids.SessionID,
+	sessionID string,
 	prepare func(context.Context, *session.Store, *runtime.Engine) (session.ChatSettingsMutation, error),
 	apply func(*runtime.Engine, session.ChatSettingsMutationResult) error,
 ) (result session.ChatSettingsMutationResult, accepted bool, resultErr error) {
 	if s == nil || s.authority == nil {
 		return result, false, errors.New("session runtime authority is required")
 	}
-	err := s.authority.WithSessionChatSettingsID(ctx, sessionID, func(
+	err := s.authority.WithSessionChatSettings(ctx, sessionID, func(
 		runCtx context.Context,
 		store *session.Store,
 		engine *runtime.Engine,
@@ -764,22 +712,13 @@ func (s *Service) publishSessionStatus(sessionID string) error {
 }
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeAppendCommittedEntryRequest]) (struct{}, error) {
-		return struct{}{}, s.AppendCommittedEntryValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) AppendCommittedEntryValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeAppendCommittedEntryRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	visibility := transcript.NormalizeEntryVisibility(transcript.EntryVisibility(req.Visibility))
 	memoReq := localEntryMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Role: strings.TrimSpace(req.Role), Text: req.Text, Visibility: visibility, NoticeID: strings.TrimSpace(req.NoticeID)}
-	_, err = s.localEntries.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLocalEntryMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntimeID(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+	_, err := s.localEntries.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLocalEntryMemoRequest, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			if visibility == transcript.EntryVisibilityAuto && strings.TrimSpace(req.NoticeID) != "" {
 				return engine.AppendCommittedEntryWithNoticeID(req.Role, req.Text, req.NoticeID)
 			}
@@ -811,19 +750,11 @@ func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role
 }
 
 func (s *Service) ShouldCompactBeforeUserMessage(ctx context.Context, req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeShouldCompactBeforeUserMessageRequest]) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
-		return s.ShouldCompactBeforeUserMessageValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) ShouldCompactBeforeUserMessageValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeShouldCompactBeforeUserMessageRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{}, err
 	}
 	var shouldCompact bool
-	err = s.withRuntimeID(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+	err := s.withRuntime(ctx, req.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		var err error
 		shouldCompact, err = engine.ShouldCompactBeforeUserMessage(callbackCtx, req.Text)
 		return err
@@ -835,23 +766,14 @@ func (s *Service) ShouldCompactBeforeUserMessageValidated(ctx context.Context, v
 }
 
 func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.RuntimeSubmitUserShellCommandRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSubmitUserShellCommandRequest]) (struct{}, error) {
-		return struct{}{}, s.SubmitUserShellCommandValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) SubmitUserShellCommandValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSubmitUserShellCommandRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	memoReq := sessionCommandMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Command: req.Command}
-	_, err = memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.userShells, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
+	_, err := memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.userShells, sameSessionCommandMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
-		commandErr := s.runAgentExecutionID(attempt.Context(), sessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		commandErr := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, err := engine.SubmitUserShellCommandWithAcceptance(runCtx, memoReq.Command, attempt.Accept)
 			return err
 		})
@@ -861,23 +783,14 @@ func (s *Service) SubmitUserShellCommandValidated(ctx context.Context, validated
 }
 
 func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompactContextRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeCompactContextRequest]) (struct{}, error) {
-		return struct{}{}, s.CompactContextValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) CompactContextValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeCompactContextRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	memoReq := sessionStringMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Value: req.Args}
-	_, err = memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.compactions, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
+	_, err := memoizedRuntimeCommand(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.compactions, sameSessionStringMemoRequest, func(ctx context.Context) (struct{}, bool, error) {
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
-		commandErr := s.withRuntimeID(attempt.Context(), sessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+		commandErr := s.withRuntime(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 			_, compactErr := engine.CompactContextWithAcceptance(runCtx, req.Args, attempt.Accept)
 			return compactErr
 		})
@@ -887,25 +800,23 @@ func (s *Service) CompactContextValidated(ctx context.Context, validated service
 }
 
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeInterruptRequest]) (serverapi.RuntimeInterruptResponse, error) {
-		return s.InterruptValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) InterruptValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeInterruptRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeInterruptResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.RuntimeInterruptResponse{}, err
+	}
 	if s == nil || s.authority == nil {
 		return serverapi.RuntimeInterruptResponse{}, errors.New("session runtime authority is required")
 	}
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
+	sessionID := strings.TrimSpace(req.SessionID)
+	return s.interrupt(ctx, runtimeInterruptMemoRequest{SessionID: sessionID})
+}
+
+func (s *Service) interrupt(ctx context.Context, req runtimeInterruptMemoRequest) (serverapi.RuntimeInterruptResponse, error) {
+	sessionID := strings.TrimSpace(req.SessionID)
+	id, err := runtimeids.ParseSessionID(sessionID)
 	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	return s.interrupt(ctx, sessionID)
-}
-
-func (s *Service) interrupt(ctx context.Context, sessionID runtimeids.SessionID) (serverapi.RuntimeInterruptResponse, error) {
-	err := s.authority.WithInterruptibleAgentTurn(ctx, sessionID, nil, func(_ context.Context, engine *runtime.Engine) error {
+	err = s.authority.WithInterruptibleAgentTurn(ctx, id, nil, func(_ context.Context, engine *runtime.Engine) error {
 		interrupted, err := engine.TryInterruptActiveAgentTurn()
 		if err != nil {
 			return err
@@ -926,7 +837,7 @@ func (s *Service) interrupt(ctx context.Context, sessionID runtimeids.SessionID)
 	if err != nil {
 		return serverapi.RuntimeInterruptResponse{}, err
 	}
-	return s.runtimeInterruptResponse(ctx, sessionID.String())
+	return s.runtimeInterruptResponse(ctx, sessionID)
 }
 
 func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string) (serverapi.RuntimeInterruptResponse, error) {
@@ -938,7 +849,12 @@ func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string
 		err = errors.New("runtime activity resolver is unavailable")
 	}
 	if err != nil {
-		return serverapi.RuntimeInterruptResponse{}, fmt.Errorf("project runtime activity after accepted interrupt for session %q: %w", sessionID, err)
+		slog.WarnContext(ctx, "runtime interrupt activity snapshot unavailable", "session_id", sessionID, "error", err)
+		version := runtimeactivity.NextReadModelVersion(sessionID)
+		return serverapi.RuntimeInterruptResponse{
+			Version:  version,
+			Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable, DiagnosticRecovery: true},
+		}, nil
 	}
 	return serverapi.RuntimeInterruptResponse{
 		Version:  snapshot.Version,
@@ -947,21 +863,13 @@ func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string
 }
 
 func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeDiscardQueuedUserMessageRequest]) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return s.DiscardQueuedUserMessageValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *Service) DiscardQueuedUserMessageValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeDiscardQueuedUserMessageRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, err
 	}
 	memoReq := queuedUserMessageMemoRequest{SessionID: strings.TrimSpace(req.SessionID), QueueItemID: strings.TrimSpace(req.QueueItemID)}
 	return s.queuedDiscards.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameQueuedUserMessageMemoRequest, func(ctx context.Context) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 		var resp serverapi.RuntimeDiscardQueuedUserMessageResponse
-		err := s.withRuntimeID(ctx, sessionID, func(_ context.Context, engine *runtime.Engine) error {
+		err := s.withRuntime(ctx, req.SessionID, func(_ context.Context, engine *runtime.Engine) error {
 			resp.Discarded = engine.DiscardQueuedUserMessage(memoReq.QueueItemID)
 			return nil
 		})
@@ -970,40 +878,17 @@ func (s *Service) DiscardQueuedUserMessageValidated(ctx context.Context, validat
 }
 
 func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
-	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeRecordPromptHistoryRequest]) (struct{}, error) {
-		return struct{}{}, s.RecordPromptHistoryValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
-	})
-	return err
-}
-
-func (s *Service) RecordPromptHistoryValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeRecordPromptHistoryRequest], authorization servicecontract.AuthorizedSessionInActiveProject) error {
-	req := validated.Value()
-	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return err
 	}
 	memoReq := sessionTextMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Text: req.Text}
-	_, err = s.promptHistory.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, s.withRuntimeID(ctx, sessionID, func(_ context.Context, _ *runtime.Engine) error {
+	_, err := s.promptHistory.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTextMemoRequest, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, s.withRuntime(ctx, req.SessionID, func(_ context.Context, _ *runtime.Engine) error {
 			_, _, err := s.recordPromptHistory(ctx, memoReq.SessionID, strings.TrimSpace(req.ClientRequestID), memoReq.Text)
 			return err
 		})
 	})
 	return err
-}
-
-func runtimeControlSessionID(raw string, authorization servicecontract.AuthorizedSessionInActiveProject) (runtimeids.SessionID, error) {
-	if !authorization.SessionID.IsZero() {
-		return authorization.SessionID, nil
-	}
-	return runtimeids.ParseSessionID(strings.TrimSpace(raw))
-}
-
-func (s *Service) withRuntimeID(ctx context.Context, sessionID runtimeids.SessionID, fn func(context.Context, *runtime.Engine) error) error {
-	if s == nil || s.authority == nil {
-		return errors.New("session runtime authority is required")
-	}
-	return s.authority.WithCurrentRuntime(ctx, sessionID, fn)
 }
 
 func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sourceID string, text string) (metadata.PromptHistoryRecord, bool, error) {

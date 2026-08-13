@@ -386,7 +386,8 @@ func TestLiveWatchReturnsInterruptedOutcomeWhenRunStops(t *testing.T) {
 	response := <-watchDone
 	if response.Outcome.Kind != serverapi.RuntimeLiveWatchInterrupted ||
 		response.Outcome.Failure == nil ||
-		response.Outcome.Failure.Reason == "" {
+		response.Outcome.Failure.Reason != string(runtime.RunStatusInterrupted) ||
+		response.Outcome.Failure.Diagnostic == nil {
 		t.Fatalf("LiveWatch outcome = %+v, want interrupted failure", response.Outcome)
 	}
 	select {
@@ -456,7 +457,7 @@ func TestLiveWatchResultClassifiesTypedTerminalStates(t *testing.T) {
 		diagnostic string
 	}{
 		{"no final", runtime.LiveRunResult{NoFinalReason: runtime.LiveRunNoFinalAnswerReasonGoalLoop}, runtime.ErrLiveRunNoFinalAnswer, "no_final_result", "", ""},
-		{"interrupted", runtime.LiveRunResult{Status: runtime.RunStatusInterrupted, Error: errors.New("stop detail")}, errors.New("terminal"), "interrupted", "terminal", "stop detail"},
+		{"interrupted", runtime.LiveRunResult{Status: runtime.RunStatusInterrupted, Error: errors.New("stop detail")}, errors.New("terminal"), "interrupted", "interrupted", "stop detail"},
 		{"error", runtime.LiveRunResult{Status: runtime.RunStatusFailed, Error: errors.New("failure detail")}, errors.New("terminal"), "execution_error", "terminal", "failure detail"},
 	}
 	for _, tc := range cases {
