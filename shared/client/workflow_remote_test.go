@@ -403,6 +403,10 @@ func TestRemoteWorkflowTaskListRoundTripsTypedScope(t *testing.T) {
 				TaskID:       "task-1",
 				WorkflowID:   workflowID,
 				WorkflowName: &workflowName,
+				Status: serverapi.WorkflowTaskStatus{
+					Kind:        serverapi.WorkflowTaskStatusKindActive,
+					NativeState: serverapi.WorkflowTaskNativeStateActive,
+				},
 				Labels: []serverapi.WorkflowProjectLabel{{
 					ID:   "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf",
 					Name: "Priority",

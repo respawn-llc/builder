@@ -399,8 +399,11 @@ func TestWorkflowLabelSuccessDTOValidation(t *testing.T) {
 		{name: "task label get response", request: WorkflowTaskLabelsGetResponse{Assignment: assignment}},
 		{name: "task label update response", request: WorkflowTaskLabelsUpdateResponse{Assignment: assignment}},
 		{name: "task detail projection", request: WorkflowTaskDetail{Summary: WorkflowTaskSummary{ID: "task-1"}, LabelIDs: []string{workflowLabelIDAlpha}, Dependencies: emptyWorkflowTaskDependenciesForTest()}},
-		{name: "task list projection", request: WorkflowTaskListItem{TaskID: "task-1", Labels: []WorkflowProjectLabel{label}}},
-		{name: "task list projection response", request: WorkflowTaskListResponse{Tasks: []WorkflowTaskListItem{{TaskID: "task-1", Labels: []WorkflowProjectLabel{label}}}}},
+		{name: "task list projection", request: WorkflowTaskListItem{
+			TaskID: "task-1", WorkflowID: runtimeids.NewWorkflowID(),
+			Status: WorkflowTaskStatus{Kind: WorkflowTaskStatusKindBacklog, NativeState: WorkflowTaskNativeStateActive},
+			Labels: []WorkflowProjectLabel{label},
+		}},
 		{name: "board card projection", request: WorkflowBoardTaskCard{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}},
 		{name: "board card projection response", request: WorkflowBoardNodeCardsListResponse{Cards: []WorkflowBoardTaskCard{{TaskID: "task-1", LabelIDs: []string{workflowLabelIDAlpha}}}}},
 	})
@@ -638,6 +641,10 @@ func TestWorkflowLabelProjectionDTOsExposeNamesOnlyForTaskListRows(t *testing.T)
 	value := WorkflowTaskListItem{
 		TaskID:     "task-1",
 		WorkflowID: runtimeids.NewWorkflowID(),
+		Status: WorkflowTaskStatus{
+			Kind:        WorkflowTaskStatusKindBacklog,
+			NativeState: WorkflowTaskNativeStateActive,
+		},
 		Labels: []WorkflowProjectLabel{
 			{ID: workflowLabelIDAlpha, Name: "Alpha"},
 			{ID: workflowLabelIDBeta, Name: "Beta"},
