@@ -331,10 +331,7 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 			}
 			return nil, err
 		}
-		referenced := make([]label.ID, 0, len(req.AddLabelIDs)+len(req.RemoveLabelIDs))
-		referenced = append(referenced, req.AddLabelIDs...)
-		referenced = append(referenced, req.RemoveLabelIDs...)
-		if err := validateTaskLabelReferences(ctx, q, req.TaskID, taskProjectID, referenced); err != nil {
+		if err := validateRemovedTaskLabelReferences(ctx, q, req.TaskID, taskProjectID, req.RemoveLabelIDs); err != nil {
 			return nil, err
 		}
 		for _, id := range req.AddLabelIDs {
@@ -342,7 +339,7 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 				TaskID:  string(req.TaskID),
 				LabelID: id.String(),
 			}); err != nil {
-				return nil, err
+				return nil, translateTaskLabelAssignmentInsertError(ctx, q, req.TaskID, taskProjectID, id, err)
 			}
 		}
 		for _, id := range req.RemoveLabelIDs {
@@ -379,7 +376,7 @@ func taskLabelScope(ctx context.Context, q *sqlitegen.Queries, taskID workflow.T
 	}, nil
 }
 
-func validateTaskLabelReferences(
+func validateRemovedTaskLabelReferences(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	taskID workflow.TaskID,
@@ -416,6 +413,36 @@ func validateTaskLabelReferences(
 		}
 	}
 	return nil
+}
+
+func translateTaskLabelAssignmentInsertError(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	taskID workflow.TaskID,
+	taskProjectID string,
+	labelID label.ID,
+	err error,
+) error {
+	if !metadata.IsSQLiteForeignKeyConstraint(err) && !metadata.IsSQLiteTriggerConstraint(err) {
+		return err
+	}
+	rows, labelErr := q.ListProjectLabelsByIDs(ctx, []string{labelID.String()})
+	if labelErr != nil {
+		return fmt.Errorf("classify task label assignment label: %w", labelErr)
+	}
+	if len(rows) == 0 {
+		return TaskLabelNotFoundError{LabelID: labelID.String()}
+	}
+	labelProjectID := rows[0].ProjectID
+	if labelProjectID != taskProjectID {
+		return TaskLabelWrongProjectError{
+			TaskID:         string(taskID),
+			TaskProjectID:  taskProjectID,
+			LabelID:        labelID.String(),
+			LabelProjectID: labelProjectID,
+		}
+	}
+	return errors.New("SQLite rejected a valid task label assignment relation")
 }
 
 func listTaskLabelIDs(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]label.ID, error) {

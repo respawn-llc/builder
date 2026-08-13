@@ -209,9 +209,6 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	if err := validateTaskLabelReferences(ctx, q, workflow.TaskID(prepared.taskID), prepared.projectID, prepared.labelIDs); err != nil {
-		return TaskRecord{}, err
-	}
 	allocated, err := q.AllocateProjectTaskSequence(ctx, sqlitegen.AllocateProjectTaskSequenceParams{ProjectID: prepared.projectID, UpdatedAtUnixMs: prepared.nowUnixMs})
 	if err != nil {
 		return TaskRecord{}, fmt.Errorf("allocate task sequence: %w", err)
@@ -242,7 +239,10 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	}
 	for _, id := range prepared.labelIDs {
 		if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{TaskID: prepared.taskID, LabelID: id.String()}); err != nil {
-			return TaskRecord{}, fmt.Errorf("insert task label: %w", err)
+			return TaskRecord{}, fmt.Errorf(
+				"insert task label: %w",
+				translateTaskLabelAssignmentInsertError(ctx, q, workflow.TaskID(prepared.taskID), prepared.projectID, id, err),
+			)
 		}
 	}
 	if prepared.dependencyIntent != nil {

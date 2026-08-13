@@ -1819,6 +1819,13 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonWrongProject) {
 		t.Fatalf("labeled task create wrong project error = %T %v", err, err)
 	}
+	if _, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Missing label",
+		LabelIDs:  []string{"11111111-1111-4111-8111-111111111111"},
+	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonLabelNotFound) {
+		t.Fatalf("labeled task create missing label error = %T %v", err, err)
+	}
 	raw101 := make([]string, serverapi.WorkflowLabelMaxIDs+1)
 	for index := range raw101 {
 		raw101[index] = "not-a-uuid"

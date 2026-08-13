@@ -460,12 +460,29 @@ VALUES (?, ?, 'STRASSE', ?, ?)`,
 	); err != nil {
 		t.Fatalf("insert same-project task label assignment: %v", err)
 	}
-	if _, err := store.db.Exec(
+	assertSQLiteConstraint(
+		t,
+		store.db,
+		sqlite3.SQLITE_CONSTRAINT_TRIGGER,
 		`INSERT INTO task_label_assignments (task_id, label_id) VALUES ('task-1', ?)`,
 		otherLabelID,
-	); err == nil {
-		t.Fatal("cross-project task label assignment insert succeeded")
-	}
+	)
+	assertSQLiteConstraint(
+		t,
+		store.db,
+		sqlite3.SQLITE_CONSTRAINT_TRIGGER,
+		`INSERT INTO task_label_assignments (task_id, label_id) VALUES (?, ?)`,
+		"task-missing",
+		projectLabelID,
+	)
+	assertSQLiteConstraint(
+		t,
+		store.db,
+		sqlite3.SQLITE_CONSTRAINT_TRIGGER,
+		`INSERT INTO task_label_assignments (task_id, label_id) VALUES (?, ?)`,
+		"task-1",
+		"11111111-1111-4111-8111-111111111111",
+	)
 	if _, err := store.db.Exec(
 		`UPDATE task_label_assignments SET label_id = ? WHERE task_id = 'task-1' AND label_id = ?`,
 		otherLabelID,
