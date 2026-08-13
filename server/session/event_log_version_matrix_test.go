@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/shared/sessioncontract"
+	"core/shared/transcript"
 )
 
 const expectedEventLogVersionV2 = 2
@@ -368,6 +369,52 @@ func TestEventLogV1QuestionCompletionProjectionDropsTypedAnswer(t *testing.T) {
 	}
 	if !bytes.Equal(envelope.Payload["output"], json.RawMessage(output)) {
 		t.Fatalf("v1 Question completion output = %s, want verbatim %s", envelope.Payload["output"], output)
+	}
+}
+
+func TestEventLogV2QuestionCompletionPreservesAuthoredFreeformWhitespace(t *testing.T) {
+	const authored = " \n  preserve this commentary \n "
+	record, err := newEventRecord(
+		1,
+		nil,
+		ToolCompletionRecord{
+			CallID:     "call-question",
+			Name:       askQuestionToolName,
+			OutputKind: ToolOutputKindFunction,
+			Output:     json.RawMessage(`"done"`),
+			Presentation: json.RawMessage(
+				`{"ToolName":"ask_question","Question":"Choose","Suggestions":["first","second"]}`,
+			),
+			QuestionAnswer: &QuestionAnswerRecord{
+				SelectedOptionNumber: intPointer(2),
+				Freeform:             stringPointer(authored),
+			},
+		},
+		func() *transcript.CommittedAtUnixMs {
+			value := transcript.CommittedAtUnixMs(1)
+			return &value
+		}(),
+	)
+	if err != nil {
+		t.Fatalf("create v2 Question completion: %v", err)
+	}
+	line, err := encodeEventRecordV2(record)
+	if err != nil {
+		t.Fatalf("encode v2 Question completion: %v", err)
+	}
+	decoded, err := decodeEventRecordV2(line)
+	if err != nil {
+		t.Fatalf("decode v2 Question completion: %v", err)
+	}
+	payload, err := decoded.Payload()
+	if err != nil {
+		t.Fatalf("read v2 Question completion payload: %v", err)
+	}
+	completion := payload.(ToolCompletionRecord)
+	if completion.QuestionAnswer == nil ||
+		completion.QuestionAnswer.Freeform == nil ||
+		*completion.QuestionAnswer.Freeform != authored {
+		t.Fatalf("freeform = %#v, want exact authored text %q", completion.QuestionAnswer, authored)
 	}
 }
 

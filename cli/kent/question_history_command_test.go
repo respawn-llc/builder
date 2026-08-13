@@ -60,6 +60,28 @@ func TestQuestionHistoryHumanStreamingRetainsPartialOutputOnFailure(t *testing.T
 	}
 }
 
+func TestQuestionHistoryHumanStreamingReportsOutputFailure(t *testing.T) {
+	sub := &questionHistoryScriptSubscription{
+		events: []serverapi.QuestionHistoryEvent{
+			{Kind: serverapi.QuestionHistoryEventStarted, LargeHistory: boolPointer(false)},
+			{
+				Kind: serverapi.QuestionHistoryEventQuestion,
+				Question: &serverapi.QuestionHistoryQuestion{
+					Question: "opaque-question",
+					Answer:   "opaque-answer",
+				},
+			},
+		},
+	}
+	var stderr bytes.Buffer
+	if exit := streamQuestionHistoryHuman(t.Context(), sub, failingCLIWriter{}, &stderr); exit != 1 {
+		t.Fatalf("exit = %d, want 1", exit)
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("output failure was not reported")
+	}
+}
+
 func TestQuestionHistoryJSONStreamsExplicitNullsAndCompletion(t *testing.T) {
 	sub := &questionHistoryScriptSubscription{
 		events: []serverapi.QuestionHistoryEvent{

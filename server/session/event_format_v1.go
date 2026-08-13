@@ -553,6 +553,24 @@ func (e *eventRecordV1Envelope) UnmarshalJSON(data []byte) error {
 }
 
 func encodeEventRecordV1(record EventRecord) ([]byte, error) {
+	return encodeEventRecord(record, encodeEventRecordPayloadV1)
+}
+
+func encodeEventRecordPayloadV1(payload EventRecordPayload) ([]byte, error) {
+	switch typed := payload.(type) {
+	case ToolCompletionRecord:
+		return encodeToolCompletionRecordV1(typed)
+	case HistoryReplacementRecord:
+		return encodeHistoryReplacementRecordV1(typed)
+	default:
+		return json.Marshal(payload)
+	}
+}
+
+func encodeEventRecord(
+	record EventRecord,
+	encodePayload func(EventRecordPayload) ([]byte, error),
+) ([]byte, error) {
 	normalized, err := newEventRecord(
 		record.seq,
 		record.stepID,
@@ -562,15 +580,7 @@ func encodeEventRecordV1(record EventRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var payload []byte
-	switch typed := normalized.payload.(type) {
-	case ToolCompletionRecord:
-		payload, err = encodeToolCompletionRecordV1(typed)
-	case HistoryReplacementRecord:
-		payload, err = encodeHistoryReplacementRecordV1(typed)
-	default:
-		payload, err = json.Marshal(normalized.payload)
-	}
+	payload, err := encodePayload(normalized.payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s payload: %w", normalized.payload.eventKind(), err)
 	}
@@ -635,7 +645,7 @@ func encodeEventRecordV2(record EventRecord) ([]byte, error) {
 	if err := validateEventRecordV2(record); err != nil {
 		return nil, err
 	}
-	return encodeEventRecord(record, false)
+	return encodeEventRecord(record, encodeEventRecordPayloadV2)
 }
 
 func decodeEventRecordV2(line []byte) (EventRecord, error) {
@@ -695,54 +705,15 @@ func validateEventRecordV2(record EventRecord) error {
 	}
 }
 
-func encodeEventRecord(record EventRecord, v1 bool) ([]byte, error) {
-	if v1 {
-		return encodeEventRecordV1(record)
-	}
-	normalized, err := newEventRecord(
-		record.seq,
-		record.stepID,
-		record.payload,
-		record.committedAtUnixMs,
-	)
-	if err != nil {
-		return nil, err
-	}
-	var payload []byte
-	switch typed := normalized.payload.(type) {
+func encodeEventRecordPayloadV2(payload EventRecordPayload) ([]byte, error) {
+	switch typed := payload.(type) {
 	case ToolCompletionRecord:
-		payload, err = encodeToolCompletionRecordV2(typed)
+		return encodeToolCompletionRecordV2(typed)
 	case HistoryReplacementRecord:
-		payload, err = encodeHistoryReplacementRecordV1(typed)
+		return encodeHistoryReplacementRecordV1(typed)
 	default:
-		payload, err = json.Marshal(normalized.payload)
+		return json.Marshal(payload)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("marshal %s payload: %w", normalized.payload.eventKind(), err)
-	}
-	var buffer bytes.Buffer
-	buffer.WriteByte('{')
-	if err := writeMarshaledJSONField(&buffer, "seq", normalized.seq, false); err != nil {
-		return nil, err
-	}
-	if err := writeMarshaledJSONField(&buffer, "kind", normalized.payload.eventKind(), true); err != nil {
-		return nil, err
-	}
-	if normalized.stepID != nil {
-		if err := writeMarshaledJSONField(&buffer, "step_id", normalized.stepID, true); err != nil {
-			return nil, err
-		}
-	}
-	if normalized.committedAtUnixMs != nil {
-		if err := writeMarshaledJSONField(&buffer, "committed_at_unix_ms", normalized.committedAtUnixMs, true); err != nil {
-			return nil, err
-		}
-	}
-	if err := writeJSONField(&buffer, "payload", payload, true); err != nil {
-		return nil, err
-	}
-	buffer.WriteByte('}')
-	return buffer.Bytes(), nil
 }
 
 func encodeToolCompletionRecordV2(record ToolCompletionRecord) ([]byte, error) {

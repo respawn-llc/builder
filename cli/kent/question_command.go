@@ -168,12 +168,21 @@ func streamQuestionHistoryHuman(
 ) int {
 	wroteBlock := false
 	questions := 0
-	writeBlock := func(write func()) {
+	writeBlock := func(write func() error) error {
 		if wroteBlock {
-			fmt.Fprintln(stdout)
+			if _, err := fmt.Fprintln(stdout); err != nil {
+				return err
+			}
 		}
-		write()
+		if err := write(); err != nil {
+			return err
+		}
 		wroteBlock = true
+		return nil
+	}
+	reportWriteFailure := func(err error) int {
+		fmt.Fprintln(stderr, err)
+		return 1
 	}
 	for {
 		event, err := sub.Next(ctx)
@@ -191,9 +200,12 @@ func streamQuestionHistoryHuman(
 		switch event.Kind {
 		case serverapi.QuestionHistoryEventStarted:
 			if event.LargeHistory != nil && *event.LargeHistory {
-				writeBlock(func() {
-					fmt.Fprintln(stdout, "[Session history is large, this command may take a while to finish]")
-				})
+				if err := writeBlock(func() error {
+					_, err := fmt.Fprintln(stdout, "[Session history is large, this command may take a while to finish]")
+					return err
+				}); err != nil {
+					return reportWriteFailure(err)
+				}
 			}
 		case serverapi.QuestionHistoryEventQuestion:
 			if event.Question == nil {
@@ -201,15 +213,27 @@ func streamQuestionHistoryHuman(
 				return 1
 			}
 			questions++
-			writeBlock(func() { writeQuestionHistoryHumanItem(stdout, *event.Question) })
+			if err := writeBlock(func() error {
+				return writeQuestionHistoryHumanItem(stdout, *event.Question)
+			}); err != nil {
+				return reportWriteFailure(err)
+			}
 		case serverapi.QuestionHistoryEventCompleted:
 			if questions == 0 {
-				writeBlock(func() { fmt.Fprintln(stdout, "No answered questions found") })
+				if err := writeBlock(func() error {
+					_, err := fmt.Fprintln(stdout, "No answered questions found")
+					return err
+				}); err != nil {
+					return reportWriteFailure(err)
+				}
 			}
 			if event.HistoryOmitted != nil && *event.HistoryOmitted {
-				writeBlock(func() {
-					fmt.Fprintln(stdout, "[Older Question history omitted; increase --max-handoffs to include more]")
-				})
+				if err := writeBlock(func() error {
+					_, err := fmt.Fprintln(stdout, "[Older Question history omitted; increase --max-handoffs to include more]")
+					return err
+				}); err != nil {
+					return reportWriteFailure(err)
+				}
 			}
 		default:
 			fmt.Fprintln(stderr, "Question-history stream returned an unknown event")
@@ -218,20 +242,31 @@ func streamQuestionHistoryHuman(
 	}
 }
 
-func writeQuestionHistoryHumanItem(stdout io.Writer, question serverapi.QuestionHistoryQuestion) {
-	fmt.Fprintln(stdout, question.Question)
+func writeQuestionHistoryHumanItem(stdout io.Writer, question serverapi.QuestionHistoryQuestion) error {
+	if _, err := fmt.Fprintln(stdout, question.Question); err != nil {
+		return err
+	}
 	if question.SelectedOptionNumber != nil {
-		fmt.Fprintf(stdout, "Answer: %d. %s\n", *question.SelectedOptionNumber, question.Answer)
+		if _, err := fmt.Fprintf(stdout, "Answer: %d. %s\n", *question.SelectedOptionNumber, question.Answer); err != nil {
+			return err
+		}
 	} else {
-		fmt.Fprintf(stdout, "Answer: %s\n", question.Answer)
+		if _, err := fmt.Fprintf(stdout, "Answer: %s\n", question.Answer); err != nil {
+			return err
+		}
 	}
 	if question.Commentary != nil {
-		fmt.Fprintf(stdout, "Commentary: %s\n", *question.Commentary)
+		if _, err := fmt.Fprintf(stdout, "Commentary: %s\n", *question.Commentary); err != nil {
+			return err
+		}
 	}
 	if question.At != nil {
 		at := time.UnixMilli(question.At.UnixMs()).Local()
-		fmt.Fprintf(stdout, "At: %s\n", at.Format("2006-01-02 15:04:05"))
+		if _, err := fmt.Fprintf(stdout, "At: %s\n", at.Format("2006-01-02 15:04:05")); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func streamQuestionHistoryJSON(

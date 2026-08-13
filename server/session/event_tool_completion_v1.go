@@ -137,10 +137,10 @@ func normalizeToolCompletionRecord(record ToolCompletionRecord) (ToolCompletionR
 			answer.SelectedOptionNumber = &selected
 		}
 		if answer.Freeform != nil {
-			freeform := strings.TrimSpace(*answer.Freeform)
-			if freeform == "" {
+			if strings.TrimSpace(*answer.Freeform) == "" {
 				return ToolCompletionRecord{}, fmt.Errorf("Question answer freeform is blank")
 			}
+			freeform := *answer.Freeform
 			answer.Freeform = &freeform
 		}
 		if answer.SelectedOptionNumber == nil && answer.Freeform == nil {
