@@ -222,16 +222,7 @@ SELECT
 FROM task_current_nodes current_node
 WHERE current_node.transition_branch_key IS NOT NULL
   AND current_node.continuation_source_kind = 'exact'
-  AND current_node.legacy_materialized = 0
-UNION
-SELECT
-    association.task_id,
-    association.transition_branch_key,
-    association.source_session_id
-FROM session_workflow_node_associations association
-WHERE association.transition_branch_key IS NOT NULL
-  AND association.association_status = 'current'
-  AND association.source_session_id IS NOT NULL;
+  AND current_node.legacy_materialized = 0;
 
 UPDATE task_active_fanout_branches
 SET
@@ -251,6 +242,96 @@ WHERE legacy_materialized = 1
         AND candidate.transition_branch_key = task_active_fanout_branches.transition_branch_key
   );
 
+CREATE TEMP TABLE workflow_legacy_approval_source_candidates (
+    approval_id TEXT NOT NULL,
+    transition_branch_key TEXT NOT NULL,
+    source_session_id TEXT NOT NULL,
+    associated_at_unix_ms INTEGER NOT NULL
+);
+
+INSERT INTO workflow_legacy_approval_source_candidates (
+    approval_id,
+    transition_branch_key,
+    source_session_id,
+    associated_at_unix_ms
+)
+SELECT
+    approval.id,
+    branch.transition_branch_key,
+    association.session_id,
+    association.associated_at_unix_ms
+FROM task_pending_approvals approval
+JOIN task_pending_approval_branches branch
+  ON branch.approval_id = approval.id
+JOIN task_records task
+  ON task.id = approval.source_task_id
+JOIN workflow_nodes selected_node
+  ON selected_node.workflow_id = task.workflow_id
+ AND selected_node.node_key = json_extract(
+     branch.effective_edge_configuration_json,
+     '$.context_source.node_key'
+ )
+JOIN session_workflow_node_associations association
+  ON association.task_id = approval.source_task_id
+ AND association.node_id = selected_node.id
+ AND association.associated_at_unix_ms <= approval.created_at_unix_ms
+ AND (
+       association.transition_branch_key = approval.source_transition_branch_key
+       OR (
+           association.transition_branch_key IS NULL
+           AND approval.source_transition_branch_key IS NULL
+       )
+ )
+WHERE json_extract(branch.context_source_resolution_json, '$.active_source.kind') = 'legacy'
+  AND json_extract(
+      branch.effective_edge_configuration_json,
+      '$.context_source.kind'
+  ) = 'selected_node';
+
+CREATE TEMP TABLE workflow_legacy_approval_source_winners AS
+SELECT
+    candidate.approval_id,
+    candidate.transition_branch_key,
+    candidate.source_session_id
+FROM workflow_legacy_approval_source_candidates candidate
+WHERE candidate.associated_at_unix_ms = (
+    SELECT MAX(latest.associated_at_unix_ms)
+    FROM workflow_legacy_approval_source_candidates latest
+    WHERE latest.approval_id = candidate.approval_id
+      AND latest.transition_branch_key = candidate.transition_branch_key
+)
+AND 1 = (
+    SELECT COUNT(*)
+    FROM workflow_legacy_approval_source_candidates tied
+    WHERE tied.approval_id = candidate.approval_id
+      AND tied.transition_branch_key = candidate.transition_branch_key
+      AND tied.associated_at_unix_ms = candidate.associated_at_unix_ms
+);
+
+INSERT INTO workflow_legacy_approval_source_winners (
+    approval_id,
+    transition_branch_key,
+    source_session_id
+)
+SELECT
+    approval.id,
+    branch.transition_branch_key,
+    approval.source_session_id
+FROM task_pending_approvals approval
+JOIN task_pending_approval_branches branch
+  ON branch.approval_id = approval.id
+JOIN sessions source_session
+  ON source_session.id = approval.source_session_id
+ AND source_session.task_id = approval.source_task_id
+WHERE json_extract(branch.context_source_resolution_json, '$.active_source.kind') = 'legacy'
+  AND COALESCE(
+      json_extract(
+          branch.effective_edge_configuration_json,
+          '$.context_source.kind'
+      ),
+      'immediate_source'
+  ) = 'immediate_source';
+
 UPDATE task_pending_approval_branches
 SET
     target_snapshot_json = json_remove(target_snapshot_json, '$.session_id'),
@@ -260,24 +341,26 @@ SET
         json_object(
             'kind',
             'exact',
-            'session_id',
-            json_extract(task_pending_approval_branches.target_snapshot_json, '$.session_id')
+            'session_id', (
+                SELECT winner.source_session_id
+                FROM workflow_legacy_approval_source_winners winner
+                WHERE winner.approval_id = task_pending_approval_branches.approval_id
+                  AND winner.transition_branch_key =
+                      task_pending_approval_branches.transition_branch_key
+            )
         )
     )
 WHERE json_extract(context_source_resolution_json, '$.active_source.kind') = 'legacy'
-  AND json_extract(target_snapshot_json, '$.session_id') IS NOT NULL
   AND EXISTS (
       SELECT 1
-      FROM task_pending_approvals approval
-      JOIN sessions source_session
-        ON source_session.id = json_extract(
-            task_pending_approval_branches.target_snapshot_json,
-            '$.session_id'
-        )
-       AND source_session.task_id = approval.source_task_id
-      WHERE approval.id = task_pending_approval_branches.approval_id
+      FROM workflow_legacy_approval_source_winners winner
+      WHERE winner.approval_id = task_pending_approval_branches.approval_id
+        AND winner.transition_branch_key =
+            task_pending_approval_branches.transition_branch_key
   );
 
+DROP TABLE workflow_legacy_approval_source_winners;
+DROP TABLE workflow_legacy_approval_source_candidates;
 DROP TABLE workflow_legacy_fanout_branch_source_candidates;
 DROP TABLE workflow_legacy_current_node_source_winners;
 DROP TABLE workflow_legacy_current_node_source_candidates;

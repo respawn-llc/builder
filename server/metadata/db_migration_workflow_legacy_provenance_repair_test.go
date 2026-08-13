@@ -451,7 +451,7 @@ WHERE approval_id = ?`, approvalID).Scan(&sourceKind, &repairedSessionID); err !
 	}
 }
 
-func TestWorkflowLegacyProvenanceRepairMigrationLeavesApprovalWithoutFrozenBranchSessionUnresolved(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationUsesSelectedNodeAssociationInsteadOfApprovalHeaderOrTarget(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
 		{sessionID: "session-approval-header-only", associatedAtOffset: 1},
@@ -488,7 +488,7 @@ INSERT INTO task_pending_approval_branches (
         'display_name', 'Agent',
         'current_input_values', json('{}'),
         'prior_values', json('{"transition_parameters":{}}'),
-        'session_id', NULL
+        'session_id', ?
     ),
     json_object(
         'id', 'edge-done-1',
@@ -501,23 +501,22 @@ INSERT INTO task_pending_approval_branches (
         'target_session', json_object('kind', 'create'),
         'active_source', json_object('kind', 'legacy')
     )
-)`)
+)`, fixture.targetSessionID)
 
 	fixture.migrate(t)
 
-	var sourceKind string
-	var sourceSessionID sql.NullString
+	var sourceKind, sourceSessionID string
 	if err := fixture.db.QueryRow(`
 SELECT
     json_extract(context_source_resolution_json, '$.active_source.kind'),
     json_extract(context_source_resolution_json, '$.active_source.session_id')
 FROM task_pending_approval_branches
 WHERE approval_id = 'approval-header-only'`).Scan(&sourceKind, &sourceSessionID); err != nil {
-		t.Fatalf("read unresolved pending Approval: %v", err)
+		t.Fatalf("read selected-node pending Approval: %v", err)
 	}
-	if sourceKind != "legacy" || sourceSessionID.Valid {
+	if sourceKind != "exact" || sourceSessionID != "session-approval-header-only" {
 		t.Fatalf(
-			"header-only pending Approval source = kind %q Session %v; want unresolved legacy",
+			"selected-node pending Approval source = kind %q Session %q; want selected-node Session",
 			sourceKind,
 			sourceSessionID,
 		)
