@@ -277,6 +277,8 @@ func (e *execution) retire() {
 // Its finalizer can still prove Current Node ownership, but no longer
 // authorizes Interrupt or appears in queued/running read models.
 func (e *execution) beginWorkflowFinalization() {
+	e.exactMu.Lock()
+	defer e.exactMu.Unlock()
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
 		e.authority.mu.Unlock()
