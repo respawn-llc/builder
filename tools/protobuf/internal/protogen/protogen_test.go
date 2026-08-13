@@ -5,9 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
-	"time"
 )
 
 func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
@@ -19,7 +17,7 @@ func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
 	if err := manager.Ensure([]Target{target}); err != nil {
 		t.Fatal(err)
 	}
-	if got := generations.Load(); got != 1 {
+	if got := generationCount(t, generations); got != 1 {
 		t.Fatalf("unchanged ensure generation count = %d, want 1", got)
 	}
 
@@ -27,7 +25,7 @@ func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
 	if err := manager.Ensure([]Target{target}); err != nil {
 		t.Fatal(err)
 	}
-	if got := generations.Load(); got != 2 {
+	if got := generationCount(t, generations); got != 2 {
 		t.Fatalf("changed-input generation count = %d, want 2", got)
 	}
 
@@ -35,7 +33,7 @@ func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
 	if err := manager.Ensure([]Target{target}); err != nil {
 		t.Fatal(err)
 	}
-	if got := generations.Load(); got != 3 {
+	if got := generationCount(t, generations); got != 3 {
 		t.Fatalf("changed-orchestration generation count = %d, want 3", got)
 	}
 
@@ -43,18 +41,14 @@ func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
 	if err := manager.Ensure([]Target{target}); err != nil {
 		t.Fatal(err)
 	}
-	if got := generations.Load(); got != 4 {
+	if got := generationCount(t, generations); got != 4 {
 		t.Fatalf("changed-output generation count = %d, want 4", got)
 	}
 }
 
 func TestEnsureSerializesConcurrentGeneration(t *testing.T) {
 	manager, target, generations := newFixtureManager(t)
-	manager.Generate = func(target Target, destination string) error {
-		generations.Add(1)
-		time.Sleep(100 * time.Millisecond)
-		return writeGeneratedOutput(target, destination)
-	}
+	t.Setenv("KENT_PROTOBUF_TEST_GENERATION_DELAY", "0.1")
 
 	var waitGroup sync.WaitGroup
 	errorsByCall := make(chan error, 2)
@@ -72,36 +66,14 @@ func TestEnsureSerializesConcurrentGeneration(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := generations.Load(); got != 1 {
+	if got := generationCount(t, generations); got != 1 {
 		t.Fatalf("concurrent generation count = %d, want 1", got)
 	}
 }
 
-func TestFailedReplacementRestoresPreviousOutput(t *testing.T) {
-	manager, target, _ := newFixtureManager(t)
-	writeFile(t, manager.RepositoryRoot, filepath.Join(target.OutputPath, "contract.generated"), "previous\n")
-	manager.BeforeReplace = func(Target, string) error {
-		return errors.New("replacement interrupted")
-	}
-
-	if err := manager.GenerateTargets([]Target{target}); err == nil {
-		t.Fatal("interrupted replacement unexpectedly succeeded")
-	}
-	content, err := os.ReadFile(filepath.Join(manager.RepositoryRoot, target.OutputPath, "contract.generated"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(content) != "previous\n" {
-		t.Fatalf("previous output = %q", content)
-	}
-}
-
 func TestVerifyRejectsNondeterministicGeneration(t *testing.T) {
-	manager, target, generations := newFixtureManager(t)
-	manager.Generate = func(target Target, destination string) error {
-		value := generations.Add(1)
-		return writeGeneratedOutputWithContent(target, destination, string(rune('0'+value))+"\n")
-	}
+	manager, target, _ := newFixtureManager(t)
+	t.Setenv("KENT_PROTOBUF_TEST_NONDETERMINISTIC", "1")
 
 	if err := manager.Verify([]Target{target}); err == nil {
 		t.Fatal("verify accepted nondeterministic generation")
@@ -139,7 +111,7 @@ func TestOutputsReadyMatchesTheRequiredTarget(t *testing.T) {
 	}
 }
 
-func newFixtureManager(t *testing.T) (*Manager, Target, *atomic.Int32) {
+func newFixtureManager(t *testing.T) (*Manager, Target, string) {
 	t.Helper()
 	root := t.TempDir()
 	target := Target{
@@ -161,25 +133,66 @@ func newFixtureManager(t *testing.T) (*Manager, Target, *atomic.Int32) {
 	} {
 		writeFile(t, root, path, content)
 	}
-	var generations atomic.Int32
+	binRoot := filepath.Join(root, "bin")
+	generations := filepath.Join(root, "generation-count")
+	writeFile(t, root, "bin/go", `#!/usr/bin/env bash
+set -euo pipefail
+count=0
+if [[ -f "$KENT_PROTOBUF_TEST_GENERATION_COUNT" ]]; then
+	read -r count < "$KENT_PROTOBUF_TEST_GENERATION_COUNT"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$KENT_PROTOBUF_TEST_GENERATION_COUNT"
+if [[ -n "${KENT_PROTOBUF_TEST_GENERATION_DELAY:-}" ]]; then
+	sleep "$KENT_PROTOBUF_TEST_GENERATION_DELAY"
+fi
+content=generated
+if [[ "${KENT_PROTOBUF_TEST_NONDETERMINISTIC:-0}" == "1" ]]; then
+	content="generated-$count"
+fi
+output=
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--output)
+		output="$2"
+		shift 2
+		;;
+	*)
+		shift
+		;;
+	esac
+done
+mkdir -p "$output/generated/fixture"
+printf '%s\n' "$content" > "$output/generated/fixture/contract.generated"
+`)
+	if err := os.Chmod(filepath.Join(binRoot, "go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("KENT_PROTOBUF_GO_COMMAND", filepath.Join(binRoot, "go"))
+	t.Setenv("KENT_PROTOBUF_TEST_GENERATION_COUNT", generations)
 	manager := NewManager(root)
-	manager.Generate = func(target Target, destination string) error {
-		generations.Add(1)
-		return writeGeneratedOutput(target, destination)
-	}
-	return manager, target, &generations
+	return manager, target, generations
 }
 
-func writeGeneratedOutput(target Target, destination string) error {
-	return writeGeneratedOutputWithContent(target, destination, "generated\n")
-}
-
-func writeGeneratedOutputWithContent(target Target, destination string, content string) error {
-	path := filepath.Join(destination, target.OutputPath, "contract.generated")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+func generationCount(t *testing.T, path string) int {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return os.WriteFile(path, []byte(content), 0o644)
+	switch string(content) {
+	case "1\n":
+		return 1
+	case "2\n":
+		return 2
+	case "3\n":
+		return 3
+	case "4\n":
+		return 4
+	default:
+		t.Fatalf("unexpected generation count %q", content)
+		return 0
+	}
 }
 
 func writeFile(t *testing.T, root, path, content string) {

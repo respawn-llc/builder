@@ -59,33 +59,33 @@ type manifest struct {
 
 type Manager struct {
 	RepositoryRoot string
-	Generate       func(target Target, destination string) error
-	BeforeReplace  func(target Target, destination string) error
 }
 
 func NewManager(repositoryRoot string) *Manager {
-	manager := &Manager{RepositoryRoot: repositoryRoot}
-	manager.Generate = manager.generate
-	return manager
+	return &Manager{RepositoryRoot: repositoryRoot}
 }
 
 func (m *Manager) WithOutputs(targets []Target, action func() error) error {
-	if err := m.Ensure(targets); err != nil {
-		return err
+	for {
+		if err := m.Ensure(targets); err != nil {
+			return err
+		}
+		current, err := m.withReadLock(func() (bool, error) {
+			for _, target := range targets {
+				current, err := m.isCurrent(target)
+				if err != nil || !current {
+					return current, err
+				}
+			}
+			return true, action()
+		})
+		if err != nil {
+			return err
+		}
+		if current {
+			return nil
+		}
 	}
-	lockPath := filepath.Join(m.RepositoryRoot, ".generated", "protobuf", "generation.lock")
-	fileLock := flock.New(lockPath)
-	lockContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	locked, err := fileLock.TryRLockContext(lockContext, 50*time.Millisecond)
-	if err != nil {
-		return err
-	}
-	if !locked {
-		return fmt.Errorf("timed out waiting for Protobuf generation read lock")
-	}
-	defer fileLock.Unlock()
-	return action()
 }
 
 func (m *Manager) Ensure(targets []Target) error {
@@ -207,11 +207,6 @@ func (m *Manager) replace(target Target) error {
 		return err
 	}
 	destination := filepath.Join(m.RepositoryRoot, target.OutputPath)
-	if m.BeforeReplace != nil {
-		if err := m.BeforeReplace(target, destination); err != nil {
-			return err
-		}
-	}
 	if err := replaceDirectory(stagedOutput, destination); err != nil {
 		return err
 	}
@@ -230,7 +225,7 @@ func (m *Manager) generateStaging(target Target) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := m.Generate(target, staging); err != nil {
+	if err := m.generate(target, staging); err != nil {
 		_ = os.RemoveAll(staging)
 		return "", fmt.Errorf("generate %s Protobuf contract: %w", target.Name, err)
 	}
@@ -380,6 +375,22 @@ func (m *Manager) withLock(action func() error) error {
 	}
 	if !locked {
 		return fmt.Errorf("timed out waiting for Protobuf generation lock")
+	}
+	defer fileLock.Unlock()
+	return action()
+}
+
+func (m *Manager) withReadLock(action func() (bool, error)) (bool, error) {
+	lockPath := filepath.Join(m.RepositoryRoot, ".generated", "protobuf", "generation.lock")
+	fileLock := flock.New(lockPath)
+	lockContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	locked, err := fileLock.TryRLockContext(lockContext, 50*time.Millisecond)
+	if err != nil {
+		return false, err
+	}
+	if !locked {
+		return false, fmt.Errorf("timed out waiting for Protobuf generation read lock")
 	}
 	defer fileLock.Unlock()
 	return action()

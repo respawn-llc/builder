@@ -351,7 +351,14 @@ message LiveSteerRequest {
       expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
     }
   ];
-  string text = 3 [(buf.validate.field).string.min_len = 1];
+  string text = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_steer_text_nonblank"
+      message: "text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message LiveSteerSuccess {
@@ -363,7 +370,14 @@ message LiveSteerSuccess {
       expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
     }
   ];
-  string text = 2 [(buf.validate.field).string.min_len = 1];
+  string text = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_steer_success_text_nonblank"
+      message: "text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message LiveStopRequest {
@@ -402,11 +416,25 @@ message LiveWaitRequest {
 }
 
 message LiveWaitAssistantFinalAnswer {
-  string result = 1 [(buf.validate.field).string.min_len = 1];
+  string result = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_result_nonblank"
+      message: "result must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message LiveWaitNoFinalAnswer {
-  string reason = 1 [(buf.validate.field).string.min_len = 1];
+  string reason = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_reason_nonblank"
+      message: "reason must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message LiveWaitSuccess {
@@ -418,7 +446,14 @@ message LiveWaitSuccess {
       expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
     }
   ];
-  string session_name = 2 [(buf.validate.field).string.min_len = 1];
+  string session_name = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_session_name_nonblank"
+      message: "session_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   int64 duration_millis = 3 [(buf.validate.field).int64 = {
     gte: 0
     lte: 9007199254740991
@@ -447,7 +482,14 @@ message LiveWaitSuccess {
       expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
     }
   ];
-  string terminal_status = 7 [(buf.validate.field).string.min_len = 1];
+  string terminal_status = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_terminal_status_nonblank"
+      message: "terminal_status must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   oneof result {
     option (buf.validate.oneof).required = true;
     LiveWaitAssistantFinalAnswer assistant_final_answer = 8;

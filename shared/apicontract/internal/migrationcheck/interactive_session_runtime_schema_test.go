@@ -326,6 +326,32 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 			t.Errorf("live-wait result accepted invalid %s", name)
 		}
 	}
+	for name, message := range map[string]proto.Message{
+		"steer request": &runtimepb.LiveSteerRequest{
+			SessionId: validID,
+			Text:      " ",
+		},
+		"steer success": &runtimepb.LiveSteerSuccess{
+			QueueItemId: validID,
+			Text:        " ",
+		},
+		"assistant final answer": &runtimepb.LiveWaitAssistantFinalAnswer{Result: " "},
+		"no final answer":        &runtimepb.LiveWaitNoFinalAnswer{Reason: " "},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Errorf("%s accepted blank text", name)
+		}
+	}
+	for name, mutate := range map[string]func(*runtimepb.LiveWaitSuccess){
+		"session_name":    func(message *runtimepb.LiveWaitSuccess) { message.SessionName = " " },
+		"terminal_status": func(message *runtimepb.LiveWaitSuccess) { message.TerminalStatus = " " },
+	} {
+		copy := proto.Clone(validWait).(*runtimepb.LiveWaitSuccess)
+		mutate(copy)
+		if err := protoapi.ValidateGeneratedMessage(copy); err == nil {
+			t.Errorf("live-wait result accepted blank %s", name)
+		}
+	}
 }
 
 func TestInteractiveSessionRuntimeReviewedValidatorSignoffsRemainMessageLocal(t *testing.T) {
