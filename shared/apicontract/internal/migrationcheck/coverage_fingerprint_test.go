@@ -1,8 +1,8 @@
 package migrationcheck
 
 import (
+	"errors"
 	"reflect"
-	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -48,14 +48,18 @@ func TestExceptionalWireFingerprintComparesLiveShapeToImmutableSignoff(t *testin
 
 	signoff.DescriptorFingerprint = "reviewed-descriptor"
 	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
-	if err == nil || !strings.Contains(err.Error(), "descriptor focused fixture changed") {
+	var fingerprintError *WireExceptionFingerprintError
+	if !errors.As(err, &fingerprintError) ||
+		fingerprintError.Code != WireExceptionFingerprintDescriptorChanged {
 		t.Fatalf("descriptor mutation error = %v", err)
 	}
 
 	signoff.DescriptorFingerprint = fingerprintExceptionalDescriptor(liveMessage)
 	signoff.LegacyFingerprint = "reviewed-legacy"
 	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
-	if err == nil || !strings.Contains(err.Error(), "legacy focused fixture changed") {
+	fingerprintError = nil
+	if !errors.As(err, &fingerprintError) ||
+		fingerprintError.Code != WireExceptionFingerprintLegacyChanged {
 		t.Fatalf("legacy mutation error = %v", err)
 	}
 }

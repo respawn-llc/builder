@@ -715,27 +715,69 @@ func checkWireExceptionFingerprint(
 	legacyFingerprint := fingerprintExceptionalLegacyType(legacyType)
 	descriptorFingerprint := fingerprintExceptionalDescriptor(message)
 	if exception.LegacyFingerprint == "" || exception.DescriptorFingerprint == "" {
-		return fmt.Errorf(
-			"focused fixture fingerprints are required; legacy=%s descriptor=%s",
-			legacyFingerprint,
-			descriptorFingerprint,
-		)
+		return &WireExceptionFingerprintError{
+			Code:                  WireExceptionFingerprintMissingSignoff,
+			LegacyFingerprint:     legacyFingerprint,
+			DescriptorFingerprint: descriptorFingerprint,
+		}
 	}
 	if exception.LegacyFingerprint != legacyFingerprint {
-		return fmt.Errorf(
-			"legacy focused fixture changed: got %s, want %s",
-			legacyFingerprint,
-			exception.LegacyFingerprint,
-		)
+		return &WireExceptionFingerprintError{
+			Code:                  WireExceptionFingerprintLegacyChanged,
+			LegacyFingerprint:     legacyFingerprint,
+			ExpectedFingerprint:   exception.LegacyFingerprint,
+			DescriptorFingerprint: descriptorFingerprint,
+		}
 	}
 	if exception.DescriptorFingerprint != descriptorFingerprint {
-		return fmt.Errorf(
-			"descriptor focused fixture changed: got %s, want %s",
-			descriptorFingerprint,
-			exception.DescriptorFingerprint,
-		)
+		return &WireExceptionFingerprintError{
+			Code:                  WireExceptionFingerprintDescriptorChanged,
+			LegacyFingerprint:     legacyFingerprint,
+			DescriptorFingerprint: descriptorFingerprint,
+			ExpectedFingerprint:   exception.DescriptorFingerprint,
+		}
 	}
 	return nil
+}
+
+type WireExceptionFingerprintErrorCode string
+
+const (
+	WireExceptionFingerprintMissingSignoff    WireExceptionFingerprintErrorCode = "missing_signoff"
+	WireExceptionFingerprintLegacyChanged     WireExceptionFingerprintErrorCode = "legacy_changed"
+	WireExceptionFingerprintDescriptorChanged WireExceptionFingerprintErrorCode = "descriptor_changed"
+)
+
+type WireExceptionFingerprintError struct {
+	Code                  WireExceptionFingerprintErrorCode
+	LegacyFingerprint     string
+	DescriptorFingerprint string
+	ExpectedFingerprint   string
+}
+
+func (e *WireExceptionFingerprintError) Error() string {
+	switch e.Code {
+	case WireExceptionFingerprintMissingSignoff:
+		return fmt.Sprintf(
+			"focused fixture fingerprints are required; legacy=%s descriptor=%s",
+			e.LegacyFingerprint,
+			e.DescriptorFingerprint,
+		)
+	case WireExceptionFingerprintLegacyChanged:
+		return fmt.Sprintf(
+			"legacy focused fixture changed: got %s, want %s",
+			e.LegacyFingerprint,
+			e.ExpectedFingerprint,
+		)
+	case WireExceptionFingerprintDescriptorChanged:
+		return fmt.Sprintf(
+			"descriptor focused fixture changed: got %s, want %s",
+			e.DescriptorFingerprint,
+			e.ExpectedFingerprint,
+		)
+	default:
+		return fmt.Sprintf("unknown wire exception fingerprint error code %q", e.Code)
+	}
 }
 
 func fingerprintExceptionalLegacyType(legacyType reflect.Type) string {
