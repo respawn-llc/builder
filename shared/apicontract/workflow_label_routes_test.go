@@ -66,7 +66,7 @@ func TestWorkflowLabelRoutesUseExistingWorkflowBoundary(t *testing.T) {
 				route.Dependency != DependencyWorkflow ||
 				route.RequestType != tt.requestType ||
 				route.ResponseType != tt.responseType ||
-				!route.ValidatesRequest {
+				route.ValidationMethod == ValidationMethodNone {
 				t.Fatalf("route %q = %+v", tt.method, route)
 			}
 		})

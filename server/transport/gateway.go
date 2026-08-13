@@ -133,12 +133,6 @@ var gatewaySubscriptionMethods = protocolSubscriptionMethodSet()
 
 type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response
 
-var gatewayUnaryHandlers = routeHandlersForKind(apicontract.KindUnary, gatewayUnaryHandlerEntries)
-
-var gatewayProgressHandlerEntries = map[string]gatewayProgressHandler{
-	protocol.MethodRunPrompt: (*Gateway).serveRunPrompt,
-}
-
 type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request) bool
 
 type gatewayRequestScheduleKind uint8
@@ -181,8 +175,6 @@ func (p gatewayRequestPanicDiagnostic) Error() string {
 	)
 }
 
-var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
-
 func RuntimeLiveControlRoutesExecutable() bool {
 	for _, method := range []string{
 		protocol.MethodRuntimeLiveSteer,
@@ -190,7 +182,8 @@ func RuntimeLiveControlRoutesExecutable() bool {
 		protocol.MethodRuntimeLiveWait,
 		protocol.MethodRuntimeLiveWatch,
 	} {
-		if _, ok := gatewayUnaryHandlers[method]; !ok {
+		executable, ok := inboundExecutableRoutes[method]
+		if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
 			return false
 		}
 	}
@@ -221,7 +214,7 @@ type connectionState struct {
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
 
-var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
+var gatewaySubscriptionHandlers = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
@@ -232,30 +225,16 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
-var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
-
-func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) map[string]T {
-	handlers := make(map[string]T)
-	for _, route := range apicontract.Routes() {
-		if route.Kind != kind {
-			continue
-		}
-		handler, ok := entries[route.Method]
-		if !ok {
-			continue
-		}
-		handlers[route.Method] = handler
-	}
-	return handlers
-}
-
 func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, apicontract.Route, bool) {
 	route, ok := apicontract.RouteByMethod(strings.TrimSpace(method))
 	if !ok || route.Kind != apicontract.KindProgress {
 		return nil, apicontract.Route{}, false
 	}
-	handler, ok := gatewayProgressHandlers[route.Method]
-	return handler, route, ok
+	executable, ok := inboundExecutableRoutes[route.Method]
+	if !ok {
+		return nil, apicontract.Route{}, false
+	}
+	return (*Gateway).serveRunPrompt, executable.route, true
 }
 
 func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Gateway, error) {
@@ -498,14 +477,11 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)
 	}
-	handler, ok := gatewayUnaryHandlers[req.Method]
-	if !ok {
+	executable, ok := inboundExecutableRoutes[req.Method]
+	if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
-		return resp
-	}
-	return handler(g, ctx, state, req)
+	return executable.executeUnary(g, ctx, state, req)
 }
 
 func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {

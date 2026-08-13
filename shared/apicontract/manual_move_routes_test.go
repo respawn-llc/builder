@@ -20,7 +20,7 @@ func TestWorkflowTaskMovePreviewRouteContract(t *testing.T) {
 		route.Dependency != DependencyWorkflow ||
 		route.RequestType != reflect.TypeOf(serverapi.WorkflowTaskMovePreviewRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.WorkflowTaskMovePreviewResponse{}) ||
-		!route.ValidatesRequest {
+		route.ValidationMethod == ValidationMethodNone {
 		t.Fatalf("workflow task move preview route = %+v", route)
 	}
 }

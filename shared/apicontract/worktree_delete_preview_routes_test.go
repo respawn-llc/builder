@@ -24,7 +24,7 @@ func TestWorktreeDeletePreviewRouteUsesSessionWorktreeBoundary(t *testing.T) {
 		route.ResponseType != reflect.TypeOf(serverapi.WorktreeDeletePreviewResponse{}) {
 		t.Fatalf("delete preview route types = %v -> %v", route.RequestType, route.ResponseType)
 	}
-	if !route.ValidatesRequest {
+	if route.ValidationMethod == ValidationMethodNone {
 		t.Fatal("delete preview route does not validate requests")
 	}
 }

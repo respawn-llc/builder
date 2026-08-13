@@ -189,8 +189,8 @@ func TestConfiguredCoreOnboardingFinalizeReturnsConfigAlreadyExists(t *testing.T
 		t.Fatalf("DialRemoteURL: %v", err)
 	}
 	defer func() { _ = remote.Close() }()
-	blue := serverapi.OnboardingTheme("blue")
-	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &blue})
+	dark := serverapi.OnboardingThemeDark
+	_, err = remote.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{Theme: &dark})
 	if !errors.Is(err, serverapi.ErrOnboardingFinalizeConfigAlreadyExists) {
 		t.Fatalf("FinalizeOnboarding error = %v, want config_already_exists", err)
 	}

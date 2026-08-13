@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"core/server/auth"
@@ -90,7 +89,24 @@ func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json
 		}
 		return params, nil
 	}
-	return decodeRouteParams(route, raw)
+	params, err := route.DecodeRequest(raw)
+	if err != nil {
+		return nil, err
+	}
+	validated, err := route.WithValidated(params, validationPolicyForRoute(route), func(_ any, value any) (any, error) {
+		return value, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return validated, nil
+}
+
+func validationPolicyForRoute(route rpccontract.Route) rpccontract.ValidationPolicy {
+	if route.ValidationMethod == rpccontract.ValidationMethodNone {
+		return rpccontract.NoSemanticValidation
+	}
+	return rpccontract.SemanticValidationRequired
 }
 
 type gatewayRouteError struct {
@@ -159,29 +175,6 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *co
 		return stored.IsNoAuthSelected(), nil
 	}
 	return false, nil
-}
-
-func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.RequestType == nil {
-		return nil, nil
-	}
-	ptr := reflect.New(route.RequestType)
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-	}
-	params := ptr.Elem().Interface()
-	if validator, ok := params.(interface{ ValidateRPC() error }); ok {
-		if err := validator.ValidateRPC(); err != nil {
-			return nil, err
-		}
-	} else if validator, ok := params.(interface{ Validate() error }); ok {
-		if err := validator.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return params, nil
 }
 
 func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connectionState, route rpccontract.Route, params any) error {

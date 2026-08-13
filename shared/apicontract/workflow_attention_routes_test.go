@@ -22,7 +22,7 @@ func TestWorkflowAttentionListRouteIsGlobal(t *testing.T) {
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.WorkflowAttentionListRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.WorkflowAttentionListResponse{}) ||
-		!route.ValidatesRequest {
+		route.ValidationMethod == ValidationMethodNone {
 		t.Fatalf("workflow attention list route types/validation = %+v", route)
 	}
 }

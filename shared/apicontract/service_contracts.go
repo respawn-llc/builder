@@ -181,6 +181,12 @@ type WorktreeService interface {
 	SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
 }
 
+type AuthorizedProjectWorkspaceBinding struct {
+	ProjectID     string
+	WorkspaceID   string
+	CanonicalRoot string
+}
+
 type WorkflowService interface {
 	CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error)
 	CreateAndLinkWorkflowToProject(ctx context.Context, req serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error)

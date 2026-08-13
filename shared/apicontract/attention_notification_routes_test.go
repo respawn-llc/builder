@@ -30,7 +30,7 @@ func TestAttentionNotificationRouteContracts(t *testing.T) {
 	if session.Kind != KindSubscription || session.Auth != AuthServer || session.Scope != ScopeAttachedSession || session.Dependency != DependencyAttentionNotification {
 		t.Fatalf("session attention notification route = %+v", session)
 	}
-	if session.RequestType != reflect.TypeOf(serverapi.AttentionSessionNotificationSubscribeRequest{}) || !session.ValidatesRequest {
-		t.Fatalf("session attention notification route request = %v validates=%t", session.RequestType, session.ValidatesRequest)
+	if session.RequestType != reflect.TypeOf(serverapi.AttentionSessionNotificationSubscribeRequest{}) || session.ValidationMethod == ValidationMethodNone {
+		t.Fatalf("session attention notification route request = %v validates=%t", session.RequestType, session.ValidationMethod != ValidationMethodNone)
 	}
 }

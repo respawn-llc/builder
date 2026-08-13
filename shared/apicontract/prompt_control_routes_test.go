@@ -22,8 +22,8 @@ func TestPromptAnswerBatchRouteContract(t *testing.T) {
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.PromptAnswerBatchRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.PromptAnswerBatchResponse{}) ||
-		!route.ValidatesRequest {
-		t.Fatalf("prompt answer batch route types = %v/%v validates=%t", route.RequestType, route.ResponseType, route.ValidatesRequest)
+		route.ValidationMethod == ValidationMethodNone {
+		t.Fatalf("prompt answer batch route types = %v/%v validates=%t", route.RequestType, route.ResponseType, route.ValidationMethod != ValidationMethodNone)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestPromptFollowUpRouteIsARegistrationAcknowledgedTerminalStream(t *testing
 		route.EventType != reflect.TypeOf(protocol.PromptFollowUpEventParams{}) ||
 		route.EventMethod != protocol.MethodPromptFollowUpEvent ||
 		route.CompleteMethod != protocol.MethodPromptFollowUpComplete ||
-		!route.ValidatesRequest {
+		route.ValidationMethod == ValidationMethodNone {
 		t.Fatalf("prompt follow-up route contract = %+v", route)
 	}
 }

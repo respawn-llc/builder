@@ -12,6 +12,14 @@ const (
 	NoSemanticValidation
 )
 
+type ValidationMethod uint8
+
+const (
+	ValidationMethodNone ValidationMethod = iota
+	ValidationMethodValidateRPC
+	ValidationMethodValidate
+)
+
 type Validated[T any] struct {
 	value T
 }
@@ -29,16 +37,31 @@ func WithValidated[T any, R any](
 	if consume == nil {
 		return zero, errors.New("validated request consumer is required")
 	}
-	if validator, ok := any(value).(interface{ ValidateRPC() error }); ok {
+	switch ValidationMethodFor(value) {
+	case ValidationMethodValidateRPC:
+		validator := any(value).(interface{ ValidateRPC() error })
 		if err := validator.ValidateRPC(); err != nil {
 			return zero, err
 		}
-	} else if validator, ok := any(value).(interface{ Validate() error }); ok {
+	case ValidationMethodValidate:
+		validator := any(value).(interface{ Validate() error })
 		if err := validator.Validate(); err != nil {
 			return zero, err
 		}
-	} else if policy != NoSemanticValidation {
-		return zero, fmt.Errorf("%T has no semantic validator", value)
+	case ValidationMethodNone:
+		if policy != NoSemanticValidation {
+			return zero, fmt.Errorf("%T has no semantic validator", value)
+		}
 	}
 	return consume(Validated[T]{value: value})
+}
+
+func ValidationMethodFor[T any](value T) ValidationMethod {
+	if _, ok := any(value).(interface{ ValidateRPC() error }); ok {
+		return ValidationMethodValidateRPC
+	}
+	if _, ok := any(value).(interface{ Validate() error }); ok {
+		return ValidationMethodValidate
+	}
+	return ValidationMethodNone
 }

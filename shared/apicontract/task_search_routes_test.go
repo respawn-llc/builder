@@ -24,7 +24,7 @@ func TestTaskSearchRouteContract(t *testing.T) {
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.TaskSearchRequest{}) ||
 		route.ResponseType != reflect.TypeOf(serverapi.TaskSearchResponse{}) ||
-		!route.ValidatesRequest {
+		route.ValidationMethod == apicontract.ValidationMethodNone {
 		t.Fatalf("task search route types/validation = %+v", route)
 	}
 }
