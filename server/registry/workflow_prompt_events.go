@@ -34,14 +34,12 @@ func (r *RuntimeRegistry) publishTaskQuestionWaitingForScope(scope sessionruntim
 	projectID := strings.TrimSpace(ref.ProjectID)
 	taskID := strings.TrimSpace(string(ref.CurrentNode.TaskID))
 	sessionID := resource.SessionID().String()
-	askID := strings.TrimSpace(snapshot.Request.ID)
+	askID := string(snapshot.PromptID)
 	switch {
 	case projectID == "":
 		return fmt.Errorf("workflow prompt scope %s has no project id", scope.ID())
 	case taskID == "":
 		return fmt.Errorf("workflow prompt scope %s has no task id", scope.ID())
-	case askID == "":
-		return fmt.Errorf("workflow prompt scope %s has a prompt without an id", scope.ID())
 	}
 	workflowID := ref.WorkflowID
 	if err := r.workflowEventPublisher(context.Background(), serverapi.WorkflowProjectEvent{
@@ -66,7 +64,7 @@ func (r *RuntimeRegistry) publishTaskQuestionCleared(sessionID string, snapshot 
 	}
 	projectID := strings.TrimSpace(target.ProjectID)
 	taskID := strings.TrimSpace(target.TaskID)
-	promptID := strings.TrimSpace(snapshot.Request.ID)
+	promptID := string(snapshot.PromptID)
 	targetSessionID := strings.TrimSpace(target.SessionID)
 	switch {
 	case projectID == "":
@@ -75,8 +73,6 @@ func (r *RuntimeRegistry) publishTaskQuestionCleared(sessionID string, snapshot 
 		return fmt.Errorf("workflow prompt %q attention target has no workflow id", promptID)
 	case taskID == "":
 		return fmt.Errorf("workflow prompt %q attention target has no task id", promptID)
-	case promptID == "":
-		return fmt.Errorf("workflow prompt attention target has no prompt id")
 	case targetSessionID == "":
 		return fmt.Errorf("workflow prompt %q attention target has no session id", promptID)
 	case targetSessionID != strings.TrimSpace(sessionID):

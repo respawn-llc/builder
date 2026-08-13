@@ -446,13 +446,11 @@ func (s ProjectWorkspaceSelector) Validate() error {
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceIDValue() *string {
-	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceID, "workspace_id")
-	return value
+	return s.WorkspaceID
 }
 
 func (s ProjectWorkspaceSelector) WorkspaceRootValue() *string {
-	value, _ := normalizeWorkspaceSelectorArm(s.WorkspaceRoot, "workspace_root")
-	return value
+	return s.WorkspaceRoot
 }
 
 func normalizeWorkspaceSelectorArm(value *string, field string) (*string, error) {

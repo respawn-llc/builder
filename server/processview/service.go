@@ -36,7 +36,7 @@ func (s *ProcessViewService) ResolveProcessAuthorization(_ context.Context, proc
 	if s == nil || s.processes == nil {
 		return apicontract.ProcessAuthorizationCandidate{}, fmt.Errorf("process source is required")
 	}
-	snapshot, err := s.processes.Snapshot(strings.TrimSpace(processID))
+	snapshot, err := s.processes.Snapshot(processID)
 	if err != nil {
 		return apicontract.ProcessAuthorizationCandidate{}, err
 	}
@@ -78,7 +78,7 @@ func (s *ProcessViewService) getProcess(processID string) (serverapi.ProcessGetR
 	if s == nil || s.processes == nil {
 		return serverapi.ProcessGetResponse{}, fmt.Errorf("process source is required")
 	}
-	snapshot, err := s.processes.Snapshot(strings.TrimSpace(processID))
+	snapshot, err := s.processes.Snapshot(processID)
 	if err != nil {
 		return serverapi.ProcessGetResponse{}, err
 	}
@@ -106,7 +106,7 @@ func (s *ProcessViewService) killProcess(ctx context.Context, clientRequestID st
 	if s == nil || s.processes == nil {
 		return serverapi.ProcessKillResponse{}, fmt.Errorf("process source is required")
 	}
-	memoReq := killRequestMemoRequest{ProcessID: strings.TrimSpace(processID)}
+	memoReq := killRequestMemoRequest{ProcessID: processID}
 	return s.kills.Do(ctx, strings.TrimSpace(clientRequestID), memoReq, func(a killRequestMemoRequest, b killRequestMemoRequest) bool { return a.ProcessID == b.ProcessID }, func(ctx context.Context) (serverapi.ProcessKillResponse, error) {
 		if err := ctx.Err(); err != nil {
 			return serverapi.ProcessKillResponse{}, err
@@ -130,7 +130,7 @@ func (s *ProcessViewService) getInlineOutput(processID string, maxChars int) (se
 	if s == nil || s.processes == nil {
 		return serverapi.ProcessInlineOutputResponse{}, fmt.Errorf("process source is required")
 	}
-	output, logPath, err := s.processes.InlineOutput(strings.TrimSpace(processID), maxChars)
+	output, logPath, err := s.processes.InlineOutput(processID, maxChars)
 	if err != nil {
 		return serverapi.ProcessInlineOutputResponse{}, err
 	}

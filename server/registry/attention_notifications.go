@@ -122,7 +122,7 @@ func (r *RuntimeRegistry) enqueueTaskQuestionBatchSnapshot(sub serverapi.Attenti
 	req := items[0].Request
 	materializedAskIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		materializedAskIDs = append(materializedAskIDs, item.Request.ID)
+		materializedAskIDs = append(materializedAskIDs, string(item.PromptID))
 	}
 	return r.questionBatches.EnqueueSnapshot(subscription, attentionnotify.QuestionBatch{
 		StepID:         questionBatchStepID(*req.QuestionBatch),
@@ -252,7 +252,7 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 	notification := clientui.AttentionNotification{
 		ID: clientui.AttentionNotificationID{
 			Kind: kind,
-			UUID: strings.TrimSpace(snapshot.Request.ID),
+			UUID: string(snapshot.PromptID),
 		},
 		Kind:       kind,
 		OccurredAt: snapshot.CreatedAt,
@@ -265,9 +265,9 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 		}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
-			PreparedAskIDs:          []string{snapshot.Request.ID},
-			MaterializedAskIDs:      []string{snapshot.Request.ID},
-			CurrentUnresolvedAskIDs: []string{snapshot.Request.ID},
+			PreparedAskIDs:          []string{string(snapshot.PromptID)},
+			MaterializedAskIDs:      []string{string(snapshot.PromptID)},
+			CurrentUnresolvedAskIDs: []string{string(snapshot.PromptID)},
 			Preview:                 strings.TrimSpace(snapshot.Request.Question),
 			DisplayCount:            1,
 			MaterializedCount:       1,

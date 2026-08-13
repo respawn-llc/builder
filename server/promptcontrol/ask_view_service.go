@@ -3,7 +3,6 @@ package promptcontrol
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -33,26 +32,18 @@ func (s *AskViewService) ListPendingAsksBySessionValidated(
 	_ context.Context,
 	validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest],
 ) (serverapi.AskListPendingBySessionResponse, error) {
-	return s.listPendingAsksBySession(validated.Value())
+	return s.listPendingAsksBySession(validated.SessionID(validated.Value().SessionID))
 }
 
-func (s *AskViewService) listPendingAsksBySession(req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
+func (s *AskViewService) listPendingAsksBySession(sessionID runtimeids.SessionID) (serverapi.AskListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
-	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
-	if err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask session identity: %w", err)
 	}
 	items := s.prompts.ListPendingPrompts(sessionID.String())
 	asks := make([]clientui.PendingAsk, 0, len(items))
 	for _, item := range items {
 		if item.Request.Approval {
 			continue
-		}
-		promptID, stepID, err := pendingPromptIdentity(item.Request.ID, item.Request.StepID)
-		if err != nil {
-			return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask identity: %w", err)
 		}
 		recommendedOptionIndex, err := DecodeLegacyRecommendedOptionIndex(
 			item.Request.RecommendedOptionIndex,
@@ -66,9 +57,9 @@ func (s *AskViewService) listPendingAsksBySession(req serverapi.AskListPendingBy
 			)
 		}
 		asks = append(asks, clientui.PendingAsk{
-			PromptID:               promptID,
+			PromptID:               item.PromptID,
 			SessionID:              sessionID,
-			StepID:                 stepID,
+			StepID:                 item.StepID,
 			Question:               item.Request.Question,
 			Suggestions:            append([]string(nil), item.Request.Suggestions...),
 			RecommendedOptionIndex: recommendedOptionIndex,

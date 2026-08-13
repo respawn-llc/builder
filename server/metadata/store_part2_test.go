@@ -145,22 +145,6 @@ func TestImportSessionSnapshotRejectsInvalidSessionCategory(t *testing.T) {
 	}
 }
 
-func TestSessionCategoryResolverRejectsInvalidStoredCategory(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	store, cfg, binding := newMetadataTestStore(t)
-	sess := createMetadataTestSession(t, store, cfg, binding)
-	if _, err := store.db.ExecContext(ctx, `PRAGMA ignore_check_constraints = ON`); err != nil {
-		t.Fatalf("disable check constraints: %v", err)
-	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE sessions SET category = 'worker' WHERE id = ?`, sess.Meta().SessionID); err != nil {
-		t.Fatalf("seed invalid stored category: %v", err)
-	}
-	if _, err := store.ResolvePersistedSession(ctx, sess.Meta().SessionID); err == nil {
-		t.Fatal("ResolvePersistedSession accepted invalid stored category")
-	}
-}
-
 func TestSessionExecutionTargetClampsEscapingCwdRelpath(t *testing.T) {
 	t.Parallel()
 	target := sessionExecutionTargetFromRow(sqlitegen.GetSessionExecutionTargetByIDRow{

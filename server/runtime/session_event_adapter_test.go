@@ -93,7 +93,7 @@ func TestSessionMessageRecordAdapterPersistsToolCallWithoutSemanticContent(t *te
 	}
 }
 
-func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(t *testing.T) {
+func TestSessionMessageRecordAdapterPreservesAbsentOptionalFacts(t *testing.T) {
 	t.Parallel()
 	record, err := sessionMessageRecordFromLLM(llm.Message{
 		Role:    llm.RoleUser,
@@ -116,27 +116,6 @@ func TestSessionMessageRecordAdapterPreservesAbsenceAndRejectsPresentBlankFacts(
 		t.Fatalf("restored absent facts became present: %#v", restored)
 	}
 
-	_, err = sessionMessageRecordFromLLM(llm.Message{
-		Role:       llm.RoleUser,
-		Content:    textutil.Value("hello"),
-		SourcePath: textutil.Value(" \t"),
-	})
-	if err == nil {
-		t.Fatal("adapter accepted a present blank source path")
-	}
-
-	_, err = sessionMessageRecordFromLLM(llm.Message{
-		Role: llm.RoleAssistant,
-		ToolCalls: []llm.ToolCall{{
-			ID:          "call-1",
-			Name:        string(toolspec.ToolPatch),
-			Custom:      true,
-			CustomInput: textutil.Value(" \t"),
-		}},
-	})
-	if err == nil {
-		t.Fatal("adapter accepted a present blank custom tool input")
-	}
 }
 
 func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
@@ -181,15 +160,6 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 		t.Fatalf("restored completion = %#v, want result=%#v provider_items=%#v", restored, result, providerItems)
 	}
 
-	_, err = sessionToolCompletionRecordFromRuntime(tools.Result{
-		CallID:  "call-blank",
-		Name:    toolspec.ToolExecCommand,
-		Output:  json.RawMessage(`"done"`),
-		Summary: textutil.Value(" \t"),
-	}, nil)
-	if err == nil {
-		t.Fatal("tool-completion adapter accepted a present blank summary")
-	}
 }
 
 func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
@@ -224,15 +194,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	}); err == nil {
 		t.Fatal("local-entry adapter accepted unsupported runtime visibility")
 	}
-	if _, err := sessionLocalEntryRecordFromRuntime(storedLocalEntry{
-		Visibility:    transcript.EntryVisibilityDetail,
-		Role:          "warning",
-		Text:          "invalid optional fact",
-		DiagnosticKey: textutil.Value(" \t"),
-	}); err == nil {
-		t.Fatal("local-entry adapter accepted a present blank diagnostic key")
-	}
-
 	request := persistedCacheRequestObserved{
 		DigestVersion: requestCacheDigestVersion,
 		CacheKey:      "cache-key-1",
@@ -275,13 +236,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	if restored := persistedCacheResponseObservedFromSessionRecord(absentResponseRecord); restored.CachedInputTokens != nil {
 		t.Fatalf("absent cached-token fact became present: %#v", restored)
 	}
-	negativeCachedInputTokens := -1
-	invalidResponse := response
-	invalidResponse.CachedInputTokens = &negativeCachedInputTokens
-	if _, err := sessionCacheResponseRecordFromRuntime(invalidResponse); err == nil {
-		t.Fatal("cache-response adapter accepted negative cached input tokens")
-	}
-
 	warning := transcript.CacheWarning{
 		Scope:           transcript.CacheWarningScopeReviewer,
 		Reason:          transcript.CacheWarningReasonReuseDropped,
@@ -295,46 +249,6 @@ func TestSessionLocalAndCacheRecordAdaptersRoundTrip(t *testing.T) {
 	restoredWarning := cacheWarningFromSessionRecord(warningRecord)
 	if !reflect.DeepEqual(restoredWarning, warning) {
 		t.Fatalf("restored cache warning = %#v, want %#v", restoredWarning, warning)
-	}
-	invalidWarning := warning
-	invalidWarning.CacheKey = textutil.Value(" \t")
-	if _, err := sessionCacheWarningRecordFromRuntime(invalidWarning); err == nil {
-		t.Fatal("cache-warning adapter accepted a present blank cache key")
-	}
-	invalidWarning = warning
-	invalidWarning.Scope = ""
-	if _, err := sessionCacheWarningRecordFromRuntime(invalidWarning); err == nil {
-		t.Fatal("cache-warning adapter accepted an absent required scope")
-	}
-}
-
-func TestSessionHistoryReplacementRecordAdapterRejectsInvalidOptionalFacts(t *testing.T) {
-	t.Parallel()
-	base := historyReplacementPayload{
-		Engine: "local",
-		Mode:   string(compactionModeAuto),
-		Items: llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-			Type:    llm.ResponseItemTypeMessage,
-			Role:    textutil.Value(llm.RoleUser),
-			Content: textutil.Value("summary"),
-		}}),
-	}
-
-	invalid := base
-	invalid.CompactionNumber = textutil.Value(0)
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present zero compaction number")
-	}
-
-	invalid = base
-	invalid.Items = llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
-		Type:       llm.ResponseItemTypeMessage,
-		Role:       textutil.Value(llm.RoleUser),
-		Content:    textutil.Value("summary"),
-		SourcePath: textutil.Value(" \t"),
-	}})
-	if _, err := sessionHistoryReplacementRecordFromRuntime(invalid); err == nil {
-		t.Fatal("history-replacement adapter accepted a present blank provider source path")
 	}
 }
 

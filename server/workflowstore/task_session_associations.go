@@ -1010,7 +1010,7 @@ func parameterByKey(parameters []workflow.Parameter, key string) (workflow.Param
 
 func nodeRecordFromCurrentDefinition(node workflow.Node) (NodeRecord, error) {
 	workflowID := workflow.NodeWorkflowID(node)
-	if workflowID == nil || workflowID.IsZero() {
+	if workflowID == nil {
 		return NodeRecord{}, errors.New("current definition node workflow id is required")
 	}
 	scriptPath := ""

@@ -435,9 +435,6 @@ func mainTransitionWorktree(topology []serverapi.WorktreeTopologyEntry, workspac
 }
 
 func gitWorktreeFromFacts(facts serverapi.WorktreeGitFacts) (GitWorktree, error) {
-	if err := facts.Validate(); err != nil {
-		return GitWorktree{}, err
-	}
 	branch, err := optionalLocalBranch(facts.BranchRef, facts.BranchName)
 	if err != nil {
 		return GitWorktree{}, err

@@ -7,6 +7,7 @@ import (
 
 	askquestion "core/server/tools"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 )
 
 func TestResolvedPromptProjectionRemainsIdentityOnlyForQuestionAndApproval(t *testing.T) {
@@ -28,10 +29,21 @@ func TestResolvedPromptProjectionRemainsIdentityOnlyForQuestionAndApproval(t *te
 			},
 		},
 	}
+	stepID, err := runtimeids.ParseStepID(registryTestStepID)
+	if err != nil {
+		t.Fatalf("ParseStepID: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID("session-1")
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
 	for _, request := range tests {
 		resolved := transcriptPendingPromptFromSnapshot("session-1", PendingPromptSnapshot{
 			Request:   request,
 			CreatedAt: createdAt,
+			SessionID: sessionID,
+			PromptID:  clientui.PromptID(request.ID),
+			StepID:    stepID,
 		}, pendingPromptEventResolved)
 		if resolved.Status != clientui.TranscriptPromptStatusResolved ||
 			resolved.PromptID != clientui.PromptID(request.ID) ||

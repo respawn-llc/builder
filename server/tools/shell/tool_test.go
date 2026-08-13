@@ -473,13 +473,6 @@ func TestManagerInlineOutputTruncatesRecentOutputFallback(t *testing.T) {
 	}
 }
 
-func TestManagerSubscribeOutputRejectsInvalidOffset(t *testing.T) {
-	manager := newBackgroundTestManager(t)
-	if _, err := manager.SubscribeOutput(context.Background(), "proc-1", -1); err == nil {
-		t.Fatal("expected invalid offset error")
-	}
-}
-
 func TestManagerSubscribeOutputRejectsUnknownProcess(t *testing.T) {
 	manager := newBackgroundTestManager(t)
 	if _, err := manager.SubscribeOutput(context.Background(), "missing", 0); err == nil {

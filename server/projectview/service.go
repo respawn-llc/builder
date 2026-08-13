@@ -585,7 +585,11 @@ func (s *Service) GetProjectWorkspaceValidated(ctx context.Context, validated se
 	if s == nil {
 		return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
 	}
-	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(
+		ctx,
+		req.ProjectID,
+		req.ProjectWorkspaceSelector,
+	)
 	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		return serverapi.ProjectWorkspaceGetResponse{
 			ProjectID: req.ProjectID,

@@ -325,9 +325,6 @@ func (a *Attention) liveQuestionCandidates(ctx context.Context, taskFilter *stri
 			}
 			promptsByID := make(map[clientui.PromptID]PendingPromptSnapshot, len(prompts))
 			for _, prompt := range prompts {
-				if err := prompt.PromptID.Validate(); err != nil {
-					return nil, fmt.Errorf("task %q session %q pending prompt identity: %w", taskID, execution.Agent.SessionID, err)
-				}
 				if _, duplicate := promptsByID[prompt.PromptID]; duplicate {
 					return nil, fmt.Errorf("task %q session %q has duplicate pending prompt %q", taskID, execution.Agent.SessionID, prompt.PromptID)
 				}

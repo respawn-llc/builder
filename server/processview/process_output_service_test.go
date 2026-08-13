@@ -11,11 +11,13 @@ import (
 )
 
 type stubSubscriber struct {
-	sub shelltool.OutputSubscription
-	err error
+	sub   shelltool.OutputSubscription
+	err   error
+	calls int
 }
 
 func (s *stubSubscriber) SubscribeOutput(context.Context, string, int64) (shelltool.OutputSubscription, error) {
+	s.calls++
 	return s.sub, s.err
 }
 
@@ -77,8 +79,15 @@ func TestServiceSubscribesAndProjectsChunks(t *testing.T) {
 }
 
 func TestServiceValidatesRequest(t *testing.T) {
-	if _, err := NewProcessOutputService(&stubSubscriber{}).SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{}); err == nil {
+	subscriber := &stubSubscriber{}
+	if _, err := NewProcessOutputService(subscriber).SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{
+		ProcessID:   "proc-1",
+		OffsetBytes: -1,
+	}); err == nil {
 		t.Fatal("expected validation error")
+	}
+	if subscriber.calls != 0 {
+		t.Fatalf("subscriber calls = %d, want 0", subscriber.calls)
 	}
 }
 

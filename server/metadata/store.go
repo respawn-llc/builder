@@ -329,9 +329,6 @@ func (s *Store) ResolveProjectWorkspaceSelector(ctx context.Context, projectID s
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
 	}
-	if err := selector.Validate(); err != nil {
-		return Binding{}, err
-	}
 	trimmedProjectID := strings.TrimSpace(projectID)
 	if trimmedProjectID == "" {
 		return Binding{}, errors.New("project id is required")
@@ -1876,12 +1873,6 @@ func (s *Store) listProjectHomeSummaries(ctx context.Context, projectID sql.Null
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	if pageSize < 0 {
-		return nil, errors.New("page size must be non-negative")
-	}
-	if offset < 0 {
-		return nil, errors.New("offset must be non-negative")
-	}
 	rows, err := s.queries.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
 		ProjectID:  projectID,
 		LimitRows:  int64(pageSize),
@@ -1939,12 +1930,6 @@ func (s *Store) ListProjectWorkspaces(ctx context.Context, projectID string) ([]
 func (s *Store) ListProjectWorkspacesPage(ctx context.Context, projectID string, pageSize int, offset int) ([]clientui.ProjectWorkspaceSummary, error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
-	}
-	if pageSize < 0 {
-		return nil, errors.New("page size must be non-negative")
-	}
-	if offset < 0 {
-		return nil, errors.New("offset must be non-negative")
 	}
 	rows, err := s.queries.ListProjectWorkspacesPage(ctx, sqlitegen.ListProjectWorkspacesPageParams{
 		ProjectID:                strings.TrimSpace(projectID),
@@ -2608,10 +2593,7 @@ func defaultJSONObject(value string) string {
 }
 
 func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Meta, error) {
-	category, err := sessionCategoryFromStored(row.ID, row.Category)
-	if err != nil {
-		return session.Meta{}, err
-	}
+	category := sessionCategoryFromStored(row.Category)
 	metadataPayload := sessionMetadataDocument{}
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
@@ -2701,15 +2683,12 @@ func nullableSessionCategory(sessionID string, category *sessioncontract.Session
 	return sql.NullString{String: string(validated), Valid: true}, nil
 }
 
-func sessionCategoryFromStored(sessionID string, stored sql.NullString) (*sessioncontract.SessionCategory, error) {
+func sessionCategoryFromStored(stored sql.NullString) *sessioncontract.SessionCategory {
 	if !stored.Valid {
-		return nil, nil
+		return nil
 	}
-	category, err := sessioncontract.ParseSessionCategory(stored.String)
-	if err != nil {
-		return nil, fmt.Errorf("session %q has invalid category %q: %w", sessionID, stored.String, err)
-	}
-	return &category, nil
+	category := sessioncontract.SessionCategory(stored.String)
+	return &category
 }
 
 func nullableSessionID(sessionID *runtimeids.SessionID) sql.NullString {

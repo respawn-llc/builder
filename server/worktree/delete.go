@@ -299,9 +299,6 @@ func (s *Service) acquireDeleteTargetActivity(
 	worktreeRoot *string,
 ) (deleteTargetActivityLease, error) {
 	lease := deleteTargetActivityLease{ctx: ctx, close: func() {}}
-	if currentSessionID != nil && currentSessionID.IsZero() {
-		return deleteTargetActivityLease{}, errors.New("current delete session id must not be blank when present")
-	}
 	if worktreeRoot != nil && strings.TrimSpace(*worktreeRoot) == "" {
 		return deleteTargetActivityLease{}, errors.New("delete target root must not be blank when present")
 	}

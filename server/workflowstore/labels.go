@@ -40,7 +40,10 @@ type TaskLabelScope struct {
 
 func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawName string) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
-	name := label.Name(rawName)
+	name, err := label.PrepareName(rawName)
+	if err != nil {
+		return ProjectLabelRecord{}, err
+	}
 	id := label.NewID()
 	now := s.now().UnixMilli()
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
@@ -48,34 +51,13 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 		if err != nil {
 			return ProjectLabelRecord{}, err
 		}
-		if len(current) >= label.MaxProjectLabels {
-			return ProjectLabelRecord{}, ProjectLabelLimitError{
-				ProjectID: trimmedProjectID,
-				Limit:     label.MaxProjectLabels,
-			}
-		}
-		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
-			TemporaryBandOffset: int64(label.MaxProjectLabels),
-			ProjectID:           trimmedProjectID,
-		}); err != nil {
-			return ProjectLabelRecord{}, err
-		}
-		for index := len(current) - 1; index >= 0; index-- {
-			if err := q.SetProjectLabelOrdinal(ctx, sqlitegen.SetProjectLabelOrdinalParams{
-				Ordinal:   int64(index + 2),
-				ID:        current[index].ID.String(),
-				ProjectID: trimmedProjectID,
-			}); err != nil {
-				return ProjectLabelRecord{}, err
-			}
-		}
-		row, err := q.InsertProjectLabel(ctx, sqlitegen.InsertProjectLabelParams{
+		_, err = q.InsertProjectLabel(ctx, sqlitegen.InsertProjectLabelParams{
 			ID:              id.String(),
 			ProjectID:       trimmedProjectID,
 			Name:            name.String(),
 			CreatedAtUnixMs: now,
 			UpdatedAtUnixMs: now,
-			Ordinal:         1,
+			Ordinal:         int64(len(current) + 1),
 			CatalogLimit:    label.MaxProjectLabels,
 		})
 		if err != nil {
@@ -96,7 +78,29 @@ func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawNam
 			}
 			return ProjectLabelRecord{}, err
 		}
-		return projectLabelRecord(row.ID, row.ProjectID, row.Name, row.Ordinal)
+		if err := q.MoveProjectLabelOrdinalsToTemporaryBand(ctx, sqlitegen.MoveProjectLabelOrdinalsToTemporaryBandParams{
+			TemporaryBandOffset: int64(label.MaxProjectLabels),
+			ProjectID:           trimmedProjectID,
+		}); err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		if err := q.SetProjectLabelOrdinal(ctx, sqlitegen.SetProjectLabelOrdinalParams{
+			Ordinal:   1,
+			ID:        id.String(),
+			ProjectID: trimmedProjectID,
+		}); err != nil {
+			return ProjectLabelRecord{}, err
+		}
+		for index := len(current) - 1; index >= 0; index-- {
+			if err := q.SetProjectLabelOrdinal(ctx, sqlitegen.SetProjectLabelOrdinalParams{
+				Ordinal:   int64(index + 2),
+				ID:        current[index].ID.String(),
+				ProjectID: trimmedProjectID,
+			}); err != nil {
+				return ProjectLabelRecord{}, err
+			}
+		}
+		return ProjectLabelRecord{ID: id, ProjectID: trimmedProjectID, Name: name, Ordinal: 1}, nil
 	})
 }
 
@@ -284,9 +288,6 @@ func projectLabelRecord(id string, projectID string, name string, ordinal int64)
 	}
 	if strings.TrimSpace(projectID) == "" {
 		return ProjectLabelRecord{}, errors.New("persisted project label project id is required")
-	}
-	if ordinal < 1 || ordinal > int64(label.MaxProjectLabels*2) {
-		return ProjectLabelRecord{}, fmt.Errorf("persisted project label %q has invalid ordinal %d", id, ordinal)
 	}
 	return ProjectLabelRecord{
 		ID:        parsedID,

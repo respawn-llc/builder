@@ -2,7 +2,6 @@ package shell
 
 import (
 	"context"
-	"errors"
 	"io"
 	"os"
 	"sync"
@@ -20,9 +19,6 @@ type outputSubscription struct {
 }
 
 func (m *Manager) SubscribeOutput(_ context.Context, processID string, offsetBytes int64) (OutputSubscription, error) {
-	if offsetBytes < 0 {
-		return nil, errors.New("offset_bytes must be >= 0")
-	}
 	entry, err := m.entry(processID)
 	if err != nil {
 		return nil, err

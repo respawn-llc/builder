@@ -363,10 +363,7 @@ func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListR
 
 func (s *Service) ListWorkflowsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowListRequest]) (serverapi.WorkflowListResponse, error) {
 	req := validated.Value()
-	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
-	if err != nil {
-		return serverapi.WorkflowListResponse{}, err
-	}
+	window := workflowOffsetWindow(req.Offset, req.Limit)
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID

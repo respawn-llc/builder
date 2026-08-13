@@ -165,12 +165,8 @@ func deleteServiceTestWorktree(env *serviceTestEnv, worktreeID string) <-chan de
 	return deleted
 }
 
-func TestAcquireDeleteTargetActivityRejectsBlankPresentOptions(t *testing.T) {
+func TestAcquireDeleteTargetActivityRejectsBlankPresentTargetRoot(t *testing.T) {
 	env := newServiceTestEnv(t)
-	blankSessionID := runtimeids.SessionID{}
-	if _, err := env.service.acquireDeleteTargetActivity(env.ctx, &blankSessionID, nil, nil); err == nil {
-		t.Fatal("acquireDeleteTargetActivity accepted a blank present current session id")
-	}
 	blankRoot := " \t "
 	if _, err := env.service.acquireDeleteTargetActivity(env.ctx, nil, nil, &blankRoot); err == nil {
 		t.Fatal("acquireDeleteTargetActivity accepted a blank present target root")
