@@ -67,8 +67,8 @@ func TestDispatchRequestAssemblyUsesOnlyExplicitIdentityFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build dispatch request: %v", err)
 	}
-	if request.SessionID != "explicit-session" {
-		t.Fatalf("SessionID = %q, want explicit-session", request.SessionID)
+	if request.SessionID == nil || *request.SessionID != "explicit-session" {
+		t.Fatalf("SessionID = %v, want explicit-session", request.SessionID)
 	}
 	if request.CodexDispatch == nil {
 		t.Fatal("dispatch request omitted Codex dispatch context")

@@ -126,8 +126,8 @@ func TestReviewerRequestsUseSupervisorIdentityAndIsolateRetryState(t *testing.T)
 			WindowID:    wantSessionID + ":3",
 			RequestKind: llm.CodexRequestKindTurn,
 		})
-		if call.SessionID != wantSessionID {
-			t.Fatalf("Reviewer call %d SessionID = %q, want %q", index+1, call.SessionID, wantSessionID)
+		if call.SessionID == nil || *call.SessionID != wantSessionID {
+			t.Fatalf("Reviewer call %d SessionID = %v, want %q", index+1, call.SessionID, wantSessionID)
 		}
 	}
 	if reviewerClient.calls[0].CodexDispatch != reviewerClient.calls[1].CodexDispatch {
@@ -182,8 +182,8 @@ func TestSubagentUsesOwnSessionRunAndWindowWithoutLineageMetadata(t *testing.T) 
 		WindowID:    subagent.Meta().SessionID + ":2",
 		RequestKind: llm.CodexRequestKindTurn,
 	})
-	if request.SessionID != subagent.Meta().SessionID {
-		t.Fatalf("subagent request SessionID = %q, want own Session %q", request.SessionID, subagent.Meta().SessionID)
+	if request.SessionID == nil || *request.SessionID != subagent.Meta().SessionID {
+		t.Fatalf("subagent request SessionID = %v, want own Session %q", request.SessionID, subagent.Meta().SessionID)
 	}
 	raw, err := request.CodexDispatch.TurnMetadataJSON()
 	if err != nil {

@@ -177,13 +177,13 @@ func (e *Engine) assembleRequest(ctx context.Context, stepID string, extra []llm
 
 func (a requestAssembly) contextFree() llm.Request {
 	request := a.request
-	request.SessionID = ""
+	request.SessionID = nil
 	request.CodexDispatch = nil
 	return request
 }
 
 func newDispatchRequestFactory(identity dispatchRequestIdentity) (dispatchRequestFactory, error) {
-	if err := identity.validate(); err != nil {
+	if _, err := identity.newDispatchContext(); err != nil {
 		return dispatchRequestFactory{}, err
 	}
 	return dispatchRequestFactory{identity: identity}, nil
@@ -203,17 +203,12 @@ func (e *Engine) activeDispatchRequestFactory(stepID string, requestKind *llm.Co
 }
 
 func (f dispatchRequestFactory) generation(base llm.Request) (llm.Request, error) {
-	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:            f.identity.SessionID,
-		RunID:                f.identity.RunID,
-		CompactionGeneration: f.identity.CompactionGeneration,
-		RequestKind:          f.identity.RequestKind,
-	})
+	dispatch, err := f.identity.newDispatchContext()
 	if err != nil {
 		return llm.Request{}, err
 	}
 	request := base
-	request.SessionID = f.identity.SessionID
+	request.SessionID = textutil.Value(f.identity.SessionID)
 	request.CodexDispatch = dispatch
 	if err := request.Validate(); err != nil {
 		return llm.Request{}, err
@@ -222,35 +217,23 @@ func (f dispatchRequestFactory) generation(base llm.Request) (llm.Request, error
 }
 
 func (f dispatchRequestFactory) compaction(base llm.CompactionRequest) (llm.CompactionRequest, error) {
-	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:            f.identity.SessionID,
-		RunID:                f.identity.RunID,
-		CompactionGeneration: f.identity.CompactionGeneration,
-		RequestKind:          f.identity.RequestKind,
-	})
+	dispatch, err := f.identity.newDispatchContext()
 	if err != nil {
 		return llm.CompactionRequest{}, err
 	}
 	request := base
-	request.SessionID = f.identity.SessionID
+	request.SessionID = textutil.Value(f.identity.SessionID)
 	request.CodexDispatch = dispatch
 	return request, nil
 }
 
-func (i dispatchRequestIdentity) validate() error {
-	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+func (i dispatchRequestIdentity) newDispatchContext() (*llm.CodexDispatchContext, error) {
+	return llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
 		SessionID:            i.SessionID,
 		RunID:                i.RunID,
 		CompactionGeneration: i.CompactionGeneration,
 		RequestKind:          i.RequestKind,
 	})
-	if err != nil {
-		return err
-	}
-	if dispatch == nil {
-		return fmt.Errorf("%w: dispatch identity is required", llm.ErrInvalidRequest)
-	}
-	return nil
 }
 
 func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode, useRequiredToolCalls bool) llm.ToolChoiceMode {

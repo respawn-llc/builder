@@ -87,7 +87,10 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	if err := validateOpenAIDispatchSessionID(request.SessionID); err != nil {
+	if request.SessionID == nil {
+		return OpenAIResponse{}, fmt.Errorf("%w: Session identity is required for dispatch", ErrInvalidRequest)
+	}
+	if err := validateOpenAIDispatchSessionID(*request.SessionID); err != nil {
 		return OpenAIResponse{}, err
 	}
 
@@ -100,11 +103,11 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		return OpenAIResponse{}, err
 	}
 	projection, err := validateOpenAIDispatchForMode(
-		request.SessionID,
+		*request.SessionID,
 		request.Model,
 		request.CodexDispatch,
 		mode,
-		effectiveGenerationServiceTier(request, providerCaps),
+		effectiveServiceTier(request.FastMode, providerCaps),
 	)
 	if err != nil {
 		return OpenAIResponse{}, err
@@ -121,7 +124,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		option.WithHTTPClient(t.Client),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, &request.SessionID, projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -164,7 +167,10 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	if err := validateOpenAIDispatchSessionID(request.SessionID); err != nil {
+	if request.SessionID == nil {
+		return OpenAIResponse{}, fmt.Errorf("%w: Session identity is required for dispatch", ErrInvalidRequest)
+	}
+	if err := validateOpenAIDispatchSessionID(*request.SessionID); err != nil {
 		return OpenAIResponse{}, err
 	}
 
@@ -177,11 +183,11 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		return OpenAIResponse{}, err
 	}
 	projection, err := validateOpenAIDispatchForMode(
-		request.SessionID,
+		*request.SessionID,
 		request.Model,
 		request.CodexDispatch,
 		mode,
-		effectiveGenerationServiceTier(request, providerCaps),
+		effectiveServiceTier(request.FastMode, providerCaps),
 	)
 	if err != nil {
 		return OpenAIResponse{}, err
@@ -198,7 +204,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, &request.SessionID, projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -351,7 +357,10 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if t.Client == nil {
 		t.Client = NewHTTPClient(120 * time.Second)
 	}
-	if err := validateOpenAIDispatchSessionID(request.SessionID); err != nil {
+	if request.SessionID == nil {
+		return OpenAICompactionResponse{}, fmt.Errorf("%w: Session identity is required for dispatch", ErrInvalidRequest)
+	}
+	if err := validateOpenAIDispatchSessionID(*request.SessionID); err != nil {
 		return OpenAICompactionResponse{}, err
 	}
 
@@ -368,11 +377,11 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 		return OpenAICompactionResponse{}, err
 	}
 	projection, err := validateOpenAIDispatchForMode(
-		request.SessionID,
+		*request.SessionID,
 		request.Model,
 		request.CodexDispatch,
 		mode,
-		effectiveCompactionServiceTier(request, providerCaps),
+		effectiveServiceTier(request.FastMode, providerCaps),
 	)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
@@ -397,7 +406,7 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
-	reqOpts := t.buildRequestOptions(authHeader, mode, &request.SessionID, projection, request.CodexDispatch)
+	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)

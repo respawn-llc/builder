@@ -44,7 +44,6 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		ReasoningEffort:         reviewerCfg.ThinkingLevel,
 		SupportsReasoningEffort: reviewerCfg.ModelCapabilities.SupportsReasoningEffort,
 		SystemPrompt:            systemPrompt,
-		SessionID:               reviewerSessionID(e.store.Meta().SessionID),
 		Items:                   reviewerItems,
 		Tools:                   []llm.Tool{},
 		ToolChoiceMode:          llm.ToolChoiceModeAutomatic,

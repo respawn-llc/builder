@@ -30,8 +30,8 @@ func TestPrepareInspectionRequestWithoutToolsUsesAutomaticChoice(t *testing.T) {
 	if request.ToolChoiceMode != llm.ToolChoiceModeAutomatic {
 		t.Fatalf("tool choice mode = %q, want automatic", request.ToolChoiceMode)
 	}
-	if request.SessionID != "" {
-		t.Fatalf("inspection SessionID = %q, want absent", request.SessionID)
+	if request.SessionID != nil {
+		t.Fatalf("inspection SessionID = %q, want absent", *request.SessionID)
 	}
 	if request.CodexDispatch != nil {
 		t.Fatal("inspection request unexpectedly carries Codex dispatch context")

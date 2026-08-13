@@ -64,7 +64,7 @@ func TestOpenAIClientProjectsProviderPhaseFromOneAuthoritativeFact(t *testing.T)
 		},
 	})
 
-	resp, err := client.Generate(context.Background(), Request{SessionID: "test-session", Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic})
+	resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestGenerateDecodesAbsentProviderPhaseStructurally(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := NewOpenAIClient(newProviderPhaseResponseTransport(t, tt.phaseField))
-			resp, err := client.Generate(context.Background(), Request{SessionID: "test-session", Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
+			resp, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
 			if err != nil {
 				t.Fatalf("generate: %v", err)
 			}
@@ -116,7 +116,7 @@ func TestGenerateRejectsInvalidProviderPhaseContracts(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := NewOpenAIClient(newProviderPhaseResponseTransport(t, tt.phaseField))
-			_, err := client.Generate(context.Background(), Request{SessionID: "test-session", Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
+			_, err := client.Generate(context.Background(), Request{SessionID: textutil.Value("test-session"), Model: "compatible-model", ToolChoiceMode: ToolChoiceModeAutomatic})
 			if err == nil {
 				t.Fatal("expected provider contract error")
 			}
@@ -138,7 +138,7 @@ func TestGenerateStreamAccumulatesOutputItemProviderPhase(t *testing.T) {
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: "test-session", Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestGenerateStreamAggregatesCompletedResponseProviderPhase(t *testing.T) {
 		`[DONE]`,
 	)
 
-	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: "test-session", Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
+	resp, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic}, StreamCallbacks{})
 	if err != nil {
 		t.Fatalf("generate stream: %v", err)
 	}

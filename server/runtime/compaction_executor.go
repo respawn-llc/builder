@@ -225,7 +225,7 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
+	req.SessionID = textutil.Value(e.SessionID())
 	req.PromptCacheKey = cacheKey
 	req.PromptCacheScope = transcript.CacheWarningScopeConversation
 	return req, true, nil

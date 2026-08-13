@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/shared/textutil"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -44,11 +45,11 @@ func (*failingOAuthAuth) OpenAIAuthMetadata(context.Context) (string, string, er
 func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	methods := []struct {
 		name     string
-		dispatch func(*HTTPTransport, string) error
+		dispatch func(*HTTPTransport, *string) error
 	}{
 		{
 			name: "generate",
-			dispatch: func(transport *HTTPTransport, sessionID string) error {
+			dispatch: func(transport *HTTPTransport, sessionID *string) error {
 				_, err := transport.Generate(context.Background(), OpenAIRequest{
 					Model:          "gpt-5",
 					ToolChoiceMode: ToolChoiceModeAutomatic,
@@ -59,7 +60,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 		},
 		{
 			name: "stream",
-			dispatch: func(transport *HTTPTransport, sessionID string) error {
+			dispatch: func(transport *HTTPTransport, sessionID *string) error {
 				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
 					Model:          "gpt-5",
 					ToolChoiceMode: ToolChoiceModeAutomatic,
@@ -70,7 +71,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 		},
 		{
 			name: "compact",
-			dispatch: func(transport *HTTPTransport, sessionID string) error {
+			dispatch: func(transport *HTTPTransport, sessionID *string) error {
 				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 					Model:     "gpt-5",
 					SessionID: sessionID,
@@ -82,13 +83,14 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 
 	invalidSessionIDs := []struct {
 		name  string
-		value string
+		value *string
 	}{
 		{name: "missing"},
-		{name: "leading SP", value: " session-1"},
-		{name: "trailing HTAB", value: "session-1\t"},
-		{name: "control byte", value: "session-\n1"},
-		{name: "oversized", value: strings.Repeat("s", maxCodexHeaderValueBytes+1)},
+		{name: "present empty", value: textutil.Value("")},
+		{name: "leading SP", value: textutil.Value(" session-1")},
+		{name: "trailing HTAB", value: textutil.Value("session-1\t")},
+		{name: "control byte", value: textutil.Value("session-\n1")},
+		{name: "oversized", value: textutil.Value(strings.Repeat("s", maxCodexHeaderValueBytes+1))},
 	}
 	authModes := []struct {
 		name      string
@@ -223,7 +225,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 	_, err = transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	})
 	if err != nil {
@@ -295,7 +297,7 @@ func TestOAuthFastGenerationRoutingTierMatchesPayload(t *testing.T) {
 		Model:          "gpt-5.6-sol",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		FastMode:       true,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	})
 	if err != nil {
@@ -328,7 +330,7 @@ func TestNonOAuthDispatchOmitsCodexOnlyContract(t *testing.T) {
 	_, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -363,7 +365,7 @@ func TestAnonymousExplicitBaseDispatchSendsCommonIdentityWithoutAuthorization(t 
 	_, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "custom-model",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -417,7 +419,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				_, err := transport.Generate(context.Background(), OpenAIRequest{
 					Model:          model,
 					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      "session-1",
+					SessionID:      textutil.Value("session-1"),
 					CodexDispatch:  dispatch,
 				})
 				return err
@@ -429,7 +431,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
 					Model:          model,
 					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      "session-1",
+					SessionID:      textutil.Value("session-1"),
 					CodexDispatch:  dispatch,
 				}, StreamCallbacks{})
 				return err
@@ -440,7 +442,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 			dispatch: func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
 				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 					Model:         model,
-					SessionID:     "session-1",
+					SessionID:     textutil.Value("session-1"),
 					CodexDispatch: dispatch,
 				})
 				return err
@@ -527,7 +529,7 @@ func TestOAuthCompactRejectsUnrepresentableRoutingModelForEveryEffectiveTierBefo
 
 				_, err = transport.Compact(context.Background(), OpenAICompactionRequest{
 					Model:         invalidModel.value,
-					SessionID:     "session-1",
+					SessionID:     textutil.Value("session-1"),
 					FastMode:      tier.fastMode,
 					CodexDispatch: dispatch,
 				})
@@ -553,7 +555,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 				_, err := transport.Generate(context.Background(), OpenAIRequest{
 					Model:          "unknown-model",
 					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      "session-1",
+					SessionID:      textutil.Value("session-1"),
 				})
 				return err
 			},
@@ -564,7 +566,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
 					Model:          "unknown-model",
 					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      "session-1",
+					SessionID:      textutil.Value("session-1"),
 				}, StreamCallbacks{})
 				return err
 			},
@@ -574,7 +576,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 			dispatch: func(transport *HTTPTransport) error {
 				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 					Model:     "unknown-model",
-					SessionID: "session-1",
+					SessionID: textutil.Value("session-1"),
 				})
 				return err
 			},

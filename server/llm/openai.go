@@ -19,7 +19,7 @@ type OpenAIRequest struct {
 	EnableNativeWebSearch   bool
 	SystemPrompt            string
 	PromptCacheKey          string
-	SessionID               string
+	SessionID               *string
 	CodexDispatch           *CodexDispatchContext
 	Items                   []ResponseItem
 	Tools                   []Tool
@@ -70,7 +70,7 @@ type OpenAICompactionRequest struct {
 	Model          string
 	Instructions   string
 	PromptCacheKey string
-	SessionID      string
+	SessionID      *string
 	FastMode       bool
 	CodexDispatch  *CodexDispatchContext
 	InputItems     []ResponseItem
@@ -241,8 +241,16 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if request.Model == "" {
 		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
 	}
+	if request.SessionID != nil {
+		if err := validateOpenAIDispatchSessionID(*request.SessionID); err != nil {
+			return CompactionResponse{}, err
+		}
+	}
 	if request.CodexDispatch != nil {
-		if err := request.CodexDispatch.validateForSession(request.SessionID); err != nil {
+		if request.SessionID == nil {
+			return CompactionResponse{}, fmt.Errorf("%w: Session identity is required with Codex dispatch context", ErrInvalidRequest)
+		}
+		if err := request.CodexDispatch.validateForSession(*request.SessionID); err != nil {
 			return CompactionResponse{}, err
 		}
 	}
@@ -303,7 +311,7 @@ func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Requ
 }
 
 func contextFreeSupportRequest(request Request) Request {
-	request.SessionID = ""
+	request.SessionID = nil
 	request.CodexDispatch = nil
 	return request
 }

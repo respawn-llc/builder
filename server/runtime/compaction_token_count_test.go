@@ -28,7 +28,7 @@ func TestBuildTokenCountRequestForItemsUsesAutomaticToolChoice(t *testing.T) {
 	if llm.HasEffectiveAdvertisedTools(req.Tools, req.EnableNativeWebSearch) {
 		t.Fatalf("standalone token-count request advertised tools: %+v", req)
 	}
-	if req.SessionID != "" || req.CodexDispatch != nil {
+	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("standalone token-count request carries dispatch identity: %+v", req)
 	}
 }
@@ -37,7 +37,7 @@ func TestCurrentExactTokenCountBuildsWithoutActiveRunOrDispatchIdentity(t *testi
 	t.Parallel()
 	client := &fakeCompactionClient{
 		inputTokenCountFn: func(request llm.Request) int {
-			if request.SessionID != "" || request.CodexDispatch != nil {
+			if request.SessionID != nil || request.CodexDispatch != nil {
 				t.Fatalf("exact-token support request carries dispatch identity: %+v", request)
 			}
 			return 123
@@ -61,7 +61,7 @@ func TestCurrentExactTokenCountWithoutPromptRefreshBuildsWithoutDispatchIdentity
 	t.Parallel()
 	client := &fakeCompactionClient{
 		inputTokenCountFn: func(request llm.Request) int {
-			if request.SessionID != "" || request.CodexDispatch != nil {
+			if request.SessionID != nil || request.CodexDispatch != nil {
 				t.Fatalf("exact-token support request carries dispatch identity: %+v", request)
 			}
 			return 321

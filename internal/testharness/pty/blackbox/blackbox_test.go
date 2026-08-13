@@ -769,7 +769,7 @@ func TestResponsesStubStreamsRequiredOperationToHTTPTransport(t *testing.T) {
 	var deltas []string
 	response, err := transport.GenerateStream(context.Background(), llm.OpenAIRequest{
 		Model:          "gpt-5",
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Items:          llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(probe)}}),
 	}, func(delta string) {
@@ -805,7 +805,7 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:         "gpt-5",
-		SessionID:     "session-1",
+		SessionID:     textutil.Value("session-1"),
 		CodexDispatch: testCodexDispatch(t, "session-1", llm.CodexRequestKindCompaction),
 		InputItems:    llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
 	}); err != nil {

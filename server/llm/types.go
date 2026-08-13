@@ -521,7 +521,7 @@ type Request struct {
 	SystemPrompt            string                       `json:"system_prompt"`
 	PromptCacheKey          string                       `json:"prompt_cache_key,omitempty"`
 	PromptCacheScope        transcript.CacheWarningScope `json:"prompt_cache_scope,omitempty"`
-	SessionID               string                       `json:"session_id,omitempty"`
+	SessionID               *string                      `json:"session_id,omitempty"`
 	CodexDispatch           *CodexDispatchContext        `json:"-"`
 	Items                   []ResponseItem               `json:"items,omitempty"`
 	Tools                   []Tool                       `json:"tools,omitempty"`
@@ -570,8 +570,16 @@ func (r Request) Validate() error {
 			return fmt.Errorf("%w: structured_output.schema must be prepared", ErrInvalidRequest)
 		}
 	}
+	if r.SessionID != nil {
+		if err := validateOpenAIDispatchSessionID(*r.SessionID); err != nil {
+			return err
+		}
+	}
 	if r.CodexDispatch != nil {
-		if err := r.CodexDispatch.validateForSession(r.SessionID); err != nil {
+		if r.SessionID == nil {
+			return fmt.Errorf("%w: Session identity is required with Codex dispatch context", ErrInvalidRequest)
+		}
+		if err := r.CodexDispatch.validateForSession(*r.SessionID); err != nil {
 			return err
 		}
 	}
@@ -595,7 +603,6 @@ func RequestFromLockedContract(locked session.LockedContract, systemPrompt strin
 		SystemPrompt:            systemPrompt,
 		PromptCacheKey:          "",
 		PromptCacheScope:        "",
-		SessionID:               "",
 		Items:                   CloneResponseItems(items),
 		Tools:                   append([]Tool(nil), tools...),
 		ToolChoiceMode:          controls.ChoiceMode,
@@ -711,7 +718,7 @@ type CompactionRequest struct {
 	Model          string
 	Instructions   string
 	PromptCacheKey string
-	SessionID      string
+	SessionID      *string
 	FastMode       bool
 	CodexDispatch  *CodexDispatchContext `json:"-"`
 	InputItems     []ResponseItem

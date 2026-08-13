@@ -125,7 +125,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *test
 				client,
 				llm.Request{
 					Model:          "gpt-5",
-					SessionID:      "session-1",
+					SessionID:      textutil.Value("session-1"),
 					CodexDispatch:  dispatch,
 					ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 				},

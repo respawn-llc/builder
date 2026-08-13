@@ -432,7 +432,7 @@ func TestAPIKeyCompactRequestTargetsStreamingResponsesV2(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
 
-	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{SessionID: "test-session",
+	resp, err := transport.Compact(context.Background(), OpenAICompactionRequest{SessionID: textutil.Value("test-session"),
 		Model: "gpt-5",
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{
 			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("u1")},
@@ -803,7 +803,7 @@ func testOAuthCompactionRequest(t *testing.T, model string) OpenAICompactionRequ
 	}
 	return OpenAICompactionRequest{
 		Model:         model,
-		SessionID:     "test-session",
+		SessionID:     textutil.Value("test-session"),
 		CodexDispatch: dispatch,
 	}
 }
@@ -837,7 +837,7 @@ func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
 		{Type: ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_compaction")},
 	})
 
-	compactPayload, err := newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, requireProviderCapabilities(t, transport, OpenAIAuthMode{})).BuildCompactV2(OpenAICompactionRequest{SessionID: "test-session",
+	compactPayload, err := newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, requireProviderCapabilities(t, transport, OpenAIAuthMode{})).BuildCompactV2(OpenAICompactionRequest{SessionID: textutil.Value("test-session"),
 		Model:        "gpt-5",
 		Instructions: "compaction instructions",
 		InputItems:   canonicalItems,
@@ -957,7 +957,7 @@ func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testin
 	_, err = transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, caps)
 	checkErr("buildInputTokenCountParams", err)
 
-	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{SessionID: "test-session", Model: "gpt-5", InputItems: unpreparedItems})
+	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{SessionID: textutil.Value("test-session"), Model: "gpt-5", InputItems: unpreparedItems})
 	checkErr("buildCompactPayload", err)
 }
 

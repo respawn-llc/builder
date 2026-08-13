@@ -61,7 +61,7 @@ func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *t
 		Model:                 "gpt-5",
 		ToolChoiceMode:        ToolChoiceModeRequired,
 		EnableNativeWebSearch: true,
-		SessionID:             "session-1",
+		SessionID:             textutil.Value("session-1"),
 		CodexDispatch:         dispatch,
 		Tools:                 []Tool{{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})}},
 	}
@@ -78,7 +78,7 @@ func TestOpenAIClientCountRequestInputTokensPreservesGenerationToolControls(t *t
 	if len(transport.request.Tools) != 1 || transport.request.Tools[0].Name != "shell" {
 		t.Fatalf("captured tools = %+v", transport.request.Tools)
 	}
-	if transport.request.SessionID != "" || transport.request.CodexDispatch != nil {
+	if transport.request.SessionID != nil || transport.request.CodexDispatch != nil {
 		t.Fatalf("token-count support request carries dispatch identity: %+v", transport.request)
 	}
 }
@@ -200,7 +200,7 @@ func TestCodexDispatchContextRejectsRequestSessionMismatch(t *testing.T) {
 	request := Request{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-2",
+		SessionID:      textutil.Value("session-2"),
 		CodexDispatch:  context,
 	}
 	if err := request.Validate(); err == nil {
@@ -252,7 +252,7 @@ func TestOpenAIClientCompactRejectsCodexDispatchSessionMismatch(t *testing.T) {
 	client := NewOpenAIClient(streamingOnlyTransport{})
 	_, err = client.Compact(context.Background(), CompactionRequest{
 		Model:         "gpt-5",
-		SessionID:     "session-2",
+		SessionID:     textutil.Value("session-2"),
 		CodexDispatch: dispatchContext,
 	})
 	if err == nil {
@@ -266,7 +266,7 @@ func TestOpenAIClientCompactProjectsEffectiveFastMode(t *testing.T) {
 
 	if _, err := client.Compact(context.Background(), CompactionRequest{
 		Model:     "gpt-5.6-sol",
-		SessionID: "session-1",
+		SessionID: textutil.Value("session-1"),
 		FastMode:  true,
 	}); err != nil {
 		t.Fatalf("Compact: %v", err)
@@ -280,10 +280,10 @@ func TestCodexDispatchDoesNotAffectRequestJSONOrPreciseTokenFingerprint(t *testi
 	base := Request{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 	}
 	context, err := NewCodexDispatchContext(CodexDispatchFacts{
-		SessionID:            base.SessionID,
+		SessionID:            *base.SessionID,
 		RunID:                "run-1",
 		CompactionGeneration: 2,
 		RequestKind:          CodexRequestKindTurn.Optional(),

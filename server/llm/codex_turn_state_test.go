@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/shared/textutil"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -562,7 +563,7 @@ func TestResponsesV2CompactionObservesHeaderAndMetadataTurnState(t *testing.T) {
 
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:         "gpt-5",
-		SessionID:     "session-1",
+		SessionID:     textutil.Value("session-1"),
 		CodexDispatch: dispatch,
 	})
 	if err != nil {
@@ -606,7 +607,7 @@ func testCodexOpenAIRequest(dispatch *CodexDispatchContext) OpenAIRequest {
 	return OpenAIRequest{
 		Model:          "gpt-5",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      "session-1",
+		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	}
 }

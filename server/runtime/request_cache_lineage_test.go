@@ -420,7 +420,7 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if req.SessionID != "" || req.CodexDispatch != nil {
+	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
@@ -441,7 +441,7 @@ func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if req.SessionID != "" || req.CodexDispatch != nil {
+	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
@@ -470,7 +470,7 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if req.SessionID != "" || req.CodexDispatch != nil {
+	if req.SessionID != nil || req.CodexDispatch != nil {
 		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
@@ -511,8 +511,8 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	if got, want := req.SessionID, eng.SessionID(); got != want {
-		t.Fatalf("SessionID = %q, want %q", got, want)
+	if got, want := req.SessionID, eng.SessionID(); got == nil || *got != want {
+		t.Fatalf("SessionID = %v, want %q", got, want)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
@@ -687,8 +687,8 @@ func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testin
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if reviewerClient.calls[0].PromptCacheKey != "" {
 		t.Fatalf("reviewer PromptCacheKey = %q, want empty", reviewerClient.calls[0].PromptCacheKey)
@@ -714,8 +714,8 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)
@@ -752,8 +752,8 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(reopened.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(reopened.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)

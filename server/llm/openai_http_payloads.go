@@ -27,16 +27,8 @@ type openAIPayloadToolControls struct {
 	choice responses.ToolChoiceOptions
 }
 
-func effectiveGenerationServiceTier(request OpenAIRequest, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
-	if request.FastMode && SupportsFastModeProvider(capabilities) {
-		tier := responses.ResponseNewParamsServiceTierPriority
-		return &tier
-	}
-	return nil
-}
-
-func effectiveCompactionServiceTier(request OpenAICompactionRequest, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
-	if request.FastMode && SupportsFastModeProvider(capabilities) {
+func effectiveServiceTier(fastMode bool, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
+	if fastMode && SupportsFastModeProvider(capabilities) {
 		tier := responses.ResponseNewParamsServiceTierPriority
 		return &tier
 	}
@@ -217,7 +209,7 @@ func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequ
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
 		out.Instructions = openai.String(instructions)
 	}
-	if serviceTier := effectiveCompactionServiceTier(request, b.capabilities); serviceTier != nil {
+	if serviceTier := effectiveServiceTier(request.FastMode, b.capabilities); serviceTier != nil {
 		out.ServiceTier = *serviceTier
 	}
 	return out, nil

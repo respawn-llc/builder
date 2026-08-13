@@ -97,7 +97,7 @@ func (s *ResponsesStub) serveScripted(
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}
-	llmRequest.SessionID = lineage.sessionID
+	llmRequest.SessionID = textutil.Value(lineage.sessionID)
 	enriched, state, err := s.beginScriptedLineage(lineage, canonical)
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err

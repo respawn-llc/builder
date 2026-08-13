@@ -443,7 +443,7 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorForOpenAIV2(t *testing.T) {
 
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  "s1",
+		SessionID:  textutil.Value("s1"),
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err == nil {
@@ -723,7 +723,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	transport.Client = server.Client()
 	transport.ProviderIdentifier = "acme_agent"
 
-	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: "session-1"}); err != nil {
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: textutil.Value("session-1")}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	headers := <-requestHeaders
@@ -825,7 +825,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 
 	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
 		Model:     "vendor-custom-model",
-		SessionID: "session-1",
+		SessionID: textutil.Value("session-1"),
 		Items:     PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err != nil {

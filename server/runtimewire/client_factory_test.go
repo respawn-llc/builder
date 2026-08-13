@@ -271,11 +271,11 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 
 	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:     "operator-alias",
-		SessionID: store.Meta().SessionID,
+		SessionID: textutil.Value(store.Meta().SessionID),
 		Items:     llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
 	}
 	request.CodexDispatch, err = llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:   request.SessionID,
+		SessionID:   *request.SessionID,
 		RunID:       uuid.NewString(),
 		RequestKind: llm.CodexRequestKindTurn.Optional(),
 	})

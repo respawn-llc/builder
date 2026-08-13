@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/shared/textutil"
 )
 
 func TestGenerateAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalReturn(t *testing.T) {
@@ -56,7 +57,7 @@ func TestGenerateAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalRetur
 		},
 	})
 	_, _ = engine.generateWithRetryClient(context.Background(), "step-1", client, llm.Request{
-		Model: "gpt-5", SessionID: "session-1", CodexDispatch: dispatch,
+		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 	}, nil, nil, nil)
 
@@ -107,7 +108,7 @@ func TestCompactionAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalRet
 		},
 	})
 	_, _ = engine.compactWithRetry(context.Background(), "step-1", client, llm.CompactionRequest{
-		Model: "gpt-5", SessionID: "session-1", CodexDispatch: dispatch,
+		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
 	})
 	assertProviderTurnStateDiagnosticEvents(t, events)
 }
@@ -155,7 +156,7 @@ func TestProviderStateDiagnosticPublicationFailureIsLoggedAndRemainsPending(t *t
 	published := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 1)
 
 	_, _ = client.Generate(context.Background(), llm.Request{
-		Model: "gpt-5", SessionID: "session-1", CodexDispatch: dispatch,
+		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
 		ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 	})
 	engine.publishProviderTurnStateDiagnostics("step-1", dispatch, published)
