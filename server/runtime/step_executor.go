@@ -929,6 +929,9 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	}
 	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed)
 	if completeErr != nil && !completed.IsApplied() {
+		if isWorkflowCompletionOperationalError(completeErr) {
+			return true, true, completeErr
+		}
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}

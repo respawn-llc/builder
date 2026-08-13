@@ -114,7 +114,9 @@ type ManualMovePreview struct {
 }
 
 func (s *Store) PreviewManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreview, error) {
-	return s.resolveManualMove(ctx, s.queries, req)
+	preview, err := s.resolveManualMove(ctx, s.queries, req)
+	reportWorkflowInvariantError(s.invariantPolicy, err)
+	return preview, err
 }
 
 func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req ManualMoveRequest) (ManualMovePreview, error) {
@@ -225,7 +227,7 @@ func (s *Store) resolveManualMoveExecutablePreview(
 			SourceNode:    source,
 			Edges:         append([]workflow.Edge(nil), edgesByGroup[group.ID]...),
 		}
-		contextUnavailableForCandidate, err := manualMoveContextUnavailable(ctx, q, definition, req.TaskID, candidate, currentNodes)
+		contextUnavailableForCandidate, err := s.manualMoveContextUnavailable(ctx, q, definition, req.TaskID, candidate, currentNodes)
 		if err != nil {
 			return ManualMovePreview{}, err
 		}
@@ -282,7 +284,7 @@ func (s *Store) resolveManualMoveExecutablePreview(
 	return ManualMovePreview{Outcome: ManualMovePreviewOutcomeTransition, Choices: candidates}, nil
 }
 
-func manualMoveContextUnavailable(
+func (s *Store) manualMoveContextUnavailable(
 	ctx context.Context,
 	q *sqlitegen.Queries,
 	definition workflow.Definition,

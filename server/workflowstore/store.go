@@ -13,6 +13,7 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/requestmemo"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -30,6 +31,7 @@ type Store struct {
 	graphSaves          *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
 	eventMu             sync.RWMutex
 	eventSink           WorkflowEventPublisher
+	invariantPolicy     invariant.Policy
 }
 
 type Option func(*Store)
@@ -55,6 +57,19 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+func WithDebug(debug bool) Option {
+	return func(s *Store) {
+		mode := invariant.ModeDiagnostic
+		if debug {
+			mode = invariant.ModePanic
+		}
+		s.invariantPolicy = invariant.NewPolicy(
+			invariant.WithMode(mode),
+			invariant.WithSink(workflowInvariantSlogSink{}),
+		)
+	}
+}
+
 func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
@@ -75,6 +90,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		approvalGate:        make(chan struct{}, 1),
 		graphSaves:          requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
 		eventSink:           noopWorkflowEventPublisher{},
+		invariantPolicy:     invariant.NewPolicy(invariant.WithSink(workflowInvariantSlogSink{})),
 	}
 	for _, opt := range opts {
 		opt(store)

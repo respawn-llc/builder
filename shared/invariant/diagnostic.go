@@ -55,6 +55,8 @@ const (
 	FieldTaskID                    Field = "task_id"
 	FieldSourceNodeID              Field = "source_node_id"
 	FieldTargetNodeID              Field = "target_node_id"
+	FieldEdgeID                    Field = "edge_id"
+	FieldTransitionBranchKey       Field = "transition_branch_key"
 	FieldActiveSourceSessionID     Field = "active_source_session_id"
 	FieldRejectedRetainedSessionID Field = "rejected_retained_session_id"
 	FieldReason                    Field = "reason"

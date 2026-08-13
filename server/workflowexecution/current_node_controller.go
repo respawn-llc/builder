@@ -145,6 +145,7 @@ type CurrentNodeController struct {
 	liveByNode            map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID
 	stopping              map[runtimeids.ExecutionScopeID]struct{}
 	completed             map[runtimeids.ExecutionScopeID]struct{}
+	operationallyBlocked  map[runtimeids.ExecutionScopeID]struct{}
 	postTurnFinalization  map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization
 	violations            map[runtimeids.ExecutionScopeID]int64
 	heldStarts            map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart
@@ -206,6 +207,7 @@ func NewCurrentNodeController(
 		liveByNode:            make(map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID),
 		stopping:              make(map[runtimeids.ExecutionScopeID]struct{}),
 		completed:             make(map[runtimeids.ExecutionScopeID]struct{}),
+		operationallyBlocked:  make(map[runtimeids.ExecutionScopeID]struct{}),
 		postTurnFinalization:  make(map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization),
 		violations:            make(map[runtimeids.ExecutionScopeID]int64),
 		heldStarts:            make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
@@ -505,6 +507,32 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 
 var _ workflowruntime.PostTurnFinalizer = (*CurrentNodeController)(nil)
 
+func (c *CurrentNodeController) FinalizeCurrentNodeOperationalCompletionBlock(
+	ctx context.Context,
+	scopeID runtimeids.ExecutionScopeID,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	if scopeID.IsZero() {
+		return errors.New("workflow operational completion block scope is required")
+	}
+	return c.permit.Run(ctx, func(context.Context) error {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if _, live := c.live[scopeID]; !live {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if _, stopping := c.stopping[scopeID]; stopping {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		c.operationallyBlocked[scopeID] = struct{}{}
+		return nil
+	})
+}
+
+var _ workflowruntime.OperationalCompletionBlockFinalizer = (*CurrentNodeController)(nil)
+
 // CompleteIdleCurrentNode applies a forced completion only after the
 // controller has established that it owns no active, admitted, queued, or
 // retirement-held work for the Task. Unlike a live completion there is no
@@ -765,6 +793,8 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	delete(c.stopping, scope.ID())
 	_, completed := c.completed[scope.ID()]
 	delete(c.completed, scope.ID())
+	_, operationallyBlocked := c.operationallyBlocked[scope.ID()]
+	delete(c.operationallyBlocked, scope.ID())
 	delete(c.postTurnFinalization, scope.ID())
 	starts := append([]currentNodeQueuedStart(nil), c.heldStarts[scope.ID()]...)
 	delete(c.heldStarts, scope.ID())
@@ -779,7 +809,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	if !closed {
 		c.wakeAdmissionWorker()
 	}
-	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || interrupted || closed {
+	if !isLive || !live.lease.Workflow().CurrentNode.Equal(ref.CurrentNode) || interrupted || operationallyBlocked || closed {
 		if !closed {
 			c.wakeAdmissionWorker()
 		}

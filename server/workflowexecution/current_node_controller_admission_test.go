@@ -264,6 +264,47 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	}
 }
 
+func TestCurrentNodeControllerOperationalCompletionBlockPreservesAdmittedCurrentNode(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	reference := currentNodeReferenceForControllerTest(t, "task-operational-block", "node-script")
+	store := &currentNodeControllerStore{}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+			controller.ExecutionFinalized(scope)
+		}),
+	})
+	runner := &operationalBlockScriptRunner{
+		authority: authority,
+		shellPath: shellPath,
+		handle:    make(chan sessionruntime.ExecutionHandle, 1),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, reference); err != nil {
+		t.Fatalf("queue current node start: %v", err)
+	}
+	handle := <-runner.handle
+	if _, err := handle.Wait(context.Background()); err == nil {
+		t.Fatal("operational completion block unexpectedly succeeded")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, interrupted := store.interruption(reference); interrupted {
+		t.Fatal("operational completion block interrupted the admitted Current Node")
+	}
+}
+
 func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesIndependently(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -343,6 +384,44 @@ type finalizerFailureScriptRunner struct {
 	finalizerEntered chan struct{}
 	releaseFinalizer chan struct{}
 	handle           chan sessionruntime.ExecutionHandle
+}
+
+type operationalBlockScriptRunner struct {
+	authority *sessionruntime.Authority
+	shellPath string
+	handle    chan sessionruntime.ExecutionHandle
+}
+
+func (r *operationalBlockScriptRunner) StartCurrentNode(
+	_ context.Context,
+	_ workflow.CurrentNodeReference,
+	_ workflowruntime.TaskPromptDelivery,
+	_ *CurrentNodeClassifiedAssignment,
+	lease sessionruntime.WorkflowExecutionLease,
+	controller workflowruntime.Controller,
+) error {
+	handle, err := r.authority.StartScriptExecution(context.Background(), sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  sessionruntime.ScriptCommand{Path: r.shellPath, Args: []string{"-c", "exit 0"}},
+		Finalize: func(ctx context.Context, scope sessionruntime.ExecutionScope, _ sessionruntime.ScriptResult, runErr error) error {
+			if runErr != nil {
+				return runErr
+			}
+			finalizer, ok := controller.(workflowruntime.OperationalCompletionBlockFinalizer)
+			if !ok {
+				return errors.New("workflow controller cannot finalize an operational completion block")
+			}
+			if err := finalizer.FinalizeCurrentNodeOperationalCompletionBlock(ctx, scope.ID()); err != nil {
+				return err
+			}
+			return errors.New("legacy Workflow continuation source is unresolved")
+		},
+	})
+	if err != nil {
+		return err
+	}
+	r.handle <- handle
+	return nil
 }
 
 func (r *finalizerFailureScriptRunner) StartCurrentNode(

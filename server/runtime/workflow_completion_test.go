@@ -979,6 +979,71 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
 }
 
+func TestWorkflowOperationalCompletionErrorDoesNotConsumeProtocolBudget(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		mode            config.WorkflowCompletionMode
+		response        llm.Response
+		wantSubmitError bool
+	}{
+		{
+			name:            "structured output",
+			mode:            config.WorkflowCompletionModeStructuredOutput,
+			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+			wantSubmitError: true,
+		},
+		{
+			name:            "unstructured output",
+			mode:            config.WorkflowCompletionModeUnstructured,
+			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+			wantSubmitError: true,
+		},
+		{
+			name: "complete node tool",
+			mode: config.WorkflowCompletionModeTool,
+			response: commentaryResponse(
+				"complete",
+				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			),
+			wantSubmitError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			source, err := workflow.NewCurrentNodeReference("task-legacy", "node-source", nil)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeReference: %v", err)
+			}
+			operationalErr := workflow.LegacyContinuationSourceUnresolvedError{
+				Source:       source,
+				TargetNodeID: "node-target",
+				EdgeID:       "edge-target",
+				Scope:        workflow.LegacyContinuationSourceCurrentNode,
+			}
+			controller := &fakeWorkflowController{completeErr: operationalErr}
+			client := &fakeClient{responses: []llm.Response{tt.response}}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, tt.mode), Config{})
+
+			_, submitErr := eng.SubmitUserMessage(context.Background(), "run")
+			if tt.wantSubmitError {
+				if !errors.As(submitErr, &operationalErr) {
+					t.Fatalf("submit error = %v, want LegacyContinuationSourceUnresolvedError", submitErr)
+				}
+			} else if submitErr != nil {
+				t.Fatalf("submit: %v", submitErr)
+			}
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("protocol violations = %d, want 0", got)
+			}
+			if got := controller.maxHits.Load(); got != 0 {
+				t.Fatalf("protocol budget max hits = %d, want 0", got)
+			}
+		})
+	}
+}
+
 func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
