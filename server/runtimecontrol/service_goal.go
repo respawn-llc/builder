@@ -12,15 +12,20 @@ import (
 	"core/server/runtimecommand"
 	"core/server/runtimeview"
 	"core/server/session"
+	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalShowResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error) {
+		return s.ShowGoalValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ShowGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error) {
+	req := validated.Value()
 	if s == nil || s.persisted == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
@@ -40,10 +45,14 @@ func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowReq
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+		return s.SetGoalValidated(ctx, validated)
+	})
+}
+
+func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+	req := validated.Value()
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
@@ -65,22 +74,38 @@ func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetReque
 }
 
 func (s *Service) PauseGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusPaused)
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+		return s.PauseGoalValidated(ctx, validated)
+	})
+}
+
+func (s *Service) PauseGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusPaused)
 }
 
 func (s *Service) ResumeGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusActive)
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+		return s.ResumeGoalValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ResumeGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusActive)
 }
 
 func (s *Service) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, req, session.GoalStatusComplete)
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+		return s.CompleteGoalValidated(ctx, validated)
+	})
 }
 
-func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+func (s *Service) CompleteGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatusValidated(ctx, validated, session.GoalStatusComplete)
+}
+
+func (s *Service) setGoalStatusValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
+	req := validated.Value()
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
@@ -117,10 +142,14 @@ func optionalGoalExecutionID(raw string) *string {
 }
 
 func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+		return s.ClearGoalValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ClearGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error) {
+	req := validated.Value()
+	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}

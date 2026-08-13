@@ -150,6 +150,20 @@ type RuntimeControlService interface {
 	ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error)
 }
 
+type RuntimeGoalTrustedService interface {
+	ShowGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error)
+	SetGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error)
+	PauseGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
+	ResumeGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
+	CompleteGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
+	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error)
+}
+
+type RuntimeControlGatewayService interface {
+	RuntimeControlService
+	RuntimeGoalTrustedService
+}
+
 type RuntimeLiveControlService interface {
 	LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error)
 	LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error)

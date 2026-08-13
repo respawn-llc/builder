@@ -77,13 +77,7 @@ func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionA
 }
 
 func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
-		return GoalCommandResult{}, err
-	}
 	command.Objective = strings.TrimSpace(command.Objective)
-	if command.Objective == "" {
-		return GoalCommandResult{}, errors.New("goal objective is required")
-	}
 	if isStepScoped(command.Actor, command.Execution) {
 		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			availability := engine.GoalMutationAvailability()
@@ -103,9 +97,6 @@ func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCo
 }
 
 func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor, command.Execution); err != nil {
-		return GoalCommandResult{}, err
-	}
 	if isStepScoped(command.Actor, command.Execution) {
 		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			availability := engine.GoalMutationAvailability()
@@ -125,30 +116,9 @@ func (a *GoalAuthority) Status(ctx context.Context, command GoalStatusCommand) (
 }
 
 func (a *GoalAuthority) Clear(ctx context.Context, command GoalClearCommand) (GoalCommandResult, error) {
-	if err := validateGoalCommand(command.SessionID, command.Actor, GoalExecutionIdentity{}); err != nil {
-		return GoalCommandResult{}, err
-	}
 	return a.withDormantAdmission(ctx, command.SessionID, func(store *session.Store) (GoalCommandResult, error) {
 		return dormantClear(store, command)
 	}, runtime.CurrentGoalClear{Actor: command.Actor})
-}
-
-func validateGoalCommand(sessionID runtimeids.SessionID, actor session.GoalActor, execution GoalExecutionIdentity) error {
-	if sessionID.IsZero() {
-		return errors.New("session id is required")
-	}
-	switch actor {
-	case session.GoalActorUser, session.GoalActorAgent, session.GoalActorSystem:
-	default:
-		return errors.New("goal actor must be user, agent, or system")
-	}
-	if execution.RunID != nil && *execution.RunID == "" {
-		return errors.New("goal run id cannot be empty")
-	}
-	if execution.StepID != nil && *execution.StepID == "" {
-		return errors.New("goal step id cannot be empty")
-	}
-	return nil
 }
 
 func isStepScoped(actor session.GoalActor, execution GoalExecutionIdentity) bool {

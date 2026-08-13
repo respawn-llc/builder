@@ -128,6 +128,13 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodProcessInlineOutput,
 		protocol.MethodProcessSubscribeOutput:
 		handler.owner = inboundHandlerTrustedOwner
+	case protocol.MethodRuntimeGoalShow,
+		protocol.MethodRuntimeGoalSet,
+		protocol.MethodRuntimeGoalPause,
+		protocol.MethodRuntimeGoalResume,
+		protocol.MethodRuntimeGoalComplete,
+		protocol.MethodRuntimeGoalClear:
+		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRunPrompt,
 		protocol.MethodAttentionNotificationSubscribe,
 		protocol.MethodPromptFollowUpWatch:
@@ -703,6 +710,7 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		},
 		handleRuntimeLiveWait,
 	)
+	registerGoalRoutes(executables)
 	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, apicontract.AuthorizedSessionInActiveProject, serverapi.SessionRuntimeActivateResponse](
 		protocol.MethodSessionRuntimeActivate,
 		apicontract.SemanticValidationRequired,
@@ -720,6 +728,26 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		handleSessionRuntimeRelease,
 	)
 	return executables
+}
+
+func registerGoalRoutes(executables map[string]inboundExecutableRoute) {
+	authorizeShow := authorizeGoalSession(func(req serverapi.RuntimeGoalShowRequest) string { return req.SessionID })
+	authorizeSet := authorizeGoalSession(func(req serverapi.RuntimeGoalSetRequest) string { return req.SessionID })
+	authorizeStatus := authorizeGoalSession(func(req serverapi.RuntimeGoalStatusRequest) string { return req.SessionID })
+	authorizeClear := authorizeGoalSession(func(req serverapi.RuntimeGoalClearRequest) string { return req.SessionID })
+	executables[protocol.MethodRuntimeGoalShow] = inboundTrustedUnary(protocol.MethodRuntimeGoalShow, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeShow, handleRuntimeGoalShow)
+	executables[protocol.MethodRuntimeGoalSet] = inboundTrustedUnary(protocol.MethodRuntimeGoalSet, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeSet, handleRuntimeGoalSet)
+	executables[protocol.MethodRuntimeGoalPause] = inboundTrustedUnary(protocol.MethodRuntimeGoalPause, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeStatus, handleRuntimeGoalPause)
+	executables[protocol.MethodRuntimeGoalResume] = inboundTrustedUnary(protocol.MethodRuntimeGoalResume, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeStatus, handleRuntimeGoalResume)
+	executables[protocol.MethodRuntimeGoalComplete] = inboundTrustedUnary(protocol.MethodRuntimeGoalComplete, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeStatus, handleRuntimeGoalComplete)
+	executables[protocol.MethodRuntimeGoalClear] = inboundTrustedUnary(protocol.MethodRuntimeGoalClear, apicontract.SemanticValidationRequired, requestDecoderDefault, nil, authorizeClear, handleRuntimeGoalClear)
+}
+
+func authorizeGoalSession[Req any](sessionID func(Req) string) func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (noAuthorizationFacts, error) {
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[Req]) (noAuthorizationFacts, error) {
+		err := g.requireGoalSessionAccess(ctx, state, sessionID(validated.Value()))
+		return noAuthorizationFacts{}, err
+	}
 }
 
 func registerActiveProjectSessionRoutes(executables map[string]inboundExecutableRoute) {
@@ -880,6 +908,62 @@ func handleRuntimeLiveWait(
 		return serverapi.RuntimeLiveWaitResponse{}, errors.New("Runtime Live Control trusted service is required")
 	}
 	return trusted.LiveWaitValidated(ctx, request)
+}
+
+func runtimeGoalTrustedService(g *Gateway) (apicontract.RuntimeGoalTrustedService, error) {
+	trusted, ok := g.deps.RuntimeControlClient().(apicontract.RuntimeGoalTrustedService)
+	if !ok {
+		return nil, errors.New("Runtime Goal trusted service is required")
+	}
+	return trusted, nil
+}
+
+func handleRuntimeGoalShow(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalShowRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalShowResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalShowResponse{}, err
+	}
+	return trusted.ShowGoalValidated(ctx, request)
+}
+
+func handleRuntimeGoalSet(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalSetRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalMutationResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	return trusted.SetGoalValidated(ctx, request)
+}
+
+func handleRuntimeGoalPause(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalStatusRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalMutationResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	return trusted.PauseGoalValidated(ctx, request)
+}
+
+func handleRuntimeGoalResume(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalStatusRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalMutationResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	return trusted.ResumeGoalValidated(ctx, request)
+}
+
+func handleRuntimeGoalComplete(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalStatusRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalMutationResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	return trusted.CompleteGoalValidated(ctx, request)
+}
+
+func handleRuntimeGoalClear(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.RuntimeGoalClearRequest], _ noAuthorizationFacts) (serverapi.RuntimeGoalMutationResponse, error) {
+	trusted, err := runtimeGoalTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeGoalMutationResponse{}, err
+	}
+	return trusted.ClearGoalValidated(ctx, request)
 }
 
 func handleSessionMainView(
