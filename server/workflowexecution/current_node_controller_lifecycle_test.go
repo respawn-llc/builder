@@ -810,6 +810,145 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	waitForRunningCurrentNode(t, authority, queuedAgent)
 }
 
+func TestCurrentNodeControllerCloseWaitsForInFlightTaskMutation(t *testing.T) {
+	taskID := workflow.TaskID("task-close-in-flight")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-start")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	store := &currentNodeControllerStore{
+		started: workflowstore.StartTaskResult{
+			Mutation: workflow.CurrentNodeMutationResult{
+				Created: []workflow.CurrentNode{{
+					Reference:  reference,
+					Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+				}},
+			},
+		},
+		startTaskStarted: started,
+		startTaskRelease: release,
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := controller.StartTask(
+			context.Background(),
+			taskID,
+			TaskStartPreparation{
+				Prepare: func(context.Context) error { return nil },
+				Commit:  func(context.Context) error { return nil },
+			},
+			func(TaskPreparationFinalization) {},
+		)
+		startDone <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("StartTask did not enter its durable mutation")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- controller.Close() }()
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before in-flight Task mutation finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-startDone; err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not finish after in-flight Task mutation settled")
+	}
+}
+
+func TestCurrentNodeControllerCloseCancelsAdmissionBeforeWaitingForLifecycleBarrier(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-close-admission-wait", "node-agent")
+	release := make(chan struct{})
+	started := make(chan struct{})
+	start := currentNodeQueuedStart{
+		reference: reference,
+		policy:    currentNodeAdmissionExplicitOverride,
+		assignmentWait: &lateCommitCurrentNodeAssignmentSteer{
+			release: release,
+			started: started,
+		},
+		done: make(chan struct{}),
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, &currentNodeControllerStore{}, &countingCurrentNodeRunner{}, authority, 1)
+	key := start.referenceKey()
+	controller.mu.Lock()
+	controller.explicitReservations[key] = start
+	controller.admissionWorkers[key] = start
+	controller.mu.Unlock()
+	controller.admissionWG.Add(1)
+	go controller.runAdmission(start)
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("admission did not begin waiting for assignment")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- controller.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Close did not cancel admission before waiting for lifecycle ownership")
+	}
+}
+
+func TestCompleteIdleCurrentNodeRejectsSessionMovingToAnotherTask(t *testing.T) {
+	first := workflow.CurrentNode{
+		Reference: currentNodeReferenceForControllerTest(t, "task-idle-first", "node-first"),
+	}
+	second := workflow.CurrentNode{
+		Reference: currentNodeReferenceForControllerTest(t, "task-idle-second", "node-second"),
+	}
+	store := &currentNodeControllerStore{
+		idleResolvedSequence: []workflow.CurrentNode{first, second},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	sessionID := runtimeids.NewSessionID()
+
+	_, err := controller.CompleteIdleCurrentNode(
+		context.Background(),
+		workflowstore.IdleCurrentNodeSelector{SessionID: &sessionID},
+		"next",
+		nil,
+		"",
+	)
+	if err == nil {
+		t.Fatal("CompleteIdleCurrentNode accepted a Session that moved to another Task")
+	}
+	if store.completions != 0 {
+		t.Fatalf("completion mutations = %d, want none", store.completions)
+	}
+}
+
 func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelivery(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {

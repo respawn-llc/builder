@@ -116,7 +116,7 @@ func (c *CurrentNodeController) StartTask(
 	if finalizer == nil {
 		return workflowstore.StartTaskResult{}, errors.New("task start preparation finalizer is required")
 	}
-	return RunTaskMutation(ctx, c.mutations, taskID, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
 			c.mu.Unlock()
@@ -167,7 +167,7 @@ func (c *CurrentNodeController) PromoteConcurrencyQueuedTask(
 		return nil, false, errors.New("workflow task id is required")
 	}
 	var promoted []workflow.CurrentNode
-	err := c.mutations.Run(ctx, taskID, func(context.Context) error {
+	err := c.runTaskMutation(ctx, taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.closed {
@@ -227,7 +227,7 @@ func (c *CurrentNodeController) EnsureTaskResumeEligible(
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
-	return c.mutations.Run(ctx, taskID, func(ctx context.Context) error {
+	return c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
 			return err
@@ -292,7 +292,7 @@ func (c *CurrentNodeController) resumeTask(
 	if preparation != nil && finalizer == nil {
 		return nil, errors.New("task resume preparation finalizer is required")
 	}
-	resumed, err := RunTaskMutation(ctx, c.mutations, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+	resumed, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
 		var resolution workflowstore.TaskAttentionResolution
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
@@ -410,7 +410,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 	if err != nil {
 		return workflowstore.PendingApprovalApplyResult{}, err
 	}
-	return RunTaskMutation(ctx, c.mutations, initial.Source.TaskID, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
+	return runCurrentNodeTaskMutation(ctx, c, initial.Source.TaskID, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
 		approval, err := c.store.PendingApproval(ctx, approvalID)
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
@@ -493,7 +493,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 		return workflowstore.ManualMoveResult{}, errors.New("current node workflow controller is required")
 	}
 	taskID := prepared.TaskID()
-	return RunTaskMutation(ctx, c.mutations, taskID, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
 			c.mu.Unlock()

@@ -440,6 +440,9 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowDeleteResponse{}, err
+	}
 	taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
@@ -1508,6 +1511,26 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	interrupted, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
+	if len(interrupted) == 0 {
+		currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
+		if err != nil {
+			return serverapi.WorkflowTaskResumeResponse{}, err
+		}
+		for _, currentNode := range currentNodes {
+			if currentNode.Scheduling == nil {
+				continue
+			}
+			switch currentNode.Scheduling.State {
+			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+				return serverapi.WorkflowTaskResumeResponse{
+					Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+					NoOp: &serverapi.WorkflowTaskResumeNoOp{
+						CurrentNodes: workflowview.ProjectCurrentNodes(currentNodes),
+					},
+				}, nil
+			}
+		}
 	}
 	if req.ExecutionTarget == nil {
 		selectionRequired, err := configuredTargetResumeSelection(interrupted)

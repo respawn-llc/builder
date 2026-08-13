@@ -137,6 +137,15 @@ func (c *CurrentNodeController) takeTaskPreparationBatch() (*taskPreparationBatc
 func (c *CurrentNodeController) runTaskPreparationBatch(batch *taskPreparationBatch) {
 	defer c.preparationWG.Done()
 	defer close(batch.done)
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		c.finishCanceledTaskPreparationBatch(batch)
+		return
+	}
 	if err := batch.preparation.Prepare(batch.ctx); err != nil {
 		if batch.ctx.Err() != nil {
 			c.finishCanceledTaskPreparationBatch(batch)

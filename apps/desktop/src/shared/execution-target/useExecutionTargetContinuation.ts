@@ -55,13 +55,19 @@ export function useTaskInitiatingActionController({
   onAppliedError: (error: unknown) => void;
 }>): TaskInitiatingActionController {
   const [pending, setPending] = useState<PendingTaskInitiatingAction | null>(null);
+  const pendingRef = useRef<PendingTaskInitiatingAction | null>(null);
   const [running, setRunning] = useState(false);
   const initialRunRef = useRef<Promise<void> | null>(null);
+  const initialActionRef = useRef<TaskInitiatingAction | null>(null);
+  const updatePending = useCallback((next: PendingTaskInitiatingAction | null) => {
+    pendingRef.current = next;
+    setPending(next);
+  }, []);
 
   const handleResult = useCallback(
     async (result: TaskInitiatingActionResult): Promise<void> => {
       if (result.response.outcome === "applied" || result.response.outcome === "no_op") {
-        setPending(null);
+        updatePending(null);
         try {
           await onApplied(result);
         } catch (error) {
@@ -70,29 +76,25 @@ export function useTaskInitiatingActionController({
         return;
       }
       if (result.response.outcome === "dependency_confirmation_required") {
-        setPending({
+        updatePending({
           kind: "dependency_confirmation",
           action: result.action,
           unsatisfiedDependencyCount: result.response.unsatisfiedDependencyCount,
         });
         return;
       }
-      setPending({
+      updatePending({
         kind: "execution_target",
         action: result.action,
         requirement: result.response.selectionRequired,
         selection: initialExecutionTargetSelectionDraft(result.response.selectionRequired),
       });
     },
-    [onApplied, onAppliedError],
+    [onApplied, onAppliedError, updatePending],
   );
 
-  const run = useCallback(
+  const executeRun = useCallback(
     async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
-      if (initialRunRef.current !== null) {
-        await initialRunRef.current;
-        return;
-      }
       setRunning(true);
       const operation = (async () => {
         try {
@@ -101,48 +103,67 @@ export function useTaskInitiatingActionController({
           if (action.kind !== "move") throw error;
           const failure = decodeWorktreeSetupRetainedError(error);
           if (failure === null) throw error;
-          setPending({ kind: "setup_recovery", action, failure,
+          updatePending({ kind: "setup_recovery", action, failure,
             ...(selection === undefined ? {} : { retrySelection: selection }) });
         }
       })();
       initialRunRef.current = operation;
+      initialActionRef.current = action;
       const settle = () => {
         if (initialRunRef.current === operation) {
           initialRunRef.current = null;
+          initialActionRef.current = null;
           setRunning(false);
         }
       };
       void operation.then(settle, settle);
       await operation;
     },
-    [execute, handleResult],
+    [execute, handleResult, updatePending],
+  );
+  const run = useCallback(
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection): Promise<void> => {
+      const active = initialRunRef.current;
+      if (active !== null) {
+        if (initialActionRef.current === action) {
+          await active;
+          return;
+        }
+        await active;
+        if (pendingRef.current !== null) {
+          throw new Error("Finish or dismiss the pending Task action before starting another one.");
+        }
+      }
+      return executeRun(action, selection);
+    },
+    [executeRun],
   );
 
   const close = useCallback(() => {
-    setPending(null);
-  }, []);
+    updatePending(null);
+  }, [updatePending]);
 
   const selectMode = useCallback((mode: WorkflowExecutionTargetSelectionMode) => {
-    setPending((current) =>
-      current?.kind !== "execution_target"
-        ? current
-        : {
-            ...current,
-            selection: { ...current.selection, mode },
-          },
-    );
-  }, []);
+    const current = pendingRef.current;
+    if (current?.kind !== "execution_target") {
+      return;
+    }
+    updatePending({
+      ...current,
+      selection: { ...current.selection, mode },
+    });
+  }, [updatePending]);
 
   const setCustomRef = useCallback((customRef: string | null) => {
-    setPending((current) =>
-      current?.kind !== "execution_target"
-        ? current
-        : {
-            ...current,
-            selection: { ...current.selection, customRef },
-          },
-    );
-  }, []);
+    const current = pendingRef.current;
+    if (current?.kind !== "execution_target") {
+      return;
+    }
+    updatePending({
+      ...current,
+      selection: { ...current.selection, customRef },
+    });
+  }, [updatePending]);
 
   return {
     pending,

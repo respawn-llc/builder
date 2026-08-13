@@ -51,10 +51,6 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 	}
 	observation.Executions = executions
 	if c.mu.TryLock() {
-		if c.closed {
-			c.mu.Unlock()
-			return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is closed")
-		}
 		snapshot := &workflowTaskControllerReadSnapshot{
 			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 			quiescence:        map[workflow.TaskID]bool{},
