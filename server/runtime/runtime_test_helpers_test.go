@@ -141,6 +141,24 @@ func buildActiveTurnRequestForTest(
 	return request
 }
 
+func buildReviewerDispatchRequestForTest(
+	t *testing.T,
+	engine *Engine,
+	reviewerClient llm.Client,
+) llm.Request {
+	t.Helper()
+	var request llm.Request
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var buildErr error
+		request, buildErr = engine.buildReviewerDispatchRequest(ctx, stepID, reviewerClient)
+		return buildErr
+	})
+	if err != nil {
+		t.Fatalf("build Reviewer dispatch request: %v", err)
+	}
+	return request
+}
+
 func compactNowInActiveTestRun(
 	t *testing.T,
 	engine *Engine,

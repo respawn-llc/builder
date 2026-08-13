@@ -607,10 +607,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("main before prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerBeforeReq, err := eng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reviewer before request: %v", err)
-	}
+	reviewerBeforeReq := buildReviewerDispatchRequestForTest(t, eng, engineClient)
 	reviewerBefore := send(reviewerBeforeReq)
 	if got, want := reviewerBefore.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer before session-id header = %q, want %q", got, want)
@@ -629,10 +626,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("main after prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerAfterReq, err := eng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reviewer after request: %v", err)
-	}
+	reviewerAfterReq := buildReviewerDispatchRequestForTest(t, eng, engineClient)
 	reviewerAfter := send(reviewerAfterReq)
 	if got, want := reviewerAfter.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
 		t.Fatalf("reviewer after session-id header = %q, want %q", got, want)
@@ -662,10 +656,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("reopened main prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reopenedReviewerReq, err := reopenedEng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reopened reviewer request: %v", err)
-	}
+	reopenedReviewerReq := buildReviewerDispatchRequestForTest(t, reopenedEng, engineClient)
 	reopenedReviewer := send(reopenedReviewerReq)
 	if got, want := reopenedReviewer.sessionID, reviewerSessionID(reopened.Meta().SessionID); got != want {
 		t.Fatalf("reopened reviewer session-id header = %q, want %q", got, want)
