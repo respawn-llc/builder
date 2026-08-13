@@ -47,7 +47,6 @@ type BoundedMigrationCoverage struct {
 	ScalarMappings         []WireScalarMapping
 	PresenceMappings       []WirePresenceMapping
 	ExceptionalFingerprint string
-	ClosedEnumFingerprint  string
 }
 
 type WirePresenceMapping struct {
@@ -133,7 +132,7 @@ func CheckBoundedMigrationCoverage(coverage BoundedMigrationCoverage) error {
 		coverage.Operations,
 		&issues,
 	)
-	checkCoverageWireShapes(
+	enumAssociations := checkCoverageWireShapes(
 		coverage.Report.Routes,
 		coverage.Operations,
 		coverage.WireExceptions,
@@ -144,6 +143,12 @@ func CheckBoundedMigrationCoverage(coverage BoundedMigrationCoverage) error {
 		coverage.Report.WireFields,
 		coverage.Report.NamedScalars,
 		coverage.Classification,
+		&issues,
+	)
+	checkAssociatedClosedEnumCoverage(
+		coverage.Classification,
+		coverage.Report.NamedScalars,
+		enumAssociations,
 		&issues,
 	)
 	if err := CheckDeclarationClassifications(
@@ -231,20 +236,27 @@ func checkAssociatedClosedEnumCoverage(
 		if !exists {
 			continue
 		}
-		wanted := make(map[protoreflect.Name]struct{}, len(scalar.EnumMembers))
-		for _, member := range scalar.EnumMembers {
-			wanted[protoreflect.Name(member.DescriptorName)] = struct{}{}
-		}
 		associated := associations[discovered.Type]
 		if len(associated) == 0 {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageDeclaration,
-				Detail: fmt.Sprintf("%s has no route-reachable descriptor enum association", scalar.Identity),
-			})
 			continue
 		}
 		for name, descriptor := range associated {
-			actual := enumMemberSet(descriptor)
+			wanted, err := semanticEnumMemberSet(scalar.EnumMembers)
+			if err != nil {
+				*issues = append(*issues, CoverageIssue{
+					Code:   IssueCoverageDeclaration,
+					Detail: fmt.Sprintf("%s associated with %s: %v", scalar.Identity, name, err),
+				})
+				continue
+			}
+			actual, err := semanticDescriptorEnumMemberSet(descriptor)
+			if err != nil {
+				*issues = append(*issues, CoverageIssue{
+					Code:   IssueCoverageDeclaration,
+					Detail: fmt.Sprintf("%s associated with %s: %v", scalar.Identity, name, err),
+				})
+				continue
+			}
 			if !equalEnumMemberSets(wanted, actual) {
 				*issues = append(*issues, CoverageIssue{
 					Code: IssueCoverageDeclaration,
@@ -259,43 +271,88 @@ func checkAssociatedClosedEnumCoverage(
 	}
 }
 
-func enumMemberSet(enum protoreflect.EnumDescriptor) map[protoreflect.Name]struct{} {
-	result := make(map[protoreflect.Name]struct{})
+func semanticEnumMemberSet(
+	members []EnumMemberClassification,
+) (map[protoreflect.Name]struct{}, error) {
+	names := make([]string, 0, len(members))
+	for _, member := range members {
+		names = append(names, member.DescriptorName)
+	}
+	return semanticEnumNames(names)
+}
+
+func semanticDescriptorEnumMemberSet(
+	enum protoreflect.EnumDescriptor,
+) (map[protoreflect.Name]struct{}, error) {
+	names := make([]string, 0, enum.Values().Len())
 	for index := 0; index < enum.Values().Len(); index++ {
 		value := enum.Values().Get(index)
 		if !isUnspecifiedEnumValue(value) {
-			result[value.Name()] = struct{}{}
+			names = append(names, string(value.Name()))
 		}
 	}
-	return result
+	return semanticEnumNames(names)
 }
 
-func collectMessageEnumMemberSets(
-	messages protoreflect.MessageDescriptors,
-	sets map[protoreflect.FullName]map[protoreflect.Name]struct{},
-) {
-	for index := 0; index < messages.Len(); index++ {
-		message := messages.Get(index)
-		collectEnumMemberSets(message.Enums(), sets)
-		collectMessageEnumMemberSets(message.Messages(), sets)
+func semanticEnumNames(names []string) (map[protoreflect.Name]struct{}, error) {
+	tokenized := make([][]string, 0, len(names))
+	for _, name := range names {
+		tokens, err := upperSnakeTokens(name)
+		if err != nil {
+			return nil, err
+		}
+		tokenized = append(tokenized, tokens)
 	}
+	prefixLength := commonTokenPrefixLength(tokenized)
+	result := make(map[protoreflect.Name]struct{}, len(tokenized))
+	for _, tokens := range tokenized {
+		result[protoreflect.Name(strings.Join(tokens[prefixLength:], "_"))] = struct{}{}
+	}
+	return result, nil
 }
 
-func collectEnumMemberSets(
-	enums protoreflect.EnumDescriptors,
-	sets map[protoreflect.FullName]map[protoreflect.Name]struct{},
-) {
-	for enumIndex := 0; enumIndex < enums.Len(); enumIndex++ {
-		enum := enums.Get(enumIndex)
-		members := make(map[protoreflect.Name]struct{})
-		for valueIndex := 0; valueIndex < enum.Values().Len(); valueIndex++ {
-			value := enum.Values().Get(valueIndex)
-			if !isUnspecifiedEnumValue(value) {
-				members[value.Name()] = struct{}{}
+func commonTokenPrefixLength(values [][]string) int {
+	if len(values) == 0 {
+		return 0
+	}
+	limit := len(values[0]) - 1
+	for _, value := range values[1:] {
+		if candidate := len(value) - 1; candidate < limit {
+			limit = candidate
+		}
+	}
+	for index := 0; index < limit; index++ {
+		for _, value := range values[1:] {
+			if value[index] != values[0][index] {
+				return index
 			}
 		}
-		sets[enum.FullName()] = members
 	}
+	return limit
+}
+
+func upperSnakeTokens(value string) ([]string, error) {
+	if value == "" {
+		return nil, fmt.Errorf("empty enum name")
+	}
+	var tokens []string
+	start := 0
+	for index := 0; index <= len(value); index++ {
+		if index < len(value) && value[index] != '_' {
+			character := value[index]
+			if (character < 'A' || character > 'Z') &&
+				(character < '0' || character > '9') {
+				return nil, fmt.Errorf("invalid enum name %q", value)
+			}
+			continue
+		}
+		if index == start {
+			return nil, fmt.Errorf("invalid enum name %q", value)
+		}
+		tokens = append(tokens, value[start:index])
+		start = index + 1
+	}
+	return tokens, nil
 }
 
 func equalEnumMemberSets(
@@ -346,7 +403,7 @@ func checkCoverageWireShapes(
 	namedScalars []NamedScalar,
 	classification DeclarationClassification,
 	issues *[]CoverageIssue,
-) {
+) map[*types.TypeName]map[protoreflect.FullName]protoreflect.EnumDescriptor {
 	exceptionIndex := make(wireExceptionIndex, len(exceptions))
 	for _, exception := range exceptions {
 		legacyType := dereferenceType(exception.LegacyType)
@@ -552,6 +609,7 @@ func checkCoverageWireShapes(
 			})
 		}
 	}
+	return enumAssociations
 }
 
 func (classification WireExceptionClassification) valid() bool {
