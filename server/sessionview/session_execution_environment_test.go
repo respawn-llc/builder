@@ -12,7 +12,6 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/worktree"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -86,39 +85,6 @@ func TestSessionExecutionEnvironmentRejectsMismatchedIdentity(t *testing.T) {
 		SessionID: otherID,
 	}); err == nil {
 		t.Fatal("environment read accepted a response for another session")
-	}
-}
-
-func TestSessionExecutionEnvironmentValidatedUsesAuthorizedExecutionTarget(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-	sessionID := sessionExecutionEnvironmentSessionID(t, store)
-	workspaceRoot := t.TempDir()
-	target := availableSessionExecutionTarget(workspaceRoot)
-	service := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		failingExecutionTargetResolver{err: errors.New("duplicate target lookup")},
-	).WithExecutionEnvironmentConfig(config.App{Settings: config.Settings{Model: "gpt-5.6-sol"}})
-	request := serverapi.SessionExecutionEnvironmentRequest{SessionID: sessionID}
-	response, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
-			return service.GetSessionExecutionEnvironmentValidated(t.Context(), validated, apicontract.AuthorizedSessionInActiveProject{
-				SessionID:       sessionID,
-				ActiveProjectID: "project-1",
-				OwningProjectID: "project-1",
-				ExecutionTarget: target,
-			})
-		},
-	)
-	if err != nil {
-		t.Fatalf("GetSessionExecutionEnvironmentValidated: %v", err)
-	}
-	workspace, ok := response.Environment.Workspace.Value()
-	if !ok || workspace.Path != workspaceRoot {
-		t.Fatalf("workspace = %+v/%v, want %q", workspace, ok, workspaceRoot)
 	}
 }
 
@@ -230,6 +196,9 @@ func TestSessionExecutionEnvironmentBranchProjection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 			}
+			if err := response.Validate(); err != nil {
+				t.Fatalf("response validation: %v", err)
+			}
 			switch {
 			case test.branch != "":
 				branch, ok := response.Environment.Branch.Value()
@@ -270,6 +239,9 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("response validation: %v", err)
+		}
 		failure, failed := response.Environment.Workspace.Failure()
 		_, modelAvailable := response.Environment.Model.Value()
 		if !failed || failure.Code != serverapi.SessionExecutionFieldErrorSourceFailure || !modelAvailable {
@@ -292,6 +264,9 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("response validation: %v", err)
 		}
 		failure, workspaceFailed := response.Environment.Workspace.Failure()
 		branchReason, branchUnavailable := response.Environment.Branch.UnavailableReason()
@@ -320,6 +295,9 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("response validation: %v", err)
 		}
 		failure, failed := response.Environment.Auth.Failure()
 		_, workspaceAvailable := response.Environment.Workspace.Value()
@@ -350,6 +328,9 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
+		}
+		if err := response.Validate(); err != nil {
+			t.Fatalf("response validation: %v", err)
 		}
 		reason, unavailable := response.Environment.Auth.UnavailableReason()
 		if !unavailable || reason != serverapi.SessionExecutionAuthUnavailableNotApplicable || authClient.calls != 0 {
@@ -406,6 +387,9 @@ func TestSessionExecutionEnvironmentModelFieldMapping(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatalf("GetSessionExecutionEnvironment: %v", err)
+			}
+			if err := response.Validate(); err != nil {
+				t.Fatalf("response validation: %v", err)
 			}
 			if test.missing {
 				reason, ok := response.Environment.Model.UnavailableReason()
@@ -511,6 +495,10 @@ func readEnvironmentAndAssertPersistenceUnchanged(
 	if err != nil {
 		t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 	}
+	if err := response.Validate(); err != nil {
+		t.Fatalf("response validation: %v", err)
+	}
+
 	afterEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("ReadFile after: %v", err)

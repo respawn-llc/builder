@@ -11,11 +11,10 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/transcript"
 )
 
 type serviceFakeLLM struct {
@@ -43,6 +42,36 @@ type serviceBlockingLLM struct {
 
 type staticExecutionTargetResolver struct {
 	target clientui.SessionExecutionTarget
+}
+
+func TestValidateSessionTranscriptPageResponseUsesInvariantFailurePolicy(t *testing.T) {
+	response := serverapi.SessionTranscriptPageResponse{
+		Transcript: clientui.TranscriptPage{
+			SessionID: "12345678-1234-4234-8234-123456789012",
+			Entries: []clientui.TranscriptCommittedRow{{
+				Visibility: transcript.EntryVisibilityOngoing,
+				Kind:       clientui.TranscriptRowUser,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 0, RowOrdinal: 1},
+				User:       &clientui.TranscriptUserRow{Text: "malformed"},
+			}},
+		},
+	}
+
+	t.Run("diagnostic mode returns contract error", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
+		if err := validateSessionTranscriptPageResponse(response); err == nil {
+			t.Fatal("malformed transcript page returned nil error")
+		}
+	})
+	t.Run("panic mode fails fast with diagnostic", func(t *testing.T) {
+		t.Setenv("KENT_INVARIANT_MODE", "panic")
+		defer func() {
+			if recover() == nil {
+				t.Fatal("malformed transcript page did not panic in invariant panic mode")
+			}
+		}()
+		_ = validateSessionTranscriptPageResponse(response)
+	})
 }
 
 func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error) {
@@ -177,46 +206,6 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	}
 	if resp.MainView.Session.ExecutionTarget.EffectiveWorkdir != dir {
 		t.Fatalf("effective workdir = %q, want %q", resp.MainView.Session.ExecutionTarget.EffectiveWorkdir, dir)
-	}
-}
-
-func TestServiceGetSessionMainViewValidatedUsesAuthorizedExecutionTarget(t *testing.T) {
-	dir := t.TempDir()
-	store := newSessionViewStore(t, dir, "ws", dir)
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("ParseSessionID: %v", err)
-	}
-	target := clientui.SessionExecutionTarget{
-		WorkspaceID:      "authorized-workspace",
-		WorkspaceRoot:    dir,
-		CwdRelpath:       ".",
-		EffectiveWorkdir: dir,
-	}
-	svc := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		failingExecutionTargetResolver{err: errors.New("duplicate target lookup")},
-	)
-	request := serverapi.SessionMainViewRequest{SessionID: sessionID.String()}
-	response, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionMainViewRequest]) (serverapi.SessionMainViewResponse, error) {
-			return svc.GetSessionMainViewValidated(t.Context(), validated, apicontract.AuthorizedSessionInActiveProject{
-				SessionID:       sessionID,
-				ActiveProjectID: "project-1",
-				OwningProjectID: "project-1",
-				ExecutionTarget: target,
-			})
-		},
-	)
-	if err != nil {
-		t.Fatalf("GetSessionMainViewValidated: %v", err)
-	}
-	if got := response.MainView.Session.ExecutionTarget; got.WorkspaceID != target.WorkspaceID {
-		t.Fatalf("execution target = %+v, want %+v", got, target)
 	}
 }
 
