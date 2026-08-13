@@ -219,11 +219,13 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	expected := taskListExpectedScope{
-		ProjectID:     "project-1",
-		WorkflowOwner: taskListExpectedWorkflowFromRequest,
+	request := serverapi.WorkflowTaskListRequest{
+		ProjectID: func() *string {
+			projectID := "project-1"
+			return &projectID
+		}(),
 	}
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 || stderr.Len() != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, true); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var output struct {
@@ -239,7 +241,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 ||
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 ||
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -256,6 +258,33 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTaskListResponseRejectsMismatchedRequestScopeBeforeOutput(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	response := serverapi.WorkflowTaskListResponse{
+		Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+		Tasks: []serverapi.WorkflowTaskListItem{{
+			TaskID:     "task-1",
+			WorkflowID: workflowID,
+			Status: serverapi.WorkflowTaskStatus{
+				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
+				NativeState: serverapi.WorkflowTaskNativeStateActive,
+			},
+		}},
+	}
+	otherProjectID := "project-2"
+	request := serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID}
+	for _, jsonOut := range []bool{false, true} {
+		var stdout, stderr bytes.Buffer
+		if code := writeTaskListResponse(&stdout, &stderr, response, request, jsonOut); code != 1 {
+			t.Fatalf("json=%t exit=%d, want 1", jsonOut, code)
+		}
+		if stdout.Len() != 0 || stderr.Len() == 0 {
+			t.Fatalf("json=%t stdout=%q stderr=%q", jsonOut, stdout.String(), stderr.String())
+		}
 	}
 }
 
@@ -319,12 +348,14 @@ func TestTaskListResponsePreservesCLIShapeFromEnrichedRows(t *testing.T) {
 	}
 
 	response.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
-	expected := taskListExpectedScope{
-		ProjectID:     "project-1",
-		WorkflowOwner: taskListExpectedWorkflowFromRequest,
+	request := serverapi.WorkflowTaskListRequest{
+		ProjectID: func() *string {
+			projectID := "project-1"
+			return &projectID
+		}(),
 	}
 	var stdout, stderr bytes.Buffer
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if got := stdout.String(); got != "KNT-1: Ship list.\nStatus: backlog\nWorkflow: Delivery\nLabels: \"Needs \\\"review\\\"\" \"Urgent\"\n" {
@@ -333,7 +364,7 @@ func TestTaskListResponsePreservesCLIShapeFromEnrichedRows(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, true); code != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var projectWide taskListOutput
@@ -351,10 +382,10 @@ func TestTaskListResponsePreservesCLIShapeFromEnrichedRows(t *testing.T) {
 	response.Scope.WorkflowID = &workflowID
 	response.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne
 	response.Tasks[0].ColumnKeys = &columns
-	expected.WorkflowID = &workflowID
+	request.WorkflowID = &workflowID
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 {
 		t.Fatalf("narrowed human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if got := stdout.String(); got != "KNT-1: Ship list.\nStatus: backlog\nColumns: todo, review\nLabels: \"Needs \\\"review\\\"\" \"Urgent\"\n" {
@@ -362,7 +393,7 @@ func TestTaskListResponsePreservesCLIShapeFromEnrichedRows(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, request, true); code != 0 {
 		t.Fatalf("narrowed JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var narrowed taskListOutput

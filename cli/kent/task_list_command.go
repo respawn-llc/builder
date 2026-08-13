@@ -157,12 +157,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 			return 1
 		}
-		expectedScope := taskListExpectedScope{
-			ProjectID:     projectID,
-			WorkflowID:    selectedWorkflowID,
-			WorkflowOwner: taskListExpectedWorkflowFromRequest,
-		}
-		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
+		return writeTaskListResponse(stdout, stderr, resp, request, *jsonOut)
 	})
 }
 
@@ -203,7 +198,16 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 	return mode, nil
 }
 
-func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, request serverapi.WorkflowTaskListRequest, jsonOut bool) int {
+	if err := resp.ValidateForRequest(request); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	expectedScope := taskListExpectedScope{
+		ProjectID:     *request.ProjectID,
+		WorkflowID:    request.WorkflowID,
+		WorkflowOwner: taskListExpectedWorkflowFromRequest,
+	}
 	projection, err := taskListProjectionFromResponse(resp, expectedScope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
