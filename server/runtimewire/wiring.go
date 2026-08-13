@@ -133,10 +133,8 @@ func NewRuntimeWiringWithBackground(
 	}
 
 	mainProvider := mainProviderRuntimeSettings(active)
-	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLocked(store.Meta().Locked); ok {
-		if _, builtIn := llm.LookupProviderCapabilityContract(resolvedCapabilities.ProviderID); !builtIn {
-			mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
-		}
+	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
+		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
 	}
 	var client llm.Client
 	if opts.Client != nil {
@@ -166,11 +164,6 @@ func NewRuntimeWiringWithBackground(
 		if err != nil {
 			return nil, err
 		}
-	}
-	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
-	if opts.ProviderCapabilitiesOverride != nil {
-		value := *opts.ProviderCapabilitiesOverride
-		providerCapabilitiesOverride = &value
 	}
 
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
@@ -223,6 +216,10 @@ func NewRuntimeWiringWithBackground(
 			configRoot:                          opts.GlobalConfigDir,
 			skipContinuationAgentRoleValidation: opts.SkipContinuationAgentRoleValidation,
 		}
+	}
+	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
+	if opts.ProviderCapabilitiesOverride != nil {
+		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
 	}
 	eng, err = runtime.New(store, eventLog, client, toolRegistry, runtime.Config{
 		Model:                           active.Model,

@@ -19,32 +19,18 @@ const (
 
 func (e *Engine) providerCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
 	if e.cfg.ProviderCapabilitiesOverride != nil {
-		override := e.cfg.ProviderCapabilitiesOverride
-		if _, builtIn := llm.LookupProviderCapabilityContract(override.ProviderID); !builtIn {
-			return *override, nil
-		}
-		if current, err := e.currentProviderCapabilities(ctx); err == nil {
-			return llm.ApplyProviderCapabilitiesOverride(current, override), nil
-		}
-		return *override, nil
+		return *e.cfg.ProviderCapabilitiesOverride, nil
 	}
-	if locked, ok := llm.ProviderCapabilitiesFromLocked(e.store.Meta().Locked); ok {
-		if _, builtIn := llm.LookupProviderCapabilityContract(locked.ProviderID); !builtIn {
-			return locked, nil
-		}
-		if current, err := e.currentProviderCapabilities(ctx); err == nil && current.ProviderID != locked.ProviderID {
-			return current, nil
-		}
-		return locked, nil
+	if caps, ok := llm.ProviderCapabilitiesFromLocked(e.store.Meta().Locked); ok {
+		return caps, nil
 	}
-	current, currentErr := e.currentProviderCapabilities(ctx)
-	if currentErr == nil {
-		return current, nil
-	}
-	return llm.ProviderCapabilities{}, fmt.Errorf("resolve current provider capabilities: %w", currentErr)
+	return e.currentProviderCapabilities(ctx)
 }
 
 func (e *Engine) currentProviderCapabilities(ctx context.Context) (llm.ProviderCapabilities, error) {
+	if e.cfg.ProviderCapabilitiesOverride != nil {
+		return *e.cfg.ProviderCapabilitiesOverride, nil
+	}
 	provider, ok := e.llm.(llm.ProviderCapabilitiesClient)
 	if !ok {
 		return llm.ProviderCapabilities{}, fmt.Errorf("provider capabilities are unavailable for client %T", e.llm)
