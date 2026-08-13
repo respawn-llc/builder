@@ -1034,6 +1034,10 @@ func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, reque
 	return service(ctx, request)
 }
 
+func (service gatewayAuthStatusService) GetAuthStatusValidated(ctx context.Context, request apicontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
+	return service(ctx, request.Value())
+}
+
 type gatewayAuthStatusDependencies struct {
 	*core.Core
 	status apicontract.AuthStatusService

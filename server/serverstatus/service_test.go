@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -115,7 +116,7 @@ func TestGetServerReadinessSurfacesAuthStoreErrorWhenStartupAuthRequired(t *test
 }
 
 func TestServerStatusSeparatesReadinessFromLazyUpdateStatus(t *testing.T) {
-	source := &countingReleaseSource{metadata: releaseMetadata{Version: "1.2.0"}}
+	source := &countingReleaseSource{metadata: releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}}
 	updates := newUpdateStatusService("1.1.0", false, source, time.Now)
 	t.Cleanup(func() {
 		if err := updates.Close(); err != nil {
@@ -140,6 +141,45 @@ func TestServerStatusSeparatesReadinessFromLazyUpdateStatus(t *testing.T) {
 	}
 	if calls := source.calls.Load(); calls != 1 {
 		t.Fatalf("release checks after update request = %d, want 1", calls)
+	}
+}
+
+func TestServerStatusValidatedMethodsPreserveStatusBehavior(t *testing.T) {
+	source := &countingReleaseSource{metadata: releaseMetadata{Version: updateVersion{components: [3]uint64{1, 2, 0}}}}
+	updates := newUpdateStatusService("1.1.0", false, source, time.Now)
+	t.Cleanup(func() {
+		if err := updates.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+	service := NewServerStatusService(nil, config.App{Settings: config.Settings{ProviderOverride: "anthropic"}}, updates)
+
+	readiness, err := apicontract.WithValidated(
+		serverapi.ServerReadinessRequest{},
+		apicontract.NoSemanticValidation,
+		func(request apicontract.Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error) {
+			return service.GetServerReadinessValidated(context.Background(), request)
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetServerReadinessValidated: %v", err)
+	}
+	if !readiness.Ready {
+		t.Fatalf("readiness = %+v, want ready", readiness)
+	}
+
+	update, err := apicontract.WithValidated(
+		serverapi.UpdateStatusRequest{},
+		apicontract.SemanticValidationRequired,
+		func(request apicontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
+			return service.GetUpdateStatusValidated(context.Background(), request)
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetUpdateStatusValidated: %v", err)
+	}
+	if update.Result.Kind() != serverapi.UpdateStatusAvailable {
+		t.Fatalf("update kind = %q, want available", update.Result.Kind())
 	}
 }
 

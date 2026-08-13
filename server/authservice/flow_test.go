@@ -39,15 +39,16 @@ func TestEnsureReadyReturnsStartupErrorWithoutInteractiveHandler(t *testing.T) {
 }
 
 func TestEnsureReadyLoopsAfterInteractionUntilAuthConfigured(t *testing.T) {
-	mgr := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
-	callCount := 0
-	err := EnsureFlowReady(context.Background(), mgr, auth.OpenAIOAuthOptions{}, "dark", func(key string) string {
+	lookupEnv := func(key string) string {
 		if key == "OPENAI_API_KEY" {
 			return "sk-env"
 		}
 		return ""
-	}, true, false, stubHandler{
-		needs: func(req FlowInteractionRequest) bool { return !req.Gate.Ready },
+	}
+	mgr := auth.NewManager(WrapStoreWithEnvAPIKeyOverride(auth.NewMemoryStore(auth.EmptyState()), lookupEnv), nil, time.Now)
+	callCount := 0
+	err := EnsureFlowReady(context.Background(), mgr, auth.OpenAIOAuthOptions{}, "dark", lookupEnv, true, false, stubHandler{
+		needs: func(FlowInteractionRequest) bool { return callCount == 0 },
 		interact: func(ctx context.Context, req FlowInteractionRequest) (FlowInteractionOutcome, error) {
 			callCount++
 			if !req.HasEnvAPIKey {
@@ -66,7 +67,7 @@ func TestEnsureReadyLoopsAfterInteractionUntilAuthConfigured(t *testing.T) {
 	if callCount != 1 {
 		t.Fatalf("expected one interaction, got %d", callCount)
 	}
-	state, err := mgr.Load(context.Background())
+	state, err := mgr.StoredState(context.Background())
 	if err != nil {
 		t.Fatalf("load auth state: %v", err)
 	}
@@ -90,5 +91,26 @@ func TestEnsureReadyAllowsOptionalStartupWithoutConfiguredAuth(t *testing.T) {
 	}
 	if interacted {
 		t.Fatal("did not expect optional startup to prompt for auth")
+	}
+}
+
+func TestEnsureReadyUsesEnvStorePresenceFact(t *testing.T) {
+	lookupEnv := func(key string) string {
+		if key == "OPENAI_API_KEY" {
+			return "  sk-env  "
+		}
+		return ""
+	}
+	mgr := auth.NewManager(WrapStoreWithEnvAPIKeyOverride(auth.NewMemoryStore(auth.EmptyState()), lookupEnv), nil, time.Now)
+	err := EnsureFlowReady(context.Background(), mgr, auth.OpenAIOAuthOptions{}, "dark", lookupEnv, true, false, stubHandler{
+		needs: func(request FlowInteractionRequest) bool {
+			if !request.HasEnvAPIKey {
+				t.Fatal("expected env-backed store to report API key presence")
+			}
+			return false
+		},
+	})
+	if err != nil {
+		t.Fatalf("EnsureFlowReady error = %v, want nil", err)
 	}
 }

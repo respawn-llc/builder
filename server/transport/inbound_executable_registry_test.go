@@ -163,6 +163,45 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 	}
 }
 
+func TestProjectAndSmallServiceRoutesUseTrustedOwners(t *testing.T) {
+	methods := []string{
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus,
+		protocol.MethodCapabilityFactsGet,
+		protocol.MethodPromptCommandCatalogGet,
+		protocol.MethodProjectList,
+		protocol.MethodProjectHomeList,
+		protocol.MethodProjectResolvePath,
+		protocol.MethodProjectPlanWorkspaceBinding,
+		protocol.MethodProjectCreate,
+		protocol.MethodProjectEditGet,
+		protocol.MethodProjectUpdate,
+		protocol.MethodProjectSetDefaultWorkspace,
+		protocol.MethodProjectWorkspaceList,
+		protocol.MethodProjectWorkspaceGet,
+		protocol.MethodProjectUnlinkWorkspace,
+		protocol.MethodProjectDelete,
+		protocol.MethodProjectAttachWorkspace,
+		protocol.MethodProjectRebindWorkspace,
+		protocol.MethodProjectGetOverview,
+		protocol.MethodSessionPage,
+		protocol.MethodPromptAnswerBatch,
+		protocol.MethodPromptFollowUpWatch,
+		protocol.MethodServerReadinessGet,
+		protocol.MethodServerUpdateStatusGet,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			executable := inboundExecutableRoutes[method]
+			if executable.handlerClassification.owner != inboundHandlerTrustedOwner {
+				t.Fatalf("handler owner = %q, want trusted owner", executable.handlerClassification.owner)
+			}
+		})
+	}
+}
+
 func TestInboundExecutableRegistryExhaustivelyClassifiesScopeAuthorization(t *testing.T) {
 	seenScopes := make(map[apicontract.ScopePolicy]bool)
 	for _, route := range apicontract.Routes() {

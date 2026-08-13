@@ -19,6 +19,14 @@ func NewEnvAPIKeyOverrideStore(base Store, lookupEnv envLookup) *EnvAPIKeyOverri
 	return &EnvAPIKeyOverrideStore{base: base, lookupEnv: lookupEnv}
 }
 
+func (s *EnvAPIKeyOverrideStore) HasEnvAPIKey() bool {
+	if s == nil || s.lookupEnv == nil {
+		return false
+	}
+	_, present := s.lookupEnv("OPENAI_API_KEY")
+	return present
+}
+
 func (s *EnvAPIKeyOverrideStore) LoadPersisted(ctx context.Context) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err

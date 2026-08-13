@@ -21,12 +21,12 @@ const (
 var ErrUpdateStatusServiceClosed = errors.New("update status service is closed")
 
 type UpdateStatusService struct {
-	currentVersion string
-	debug          bool
-	releaseSource  releaseMetadataSource
-	now            func() time.Time
-	lifecycle      context.Context
-	cancel         context.CancelFunc
+	currentVersion    updateVersion
+	currentVersionErr error
+	releaseSource     releaseMetadataSource
+	now               func() time.Time
+	lifecycle         context.Context
+	cancel            context.CancelFunc
 
 	mu        sync.Mutex
 	workers   sync.WaitGroup
@@ -50,7 +50,7 @@ func NewUpdateStatusService(currentVersion string, debug bool) *UpdateStatusServ
 	return newUpdateStatusService(currentVersion, debug, nil, time.Now)
 }
 
-func newUpdateStatusService(currentVersion string, debug bool, releaseSource releaseMetadataSource, now func() time.Time) *UpdateStatusService {
+func newUpdateStatusService(currentVersion string, _ bool, releaseSource releaseMetadataSource, now func() time.Time) *UpdateStatusService {
 	if releaseSource == nil {
 		releaseSource = newDefaultGitHubReleaseMetadataSource()
 	}
@@ -58,13 +58,14 @@ func newUpdateStatusService(currentVersion string, debug bool, releaseSource rel
 		now = time.Now
 	}
 	lifecycle, cancel := context.WithCancel(context.Background())
+	parsedVersion, versionErr := parseConfiguredUpdateVersion(currentVersion)
 	return &UpdateStatusService{
-		currentVersion: currentVersion,
-		debug:          debug,
-		releaseSource:  releaseSource,
-		now:            now,
-		lifecycle:      lifecycle,
-		cancel:         cancel,
+		currentVersion:    parsedVersion,
+		currentVersionErr: versionErr,
+		releaseSource:     releaseSource,
+		now:               now,
+		lifecycle:         lifecycle,
+		cancel:            cancel,
 	}
 }
 
@@ -107,9 +108,6 @@ func (s *UpdateStatusService) runUpdateStatusCheck(operation *updateStatusOperat
 	defer cancel()
 
 	result := s.checkUpdateStatus(ctx)
-	if err := result.Validate(); err != nil {
-		result = s.invalidCalculatedResult(result, err)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,38 +117,18 @@ func (s *UpdateStatusService) runUpdateStatusCheck(operation *updateStatusOperat
 	s.completeOperationLocked(operation, result, nil, true)
 }
 
-func (s *UpdateStatusService) invalidCalculatedResult(result serverapi.UpdateStatusResult, cause error) serverapi.UpdateStatusResult {
-	diagnostic := fmt.Sprintf(
-		"update status invariant violated: operation=publish calculated_kind=%q configured_version=%q cause=%v",
-		result.Kind(),
-		strings.TrimSpace(s.currentVersion),
-		cause,
-	)
-	if s.debug {
-		panic(diagnostic)
-	}
-	return serverapi.FailedUpdateStatusResult("internal update checker failure: " + cause.Error())
-}
-
 func (s *UpdateStatusService) checkUpdateStatus(ctx context.Context) serverapi.UpdateStatusResult {
-	currentVersion, err := parseConfiguredUpdateVersion(s.currentVersion)
-
-	if err != nil {
-		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("current release version is invalid: %v", err))
+	if s.currentVersionErr != nil {
+		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("current release version is invalid: %v", s.currentVersionErr))
 	}
 
 	metadata, err := s.releaseSource.LatestRelease(ctx)
 	if err != nil {
 		return classifyReleaseSourceFailure(err)
 	}
-	latestVersion, err := parseUpdateVersion(metadata.Version)
-	if err != nil {
-		return serverapi.FailedUpdateStatusResult(fmt.Sprintf("latest release version is invalid: %v", err))
-	}
-
-	current := currentVersion.String()
-	latest := latestVersion.String()
-	if latestVersion.Compare(currentVersion) > 0 {
+	current := s.currentVersion.String()
+	latest := metadata.Version.String()
+	if metadata.Version.Compare(s.currentVersion) > 0 {
 		return serverapi.AvailableUpdateStatusResult(current, latest)
 	}
 	return serverapi.CurrentUpdateStatusResult(current, latest)

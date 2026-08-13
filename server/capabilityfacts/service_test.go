@@ -10,6 +10,7 @@ import (
 
 	"core/server/auth"
 	"core/server/onboardingimports"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -136,6 +137,43 @@ func TestServiceRejectsUnsupportedExplicitProvider(t *testing.T) {
 	_, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{"missing-provider"}})
 	if !errors.Is(err, serverapi.ErrUnsupportedProvider) {
 		t.Fatalf("GetCapabilityFacts error = %v, want ErrUnsupportedProvider", err)
+	}
+}
+
+func TestServiceRawAndTrustedCapabilityFactsUseTheSameOwner(t *testing.T) {
+	service := NewService(Options{Config: testConfig(t, config.Settings{Model: "gpt-5.6-sol"})})
+	request := serverapi.CapabilityFactsRequest{ExplicitLLMProviderIDs: []string{" openai ", "OPENAI"}}
+
+	raw, err := service.GetCapabilityFacts(context.Background(), request)
+	if err != nil {
+		t.Fatalf("GetCapabilityFacts: %v", err)
+	}
+	trusted, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error) {
+			return service.GetCapabilityFactsValidated(context.Background(), validated)
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetCapabilityFactsValidated: %v", err)
+	}
+	if len(raw.Providers.Explicit) != 1 || len(trusted.Providers.Explicit) != 1 ||
+		raw.Providers.Explicit[0] != trusted.Providers.Explicit[0] {
+		t.Fatalf("raw/trusted explicit provider facts differ: raw=%+v trusted=%+v", raw.Providers.Explicit, trusted.Providers.Explicit)
+	}
+}
+
+func TestServiceConstructionRejectsInvalidStaticFacts(t *testing.T) {
+	for name, settings := range map[string]config.Settings{
+		"blank primary model": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := NewService(Options{Config: testConfig(t, settings)})
+			if _, err := service.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{}); err == nil {
+				t.Fatal("capability operation accepted invalid construction facts")
+			}
+		})
 	}
 }
 

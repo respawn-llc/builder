@@ -103,6 +103,31 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		}
 		handler.owner = inboundHandlerRuntimeLiveOwner
 	case protocol.MethodAttachSession,
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus,
+		protocol.MethodCapabilityFactsGet,
+		protocol.MethodPromptCommandCatalogGet,
+		protocol.MethodProjectList,
+		protocol.MethodProjectHomeList,
+		protocol.MethodProjectResolvePath,
+		protocol.MethodProjectPlanWorkspaceBinding,
+		protocol.MethodProjectCreate,
+		protocol.MethodProjectEditGet,
+		protocol.MethodProjectUpdate,
+		protocol.MethodProjectSetDefaultWorkspace,
+		protocol.MethodProjectWorkspaceList,
+		protocol.MethodProjectWorkspaceGet,
+		protocol.MethodProjectUnlinkWorkspace,
+		protocol.MethodProjectDelete,
+		protocol.MethodProjectAttachWorkspace,
+		protocol.MethodProjectRebindWorkspace,
+		protocol.MethodProjectGetOverview,
+		protocol.MethodSessionPage,
+		protocol.MethodPromptAnswerBatch,
+		protocol.MethodServerReadinessGet,
+		protocol.MethodServerUpdateStatusGet,
 		protocol.MethodSessionRetargetWorkspace,
 		protocol.MethodSessionGetMainView,
 		protocol.MethodSessionGetTranscriptPage,
@@ -269,6 +294,47 @@ func inboundTrustedUnary[Req any, Authz any, Resp any](
 		return handlerSuccessResponse(wire.ID, response)
 	}
 	return executable
+}
+
+func trustedServiceUnary[Req any, Resp any, Trusted any](
+	method string,
+	client func(GatewayDependencies) any,
+	call func(Trusted, context.Context, apicontract.Validated[Req]) (Resp, error),
+) inboundExecutableRoute {
+	route := mustInboundRoute(method, apicontract.KindUnary)
+	policy := apicontract.SemanticValidationRequired
+	if route.ValidationMethod == apicontract.ValidationMethodNone {
+		policy = apicontract.NoSemanticValidation
+	}
+	return inboundTrustedUnary(
+		method,
+		policy,
+		requestDecoderDefault,
+		nil,
+		authorizeRouteScope[Req](route),
+		func(ctx context.Context, g *Gateway, _ *connectionState, req apicontract.Validated[Req], _ noAuthorizationFacts) (Resp, error) {
+			trusted, ok := client(g.deps).(Trusted)
+			if !ok {
+				var zero Resp
+				return zero, fmt.Errorf("%s trusted service is required", route.Dependency)
+			}
+			return call(trusted, ctx, req)
+		},
+	)
+}
+
+func handlePromptAnswerBatch(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	req apicontract.Validated[serverapi.PromptAnswerBatchRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.PromptAnswerBatchResponse, error) {
+	trusted, ok := g.deps.PromptControlClient().(apicontract.PromptControlTrustedService)
+	if !ok {
+		return serverapi.PromptAnswerBatchResponse{}, errors.New("Prompt Control trusted service is required")
+	}
+	return trusted.AnswerPromptBatchValidated(ctx, req)
 }
 
 func executeInboundUnary[Req any, Authz any](
@@ -597,6 +663,7 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		}
 	}
 	registerActiveProjectSessionRoutes(executables)
+	registerProjectAndSmallServiceRoutes(executables)
 	executables[protocol.MethodOnboardingFinalize] = inboundUnary[serverapi.OnboardingFinalizeRequest, noAuthorizationFacts](
 		protocol.MethodOnboardingFinalize,
 		apicontract.SemanticValidationRequired,
@@ -728,6 +795,71 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		handleSessionRuntimeRelease,
 	)
 	return executables
+}
+
+func registerProjectAndSmallServiceRoutes(executables map[string]inboundExecutableRoute) {
+	projectClient := func(deps GatewayDependencies) any { return deps.ProjectViewClient() }
+	executables[protocol.MethodProjectList] = trustedServiceUnary(protocol.MethodProjectList, projectClient, apicontract.ProjectViewTrustedService.ListProjectsValidated)
+	executables[protocol.MethodProjectHomeList] = trustedServiceUnary(protocol.MethodProjectHomeList, projectClient, apicontract.ProjectViewTrustedService.ListProjectHomeValidated)
+	executables[protocol.MethodProjectResolvePath] = trustedServiceUnary(protocol.MethodProjectResolvePath, projectClient, apicontract.ProjectViewTrustedService.ResolveProjectPathValidated)
+	executables[protocol.MethodProjectPlanWorkspaceBinding] = trustedServiceUnary(protocol.MethodProjectPlanWorkspaceBinding, projectClient, apicontract.ProjectViewTrustedService.PlanWorkspaceBindingValidated)
+	executables[protocol.MethodProjectCreate] = trustedServiceUnary(protocol.MethodProjectCreate, projectClient, apicontract.ProjectViewTrustedService.CreateProjectValidated)
+	executables[protocol.MethodProjectEditGet] = trustedServiceUnary(protocol.MethodProjectEditGet, projectClient, apicontract.ProjectViewTrustedService.GetProjectEditValidated)
+	executables[protocol.MethodProjectUpdate] = trustedServiceUnary(protocol.MethodProjectUpdate, projectClient, apicontract.ProjectViewTrustedService.UpdateProjectValidated)
+	executables[protocol.MethodProjectSetDefaultWorkspace] = trustedServiceUnary(protocol.MethodProjectSetDefaultWorkspace, projectClient, apicontract.ProjectViewTrustedService.SetDefaultWorkspaceValidated)
+	executables[protocol.MethodProjectWorkspaceList] = trustedServiceUnary(protocol.MethodProjectWorkspaceList, projectClient, apicontract.ProjectViewTrustedService.ListProjectWorkspacesValidated)
+	executables[protocol.MethodProjectWorkspaceGet] = trustedServiceUnary(protocol.MethodProjectWorkspaceGet, projectClient, apicontract.ProjectViewTrustedService.GetProjectWorkspaceValidated)
+	executables[protocol.MethodProjectUnlinkWorkspace] = trustedServiceUnary(protocol.MethodProjectUnlinkWorkspace, projectClient, apicontract.ProjectViewTrustedService.UnlinkWorkspaceFromProjectValidated)
+	executables[protocol.MethodProjectDelete] = trustedServiceUnary(protocol.MethodProjectDelete, projectClient, apicontract.ProjectViewTrustedService.DeleteProjectValidated)
+	executables[protocol.MethodProjectAttachWorkspace] = trustedServiceUnary(protocol.MethodProjectAttachWorkspace, projectClient, apicontract.ProjectViewTrustedService.AttachWorkspaceToProjectValidated)
+	executables[protocol.MethodProjectRebindWorkspace] = trustedServiceUnary(protocol.MethodProjectRebindWorkspace, projectClient, apicontract.ProjectViewTrustedService.RebindWorkspaceValidated)
+	executables[protocol.MethodProjectGetOverview] = trustedServiceUnary(protocol.MethodProjectGetOverview, projectClient, apicontract.ProjectViewTrustedService.GetProjectOverviewValidated)
+	executables[protocol.MethodSessionPage] = trustedServiceUnary(protocol.MethodSessionPage, projectClient, apicontract.ProjectViewTrustedService.ListSessionPageValidated)
+
+	executables[protocol.MethodAuthGetStatus] = trustedServiceUnary(
+		protocol.MethodAuthGetStatus,
+		func(deps GatewayDependencies) any { return deps.AuthStatusClient() },
+		apicontract.AuthStatusTrustedService.GetAuthStatusValidated,
+	)
+	executables[protocol.MethodCapabilityFactsGet] = trustedServiceUnary(
+		protocol.MethodCapabilityFactsGet,
+		func(deps GatewayDependencies) any { return deps.CapabilityFactsClient() },
+		apicontract.CapabilityFactsTrustedService.GetCapabilityFactsValidated,
+	)
+	executables[protocol.MethodPromptAnswerBatch] = inboundTrustedUnary(
+		protocol.MethodPromptAnswerBatch,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.PromptAnswerBatchRequest) string { return req.SessionID.String() }),
+		handlePromptAnswerBatch,
+	)
+	executables[protocol.MethodServerUpdateStatusGet] = trustedServiceUnary(
+		protocol.MethodServerUpdateStatusGet,
+		func(deps GatewayDependencies) any { return deps.ServerStatusClient() },
+		apicontract.ServerStatusTrustedService.GetUpdateStatusValidated,
+	)
+
+	executables[protocol.MethodAuthGetBootstrapStatus] = inboundTrustedUnary(
+		protocol.MethodAuthGetBootstrapStatus, apicontract.NoSemanticValidation, requestDecoderDefault, nil,
+		authorizeRouteScope[serverapi.AuthGetBootstrapStatusRequest](mustInboundRoute(protocol.MethodAuthGetBootstrapStatus, apicontract.KindUnary)),
+		handleAuthGetBootstrapStatus,
+	)
+	executables[protocol.MethodAuthCompleteBootstrap] = inboundTrustedUnary(
+		protocol.MethodAuthCompleteBootstrap, apicontract.SemanticValidationRequired, requestDecoderDefault, nil,
+		authorizeRouteScope[serverapi.AuthCompleteBootstrapRequest](mustInboundRoute(protocol.MethodAuthCompleteBootstrap, apicontract.KindUnary)),
+		handleAuthCompleteBootstrap,
+	)
+	executables[protocol.MethodAuthAcknowledgeNoAuth] = inboundTrustedUnary(
+		protocol.MethodAuthAcknowledgeNoAuth, apicontract.NoSemanticValidation, requestDecoderDefault, nil,
+		authorizeRouteScope[serverapi.AuthAcknowledgeNoAuthRequest](mustInboundRoute(protocol.MethodAuthAcknowledgeNoAuth, apicontract.KindUnary)),
+		handleAuthAcknowledgeNoAuth,
+	)
+	executables[protocol.MethodServerReadinessGet] = inboundTrustedUnary(
+		protocol.MethodServerReadinessGet, apicontract.NoSemanticValidation, requestDecoderDefault, nil,
+		authorizeRouteScope[serverapi.ServerReadinessRequest](mustInboundRoute(protocol.MethodServerReadinessGet, apicontract.KindUnary)),
+		handleServerReadiness,
+	)
 }
 
 func registerGoalRoutes(executables map[string]inboundExecutableRoute) {
@@ -1178,6 +1310,52 @@ func handleAttachSession(
 	state.attachedWorkspaceID = attachment.WorkspaceID
 	state.attachedWorkspaceRoot = attachment.CanonicalRoot
 	state.attachedSession = &attachment.SessionID
+	return response, nil
+}
+
+func handleAuthGetBootstrapStatus(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.AuthGetBootstrapStatusRequest], _ noAuthorizationFacts) (serverapi.AuthGetBootstrapStatusResponse, error) {
+	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
+	if !ok {
+		return serverapi.AuthGetBootstrapStatusResponse{}, serverapi.ErrServerAuthRequired
+	}
+	return trusted.GetAuthBootstrapStatusValidated(ctx, request)
+}
+
+func handleAuthCompleteBootstrap(ctx context.Context, g *Gateway, state *connectionState, request apicontract.Validated[serverapi.AuthCompleteBootstrapRequest], _ noAuthorizationFacts) (serverapi.AuthCompleteBootstrapResponse, error) {
+	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
+	if !ok {
+		return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
+	}
+	response, err := trusted.CompleteAuthBootstrapValidated(ctx, request)
+	if err == nil {
+		state.noAuthAccepted = response.NoAuthSelected
+	}
+	return response, err
+}
+
+func handleAuthAcknowledgeNoAuth(ctx context.Context, g *Gateway, state *connectionState, request apicontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest], _ noAuthorizationFacts) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
+	if !ok {
+		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
+	}
+	response, err := trusted.AcknowledgeNoAuthValidated(ctx, request)
+	if err == nil {
+		state.noAuthAccepted = response.NoAuthSelected
+	}
+	return response, err
+}
+
+func handleServerReadiness(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.ServerReadinessRequest], _ noAuthorizationFacts) (serverapi.ServerReadinessResponse, error) {
+	trusted, ok := g.deps.ServerStatusClient().(apicontract.ServerStatusTrustedService)
+	if !ok {
+		return serverapi.ServerReadinessResponse{}, errors.New("server status trusted service is required")
+	}
+	response, err := trusted.GetServerReadinessValidated(ctx, request)
+	if err != nil {
+		return serverapi.ServerReadinessResponse{}, err
+	}
+	response.ServerID = g.identity.ServerID
+	response.ProtocolVersion = g.identity.ProtocolVersion
 	return response, nil
 }
 

@@ -21,13 +21,32 @@ type promptCommandCatalogService struct {
 	catalog promptcommands.Service
 }
 
-func (s promptCommandCatalogService) GetPromptCommandCatalog(context.Context, serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
+var _ apicontract.PromptCommandCatalogTrustedService = promptCommandCatalogService{}
+
+func (s promptCommandCatalogService) GetPromptCommandCatalog(
+	ctx context.Context,
+	req serverapi.PromptCommandCatalogRequest,
+) (serverapi.PromptCommandCatalogResponse, error) {
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
+			return s.GetPromptCommandCatalogValidated(ctx, validated)
+		},
+	)
+}
+
+func (s promptCommandCatalogService) GetPromptCommandCatalogValidated(
+	_ context.Context,
+	_ apicontract.Validated[serverapi.PromptCommandCatalogRequest],
+) (serverapi.PromptCommandCatalogResponse, error) {
 	entries, err := s.catalog.Catalog()
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, publicPromptCommandError(err)
 	}
-	response := serverapi.PromptCommandCatalogResponse{Commands: append([]serverapi.PromptCommandCatalogEntry(nil), entries...)}
-	return response, response.Validate()
+	return serverapi.PromptCommandCatalogResponse{
+		Commands: append([]serverapi.PromptCommandCatalogEntry(nil), entries...),
+	}, nil
 }
 
 type promptCommandRuntimeResolver struct {
@@ -40,7 +59,22 @@ type promptCommandSessionCatalogService struct {
 	sessionID string
 }
 
+var _ apicontract.PromptCommandCatalogTrustedService = promptCommandSessionCatalogService{}
+
 func (s promptCommandSessionCatalogService) GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
+			return s.GetPromptCommandCatalogValidated(ctx, validated)
+		},
+	)
+}
+
+func (s promptCommandSessionCatalogService) GetPromptCommandCatalogValidated(
+	ctx context.Context,
+	validated apicontract.Validated[serverapi.PromptCommandCatalogRequest],
+) (serverapi.PromptCommandCatalogResponse, error) {
 	if s.core == nil {
 		return serverapi.PromptCommandCatalogResponse{}, errors.New("core is required")
 	}
@@ -52,7 +86,7 @@ func (s promptCommandSessionCatalogService) GetPromptCommandCatalog(ctx context.
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, err
 	}
-	return catalog.GetPromptCommandCatalog(ctx, req)
+	return catalog.(apicontract.PromptCommandCatalogTrustedService).GetPromptCommandCatalogValidated(ctx, validated)
 }
 
 type promptCommandEffectiveWorkspaceResolver struct {
@@ -60,7 +94,11 @@ type promptCommandEffectiveWorkspaceResolver struct {
 }
 
 func (r promptCommandEffectiveWorkspaceResolver) ResolvePromptCommandForWorkspace(ctx context.Context, workspaceRoot, name, arguments string) (string, error) {
-	content, err := promptcommands.New(r.persistenceRoot, workspaceRoot).Resolve(name, arguments)
+	catalog, err := promptcommands.New(r.persistenceRoot, workspaceRoot)
+	if err != nil {
+		return "", publicPromptCommandError(err)
+	}
+	content, err := catalog.Resolve(name, arguments)
 	if err != nil {
 		return "", publicPromptCommandError(err)
 	}
@@ -152,9 +190,11 @@ func (s *Core) PromptCommandCatalogClientForProjectWorkspace(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
-	return promptCommandCatalogService{
-		catalog: promptcommands.New(projectCtx.config.PersistenceRoot, projectCtx.projectRoot),
-	}, nil
+	catalog, err := promptcommands.New(projectCtx.config.PersistenceRoot, projectCtx.projectRoot)
+	if err != nil {
+		return nil, publicPromptCommandError(err)
+	}
+	return promptCommandCatalogService{catalog: catalog}, nil
 }
 
 func (s *Core) PromptCommandCatalogClientForSession(ctx context.Context, sessionID string) (apicontract.PromptCommandCatalogService, error) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/apicontract"
 	"core/shared/authstatus"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -53,6 +54,24 @@ func TestStatusServiceLoadsAuthStateOnce(t *testing.T) {
 	}
 	if store.loads != 1 {
 		t.Fatalf("auth state loads = %d, want 1", store.loads)
+	}
+}
+
+func TestStatusServiceValidatedPreservesProviderResolution(t *testing.T) {
+	service := NewStatusService(nil, config.Settings{ProviderOverride: "anthropic"})
+
+	response, err := apicontract.WithValidated(
+		serverapi.AuthStatusRequest{},
+		apicontract.SemanticValidationRequired,
+		func(request apicontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
+			return service.GetAuthStatusValidated(context.Background(), request)
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetAuthStatusValidated: %v", err)
+	}
+	if response.Resolution.Facts == nil || response.Resolution.Facts.Provider.Identifier != "anthropic" {
+		t.Fatalf("auth status = %+v, want anthropic provider", response)
 	}
 }
 

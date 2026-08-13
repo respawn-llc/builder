@@ -37,8 +37,8 @@ func WrapStoreWithEnvAPIKeyOverride(base auth.Store, lookupEnv func(string) stri
 		lookupEnv = os.Getenv
 	}
 	return auth.NewEnvAPIKeyOverrideStore(base, func(key string) (string, bool) {
-		value := lookupEnv(key)
-		return value, strings.TrimSpace(value) != ""
+		value := strings.TrimSpace(lookupEnv(key))
+		return value, value != ""
 	})
 }
 
@@ -49,34 +49,31 @@ func EnsureFlowReady(ctx context.Context, mgr *auth.Manager, oauthOpts auth.Open
 	if handler == nil {
 		return errors.New("auth flow handler is required")
 	}
-	if lookupEnv == nil {
-		lookupEnv = os.Getenv
-	}
 	for {
-		state, err := mgr.Load(ctx)
+		readiness, err := EvaluateReadiness(ctx, mgr, authRequired)
 		if err != nil {
 			return err
 		}
+		state := readiness.State
 		storedState, err := mgr.StoredState(ctx)
 		if err != nil {
 			return err
 		}
-		gate := auth.EvaluateStartupGate(state)
 		var startupErr error
-		if authRequired && !gate.Ready {
-			startupErr = auth.EnsureStartupReady(state)
+		if authRequired && !readiness.Ready {
+			startupErr = auth.EnsureStartupReady(readiness.State)
 		}
 		req := FlowInteractionRequest{
 			Manager:        mgr,
 			State:          state,
 			StoredState:    storedState,
-			Gate:           gate,
+			Gate:           readiness.Gate,
 			AuthRequired:   authRequired,
 			PromptOptional: promptOptional,
 			StartupErr:     startupErr,
 			OAuthOptions:   oauthOpts,
 			Theme:          theme,
-			HasEnvAPIKey:   strings.TrimSpace(lookupEnv("OPENAI_API_KEY")) != "",
+			HasEnvAPIKey:   mgr.HasEnvAPIKey(),
 		}
 		if !handler.NeedsInteraction(req) {
 			if startupErr != nil {

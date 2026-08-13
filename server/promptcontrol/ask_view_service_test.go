@@ -7,6 +7,7 @@ import (
 
 	"core/server/registry"
 	askquestion "core/server/tools"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -102,5 +103,21 @@ func TestServiceRejectsInvalidPendingAskRecommendation(t *testing.T) {
 func TestAskViewServiceRequiresSessionID(t *testing.T) {
 	if _, err := NewAskViewService(&stubAskPendingPromptSource{}).ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{}); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestAskViewServiceConsumesValidatedRequest(t *testing.T) {
+	service := NewAskViewService(&stubAskPendingPromptSource{})
+	request := serverapi.AskListPendingBySessionRequest{SessionID: "session-1"}
+	_, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.AskListPendingBySessionRequest]) (struct{}, error) {
+			_, err := service.ListPendingAsksBySessionValidated(context.Background(), validated)
+			return struct{}{}, err
+		},
+	)
+	if err != nil {
+		t.Fatalf("ListPendingAsksBySessionValidated: %v", err)
 	}
 }

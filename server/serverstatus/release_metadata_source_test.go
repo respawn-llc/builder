@@ -19,8 +19,8 @@ func TestGitHubReleaseMetadataSourceReturnsValidatedRelease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LatestRelease: %v", err)
 	}
-	if metadata.Version != "1.2.3" {
-		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	if metadata.Version.String() != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", metadata.Version.String())
 	}
 }
 
@@ -53,6 +53,19 @@ func TestGitHubReleaseMetadataSourceClassifiesHTTPFailure(t *testing.T) {
 func TestGitHubReleaseMetadataSourceBoundsInvalidMetadata(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(strings.Repeat("x", maxReleaseMetadataBytes+1)))
+	}))
+	defer server.Close()
+
+	_, err := newGitHubReleaseMetadataSource(server.Client(), server.URL).LatestRelease(context.Background())
+	var metadataError *releaseMetadataError
+	if !errors.As(err, &metadataError) {
+		t.Fatalf("error = %v, want metadata error", err)
+	}
+}
+
+func TestGitHubReleaseMetadataSourceRejectsInvalidVersionAtSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v1.invalid.3"}`))
 	}))
 	defer server.Close()
 

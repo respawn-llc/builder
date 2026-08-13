@@ -15,55 +15,33 @@ type ProcessOutputSubscriber interface {
 	SubscribeOutput(ctx context.Context, processID string, offsetBytes int64) (shelltool.OutputSubscription, error)
 }
 
-type ProcessOutputSource interface {
-	Snapshot(id string) (shelltool.Snapshot, error)
-}
-
 type ProcessOutputService struct {
 	subscriber ProcessOutputSubscriber
-	processes  ProcessOutputSource
 }
 
-func NewProcessOutputService(subscriber ProcessOutputSubscriber, processes ProcessOutputSource) *ProcessOutputService {
-	return &ProcessOutputService{subscriber: subscriber, processes: processes}
+func NewProcessOutputService(subscriber ProcessOutputSubscriber) *ProcessOutputService {
+	return &ProcessOutputService{subscriber: subscriber}
 }
 
 func (s *ProcessOutputService) SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProcessOutputSubscribeRequest]) (serverapi.ProcessOutputSubscription, error) {
-		return s.subscribeProcessOutput(ctx, validated.Value())
+		request := validated.Value()
+		return s.subscribeProcessOutputOwner(ctx, request.ProcessID, request.OffsetBytes)
 	})
 }
 
 func (s *ProcessOutputService) SubscribeProcessOutputValidated(ctx context.Context, req servicecontract.Validated[serverapi.ProcessOutputSubscribeRequest], authorization servicecontract.AuthorizedProcessInActiveProject) (serverapi.ProcessOutputSubscription, error) {
 	request := req.Value()
-	request.ProcessID = authorization.ProcessID
-	return s.subscribeProcessOutput(ctx, request)
+	return s.subscribeProcessOutputOwner(ctx, authorization.ProcessID, request.OffsetBytes)
 }
 
-func (s *ProcessOutputService) subscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
-	if s == nil || s.subscriber == nil || s.processes == nil {
+func (s *ProcessOutputService) subscribeProcessOutputOwner(ctx context.Context, processID string, offsetBytes int64) (serverapi.ProcessOutputSubscription, error) {
+	if s == nil || s.subscriber == nil {
 		return nil, errors.New("process output subscriber is required")
 	}
-	snapshot, err := s.processes.Snapshot(req.ProcessID)
+	sub, err := s.subscriber.SubscribeOutput(ctx, processID, offsetBytes)
 	if err != nil {
-		return nil, fmt.Errorf("process output stream for %q is unavailable: %w", req.ProcessID, serverapi.ErrProcessOutputUnavailable)
-	}
-	if !snapshot.OutputAvailable {
-		return nil, fmt.Errorf("process output stream for %q is unavailable: %w", req.ProcessID, serverapi.ErrProcessOutputUnavailable)
-	}
-	if req.OffsetBytes < snapshot.OutputRetainedFromBytes || req.OffsetBytes > snapshot.OutputRetainedToBytes {
-		return nil, fmt.Errorf(
-			"process output offset %d is outside retained range [%d,%d] for %q: %w",
-			req.OffsetBytes,
-			snapshot.OutputRetainedFromBytes,
-			snapshot.OutputRetainedToBytes,
-			req.ProcessID,
-			serverapi.ErrProcessOutputGap,
-		)
-	}
-	sub, err := s.subscriber.SubscribeOutput(ctx, req.ProcessID, req.OffsetBytes)
-	if err != nil {
-		return nil, fmt.Errorf("process output stream for %q failed: %w", req.ProcessID, serverapi.ErrStreamFailed)
+		return nil, fmt.Errorf("process output stream for %q failed: %w", processID, serverapi.NormalizeStreamError(err))
 	}
 	return &processOutputSubscription{inner: sub}, nil
 }

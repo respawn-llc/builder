@@ -19,10 +19,24 @@ func NewAskViewService(prompts PendingPromptSource) *AskViewService {
 	return &AskViewService{prompts: prompts}
 }
 
-func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, err
-	}
+func (s *AskViewService) ListPendingAsksBySession(ctx context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
+	return servicecontract.WithValidated(
+		req,
+		servicecontract.SemanticValidationRequired,
+		func(validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest]) (serverapi.AskListPendingBySessionResponse, error) {
+			return s.ListPendingAsksBySessionValidated(ctx, validated)
+		},
+	)
+}
+
+func (s *AskViewService) ListPendingAsksBySessionValidated(
+	_ context.Context,
+	validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest],
+) (serverapi.AskListPendingBySessionResponse, error) {
+	return s.listPendingAsksBySession(validated.Value())
+}
+
+func (s *AskViewService) listPendingAsksBySession(req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}

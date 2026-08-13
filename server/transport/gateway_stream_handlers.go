@@ -200,7 +200,11 @@ func executePromptFollowUpSubscription(g *Gateway, conn rpcwire.Conn, ctx contex
 		)(ctx, g, state, validated); err != nil {
 			return struct{}{}, validatedOwnerError{cause: err}
 		}
-		subscription, err := g.deps.PromptControlClient().SubscribeFollowUp(ctx, validated.Value())
+		trusted, ok := g.deps.PromptControlClient().(rpccontract.PromptControlTrustedService)
+		if !ok {
+			return struct{}{}, validatedOwnerError{cause: errors.New("Prompt Control trusted service is required")}
+		}
+		subscription, err := trusted.SubscribeFollowUpValidated(ctx, validated)
 		if err != nil {
 			return struct{}{}, validatedOwnerError{cause: err}
 		}

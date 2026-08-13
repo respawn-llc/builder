@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"core/server/tools/shell/postprocess"
+	"core/shared/serverapi"
 )
 
 type outputSubscription struct {
@@ -25,6 +26,16 @@ func (m *Manager) SubscribeOutput(_ context.Context, processID string, offsetByt
 	entry, err := m.entry(processID)
 	if err != nil {
 		return nil, err
+	}
+	entry.mu.Lock()
+	outputAvailable := entry.logPath != ""
+	retainedToBytes := entry.outputBytes
+	entry.mu.Unlock()
+	if !outputAvailable {
+		return nil, serverapi.ErrStreamUnavailable
+	}
+	if offsetBytes > retainedToBytes {
+		return nil, serverapi.ErrStreamGap
 	}
 	return &outputSubscription{processID: processID, entry: entry, offset: offsetBytes, closeCh: make(chan struct{})}, nil
 }

@@ -13,6 +13,14 @@ type Manager struct {
 	now       func() time.Time
 }
 
+func (m *Manager) HasEnvAPIKey() bool {
+	if m == nil || m.store == nil {
+		return false
+	}
+	store, ok := m.store.(interface{ HasEnvAPIKey() bool })
+	return ok && store.HasEnvAPIKey()
+}
+
 type CurrentStateResolution struct {
 	Loaded  *State
 	Current *State

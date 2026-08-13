@@ -23,16 +23,39 @@ type AuthBootstrapService interface {
 	AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error)
 }
 
+type AuthBootstrapTrustedService interface {
+	GetAuthBootstrapStatusValidated(ctx context.Context, req Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error)
+	CompleteAuthBootstrapValidated(ctx context.Context, req Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error)
+	AcknowledgeNoAuthValidated(ctx context.Context, req Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error)
+}
+
+type AuthBootstrapGatewayService interface {
+	AuthBootstrapService
+	AuthBootstrapTrustedService
+}
+
 type AuthStatusService interface {
 	GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
+}
+
+type AuthStatusTrustedService interface {
+	GetAuthStatusValidated(ctx context.Context, req Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error)
 }
 
 type CapabilityFactsService interface {
 	GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
 }
 
+type CapabilityFactsTrustedService interface {
+	GetCapabilityFactsValidated(ctx context.Context, req Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error)
+}
+
 type PromptCommandCatalogService interface {
 	GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error)
+}
+
+type PromptCommandCatalogTrustedService interface {
+	GetPromptCommandCatalogValidated(ctx context.Context, req Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error)
 }
 
 type OnboardingFinalizeService interface {
@@ -95,6 +118,30 @@ type ProjectViewService interface {
 	ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error)
 }
 
+type ProjectViewTrustedService interface {
+	ListProjectsValidated(ctx context.Context, req Validated[serverapi.ProjectListRequest]) (serverapi.ProjectListResponse, error)
+	ListProjectHomeValidated(ctx context.Context, req Validated[serverapi.ProjectHomeListRequest]) (serverapi.ProjectHomeListResponse, error)
+	ResolveProjectPathValidated(ctx context.Context, req Validated[serverapi.ProjectResolvePathRequest]) (serverapi.ProjectResolvePathResponse, error)
+	PlanWorkspaceBindingValidated(ctx context.Context, req Validated[serverapi.ProjectBindingPlanRequest]) (serverapi.ProjectBindingPlanResponse, error)
+	CreateProjectValidated(ctx context.Context, req Validated[serverapi.ProjectCreateRequest]) (serverapi.ProjectCreateResponse, error)
+	GetProjectEditValidated(ctx context.Context, req Validated[serverapi.ProjectEditGetRequest]) (serverapi.ProjectEditGetResponse, error)
+	UpdateProjectValidated(ctx context.Context, req Validated[serverapi.ProjectUpdateRequest]) (serverapi.ProjectUpdateResponse, error)
+	SetDefaultWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectDefaultWorkspaceSetRequest]) (serverapi.ProjectDefaultWorkspaceSetResponse, error)
+	ListProjectWorkspacesValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceListRequest]) (serverapi.ProjectWorkspaceListResponse, error)
+	GetProjectWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceGetRequest]) (serverapi.ProjectWorkspaceGetResponse, error)
+	UnlinkWorkspaceFromProjectValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceUnlinkRequest]) (serverapi.ProjectWorkspaceUnlinkResponse, error)
+	DeleteProjectValidated(ctx context.Context, req Validated[serverapi.ProjectDeleteRequest]) (serverapi.ProjectDeleteResponse, error)
+	AttachWorkspaceToProjectValidated(ctx context.Context, req Validated[serverapi.ProjectAttachWorkspaceRequest]) (serverapi.ProjectAttachWorkspaceResponse, error)
+	RebindWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectRebindWorkspaceRequest]) (serverapi.ProjectRebindWorkspaceResponse, error)
+	GetProjectOverviewValidated(ctx context.Context, req Validated[serverapi.ProjectGetOverviewRequest]) (serverapi.ProjectGetOverviewResponse, error)
+	ListSessionPageValidated(ctx context.Context, req Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error)
+}
+
+type ProjectViewGatewayService interface {
+	ProjectViewService
+	ProjectViewTrustedService
+}
+
 type AttentionNotificationService interface {
 	SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
 	SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
@@ -107,6 +154,11 @@ type AttentionNotificationTrustedService interface {
 type PromptControlService interface {
 	AnswerPromptBatch(ctx context.Context, req serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error)
 	SubscribeFollowUp(ctx context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error)
+}
+
+type PromptControlTrustedService interface {
+	AnswerPromptBatchValidated(ctx context.Context, req Validated[serverapi.PromptAnswerBatchRequest]) (serverapi.PromptAnswerBatchResponse, error)
+	SubscribeFollowUpValidated(ctx context.Context, req Validated[serverapi.PromptFollowUpWatchRequest]) (serverapi.PromptFollowUpSubscription, error)
 }
 
 type RunPromptService interface {
@@ -125,6 +177,11 @@ type RunPromptGatewayService interface {
 type ServerStatusService interface {
 	GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error)
 	GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error)
+}
+
+type ServerStatusTrustedService interface {
+	GetServerReadinessValidated(ctx context.Context, req Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error)
+	GetUpdateStatusValidated(ctx context.Context, req Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error)
 }
 
 type RuntimeControlService interface {

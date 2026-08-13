@@ -18,7 +18,7 @@ const (
 )
 
 type releaseMetadata struct {
-	Version string
+	Version updateVersion
 }
 
 type releaseMetadataSource interface {
@@ -145,5 +145,5 @@ func (s *githubReleaseMetadataSource) LatestRelease(ctx context.Context) (metada
 	if err != nil {
 		return releaseMetadata{}, &releaseMetadataError{Cause: fmt.Errorf("latest release tag is invalid: %w", err)}
 	}
-	return releaseMetadata{Version: version.String()}, nil
+	return releaseMetadata{Version: version}, nil
 }

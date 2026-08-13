@@ -15,29 +15,8 @@ type stubSubscriber struct {
 	err error
 }
 
-type stubProcessSource struct {
-	snapshots []shelltool.Snapshot
-	err       error
-	calls     int
-}
-
 func (s *stubSubscriber) SubscribeOutput(context.Context, string, int64) (shelltool.OutputSubscription, error) {
 	return s.sub, s.err
-}
-
-func (s *stubProcessSource) Snapshot(string) (shelltool.Snapshot, error) {
-	if s.err != nil {
-		return shelltool.Snapshot{}, s.err
-	}
-	if len(s.snapshots) == 0 {
-		return shelltool.Snapshot{}, nil
-	}
-	index := s.calls
-	if index >= len(s.snapshots) {
-		index = len(s.snapshots) - 1
-	}
-	s.calls++
-	return s.snapshots[index], nil
 }
 
 type stubShellOutputSubscription struct {
@@ -60,7 +39,6 @@ func testSubscriptionNextError(t *testing.T, nextErr error, wantErr error) {
 	t.Helper()
 	svc := NewProcessOutputService(
 		&stubSubscriber{sub: &stubShellOutputSubscription{err: nextErr}},
-		&stubProcessSource{snapshots: []shelltool.Snapshot{{ID: "proc-1", LogPath: "/tmp/proc-1.log", OutputAvailable: true, OutputRetainedToBytes: 1}}},
 	)
 	sub, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1"})
 	if err != nil {
@@ -75,7 +53,6 @@ func testSubscribeTimeFailure(t *testing.T, wantErr error) {
 	t.Helper()
 	svc := NewProcessOutputService(
 		&stubSubscriber{err: errors.New("subscribe failed")},
-		&stubProcessSource{snapshots: []shelltool.Snapshot{{ID: "proc-1", OutputAvailable: true, OutputRetainedFromBytes: 0, OutputRetainedToBytes: 10}}},
 	)
 	if _, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1", OffsetBytes: 10}); !errors.Is(err, wantErr) {
 		t.Fatalf("SubscribeProcessOutput error = %v, want %v", err, wantErr)
@@ -85,7 +62,6 @@ func testSubscribeTimeFailure(t *testing.T, wantErr error) {
 func TestServiceSubscribesAndProjectsChunks(t *testing.T) {
 	svc := NewProcessOutputService(
 		&stubSubscriber{sub: &stubShellOutputSubscription{chunk: shelltool.OutputChunk{ProcessID: "proc-1", OffsetBytes: 10, NextOffsetBytes: 15, Text: "hello"}}},
-		&stubProcessSource{snapshots: []shelltool.Snapshot{{ID: "proc-1", LogPath: "/tmp/proc-1.log", OutputAvailable: true, OutputRetainedToBytes: 10}}},
 	)
 	sub, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1", OffsetBytes: 10})
 	if err != nil {
@@ -101,13 +77,13 @@ func TestServiceSubscribesAndProjectsChunks(t *testing.T) {
 }
 
 func TestServiceValidatesRequest(t *testing.T) {
-	if _, err := NewProcessOutputService(&stubSubscriber{}, &stubProcessSource{}).SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{}); err == nil {
+	if _, err := NewProcessOutputService(&stubSubscriber{}).SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{}); err == nil {
 		t.Fatal("expected validation error")
 	}
 }
 
 func TestServiceRejectsUnavailableStream(t *testing.T) {
-	svc := NewProcessOutputService(&stubSubscriber{}, &stubProcessSource{err: errors.New("missing")})
+	svc := NewProcessOutputService(&stubSubscriber{err: serverapi.ErrStreamUnavailable})
 	if _, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1"}); !errors.Is(err, serverapi.ErrStreamUnavailable) {
 		t.Fatalf("expected unavailable error, got %v", err)
 	}
@@ -115,8 +91,7 @@ func TestServiceRejectsUnavailableStream(t *testing.T) {
 
 func TestServiceRejectsOffsetOutsideRetainedRange(t *testing.T) {
 	svc := NewProcessOutputService(
-		&stubSubscriber{},
-		&stubProcessSource{snapshots: []shelltool.Snapshot{{ID: "proc-1", LogPath: "/tmp/proc-1.log", OutputAvailable: true, OutputRetainedFromBytes: 0, OutputRetainedToBytes: 5}}},
+		&stubSubscriber{err: serverapi.ErrStreamGap},
 	)
 	if _, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1", OffsetBytes: 6}); !errors.Is(err, serverapi.ErrStreamGap) {
 		t.Fatalf("expected gap error, got %v", err)

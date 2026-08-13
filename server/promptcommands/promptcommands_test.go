@@ -26,7 +26,8 @@ func TestCatalogUsesOrderedRootsSortedEntriesAndNormalizedFirstValidPrecedence(t
 	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "nested", "ignored.md"), "ignored")
 	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "not-markdown.txt"), "ignored")
 
-	entries, err := New(persistenceRoot, workspaceRoot).Catalog()
+	service := newTestService(t, persistenceRoot, workspaceRoot)
+	entries, err := service.Catalog()
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
@@ -57,7 +58,8 @@ func TestCatalogBlankHigherPrecedenceFallsBackAndPreviewCollapsesWhitespaceAtUni
 	writePromptFile(t, filepath.Join(persistenceRoot, "prompts", "same.md"), "fallback")
 	writePromptFile(t, filepath.Join(persistenceRoot, "commands", "preview.md"), "first\n\n second\t third "+body)
 
-	entries, err := New(persistenceRoot, workspaceRoot).Catalog()
+	service := newTestService(t, persistenceRoot, workspaceRoot)
+	entries, err := service.Catalog()
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
@@ -90,7 +92,7 @@ func TestResolveReadsCurrentWinningContentAndExpandsArguments(t *testing.T) {
 	path := filepath.Join(persistenceRoot, "prompts", "review_file.md")
 	writePromptFile(t, path, "before $ARGUMENTS")
 
-	service := New(persistenceRoot, workspaceRoot)
+	service := newTestService(t, persistenceRoot, workspaceRoot)
 	if got, err := service.Resolve("prompt:review_file", "  src/internal  "); err != nil || got != "before src/internal" {
 		t.Fatalf("Resolve first = %q, %v", got, err)
 	}
@@ -100,19 +102,32 @@ func TestResolveReadsCurrentWinningContentAndExpandsArguments(t *testing.T) {
 	}
 }
 
+func TestConstructionRejectsBlankRoots(t *testing.T) {
+	for name, roots := range map[string][2]string{
+		"persistence": {"", t.TempDir()},
+		"workspace":   {t.TempDir(), " "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := New(roots[0], roots[1]); err == nil {
+				t.Fatal("New accepted blank root")
+			}
+		})
+	}
+}
+
 func TestResolveReturnsExactEmptyExpansion(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	writePromptFile(t, filepath.Join(persistenceRoot, "prompts", "arguments_only.md"), "$ARGUMENTS")
 
-	got, err := New(persistenceRoot, workspaceRoot).Resolve("prompt:arguments_only", "")
+	got, err := newTestService(t, persistenceRoot, workspaceRoot).Resolve("prompt:arguments_only", "")
 	if err != nil || got != "" {
 		t.Fatalf("empty expansion = %q, %v; want exact empty result", got, err)
 	}
 }
 
 func TestBuiltInPromptCommandsResolveThroughTheServerService(t *testing.T) {
-	service := New(t.TempDir(), t.TempDir())
+	service := newTestService(t, t.TempDir(), t.TempDir())
 	for _, test := range []struct {
 		name string
 		body string
@@ -134,7 +149,7 @@ func TestBuiltInPromptCommandsResolveThroughTheServerService(t *testing.T) {
 func TestResolveReportsTypedRedactedErrors(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
-	service := New(persistenceRoot, workspaceRoot)
+	service := newTestService(t, persistenceRoot, workspaceRoot)
 
 	_, err := service.Resolve("prompt:missing", "")
 	var commandErr *Error
@@ -157,7 +172,7 @@ func TestResolveDoesNotReadUnrelatedUnreadablePrompt(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(bad, 0o600) })
 
-	if got, err := New(persistenceRoot, workspaceRoot).Resolve("prompt:good", ""); err != nil || got != "good" {
+	if got, err := newTestService(t, persistenceRoot, workspaceRoot).Resolve("prompt:good", ""); err != nil || got != "good" {
 		t.Fatalf("Resolve valid command = %q, %v", got, err)
 	}
 }
@@ -174,7 +189,7 @@ func TestCatalogReadFailureIsTypedAndRedacted(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(blocked, 0o755) })
 
-	_, err := New(persistenceRoot, workspaceRoot).Catalog()
+	_, err := newTestService(t, persistenceRoot, workspaceRoot).Catalog()
 	var commandErr *Error
 	if !errors.As(err, &commandErr) || commandErr.Kind != ErrorKindCatalogRead {
 		t.Fatalf("Catalog error = %T %v", err, err)
@@ -201,7 +216,7 @@ func TestCatalogSkipsBrokenBuiltInShadowFiles(t *testing.T) {
 		}
 	}
 
-	entries, err := New(t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
+	entries, err := newTestService(t, t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
@@ -233,7 +248,7 @@ func TestCatalogSkipsMarkdownSymlinkToDirectory(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 
-	entries, err := New(t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
+	entries, err := newTestService(t, t.TempDir(), filepath.Dir(filepath.Dir(root))).Catalog()
 	if err != nil {
 		t.Fatalf("Catalog: %v", err)
 	}
@@ -262,4 +277,13 @@ func writePromptFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func newTestService(t *testing.T, persistenceRoot, workspaceRoot string) Service {
+	t.Helper()
+	service, err := New(persistenceRoot, workspaceRoot)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return service
 }

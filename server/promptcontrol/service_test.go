@@ -7,6 +7,7 @@ import (
 
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -89,6 +90,46 @@ func TestServiceSubscribeFollowUpInstallsWatcherBeforeReturning(t *testing.T) {
 	}
 }
 
+func TestServiceTrustedPromptControlMethodsConsumeValidatedRequests(t *testing.T) {
+	service, responder := newPromptControlTestService()
+	batchRequest := promptAnswerBatchRequest(t)
+	responder.batchResults = []sessionruntime.PromptAnswerResult{
+		{PromptID: "question-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{PromptID: "approval-1", Outcome: sessionruntime.PromptAnswerOutcomeResolved},
+		{PromptID: "declined-1", Outcome: sessionruntime.PromptAnswerOutcomeSkipped},
+	}
+	if _, err := apicontract.WithValidated(
+		batchRequest,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.PromptAnswerBatchRequest]) (struct{}, error) {
+			_, err := service.AnswerPromptBatchValidated(context.Background(), validated)
+			return struct{}{}, err
+		},
+	); err != nil {
+		t.Fatalf("AnswerPromptBatchValidated: %v", err)
+	}
+
+	followUpRequest := serverapi.PromptFollowUpWatchRequest{
+		SessionID: runtimeids.NewSessionID(),
+		StepID:    promptControlStepID(t),
+		PromptID:  "prompt-1",
+	}
+	responder.followUp = &stubPromptFollowUpSubscription{}
+	if _, err := apicontract.WithValidated(
+		followUpRequest,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.PromptFollowUpWatchRequest]) (struct{}, error) {
+			_, err := service.SubscribeFollowUpValidated(context.Background(), validated)
+			return struct{}{}, err
+		},
+	); err != nil {
+		t.Fatalf("SubscribeFollowUpValidated: %v", err)
+	}
+	if responder.batchCalls != 1 || responder.followUpCalls != 1 {
+		t.Fatalf("trusted owner calls = batch %d follow-up %d, want one each", responder.batchCalls, responder.followUpCalls)
+	}
+}
+
 func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResults(t *testing.T) {
 	service, responder := newPromptControlTestService()
 	request := promptAnswerBatchRequest(t)
@@ -128,6 +169,18 @@ func TestServiceAnswerPromptBatchTranslatesMixedEntriesAndValidatesReorderedResu
 	}
 	if err := serverapi.ValidatePromptAnswerBatchResponse(request, response); err != nil {
 		t.Fatalf("response correlation: %v", err)
+	}
+}
+
+func TestPromptAnswerBatchCorrelationTrustsProducerShape(t *testing.T) {
+	request := promptAnswerBatchRequest(t)
+	response := serverapi.PromptAnswerBatchResponse{Results: []serverapi.PromptAnswerBatchResult{
+		{PromptID: "question-1", Outcome: serverapi.PromptAnswerBatchOutcome("producer-owned")},
+		{PromptID: "approval-1", Outcome: serverapi.PromptAnswerBatchOutcomeResolved},
+		{PromptID: "declined-1", Outcome: serverapi.PromptAnswerBatchOutcomeSkipped},
+	}}
+	if err := validatePromptAnswerBatchCorrelation(request, response); err != nil {
+		t.Fatalf("correlation rejected producer shape: %v", err)
 	}
 }
 

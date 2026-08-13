@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -201,12 +202,67 @@ func TestAcknowledgeNoAuthReportsReadyRealAuthWithoutNoAuthSelection(t *testing.
 	}
 }
 
+func TestAcknowledgeNoAuthReportsReadyWhenAuthIsOptional(t *testing.T) {
+	service, _ := newTestAuthBootstrapServiceWithSettings(
+		auth.EmptyState(),
+		config.Settings{OpenAIBaseURL: "http://127.0.0.1:8080/v1"},
+	)
+
+	response, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+	if err != nil {
+		t.Fatalf("AcknowledgeNoAuth: %v", err)
+	}
+	if !response.AuthReady {
+		t.Fatalf("response = %+v, want optional auth ready", response)
+	}
+}
+
 func TestAcknowledgeNoAuthRejectsMissingAuthAndNoAuthSelection(t *testing.T) {
 	service, _ := newTestAuthBootstrapService(auth.EmptyState())
 
 	_, err := service.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
 	if !errors.Is(err, serverapi.ErrServerAuthRequired) {
 		t.Fatalf("AcknowledgeNoAuth error = %v, want ErrServerAuthRequired", err)
+	}
+}
+
+func TestNilBootstrapServiceStatusIsNotReady(t *testing.T) {
+	var service *BootstrapService
+
+	response, err := service.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("GetAuthBootstrapStatus: %v", err)
+	}
+	if response.AuthReady || response.AuthRequired {
+		t.Fatalf("response = %+v, want nil service not ready and not required", response)
+	}
+}
+
+func TestCompleteAuthBootstrapValidatedUsesValidatedRequest(t *testing.T) {
+	service, store := newTestAuthBootstrapService(auth.EmptyState())
+
+	response, err := apicontract.WithValidated(
+		serverapi.AuthCompleteBootstrapRequest{
+			Mode:   serverapi.AuthBootstrapModeAPIKey,
+			APIKey: "server-key",
+		},
+		apicontract.SemanticValidationRequired,
+		func(request apicontract.Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error) {
+			return service.CompleteAuthBootstrapValidated(context.Background(), request)
+		},
+	)
+	if err != nil {
+		t.Fatalf("CompleteAuthBootstrapValidated: %v", err)
+	}
+	if !response.AuthReady {
+		t.Fatal("expected auth ready after trusted bootstrap completion")
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if state.Method.APIKey == nil || state.Method.APIKey.Key != "server-key" {
+		t.Fatalf("stored method = %+v, want server-key", state.Method)
 	}
 }
 

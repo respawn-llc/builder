@@ -7,6 +7,7 @@ import (
 
 	"core/server/registry"
 	askquestion "core/server/tools"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -60,5 +61,21 @@ func TestApprovalViewServiceRejectsMalformedPendingPromptIdentity(t *testing.T) 
 func TestApprovalViewServiceRequiresSessionID(t *testing.T) {
 	if _, err := NewApprovalViewService(&stubApprovalPendingPromptSource{}).ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{}); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestApprovalViewServiceConsumesValidatedRequest(t *testing.T) {
+	service := NewApprovalViewService(&stubApprovalPendingPromptSource{})
+	request := serverapi.ApprovalListPendingBySessionRequest{SessionID: "session-1"}
+	_, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.ApprovalListPendingBySessionRequest]) (struct{}, error) {
+			_, err := service.ListPendingApprovalsBySessionValidated(context.Background(), validated)
+			return struct{}{}, err
+		},
+	)
+	if err != nil {
+		t.Fatalf("ListPendingApprovalsBySessionValidated: %v", err)
 	}
 }
