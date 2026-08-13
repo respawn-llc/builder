@@ -135,6 +135,13 @@ type assistantStreamingState struct {
 	phase              llm.MessagePhase
 }
 
+type assistantStreamingAppend struct {
+	metadata           *AssistantStreamMetadata
+	transcriptStreamID *uuid.UUID
+	supersededMetadata *AssistantStreamMetadata
+	supersededStreamID *uuid.UUID
+}
+
 type compactionCheckpoint struct {
 	Items []llm.ResponseItem
 }
@@ -383,20 +390,37 @@ func (s *chatStore) recordToolCompletionWithProviderItems(res tools.Result, prov
 	}
 }
 
-func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
+func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) assistantStreamingAppend {
 	if delta == "" {
-		return nil, nil
+		return assistantStreamingAppend{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	nextMetadata := newAssistantStreamMetadata(stepID, baseRevision, baseCommittedEntryCount)
+	var supersededMetadata *AssistantStreamMetadata
+	var supersededStreamID *uuid.UUID
+	if s.streaming != nil &&
+		s.streaming.phase != "" &&
+		phase != "" &&
+		s.streaming.phase != phase {
+		supersededMetadata = cloneAssistantStreamMetadata(s.streaming.metadata)
+		supersededStreamID = cloneTranscriptStreamID(s.streaming.transcriptStreamID)
+		s.streaming = nil
+	}
 	if s.streaming == nil || assistantStreamingSegmentChanged(s.streaming.metadata, nextMetadata) {
 		streamID := uuid.New()
 		s.streaming = &assistantStreamingState{metadata: nextMetadata, transcriptStreamID: &streamID}
 	}
 	s.streaming.text += delta
-	s.streaming.phase = phase
-	return cloneAssistantStreamMetadata(s.streaming.metadata), cloneTranscriptStreamID(s.streaming.transcriptStreamID)
+	if phase != "" {
+		s.streaming.phase = phase
+	}
+	return assistantStreamingAppend{
+		metadata:           cloneAssistantStreamMetadata(s.streaming.metadata),
+		transcriptStreamID: cloneTranscriptStreamID(s.streaming.transcriptStreamID),
+		supersededMetadata: supersededMetadata,
+		supersededStreamID: supersededStreamID,
+	}
 }
 
 func (s *chatStore) streamingSnapshot() (string, string, *AssistantStreamMetadata) {

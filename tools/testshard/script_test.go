@@ -1,19 +1,19 @@
 package main
 
 import (
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 )
 
-func TestDefaultScriptPrebuildsPTYFixtureBinaryBeforeCappedShardRunner(t *testing.T) {
+func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatalf("resolve repository root: %v", err)
 	}
 	fakeGoDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	fixturePathRecord := filepath.Join(t.TempDir(), "fixture-path")
 	kentPathRecord := filepath.Join(t.TempDir(), "kent-path")
 	ansiWriterPathRecord := filepath.Join(t.TempDir(), "ansi-writer-path")
@@ -21,56 +21,55 @@ func TestDefaultScriptPrebuildsPTYFixtureBinaryBeforeCappedShardRunner(t *testin
 	phaseWriterPathRecord := filepath.Join(t.TempDir(), "phase-writer-path")
 	writeFakeGoCommand(t, filepath.Join(fakeGoDir, "go"))
 
-	command := exec.Command("bash", "scripts/test.sh", "server", "--inherit-env")
-	command.Dir = repoRoot
-	command.Env = append(environmentWithout("KENT_PROTOBUF_OUTPUTS_READY"),
-		"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"KENT_PROTOBUF_TEST_BYPASS_LOCK=1",
-		"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
-		"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
-		"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,
-		"TEST_SCRIPT_PHASE_INPUT_WRITER_PATH="+phaseInputWriterPathRecord,
-		"TEST_SCRIPT_PHASE_WRITER_PATH="+phaseWriterPathRecord,
-		"KENT_SKIP_FRONTEND=1",
-		"KENT_TEST_DISABLE_WALL_CLOCK_CAP=0",
-		"KENT_TEST_TIMEOUT_SECONDS=1",
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run capped default server script: %v\n%q", err, output)
-	}
-
-	assertRemovedPrebuiltExecutable(t, fixturePathRecord, "PTY fixture")
-	assertRemovedPrebuiltExecutable(t, kentPathRecord, "Kent")
-	assertRemovedPrebuiltExecutable(t, ansiWriterPathRecord, "ANSI writer")
-	assertRemovedPrebuiltExecutable(t, phaseInputWriterPathRecord, "phase input writer")
-	assertRemovedPrebuiltExecutable(t, phaseWriterPathRecord, "phase writer")
-}
-
-func environmentWithout(names ...string) []string {
-	excluded := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		excluded[name] = struct{}{}
-	}
-	environment := make([]string, 0, len(os.Environ()))
-	for _, item := range os.Environ() {
-		name := item
-		for index, character := range item {
-			if character == '=' {
-				name = item[:index]
-				break
-			}
-		}
-		if _, exists := excluded[name]; !exists {
-			environment = append(environment, item)
+	runScript := func() {
+		t.Helper()
+		command := exec.Command("bash", "scripts/test.sh", "server")
+		command.Dir = repoRoot
+		command.Env = append(
+			os.Environ(),
+			"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
+			"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
+			"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,
+			"TEST_SCRIPT_PHASE_INPUT_WRITER_PATH="+phaseInputWriterPathRecord,
+			"TEST_SCRIPT_PHASE_WRITER_PATH="+phaseWriterPathRecord,
+			"KENT_TEST_PTY_CACHE_ROOT="+cacheRoot,
+			"KENT_SKIP_FRONTEND=1",
+			"KENT_TEST_DISABLE_WALL_CLOCK_CAP=0",
+			"KENT_TEST_TIMEOUT_SECONDS=1",
+		)
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("run capped default server script: %v\n%s", err, output)
 		}
 	}
-	return environment
+
+	runScript()
+	firstPaths := []string{
+		assertPrebuiltExecutable(t, fixturePathRecord, "PTY fixture"),
+		assertPrebuiltExecutable(t, kentPathRecord, "Kent"),
+		assertPrebuiltExecutable(t, ansiWriterPathRecord, "ANSI writer"),
+		assertPrebuiltExecutable(t, phaseInputWriterPathRecord, "phase input writer"),
+		assertPrebuiltExecutable(t, phaseWriterPathRecord, "phase writer"),
+	}
+
+	runScript()
+	secondRecords := []string{
+		fixturePathRecord,
+		kentPathRecord,
+		ansiWriterPathRecord,
+		phaseInputWriterPathRecord,
+		phaseWriterPathRecord,
+	}
+	for index, recordPath := range secondRecords {
+		if got := assertPrebuiltExecutable(t, recordPath, "cached fixture"); got != firstPaths[index] {
+			t.Fatalf("cached fixture path changed: got %q, want %q", got, firstPaths[index])
+		}
+	}
 }
 
-func assertRemovedPrebuiltExecutable(t *testing.T, recordPath string, name string) {
+func assertPrebuiltExecutable(t *testing.T, recordPath string, name string) string {
 	t.Helper()
-
 	recordedPath, err := os.ReadFile(recordPath)
 	if err != nil {
 		t.Fatalf("read prebuilt %s path: %v", name, err)
@@ -79,9 +78,14 @@ func assertRemovedPrebuiltExecutable(t *testing.T, recordPath string, name strin
 	if !filepath.IsAbs(path) {
 		t.Fatalf("prebuilt %s path = %q, want absolute path", name, path)
 	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("prebuilt %s binary remains after script cleanup: %v", name, err)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("prebuilt %s binary missing: %v", name, err)
 	}
+	if !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+		t.Fatalf("prebuilt %s path is not executable: %s", name, path)
+	}
+	return path
 }
 
 func writeFakeGoCommand(t *testing.T, path string) {
@@ -91,6 +95,15 @@ func writeFakeGoCommand(t *testing.T, path string) {
 set -euo pipefail
 
 case "$1" in
+version)
+    printf 'go version go-test darwin/arm64\n'
+    ;;
+env)
+    printf 'darwin\narm64\n0\n'
+    ;;
+list)
+    printf 'stable dependency build IDs\n'
+    ;;
 test)
     if [ "$2" != "-c" ]; then
         printf 'unexpected go test arguments: %s\n' "$*" >&2

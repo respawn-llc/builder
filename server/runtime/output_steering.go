@@ -695,6 +695,20 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		if commit.result == nil {
 			return errors.New("assistant commit steering item requires a result destination")
 		}
+		if committedAssistantMessageFinalizesStreaming(commit.message) {
+			streamed, _, _ := e.transcriptRuntimeState().StreamingSnapshot()
+			finalText := ""
+			if commit.message.Content != nil {
+				finalText = *commit.message.Content
+			}
+			if streamed != "" && !llm.AssistantResponseTextExtendsStream(streamed, finalText) {
+				outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
+				commit.result.resolution = outcome
+				if resolveErr != nil {
+					return resolveErr
+				}
+			}
+		}
 		receipt, err := e.appendMessageRaw(stepID, commit.message, steeringMessageEventNone, true, &commit.result.provenance)
 		item.recordCommitReceipt(receipt)
 		if err != nil || !receipt.Committed {
@@ -980,8 +994,26 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if err != nil {
 				return err
 			}
-			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
+			appended := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			if appended.supersededStreamID != nil {
+				reason := AssistantStreamAbortSuperseded
+				if err := e.emitStreamingAssistantCleanupEventsRaw(
+					stepID,
+					appended.supersededMetadata,
+					appended.supersededStreamID,
+					&reason,
+				); err != nil {
+					return err
+				}
+			}
+			return e.emitRaw(Event{
+				Kind:                        EventAssistantDelta,
+				StepID:                      stepID,
+				AssistantDelta:              delta.Text,
+				AssistantDeltaPhase:         delta.Phase,
+				AssistantStreamMetadata:     appended.metadata,
+				AssistantTranscriptStreamID: appended.transcriptStreamID,
+			})
 		}
 		if item.streaming.reasoningDelta != nil {
 			delta := *item.streaming.reasoningDelta

@@ -17,7 +17,7 @@ import (
 )
 
 func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
 	defer cancel()
 
 	root := t.TempDir()
@@ -76,7 +76,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 			{Phase: pty.PhasePromptReady, Bytes: []byte("\r")},
 			{Phase: pty.PhaseLifecycleHooksObserved, Bytes: []byte{0x03, 0x03}},
 		},
-		Timeout: 25 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run local lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
@@ -103,7 +103,7 @@ func TestLifecycleHooksLocalConfiguredPTYRunsRepresentativeFlow(t *testing.T) {
 }
 
 func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, ctx)
@@ -175,7 +175,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 			Phase: pty.PhaseLifecycleHooksObserved,
 			Bytes: []byte{0x03, 0x03},
 		}},
-		Timeout: 25 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run remote lifecycle PTY fixture: %v raw=%q server=%q", err, string(capture.Raw), serverOutput.String())
@@ -193,7 +193,7 @@ func TestLifecycleHooksRemotePTYRunsInControllingClient(t *testing.T) {
 }
 
 func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
 	defer cancel()
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("COLORTERM", "truecolor")
@@ -228,7 +228,7 @@ func TestLifecycleHookFailureIsVisibleAndDoesNotBlockPTYRuntime(t *testing.T) {
 			After: 2 * time.Second,
 			Bytes: []byte{0x03, 0x03},
 		}},
-		Timeout: 25 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run failing-hook lifecycle PTY fixture: %v raw=%q", err, string(capture.Raw))
@@ -293,7 +293,7 @@ func waitForLifecycleServerReady(
 	output *bytes.Buffer,
 ) appfixture.LifecycleServerProcessReady {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(ptyFixtureTestTimeout)
 	for time.Now().Before(deadline) {
 		ready, err := appfixture.ReadLifecycleServerProcessReady(path)
 		if err == nil {

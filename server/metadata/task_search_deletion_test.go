@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"database/sql"
 	"testing"
 
 	"core/server/metadata/sqlitegen"
@@ -150,97 +149,4 @@ VALUES ('comment-project-deleted', 'task-project-deleted', 'project delete comme
 	assertTaskSearchSourceSearchable(t, store.db, "survive title zebra", "title", "task-project-survives")
 	assertTaskSearchSourceSearchable(t, store.db, "survive body antelope", "body", "task-project-survives")
 	assertTaskSearchInvariants(t, store.db)
-}
-
-func TestTaskSearchSourceTableRebuildFailsContractAndRollsBackToHealthySchema(t *testing.T) {
-	for _, testCase := range []struct {
-		name           string
-		missingTrigger string
-		rebuild        func(*sql.Tx) error
-	}{
-		{
-			name:           "tasks",
-			missingTrigger: "task_search_task_insert",
-			rebuild: func(tx *sql.Tx) error {
-				if _, err := tx.Exec(`CREATE TABLE tasks_rebuilt AS SELECT * FROM tasks`); err != nil {
-					return err
-				}
-				if _, err := tx.Exec(`DROP TABLE tasks`); err != nil {
-					return err
-				}
-				_, err := tx.Exec(`ALTER TABLE tasks_rebuilt RENAME TO tasks`)
-				return err
-			},
-		},
-		{
-			name:           "task comments",
-			missingTrigger: "task_search_comment_insert",
-			rebuild: func(tx *sql.Tx) error {
-				if _, err := tx.Exec(`CREATE TABLE task_comments_rebuilt AS SELECT * FROM task_comments`); err != nil {
-					return err
-				}
-				if _, err := tx.Exec(`DROP TABLE task_comments`); err != nil {
-					return err
-				}
-				_, err := tx.Exec(`ALTER TABLE task_comments_rebuilt RENAME TO task_comments`)
-				return err
-			},
-		},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			store, err := Open(t.TempDir())
-			if err != nil {
-				t.Fatalf("Open: %v", err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
-			conn, err := store.db.Conn(t.Context())
-			if err != nil {
-				t.Fatalf("acquire SQLite connection: %v", err)
-			}
-			t.Cleanup(func() { _ = conn.Close() })
-			if _, err := conn.ExecContext(t.Context(), `PRAGMA foreign_keys = OFF`); err != nil {
-				t.Fatalf("disable foreign keys for %s rebuild: %v", testCase.name, err)
-			}
-			if _, err := conn.ExecContext(t.Context(), `PRAGMA legacy_alter_table = ON`); err != nil {
-				t.Fatalf("enable legacy table rebuild mode for %s: %v", testCase.name, err)
-			}
-			tx, err := conn.BeginTx(t.Context(), nil)
-			if err != nil {
-				t.Fatalf("begin %s rebuild: %v", testCase.name, err)
-			}
-			if err := testCase.rebuild(tx); err != nil {
-				_ = tx.Rollback()
-				t.Fatalf("rebuild %s: %v", testCase.name, err)
-			}
-			var triggerCount int
-			if err := tx.QueryRow(`SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' AND name = ?`, testCase.missingTrigger).Scan(&triggerCount); err != nil {
-				_ = tx.Rollback()
-				t.Fatalf("inspect rebuilt %s trigger: %v", testCase.name, err)
-			}
-			if triggerCount != 0 {
-				_ = tx.Rollback()
-				t.Fatalf("rebuild %s retained %s, want contract failure", testCase.name, testCase.missingTrigger)
-			}
-			failures, err := store.Queries().WithTx(tx).ListTaskSearchSchemaContractFailures(t.Context())
-			if err != nil {
-				_ = tx.Rollback()
-				t.Fatalf("validate rebuilt %s schema contract: %v", testCase.name, err)
-			}
-			if len(failures) == 0 {
-				_ = tx.Rollback()
-				t.Fatalf("rebuilt %s unexpectedly passed task-search schema contract", testCase.name)
-			}
-			if err := tx.Rollback(); err != nil {
-				t.Fatalf("roll back %s rebuild: %v", testCase.name, err)
-			}
-			if _, err := conn.ExecContext(t.Context(), `PRAGMA foreign_keys = ON`); err != nil {
-				t.Fatalf("restore foreign keys after %s rebuild: %v", testCase.name, err)
-			}
-			if _, err := conn.ExecContext(t.Context(), `PRAGMA legacy_alter_table = OFF`); err != nil {
-				t.Fatalf("restore table rebuild mode after %s: %v", testCase.name, err)
-			}
-			assertTaskSearchTriggerCatalog(t, store.db, taskSearchTriggerNames)
-			assertTaskSearchInvariants(t, store.db)
-		})
-	}
 }

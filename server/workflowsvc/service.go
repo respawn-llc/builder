@@ -31,7 +31,7 @@ type Service struct {
 	events               *workflowProjectEventBroker
 	attentionFinalizer   workflowAttentionFinalizer
 	setupEvents          workflowTaskSetupEventPublisher
-	mutationPermit       *workflowexecution.MutationPermit
+	taskMutations        *workflowexecution.TaskMutationCoordinator
 	currentNodeExecution interface {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
 		PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
@@ -220,12 +220,12 @@ func WithWorkflowTaskSetupEventPublisher(publisher workflowTaskSetupEventPublish
 	}
 }
 
-func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, mutationPermit *workflowexecution.MutationPermit, opts ...Option) (*Service, error) {
+func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflow.RoleResolver, taskMutations *workflowexecution.TaskMutationCoordinator, opts ...Option) (*Service, error) {
 	if store == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	if mutationPermit == nil {
-		return nil, errors.New("workflow mutation permit is required")
+	if taskMutations == nil {
+		return nil, errors.New("task mutation coordinator is required")
 	}
 	if err := readModels.validate(); err != nil {
 		return nil, err
@@ -233,11 +233,11 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 	events := newWorkflowProjectEventBroker()
 	store.SetWorkflowEventPublisher(events)
 	service := &Service{
-		store:          store,
-		readModels:     readModels,
-		roleResolver:   roleResolver,
-		events:         events,
-		mutationPermit: mutationPermit,
+		store:         store,
+		readModels:    readModels,
+		roleResolver:  roleResolver,
+		events:        events,
+		taskMutations: taskMutations,
 	}
 	for _, opt := range opts {
 		opt(service)
@@ -443,12 +443,20 @@ func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
-	return workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (serverapi.WorkflowDeleteResponse, error) {
+	taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowDeleteResponse{}, err
+	}
+	var response serverapi.WorkflowDeleteResponse
+	err = s.taskMutations.RunMany(ctx, taskIDs, func(ctx context.Context) error {
 		if err := s.ensureWorkflowTasksQuiescent(ctx, req.WorkflowID); err != nil {
-			return serverapi.WorkflowDeleteResponse{}, err
+			return err
 		}
-		return s.deleteWorkflow(ctx, req)
+		var err error
+		response, err = s.deleteWorkflow(ctx, req)
+		return err
 	})
+	return response, err
 }
 
 func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID runtimeids.WorkflowID) error {
@@ -472,7 +480,7 @@ func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, work
 	if service == nil {
 		return result, errors.New("workflow service is required")
 	}
-	return workflowexecution.RunMutation(ctx, service.mutationPermit, mutation)
+	return mutation(ctx)
 }
 
 func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
@@ -868,8 +876,8 @@ func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowT
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
-	preflight, err := workflowexecution.RunMutation(ctx, s.mutationPermit, func(ctx context.Context) (initiatingActionPreflight, error) {
-		taskID := workflow.TaskID(req.TaskID)
+	taskID := workflow.TaskID(req.TaskID)
+	preflight, err := workflowexecution.RunTaskMutation(ctx, s.taskMutations, taskID, func(ctx context.Context) (initiatingActionPreflight, error) {
 		if err := s.currentNodeExecution.EnsureTaskQuiescent(taskID); err != nil {
 			return initiatingActionPreflight{}, err
 		}
@@ -2033,7 +2041,7 @@ func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.Workflow
 			return err
 		}
 	}
-	return s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	return s.taskMutations.Run(ctx, workflow.TaskID(req.TaskID), func(ctx context.Context) error {
 		if s.currentNodeExecution == nil {
 			return errors.New("current node workflow execution is required")
 		}
