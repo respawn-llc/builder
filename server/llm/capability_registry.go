@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -75,6 +76,9 @@ func LookupProviderCapabilityContract(providerID string) (ProviderCapabilities, 
 }
 
 func resolveProviderTransportVariant(provider Provider, endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (ProviderVariantContract, error) {
+	if endpoint.Explicit && endpoint.URL == nil {
+		return ProviderVariantContract{}, errors.New("explicit provider endpoint URL is absent")
+	}
 	contract, ok := globalProviderRegistry.contractsByProvider[provider]
 	if !ok {
 		return ProviderVariantContract{}, fmt.Errorf("%w: %s", ErrUnsupportedProvider, provider)

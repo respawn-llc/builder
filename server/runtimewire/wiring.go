@@ -149,8 +149,7 @@ func NewRuntimeWiringWithBackground(
 		lockedCapabilities, lockedOK := llm.ProviderCapabilitiesFromLocked(locked)
 		_, lockedIsBuiltIn := llm.LookupProviderCapabilityContract(lockedCapabilities.ProviderID)
 		_, currentIsBuiltIn := llm.LookupProviderCapabilityContract(currentCapabilities.ProviderID)
-		if strings.TrimSpace(active.OpenAIBaseURL) != "" &&
-			resolveErr == nil &&
+		if resolveErr == nil &&
 			lockedOK &&
 			lockedIsBuiltIn &&
 			currentIsBuiltIn &&
