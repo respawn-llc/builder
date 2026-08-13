@@ -752,4 +752,7 @@ func projectBindingFromMetadata(binding metadata.Binding) serverapi.ProjectBindi
 	}
 }
 
-var _ servicecontract.ProjectViewGatewayService = (*Service)(nil)
+var (
+	_ servicecontract.ProjectViewService        = (*Service)(nil)
+	_ servicecontract.ProjectViewTrustedService = (*Service)(nil)
+)

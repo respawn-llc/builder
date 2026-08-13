@@ -37,11 +37,6 @@ type AuthBootstrapTrustedService interface {
 	AcknowledgeNoAuthValidated(ctx context.Context, req Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error)
 }
 
-type AuthBootstrapGatewayService interface {
-	AuthBootstrapService
-	AuthBootstrapTrustedService
-}
-
 type AuthStatusService interface {
 	GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
 }
@@ -72,11 +67,6 @@ type OnboardingFinalizeService interface {
 
 type OnboardingFinalizeTrustedService interface {
 	FinalizeOnboardingValidated(ctx context.Context, req Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error)
-}
-
-type OnboardingFinalizeGatewayService interface {
-	OnboardingFinalizeService
-	OnboardingFinalizeTrustedService
 }
 
 type ProcessControlService interface {
@@ -137,11 +127,6 @@ type ProjectViewTrustedService interface {
 	ListSessionPageValidated(ctx context.Context, req Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error)
 }
 
-type ProjectViewGatewayService interface {
-	ProjectViewService
-	ProjectViewTrustedService
-}
-
 type AttentionNotificationService interface {
 	SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
 	SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
@@ -167,11 +152,6 @@ type RunPromptService interface {
 
 type RunPromptTrustedService interface {
 	RunPromptValidated(ctx context.Context, req Validated[serverapi.RunPromptRequest], progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
-}
-
-type RunPromptGatewayService interface {
-	RunPromptService
-	RunPromptTrustedService
 }
 
 type ServerStatusService interface {
@@ -233,12 +213,6 @@ type RuntimeControlTrustedService interface {
 	RecordPromptHistoryValidated(ctx context.Context, req Validated[serverapi.RuntimeRecordPromptHistoryRequest], authorization AuthorizedSessionInActiveProject) error
 }
 
-type RuntimeControlGatewayService interface {
-	RuntimeControlService
-	RuntimeControlTrustedService
-	RuntimeGoalTrustedService
-}
-
 type RuntimeLiveControlService interface {
 	LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error)
 	LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error)
@@ -251,11 +225,6 @@ type RuntimeLiveControlTrustedService interface {
 	LiveStopValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveStopRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveStopResponse, error)
 	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWaitResponse, error)
 	LiveWatchValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWatchRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWatchResponse, error)
-}
-
-type RuntimeLiveControlGatewayService interface {
-	RuntimeLiveControlService
-	RuntimeLiveControlTrustedService
 }
 
 type SessionTranscriptService interface {
@@ -272,11 +241,6 @@ type SessionLaunchTrustedService interface {
 	PlanSessionValidated(ctx context.Context, req Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error)
 	WorkspaceChatDraftValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error)
 	MaterializeWorkspaceChatValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error)
-}
-
-type SessionLaunchGatewayService interface {
-	SessionLaunchService
-	SessionLaunchTrustedService
 }
 
 type SessionLifecycleService interface {
@@ -297,11 +261,6 @@ type SessionLifecycleTrustedService interface {
 	ResolveTransitionValidated(ctx context.Context, req Validated[serverapi.SessionResolveTransitionRequest], authorization OptionalAuthorizedSessionInActiveProject) (serverapi.SessionResolveTransitionResponse, error)
 }
 
-type SessionLifecycleGatewayService interface {
-	SessionLifecycleService
-	SessionLifecycleTrustedService
-}
-
 type SessionRuntimeService interface {
 	ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error)
 	ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error)
@@ -310,11 +269,6 @@ type SessionRuntimeService interface {
 type SessionRuntimeTrustedService interface {
 	ActivateSessionRuntimeValidated(ctx context.Context, req Validated[serverapi.SessionRuntimeActivateRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error)
 	ReleaseSessionRuntimeValidated(ctx context.Context, req Validated[serverapi.SessionRuntimeReleaseRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error)
-}
-
-type SessionRuntimeGatewayService interface {
-	SessionRuntimeService
-	SessionRuntimeTrustedService
 }
 
 type SessionViewService interface {
@@ -329,11 +283,6 @@ type SessionViewTrustedService interface {
 	GetSessionTranscriptPageValidated(ctx context.Context, req Validated[serverapi.SessionTranscriptPageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionTranscriptPageResponse, error)
 	GetLatestCommittedAssistantFinalAnswerValidated(ctx context.Context, req Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 	GetSessionExecutionEnvironmentValidated(ctx context.Context, req Validated[serverapi.SessionExecutionEnvironmentRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionExecutionEnvironmentResponse, error)
-}
-
-type SessionViewGatewayService interface {
-	SessionViewService
-	SessionViewTrustedService
 }
 
 type WorktreeService interface {
@@ -365,11 +314,6 @@ type WorktreeTrustedService interface {
 	EnterWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeEnterRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error)
 	LeaveWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeLeaveRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error)
 	DeleteWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeDeleteRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeDeleteResult, error)
-}
-
-type WorktreeGatewayService interface {
-	WorktreeService
-	WorktreeTrustedService
 }
 
 type WorkflowService interface {

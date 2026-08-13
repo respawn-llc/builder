@@ -90,18 +90,6 @@ func validatedGatewayClientCall[Req any, Resp any, Trusted any](
 	}
 }
 
-func validatedGatewayClientCallNoResponse[Req any, Trusted any](
-	getClient func(GatewayDependencies) any,
-	call func(Trusted, context.Context, apicontract.Validated[Req]) error,
-) gatewayUnaryHandler {
-	return validatedGatewayClientCall(
-		getClient,
-		func(trusted Trusted, ctx context.Context, req apicontract.Validated[Req]) (struct{}, error) {
-			return struct{}{}, call(trusted, ctx, req)
-		},
-	)
-}
-
 func handlePromptAnswerBatch(
 	ctx context.Context,
 	g *Gateway,
@@ -621,76 +609,12 @@ func trustedWorktreeService(g *Gateway) (apicontract.WorktreeTrustedService, err
 	return trusted, nil
 }
 
-func handleWorktreeStatus(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeStatusRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeStatusResponse, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeStatusResponse{}, err
-	}
-	return trusted.GetWorktreeStatusValidated(ctx, request, authorization)
-}
-
-func handleWorktreeList(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeListRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeListResponse, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
-	return trusted.ListWorktreesValidated(ctx, request, authorization)
-}
-
-func handleWorktreeSelectorResolve(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeSelectorPreviewRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
-	}
-	return trusted.ResolveWorktreeSelectorValidated(ctx, request, authorization)
-}
-
-func handleWorktreeDeletePreview(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeDeletePreviewRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeDeletePreviewResponse, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
-	}
-	return trusted.PreviewWorktreeDeleteValidated(ctx, request, authorization)
-}
-
-func handleWorktreeCreateTargetResolve(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, err
-	}
-	return trusted.ResolveWorktreeCreateTargetValidated(ctx, request, authorization)
-}
-
 func handleWorktreeCreate(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeCreateRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateResponse, error) {
 	trusted, err := trustedWorktreeService(g)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	return trusted.CreateWorktreeValidated(ctx, request, authorization)
-}
-
-func handleWorktreeEnter(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeEnterRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	return trusted.EnterWorktreeValidated(ctx, request, authorization)
-}
-
-func handleWorktreeLeave(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeLeaveRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeScheduledAcknowledgement{}, err
-	}
-	return trusted.LeaveWorktreeValidated(ctx, request, authorization)
-}
-
-func handleWorktreeDelete(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeDeleteRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeDeleteResult, error) {
-	trusted, err := trustedWorktreeService(g)
-	if err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
-	}
-	return trusted.DeleteWorktreeValidated(ctx, request, authorization)
 }
 
 func handleSessionWorkspaceRetarget(
@@ -727,52 +651,6 @@ func handleAttachSession(
 	state.attachedWorkspaceID = attachment.WorkspaceID
 	state.attachedWorkspaceRoot = attachment.CanonicalRoot
 	state.attachedSession = &attachment.SessionID
-	return response, nil
-}
-
-func handleAuthGetBootstrapStatus(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.AuthGetBootstrapStatusRequest], _ noAuthorizationFacts) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
-	if !ok {
-		return serverapi.AuthGetBootstrapStatusResponse{}, serverapi.ErrServerAuthRequired
-	}
-	return trusted.GetAuthBootstrapStatusValidated(ctx, request)
-}
-
-func handleAuthCompleteBootstrap(ctx context.Context, g *Gateway, state *connectionState, request apicontract.Validated[serverapi.AuthCompleteBootstrapRequest], _ noAuthorizationFacts) (serverapi.AuthCompleteBootstrapResponse, error) {
-	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
-	if !ok {
-		return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
-	}
-	response, err := trusted.CompleteAuthBootstrapValidated(ctx, request)
-	if err == nil {
-		state.noAuthAccepted = response.NoAuthSelected
-	}
-	return response, err
-}
-
-func handleAuthAcknowledgeNoAuth(ctx context.Context, g *Gateway, state *connectionState, request apicontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest], _ noAuthorizationFacts) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	trusted, ok := g.deps.AuthBootstrapClient().(apicontract.AuthBootstrapTrustedService)
-	if !ok {
-		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
-	}
-	response, err := trusted.AcknowledgeNoAuthValidated(ctx, request)
-	if err == nil {
-		state.noAuthAccepted = response.NoAuthSelected
-	}
-	return response, err
-}
-
-func handleServerReadiness(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.ServerReadinessRequest], _ noAuthorizationFacts) (serverapi.ServerReadinessResponse, error) {
-	trusted, ok := g.deps.ServerStatusClient().(apicontract.ServerStatusTrustedService)
-	if !ok {
-		return serverapi.ServerReadinessResponse{}, errors.New("server status trusted service is required")
-	}
-	response, err := trusted.GetServerReadinessValidated(ctx, request)
-	if err != nil {
-		return serverapi.ServerReadinessResponse{}, err
-	}
-	response.ServerID = g.identity.ServerID
-	response.ProtocolVersion = g.identity.ProtocolVersion
 	return response, nil
 }
 
