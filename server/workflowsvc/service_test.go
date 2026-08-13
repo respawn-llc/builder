@@ -503,9 +503,6 @@ func TestServiceManualMoveNoOpSkipsInterruptionAttentionAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask no-op: %v", err)
 	}
-	if err := moved.Validate(); err != nil {
-		t.Fatalf("no-op response validation: %v", err)
-	}
 	if moved.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
 		moved.NoOp == nil || len(moved.NoOp.CurrentNodes) != 1 ||
 		moved.NoOp.CurrentNodes[0].NodeID != started.CurrentNodes[0].NodeID {
@@ -562,9 +559,6 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask stale no-op: %v", err)
 	}
-	if err := moved.Validate(); err != nil {
-		t.Fatalf("stale no-op response validation: %v", err)
-	}
 	if moved.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
 		moved.NoOp == nil || len(moved.NoOp.CurrentNodes) != 1 ||
 		moved.NoOp.CurrentNodes[0].NodeID != terminalID {
@@ -609,9 +603,6 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
-	}
-	if err := moved.Validate(); err != nil {
-		t.Fatalf("MoveWorkflowTask response validation: %v", err)
 	}
 	if moved.Applied == nil ||
 		len(moved.Applied.CurrentNodes) != 1 ||
@@ -2714,9 +2705,6 @@ func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterminis
 	}}
 	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "confirmation_required"); !slices.Equal(got, wantConfirmationEntities) {
 		t.Fatalf("confirmation_required affected entities = %+v, want %+v", got, wantConfirmationEntities)
-	}
-	if err := preview.Validate(); err != nil {
-		t.Fatalf("preview response validation: %v", err)
 	}
 	first, err := json.Marshal(preview)
 	if err != nil {

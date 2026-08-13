@@ -551,12 +551,10 @@ func TestGatewayWorkspaceChatDraftCallsOnlyTrustedOwner(t *testing.T) {
 	}
 }
 
-func TestGatewayWorkspaceChatMaterializeCallsOnlyTrustedOwner(t *testing.T) {
+func TestGatewayRejectsInvalidTrustedOwnerResponseAtEgress(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	t.Cleanup(func() { _ = appCore.Close() })
-	launch := &customRouteSessionLaunchService{materializeResponse: serverapi.WorkspaceChatMaterializeResponse{
-		SessionID: runtimeids.NewSessionID(),
-	}}
+	launch := &customRouteSessionLaunchService{}
 	gateway, err := NewGateway(&customRouteGatewayDependencies{Core: appCore, launch: launch}, protocol.ServerIdentity{
 		ProtocolVersion: protocol.Version,
 		ServerID:        "server-1",
@@ -571,8 +569,8 @@ func TestGatewayWorkspaceChatMaterializeCallsOnlyTrustedOwner(t *testing.T) {
 		Method:  protocol.MethodSessionWorkspaceChatMaterialize,
 		Params:  []byte(`{}`),
 	})
-	if response.Error != nil {
-		t.Fatalf("Workspace Chat Materialize response error = %+v", response.Error)
+	if response.Error == nil || response.Error.Code != protocol.ErrCodeInternalError || len(response.Result) != 0 {
+		t.Fatalf("response = %+v, want gateway egress rejection", response)
 	}
 	if launch.rawMaterializeCalls != 0 || launch.trustedMaterializeCalls != 1 {
 		t.Fatalf(

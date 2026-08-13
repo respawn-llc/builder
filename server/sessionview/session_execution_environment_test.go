@@ -230,9 +230,6 @@ func TestSessionExecutionEnvironmentBranchProjection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 			}
-			if err := response.Validate(); err != nil {
-				t.Fatalf("response validation: %v", err)
-			}
 			switch {
 			case test.branch != "":
 				branch, ok := response.Environment.Branch.Value()
@@ -273,9 +270,6 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 		}
-		if err := response.Validate(); err != nil {
-			t.Fatalf("response validation: %v", err)
-		}
 		failure, failed := response.Environment.Workspace.Failure()
 		_, modelAvailable := response.Environment.Model.Value()
 		if !failed || failure.Code != serverapi.SessionExecutionFieldErrorSourceFailure || !modelAvailable {
@@ -298,9 +292,6 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
-		}
-		if err := response.Validate(); err != nil {
-			t.Fatalf("response validation: %v", err)
 		}
 		failure, workspaceFailed := response.Environment.Workspace.Failure()
 		branchReason, branchUnavailable := response.Environment.Branch.UnavailableReason()
@@ -329,9 +320,6 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
-		}
-		if err := response.Validate(); err != nil {
-			t.Fatalf("response validation: %v", err)
 		}
 		failure, failed := response.Environment.Auth.Failure()
 		_, workspaceAvailable := response.Environment.Workspace.Value()
@@ -362,9 +350,6 @@ func TestSessionExecutionEnvironmentFieldFailuresRemainIndependent(t *testing.T)
 		})
 		if err != nil {
 			t.Fatalf("GetSessionExecutionEnvironment: %v", err)
-		}
-		if err := response.Validate(); err != nil {
-			t.Fatalf("response validation: %v", err)
 		}
 		reason, unavailable := response.Environment.Auth.UnavailableReason()
 		if !unavailable || reason != serverapi.SessionExecutionAuthUnavailableNotApplicable || authClient.calls != 0 {
@@ -421,9 +406,6 @@ func TestSessionExecutionEnvironmentModelFieldMapping(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatalf("GetSessionExecutionEnvironment: %v", err)
-			}
-			if err := response.Validate(); err != nil {
-				t.Fatalf("response validation: %v", err)
 			}
 			if test.missing {
 				reason, ok := response.Environment.Model.UnavailableReason()
@@ -529,10 +511,6 @@ func readEnvironmentAndAssertPersistenceUnchanged(
 	if err != nil {
 		t.Fatalf("GetSessionExecutionEnvironment: %v", err)
 	}
-	if err := response.Validate(); err != nil {
-		t.Fatalf("response validation: %v", err)
-	}
-
 	afterEvents, err := os.ReadFile(eventsPath)
 	if err != nil {
 		t.Fatalf("ReadFile after: %v", err)

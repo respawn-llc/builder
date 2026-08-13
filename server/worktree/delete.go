@@ -206,11 +206,7 @@ func (s *Service) executeDeleteLocked(
 		}
 	}
 	cleanup := s.cleanupDeletedBranch(ctx, workspaceCtx.workspaceRoot, entry, record, req.BranchCleanupPolicy)
-	result := serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}
-	if err := result.Validate(); err != nil {
-		return serverapi.WorktreeDeleteCompletedResult{}, err
-	}
-	return result, nil
+	return serverapi.WorktreeDeleteCompletedResult{Cleanup: cleanup, LeftoverRoot: leftoverRoot}, nil
 }
 
 func (s *Service) ensureDeleteFolderRemovalAuthorized(

@@ -1991,9 +1991,6 @@ func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRe
 			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		})
 	}
-	if err := out.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
-	}
 	return out, nil
 }
 

@@ -201,15 +201,11 @@ func (s *Service) previewWorktreeDelete(
 	if err != nil {
 		return serverapi.WorktreeDeletePreviewResponse{}, err
 	}
-	response := serverapi.WorktreeDeletePreviewResponse{
+	return serverapi.WorktreeDeletePreviewResponse{
 		Worktree:         resolution.match.entry,
 		DeletionSelector: deletionSelector,
 		Cleanliness:      cleanliness,
-	}
-	if err := response.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
-	}
-	return response, nil
+	}, nil
 }
 
 func gitFactsFromEntry(entry GitWorktree) serverapi.WorktreeGitFacts {

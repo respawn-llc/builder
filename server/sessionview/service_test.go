@@ -16,7 +16,6 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
-	"core/shared/transcript"
 )
 
 type serviceFakeLLM struct {
@@ -44,36 +43,6 @@ type serviceBlockingLLM struct {
 
 type staticExecutionTargetResolver struct {
 	target clientui.SessionExecutionTarget
-}
-
-func TestValidateSessionTranscriptPageResponseUsesInvariantFailurePolicy(t *testing.T) {
-	response := serverapi.SessionTranscriptPageResponse{
-		Transcript: clientui.TranscriptPage{
-			SessionID: "12345678-1234-4234-8234-123456789012",
-			Entries: []clientui.TranscriptCommittedRow{{
-				Visibility: transcript.EntryVisibilityOngoing,
-				Kind:       clientui.TranscriptRowUser,
-				Locator:    transcript.CommittedRowLocator{EventSequence: 0, RowOrdinal: 1},
-				User:       &clientui.TranscriptUserRow{Text: "malformed"},
-			}},
-		},
-	}
-
-	t.Run("diagnostic mode returns contract error", func(t *testing.T) {
-		t.Setenv("KENT_INVARIANT_MODE", "diagnostic")
-		if err := validateSessionTranscriptPageResponse(response); err == nil {
-			t.Fatal("malformed transcript page returned nil error")
-		}
-	})
-	t.Run("panic mode fails fast with diagnostic", func(t *testing.T) {
-		t.Setenv("KENT_INVARIANT_MODE", "panic")
-		defer func() {
-			if recover() == nil {
-				t.Fatal("malformed transcript page did not panic in invariant panic mode")
-			}
-		}()
-		_ = validateSessionTranscriptPageResponse(response)
-	})
 }
 
 func (r staticExecutionTargetResolver) ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error) {

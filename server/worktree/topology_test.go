@@ -89,9 +89,6 @@ func TestPreviewWorktreeDeleteResolvesCleanNonCurrentRegisteredTarget(t *testing
 	if response.Cleanliness.Kind != clientui.WorktreeDirtyStateClean {
 		t.Fatalf("preview cleanliness = %+v, want clean", response.Cleanliness)
 	}
-	if err := response.Validate(); err != nil {
-		t.Fatalf("preview response validation: %v", err)
-	}
 }
 
 func TestPreviewWorktreeDeleteBindsExternalConfirmationToCanonicalRoot(t *testing.T) {

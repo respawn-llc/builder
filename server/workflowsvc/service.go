@@ -668,11 +668,7 @@ func (s *Service) PreviewWorkflowGraphSaveValidated(ctx context.Context, validat
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
 	}
-	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
-	}
-	return resp, nil
+	return workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result)), nil
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
@@ -710,9 +706,6 @@ func (s *Service) SaveWorkflowGraphValidated(ctx context.Context, validated apic
 		if result.Changed {
 			s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
 		}
-	}
-	if err := resp.Validate(); err != nil {
-		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
 }

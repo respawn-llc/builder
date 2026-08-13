@@ -137,11 +137,7 @@ func (s *Service) MaterializeWorkspaceChatValidated(
 	if err != nil {
 		return serverapi.WorkspaceChatMaterializeResponse{}, err
 	}
-	response := serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}
-	if err := response.Validate(); err != nil {
-		return serverapi.WorkspaceChatMaterializeResponse{}, err
-	}
-	return response, nil
+	return serverapi.WorkspaceChatMaterializeResponse{SessionID: sessionID}, nil
 }
 
 func (s *Service) materializeResolvedWorkspaceChat(
@@ -305,11 +301,7 @@ func (s *Service) PlanSessionValidated(ctx context.Context, validated servicecon
 	if err != nil {
 		return serverapi.SessionPlanResponse{}, err
 	}
-	response := sessionPlanResponseFromResult(result)
-	if err := response.Plan.Validate(); err != nil {
-		return serverapi.SessionPlanResponse{}, err
-	}
-	return response, nil
+	return sessionPlanResponseFromResult(result), nil
 }
 
 func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
