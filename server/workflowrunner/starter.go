@@ -294,6 +294,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 	return workflowstore.ManualMoveTargetAssignmentPreparation{
 		Assignments: assignments,
 		Diagnostic:  errors.Join(diagnostics...),
+		Abort:       cleanupPrepared,
 	}, steers, nil
 }
 

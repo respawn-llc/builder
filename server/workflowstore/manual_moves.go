@@ -31,13 +31,16 @@ type ManualMoveTargetAssignment struct {
 type ManualMoveTargetAssignmentPreparation struct {
 	Assignments []ManualMoveTargetAssignment
 	Diagnostic  error
+	Abort       func(error) error
 }
 
 type ManualMoveTargetAssignmentPreparer func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error)
 
 type preparedManualMoveAssignments struct {
-	targets     []workflow.CurrentNode
-	assignments []ManualMoveTargetAssignment
+	targets         []workflow.CurrentNode
+	assignments     []ManualMoveTargetAssignment
+	workflowVersion *int64
+	abort           func(error) error
 }
 
 type preparedManualMoveExecutionTarget struct {
@@ -178,17 +181,25 @@ func (s *Store) applyManualMove(
 		return ManualMoveResult{}, err
 	}
 	var preparedAssignments preparedManualMoveAssignments
+	assignmentsConsumed := false
+	defer func() {
+		if !assignmentsConsumed && preparedAssignments.abort != nil {
+			resultErr = preparedAssignments.abort(resultErr)
+		}
+	}()
 	if prepareAssignments != nil && !prepared.noOp && executableNodeKind(prepared.target.Kind()) {
-		targets, contexts, err := s.prepareManualMoveAssignmentContexts(ctx, prepared, executionTargetPreparation)
+		targets, contexts, workflowVersion, err := s.prepareManualMoveAssignmentContexts(ctx, prepared, executionTargetPreparation)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
 		preparedAssignments.targets = targets
+		preparedAssignments.workflowVersion = &workflowVersion
 		assignmentPreparation, err := prepareAssignments(ctx, contexts)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
 		preparedAssignments.assignments = assignmentPreparation.Assignments
+		preparedAssignments.abort = assignmentPreparation.Abort
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -233,9 +244,12 @@ func (s *Store) applyManualMove(
 	if preview.Outcome == ManualMovePreviewOutcomeBlocked {
 		return ManualMoveResult{}, manualMovePreviewBlockerError(preview.Blocker)
 	}
-	definition, _, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
+	definition, workflowRecord, err := workflowDefinitionFromQueries(ctx, q, runtimeids.WorkflowID(task.WorkflowID))
 	if err != nil {
 		return ManualMoveResult{}, err
+	}
+	if preparedAssignments.workflowVersion != nil && workflowRecord.Version != *preparedAssignments.workflowVersion {
+		return ManualMoveResult{}, errors.New("workflow changed after Manual Move assignment preparation")
 	}
 	targetDefinition, err := currentNodeDefinitionNode(definition, prepared.request.TargetNodeID)
 	if err != nil {
@@ -276,6 +290,7 @@ func (s *Store) applyManualMove(
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
+		applyManualMoveCommentary(targets, prepared.request.Commentary)
 		if prepareAssignments != nil {
 			if !sameManualMoveTargets(targets, preparedAssignments.targets) {
 				return ManualMoveResult{}, errors.New("manual move targets changed after assignment preparation")
@@ -300,14 +315,7 @@ func (s *Store) applyManualMove(
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
-	}
-	if commentary := prepared.request.Commentary; commentary != "" {
-		for index := range targets {
-			if targets[index].CurrentInputValues == nil {
-				targets[index].CurrentInputValues = make(map[string]string)
-			}
-			targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
-		}
+		applyManualMoveCommentary(targets, prepared.request.Commentary)
 	}
 	attentionResolution, err := taskApprovalAttentionResolution(ctx, q, prepared.request.TaskID)
 	if err != nil {
@@ -339,6 +347,7 @@ func (s *Store) applyManualMove(
 	if err := tx.Commit(); err != nil {
 		return ManualMoveResult{}, err
 	}
+	assignmentsConsumed = true
 	for _, detail := range invariants {
 		reportRetainedTargetInvariantAfterCommit(s.invariantPolicy, detail)
 	}
@@ -424,14 +433,14 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 	ctx context.Context,
 	prepared ManualMovePreparation,
 	executionTarget preparedManualMoveExecutionTarget,
-) ([]workflow.CurrentNode, []CurrentNodeStartContext, error) {
+) ([]workflow.CurrentNode, []CurrentNodeStartContext, int64, error) {
 	taskRow, err := s.queries.GetTask(ctx, string(prepared.request.TaskID))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	task, err := taskRecordFromTask(taskRow)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	definition, workflowRecord, err := workflowDefinitionFromQueries(
 		ctx,
@@ -439,21 +448,21 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 		runtimeids.WorkflowID(taskRow.WorkflowID),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	currentNodes, err := s.listTaskCurrentNodes(ctx, s.queries, prepared.request.TaskID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	preview, err := s.resolveManualMove(ctx, s.queries, prepared.request)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if preview.Outcome == ManualMovePreviewOutcomeNoOp {
-		return nil, nil, nil
+		return nil, nil, workflowRecord.Version, nil
 	}
 	if preview.Outcome != ManualMovePreviewOutcomeTransition || len(preview.Choices) != 1 {
-		return nil, nil, ErrManualMoveTransitionSelectionRequired
+		return nil, nil, 0, ErrManualMoveTransitionSelectionRequired
 	}
 	choice := preview.Choices[0]
 	valueEnvironment, err := s.manualMoveValueEnvironment(
@@ -464,10 +473,10 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 		currentNodes,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err := validateManualMoveValues(choice, prepared.request.Values, valueEnvironment); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	targets, _, _, err := s.materializeManualMoveTargets(
 		ctx,
@@ -479,8 +488,9 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 		prepared.request.Values,
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
+	applyManualMoveCommentary(targets, prepared.request.Commentary)
 	contexts := make([]CurrentNodeStartContext, 0, len(targets))
 	for _, target := range targets {
 		context, err := s.resolveMaterializedCurrentNodeStartContext(
@@ -493,11 +503,23 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 			&executionTarget.mutation.executionRoot,
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		contexts = append(contexts, context)
 	}
-	return targets, contexts, nil
+	return targets, contexts, workflowRecord.Version, nil
+}
+
+func applyManualMoveCommentary(targets []workflow.CurrentNode, commentary string) {
+	if commentary == "" {
+		return
+	}
+	for index := range targets {
+		if targets[index].CurrentInputValues == nil {
+			targets[index].CurrentInputValues = make(map[string]string)
+		}
+		targets[index].CurrentInputValues[workflow.RuntimePromptParameterCommentary] = commentary
+	}
 }
 
 func validatePreparedManualMoveTargetShape(

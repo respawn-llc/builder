@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -54,6 +55,108 @@ func TestApplyManualMoveRejectsAgentPlacementWithoutAssignmentPreparation(t *tes
 	}
 	if len(currentNodes) != 1 || currentNodes[0].Reference.NodeID == workflow.NodeIDOf(target) {
 		t.Fatalf("Current Nodes after rejected Agent move = %+v, want unchanged origin", currentNodes)
+	}
+}
+
+func TestManualMoveAssignmentPreparationIncludesCommentary(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  operator handoff  ",
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	var observed []CurrentNodeStartContext
+	if _, err := applyManualMoveForStoreTestWithPreparation(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(inputs []CurrentNodeStartContext) {
+			observed = append([]CurrentNodeStartContext(nil), inputs...)
+		},
+	); err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	if len(observed) != 1 ||
+		observed[0].CurrentNode.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "operator handoff" {
+		t.Fatalf("assignment preparation contexts = %+v, want trimmed operator commentary", observed)
+	}
+}
+
+func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	origin := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	aborted := false
+	_, err = store.ApplyManualMoveWithTargetAssignments(
+		ctx,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			updated := definition
+			updated.Edges = append([]workflow.Edge(nil), definition.Edges...)
+			for index := range updated.Edges {
+				if updated.Edges[index].TargetNodeID == workflow.NodeIDOf(target) {
+					updated.Edges[index].PromptTemplate = "Updated assignment instructions."
+					break
+				}
+			}
+			saved, saveErr := store.SaveWorkflowGraph(ctx, NewWorkflowGraphSaveRequest(updated, record.Version))
+			if saveErr != nil {
+				return ManualMoveTargetAssignmentPreparation{}, saveErr
+			}
+			if !saved.Saved || saved.Version != record.Version+1 {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("workflow edit did not commit")
+			}
+			return ManualMoveTargetAssignmentPreparation{
+				Abort: func(err error) error {
+					aborted = true
+					return err
+				},
+			}, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("ApplyManualMoveWithTargetAssignments accepted changed Workflow Version")
+	}
+	if !aborted {
+		t.Fatal("changed Workflow Version did not abort prepared assignments")
+	}
+	currentNodes, listErr := store.ListCurrentNodes(ctx, task.ID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(origin.Reference) {
+		t.Fatalf("Current Nodes after Workflow edit = %+v, want origin %v", currentNodes, origin.Reference)
 	}
 }
 
