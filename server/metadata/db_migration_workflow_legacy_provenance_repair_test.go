@@ -9,7 +9,7 @@ import (
 	"core/shared/runtimeids"
 )
 
-func TestWorkflowLegacyProvenanceRepairMigrationRepairsV25CurrentNodeDuringFullUpgrade(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationLeavesGraphDerivedV25SourceUnresolved(t *testing.T) {
 	t.Parallel()
 	const (
 		projectID       = "project-v25-provenance-repair"
@@ -94,7 +94,7 @@ INSERT INTO task_current_nodes (
 	if _, err := provider.UpTo(t.Context(), 85); err != nil {
 		t.Fatalf("upgrade v2.5 Workflow state through provenance repair: %v", err)
 	}
-	var sourceKind, repairedSource string
+	var sourceKind, repairedSource sql.NullString
 	var legacyMaterialized int64
 	if err := db.QueryRow(`
 SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
@@ -102,9 +102,9 @@ FROM task_current_nodes
 WHERE task_id = ?`, taskID).Scan(&sourceKind, &repairedSource, &legacyMaterialized); err != nil {
 		t.Fatalf("read fully upgraded Current Node: %v", err)
 	}
-	if sourceKind != "exact" || repairedSource != sourceSessionID || legacyMaterialized != 0 {
+	if sourceKind.Valid || repairedSource.Valid || legacyMaterialized != 1 {
 		t.Fatalf(
-			"fully upgraded Current Node = kind %q source %q legacy %d; want exact v2.5 source",
+			"fully upgraded Current Node = kind %v source %v legacy %d; want unresolved source",
 			sourceKind,
 			repairedSource,
 			legacyMaterialized,
@@ -112,7 +112,7 @@ WHERE task_id = ?`, taskID).Scan(&sourceKind, &repairedSource, &legacyMaterializ
 	}
 }
 
-func TestWorkflowLegacyProvenanceRepairMigrationInfersUniqueLatestEnteringSource(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationDoesNotInferFromEditableGraph(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
 		{sessionID: "session-source-older", associatedAtOffset: 1},
@@ -121,7 +121,7 @@ func TestWorkflowLegacyProvenanceRepairMigrationInfersUniqueLatestEnteringSource
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	var legacyMaterialized int64
 	if err := fixture.db.QueryRow(`
 SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
@@ -133,15 +133,16 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	); err != nil {
 		t.Fatalf("read repaired Current Node: %v", err)
 	}
-	if sourceKind != "exact" || sourceSessionID != "session-source-latest" || legacyMaterialized != 0 {
+	if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 		t.Fatalf(
-			"repaired Current Node = kind %q Session %q legacy %d; want exact latest source",
+			"Current Node = kind %v Session %v legacy %d; want unresolved source",
 			sourceKind,
 			sourceSessionID,
 			legacyMaterialized,
 		)
 	}
-	var status, associationSource string
+	var status string
+	var associationSource sql.NullString
 	if err := fixture.db.QueryRow(`
 SELECT association_status, source_session_id
 FROM session_workflow_node_associations
@@ -152,9 +153,9 @@ WHERE task_id = ? AND session_id = ? AND node_id = ?`,
 	).Scan(&status, &associationSource); err != nil {
 		t.Fatalf("read repaired retained association: %v", err)
 	}
-	if status != "current" || associationSource != "session-source-latest" {
+	if status != "historical" || associationSource.Valid {
 		t.Fatalf(
-			"repaired retained association = status %q source %q; want current latest source",
+			"retained association = status %q source %v; want unchanged historical source",
 			status,
 			associationSource,
 		)
@@ -352,7 +353,7 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	}
 }
 
-func TestWorkflowLegacyProvenanceRepairMigrationUsesSelectedNodeForCurrentNodeSource(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationDoesNotInferSelectedNodeFromEditableGraph(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
 		{sessionID: "session-entering-source", associatedAtOffset: 1},
@@ -414,7 +415,7 @@ WHERE id = (
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	var legacyMaterialized int64
 	if err := fixture.db.QueryRow(`
 SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
@@ -426,9 +427,9 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	); err != nil {
 		t.Fatalf("read selected-node repaired Current Node: %v", err)
 	}
-	if sourceKind != "exact" || sourceSessionID != selectedSessionID || legacyMaterialized != 0 {
+	if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 		t.Fatalf(
-			"selected-node Current Node = kind %q Session %q legacy %d; want selected source Session",
+			"selected-node Current Node = kind %v Session %v legacy %d; want unresolved source",
 			sourceKind,
 			sourceSessionID,
 			legacyMaterialized,
@@ -544,11 +545,9 @@ ORDER BY transition_branch_key`, fixture.taskID)
 		}
 		switch branchKey {
 		case "branch-a":
-			if !sourceKind.Valid || sourceKind.String != "exact" ||
-				!sourceSessionID.Valid || sourceSessionID.String != "session-fanout-source" ||
-				legacyMaterialized != 0 {
+			if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 				t.Fatalf(
-					"repaired Fan-Out branch %q = kind %v Session %v legacy %d; want branch-local proof",
+					"unproved Fan-Out branch %q = kind %v Session %v legacy %d; want unresolved legacy",
 					branchKey,
 					sourceKind,
 					sourceSessionID,
@@ -755,7 +754,7 @@ INSERT INTO task_pending_approval_branches (
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	if err := fixture.db.QueryRow(`
 SELECT
     json_extract(context_source_resolution_json, '$.active_source.kind'),
@@ -764,9 +763,10 @@ FROM task_pending_approval_branches
 WHERE approval_id = 'approval-header-only'`).Scan(&sourceKind, &sourceSessionID); err != nil {
 		t.Fatalf("read selected-node pending Approval: %v", err)
 	}
-	if sourceKind != "exact" || sourceSessionID != "session-approval-header-only" {
+	if !sourceKind.Valid || sourceKind.String != "exact" ||
+		!sourceSessionID.Valid || sourceSessionID.String != "session-approval-header-only" {
 		t.Fatalf(
-			"selected-node pending Approval source = kind %q Session %q; want selected-node Session",
+			"selected-node pending Approval source = kind %v Session %v; want selected-node Session",
 			sourceKind,
 			sourceSessionID,
 		)
@@ -824,7 +824,7 @@ INSERT INTO task_pending_approval_branches (
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	if err := fixture.db.QueryRow(`
 SELECT
     json_extract(context_source_resolution_json, '$.active_source.kind'),
@@ -833,9 +833,9 @@ FROM task_pending_approval_branches
 WHERE approval_id = 'approval-retained-source'`).Scan(&sourceKind, &sourceSessionID); err != nil {
 		t.Fatalf("read retained-source pending Approval: %v", err)
 	}
-	if sourceKind != "exact" || sourceSessionID != "session-retained-approval-source" {
+	if !sourceKind.Valid || sourceKind.String != "legacy" || sourceSessionID.Valid {
 		t.Fatalf(
-			"retained-source pending Approval = kind %q Session %q; want repaired source Session",
+			"retained-source pending Approval = kind %v Session %v; want unresolved source",
 			sourceKind,
 			sourceSessionID,
 		)
