@@ -128,7 +128,20 @@ message ListApprovalsSuccess {
   repeated Approval approvals = 1 [(buf.validate.field).repeated.items.required = true];
 }
 
-message OperationError {
+message ListQuestionsError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ListApprovalsError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -145,7 +158,7 @@ message ListQuestionsResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     ListQuestionsSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    ListQuestionsError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -153,7 +166,7 @@ message ListApprovalsResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     ListApprovalsSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    ListApprovalsError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -248,11 +261,24 @@ message AnswerBatchSuccess {
   }];
 }
 
+message AnswerBatchError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
 message AnswerBatchResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     AnswerBatchSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    AnswerBatchError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -276,11 +302,24 @@ message FollowUpWatchRequest {
   ];
 }
 
+message FollowUpWatchError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
 message FollowUpStartResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    FollowUpWatchError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -296,11 +335,24 @@ message RecordHistoryRequest {
   string text = 2;
 }
 
-message EmptyResult {
+message RecordHistoryError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message RecordHistoryResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    RecordHistoryError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -361,11 +413,24 @@ message LiveWatchSuccess {
   };
 }
 
+message LiveWatchError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
 message LiveWatchResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     LiveWatchSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    LiveWatchError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -441,7 +506,7 @@ service FollowUpService {
 }
 
 service HistoryService {
-  rpc Record(RecordHistoryRequest) returns (EmptyResult) {
+  rpc Record(RecordHistoryRequest) returns (RecordHistoryResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER

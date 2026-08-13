@@ -544,7 +544,7 @@ message GoalMutationSuccess {
   };
 }
 
-message StandardError {
+message SetSessionNameError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -561,7 +561,15 @@ message StandardError {
   }
 }
 
-message RuntimeCommandError {
+message SetThinkingLevelError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message SetFastModeEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message SetReviewerEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message SetAutoCompactionEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message SetQuestionsEnabledError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message ShouldCompactError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message DiscardQueuedUserMessageError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+
+message SubmitUserTurnError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -581,6 +589,9 @@ message RuntimeCommandError {
     }];
   }
 }
+
+message SubmitUserShellCommandError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeCommandNotAcceptedDetails runtime_command_not_accepted = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_command_not_accepted" }]; RuntimeUnavailableDetails runtime_unavailable = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message InterruptError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeCommandNotAcceptedDetails runtime_command_not_accepted = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_command_not_accepted" }]; RuntimeUnavailableDetails runtime_unavailable = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
 
 message CompactContextError {
   string code = 1 [
@@ -687,7 +698,7 @@ message GoalShowError {
   }
 }
 
-message GoalMutationError {
+message GoalSetError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -704,19 +715,25 @@ message GoalMutationError {
   }
 }
 
-message EmptyResult {
+message GoalPauseError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message GoalResumeError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message GoalCompleteError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message GoalClearError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "runtime_unavailable" }]; kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+
+message SetSessionNameResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SetSessionNameError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
-message CommandEmptyResult {
+message SetThinkingLevelResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; SetThinkingLevelError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message SubmitUserShellCommandResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SubmitUserShellCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -728,11 +745,11 @@ message CompactContextResult {
   }
 }
 
-message ToggleResult {
+message SetFastModeEnabledResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     ToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SetFastModeEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -740,23 +757,25 @@ message ReviewerToggleResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     ReviewerToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SetReviewerEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
-message EffectiveToggleResult {
+message SetAutoCompactionEnabledResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     EffectiveToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SetAutoCompactionEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
+
+message SetQuestionsEnabledResult { oneof outcome { option (buf.validate.oneof).required = true; EffectiveToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; SetQuestionsEnabledError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
 
 message ShouldCompactResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     ShouldCompactSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    ShouldCompactError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -764,7 +783,7 @@ message SubmitUserTurnResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     SubmitUserTurnSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    SubmitUserTurnError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -772,7 +791,7 @@ message InterruptResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     InterruptSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    InterruptError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -804,7 +823,7 @@ message DiscardQueuedUserMessageResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     DiscardQueuedUserMessageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    DiscardQueuedUserMessageError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -816,16 +835,21 @@ message GoalShowResult {
   }
 }
 
-message GoalMutationResult {
+message GoalSetResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    GoalMutationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    GoalSetError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
+message GoalPauseResult { oneof outcome { option (buf.validate.oneof).required = true; GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; GoalPauseError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message GoalResumeResult { oneof outcome { option (buf.validate.oneof).required = true; GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; GoalResumeError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message GoalCompleteResult { oneof outcome { option (buf.validate.oneof).required = true; GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; GoalCompleteError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message GoalClearResult { oneof outcome { option (buf.validate.oneof).required = true; GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; GoalClearError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+
 service SettingsService {
-  rpc SetSessionName(SetSessionNameRequest) returns (EmptyResult) {
+  rpc SetSessionName(SetSessionNameRequest) returns (SetSessionNameResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -835,7 +859,7 @@ service SettingsService {
       legacy_wire_name: "runtime.setSessionName"
     };
   }
-  rpc SetThinkingLevel(SetThinkingLevelRequest) returns (EmptyResult) {
+  rpc SetThinkingLevel(SetThinkingLevelRequest) returns (SetThinkingLevelResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -845,7 +869,7 @@ service SettingsService {
       legacy_wire_name: "runtime.setThinkingLevel"
     };
   }
-  rpc SetFastModeEnabled(ToggleRequest) returns (ToggleResult) {
+  rpc SetFastModeEnabled(ToggleRequest) returns (SetFastModeEnabledResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -865,7 +889,7 @@ service SettingsService {
       legacy_wire_name: "runtime.setReviewerEnabled"
     };
   }
-  rpc SetAutoCompactionEnabled(ToggleRequest) returns (EffectiveToggleResult) {
+  rpc SetAutoCompactionEnabled(ToggleRequest) returns (SetAutoCompactionEnabledResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -875,7 +899,7 @@ service SettingsService {
       legacy_wire_name: "runtime.setAutoCompactionEnabled"
     };
   }
-  rpc SetQuestionsEnabled(ToggleRequest) returns (EffectiveToggleResult) {
+  rpc SetQuestionsEnabled(ToggleRequest) returns (SetQuestionsEnabledResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -908,7 +932,7 @@ service TurnService {
       legacy_wire_name: "runtime.submitUserTurn"
     };
   }
-  rpc SubmitUserShellCommand(ShellCommandRequest) returns (CommandEmptyResult) {
+  rpc SubmitUserShellCommand(ShellCommandRequest) returns (SubmitUserShellCommandResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -994,7 +1018,7 @@ service GoalService {
       legacy_wire_name: "runtime.goal.show"
     };
   }
-  rpc Set(GoalSetRequest) returns (GoalMutationResult) {
+  rpc Set(GoalSetRequest) returns (GoalSetResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -1004,7 +1028,7 @@ service GoalService {
       legacy_wire_name: "runtime.goal.set"
     };
   }
-  rpc Pause(GoalMutationRequest) returns (GoalMutationResult) {
+  rpc Pause(GoalMutationRequest) returns (GoalPauseResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -1014,7 +1038,7 @@ service GoalService {
       legacy_wire_name: "runtime.goal.pause"
     };
   }
-  rpc Resume(GoalMutationRequest) returns (GoalMutationResult) {
+  rpc Resume(GoalMutationRequest) returns (GoalResumeResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -1024,7 +1048,7 @@ service GoalService {
       legacy_wire_name: "runtime.goal.resume"
     };
   }
-  rpc Complete(GoalMutationRequest) returns (GoalMutationResult) {
+  rpc Complete(GoalMutationRequest) returns (GoalCompleteResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER
@@ -1034,7 +1058,7 @@ service GoalService {
       legacy_wire_name: "runtime.goal.complete"
     };
   }
-  rpc Clear(GoalClearRequest) returns (GoalMutationResult) {
+  rpc Clear(GoalClearRequest) returns (GoalClearResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER

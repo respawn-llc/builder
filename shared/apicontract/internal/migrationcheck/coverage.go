@@ -701,7 +701,7 @@ func checkWireExceptionFingerprint(
 	return nil
 }
 
-func PopulateWireExceptionFingerprints(
+func LiveWireExceptionFingerprints(
 	exceptions []WireException,
 	operations []protoapi.Operation,
 ) []WireException {

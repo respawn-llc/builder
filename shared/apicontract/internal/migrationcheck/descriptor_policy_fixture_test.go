@@ -91,6 +91,8 @@ const (
 	issueDuplicateActiveOperationName     descriptorPolicyIssueCode = "duplicate_active_operation_name"
 	issueDuplicateLegacyWireName          descriptorPolicyIssueCode = "duplicate_legacy_wire_name"
 	issueInvalidOperationResultConvention descriptorPolicyIssueCode = "invalid_operation_result_convention"
+	issueSharedOperationResultDescriptor  descriptorPolicyIssueCode = "shared_operation_result_descriptor"
+	issueSharedOperationErrorDescriptor   descriptorPolicyIssueCode = "shared_operation_error_descriptor"
 )
 
 type descriptorPolicyIssue struct {
@@ -132,6 +134,8 @@ func checkDescriptorPolicy(descriptors descriptorPolicySet) error {
 	}
 	checkDuplicateOperationNames(descriptors.Operations, &issues)
 	checkOperationResultConventions(descriptors.Operations, &issues)
+	checkDistinctOperationResultDescriptors(descriptors.Operations, &issues)
+	checkDistinctOperationErrorDescriptors(descriptors.Operations, &issues)
 	if len(issues) == 0 {
 		return nil
 	}
@@ -148,6 +152,68 @@ func checkDescriptorPolicy(descriptors descriptorPolicySet) error {
 		return issues[left].Code < issues[right].Code
 	})
 	return &descriptorPolicyError{Issues: issues}
+}
+
+func checkDistinctOperationResultDescriptors(
+	operations []descriptorPolicyOperationIdentity,
+	issues *[]descriptorPolicyIssue,
+) {
+	owners := make(map[protoreflect.FullName]string, len(operations))
+	for _, operation := range operations {
+		switch operation.Kind {
+		case sharedpb.OperationKind_OPERATION_KIND_UNARY,
+			sharedpb.OperationKind_OPERATION_KIND_PROGRESS,
+			sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
+		default:
+			continue
+		}
+		if !protoapi.IsOperationResultDescriptor(operation.Output) {
+			continue
+		}
+		resultName := operation.Output.FullName()
+		if priorPath, duplicate := owners[resultName]; duplicate {
+			*issues = append(*issues, descriptorPolicyIssue{
+				Code:        issueSharedOperationResultDescriptor,
+				MessagePath: operation.DescriptorPath,
+				FieldName:   priorPath,
+			})
+			continue
+		}
+		owners[resultName] = operation.DescriptorPath
+	}
+}
+
+func checkDistinctOperationErrorDescriptors(
+	operations []descriptorPolicyOperationIdentity,
+	issues *[]descriptorPolicyIssue,
+) {
+	owners := make(map[protoreflect.FullName]string, len(operations))
+	for _, operation := range operations {
+		switch operation.Kind {
+		case sharedpb.OperationKind_OPERATION_KIND_UNARY,
+			sharedpb.OperationKind_OPERATION_KIND_PROGRESS,
+			sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION:
+		default:
+			continue
+		}
+		if !protoapi.IsOperationResultDescriptor(operation.Output) {
+			continue
+		}
+		errorField := operation.Output.Fields().ByName("error")
+		if errorField == nil || errorField.Message() == nil {
+			continue
+		}
+		errorName := errorField.Message().FullName()
+		if priorPath, duplicate := owners[errorName]; duplicate {
+			*issues = append(*issues, descriptorPolicyIssue{
+				Code:        issueSharedOperationErrorDescriptor,
+				MessagePath: operation.DescriptorPath,
+				FieldName:   priorPath,
+			})
+			continue
+		}
+		owners[errorName] = operation.DescriptorPath
+	}
 }
 
 func checkOperationResultConventions(

@@ -733,7 +733,7 @@ message AppendCommittedEntryRequest {
   }];
   optional string notice_id = 5 [(buf.validate.field).string.min_len = 1];
 }
-message OperationError {
+message PageError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -745,10 +745,14 @@ message OperationError {
   }
 }
 
-message PageResult { oneof outcome { option (buf.validate.oneof).required = true; PageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
-message LatestFinalAnswerResult { oneof outcome { option (buf.validate.oneof).required = true; LatestFinalAnswerSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
-message SubscribeResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
-message EmptyResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message LatestFinalAnswerError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message SubscribeError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+message AppendCommittedEntryError { string code = 1 [(buf.validate.field).string.min_len = 1, (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE]; oneof detail { kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = { role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure" }]; } }
+
+message PageResult { oneof outcome { option (buf.validate.oneof).required = true; PageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; PageError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message LatestFinalAnswerResult { oneof outcome { option (buf.validate.oneof).required = true; LatestFinalAnswerSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; LatestFinalAnswerError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message SubscribeResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; SubscribeError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message AppendCommittedEntryResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; AppendCommittedEntryError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
 
 service ReadService {
   rpc GetPage(PageRequest) returns (PageResult) {
@@ -794,7 +798,7 @@ service StreamService {
 }
 
 service AppendService {
-  rpc AppendCommittedEntry(AppendCommittedEntryRequest) returns (EmptyResult) {
+  rpc AppendCommittedEntry(AppendCommittedEntryRequest) returns (AppendCommittedEntryResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_SERVER
       scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER

@@ -120,14 +120,16 @@ func TestDescriptorPolicyRejectsInMemoryDescriptorViolationsIndependently(t *tes
 		{
 			name: "duplicate active operation name",
 			mutate: func(file *descriptorpb.FileDescriptorProto) {
-				file.Service[0].Method = append(file.Service[0].Method, policyFixtureMethod("HttpStatus", "legacy.http_status_alias"))
+				method := policyFixtureDistinctResultMethod(t, file, "HttpStatus", "legacy.http_status_alias")
+				file.Service[0].Method = append(file.Service[0].Method, method)
 			},
 			want: issueDuplicateActiveOperationName,
 		},
 		{
 			name: "duplicate legacy operation option",
 			mutate: func(file *descriptorpb.FileDescriptorProto) {
-				file.Service[0].Method = append(file.Service[0].Method, policyFixtureMethod("Create", "legacy.http_status"))
+				method := policyFixtureDistinctResultMethod(t, file, "Create", "legacy.http_status")
+				file.Service[0].Method = append(file.Service[0].Method, method)
 			},
 			want: issueDuplicateLegacyWireName,
 		},
@@ -158,6 +160,29 @@ func TestDescriptorPolicyRejectsInMemoryDescriptorViolationsIndependently(t *tes
 			assertOnlyDescriptorPolicyIssue(t, checkDescriptorPolicy(fixture), test.want)
 		})
 	}
+}
+
+func policyFixtureDistinctResultMethod(
+	t *testing.T,
+	file *descriptorpb.FileDescriptorProto,
+	methodName string,
+	legacyWireName string,
+) *descriptorpb.MethodDescriptorProto {
+	t.Helper()
+	errorMessage := proto.Clone(
+		descriptorMessageByName(t, file, "Error"),
+	).(*descriptorpb.DescriptorProto)
+	errorMessage.Name = proto.String(methodName + "Error")
+	responseMessage := proto.Clone(
+		descriptorMessageByName(t, file, "Response"),
+	).(*descriptorpb.DescriptorProto)
+	responseMessage.Name = proto.String(methodName + "Response")
+	responseMessage.Field[1].TypeName = proto.String(".kent.api.policy." + methodName + "Error")
+	file.MessageType = append(file.MessageType, errorMessage, responseMessage)
+
+	method := policyFixtureMethod(methodName, legacyWireName)
+	method.OutputType = proto.String(".kent.api.policy." + methodName + "Response")
+	return method
 }
 
 func TestDescriptorPolicyRejectsMalformedResultConventionsForResultBearingOperations(t *testing.T) {
@@ -208,6 +233,60 @@ func TestDescriptorPolicyRejectsMalformedResultConventionsForResultBearingOperat
 				issueInvalidOperationResultConvention,
 			)
 		})
+	}
+}
+
+func TestDescriptorPolicyRejectsSharedOperationErrorDescriptors(t *testing.T) {
+	file := validInMemoryPolicyDescriptor()
+	secondResponse := proto.Clone(
+		descriptorMessageByName(t, file, "Response"),
+	).(*descriptorpb.DescriptorProto)
+	secondResponse.Name = proto.String("CreateResponse")
+	file.MessageType = append(file.MessageType, secondResponse)
+	file.Service[0].Method = append(
+		file.Service[0].Method,
+		policyFixtureMethod("Create", "legacy.create"),
+	)
+	file.Service[0].Method[1].OutputType = proto.String(".kent.api.policy.CreateResponse")
+
+	fixture, err := parseDescriptorPolicyFiles(policyFixtureFiles(t, file))
+	if err != nil {
+		t.Fatalf("parse descriptor fixture: %v", err)
+	}
+	assertOnlyDescriptorPolicyIssue(
+		t,
+		checkDescriptorPolicy(fixture),
+		issueSharedOperationErrorDescriptor,
+	)
+}
+
+func TestDescriptorPolicyRejectsSharedOperationResultDescriptors(t *testing.T) {
+	file := validInMemoryPolicyDescriptor()
+	file.Service[0].Method = append(
+		file.Service[0].Method,
+		policyFixtureMethod("Create", "legacy.create"),
+	)
+
+	fixture, err := parseDescriptorPolicyFiles(policyFixtureFiles(t, file))
+	if err != nil {
+		t.Fatalf("parse descriptor fixture: %v", err)
+	}
+	err = checkDescriptorPolicy(fixture)
+	var policyError *descriptorPolicyError
+	if !errors.As(err, &policyError) {
+		t.Fatalf("error = %v, want descriptorPolicyError", err)
+	}
+	codes := make(map[descriptorPolicyIssueCode]struct{}, len(policyError.Issues))
+	for _, issue := range policyError.Issues {
+		codes[issue.Code] = struct{}{}
+	}
+	for _, want := range []descriptorPolicyIssueCode{
+		issueSharedOperationResultDescriptor,
+		issueSharedOperationErrorDescriptor,
+	} {
+		if _, exists := codes[want]; !exists {
+			t.Fatalf("descriptor policy issues = %+v, want %s", policyError.Issues, want)
+		}
 	}
 }
 

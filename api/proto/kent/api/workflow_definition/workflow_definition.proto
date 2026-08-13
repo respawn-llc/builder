@@ -1689,6 +1689,27 @@ message ValidateError {
   }
 }
 
+message ValidateScriptPathError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
 message GraphValidateDraftError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
@@ -2002,6 +2023,14 @@ message ValidateResult {
   }
 }
 
+message ValidateScriptPathResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ValidateResponse success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ValidateScriptPathError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
 message GraphValidateDraftResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
@@ -2089,7 +2118,28 @@ message WorkflowSubscribeRequest {
   string workflow_id = 1 [(buf.validate.field).string.uuid = true];
 }
 
-message SubscriptionStartError {
+message WorkflowSubscriptionStartError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectSubscriptionStartError {
   string code = 1 [
     (buf.validate.field).string.min_len = 1,
     (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
@@ -2114,7 +2164,7 @@ message ProjectSubscriptionStartResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    SubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    ProjectSubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -2122,7 +2172,7 @@ message WorkflowSubscriptionStartResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    SubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    WorkflowSubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 
@@ -2268,7 +2318,7 @@ service WorkflowDefinitionService {
       legacy_wire_name: "workflow.validate"
     };
   }
-  rpc ValidateScriptPath(ScriptPathValidateRequest) returns (ValidateResult) {
+  rpc ValidateScriptPath(ScriptPathValidateRequest) returns (ValidateScriptPathResult) {
     option (kent.api.shared.kent_method) = {
       kind: OPERATION_KIND_UNARY
       authentication_stage: AUTHENTICATION_STAGE_SERVER

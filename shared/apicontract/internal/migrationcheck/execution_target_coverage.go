@@ -29,10 +29,12 @@ const (
 	WireExceptionFieldReshape
 	WireExceptionCollectionReshape
 	WireExceptionEmptyAcknowledment
+
+	reviewedExceptionalWireFingerprint = "dcc83804e382bdf36968cd23a69c25c80e793a6ef00c361afc850887435246a2"
 )
 
-func actualTargetWireExceptions() []WireException {
-	return []WireException{
+func actualTargetWireExceptions(operations []protoapi.Operation) []WireException {
+	return LiveWireExceptionFingerprints([]WireException{
 		wireException[serverapi.OnboardingImportSelection]("kent.api.onboarding.ImportSelection", WireExceptionCustomWire),
 		wireException[serverapi.SessionLaunchIntent]("kent.api.session_launch.SessionLaunchIntent", WireExceptionCustomWire),
 		wireException[serverapi.SessionExecutionEnvironment]("kent.api.session.ExecutionEnvironment", WireExceptionCustomWire),
@@ -102,7 +104,7 @@ func actualTargetWireExceptions() []WireException {
 		wireException[serverapi.WorktreeLeaveRequest]("kent.api.worktree.LeaveRequest", WireExceptionFieldReshape),
 		wireException[protocol.StreamCompleteParams]("kent.api.worktree.SetupCompletion", WireExceptionFieldReshape),
 		wireException[protocol.WorktreeSetupEventParams]("kent.api.worktree.SetupEvent", WireExceptionOneofReshape),
-	}
+	}, operations)
 }
 
 func actualTargetFieldRenames() []WireFieldRename {
@@ -260,15 +262,16 @@ func CheckExecutionTarget() error {
 	if err != nil {
 		return err
 	}
-	wireExceptions := PopulateWireExceptionFingerprints(actualTargetWireExceptions(), operations)
+	wireExceptions := actualTargetWireExceptions(operations)
 	coverage := BoundedMigrationCoverage{
-		Report:           report,
-		Operations:       operations,
-		Classification:   classification,
-		WireExceptions:   wireExceptions,
-		FieldRenames:     actualTargetFieldRenames(),
-		ScalarMappings:   actualTargetScalarMappings(),
-		PresenceMappings: actualTargetPresenceMappings(),
+		Report:                 report,
+		Operations:             operations,
+		Classification:         classification,
+		WireExceptions:         wireExceptions,
+		FieldRenames:           actualTargetFieldRenames(),
+		ScalarMappings:         actualTargetScalarMappings(),
+		PresenceMappings:       actualTargetPresenceMappings(),
+		ExceptionalFingerprint: reviewedExceptionalWireFingerprint,
 		FocusedFixtures: []FocusedProjectionFixture{
 			{Name: FocusedKENT345StrictJSON, Check: checkKENT345StrictJSONFixture},
 			{Name: FocusedKENT345CustomWire, Check: checkKENT345CustomWireFixture},
@@ -280,7 +283,6 @@ func CheckExecutionTarget() error {
 			{Name: FocusedKENT554RetainedCapabilityFacts, Check: checkKENT554RetainedCapabilityFactsFixture},
 		},
 	}
-	coverage.ExceptionalFingerprint = fingerprintWireExceptions(wireExceptions)
 	return CheckBoundedMigrationCoverage(coverage)
 }
 
