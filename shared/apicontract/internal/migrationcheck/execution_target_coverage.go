@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "645056249ec6b6284ac55e6cc094850196a0e4e8d23410ff19b32fcf793cfaab"
+const reviewedExceptionalWireFingerprint = "92c2705d9a0264509b8b7338c2e6ea50af68b8799d9067f33fac43aab63dc1d4"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
@@ -89,9 +89,9 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[serverapi.WorkflowTaskCompleteRequest]("kent.api.workflow_task.CompleteRequest", WireExceptionCollectionReshape, "e4d073345d4cae884c3c795188c9163097353e5b0447005e97f3e676a7b75060", "fe9c8bff305bc3631383fde6e108da4dac645fcad236399261d554b45a974c0d"),
 		wireExceptionSignoff[serverapi.WorkflowTaskMoveRequest]("kent.api.workflow_task.MoveRequest", WireExceptionCollectionReshape, "77280238168f08334652641f17a0cd0eb45c38bd5e3fb6a23abd51cc08308894", "fc6ce1a920ea4123cd3e5470e07bda6359a1d3e66d20bd0373ba6b120ef962d8"),
 		wireExceptionSignoff[serverapi.WorktreeTopologyEntry]("kent.api.worktree.TopologyEntry", WireExceptionOneofReshape, "dec2dedb7f1220a5b64c611694028d2c98a83349d8aba3efc984fb210384a251", "cc5050e0a4463f623c0f0390dd0fb7bf9d802043673d66c7a34812d6ac5a2862"),
-		wireExceptionSignoff[serverapi.WorktreeDeleteRequest]("kent.api.worktree.DeleteRequest", WireExceptionFieldReshape, "e591cfd3b02347b9cc098b981acb9b6f134d4824b7a95637063373addfa4c548", "3e9a25bce5bb661dce558f86c40aa3b89172d3b3e445ef3293a36f860c9ec611"),
+		wireExceptionSignoff[serverapi.WorktreeDeleteRequest]("kent.api.worktree.DeleteRequest", WireExceptionFieldReshape, "e591cfd3b02347b9cc098b981acb9b6f134d4824b7a95637063373addfa4c548", "8c680f7db293c6088bc7dca8b1301c535cec6a29bf8ad8c6daa65dc26e035e49"),
 		wireExceptionSignoff[serverapi.WorktreeDeleteResult]("kent.api.worktree.DeleteSuccess", WireExceptionFieldReshape, "23874bdd52e1a582609270cc1016fb1120ca65a591e536b88bb8a93824b1a1b4", "48ad6682ea4f86518039dfd1d22f81db2120f8a41acd1745d9deeb76b1c0ae62"),
-		wireExceptionSignoff[serverapi.WorktreeEnterRequest]("kent.api.worktree.EnterRequest", WireExceptionFieldReshape, "a0f130be369436c2d0c9b23bf0eb65b8c4118e498dbc8bc816316b2cb5ed4f09", "d17502b1da57dfc69a84745c93133734082d0f70ccbf21e1b061bcb22abfd16c"),
+		wireExceptionSignoff[serverapi.WorktreeEnterRequest]("kent.api.worktree.EnterRequest", WireExceptionFieldReshape, "a0f130be369436c2d0c9b23bf0eb65b8c4118e498dbc8bc816316b2cb5ed4f09", "993589cf55620531c271e7bda58cac686ca7a9e88afc95b8a59464588ebec62e"),
 		wireExceptionSignoff[serverapi.WorktreeLeaveRequest]("kent.api.worktree.LeaveRequest", WireExceptionFieldReshape, "ada2e2d635da350049bfbdd29d72e8b73fdf8f0ada904b0ce482745ae1bdb6b5", "20a0a210647730cbee2ba1e51277a2582b9ee6347834e80e549251a0123911b4"),
 		wireExceptionSignoff[protocol.StreamCompleteParams]("kent.api.worktree.SetupCompletion", WireExceptionFieldReshape, "ec45766d5d031f43b6b72f68b420eaa81d70c43d04433406c417988f4c753b43", "1834eba547236ef20959077e5705ccf23c5eac3537b271635be0800b6e3ca1d9"),
 		wireExceptionSignoff[protocol.WorktreeSetupEventParams]("kent.api.worktree.SetupEvent", WireExceptionOneofReshape, "08515f0e3215c776c462aaf31310c36ac4783dcb6c30ee2dafb8174b844beac9", "5c082ee5f88bb9c2fba3f5fefa48124dc7a27715ab85de5691f844a1ae4af098"),

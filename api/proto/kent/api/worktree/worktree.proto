@@ -530,7 +530,14 @@ message WorkspaceListResult {
 
 message SelectorResolveRequest {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string selector = 2 [(buf.validate.field).string.min_len = 1];
+  string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.selector_resolve_nonblank"
+      message: "selector must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message SelectorResolveSuccess {
@@ -564,7 +571,14 @@ message SelectorResolveResult {
 
 message DeletePreviewRequest {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string selector = 2 [(buf.validate.field).string.min_len = 1];
+  string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.delete_preview_selector_nonblank"
+      message: "selector must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message DeletePreviewSuccess {
@@ -711,7 +725,14 @@ message CreateResult {
 
 message EnterRequest {
   TransitionHeader transition = 1 [(buf.validate.field).required = true];
-  string selector = 2 [(buf.validate.field).string.min_len = 1];
+  string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.enter_selector_nonblank"
+      message: "selector must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message LeaveRequest {
@@ -782,7 +803,14 @@ message LeaveResult {
 
 message DeleteRequest {
   TransitionHeader transition = 1 [(buf.validate.field).required = true];
-  string selector = 2 [(buf.validate.field).string.min_len = 1];
+  string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.delete_selector_nonblank"
+      message: "selector must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool force_folder_removal = 3;
   BranchCleanupMode branch_cleanup_policy = 4 [(buf.validate.field).enum = {
     defined_only: true

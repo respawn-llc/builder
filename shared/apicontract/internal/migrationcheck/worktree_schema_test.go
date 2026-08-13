@@ -227,6 +227,30 @@ func TestWorktreeGitFactsRejectBlankPresentOptionalValues(t *testing.T) {
 	}
 }
 
+func TestWorktreeRequestsRejectBlankSelectors(t *testing.T) {
+	for name, message := range map[string]proto.Message{
+		"selector resolve": &worktreepb.SelectorResolveRequest{SessionId: "session-1", Selector: " "},
+		"delete preview":   &worktreepb.DeletePreviewRequest{SessionId: "session-1", Selector: " "},
+		"enter":            &worktreepb.EnterRequest{Transition: validTransitionHeader(), Selector: " "},
+		"delete": &worktreepb.DeleteRequest{
+			Transition:          validTransitionHeader(),
+			Selector:            " ",
+			BranchCleanupPolicy: worktreepb.BranchCleanupMode_WORKTREE_BRANCH_CLEANUP_MODE_RETAIN,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Errorf("%s accepted blank selector", name)
+		}
+	}
+}
+
+func validTransitionHeader() *worktreepb.TransitionHeader {
+	return &worktreepb.TransitionHeader{
+		OperationId: "11111111-1111-4111-8111-111111111111",
+		SessionId:   "22222222-2222-4222-8222-222222222222",
+	}
+}
+
 func TestWorktreeSetupCompletionReshapeIsExact(t *testing.T) {
 	completion := (&worktreepb.SetupCompletion{}).ProtoReflect().Descriptor()
 	assertExactFields(t, completion, "code", "diagnostic")

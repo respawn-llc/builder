@@ -269,6 +269,22 @@ func TestCompletedSchemaSliceAuthDisplayOriginBoundaries(t *testing.T) {
 	}
 }
 
+func TestAuthUnavailableResolutionRejectsPartialFailure(t *testing.T) {
+	failure := &authpb.StatusFailure{
+		Cause: "unavailable",
+	}
+	resolution := &authpb.StatusResolution{
+		Resolution: &authpb.StatusResolution_Unavailable{Unavailable: failure},
+	}
+	if err := protoapi.ValidateGeneratedMessage(resolution); err != nil {
+		t.Fatalf("unavailable resolution: %v", err)
+	}
+	resolution.PartialFailure = failure
+	if err := protoapi.ValidateGeneratedMessage(resolution); err == nil {
+		t.Fatal("unavailable resolution accepted partial failure")
+	}
+}
+
 func TestCompletedSchemaSliceGeneratedDescriptorsCoverLockedReshapes(t *testing.T) {
 	assertExactOneofFields(t, (&connectionpb.AttachmentSuccess{}).ProtoReflect().Descriptor(), "attachment", "project", "session")
 	assertExactOneofFields(t, (&sessionlaunchpb.SessionLaunchIntent{}).ProtoReflect().Descriptor(), "intent", "create_new", "open_existing_session_id")

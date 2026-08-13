@@ -342,6 +342,12 @@ message StatusFacts {
 }
 
 message StatusResolution {
+  option (buf.validate.message).cel = {
+    id: "kent.auth.status_resolution_partial_failure"
+    message: "partial_failure is allowed only with known auth facts"
+    expression: "!has(this.partial_failure) || has(this.known)"
+  };
+
   oneof resolution {
     option (buf.validate.oneof).required = true;
     StatusFacts known = 1;
