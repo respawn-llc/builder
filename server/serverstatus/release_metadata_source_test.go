@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"core/internal/testharness/pty"
+	"core/internal/testharness/httpclient"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +54,7 @@ func TestDefaultGitHubReleaseMetadataSourceNegotiatesAndDecodesCompressedRespons
 
 func TestGitHubReleaseMetadataSourceClassifiesTransportFailure(t *testing.T) {
 	cause := errors.New("network unavailable")
-	client := &http.Client{Transport: pty.RoundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, cause
 	})}
 

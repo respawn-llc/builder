@@ -2,7 +2,7 @@ package llm
 
 import (
 	"context"
-	"core/internal/testharness/pty"
+	"core/internal/testharness/httpclient"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"encoding/json"
@@ -693,7 +693,7 @@ func newRewritingHTTPClient(t *testing.T, server *httptest.Server) *http.Client 
 	if err != nil {
 		t.Fatalf("parse test server URL: %v", err)
 	}
-	return &http.Client{Transport: pty.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
+	return &http.Client{Transport: httpclient.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		cloned := req.Clone(req.Context())
 		cloned.URL.Scheme = target.Scheme
 		cloned.URL.Host = target.Host

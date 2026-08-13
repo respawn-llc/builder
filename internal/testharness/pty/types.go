@@ -2,14 +2,7 @@ package pty
 
 import (
 	"core/internal/testharness/pty/analyzer"
-	"net/http"
 )
-
-type RoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f RoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
 
 type Dimensions = analyzer.Dimensions
 

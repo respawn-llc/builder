@@ -2,7 +2,7 @@ package llm
 
 import (
 	"context"
-	"core/internal/testharness/pty"
+	"core/internal/testharness/httpclient"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -396,7 +396,7 @@ func TestGenerateStream_RejectsPreTerminalMalformedResponsesStream(t *testing.T)
 func TestGenerateStream_LeavesPreResponseEOFRetryable(t *testing.T) {
 	transport := NewHTTPTransport(staticAuthHeader{})
 	transport.BaseURL = "https://example.invalid"
-	transport.Client = &http.Client{Transport: pty.RoundTripFunc(func(*http.Request) (*http.Response, error) {
+	transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, io.EOF
 	})}
 

@@ -911,14 +911,9 @@ func (e *Engine) ensureLocked() (session.LockedContract, error) {
 	}
 	var providerContract llm.ProviderCapabilities
 	hasProviderContract := false
-	if e.cfg.ProviderCapabilitiesOverride != nil {
-		providerContract = *e.cfg.ProviderCapabilitiesOverride
+	if caps, err := e.providerCapabilities(context.Background()); err == nil {
+		providerContract = caps
 		hasProviderContract = true
-	} else if provider, ok := e.llm.(llm.ProviderCapabilitiesClient); ok {
-		if caps, err := provider.ProviderCapabilities(context.Background()); err == nil {
-			providerContract = caps
-			hasProviderContract = true
-		}
 	}
 
 	contextBudget := e.promptContextBudgetFromConfig()
