@@ -188,6 +188,36 @@ func TestCodexDispatchContextRejectsInvalidFacts(t *testing.T) {
 		})
 	}
 }
+func TestCodexDispatchSessionConsistencyAtProviderNeutralBoundaries(t *testing.T) {
+	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{SessionID: "session-1", RunID: "run-1"})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	request := Request{
+		Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic,
+		SessionID: textutil.Value("session-2"), CodexDispatch: dispatch,
+	}
+	if err := request.Validate(); err == nil {
+		t.Fatal("generation request/session mismatch unexpectedly validated")
+	}
+	client := NewOpenAIClient(streamingOnlyTransport{})
+	if _, err := client.Compact(context.Background(), CompactionRequest{
+		Model: "gpt-5", SessionID: textutil.Value("session-2"), CodexDispatch: dispatch,
+	}); err == nil {
+		t.Fatal("compaction request/session mismatch unexpectedly projected")
+	}
+}
+func TestOpenAIClientCompactProjectsEffectiveFastMode(t *testing.T) {
+	transport := &capturingCompactionTransport{}
+	if _, err := NewOpenAIClient(transport).Compact(context.Background(), CompactionRequest{
+		Model: "gpt-5.6-sol", SessionID: textutil.Value("session-1"), FastMode: true,
+	}); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	if !transport.request.FastMode {
+		t.Fatal("provider compaction request lost effective Fast Mode")
+	}
+}
 
 func TestCodexDispatchDoesNotAffectRequestJSONOrPreciseTokenFingerprint(t *testing.T) {
 	base := Request{

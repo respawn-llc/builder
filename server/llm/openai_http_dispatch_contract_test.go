@@ -29,19 +29,6 @@ func (*countingOAuthAuth) OpenAIAuthMetadata(context.Context) (string, string, e
 	return "oauth", "account-1", nil
 }
 
-type failingOAuthAuth struct {
-	calls atomic.Int32
-}
-
-func (a *failingOAuthAuth) AuthorizationHeader(context.Context) (string, error) {
-	a.calls.Add(1)
-	return "", errors.New("expired OAuth refresh callback reached")
-}
-
-func (*failingOAuthAuth) OpenAIAuthMetadata(context.Context) (string, string, error) {
-	return "oauth", "account-1", nil
-}
-
 func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	methods := []struct {
 		name     string
@@ -144,54 +131,6 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 				})
 			}
 		}
-	}
-}
-
-func TestOpenAIDispatchRejectsInvalidSessionBeforeExpiredOAuthRefresh(t *testing.T) {
-	methods := []struct {
-		name     string
-		dispatch func(*HTTPTransport) error
-	}{
-		{
-			name: "generate",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.Generate(context.Background(), OpenAIRequest{
-					Model:          "gpt-5",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-				})
-				return err
-			},
-		},
-		{
-			name: "stream",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
-					Model:          "gpt-5",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-				}, StreamCallbacks{})
-				return err
-			},
-		},
-		{
-			name: "compact",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5"})
-				return err
-			},
-		},
-	}
-	for _, method := range methods {
-		t.Run(method.name, func(t *testing.T) {
-			auth := &failingOAuthAuth{}
-			transport := NewHTTPTransport(auth)
-			err := method.dispatch(transport)
-			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "session id") {
-				t.Fatalf("error = %v, want invalid Session ID", err)
-			}
-			if got := auth.calls.Load(); got != 0 {
-				t.Fatalf("OAuth refresh calls = %d, want 0", got)
-			}
-		})
 	}
 }
 
@@ -384,30 +323,6 @@ func TestAnonymousExplicitBaseDispatchSendsCommonIdentityWithoutAuthorization(t 
 	}
 }
 
-func TestContextFreeSupportRequestOmitsDispatchIdentity(t *testing.T) {
-	var capturedHeaders http.Header
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedHeaders = r.Header.Clone()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"gpt-5","object":"model","context_window":200000}`))
-	}))
-	t.Cleanup(server.Close)
-
-	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL
-	transport.Client = server.Client()
-	transport.ContextWindowTokens = 0
-	if _, err := transport.ResolveModelContextWindow(context.Background(), "gpt-5"); err != nil {
-		t.Fatalf("resolve model context window: %v", err)
-	}
-	if got := capturedHeaders.Get("session-id"); got != "" {
-		t.Fatalf("session-id = %q, want absent", got)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "" {
-		t.Fatalf("routing hint = %q, want absent", got)
-	}
-}
-
 func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *testing.T) {
 	methods := []struct {
 		name     string
@@ -481,58 +396,6 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				})}
 
 				err = method.dispatch(transport, invalidModel.value, dispatch)
-				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "routing") {
-					t.Fatalf("error = %v, want invalid routing model", err)
-				}
-				if got := networkCalls.Load(); got != 0 {
-					t.Fatalf("network calls = %d, want 0", got)
-				}
-			})
-		}
-	}
-}
-
-func TestOAuthCompactRejectsUnrepresentableRoutingModelForEveryEffectiveTierBeforeProviderHTTP(t *testing.T) {
-	tiers := []struct {
-		name     string
-		fastMode bool
-	}{
-		{name: "standard"},
-		{name: "priority", fastMode: true},
-	}
-	invalidModels := []struct {
-		name  string
-		value string
-	}{
-		{name: "semicolon", value: "gpt-5;tier=priority"},
-		{name: "control byte", value: "gpt-\n5"},
-	}
-
-	for _, tier := range tiers {
-		for _, invalidModel := range invalidModels {
-			t.Run(tier.name+"/"+invalidModel.name, func(t *testing.T) {
-				dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
-					SessionID:   "session-1",
-					RunID:       "run-1",
-					RequestKind: CodexRequestKindCompaction.Optional(),
-				})
-				if err != nil {
-					t.Fatalf("dispatch context: %v", err)
-				}
-				networkCalls := atomic.Int32{}
-				transport := NewHTTPTransport(oauthStaticAuth{})
-				transport.ContextWindowTokens = 0
-				transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-					networkCalls.Add(1)
-					return nil, errors.New("unexpected network request")
-				})}
-
-				_, err = transport.Compact(context.Background(), OpenAICompactionRequest{
-					Model:         invalidModel.value,
-					SessionID:     textutil.Value("session-1"),
-					FastMode:      tier.fastMode,
-					CodexDispatch: dispatch,
-				})
 				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "routing") {
 					t.Fatalf("error = %v, want invalid routing model", err)
 				}

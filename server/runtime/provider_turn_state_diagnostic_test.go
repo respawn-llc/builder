@@ -74,3 +74,50 @@ func TestGenerateAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalRetur
 		t.Fatal("provider diagnostics were not published before the bounded retry")
 	}
 }
+func TestCompactionAttemptPublishesProviderStateDiagnosticsOnceBeforeRetry(t *testing.T) {
+	withCompactionRetryDelays(t, []time.Duration{0})
+	var (
+		attempts             atomic.Int32
+		publishedDiagnostics atomic.Int32
+		publishedBeforeRetry atomic.Bool
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) == 2 && publishedDiagnostics.Load() == 2 {
+			publishedBeforeRetry.Store(true)
+		}
+		w.Header().Add("x-codex-turn-state", "accepted")
+		w.Header().Add("x-codex-turn-state", "different")
+		w.Header().Add("x-codex-turn-state", "")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"retry","type":"server_error"}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindCompaction.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("NewCodexDispatchContext: %v", err)
+	}
+	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+	client := providerTurnStateCompactionClient{client: llm.NewOpenAIClient(transport)}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind == EventProviderTurnStateInvalid || event.Kind == EventProviderTurnStateConflict {
+				publishedDiagnostics.Add(1)
+			}
+		},
+	})
+	_, _ = engine.compactWithRetry(context.Background(), "step-1", client, llm.CompactionRequest{
+		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
+	})
+	if publishedDiagnostics.Load() != 2 {
+		t.Fatalf("published diagnostics = %d, want each category once", publishedDiagnostics.Load())
+	}
+	if !publishedBeforeRetry.Load() {
+		t.Fatal("compaction diagnostics were not published before the bounded retry")
+	}
+}

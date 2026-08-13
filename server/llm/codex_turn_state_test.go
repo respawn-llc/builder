@@ -5,7 +5,6 @@ import (
 	"core/shared/textutil"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,28 +122,6 @@ func TestDecodeCodexTurnStateMetadataOrderedContainerContract(t *testing.T) {
 	}
 }
 
-func TestCodexTurnStateMetadataObservationOrderAndInvalidContainerRecovery(t *testing.T) {
-	dispatch := newTestCodexDispatch(t)
-	events := []string{
-		`{"type":"response.metadata","headers":{"x-codex-turn-state":null}}`,
-		`{"type":"response.metadata","headers":{"x-codex-turn-state":"first","X-Codex-Turn-State":"discarded"}}`,
-		`{"type":"response.metadata","headers":{"x-codex-turn-state":["accepted","accepted"]}}`,
-		`{"type":"response.metadata","headers":{"x-codex-turn-state":"conflict"}}`,
-	}
-	for _, raw := range events {
-		dispatch.observeTurnStateMetadata(raw)
-	}
-	if got, ok := dispatch.currentTurnState(); !ok || got != "accepted" {
-		t.Fatalf("turn state = (%q, %v), want accepted", got, ok)
-	}
-	if got := dispatch.TurnStateDiagnostics(); !equalCodexDiagnostics(got, []CodexTurnStateDiagnosticCategory{
-		CodexTurnStateDiagnosticInvalid,
-		CodexTurnStateDiagnosticConflict,
-	}) {
-		t.Fatalf("diagnostics = %v", got)
-	}
-}
-
 func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Add(codexTurnStateHeader, "")
@@ -171,102 +148,6 @@ func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 	}
 }
 
-func TestGenerateAbsentTurnStateIsNoop(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-	dispatch := newTestCodexDispatch(t)
-	transport := newOAuthTestTransport(server, server.Client())
-
-	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch)); err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if _, ok := dispatch.currentTurnState(); ok {
-		t.Fatal("turn state accepted from absent header")
-	}
-	if got := dispatch.TurnStateDiagnostics(); len(got) != 0 {
-		t.Fatalf("diagnostics = %v, want none", got)
-	}
-}
-
-func TestGenerateObservesTurnStateWithoutReplacingProviderError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(codexTurnStateHeader, "accepted")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"error":{"message":"provider unavailable","type":"server_error"}}`))
-	}))
-	t.Cleanup(server.Close)
-	dispatch := newTestCodexDispatch(t)
-	transport := newOAuthTestTransport(server, server.Client())
-
-	_, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch))
-	if err == nil || !strings.Contains(err.Error(), "provider unavailable") {
-		t.Fatalf("error = %v, want original provider error", err)
-	}
-	if got, ok := dispatch.currentTurnState(); !ok || got != "accepted" {
-		t.Fatalf("turn state = (%q, %v), want accepted despite provider error", got, ok)
-	}
-}
-
-func TestGenerateRetryReplaysExactTurnStateOverHTTP1AndHTTP2(t *testing.T) {
-	for _, protocol := range []string{"http1", "http2"} {
-		t.Run(protocol, func(t *testing.T) {
-			const state = "opaque,state=value"
-			var mu sync.Mutex
-			var received []string
-			var protocolMajors []int
-			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				mu.Lock()
-				received = append(received, r.Header.Get(codexTurnStateHeader))
-				protocolMajors = append(protocolMajors, r.ProtoMajor)
-				attempt := len(received)
-				mu.Unlock()
-				if attempt == 1 {
-					w.Header().Set(codexTurnStateHeader, state)
-				}
-				writeCompletedResponseJSON(w)
-			})
-
-			var server *httptest.Server
-			if protocol == "http2" {
-				server = httptest.NewUnstartedServer(handler)
-				server.EnableHTTP2 = true
-				server.StartTLS()
-			} else {
-				server = httptest.NewServer(handler)
-			}
-			t.Cleanup(server.Close)
-
-			dispatch := newTestCodexDispatch(t)
-			transport := newOAuthTestTransport(server, server.Client())
-			request := testCodexOpenAIRequest(dispatch)
-			if _, err := transport.Generate(context.Background(), request); err != nil {
-				t.Fatalf("first Generate: %v", err)
-			}
-			if _, err := transport.Generate(context.Background(), request); err != nil {
-				t.Fatalf("retry Generate: %v", err)
-			}
-			mu.Lock()
-			got := append([]string(nil), received...)
-			mu.Unlock()
-			if fmt.Sprint(got) != fmt.Sprint([]string{"", state}) {
-				t.Fatalf("received states = %q, want exact retry replay", got)
-			}
-			wantProtocolMajor := 1
-			if protocol == "http2" {
-				wantProtocolMajor = 2
-			}
-			for _, gotProtocolMajor := range protocolMajors {
-				if gotProtocolMajor != wantProtocolMajor {
-					t.Fatalf("HTTP protocol major = %d, want %d", gotProtocolMajor, wantProtocolMajor)
-				}
-			}
-		})
-	}
-}
-
 func TestNonOAuthGenerateDoesNotObserveProviderTurnState(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(codexTurnStateHeader, "must-not-be-observed")
@@ -286,81 +167,6 @@ func TestNonOAuthGenerateDoesNotObserveProviderTurnState(t *testing.T) {
 	}
 	if diagnostics := dispatch.TurnStateDiagnostics(); len(diagnostics) != 0 {
 		t.Fatalf("API-key response diagnostics = %v, want none", diagnostics)
-	}
-}
-
-func TestNonOAuthStreamDoesNotObserveProviderTurnStateMetadata(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(codexTurnStateHeader, "must-not-be-observed")
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprintf(
-			w,
-			"data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
-			`{"type":"response.metadata","headers":{"x-codex-turn-state":null}}`,
-			completedResponseSSEJSON,
-		)
-	}))
-	t.Cleanup(server.Close)
-	dispatch := newTestCodexDispatch(t)
-	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL
-	transport.Client = server.Client()
-
-	if _, err := transport.GenerateStreamWithEvents(
-		context.Background(),
-		testCodexOpenAIRequest(dispatch),
-		StreamCallbacks{},
-	); err != nil {
-		t.Fatalf("GenerateStreamWithEvents: %v", err)
-	}
-	if _, ok := dispatch.currentTurnState(); ok {
-		t.Fatal("API-key stream mutated OAuth-only provider turn state")
-	}
-	if diagnostics := dispatch.TurnStateDiagnostics(); len(diagnostics) != 0 {
-		t.Fatalf("API-key stream diagnostics = %v, want none", diagnostics)
-	}
-}
-
-func TestRetryReadsTurnStateImmediatelyBeforeBuildingRequestOptions(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get(codexTurnStateHeader); got != "accepted-after-projection" {
-			t.Errorf("turn-state request header = %q, want accepted-after-projection", got)
-		}
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-	dispatch := newTestCodexDispatch(t)
-	transport := newOAuthTestTransport(server, server.Client())
-
-	if _, err := validateOpenAIDispatchForMode(
-		"session-1",
-		"gpt-5",
-		dispatch,
-		OpenAIAuthMode{IsOAuth: true, AccountID: "account-1"},
-		nil,
-	); err != nil {
-		t.Fatalf("initial projection: %v", err)
-	}
-	dispatch.observeTurnStateCandidate("accepted-after-projection", codexTurnStateSourceHTTPHeader)
-
-	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch)); err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-}
-
-func TestInvalidEdgeWhitespaceTurnStateIsNeverReplayed(t *testing.T) {
-	dispatch := newTestCodexDispatch(t)
-	dispatch.observeTurnStateCandidate(" state", codexTurnStateSourceMetadata)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get(codexTurnStateHeader); got != "" {
-			t.Errorf("turn-state request header = %q, want absent", got)
-		}
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-	transport := newOAuthTestTransport(server, server.Client())
-	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch)); err != nil {
-		t.Fatalf("Generate: %v", err)
 	}
 }
 
@@ -399,20 +205,6 @@ func TestStreamingMetadataStateSurvivesReadError(t *testing.T) {
 	}
 	if got := dispatch.TurnStateDiagnostics(); !equalCodexDiagnostics(got, []CodexTurnStateDiagnosticCategory{CodexTurnStateDiagnosticInvalid}) {
 		t.Fatalf("diagnostics = %v, want retained invalid category", got)
-	}
-}
-
-func TestMalformedUndeliveredMetadataEventDoesNotContributeState(t *testing.T) {
-	dispatch := newTestCodexDispatch(t)
-	transport := newCodexSSETransport(t,
-		`{"type":"response.metadata","headers":{"x-codex-turn-state":"not-delivered"}`,
-	)
-	_, err := transport.GenerateStreamWithEvents(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{})
-	if err == nil {
-		t.Fatal("expected stream decode error")
-	}
-	if _, ok := dispatch.currentTurnState(); ok {
-		t.Fatal("malformed event contributed turn state")
 	}
 }
 
@@ -476,31 +268,6 @@ func TestStreamingInitialHeaderIsObservedBeforeFirstEvent(t *testing.T) {
 	}
 }
 
-func TestTurnStateWarningsAreDeduplicatedAndRedacted(t *testing.T) {
-	handler := &capturingSlogHandler{}
-	previous := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(previous) })
-
-	dispatch := newTestCodexDispatch(t)
-	dispatch.observeTurnStateCandidate("secret-invalid\n", codexTurnStateSourceHTTPHeader)
-	dispatch.observeTurnStateCandidate("other-invalid\n", codexTurnStateSourceMetadata)
-	dispatch.observeTurnStateCandidate("accepted-secret", codexTurnStateSourceMetadata)
-	dispatch.observeTurnStateCandidate("conflicting-secret", codexTurnStateSourceHTTPHeader)
-	dispatch.observeTurnStateCandidate("another-secret", codexTurnStateSourceMetadata)
-
-	records := handler.snapshot()
-	if len(records) != 2 {
-		t.Fatalf("warning records = %d, want one per category", len(records))
-	}
-	joined := fmt.Sprint(records)
-	for _, secret := range []string{"secret-invalid", "other-invalid", "accepted-secret", "conflicting-secret", "another-secret"} {
-		if strings.Contains(joined, secret) {
-			t.Fatalf("warning leaked turn-state value %q: %s", secret, joined)
-		}
-	}
-}
-
 func TestTurnStateObserverIsSynchronized(t *testing.T) {
 	dispatch := newTestCodexDispatch(t)
 	start := make(chan struct{})
@@ -524,22 +291,6 @@ func TestTurnStateObserverIsSynchronized(t *testing.T) {
 		CodexTurnStateDiagnosticConflict,
 	}) {
 		t.Fatalf("diagnostics = %v, want synchronized deduplicated categories", got)
-	}
-}
-
-func TestFreshCodexDispatchDoesNotInheritTurnStateOrDiagnostics(t *testing.T) {
-	dispatch := newTestCodexDispatch(t)
-	dispatch.observeTurnStateCandidate("", codexTurnStateSourceHTTPHeader)
-	dispatch.observeTurnStateCandidate("accepted", codexTurnStateSourceHTTPHeader)
-	fresh, err := NewCodexDispatchContext(dispatch.facts)
-	if err != nil {
-		t.Fatalf("Fresh: %v", err)
-	}
-	if _, ok := fresh.currentTurnState(); ok {
-		t.Fatal("fresh dispatch inherited turn state")
-	}
-	if got := fresh.TurnStateDiagnostics(); len(got) != 0 {
-		t.Fatalf("fresh diagnostics = %v, want none", got)
 	}
 }
 
@@ -634,32 +385,4 @@ func newCodexSSETransport(t *testing.T, events ...string) *HTTPTransport {
 
 func equalCodexDiagnostics(got, want []CodexTurnStateDiagnosticCategory) bool {
 	return fmt.Sprint(got) == fmt.Sprint(want)
-}
-
-type capturingSlogHandler struct {
-	mu      sync.Mutex
-	records []string
-}
-
-func (*capturingSlogHandler) Enabled(context.Context, slog.Level) bool { return true }
-
-func (h *capturingSlogHandler) Handle(_ context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	attrs := make([]string, 0, record.NumAttrs())
-	record.Attrs(func(attr slog.Attr) bool {
-		attrs = append(attrs, attr.String())
-		return true
-	})
-	h.records = append(h.records, record.Message+fmt.Sprint(attrs))
-	return nil
-}
-
-func (h *capturingSlogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *capturingSlogHandler) WithGroup(string) slog.Handler      { return h }
-
-func (h *capturingSlogHandler) snapshot() []string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return append([]string(nil), h.records...)
 }

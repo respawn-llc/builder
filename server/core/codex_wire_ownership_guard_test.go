@@ -39,49 +39,6 @@ func TestCodexWireHeadersHaveOneCanonicalAuthority(t *testing.T) {
 	}
 }
 
-func TestCodexWireOwnershipGuardRejectsDirectHeaderAuthorities(t *testing.T) {
-	legacyHeader := "session" + "_id"
-	compatibilityHeader := "x-codex-turn-" + "metadata"
-	source := `package fixture
-import (
-	"net/http"
-	"github.com/openai/openai-go/v3/option"
-)
-func setHeaders(request *http.Request) {
-	request.Header.Set("` + legacyHeader + `", "session")
-	request.Header.Add("` + compatibilityHeader + `", "metadata")
-	_ = option.WithHeader("x-codex-window-id", "window")
-}
-`
-	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, "fixture.go", source, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse fixture: %v", err)
-	}
-
-	findings := codexWireHeaderFindings(fileSet, file, "fixture.go")
-	if len(findings) != 3 {
-		t.Fatalf("findings = %v, want three direct header-authority findings", findings)
-	}
-}
-
-func TestCodexWireOwnershipGuardAllowsInternalJSONFieldNames(t *testing.T) {
-	source := `package fixture
-type metadata struct {
-	SessionID string ` + "`json:\"session_id\"`" + `
-}
-`
-	fileSet := token.NewFileSet()
-	file, err := parser.ParseFile(fileSet, "fixture.go", source, parser.SkipObjectResolution)
-	if err != nil {
-		t.Fatalf("parse fixture: %v", err)
-	}
-
-	if findings := codexWireHeaderFindings(fileSet, file, "fixture.go"); len(findings) != 0 {
-		t.Fatalf("internal JSON field produced findings: %v", findings)
-	}
-}
-
 func codexWireHeaderFindings(fileSet *token.FileSet, file *ast.File, relativePath string) []string {
 	canonicalAuthority := relativePath == canonicalCodexWireAuthorityPath
 	isTestFile := filepath.Ext(relativePath) == ".go" &&

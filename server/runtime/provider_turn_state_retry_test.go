@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -179,6 +180,116 @@ func TestChangedGenerationPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 	if fmt.Sprint(got) != fmt.Sprint([]string{"", ""}) {
 		t.Fatalf("changed generation payload states = %q, want no inherited state", got)
 	}
+}
+
+func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*testing.T, *Engine) error
+	}{
+		{
+			name: "remote overflow repair",
+			run: func(t *testing.T, engine *Engine) error {
+				for _, steering := range []struct {
+					id      string
+					message llm.Message
+				}{
+					{id: "input", message: llm.Message{Role: llm.RoleUser, Content: textutil.Value("input")}},
+					{id: "call", message: llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
+						ID: "call-1", Name: "exec_command", Input: []byte(`{"cmd":"pwd"}`),
+					}}}},
+					{id: "output", message: llm.Message{
+						Role: llm.RoleTool, ToolCallID: textutil.Value("call-1"), Name: textutil.Value("exec_command"),
+						Content: textutil.Value(`{"output":"` + strings.Repeat("x", 4_000) + `"}`),
+					}},
+				} {
+					if err := engine.steer(steering.id, steerMessagesWithPersistenceIntent(
+						steeringPriorityNormal, steeringMessageEventNone, true, []llm.Message{steering.message},
+					)); err != nil {
+						t.Fatalf("persist %s: %v", steering.id, err)
+					}
+				}
+				return engine.CompactContext(context.Background(), "")
+			},
+		},
+		{
+			name: "local tool-call repair",
+			run: func(_ *testing.T, engine *Engine) error {
+				return withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+					_, _, err := engine.compactNow(ctx, stepID, compactionModeHandoff, compactionInstructionsInput{}, false)
+					return err
+				})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				mu             sync.Mutex
+				receivedStates []string
+			)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				mu.Lock()
+				receivedStates = append(receivedStates, request.Header.Get("x-codex-turn-state"))
+				attempt := len(receivedStates)
+				mu.Unlock()
+				if attempt == 1 {
+					w.Header().Set("x-codex-turn-state", "compaction-repair-state")
+					if test.name == "remote overflow repair" {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusRequestEntityTooLarge)
+						_, _ = w.Write([]byte(`{"error":{"message":"context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}`))
+						return
+					}
+					writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","status":"completed"}]`))
+					return
+				}
+				if test.name == "remote overflow repair" {
+					writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]`))
+					return
+				}
+				writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"summary","annotations":[]}]}]`))
+			}))
+			t.Cleanup(server.Close)
+
+			transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+			transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+			openAIClient := llm.NewOpenAIClient(transport)
+			var client llm.Client = nonStreamingClient{client: openAIClient}
+			config := Config{Model: "gpt-5", CompactionMode: "local"}
+			if test.name == "remote overflow repair" {
+				client = providerTurnStateCompactionClient{client: openAIClient}
+				config.CompactionMode, config.ContextWindowTokens = "native", 2_500
+			}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), config)
+			if test.name == "local tool-call repair" {
+				if err := engine.steer("input", steerMessagesWithPersistenceIntent(
+					steeringPriorityNormal, steeringMessageEventNone, true,
+					[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+				)); err != nil {
+					t.Fatalf("persist input: %v", err)
+				}
+			}
+			if err := test.run(t, engine); err != nil {
+				t.Fatalf("compaction repair: %v", err)
+			}
+			mu.Lock()
+			got := append([]string(nil), receivedStates...)
+			mu.Unlock()
+			if fmt.Sprint(got) != fmt.Sprint([]string{"", ""}) {
+				t.Fatalf("changed compaction payload states = %q, want no inherited state", got)
+			}
+		})
+	}
+}
+
+func writeRuntimeCompletedResponseSSE(w http.ResponseWriter, output []byte) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	_, _ = fmt.Fprintf(
+		w,
+		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}}\n\ndata: [DONE]\n\n",
+		output,
+	)
 }
 
 func writeRuntimeCompletedResponseJSON(w http.ResponseWriter, output []byte) {

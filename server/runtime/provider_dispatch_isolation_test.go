@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +108,100 @@ func TestConsecutiveRequestsWithinAgentTurnUseFreshProviderDispatches(t *testing
 		if observation.TurnState != "" {
 			t.Fatalf("request %d replayed another request's provider turn state", index+1)
 		}
+	}
+}
+
+func TestSequentialAgentTurnsIsolateProviderDispatches(t *testing.T) {
+	tests := []struct {
+		name       string
+		firstReply func(http.ResponseWriter, *http.Request, chan<- struct{})
+		wantError  func(error) bool
+	}{
+		{
+			name: "success",
+			firstReply: func(w http.ResponseWriter, _ *http.Request, _ chan<- struct{}) {
+				writeDispatchIsolationSuccess(w)
+			},
+			wantError: func(err error) bool { return err == nil },
+		},
+		{
+			name: "failure",
+			firstReply: func(w http.ResponseWriter, _ *http.Request, _ chan<- struct{}) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"message":"invalid request","type":"invalid_request_error"}}`))
+			},
+			wantError: func(err error) bool { return err != nil },
+		},
+		{
+			name: "cancellation",
+			firstReply: func(w http.ResponseWriter, request *http.Request, started chan<- struct{}) {
+				w.WriteHeader(http.StatusOK)
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+				close(started)
+				<-request.Context().Done()
+			},
+			wantError: func(err error) bool { return errors.Is(err, context.Canceled) },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var (
+				mu           sync.Mutex
+				observations []dispatchIsolationObservation
+			)
+			started := make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				observation := observeDispatchIsolationRequest(t, request)
+				mu.Lock()
+				observations = append(observations, observation)
+				call := len(observations)
+				mu.Unlock()
+				w.Header().Set("x-codex-turn-state", "state-for-request")
+				if call == 1 {
+					test.firstReply(w, request, started)
+					return
+				}
+				writeDispatchIsolationSuccess(w)
+			}))
+			t.Cleanup(server.Close)
+
+			client := newDispatchIsolationClient(server)
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+			ctx, cancel := context.WithCancel(context.Background())
+			first := make(chan error, 1)
+			go func() {
+				_, err := engine.SubmitUserMessage(ctx, "first")
+				first <- err
+			}()
+			if test.name == "cancellation" {
+				<-started
+				cancel()
+			}
+			if err := <-first; !test.wantError(err) {
+				t.Fatalf("first Agent Turn error = %v", err)
+			}
+			if _, err := engine.SubmitUserMessage(context.Background(), "next"); err != nil {
+				t.Fatalf("following Agent Turn: %v", err)
+			}
+
+			calls := client.snapshotCalls()
+			if len(calls) != 2 {
+				t.Fatalf("provider calls = %d, want two Agent Turns", len(calls))
+			}
+			assertDistinctDispatchHandles(t, calls[0], calls[1])
+			mu.Lock()
+			got := append([]dispatchIsolationObservation(nil), observations...)
+			mu.Unlock()
+			if len(got) != 2 || got[0].TurnID == "" || got[1].TurnID == "" || got[0].TurnID == got[1].TurnID {
+				t.Fatalf("sequential Agent Turn IDs = %+v, want distinct nonblank Run IDs", got)
+			}
+			if got[0].TurnState != "" || got[1].TurnState != "" {
+				t.Fatalf("sequential Agent Turn states = %+v, want no replay", got)
+			}
+		})
 	}
 }
 
