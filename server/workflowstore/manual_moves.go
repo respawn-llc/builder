@@ -732,6 +732,9 @@ func prepareManualMoveAssignedTargetsForInsert(
 		if result[index].SessionID == nil {
 			continue
 		}
+		if result[index].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
+			continue
+		}
 		association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
 			SessionID:    *result[index].SessionID,
 			CurrentNode:  result[index].Reference,
@@ -743,13 +746,11 @@ func prepareManualMoveAssignedTargetsForInsert(
 		if err := bindSessionToTask(ctx, q, association); err != nil {
 			return nil, err
 		}
-		if result[index].ContinuationSource.Kind() == workflow.MaterializedContinuationSourceDeferredSelf {
-			source, err := workflow.NewExactMaterializedContinuationSource(*result[index].SessionID)
-			if err != nil {
-				return nil, err
-			}
-			result[index].ContinuationSource = source
+		source, err := workflow.NewExactMaterializedContinuationSource(*result[index].SessionID)
+		if err != nil {
+			return nil, err
 		}
+		result[index].ContinuationSource = source
 	}
 	return result, nil
 }
