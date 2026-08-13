@@ -19,7 +19,14 @@ message ExecutionFieldError {
     defined_only: true
     not_in: [0]
   }];
-  string message = 2 [(buf.validate.field).string.min_len = 1];
+  string message = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_field_error_message_nonblank"
+      message: "message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 enum ExecutionWorkspaceUnavailableReason {
@@ -51,15 +58,36 @@ enum ExecutionAuthMethod {
 }
 
 message ExecutionWorkspace {
-  string path = 1 [(buf.validate.field).string.min_len = 1];
+  string path = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_workspace_path_nonblank"
+      message: "path must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ExecutionBranch {
-  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_branch_name_nonblank"
+      message: "name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ExecutionAuth {
-  string provider = 1 [(buf.validate.field).string.min_len = 1];
+  string provider = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_auth_provider_nonblank"
+      message: "provider must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   ExecutionAuthMethod method = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -67,8 +95,22 @@ message ExecutionAuth {
 }
 
 message ExecutionModel {
-  string name = 1 [(buf.validate.field).string.min_len = 1];
-  string provider = 2 [(buf.validate.field).string.min_len = 1];
+  string name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_model_name_nonblank"
+      message: "name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string provider = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_model_provider_nonblank"
+      message: "provider must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool locked = 3;
 }
 

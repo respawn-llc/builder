@@ -12,7 +12,7 @@ fi
 
 if [[ "$1" == "run" && "$#" -ge 4 && "$3" == "--" ]]; then
 	ready="${KENT_PROTOBUF_OUTPUTS_READY:-}"
-	if [[ "${KENT_PROTOBUF_TEST_BYPASS_LOCK:-0}" == "1" || "$ready" == "all" || "$ready" == "$2" ]]; then
+	if [[ "$ready" == "all" || "$ready" == "$2" ]]; then
 		shift 3
 		exec "$@"
 	fi

@@ -29,7 +29,7 @@ func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
 		command.Dir = repoRoot
 		command.Env = append(testsetup.EnvironmentWithout("KENT_PROTOBUF_OUTPUTS_READY"),
 			"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"KENT_PROTOBUF_TEST_BYPASS_LOCK=1",
+			"KENT_PROTOBUF_OUTPUTS_READY=go",
 			"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
 			"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
 			"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,

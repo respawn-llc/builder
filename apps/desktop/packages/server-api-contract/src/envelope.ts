@@ -13,6 +13,7 @@ import {
   encodeGeneratedMessage,
 } from "./message.js";
 import { operationByName } from "./policy.js";
+import { classifyOperationResult } from "./result.js";
 
 export function marshalEnvelope(envelope: Envelope): Uint8Array {
   validateEnvelopePayload(envelope);
@@ -40,7 +41,10 @@ function validateEnvelopePayload(envelope: Envelope): void {
   if (payload === undefined || !isFieldSet(frame.value, payloadDescriptor)) {
     throw new Error(`${frame.case} payload is required`);
   }
-  decodeGeneratedMessage(descriptor, payload);
+  const message = decodeGeneratedMessage(descriptor, payload);
+  if (frame.case === "result") {
+    classifyOperationResult(descriptor, message);
+  }
 }
 
 function envelopePayloadDescriptor(

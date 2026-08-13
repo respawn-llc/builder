@@ -90,6 +90,7 @@ const {
   QueuedMessageStatus,
 } = transcript;
 const {
+  GetReadinessErrorSchema,
   GetReadinessResultSchema,
   GetReadinessSuccessSchema,
   ReadinessSchema,
@@ -812,6 +813,29 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
     const encoded = toBinary(EnvelopeSchema, envelope);
     assert.throws(() => unmarshalEnvelope(encoded));
   }
+});
+
+test("binary envelopes reject malformed typed result failures", () => {
+  const payload = toBinary(
+    GetReadinessResultSchema,
+    create(GetReadinessResultSchema, {
+      outcome: {
+        case: "error",
+        value: create(GetReadinessErrorSchema, { code: "internal_failure" }),
+      },
+    }),
+  );
+  const envelope = create(EnvelopeSchema, {
+    frame: {
+      case: "result",
+      value: create(ResultSchema, {
+        operation: "kent.api.server.server_service.get_readiness",
+        payload,
+      }),
+    },
+  });
+  assert.throws(() => marshalEnvelope(envelope));
+  assert.throws(() => unmarshalEnvelope(toBinary(EnvelopeSchema, envelope)));
 });
 
 test("binary envelopes distinguish absent payloads from valid zero-byte payloads", () => {

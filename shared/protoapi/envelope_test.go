@@ -293,6 +293,31 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 	}
 }
 
+func TestEnvelopeRejectsMalformedTypedResultFailure(t *testing.T) {
+	payload, err := proto.Marshal(&serverpb.GetReadinessResult{
+		Outcome: &serverpb.GetReadinessResult_Error{
+			Error: &serverpb.GetReadinessError{Code: "internal_failure"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+		Operation: "kent.api.server.server_service.get_readiness",
+		Payload:   payload,
+	}}}
+	if _, err := protoapi.MarshalEnvelope(envelope); err == nil {
+		t.Fatal("known failure without typed detail unexpectedly marshaled")
+	}
+	encoded, err := proto.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := protoapi.UnmarshalEnvelope(encoded); err == nil {
+		t.Fatal("known failure without typed detail unexpectedly unmarshaled")
+	}
+}
+
 func TestEnvelopeDistinguishesAbsentPayloadFromValidZeroBytePayload(t *testing.T) {
 	emptyPayloadFrames := []struct {
 		name     string

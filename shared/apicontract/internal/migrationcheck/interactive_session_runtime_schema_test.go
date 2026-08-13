@@ -261,6 +261,24 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 			t.Fatalf("valid execution %s field: %v", name, err)
 		}
 	}
+	for name, message := range map[string]proto.Message{
+		"workspace": &sessionpb.ExecutionWorkspace{Path: " "},
+		"branch":    &sessionpb.ExecutionBranch{Name: " "},
+		"auth": &sessionpb.ExecutionAuth{
+			Provider: " ",
+			Method:   sessionpb.ExecutionAuthMethod_EXECUTION_AUTH_METHOD_O_AUTH,
+		},
+		"model name":     &sessionpb.ExecutionModel{Name: " ", Provider: "openai"},
+		"model provider": &sessionpb.ExecutionModel{Name: "gpt", Provider: " "},
+		"failure message": &sessionpb.ExecutionFieldError{
+			Code:    sessionpb.ExecutionFieldErrorCode_EXECUTION_FIELD_ERROR_CODE_SOURCE_FAILURE,
+			Message: " ",
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Errorf("execution %s accepted blank text", name)
+		}
+	}
 
 	silent := &runtimepb.SubmitUserTurnSuccess{
 		Result: &runtimepb.SubmitUserTurnSuccess_SilentFinal{

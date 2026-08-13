@@ -87,6 +87,11 @@ func validateEnvelopePayload(envelope *sharedpb.Envelope) error {
 	if err := DecodeGeneratedMessage(payload, message); err != nil {
 		return fmt.Errorf("decode %s payload for operation %q: %w", descriptor.FullName(), operationName, err)
 	}
+	if frameKind == envelopeFrameResult {
+		if _, err := ClassifyOperationResult(message); err != nil {
+			return fmt.Errorf("classify result payload for operation %q: %w", operationName, err)
+		}
+	}
 	return nil
 }
 
