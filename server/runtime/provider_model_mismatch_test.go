@@ -55,21 +55,17 @@ func TestAcceptedResponsePersistsProviderModelMismatchAndAdjustedUsage(t *testin
 
 func TestConsecutiveAcceptedToolLoopResponsesPersistOneMismatchEach(t *testing.T) {
 	store := mustCreateTestSession(t)
-	first := commentaryResponse("working", llm.ToolCall{
-		ID: "call-1", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`),
-	})
+	first := commentaryResponse("working", llm.ToolCall{ID: "call-1", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`)})
 	first.ServedModel = stringPointer("served-model")
 	second := finalTextResponse("done")
 	second.ServedModel = stringPointer("served-model")
-	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{first, second}},
-		newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
-		Config{Model: "requested-model"})
-
+	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{first, second}}, newTestToolRegistry(t,
+		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "requested-model"})
 	if _, err := engine.runStepLoop(context.Background(), "shared-step"); err != nil {
 		t.Fatal(err)
 	}
-	if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 2 {
-		t.Fatalf("provider-model mismatch warning count = %d, want two", len(warnings))
+	if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 1 {
+		t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
 	}
 }
 
@@ -81,7 +77,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 			return snapshot.Meta.LastSequence > baselineSequence && snapshot.Meta.UsageState == nil
 		}, warningErr)
-		err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate())
+		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, warningErr)
 		if store.Meta().UsageState == nil {
 			t.Fatal("usage checkpoint was not attempted after warning failure")
@@ -94,7 +90,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
 			return snapshot.Meta.UsageState != nil
 		}, usageErr)
-		err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate())
+		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
 		if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 1 {
 			t.Fatalf("provider-model mismatch warning count = %d, want one", len(warnings))
@@ -108,7 +104,7 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 			return snapshot.Meta.UsageState != nil
 		}, usageErr)
 		blocker := mustBlockTestEventLogAppends(t, store)
-		err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate())
+		_, err := engine.commitAcceptedResponseCandidate("step-1", acceptedMismatchCandidate(), false)
 		requireErrorIs(t, err, usageErr)
 		joined, ok := err.(interface{ Unwrap() []error })
 		if !ok || len(joined.Unwrap()) != 2 {
@@ -119,7 +115,6 @@ func TestAcceptedResponsePersistenceAttemptsWarningAndUsageIndependently(t *test
 		}
 	})
 }
-
 func TestProviderModelMismatchHydrationKeepsHistoricalAbsenceAndNewFact(t *testing.T) {
 	store := mustCreateTestSession(t)
 	if _, _, err := appendTestEvent(t, store, "historical-step", storedLocalEntry{
@@ -131,7 +126,7 @@ func TestProviderModelMismatchHydrationKeepsHistoricalAbsenceAndNewFact(t *testi
 	}
 
 	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "requested-model"})
-	if err := engine.commitAcceptedResponseCandidate("new-step", acceptedMismatchCandidate()); err != nil {
+	if _, err := engine.commitAcceptedResponseCandidate("new-step", acceptedMismatchCandidate(), false); err != nil {
 		t.Fatalf("commit new mismatch: %v", err)
 	}
 	if err := engine.Close(); err != nil {

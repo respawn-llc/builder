@@ -15,9 +15,9 @@ type successfulRequestCandidate struct {
 	estimatedProviderTokens int
 }
 
-func (e *Engine) commitAcceptedResponseCandidate(stepID string, candidate successfulRequestCandidate) error {
+func (e *Engine) commitAcceptedResponseCandidate(stepID string, candidate successfulRequestCandidate, mismatchWarningCommitted bool) (bool, error) {
 	var warningErr error
-	if servedModel := candidate.response.ServedModel; servedModel != nil {
+	if servedModel := candidate.response.ServedModel; servedModel != nil && !mismatchWarningCommitted {
 		requested := strings.TrimSpace(candidate.requestedModel)
 		served := strings.TrimSpace(*servedModel)
 		if requested != "" && served != "" && requested != served {
@@ -34,13 +34,14 @@ func (e *Engine) commitAcceptedResponseCandidate(stepID string, candidate succes
 				},
 			}))
 			warningErr = err
+			mismatchWarningCommitted = receipt.Committed
 			if !receipt.Committed && warningErr == nil {
 				warningErr = fmt.Errorf("provider-model mismatch warning persistence returned without a durable commit")
 			}
 		}
 	}
 	_, usageErr := e.recordLastUsageWithBaseline(candidate.response.Usage, candidate.estimatedProviderTokens)
-	return errors.Join(warningErr, usageErr)
+	return mismatchWarningCommitted, errors.Join(warningErr, usageErr)
 }
 
 func newSuccessfulRequestCandidate(request llm.Request, response llm.Response) successfulRequestCandidate {

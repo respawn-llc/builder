@@ -262,7 +262,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
 	executedToolCall := false
-	patchEditsApplied := false
+	patchEditsApplied, mismatchWarningCommitted := false, false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
@@ -352,13 +352,15 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
-			if err := e.commitAcceptedResponseCandidate(stepID, candidate); err != nil {
+			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			if err != nil {
 				return stepLoopResult{}, err
 			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
-			if err := e.commitAcceptedResponseCandidate(stepID, candidate); err != nil {
+			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			if err != nil {
 				return stepLoopResult{}, err
 			}
 		default:
