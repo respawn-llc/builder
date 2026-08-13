@@ -122,7 +122,6 @@ type GatewayPromptCommandDependencies interface {
 type GatewayProcessDependencies interface {
 	ProcessViewClient() apicontract.ProcessViewService
 	ProcessControlClient() apicontract.ProcessControlService
-	ProcessOutputClient() apicontract.ProcessOutputService
 }
 
 type GatewayWorktreeDependencies interface {
@@ -223,7 +222,6 @@ type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
-	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
 	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,

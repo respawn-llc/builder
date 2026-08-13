@@ -62,7 +62,6 @@ type PersistenceBundle struct {
 
 type ProcessBundle struct {
 	processControls apicontract.ProcessControlService
-	processOutput   apicontract.ProcessOutputService
 	processViews    apicontract.ProcessViewService
 }
 
@@ -183,7 +182,6 @@ type bundleCompositionInput struct {
 	askService              *promptcontrol.AskViewService
 	approvalService         *promptcontrol.ApprovalViewService
 	processService          *processview.ProcessViewService
-	processOutputService    *processview.ProcessOutputService
 	promptControlService    *promptcontrol.PromptControlService
 	attentionService        apicontract.AttentionNotificationService
 	runtimeControlService   *runtimecontrol.Service
@@ -240,7 +238,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 			}},
 		},
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore),
-		Processes:   newProcessBundle(in.processService, in.processOutputService),
+		Processes:   newProcessBundle(in.processService),
 		Projects:    newProjectBundle(in.cfg, in.projectViews),
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeAuthority, in.runtimeControlService, in.sessionRuntimeAPI),
@@ -271,10 +269,9 @@ func newPersistenceBundle(rootLease *RootLockLease, metadataStore *metadata.Stor
 	}
 }
 
-func newProcessBundle(processService *processview.ProcessViewService, processOutputService *processview.ProcessOutputService) *ProcessBundle {
+func newProcessBundle(processService *processview.ProcessViewService) *ProcessBundle {
 	return &ProcessBundle{
 		processControls: processService,
-		processOutput:   processOutputService,
 		processViews:    processService,
 	}
 }

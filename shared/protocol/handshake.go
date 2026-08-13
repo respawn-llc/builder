@@ -167,9 +167,6 @@ const (
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
-	MethodProcessSubscribeOutput                        = "process.subscribeOutput"
-	MethodProcessOutputEvent                            = "process.output"
-	MethodProcessOutputComplete                         = "process.output.complete"
 )
 
 type HandshakeRequest struct {
@@ -803,10 +800,6 @@ type SubscribeResponse struct {
 
 type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
-}
-
-type ProcessOutputEventParams struct {
-	Chunk clientui.ProcessOutputChunk `json:"chunk"`
 }
 
 type AttentionNotificationEventParams struct {

@@ -123,22 +123,6 @@ func TestStartSessionServerUsesConfiguredDaemonForProcessFlows(t *testing.T) {
 		t.Fatalf("unexpected get process response: %+v", getResp.Process)
 	}
 
-	outputSub, err := processes.ProcessOutput.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: result.SessionID, OffsetBytes: 0})
-	if err != nil {
-		t.Fatalf("SubscribeProcessOutput: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := outputSub.Close(); err != nil {
-			t.Errorf("close process output subscription: %v", err)
-		}
-	})
-	chunk, err := outputSub.Next(context.Background())
-	if err != nil {
-		t.Fatalf("ProcessOutput Next: %v", err)
-	}
-	if !strings.Contains(chunk.Text, "daemon process output") {
-		t.Fatalf("unexpected process output chunk: %+v", chunk)
-	}
 	inlineResp := waitForRemoteInlineOutput(t, processes.ProcessControls, result.SessionID)
 	if !strings.Contains(inlineResp.Output, "daemon process output") {
 		t.Fatalf("unexpected inline output: %q", inlineResp.Output)
