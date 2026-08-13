@@ -49,6 +49,22 @@ type lazyGoalFailingClient struct {
 	release      chan struct{}
 }
 
+type lazyGoalLaunchClient interface {
+	PlanSession(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error)
+	MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
+}
+
+type lazyGoalFixture struct {
+	appCore      *Core
+	binding      metadata.Binding
+	launch       lazyGoalLaunchClient
+	draft        metadata.WorkspaceChatDraftDocument
+	materialized serverapi.WorkspaceChatMaterializeResponse
+	planned      serverapi.SessionPlanResponse
+	activation   serverapi.SessionRuntimeActivateResponse
+	released     bool
+}
+
 func (c *lazyGoalFailingClient) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	c.mu.Lock()
 	c.calls++
@@ -69,7 +85,9 @@ func (*lazyGoalFailingClient) ProviderCapabilities(context.Context) (llm.Provide
 
 func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	blocking := &lazyGoalBlockingClient{started: make(chan struct{})}
-	appCore, binding, launchClient := newLazyGoalCore(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, blocking)
+	fixture := newLazyGoalFixture(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, blocking)
+	appCore := fixture.appCore
+	binding := fixture.binding
 	goalClient := appCore.RuntimeControlClient()
 
 	page, err := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
@@ -84,50 +102,8 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 		t.Fatalf("untouched lazy Chat exposed Sessions: %+v", page.Sessions)
 	}
 
-	draft := writeLazyGoalDraft(t, appCore, binding)
-	materialized, err := launchClient.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
-	if err != nil {
-		t.Fatalf("MaterializeWorkspaceChat: %v", err)
-	}
-
-	planned, err := launchClient.PlanSession(t.Context(), serverapi.SessionPlanRequest{
-		ClientRequestID: "lazy-goal-plan",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if planned.Plan.SessionID != materialized.SessionID.String() {
-		t.Fatalf("planned Session = %q, want %q", planned.Plan.SessionID, materialized.SessionID)
-	}
-	activation, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:          "lazy-goal-activate",
-		SessionID:                materialized.SessionID.String(),
-		OwnerID:                  "lazy-goal-owner",
-		ActiveSettings:           planned.Plan.ActiveSettings,
-		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
-		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
-		AutoCompactionEnabled:    boolPointer(planned.Plan.AutoCompactionEnabled),
-		ThinkingOverrideExplicit: planned.Plan.ThinkingOverrideExplicit,
-		Source:                   planned.Plan.Source,
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
-	released := false
-	t.Cleanup(func() {
-		if released {
-			return
-		}
-		_, _ = appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "lazy-goal-release",
-			Attachment:      activation.Attachment,
-			OwnerID:         "lazy-goal-owner",
-			DropOwner:       true,
-		})
-	})
-
+	fixture.materializeAndActivate(t, "lazy-goal")
+	materialized := fixture.materialized
 	response, err := goalClient.SetGoal(t.Context(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "lazy-goal-set",
 		SessionID:       materialized.SessionID.String(),
@@ -154,47 +130,19 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChatDraftStateFromMeta: %v", err)
 	}
-	if state.Message != draft.Message || state.Agent != draft.Agent ||
+	if state.Message != fixture.draft.Message || state.Agent != fixture.draft.Agent ||
 		state.Settings == nil ||
-		*state.Settings.Supervisor != draft.Supervisor ||
-		*state.Settings.Thinking != draft.Thinking ||
-		*state.Settings.Fast != draft.Fast ||
-		*state.Settings.Questions != draft.Questions ||
-		*state.Settings.AutoCompaction != draft.AutoCompaction {
-		t.Fatalf("materialized Chat state = %+v, want %+v", state, draft)
+		*state.Settings.Supervisor != fixture.draft.Supervisor ||
+		*state.Settings.Thinking != fixture.draft.Thinking ||
+		*state.Settings.Fast != fixture.draft.Fast ||
+		*state.Settings.Questions != fixture.draft.Questions ||
+		*state.Settings.AutoCompaction != fixture.draft.AutoCompaction {
+		t.Fatalf("materialized Chat state = %+v, want %+v", state, fixture.draft)
 	}
 	if record.Meta.Goal == nil || record.Meta.Goal.Objective != response.Goal.Objective || record.Meta.Goal.Status != session.GoalStatusActive {
 		t.Fatalf("persisted Goal = %+v, want active Goal", record.Meta.Goal)
 	}
-	store, err := session.Open(record.SessionDir, appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
-	goalNotices := 0
-	userMessages := 0
-	for _, event := range records {
-		payload, payloadErr := event.Payload()
-		if payloadErr != nil {
-			t.Fatalf("event payload: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if !ok {
-			continue
-		}
-		if message.MessageType != nil && *message.MessageType == session.MessageTypeGoal {
-			goalNotices++
-		}
-		if message.Role == session.MessageRoleUser {
-			userMessages++
-		}
-	}
-	if goalNotices != 1 || userMessages != 0 {
-		t.Fatalf("materialized Goal records = notices:%d user_messages:%d, want one notice and no user message", goalNotices, userMessages)
-	}
+	fixture.requireGoalNoticeWithoutUserMessage(t)
 	page, err = appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
@@ -206,69 +154,20 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	if len(page.Sessions) != 1 {
 		t.Fatalf("materialized Session list = %+v, want one", page.Sessions)
 	}
-	releaseResponse, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "lazy-goal-release-explicit",
-		Attachment:      activation.Attachment,
-		OwnerID:         "lazy-goal-owner",
-		DropOwner:       true,
-	})
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !releaseResponse.Released || releaseResponse.Active {
-		t.Fatalf("ReleaseSessionRuntime response = %+v, want released inactive", releaseResponse)
-	}
-	released = true
+	fixture.release(t, "lazy-goal")
 }
 
 func TestCoreLazyChatGoalRejectsUnavailableCapabilityAfterMaterialization(t *testing.T) {
 	client := &lazyGoalBlockingClient{started: make(chan struct{})}
-	appCore, binding, launchClient := newLazyGoalCore(t, map[toolspec.ID]bool{toolspec.ToolExecCommand: true}, client)
-	draft := writeLazyGoalDraft(t, appCore, binding)
+	fixture := newLazyGoalFixture(t, map[toolspec.ID]bool{toolspec.ToolExecCommand: true}, client)
+	fixture.materializeAndActivate(t, "lazy-capability")
+	materialized := fixture.materialized
+	appCore := fixture.appCore
+	if containsTool(fixture.planned.Plan.EnabledToolIDs, string(toolspec.ToolAskQuestion)) {
+		t.Fatalf("planned materialized tool contract unexpectedly enables ask_question: %v", fixture.planned.Plan.EnabledToolIDs)
+	}
 
-	materialized, err := launchClient.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
-	if err != nil {
-		t.Fatalf("MaterializeWorkspaceChat: %v", err)
-	}
-	planned, err := launchClient.PlanSession(t.Context(), serverapi.SessionPlanRequest{
-		ClientRequestID: "lazy-capability-plan",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	if containsTool(planned.Plan.EnabledToolIDs, string(toolspec.ToolAskQuestion)) {
-		t.Fatalf("planned materialized tool contract unexpectedly enables ask_question: %v", planned.Plan.EnabledToolIDs)
-	}
-	activation, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:          "lazy-capability-activate",
-		SessionID:                materialized.SessionID.String(),
-		OwnerID:                  "lazy-capability-owner",
-		ActiveSettings:           planned.Plan.ActiveSettings,
-		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
-		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
-		AutoCompactionEnabled:    boolPointer(planned.Plan.AutoCompactionEnabled),
-		ThinkingOverrideExplicit: planned.Plan.ThinkingOverrideExplicit,
-		Source:                   planned.Plan.Source,
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
-	released := false
-	t.Cleanup(func() {
-		if released {
-			return
-		}
-		_, _ = appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-			ClientRequestID: "lazy-capability-release",
-			Attachment:      activation.Attachment,
-			OwnerID:         "lazy-capability-owner",
-			DropOwner:       true,
-		})
-	})
-
-	_, err = appCore.RuntimeControlClient().SetGoal(t.Context(), serverapi.RuntimeGoalSetRequest{
+	_, err := appCore.RuntimeControlClient().SetGoal(t.Context(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "lazy-capability-set",
 		SessionID:       materialized.SessionID.String(),
 		Objective:       "this must be rejected",
@@ -284,57 +183,16 @@ func TestCoreLazyChatGoalRejectsUnavailableCapabilityAfterMaterialization(t *tes
 	if record.Meta.Goal != nil {
 		t.Fatalf("rejected capability Goal persisted: %+v", record.Meta.Goal)
 	}
-	state, err := session.ChatDraftStateFromMeta(*record.Meta)
-	if err != nil {
-		t.Fatalf("ChatDraftStateFromMeta: %v", err)
-	}
-	if state.Message != draft.Message {
-		t.Fatalf("composer draft = %q, want %q", state.Message, draft.Message)
-	}
-	store, err := session.Open(record.SessionDir, appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
-	if len(records) != 0 {
-		t.Fatalf("rejected capability created transcript records: %+v", records)
-	}
-	page, err := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     intPointer(20),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(page.Sessions) != 1 {
-		t.Fatalf("retained Session list = %+v, want one", page.Sessions)
-	}
-	releaseResponse, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "lazy-capability-release-explicit",
-		Attachment:      activation.Attachment,
-		OwnerID:         "lazy-capability-owner",
-		DropOwner:       true,
-	})
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !releaseResponse.Released || releaseResponse.Active {
-		t.Fatalf("ReleaseSessionRuntime response = %+v, want released inactive", releaseResponse)
-	}
-	released = true
+	fixture.requireNoTranscript(t)
+	fixture.requireOneSession(t)
+	fixture.release(t, "lazy-capability")
 }
 
 func TestCoreLazyChatGoalAdmissionRejectionRetainsMaterializedSession(t *testing.T) {
-	appCore, binding, launchClient := newLazyGoalCore(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, &lazyGoalBlockingClient{started: make(chan struct{})})
-	draft := writeLazyGoalDraft(t, appCore, binding)
-	materialized, err := launchClient.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
-	if err != nil {
-		t.Fatalf("MaterializeWorkspaceChat: %v", err)
-	}
+	fixture := newLazyGoalFixture(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, &lazyGoalBlockingClient{started: make(chan struct{})})
+	fixture.materialize(t)
+	appCore := fixture.appCore
+	materialized := fixture.materialized
 	releaseBlock, err := appCore.safeBundles().Runtime.runtimeAuthority.BlockSessionStarts(
 		t.Context(),
 		[]runtimeids.SessionID{materialized.SessionID},
@@ -361,35 +219,8 @@ func TestCoreLazyChatGoalAdmissionRejectionRetainsMaterializedSession(t *testing
 	if record.Meta.Goal != nil {
 		t.Fatalf("admission-rejected Goal persisted: %+v", record.Meta.Goal)
 	}
-	state, err := session.ChatDraftStateFromMeta(*record.Meta)
-	if err != nil {
-		t.Fatalf("ChatDraftStateFromMeta: %v", err)
-	}
-	if state.Message != draft.Message {
-		t.Fatalf("composer draft = %q, want %q", state.Message, draft.Message)
-	}
-	store, err := session.Open(record.SessionDir, appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
-	if len(records) != 0 {
-		t.Fatalf("admission rejection created transcript records: %+v", records)
-	}
-	page, err := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
-		ProjectID: binding.ProjectID,
-		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     intPointer(20),
-	})
-	if err != nil {
-		t.Fatalf("ListSessionPage: %v", err)
-	}
-	if len(page.Sessions) != 1 {
-		t.Fatalf("retained Session list = %+v, want one", page.Sessions)
-	}
+	fixture.requireNoTranscript(t)
+	fixture.requireOneSession(t)
 }
 
 func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
@@ -398,34 +229,10 @@ func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
 		returned: make(chan struct{}),
 		release:  make(chan struct{}),
 	}
-	appCore, binding, launchClient := newLazyGoalCore(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, client)
-	draft := writeLazyGoalDraft(t, appCore, binding)
-	materialized, err := launchClient.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
-	if err != nil {
-		t.Fatalf("MaterializeWorkspaceChat: %v", err)
-	}
-	planned, err := launchClient.PlanSession(t.Context(), serverapi.SessionPlanRequest{
-		ClientRequestID: "lazy-failure-plan",
-		Mode:            serverapi.SessionLaunchModeInteractive,
-		Intent:          serverapi.OpenExistingSessionLaunchIntent(materialized.SessionID),
-	})
-	if err != nil {
-		t.Fatalf("PlanSession: %v", err)
-	}
-	activation, err := appCore.SessionRuntimeClient().ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:          "lazy-failure-activate",
-		SessionID:                materialized.SessionID.String(),
-		OwnerID:                  "lazy-failure-owner",
-		ActiveSettings:           planned.Plan.ActiveSettings,
-		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
-		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
-		AutoCompactionEnabled:    boolPointer(planned.Plan.AutoCompactionEnabled),
-		ThinkingOverrideExplicit: planned.Plan.ThinkingOverrideExplicit,
-		Source:                   planned.Plan.Source,
-	})
-	if err != nil {
-		t.Fatalf("ActivateSessionRuntime: %v", err)
-	}
+	fixture := newLazyGoalFixture(t, map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}, client)
+	fixture.materializeAndActivate(t, "lazy-failure")
+	appCore := fixture.appCore
+	materialized := fixture.materialized
 	response, err := appCore.RuntimeControlClient().SetGoal(t.Context(), serverapi.RuntimeGoalSetRequest{
 		ClientRequestID: "lazy-failure-set",
 		SessionID:       materialized.SessionID.String(),
@@ -449,31 +256,22 @@ func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for provider failure return")
 	}
-	deadline := time.Now().Add(3 * time.Second)
+	settleCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
 	for {
-		view, viewErr := appCore.SessionViewClient().GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
+		view, viewErr := appCore.SessionViewClient().GetSessionMainView(settleCtx, serverapi.SessionMainViewRequest{
 			SessionID: materialized.SessionID.String(),
 		})
 		if viewErr == nil && view.MainView.Activity.State == clientui.RuntimeActivityRegisteredIdle {
 			break
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-settleCtx.Done():
 			t.Fatalf("runtime did not settle idle after provider failure: view error=%v", viewErr)
+		case <-time.After(10 * time.Millisecond):
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	releaseResponse, err := appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "lazy-failure-release",
-		Attachment:      activation.Attachment,
-		OwnerID:         "lazy-failure-owner",
-		DropOwner:       true,
-	})
-	if err != nil {
-		t.Fatalf("ReleaseSessionRuntime: %v", err)
-	}
-	if !releaseResponse.Released || releaseResponse.Active {
-		t.Fatalf("ReleaseSessionRuntime response = %+v, want released inactive", releaseResponse)
-	}
+	fixture.release(t, "lazy-failure")
 	client.mu.Lock()
 	calls := client.calls
 	client.mu.Unlock()
@@ -487,13 +285,7 @@ func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
 	if record.Meta.Goal == nil || record.Meta.Goal.ID != response.Goal.ID || record.Meta.Goal.Status != session.GoalStatusActive {
 		t.Fatalf("durable Goal = %+v, want accepted active Goal", record.Meta.Goal)
 	}
-	state, err := session.ChatDraftStateFromMeta(*record.Meta)
-	if err != nil {
-		t.Fatalf("ChatDraftStateFromMeta: %v", err)
-	}
-	if state.Message != draft.Message {
-		t.Fatalf("composer draft = %q, want %q", state.Message, draft.Message)
-	}
+	fixture.requireDraftAndTranscript(t, nil)
 }
 
 func newLazyGoalCore(t *testing.T, enabledTools map[toolspec.ID]bool, client llm.Client) (*Core, metadata.Binding, interface {
@@ -516,7 +308,7 @@ func newLazyGoalCore(t *testing.T, enabledTools map[toolspec.ID]bool, client llm
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	appCore := newCoreTestAppWithRuntimeFactory(t, resolved.Config, auth.EmptyState(), runtimewire.RuntimeClientFactoryFunc(
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState(), runtimewire.RuntimeClientFactoryFunc(
 		func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return client, nil
 		},
@@ -526,6 +318,177 @@ func newLazyGoalCore(t *testing.T, enabledTools map[toolspec.ID]bool, client llm
 		t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 	}
 	return appCore, binding, launchClient
+}
+
+func newLazyGoalFixture(t *testing.T, enabledTools map[toolspec.ID]bool, client llm.Client) *lazyGoalFixture {
+	t.Helper()
+	appCore, binding, launch := newLazyGoalCore(t, enabledTools, client)
+	fixture := &lazyGoalFixture{
+		appCore: appCore,
+		binding: binding,
+		launch:  launch,
+		draft:   writeLazyGoalDraft(t, appCore, binding),
+	}
+	t.Cleanup(func() {
+		if fixture.released || fixture.activation.Attachment.SessionID == "" {
+			return
+		}
+		_, _ = appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "lazy-goal-release-cleanup",
+			Attachment:      fixture.activation.Attachment,
+			OwnerID:         "lazy-goal-cleanup",
+			DropOwner:       true,
+		})
+	})
+	return fixture
+}
+
+func (f *lazyGoalFixture) materialize(t *testing.T) {
+	t.Helper()
+	materialized, err := f.launch.MaterializeWorkspaceChat(t.Context(), serverapi.WorkspaceChatMaterializeRequest{})
+	if err != nil {
+		t.Fatalf("MaterializeWorkspaceChat: %v", err)
+	}
+	f.materialized = materialized
+}
+
+func (f *lazyGoalFixture) materializeAndActivate(t *testing.T, prefix string) {
+	t.Helper()
+	f.materialize(t)
+	planned, err := f.launch.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: prefix + "-plan",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(f.materialized.SessionID),
+	})
+	if err != nil {
+		t.Fatalf("PlanSession: %v", err)
+	}
+	f.planned = planned
+	activation, err := f.appCore.SessionRuntimeClient().ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:          prefix + "-activate",
+		SessionID:                f.materialized.SessionID.String(),
+		OwnerID:                  prefix + "-owner",
+		ActiveSettings:           planned.Plan.ActiveSettings,
+		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
+		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
+		AutoCompactionEnabled:    boolPointer(planned.Plan.AutoCompactionEnabled),
+		ThinkingOverrideExplicit: planned.Plan.ThinkingOverrideExplicit,
+		Source:                   planned.Plan.Source,
+	})
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	f.activation = activation
+}
+
+func (f *lazyGoalFixture) release(t *testing.T, ownerID string) {
+	t.Helper()
+	response, err := f.appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "lazy-goal-release",
+		Attachment:      f.activation.Attachment,
+		OwnerID:         ownerID,
+		DropOwner:       true,
+	})
+	if err != nil {
+		t.Fatalf("ReleaseSessionRuntime: %v", err)
+	}
+	if !response.Released || response.Active {
+		t.Fatalf("ReleaseSessionRuntime response = %+v, want released inactive", response)
+	}
+	f.released = true
+}
+
+func (f *lazyGoalFixture) requireDraftAndTranscript(t *testing.T, wantRecords *int) {
+	t.Helper()
+	record, err := f.appCore.MetadataStore().ResolvePersistedSession(t.Context(), f.materialized.SessionID.String())
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	state, err := session.ChatDraftStateFromMeta(*record.Meta)
+	if err != nil {
+		t.Fatalf("ChatDraftStateFromMeta: %v", err)
+	}
+	if state.Message != f.draft.Message {
+		t.Fatalf("composer draft = %q, want %q", state.Message, f.draft.Message)
+	}
+	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open materialized Session: %v", err)
+	}
+	records, err := sessiontest.CollectRecords(store)
+	if err != nil {
+		t.Fatalf("CollectRecords: %v", err)
+	}
+	if wantRecords != nil && len(records) != *wantRecords {
+		t.Fatalf("materialized transcript records = %d, want %d", len(records), *wantRecords)
+	}
+	for _, event := range records {
+		payload, payloadErr := event.Payload()
+		if payloadErr != nil {
+			t.Fatalf("event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok && message.Role == session.MessageRoleUser {
+			t.Fatalf("materialized transcript contains user message: %+v", message)
+		}
+	}
+}
+
+func (f *lazyGoalFixture) requireNoTranscript(t *testing.T) {
+	t.Helper()
+	wantRecords := 0
+	f.requireDraftAndTranscript(t, &wantRecords)
+}
+
+func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
+	t.Helper()
+	record, err := f.appCore.MetadataStore().ResolvePersistedSession(t.Context(), f.materialized.SessionID.String())
+	if err != nil {
+		t.Fatalf("ResolvePersistedSession: %v", err)
+	}
+	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open materialized Session: %v", err)
+	}
+	records, err := sessiontest.CollectRecords(store)
+	if err != nil {
+		t.Fatalf("CollectRecords: %v", err)
+	}
+	goalNotices, userMessages := 0, 0
+	for _, event := range records {
+		payload, payloadErr := event.Payload()
+		if payloadErr != nil {
+			t.Fatalf("event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if !ok {
+			continue
+		}
+		if message.MessageType != nil && *message.MessageType == session.MessageTypeGoal {
+			goalNotices++
+		}
+		if message.Role == session.MessageRoleUser {
+			userMessages++
+		}
+	}
+	if goalNotices != 1 || userMessages != 0 {
+		t.Fatalf("materialized Goal records = notices:%d user_messages:%d, want one notice and no user message", goalNotices, userMessages)
+	}
+}
+
+func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
+	t.Helper()
+	page, err := f.appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
+		ProjectID: f.binding.ProjectID,
+		Category:  sessioncontract.SessionCategoryMain,
+		Limit:     intPointer(20),
+	})
+	if err != nil {
+		t.Fatalf("ListSessionPage: %v", err)
+	}
+	if len(page.Sessions) != 1 {
+		t.Fatalf("retained Session list = %+v, want one", page.Sessions)
+	}
 }
 
 func writeLazyGoalDraft(t *testing.T, appCore *Core, binding metadata.Binding) metadata.WorkspaceChatDraftDocument {
@@ -554,29 +517,10 @@ func containsTool(tools []string, want string) bool {
 	return false
 }
 
-func intPointer(value int) *int {
-	return &value
-}
-
 func boolPointer(value bool) *bool {
 	return &value
 }
 
-func newCoreTestAppWithRuntimeFactory(t *testing.T, cfg brand.App, state auth.State, factory runtimewire.RuntimeClientFactory) *Core {
-	t.Helper()
-	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
-	if err != nil {
-		t.Fatalf("BuildAuthSupport: %v", err)
-	}
-	runtimeSupport, err := serverbootstrap.BuildRuntimeSupport(cfg)
-	if err != nil {
-		t.Fatalf("BuildRuntimeSupport: %v", err)
-	}
-	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-	appCore, err := NewWithContextOptions(t.Context(), cfg, authSupport, runtimeSupport, Options{RuntimeClientFactory: factory})
-	if err != nil {
-		t.Fatalf("NewWithContextOptions: %v", err)
-	}
-	t.Cleanup(func() { _ = appCore.Close() })
-	return appCore
+func intPointer(value int) *int {
+	return &value
 }

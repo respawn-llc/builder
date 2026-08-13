@@ -15,6 +15,7 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
+	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/sessionlaunch"
@@ -946,7 +947,7 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 	}
 }
 
-func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
+func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State, factories ...runtimewire.RuntimeClientFactory) *Core {
 	t.Helper()
 	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
 	if err != nil {
@@ -957,9 +958,19 @@ func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
 		t.Fatalf("BuildRuntimeSupport: %v", err)
 	}
 	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-	appCore, err := New(cfg, authSupport, runtimeSupport)
+	var appCore *Core
+	switch len(factories) {
+	case 0:
+		appCore, err = New(cfg, authSupport, runtimeSupport)
+	case 1:
+		appCore, err = NewWithContextOptions(t.Context(), cfg, authSupport, runtimeSupport, Options{
+			RuntimeClientFactory: factories[0],
+		})
+	default:
+		t.Fatalf("newCoreTestApp received %d runtime client factories, want at most one", len(factories))
+	}
 	if err != nil {
-		t.Fatalf("New: %v", err)
+		t.Fatalf("create Core: %v", err)
 	}
 	t.Cleanup(func() { _ = appCore.Close() })
 	return appCore

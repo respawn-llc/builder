@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http/httptest"
 	"sync"
 	"sync/atomic"
@@ -19,10 +21,6 @@ import (
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
-
-func reconnectIntPointer(value int) *int {
-	return &value
-}
 
 type reconnectCountingTransport struct {
 	base             rpcwire.WebSocketTransport
@@ -150,21 +148,29 @@ func TestRemoteLazyChatMaterializationReconnectDoesNotReplayGoal(t *testing.T) {
 		t.Fatal("timed out waiting for first physical connection closure")
 	}
 
-	deadline := time.Now().Add(3 * time.Second)
+	pollCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
 	var page serverapi.SessionPageResponse
 	for {
-		page, err = remote.ListSessionPage(t.Context(), serverapi.SessionPageRequest{
+		page, err = remote.ListSessionPage(pollCtx, serverapi.SessionPageRequest{
 			ProjectID: appCore.ProjectID(),
 			Category:  sessioncontract.SessionCategoryMain,
-			Limit:     reconnectIntPointer(20),
+			Limit:     remoteTestIntPointer(20),
 		})
 		if err == nil {
 			break
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("Session list did not reconnect: %v", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Session list did not reconnect before deadline: %v", err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("Session list reconnect failed with non-transient error: %v", err)
+		}
+		select {
+		case <-pollCtx.Done():
+			t.Fatalf("Session list did not reconnect: %v", pollCtx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	if len(page.Sessions) != 1 || page.Sessions[0].SessionID != materialized.SessionID {
 		t.Fatalf("reconnected Session page = %+v, want exactly %q", page.Sessions, materialized.SessionID)
