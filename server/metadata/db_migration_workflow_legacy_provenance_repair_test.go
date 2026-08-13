@@ -227,6 +227,48 @@ WHERE task_id = ?`, fixture.taskID).Scan(&legacyMaterialized); err != nil {
 	}
 }
 
+func TestWorkflowLegacyProvenanceRepairMigrationUsesBoundAgentSessionForNewSessionEntry(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-new-entry-source", associatedAtOffset: 1},
+	}, 2)
+	execSeed(t, fixture.db, "mark entering Edge new Session", `
+UPDATE workflow_edges
+SET context_mode = 'new_session',
+    context_source_kind = 'immediate_source'
+WHERE id = (
+    SELECT entered_by_edge_id
+    FROM task_current_nodes
+    WHERE task_id = ?
+)`, fixture.taskID)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID string
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(
+		&sourceKind,
+		&sourceSessionID,
+		&legacyMaterialized,
+	); err != nil {
+		t.Fatalf("read repaired new-session Current Node: %v", err)
+	}
+	if sourceKind != "exact" ||
+		sourceSessionID != fixture.targetSessionID ||
+		legacyMaterialized != 0 {
+		t.Fatalf(
+			"new-session Current Node = kind %q Session %q legacy %d; want exact self Session %q",
+			sourceKind,
+			sourceSessionID,
+			legacyMaterialized,
+			fixture.targetSessionID,
+		)
+	}
+}
+
 func TestWorkflowLegacyProvenanceRepairMigrationRepairsOnlyFanoutBranchesWithBranchLocalProof(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
@@ -517,6 +559,75 @@ WHERE approval_id = 'approval-header-only'`).Scan(&sourceKind, &sourceSessionID)
 	if sourceKind != "exact" || sourceSessionID != "session-approval-header-only" {
 		t.Fatalf(
 			"selected-node pending Approval source = kind %q Session %q; want selected-node Session",
+			sourceKind,
+			sourceSessionID,
+		)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationUsesRepairedSourceForRetainedTargetApproval(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-retained-approval-source", associatedAtOffset: 1},
+	}, 2)
+	execSeed(t, fixture.db, "retained-source pending Approval", `
+INSERT INTO task_pending_approvals (
+    id, source_task_id, source_node_id, source_transition_branch_key,
+    source_session_id, workflow_version, transition_snapshot_json,
+    materialized_values_json, created_at_unix_ms
+) VALUES (
+    'approval-retained-source', ?, ?, NULL,
+    ?, 1, '{}', '{}', ?
+)`,
+		fixture.taskID,
+		fixture.targetNodeID,
+		fixture.targetSessionID,
+		time.Now().UTC().UnixMilli(),
+	)
+	execSeed(t, fixture.db, "retained-source pending Approval branch", `
+INSERT INTO task_pending_approval_branches (
+    approval_id, transition_branch_key, target_snapshot_json,
+    effective_edge_configuration_json, context_source_resolution_json
+) VALUES (
+    'approval-retained-source',
+    'target',
+    json_object(
+        'node_id', 'node-agent',
+        'display_name', 'Agent',
+        'current_input_values', json('{}'),
+        'prior_values', json('{"transition_parameters":{}}'),
+        'session_id', ?
+    ),
+    json_object(
+        'id', 'edge-done-1',
+        'transition_group_id', 'group-done',
+        'target_node_id', 'node-agent',
+        'context_mode', 'continue_session',
+        'context_source', json_object('kind', 'previous_target')
+    ),
+    json_object(
+        'target_session', json_object('kind', 'reuse', 'session_id', ?),
+        'active_source', json_object('kind', 'legacy')
+    )
+)`,
+		fixture.targetSessionID,
+		fixture.targetSessionID,
+	)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID string
+	if err := fixture.db.QueryRow(`
+SELECT
+    json_extract(context_source_resolution_json, '$.active_source.kind'),
+    json_extract(context_source_resolution_json, '$.active_source.session_id')
+FROM task_pending_approval_branches
+WHERE approval_id = 'approval-retained-source'`).Scan(&sourceKind, &sourceSessionID); err != nil {
+		t.Fatalf("read retained-source pending Approval: %v", err)
+	}
+	if sourceKind != "exact" || sourceSessionID != "session-retained-approval-source" {
+		t.Fatalf(
+			"retained-source pending Approval = kind %q Session %q; want repaired source Session",
 			sourceKind,
 			sourceSessionID,
 		)
