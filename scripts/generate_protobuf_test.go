@@ -137,13 +137,15 @@ func newProtobufGenerationFixture(t *testing.T) protobufGenerationFixture {
 	); err != nil {
 		t.Fatal(err)
 	}
+	realGoPath := realGo(t)
 	installFakeGo(t, fixture.fakeBinRoot)
+	testPath := fixture.fakeBinRoot + string(os.PathListSeparator) + os.Getenv("PATH")
+	t.Setenv("PATH", testPath)
 	fixture.environment = append(
 		testsetup.EnvironmentWithout("PATH", "KENT_PROTOBUF_REAL_GO", "KENT_PROTOBUF_TEST_STATE_ROOT"),
-		"PATH="+fixture.fakeBinRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"PATH="+testPath,
 		"KENT_PROTOBUF_TEST_STATE_ROOT="+fixture.stateRoot,
-		"KENT_PROTOBUF_REAL_GO="+realGo(t),
-		"KENT_PROTOBUF_GO_COMMAND="+filepath.Join(fixture.fakeBinRoot, "go"),
+		"KENT_PROTOBUF_REAL_GO="+realGoPath,
 		"KENT_PROTOBUF_TS_GENERATOR="+filepath.Join(fixture.fakeBinRoot, "protoc-gen-es"),
 	)
 	return fixture
@@ -184,7 +186,10 @@ func installFakeGo(t *testing.T, binRoot string) {
 set -euo pipefail
 
 if [[ "${1:-}" == "run" && "${2:-}" == "./cmd/protogen" ]]; then
-	exec "$KENT_PROTOBUF_REAL_GO" "$@"
+	mkdir -p "$KENT_PROTOBUF_TEST_STATE_ROOT"
+	"$KENT_PROTOBUF_REAL_GO" build -o "$KENT_PROTOBUF_TEST_STATE_ROOT/protogen" ./cmd/protogen
+	shift 2
+	exec "$KENT_PROTOBUF_TEST_STATE_ROOT/protogen" "$@"
 fi
 if [[ "${1:-}" == "run" && "${2:-}" == "./shared/apicontract/cmd/migrationlint" ]]; then
 	exit 0

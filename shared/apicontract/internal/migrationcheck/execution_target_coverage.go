@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "0e51cbb71f628b78d359ad9d44d827d7fe53c944c3f28c0e05e71b125b000a8b"
+const reviewedExceptionalWireFingerprint = "4d3ce078cce447adb4329dc4b8e1fbbd28b5fab3172110229b15152913e3937a"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
@@ -44,7 +44,7 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[serverapi.ProjectHomeSummary]("kent.api.project.ProjectHomeSummary", WireExceptionFieldReshape, "b7141a117f6266cf08b28f577de27fdd4cbf3114aa6e84186a933dd90e18f4e9", "bb04fbdeafeeb1c18310b5d92fbb650e21dd40a5dd0fa168cd5a51b3ebdb0ccd"),
 		wireExceptionSignoff[serverapi.ProjectWorkspaceSummary]("kent.api.workflow_task.TaskSourceWorkspace", WireExceptionFieldReshape, "35997181b3f5694b65e60c1f2bc2963b2434f4e5f61f5a542a72c2f348ffee4f", "8a255e54849d8d191365d5bcfd6f5ccbffd69c57944b2a7617d801de6e9de689"),
 		wireExceptionSignoff[serverapi.ProjectHomeListResponse]("kent.api.project.ProjectHomeListSuccess", WireExceptionFieldReshape, "d1506234e72a62f5378ccbf6ad6180672560c5dd4d0a993c34742881948c873d", "3bb065b2210de86023e1ba1d3e34f1f8d8e1a002465d435170f41794818f7bcf"),
-		wireExceptionSignoff[serverapi.ProjectWorkspaceGetRequest]("kent.api.project.GetProjectWorkspaceRequest", WireExceptionOneofReshape, "24fd81cc3d475d8e9572e8278bfef2ff71945620053b299501f8a9017e911bb7", "fa579ac81111a1815af5cdddc1ce430d5403693b3ef2877c4da7bc1d7ead50a7"),
+		wireExceptionSignoff[serverapi.ProjectWorkspaceGetRequest]("kent.api.project.GetProjectWorkspaceRequest", WireExceptionOneofReshape, "24fd81cc3d475d8e9572e8278bfef2ff71945620053b299501f8a9017e911bb7", "ede4de23dceaeb429fd3ae69fac96eea0b8bdcd8d504907a840f54702a979503"),
 		wireExceptionSignoff[serverapi.ProjectWorkspaceUnlinkRequest]("kent.api.project.UnlinkWorkspaceRequest", WireExceptionFieldReshape, "e395a032d34cbf0f475fd86a39f93d4fa1c2799822f62373c399d222a9299e28", "fd178befc09e891c4e555f542cb6a1d7613f6cd6f30bb8dd0a78415af74c2265"),
 		wireExceptionSignoff[protocol.PromptFollowUpEventParams]("kent.api.prompt.FollowUpEvent", WireExceptionFieldReshape, "cac9a46268261f2cb2f00a700af482264ff6a445c80ba5ba5b15d80daf6665db", "47b516bee6246428c18cdb37b86c6f9a4949bff8fd0e00703ff1e4053b705b4e"),
 		wireExceptionSignoff[serverapi.RunPromptProgress]("kent.api.run_prompt.ProgressEvent", WireExceptionOneofReshape, "b3db3e2787e6f7433efaf5e10ff0d72377c5511894dd555c17c32a62f7e40ebe", "4d1829873a3cb385f91675df1cde9b056cb7bb833b1913635684bad4730fa302"),

@@ -43,6 +43,51 @@ func TestCapabilityDefaultsRejectUnknownCompactionMode(t *testing.T) {
 	}
 }
 
+func TestProjectWorkspaceContractsRejectBlankAndNoncanonicalValues(t *testing.T) {
+	for name, message := range map[string]proto.Message{
+		"selector ID": &projectpb.ProjectWorkspaceSelector{
+			Selector: &projectpb.ProjectWorkspaceSelector_WorkspaceId{WorkspaceId: " "},
+		},
+		"selector root": &projectpb.ProjectWorkspaceSelector{
+			Selector: &projectpb.ProjectWorkspaceSelector_WorkspaceRoot{WorkspaceRoot: " "},
+		},
+		"get selector ID": &projectpb.GetProjectWorkspaceRequest{
+			ProjectId: "project",
+			Selector:  &projectpb.GetProjectWorkspaceRequest_WorkspaceId{WorkspaceId: " "},
+		},
+		"get selector root": &projectpb.GetProjectWorkspaceRequest{
+			ProjectId: "project",
+			Selector:  &projectpb.GetProjectWorkspaceRequest_WorkspaceRoot{WorkspaceRoot: " "},
+		},
+		"blank catalog display name": &projectpb.ProjectWorkspaceCatalogSummary{
+			WorkspaceId: "workspace",
+			DisplayName: " ",
+			RootPath:    "/workspace",
+		},
+		"spaced catalog workspace ID": &projectpb.ProjectWorkspaceCatalogSummary{
+			WorkspaceId: " workspace ",
+			DisplayName: "Workspace",
+			RootPath:    "/workspace",
+		},
+		"spaced catalog root": &projectpb.ProjectWorkspaceCatalogSummary{
+			WorkspaceId: "workspace",
+			DisplayName: "Workspace",
+			RootPath:    " /workspace ",
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+
+	if err := protoapi.ValidateGeneratedMessage(&projectpb.ProjectWorkspaceCatalogSummary{
+		WorkspaceId: "workspace",
+		RootPath:    "/",
+	}); err != nil {
+		t.Fatalf("filesystem root without display name: %v", err)
+	}
+}
+
 func TestSessionPlanActiveSettingsRejectInvalidZeroValues(t *testing.T) {
 	valid := validGeneratedActiveSettings()
 	if err := protoapi.ValidateGeneratedMessage(valid); err != nil {

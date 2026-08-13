@@ -168,7 +168,7 @@ printf '%s\n' "$content" > "$output/generated/fixture/contract.generated"
 	if err := os.Chmod(filepath.Join(binRoot, "go"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("KENT_PROTOBUF_GO_COMMAND", filepath.Join(binRoot, "go"))
+	t.Setenv("PATH", binRoot+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("KENT_PROTOBUF_TEST_GENERATION_COUNT", generations)
 	manager := NewManager(root)
 	return manager, target, generations

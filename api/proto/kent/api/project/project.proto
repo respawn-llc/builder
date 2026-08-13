@@ -216,10 +216,45 @@ message ProjectHomeSummary {
 }
 
 message ProjectWorkspaceCatalogSummary {
-  string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
-  string display_name = 2;
-  string root_path = 3 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_id_trimmed"
+      message: "workspace_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string display_name = 2 [
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_display_name_trimmed"
+      message: "display_name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string root_path = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.project.workspace_catalog_root_path_trimmed"
+      message: "root_path must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
   bool is_default = 4;
+
+  option (buf.validate.message).cel = {
+    id: "kent.project.workspace_catalog_display_name_nonblank"
+    message: "display_name must not be blank for a non-root workspace"
+    expression:
+      "this.display_name != '' || this.root_path == '/' || "
+      "(size(this.root_path) == 3 && this.root_path.charAt(1) == ':' && "
+      "this.root_path.charAt(2) in ['/', '\\\\'] && "
+      "((this.root_path.charAt(0) >= 'a' && this.root_path.charAt(0) <= 'z') || "
+      "(this.root_path.charAt(0) >= 'A' && this.root_path.charAt(0) <= 'Z'))) || "
+      "(this.root_path.startsWith('//') && "
+      "size(this.root_path.substring(2).split('/').filter(part, part != '')) == 2) || "
+      "(this.root_path.startsWith('\\\\\\\\') && "
+      "size(this.root_path.substring(2).split('\\\\').filter(part, part != '')) == 2)"
+  };
 }
 
 message ProjectNotFoundDetails {
@@ -715,8 +750,22 @@ message UpdateProjectResult {
 message ProjectWorkspaceSelector {
   oneof selector {
     option (buf.validate.oneof).required = true;
-    string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
-    string workspace_root = 2 [(buf.validate.field).string.min_len = 1];
+    string workspace_id = 1 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_selector_id_nonblank"
+        message: "workspace_id must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+    string workspace_root = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_selector_root_nonblank"
+        message: "workspace_root must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
   }
 }
 
@@ -822,8 +871,22 @@ message GetProjectWorkspaceRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
   oneof selector {
     option (buf.validate.oneof).required = true;
-    string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
-    string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+    string workspace_id = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_get_id_nonblank"
+        message: "workspace_id must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
+    string workspace_root = 3 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.project.workspace_get_root_nonblank"
+        message: "workspace_root must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
   }
 }
 

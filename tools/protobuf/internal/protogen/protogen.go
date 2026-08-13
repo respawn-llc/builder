@@ -238,12 +238,8 @@ func (m *Manager) generate(target Target, destination string) error {
 			return err
 		}
 	}
-	goCommand := os.Getenv("KENT_PROTOBUF_GO_COMMAND")
-	if goCommand == "" {
-		goCommand = "go"
-	}
 	command := exec.Command(
-		goCommand, "tool", "buf", "generate", m.RepositoryRoot,
+		"go", "tool", "buf", "generate", m.RepositoryRoot,
 		"--config", filepath.Join(m.RepositoryRoot, "buf.yaml"),
 		"--template", filepath.Join(m.RepositoryRoot, target.Template),
 		"--output", destination,
