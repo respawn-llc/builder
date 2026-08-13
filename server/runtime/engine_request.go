@@ -18,44 +18,89 @@ import (
 	"core/shared/transcript"
 )
 
-type requestBuildPlan struct {
-	Request llm.Request
+type requestAssembly struct {
+	request llm.Request
+}
+
+type dispatchRequestIdentity struct {
+	SessionID            string
+	RunID                string
+	CompactionGeneration int
+	RequestKind          *llm.CodexRequestKind
+}
+
+type dispatchRequestFactory struct {
+	identity dispatchRequestIdentity
 }
 
 func (e *Engine) buildRequest(ctx context.Context, stepID string, allowTools bool) (llm.Request, error) {
-	plan, err := e.buildRequestPlanWithExtraItems(ctx, stepID, nil, allowTools)
+	return e.buildContextFreeRequest(ctx, stepID, nil, allowTools)
+}
+
+func (e *Engine) buildContextFreeRequest(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool) (llm.Request, error) {
+	assembly, err := e.assembleRequest(ctx, stepID, extra, allowTools, true)
 	if err != nil {
 		return llm.Request{}, err
 	}
-	return plan.Request, nil
+	return assembly.contextFree(), nil
+}
+
+func (e *Engine) buildContextFreeRequestWithoutPromptRefresh(ctx context.Context, allowTools bool) (llm.Request, error) {
+	assembly, err := e.assembleRequest(ctx, "", nil, allowTools, false)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	return assembly.contextFree(), nil
 }
 
 func (e *Engine) buildRequestWithExtraItems(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool) (llm.Request, error) {
-	plan, err := e.buildRequestPlanWithExtraItems(ctx, stepID, extra, allowTools)
+	return e.buildContextFreeRequest(ctx, stepID, extra, allowTools)
+}
+
+func (e *Engine) buildDispatchRequest(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool, identity dispatchRequestIdentity) (llm.Request, error) {
+	factory, err := newDispatchRequestFactory(identity)
 	if err != nil {
 		return llm.Request{}, err
 	}
-	return plan.Request, nil
+	assembly, err := e.assembleRequest(ctx, stepID, extra, allowTools, true)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	return factory.generation(assembly.request)
 }
 
-func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool) (requestBuildPlan, error) {
+func (e *Engine) buildActiveTurnDispatchRequest(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool) (llm.Request, error) {
+	factory, err := e.activeDispatchRequestFactory(stepID, llm.CodexRequestKindTurn.Optional())
+	if err != nil {
+		return llm.Request{}, err
+	}
+	assembly, err := e.assembleRequest(ctx, stepID, extra, allowTools, true)
+	if err != nil {
+		return llm.Request{}, err
+	}
+	return factory.generation(assembly.request)
+}
+
+func (e *Engine) assembleRequest(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool, refreshPrompt bool) (requestAssembly, error) {
 	locked, err := e.ensureLocked()
 	if err != nil {
-		return requestBuildPlan{}, err
+		return requestAssembly{}, err
 	}
 	if _, err := e.lockedRequestShape(); err != nil {
-		return requestBuildPlan{}, err
+		return requestAssembly{}, err
 	}
-	locked, err = e.ensureMainPromptFacingContractFresh(ctx, locked)
-	if err != nil {
-		return requestBuildPlan{}, err
+	if refreshPrompt {
+		locked, err = e.ensureMainPromptFacingContractFresh(ctx, locked)
+		if err != nil {
+			return requestAssembly{}, err
+		}
 	}
 
 	var workflowMode workflowruntime.CompletionMode
 	if e.workflowPromptActive() {
 		resolved, modeErr := e.workflowCompletionMode(ctx)
 		if modeErr != nil {
-			return requestBuildPlan{}, modeErr
+			return requestAssembly{}, modeErr
 		}
 		workflowMode = resolved
 	}
@@ -63,7 +108,7 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	if allowTools {
 		requestTools, err = e.requestTools(ctx, workflowMode)
 		if err != nil {
-			return requestBuildPlan{}, err
+			return requestAssembly{}, err
 		}
 	} else {
 		requestTools = []llm.Tool{}
@@ -73,15 +118,20 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	if len(extra) > 0 {
 		items = append(items, llm.CloneResponseItems(extra)...)
 	}
-	systemPrompt, err := e.systemPrompt(locked)
+	systemPrompt := ""
+	if refreshPrompt {
+		systemPrompt, err = e.systemPrompt(locked)
+	} else {
+		systemPrompt, err = e.systemPromptWithoutBackfill(locked)
+	}
 	if err != nil {
-		return requestBuildPlan{}, err
+		return requestAssembly{}, err
 	}
 	nativeWebSearch := false
 	if allowTools {
 		nativeWebSearch, err = e.enableNativeWebSearch(ctx)
 		if err != nil {
-			return requestBuildPlan{}, err
+			return requestAssembly{}, err
 		}
 	}
 	toolChoiceMode := llm.ToolChoiceModeAutomatic
@@ -93,11 +143,10 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 		EnableNativeWebSearch: nativeWebSearch,
 	})
 	if err != nil {
-		return requestBuildPlan{}, err
+		return requestAssembly{}, err
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
 	if e.supportsPromptCacheKey(ctx) {
 		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
@@ -108,22 +157,83 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 		if workflowMode == workflowruntime.CompletionModeStructuredOutput {
 			contract, contractErr := e.workflowCompletionContract()
 			if contractErr != nil {
-				return requestBuildPlan{}, contractErr
+				return requestAssembly{}, contractErr
 			}
 			output, outputErr := workflowruntime.StructuredOutput(contract)
 			if outputErr != nil {
-				return requestBuildPlan{}, outputErr
+				return requestAssembly{}, outputErr
 			}
 			req.StructuredOutput = output
 		}
 		if err := req.Validate(); err != nil {
-			return requestBuildPlan{}, err
+			return requestAssembly{}, err
 		}
 	}
 	if err := e.validateToolChoiceSupport(ctx, toolChoiceMode); err != nil {
-		return requestBuildPlan{}, err
+		return requestAssembly{}, err
 	}
-	return requestBuildPlan{Request: req}, nil
+	return requestAssembly{request: req}, nil
+}
+
+func (a requestAssembly) contextFree() llm.Request {
+	request := a.request
+	request.SessionID = nil
+	request.CodexDispatch = nil
+	return request
+}
+
+func newDispatchRequestFactory(identity dispatchRequestIdentity) (dispatchRequestFactory, error) {
+	if _, err := identity.newDispatchContext(); err != nil {
+		return dispatchRequestFactory{}, err
+	}
+	return dispatchRequestFactory{identity: identity}, nil
+}
+
+func (e *Engine) activeDispatchRequestFactory(stepID string, requestKind *llm.CodexRequestKind) (dispatchRequestFactory, error) {
+	runID := activeRunIDForStep(e, stepID)
+	if runID == "" {
+		return dispatchRequestFactory{}, fmt.Errorf("%w: active Run identity is required for dispatch", llm.ErrInvalidRequest)
+	}
+	return newDispatchRequestFactory(dispatchRequestIdentity{
+		SessionID:            e.SessionID(),
+		RunID:                runID,
+		CompactionGeneration: e.compactionRuntimeState().Count(),
+		RequestKind:          requestKind,
+	})
+}
+
+func (f dispatchRequestFactory) generation(base llm.Request) (llm.Request, error) {
+	dispatch, err := f.identity.newDispatchContext()
+	if err != nil {
+		return llm.Request{}, err
+	}
+	request := base
+	request.SessionID = textutil.Value(f.identity.SessionID)
+	request.CodexDispatch = dispatch
+	if err := request.Validate(); err != nil {
+		return llm.Request{}, err
+	}
+	return request, nil
+}
+
+func (f dispatchRequestFactory) compaction(base llm.CompactionRequest) (llm.CompactionRequest, error) {
+	dispatch, err := f.identity.newDispatchContext()
+	if err != nil {
+		return llm.CompactionRequest{}, err
+	}
+	request := base
+	request.SessionID = textutil.Value(f.identity.SessionID)
+	request.CodexDispatch = dispatch
+	return request, nil
+}
+
+func (i dispatchRequestIdentity) newDispatchContext() (*llm.CodexDispatchContext, error) {
+	return llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+		SessionID:            i.SessionID,
+		RunID:                i.RunID,
+		CompactionGeneration: i.CompactionGeneration,
+		RequestKind:          i.RequestKind,
+	})
 }
 
 func toolChoiceModeForWorkflowCompletion(mode workflowruntime.CompletionMode, useRequiredToolCalls bool) llm.ToolChoiceMode {

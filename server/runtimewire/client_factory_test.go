@@ -268,8 +268,17 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	t.Cleanup(func() { _ = wiring.Close() })
 
 	request := llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		Model: "operator-alias",
-		Items: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
+		Model:     "operator-alias",
+		SessionID: textutil.Value(store.Meta().SessionID),
+		Items:     llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("hello")}}),
+	}
+	request.CodexDispatch, err = llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+		SessionID:   *request.SessionID,
+		RunID:       uuid.NewString(),
+		RequestKind: llm.CodexRequestKindTurn.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("create generation dispatch identity: %v", err)
 	}
 	if _, err := mainClient.Generate(context.Background(), request); err != nil {
 		t.Fatalf("generate through resumed main client: %v", err)

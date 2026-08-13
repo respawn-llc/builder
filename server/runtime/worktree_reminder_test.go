@@ -191,7 +191,7 @@ func TestRunStepLoopMaterializesPendingWorktreeReminder(t *testing.T) {
 	client := &fakeClient{responses: []llm.Response{finalOutputItemResponse("ok")}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{})
 
-	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, context.Background(), eng); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 
@@ -367,7 +367,7 @@ func TestRunStepLoopIncludesPendingWorktreeReminderAfterAutoCompaction(t *testin
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 9_999, WindowTokens: 20_000})
 
-	if _, err := eng.runStepLoop(context.Background(), "step-1"); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, context.Background(), eng); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 	if len(client.compactionCalls) != 1 {

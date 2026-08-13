@@ -203,7 +203,10 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
-	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
+		return err
+	}); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 
@@ -273,7 +276,10 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 		},
 	)
 
-	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
+	if err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, err := engine.runStepLoopWithOptions(ctx, stepID, "off", nil, false)
+		return err
+	}); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
 

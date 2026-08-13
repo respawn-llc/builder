@@ -289,11 +289,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if err := s.commitPendingUserSteer(stepID, options); err != nil {
 					return llm.Request{}, err
 				}
-				requestPlan, buildErr := e.buildRequestPlanWithExtraItems(ctx, stepID, nil, true)
-				if buildErr != nil {
-					return llm.Request{}, buildErr
-				}
-				return requestPlan.Request, nil
+				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
 			},
 			func(delta llm.AssistantDelta) {
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
