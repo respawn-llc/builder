@@ -13,7 +13,15 @@ import {
 } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 import type * as UI from "@/ui";
-import type { VirtualizedFrameScrollCommand } from "@/ui/VirtualizedFrame";
+
+type CapturedScrollRequest =
+  | Readonly<{ key: string; target: "top" }>
+  | Readonly<{
+      align: "auto" | "center" | "end" | "start";
+      entryKey: string;
+      key: string;
+      target: "entry";
+    }>;
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
 
@@ -50,7 +58,7 @@ const fixture = vi.hoisted<{
   open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
   assignmentRequests: number;
-  scrollRequests: (VirtualizedFrameScrollCommand | undefined)[];
+  scrollRequests: (CapturedScrollRequest | undefined)[];
 }>(() => ({
   activeDestination: null,
   board: {
@@ -458,6 +466,35 @@ describe("ProjectTasksSurface", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
     expect(refetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects duplicate Down and lets a newer Up cancel the pending final scroll", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 84 };
+    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
+    const memory = createProjectTasksViewMemory();
+    memory.setDisclosure({ active: true, backlog: true, done: true });
+    const view = renderSurface(memory);
+    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 40, writable: true },
+    });
+    view.rerender(withQueryClient(surface(memory)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    expect(memory.read().anchors.done).toBe(75);
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
+    fixture.scrollRequests = [];
+    fixture.doneDataOverrides = {};
+    view.rerender(withQueryClient(surface(memory)));
+
+    expect(screen.getByRole("row", { name: "KNT-84 Final done task" })).toBeInTheDocument();
+    expect(
+      fixture.scrollRequests.filter((request) => request?.target === "entry"),
+    ).toEqual([]);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {

@@ -20,6 +20,7 @@ import {
   queryKeys,
   useAppServices,
   useConnectionSnapshot,
+  useRetainedQueryData,
 } from "@/app-facade";
 
 export const projectTaskGroups = ["active", "backlog", "done"] as const;
@@ -172,6 +173,11 @@ function useProjectTaskGroupData(
     gcTime: 0,
     placeholderData: (previous) => previous,
   });
+  const retainedData = useRetainedQueryData(
+    { group, projectID },
+    enabled ? query.data : undefined,
+    projectTaskGroupScopesEqual,
+  );
   useEffect(() => {
     if (enabled) {
       return;
@@ -181,17 +187,25 @@ function useProjectTaskGroupData(
       exact: true,
     });
   }, [anchorOffset, enabled, group, projectID, queryClient]);
-  return projectTaskGroupData(query, enabled);
+  return projectTaskGroupData(query, retainedData, enabled);
+}
+
+function projectTaskGroupScopesEqual(
+  left: Readonly<{ group: ProjectTaskGroup; projectID: string }>,
+  right: Readonly<{ group: ProjectTaskGroup; projectID: string }>,
+): boolean {
+  return left.group === right.group && left.projectID === right.projectID;
 }
 
 function projectTaskGroupData(
   query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>,
+  retainedData: InfiniteData<TaskListPage, number> | undefined,
   enabled: boolean,
 ): ProjectTaskGroupData {
   if (!enabled) {
     return emptyProjectTaskGroupData;
   }
-  const pages = query.data?.pages ?? [];
+  const pages = retainedData?.pages ?? [];
   return {
     error: query.error,
     fetchNextPage: query.fetchNextPage,
@@ -205,8 +219,8 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
-    isPlaceholderData: query.isPlaceholderData,
-    pageParams: query.data?.pageParams ?? [],
+    isPlaceholderData: query.isPlaceholderData || query.data !== retainedData,
+    pageParams: retainedData?.pageParams ?? [],
     pages,
     refetch: query.refetch,
     tasks: pages.flatMap((page) => page.tasks),

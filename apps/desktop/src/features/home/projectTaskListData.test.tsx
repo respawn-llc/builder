@@ -226,6 +226,41 @@ describe("Project Task-list data ownership", () => {
     });
   });
 
+  it("keeps the prior bounded window when a direct replacement anchor fails", async () => {
+    state.listPage = async (input) => {
+      if (input.offset === 0) {
+        return pageResponse(input.group ?? "active", 0);
+      }
+      throw new Error("final page failed");
+    };
+    const harness = createHarness();
+    const { result, rerender } = renderHook(
+      ({ anchor }) =>
+        useProjectTaskListData({
+          projectID: "project-1",
+          gateReady: true,
+          expanded: { active: true, backlog: false, done: false },
+          anchors: { active: anchor, backlog: 0, done: 0 },
+        }),
+      {
+        initialProps: { anchor: 0 },
+        wrapper: ({ children }) => harness.render(children),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.active.tasks).toHaveLength(1);
+    });
+
+    rerender({ anchor: projectTaskGroupPageSize });
+    await waitFor(() => {
+      expect(result.current.active.isError).toBe(true);
+    });
+
+    expect(result.current.active.tasks).toHaveLength(1);
+    expect(result.current.active.pageParams).toEqual([0]);
+    expect(result.current.active.isPlaceholderData).toBe(true);
+  });
+
   it("distinguishes a first-page failure from a retained next-edge failure", async () => {
     state.listPage = async () => {
       throw new Error("first page failed");

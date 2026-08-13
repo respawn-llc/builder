@@ -96,6 +96,7 @@ export type VirtualizedGroupedGridProps = Readonly<{
         downLabel: string;
         finalEntryKey: string;
         onRequestFinalEntry?: (() => void) | undefined;
+        onRequestTop?: (() => void) | undefined;
         requestKey?: string | null | undefined;
         requiresFinalEntryRequest?: boolean | undefined;
         upDisabled?: boolean | undefined;
@@ -124,6 +125,16 @@ export function VirtualizedGroupedGrid({
 }: VirtualizedGroupedGridProps) {
   requirePositiveColumnCount(columnCount);
   const navigationState = useGroupedGridNavigation(entries, navigation);
+  const [cancelledRequestKey, setCancelledRequestKey] = useState<string | null>(null);
+  const scrollCommand = preferredGroupedGridScrollCommand(
+    scrollRequest,
+    cancelledRequestKey,
+    navigationState.scrollCommand,
+  );
+  const requestTop = () => {
+    setCancelledRequestKey(navigation?.requestKey ?? null);
+    navigationState.requestTop();
+  };
   const frameEntries = useMemo(
     () => entries.map((entry) => groupedFrameEntry(entry, columnCount)),
     [columnCount, entries],
@@ -168,7 +179,7 @@ export function VirtualizedGroupedGrid({
         role="grid"
         rowRole="row"
         rowSpacing={rowSpacing}
-        scrollCommand={scrollRequest ?? navigationState.scrollCommand}
+        scrollCommand={scrollCommand}
         testId={testId}
       />
       {navigation === undefined || !scrollMetrics.overflows ? null : (
@@ -176,7 +187,7 @@ export function VirtualizedGroupedGrid({
           <IconTooltipButton
             disabled={navigation.upDisabled === true || scrollMetrics.atTop}
             label={navigation.upLabel}
-            onClick={navigationState.requestTop}
+            onClick={requestTop}
             size="icon-sm"
           >
             <ArrowUp aria-hidden="true" size={16} />
@@ -198,6 +209,15 @@ export function VirtualizedGroupedGrid({
       )}
     </div>
   );
+}
+
+function preferredGroupedGridScrollCommand(
+  requested: VirtualizedFrameScrollCommand | undefined,
+  cancelledRequestKey: string | null,
+  navigation: VirtualizedFrameScrollCommand | undefined,
+): VirtualizedFrameScrollCommand | undefined {
+  if (requested?.key === cancelledRequestKey) return navigation;
+  return requested ?? navigation;
 }
 
 function requirePositiveColumnCount(columnCount: number): void {
@@ -224,6 +244,7 @@ function useGroupedGridNavigation(
     return sequenceRef.current;
   };
   const requestTop = () => {
+    navigation?.onRequestTop?.();
     setScrollCommand({ key: `top-${nextSequence().toString()}`, target: "top" });
   };
   const requestFinalEntry = () => {

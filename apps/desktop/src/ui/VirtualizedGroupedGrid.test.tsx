@@ -445,6 +445,57 @@ describe("VirtualizedGroupedGrid", () => {
     });
   });
 
+  it("disables duplicate Down requests while the caller reports final navigation in flight", () => {
+    const onRequestFinalEntry = vi.fn();
+
+    render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={entries.slice(0, 2)}
+        estimateSize={() => 40}
+        onScrollElementChange={makeScrollable}
+        navigation={{
+          downDisabled: true,
+          downLabel: "Jump to bottom",
+          finalEntryKey: "task-final",
+          onRequestFinalEntry,
+          requiresFinalEntryRequest: true,
+          upLabel: "Jump to top",
+        }}
+      />,
+    );
+
+    const down = screen.getByRole("button", { name: "Jump to bottom" });
+    expect(down).toBeDisabled();
+    fireEvent.click(down);
+    expect(onRequestFinalEntry).not.toHaveBeenCalled();
+  });
+
+  it("notifies the owner before applying a newer Up command", () => {
+    const onRequestTop = vi.fn();
+
+    render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={entries}
+        estimateSize={() => 40}
+        onScrollElementChange={makeScrollable}
+        navigation={{
+          downLabel: "Jump to bottom",
+          finalEntryKey: "task-final",
+          onRequestTop,
+          upLabel: "Jump to top",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
+    expect(onRequestTop).toHaveBeenCalledOnce();
+    expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(0, { behavior: "auto" });
+  });
+
   it("applies a caller-owned entry scroll request and reports completion", () => {
     const onScrollRequestApplied = vi.fn();
 

@@ -234,12 +234,16 @@ export function ProjectTasksSurface({
       entries={presentation.entries}
       finalEntryKey={finalNavigation.entryKey}
       finalEntryRequestKey={finalNavigation.requestKey}
+      finalNavigationInFlight={finalNavigation.inFlight}
       finalNavigationRequiresRequest={finalNavigation.requiresRequest}
       onLinkWorkflow={openLinkWorkflow}
       onNewTask={openNewTask}
       onRequestFinalEntry={() => {
         if (finalNavigation.request === null) return;
         requestFinalEntry(finalNavigation.request.group, finalNavigation.request.count);
+      }}
+      onRequestTop={() => {
+        setFinalNavigationRequest(null);
       }}
       onScrollRequestApplied={onScrollRequestApplied}
       onScrollElementChange={onScrollElementChange}
@@ -264,6 +268,7 @@ function finalNavigationState({
   request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
 }>): Readonly<{
   entryKey: string;
+  inFlight: boolean;
   request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
   requestKey: string | null;
   requiresRequest: boolean;
@@ -274,6 +279,7 @@ function finalNavigationState({
   if (counts === undefined) {
     return {
       entryKey: "columns",
+      inFlight: false,
       request: null,
       requestKey: null,
       requiresRequest: false,
@@ -284,6 +290,7 @@ function finalNavigationState({
   if (group === null) {
     return {
       entryKey: "columns",
+      inFlight: false,
       request: null,
       requestKey: null,
       requiresRequest: false,
@@ -303,6 +310,7 @@ function expandedFinalNavigationState(
   request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
 ): Readonly<{
   entryKey: string;
+  inFlight: boolean;
   request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
   requestKey: string | null;
   requiresRequest: boolean;
@@ -315,29 +323,43 @@ function expandedFinalNavigationState(
   const finalTaskID = finalPageReady
     ? (data.tasks.at(-1)?.id ?? `group-${group}`)
     : `group-${group}`;
-  const requestInFlight =
-    request?.group === group &&
-    request.offset === finalOffset &&
-    !data.isError;
+  const requestInFlight = finalNavigationRequestInFlight(request, group, finalOffset, data.isError);
   return {
     entryKey: finalTaskID,
+    inFlight: requestInFlight,
     request: !requestInFlight && !finalPageReady ? { count, group } : null,
-    requestKey: null,
+    requestKey: request?.key ?? null,
     requiresRequest: !finalPageReady,
-    scrollRequest:
-      finalPageReady && request !== null
-        ? {
-            align: "end",
-            entryKey: finalTaskID,
-            key: request.key,
-            target: "entry",
-          }
-        : undefined,
+    scrollRequest: finalNavigationScrollRequest(finalPageReady, finalTaskID, request),
+  };
+}
+
+function finalNavigationRequestInFlight(
+  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
+  group: ProjectTaskGroup,
+  finalOffset: number,
+  failed: boolean,
+): boolean {
+  return request?.group === group && request.offset === finalOffset && !failed;
+}
+
+function finalNavigationScrollRequest(
+  finalPageReady: boolean,
+  finalTaskID: string,
+  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
+) {
+  if (!finalPageReady || request === null) return undefined;
+  return {
+    align: "end" as const,
+    entryKey: finalTaskID,
+    key: request.key,
+    target: "entry" as const,
   };
 }
 
 function finalNavigationReady(entryKey: string): Readonly<{
   entryKey: string;
+  inFlight: false;
   request: null;
   requestKey: null;
   requiresRequest: false;
@@ -345,6 +367,7 @@ function finalNavigationReady(entryKey: string): Readonly<{
 }> {
   return {
     entryKey,
+    inFlight: false,
     request: null,
     requestKey: null,
     requiresRequest: false,
@@ -408,10 +431,12 @@ function ProjectTasksContent({
   entries,
   finalEntryKey,
   finalEntryRequestKey,
+  finalNavigationInFlight,
   finalNavigationRequiresRequest,
   onLinkWorkflow,
   onNewTask,
   onRequestFinalEntry,
+  onRequestTop,
   onScrollRequestApplied,
   onScrollElementChange,
   projectID,
@@ -425,10 +450,12 @@ function ProjectTasksContent({
   entries: readonly VirtualizedGroupedGridEntry[];
   finalEntryKey: string;
   finalEntryRequestKey: string | null;
+  finalNavigationInFlight: boolean;
   finalNavigationRequiresRequest: boolean;
   onLinkWorkflow: () => void;
   onNewTask: () => void;
   onRequestFinalEntry: () => void;
+  onRequestTop: () => void;
   onScrollRequestApplied: (key: string) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
@@ -483,8 +510,10 @@ function ProjectTasksContent({
           estimateSize={() => 38}
           navigation={{
             downLabel: t("home.prototype.jumpToBottom"),
+            downDisabled: finalNavigationInFlight,
             finalEntryKey,
             onRequestFinalEntry,
+            onRequestTop,
             requestKey: finalEntryRequestKey,
             requiresFinalEntryRequest: finalNavigationRequiresRequest,
             upLabel: t("home.prototype.jumpToTop"),
