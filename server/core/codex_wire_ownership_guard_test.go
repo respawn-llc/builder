@@ -39,6 +39,24 @@ func TestCodexWireHeadersHaveOneCanonicalAuthority(t *testing.T) {
 	}
 }
 
+func TestCodexWireOwnershipGuardRecognizesOnlyHeaderAuthorities(t *testing.T) {
+	source := `package fixture
+func set(request *http.Request) {
+	request.Header.Set("session_id", "session"); request.Header.Add("x-codex-turn-metadata", "metadata")
+	_ = option.WithHeader("x-codex-window-id", "window")
+}
+type metadata struct { SessionID string ` + "`json:\"session_id\"`" + ` }
+`
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, "fixture.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findings := codexWireHeaderFindings(fileSet, file, "fixture.go"); len(findings) != 3 {
+		t.Fatalf("findings = %v, want three header authorities and no JSON-tag finding", findings)
+	}
+}
+
 func codexWireHeaderFindings(fileSet *token.FileSet, file *ast.File, relativePath string) []string {
 	canonicalAuthority := relativePath == canonicalCodexWireAuthorityPath
 	isTestFile := filepath.Ext(relativePath) == ".go" &&

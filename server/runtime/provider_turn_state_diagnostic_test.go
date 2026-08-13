@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -119,5 +121,46 @@ func TestCompactionAttemptPublishesProviderStateDiagnosticsOnceBeforeRetry(t *te
 	}
 	if !publishedBeforeRetry.Load() {
 		t.Fatal("compaction diagnostics were not published before the bounded retry")
+	}
+}
+
+func TestCompactionDiagnosticPublicationFailureRemainsPending(t *testing.T) {
+	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindCompaction.Optional(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-codex-turn-state", "")
+		writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]`))
+	}))
+	t.Cleanup(server.Close)
+	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+	client := providerTurnStateCompactionClient{client: llm.NewOpenAIClient(transport)}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine.closed.Store(true)
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	published := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 1)
+
+	response, compactErr := client.Compact(context.Background(), llm.CompactionRequest{Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
+	engine.publishProviderTurnStateDiagnostics("step-1", dispatch, published)
+	if compactErr != nil || len(response.OutputItems) != 1 {
+		t.Fatalf("compaction changed by diagnostic failure: response=%+v error=%v", response, compactErr)
+	}
+	if _, marked := published[llm.CodexTurnStateDiagnosticInvalid]; marked {
+		t.Fatal("failed diagnostic publication was marked published")
+	}
+	if logs.Len() == 0 {
+		t.Fatal("failed diagnostic publication was not operator-logged")
+	}
+	engine.closed.Store(false)
+	engine.publishProviderTurnStateDiagnostics("step-1", dispatch, published)
+	if _, marked := published[llm.CodexTurnStateDiagnosticInvalid]; !marked {
+		t.Fatal("pending diagnostic was not eligible for later publication")
 	}
 }

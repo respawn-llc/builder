@@ -30,95 +30,51 @@ func (*countingOAuthAuth) OpenAIAuthMetadata(context.Context) (string, string, e
 }
 
 func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
-	methods := []struct {
-		name     string
-		dispatch func(*HTTPTransport, *string) error
-	}{
-		{
-			name: "generate",
-			dispatch: func(transport *HTTPTransport, sessionID *string) error {
-				_, err := transport.Generate(context.Background(), OpenAIRequest{
-					Model:          "gpt-5",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      sessionID,
-				})
-				return err
-			},
+	methods := map[string]func(*HTTPTransport, *string) error{
+		"generate": func(transport *HTTPTransport, sessionID *string) error {
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID})
+			return err
 		},
-		{
-			name: "stream",
-			dispatch: func(transport *HTTPTransport, sessionID *string) error {
-				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
-					Model:          "gpt-5",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      sessionID,
-				}, StreamCallbacks{})
-				return err
-			},
+		"stream": func(transport *HTTPTransport, sessionID *string) error {
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "gpt-5", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: sessionID}, StreamCallbacks{})
+			return err
 		},
-		{
-			name: "compact",
-			dispatch: func(transport *HTTPTransport, sessionID *string) error {
-				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-					Model:     "gpt-5",
-					SessionID: sessionID,
-				})
-				return err
-			},
+		"compact": func(transport *HTTPTransport, sessionID *string) error {
+			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "gpt-5", SessionID: sessionID})
+			return err
 		},
 	}
-
-	invalidSessionIDs := []struct {
-		name  string
-		value *string
-	}{
-		{name: "missing"},
-		{name: "present empty", value: textutil.Value("")},
-		{name: "leading SP", value: textutil.Value(" session-1")},
-		{name: "trailing HTAB", value: textutil.Value("session-1\t")},
-		{name: "control byte", value: textutil.Value("session-\n1")},
-		{name: "oversized", value: textutil.Value(strings.Repeat("s", maxCodexHeaderValueBytes+1))},
+	invalidSessionIDs := map[string]*string{
+		"missing": nil, "present empty": textutil.Value(""), "leading SP": textutil.Value(" session-1"),
+		"trailing HTAB": textutil.Value("session-1\t"), "control byte": textutil.Value("session-\n1"),
+		"oversized": textutil.Value(strings.Repeat("s", maxCodexHeaderValueBytes+1)),
 	}
-	authModes := []struct {
-		name      string
-		transport func() (*HTTPTransport, func() int32)
-	}{
-		{
-			name: "api key",
-			transport: func() (*HTTPTransport, func() int32) {
-				auth := &countingAuth{}
-				return NewHTTPTransport(auth), auth.calls.Load
-			},
+	authModes := map[string]func() (*HTTPTransport, func() int32){
+		"api key": func() (*HTTPTransport, func() int32) {
+			auth := &countingAuth{}
+			return NewHTTPTransport(auth), auth.calls.Load
 		},
-		{
-			name: "OAuth",
-			transport: func() (*HTTPTransport, func() int32) {
-				auth := &countingOAuthAuth{}
-				return NewHTTPTransport(auth), auth.calls.Load
-			},
+		"OAuth": func() (*HTTPTransport, func() int32) {
+			auth := &countingOAuthAuth{}
+			return NewHTTPTransport(auth), auth.calls.Load
 		},
-		{
-			name: "anonymous explicit base",
-			transport: func() (*HTTPTransport, func() int32) {
-				transport := NewHTTPTransport(nil)
-				transport.BaseURL = "https://compatible.example/v1"
-				transport.BaseURLExplicit = true
-				return transport, func() int32 { return 0 }
-			},
+		"anonymous explicit base": func() (*HTTPTransport, func() int32) {
+			transport := NewHTTPTransport(nil)
+			transport.BaseURL, transport.BaseURLExplicit = "https://compatible.example/v1", true
+			return transport, func() int32 { return 0 }
 		},
 	}
-	for _, authMode := range authModes {
-		for _, method := range methods {
-			for _, invalidSessionID := range invalidSessionIDs {
-				t.Run(authMode.name+"/"+method.name+"/"+invalidSessionID.name, func(t *testing.T) {
-					transport, authCalls := authMode.transport()
+	for authName, newTransport := range authModes {
+		for methodName, dispatch := range methods {
+			for invalidName, sessionID := range invalidSessionIDs {
+				t.Run(authName+"/"+methodName+"/"+invalidName, func(t *testing.T) {
+					transport, authCalls := newTransport()
 					networkCalls := atomic.Int32{}
 					transport.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 						networkCalls.Add(1)
 						return nil, errors.New("unexpected network request")
 					})}
-
-					err := method.dispatch(transport, invalidSessionID.value)
+					err := dispatch(transport, sessionID)
 					if err == nil || !strings.Contains(strings.ToLower(err.Error()), "session id") {
 						t.Fatalf("error = %v, want invalid Session ID", err)
 					}
@@ -324,61 +280,28 @@ func TestAnonymousExplicitBaseDispatchSendsCommonIdentityWithoutAuthorization(t 
 }
 
 func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *testing.T) {
-	methods := []struct {
-		name     string
-		dispatch func(*HTTPTransport, string, *CodexDispatchContext) error
-	}{
-		{
-			name: "generate",
-			dispatch: func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-				_, err := transport.Generate(context.Background(), OpenAIRequest{
-					Model:          model,
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      textutil.Value("session-1"),
-					CodexDispatch:  dispatch,
-				})
-				return err
-			},
+	methods := map[string]func(*HTTPTransport, string, *CodexDispatchContext) error{
+		"generate": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
+			return err
 		},
-		{
-			name: "stream",
-			dispatch: func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
-					Model:          model,
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      textutil.Value("session-1"),
-					CodexDispatch:  dispatch,
-				}, StreamCallbacks{})
-				return err
-			},
+		"stream": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: model, ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch}, StreamCallbacks{})
+			return err
 		},
-		{
-			name: "compact",
-			dispatch: func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
-				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-					Model:         model,
-					SessionID:     textutil.Value("session-1"),
-					CodexDispatch: dispatch,
-				})
-				return err
-			},
+		"compact": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
+			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: model, SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
+			return err
 		},
 	}
-	invalidModels := []struct {
-		name  string
-		value string
-	}{
-		{name: "empty"},
-		{name: "leading SP", value: " gpt-5"},
-		{name: "trailing HTAB", value: "gpt-5\t"},
-		{name: "semicolon", value: "gpt-5;tier=priority"},
-		{name: "control byte", value: "gpt-\n5"},
-		{name: "oversized routing hint", value: strings.Repeat("m", maxCodexHeaderValueBytes-len("model=")+1)},
+	invalidModels := map[string]string{
+		"empty": "", "leading SP": " gpt-5", "trailing HTAB": "gpt-5\t",
+		"semicolon": "gpt-5;tier=priority", "control byte": "gpt-\n5",
+		"oversized routing hint": strings.Repeat("m", maxCodexHeaderValueBytes-len("model=")+1),
 	}
-
-	for _, method := range methods {
-		for _, invalidModel := range invalidModels {
-			t.Run(method.name+"/"+invalidModel.name, func(t *testing.T) {
+	for methodName, dispatchRequest := range methods {
+		for invalidName, model := range invalidModels {
+			t.Run(methodName+"/"+invalidName, func(t *testing.T) {
 				dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 					SessionID:   "session-1",
 					RunID:       "run-1",
@@ -395,7 +318,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 					return nil, errors.New("unexpected network request")
 				})}
 
-				err = method.dispatch(transport, invalidModel.value, dispatch)
+				err = dispatchRequest(transport, model, dispatch)
 				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "routing") {
 					t.Fatalf("error = %v, want invalid routing model", err)
 				}
@@ -408,45 +331,22 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 }
 
 func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T) {
-	methods := []struct {
-		name     string
-		dispatch func(*HTTPTransport) error
-	}{
-		{
-			name: "generate",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.Generate(context.Background(), OpenAIRequest{
-					Model:          "unknown-model",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      textutil.Value("session-1"),
-				})
-				return err
-			},
+	methods := map[string]func(*HTTPTransport) error{
+		"generate": func(transport *HTTPTransport) error {
+			_, err := transport.Generate(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")})
+			return err
 		},
-		{
-			name: "stream",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
-					Model:          "unknown-model",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-					SessionID:      textutil.Value("session-1"),
-				}, StreamCallbacks{})
-				return err
-			},
+		"stream": func(transport *HTTPTransport) error {
+			_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{Model: "unknown-model", ToolChoiceMode: ToolChoiceModeAutomatic, SessionID: textutil.Value("session-1")}, StreamCallbacks{})
+			return err
 		},
-		{
-			name: "compact",
-			dispatch: func(transport *HTTPTransport) error {
-				_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-					Model:     "unknown-model",
-					SessionID: textutil.Value("session-1"),
-				})
-				return err
-			},
+		"compact": func(transport *HTTPTransport) error {
+			_, err := transport.Compact(context.Background(), OpenAICompactionRequest{Model: "unknown-model", SessionID: textutil.Value("session-1")})
+			return err
 		},
 	}
-	for _, method := range methods {
-		t.Run(method.name, func(t *testing.T) {
+	for name, dispatch := range methods {
+		t.Run(name, func(t *testing.T) {
 			networkCalls := atomic.Int32{}
 			transport := NewHTTPTransport(oauthStaticAuth{})
 			transport.ContextWindowTokens = 0
@@ -455,7 +355,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 				return nil, errors.New("unexpected network request")
 			})}
 
-			err := method.dispatch(transport)
+			err := dispatch(transport)
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "dispatch context") {
 				t.Fatalf("error = %v, want missing Codex dispatch context", err)
 			}

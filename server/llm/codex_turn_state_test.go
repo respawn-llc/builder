@@ -1,14 +1,15 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"core/shared/textutil"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -148,6 +149,24 @@ func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 	}
 }
 
+func TestProviderErrorStillObservesTurnState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(codexTurnStateHeader, "accepted")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"provider unavailable","type":"server_error"}}`))
+	}))
+	t.Cleanup(server.Close)
+	dispatch := newTestCodexDispatch(t)
+	_, err := newOAuthTestTransport(server, server.Client()).Generate(context.Background(), testCodexOpenAIRequest(dispatch))
+	if err == nil || !strings.Contains(err.Error(), "provider unavailable") {
+		t.Fatalf("error = %v, want original provider error", err)
+	}
+	if state, ok := dispatch.currentTurnState(); !ok || state != "accepted" {
+		t.Fatalf("turn state = (%q, %v), want accepted despite provider error", state, ok)
+	}
+}
+
 func TestNonOAuthGenerateDoesNotObserveProviderTurnState(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set(codexTurnStateHeader, "must-not-be-observed")
@@ -205,6 +224,42 @@ func TestStreamingMetadataStateSurvivesReadError(t *testing.T) {
 	}
 	if got := dispatch.TurnStateDiagnostics(); !equalCodexDiagnostics(got, []CodexTurnStateDiagnosticCategory{CodexTurnStateDiagnosticInvalid}) {
 		t.Fatalf("diagnostics = %v, want retained invalid category", got)
+	}
+}
+
+func TestStreamingStateObservationRejectsNonOAuthAndUndeliveredMetadata(t *testing.T) {
+	tests := []struct {
+		name, event string
+		auth        AuthHeaderProvider
+		wantError   bool
+	}{
+		{name: "API key", auth: staticAuth{}, event: `{"type":"response.metadata","headers":{"x-codex-turn-state":"private"}}`},
+		{name: "malformed undelivered event", auth: oauthStaticAuth{}, event: `{"type":"response.metadata","headers":{"x-codex-turn-state":"private"}`, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if test.name == "API key" {
+					w.Header().Set(codexTurnStateHeader, "private")
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", test.event)
+				if !test.wantError {
+					_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", completedResponseSSEJSON)
+				}
+			}))
+			t.Cleanup(server.Close)
+			dispatch := newTestCodexDispatch(t)
+			transport := NewHTTPTransport(test.auth)
+			transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+			_, err := transport.GenerateStreamWithEvents(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{})
+			if test.wantError != (err != nil) {
+				t.Fatalf("error = %v, wantError=%v", err, test.wantError)
+			}
+			if _, ok := dispatch.currentTurnState(); ok {
+				t.Fatal("ineligible or undelivered stream state was observed")
+			}
+		})
 	}
 }
 
@@ -268,29 +323,26 @@ func TestStreamingInitialHeaderIsObservedBeforeFirstEvent(t *testing.T) {
 	}
 }
 
-func TestTurnStateObserverIsSynchronized(t *testing.T) {
+func TestTurnStateWarningsAreRedactedAndFreshDispatchIsEmpty(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
 	dispatch := newTestCodexDispatch(t)
-	start := make(chan struct{})
-	var wait sync.WaitGroup
-	for _, candidate := range []string{"accepted", "accepted", "conflict-a", "conflict-b", "", "\tinvalid"} {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			<-start
-			dispatch.observeTurnStateCandidate(candidate, codexTurnStateSourceMetadata)
-		}()
+	for _, candidate := range []string{"secret-invalid\n", "other-invalid\n", "accepted-secret", "conflicting-secret", "another-secret"} {
+		dispatch.observeTurnStateCandidate(candidate, codexTurnStateSourceMetadata)
 	}
-	close(start)
-	wait.Wait()
-
-	if _, ok := dispatch.currentTurnState(); !ok {
-		t.Fatal("concurrent observer accepted no valid state")
+	if records := bytes.Count(logs.Bytes(), []byte{'\n'}); records != 2 {
+		t.Fatalf("warning records = %d, want one per category", records)
 	}
-	if got := dispatch.TurnStateDiagnostics(); !equalCodexDiagnostics(got, []CodexTurnStateDiagnosticCategory{
-		CodexTurnStateDiagnosticInvalid,
-		CodexTurnStateDiagnosticConflict,
-	}) {
-		t.Fatalf("diagnostics = %v, want synchronized deduplicated categories", got)
+	for _, secret := range []string{"secret-invalid", "other-invalid", "accepted-secret", "conflicting-secret", "another-secret"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("warning leaked provider state %q", secret)
+		}
+	}
+	fresh := newTestCodexDispatch(t)
+	if state, ok := fresh.currentTurnState(); ok || state != "" || len(fresh.TurnStateDiagnostics()) != 0 {
+		t.Fatal("fresh dispatch inherited provider state or diagnostics")
 	}
 }
 

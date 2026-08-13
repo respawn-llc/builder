@@ -62,123 +62,72 @@ func (providerTurnStateCompactionClient) ProviderCapabilities(context.Context) (
 }
 
 func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *testing.T) {
-	withGenerateRetryDelays(t, []time.Duration{0})
-	const turnState = "opaque,state=value"
-	var (
-		mu             sync.Mutex
-		receivedStates []string
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		receivedStates = append(receivedStates, r.Header.Get("x-codex-turn-state"))
-		attempt := len(receivedStates)
-		mu.Unlock()
-		if attempt == 1 {
-			w.Header().Set("x-codex-turn-state", turnState)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":{"message":"retry me","type":"server_error"}}`))
-			return
-		}
-		writeRuntimeCompletedResponseJSON(w, nil)
-	}))
-	t.Cleanup(server.Close)
+	for _, protocol := range []string{"http1", "http2"} {
+		t.Run(protocol, func(t *testing.T) {
+			withGenerateRetryDelays(t, []time.Duration{0})
+			const turnState = "opaque,state=value"
+			var mu sync.Mutex
+			var states []string
+			var protocols []int
+			handler := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				mu.Lock()
+				states = append(states, request.Header.Get("x-codex-turn-state"))
+				protocols = append(protocols, request.ProtoMajor)
+				attempt := len(states)
+				mu.Unlock()
+				if attempt == 1 {
+					w.Header().Set("x-codex-turn-state", turnState)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusServiceUnavailable)
+					_, _ = w.Write([]byte(`{"error":{"message":"retry me","type":"server_error"}}`))
+					return
+				}
+				writeRuntimeCompletedResponseJSON(w, nil)
+			})
+			var server *httptest.Server
+			if protocol == "http2" {
+				server = httptest.NewUnstartedServer(handler)
+				server.EnableHTTP2 = true
+				server.StartTLS()
+			} else {
+				server = httptest.NewServer(handler)
+			}
+			t.Cleanup(server.Close)
 
-	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID:            "session-1",
-		RunID:                "run-1",
-		CompactionGeneration: 1,
-		RequestKind:          llm.CodexRequestKindTurn.Optional(),
-	})
-	if err != nil {
-		t.Fatalf("NewCodexDispatchContext: %v", err)
-	}
-	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
-	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
-
-	_, err = engine.generateWithRetryClient(
-		context.Background(),
-		"",
-		client,
-		llm.Request{
-			Model:          "gpt-5",
-			SessionID:      textutil.Value("session-1"),
-			CodexDispatch:  dispatch,
-			ToolChoiceMode: llm.ToolChoiceModeAutomatic,
-		},
-		nil,
-		nil,
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("generateWithRetryClient: %v", err)
-	}
-
-	mu.Lock()
-	gotStates := append([]string(nil), receivedStates...)
-	mu.Unlock()
-	if fmt.Sprint(gotStates) != fmt.Sprint([]string{"", turnState}) {
-		t.Fatalf("received turn states = %q, want exact bounded-retry replay", gotStates)
-	}
-}
-
-func TestChangedGenerationPayloadDoesNotInheritProviderTurnState(t *testing.T) {
-	const turnState = "generation-repair-state"
-	var (
-		mu             sync.Mutex
-		receivedStates []string
-	)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		receivedStates = append(receivedStates, r.Header.Get("x-codex-turn-state"))
-		attempt := len(receivedStates)
-		mu.Unlock()
-		if attempt == 1 {
-			w.Header().Set("x-codex-turn-state", turnState)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
-			return
-		}
-		writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
-	}))
-	t.Cleanup(server.Close)
-
-	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
-	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{
-		ID: "missing", Name: "exec_command", Input: []byte(`{}`),
-	})
-
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, generateErr := engine.generateWithMissingToolOutputRepair(
-			ctx,
-			stepID,
-			func() (llm.Request, error) {
-				return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
-			},
-			nil,
-			nil,
-			nil,
-		)
-		return generateErr
-	})
-	if err != nil {
-		t.Fatalf("generation repair: %v", err)
-	}
-	mu.Lock()
-	got := append([]string(nil), receivedStates...)
-	mu.Unlock()
-	if fmt.Sprint(got) != fmt.Sprint([]string{"", ""}) {
-		t.Fatalf("changed generation payload states = %q, want no inherited state", got)
+			dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
+				SessionID: "session-1", RunID: "run-1",
+				CompactionGeneration: 1, RequestKind: llm.CodexRequestKindTurn.Optional(),
+			})
+			if err != nil {
+				t.Fatalf("NewCodexDispatchContext: %v", err)
+			}
+			transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+			transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+			client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+			_, err = engine.generateWithRetryClient(context.Background(), "", client, llm.Request{
+				Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
+				ToolChoiceMode: llm.ToolChoiceModeAutomatic,
+			}, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("generateWithRetryClient: %v", err)
+			}
+			mu.Lock()
+			gotStates, gotProtocols := append([]string(nil), states...), append([]int(nil), protocols...)
+			mu.Unlock()
+			if fmt.Sprint(gotStates) != fmt.Sprint([]string{"", turnState}) {
+				t.Fatalf("received turn states = %q, want exact bounded-retry replay", gotStates)
+			}
+			wantProtocol := 1
+			if protocol == "http2" {
+				wantProtocol = 2
+			}
+			for _, got := range gotProtocols {
+				if got != wantProtocol {
+					t.Fatalf("HTTP protocol = %d, want %d", got, wantProtocol)
+				}
+			}
+		})
 	}
 }
 
@@ -213,6 +162,24 @@ func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 			},
 		},
 		{
+			name: "remote missing-tool-output repair",
+			run: func(t *testing.T, engine *Engine) error {
+				steerDanglingToolCall(t, engine, "step", llm.ToolCall{
+					ID: "missing", Name: "exec_command", Input: []byte(`{}`),
+				})
+				request := llm.CompactionRequest{
+					Model: "gpt-5", InputItems: engine.transcriptRuntimeState().SnapshotItems(),
+				}
+				factory := mustTestDispatchRequestFactory(
+					t, engine.SessionID(), "run-compaction", llm.CodexRequestKindCompaction,
+				)
+				_, _, _, err := engine.compactWithContextRepairRetry(
+					context.Background(), "step", engine.llm.(llm.CompactionClient), request, factory,
+				)
+				return err
+			},
+		},
+		{
 			name: "local tool-call repair",
 			run: func(_ *testing.T, engine *Engine) error {
 				return withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
@@ -241,10 +208,16 @@ func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 						_, _ = w.Write([]byte(`{"error":{"message":"context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}`))
 						return
 					}
+					if test.name == "remote missing-tool-output repair" {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusBadRequest)
+						_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
+						return
+					}
 					writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command","arguments":"{\"cmd\":\"pwd\"}","status":"completed"}]`))
 					return
 				}
-				if test.name == "remote overflow repair" {
+				if strings.HasPrefix(test.name, "remote ") {
 					writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]`))
 					return
 				}
@@ -257,7 +230,7 @@ func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 			openAIClient := llm.NewOpenAIClient(transport)
 			var client llm.Client = nonStreamingClient{client: openAIClient}
 			config := Config{Model: "gpt-5", CompactionMode: "local"}
-			if test.name == "remote overflow repair" {
+			if strings.HasPrefix(test.name, "remote ") {
 				client = providerTurnStateCompactionClient{client: openAIClient}
 				config.CompactionMode, config.ContextWindowTokens = "native", 2_500
 			}
