@@ -48,9 +48,9 @@ func TestExceptionalWireFingerprintComparesLiveShapeToImmutableSignoff(t *testin
 
 	signoff.DescriptorFingerprint = "reviewed-descriptor"
 	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
-	var fingerprintError *WireExceptionFingerprintError
+	var fingerprintError *wireExceptionFingerprintError
 	if !errors.As(err, &fingerprintError) ||
-		fingerprintError.Code != WireExceptionFingerprintDescriptorChanged {
+		fingerprintError.Code != wireExceptionFingerprintDescriptorChanged {
 		t.Fatalf("descriptor mutation error = %v", err)
 	}
 
@@ -59,7 +59,7 @@ func TestExceptionalWireFingerprintComparesLiveShapeToImmutableSignoff(t *testin
 	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
 	fingerprintError = nil
 	if !errors.As(err, &fingerprintError) ||
-		fingerprintError.Code != WireExceptionFingerprintLegacyChanged {
+		fingerprintError.Code != wireExceptionFingerprintLegacyChanged {
 		t.Fatalf("legacy mutation error = %v", err)
 	}
 }
