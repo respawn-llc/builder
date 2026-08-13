@@ -180,6 +180,8 @@ func (p gatewayRequestPanicDiagnostic) Error() string {
 	)
 }
 
+var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
+
 func RuntimeLiveControlRoutesExecutable() bool {
 	for _, method := range []string{
 		protocol.MethodRuntimeLiveSteer,
@@ -228,8 +230,6 @@ var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
-var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
-
 var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
 
 func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) map[string]T {
@@ -239,9 +239,10 @@ func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) ma
 			continue
 		}
 		handler, ok := entries[route.Method]
-		if ok {
-			handlers[route.Method] = handler
+		if !ok {
+			continue
 		}
+		handlers[route.Method] = handler
 	}
 	return handlers
 }
@@ -484,7 +485,7 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)
-	if !ok || route.Kind != apicontract.KindUnary {
+	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
@@ -498,6 +499,13 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	handler, ok := gatewayUnaryHandlers[req.Method]
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+	}
+	switch req.Method {
+	case protocol.MethodSessionRuntimeActivate, protocol.MethodSessionRuntimeRelease:
+	default:
+		if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
+			return resp
+		}
 	}
 	return handler(g, ctx, state, req)
 }
@@ -527,16 +535,12 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	if err != nil {
 		return responseForError(req.ID, err)
 	}
-	return handlerSuccessResponse(req.ID, resp)
-}
-
-func handlerSuccessResponse(id string, response any) protocol.Response {
-	if validator, ok := response.(interface{ Validate() error }); ok {
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
-			return responseForError(id, fmt.Errorf("handler returned an invalid response: %w", err))
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
 		}
 	}
-	return protocol.NewSuccessResponse(id, response)
+	return protocol.NewSuccessResponse(req.ID, resp)
 }
 
 func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, error) {

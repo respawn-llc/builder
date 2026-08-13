@@ -90,23 +90,7 @@ func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json
 		}
 		return params, nil
 	}
-	params := reflect.New(route.RequestType)
-	if len(raw) != 0 {
-		if err := json.Unmarshal(raw, params.Interface()); err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-	}
-	value := params.Elem().Interface()
-	var validationErr error
-	if validator, ok := value.(interface{ ValidateRPC() error }); ok {
-		validationErr = validator.ValidateRPC()
-	} else if validator, ok := value.(interface{ Validate() error }); ok {
-		validationErr = validator.Validate()
-	}
-	if validationErr != nil {
-		return nil, validationErr
-	}
-	return value, nil
+	return decodeRouteParams(route, raw)
 }
 
 type gatewayRouteError struct {
@@ -177,6 +161,29 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *co
 	return false, nil
 }
 
+func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
+	if route.RequestType == nil {
+		return nil, nil
+	}
+	ptr := reflect.New(route.RequestType)
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
+			return nil, fmt.Errorf("decode params: %w", err)
+		}
+	}
+	params := ptr.Elem().Interface()
+	if validator, ok := params.(interface{ ValidateRPC() error }); ok {
+		if err := validator.ValidateRPC(); err != nil {
+			return nil, err
+		}
+	} else if validator, ok := params.(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return nil, err
+		}
+	}
+	return params, nil
+}
+
 func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connectionState, route rpccontract.Route, params any) error {
 	scopeParams, err := routeScopeParamsFor(route, params)
 	if err != nil {
@@ -207,6 +214,9 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 			return serverapi.ErrWorkspaceNotRegistered
 		}
 		return nil
+	case rpccontract.ScopeAttachSession:
+		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
+		return err
 	case rpccontract.ScopeSessionActiveProject:
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionActiveProjectIfSet:
@@ -215,7 +225,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
-		panic(fmt.Sprintf("scope %q for route %q must execute through its typed attached-Project constraint", route.Scope, route.Method))
+		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeAttachedSession:
 		if state.attachedSession == nil || state.attachedSession.String() != scopeParams.sessionID {
 			return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
@@ -226,7 +236,8 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeRuntimeLiveSessionOptional:
 		return nil
 	case rpccontract.ScopeProcessActiveProject:
-		panic(fmt.Sprintf("scope %q for route %q must execute through its typed Process authorizer", route.Scope, route.Method))
+		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
+		return err
 	case rpccontract.ScopeProcessListActiveProject:
 		if strings.TrimSpace(scopeParams.ownerSessionID) != "" {
 			return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.ownerSessionID)
@@ -459,6 +470,47 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
+}
+
+func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID string) error {
+	trimmedSessionID := strings.TrimSpace(sessionID)
+	if trimmedSessionID == "" {
+		return serverapi.ErrRuntimeUnavailable
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return serverapi.ErrRuntimeUnavailable
+	}
+	if _, err := metadataStore.ResolvePersistedSession(ctx, trimmedSessionID); err != nil {
+		return fmt.Errorf("%w: %w", serverapi.ErrRuntimeUnavailable, err)
+	}
+	return nil
+}
+
+func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {
+	projectID := strings.TrimSpace(state.attachedProject)
+	if projectID == "" {
+		return nil
+	}
+	return g.deps.SessionBelongsToProject(ctx, sessionID, projectID)
+}
+
+func (g *Gateway) processInActiveProject(ctx context.Context, state *connectionState, processID string) (serverapi.ProcessGetResponse, error) {
+	resp, err := g.deps.ProcessViewClient().GetProcess(ctx, serverapi.ProcessGetRequest{ProcessID: processID})
+	if err != nil {
+		return serverapi.ProcessGetResponse{}, err
+	}
+	if resp.Process == nil {
+		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
+	}
+	ownerSessionID := strings.TrimSpace(resp.Process.OwnerSessionID)
+	if ownerSessionID == "" {
+		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
+	}
+	if err := g.requireSessionInActiveProject(ctx, state, ownerSessionID); err != nil {
+		return serverapi.ProcessGetResponse{}, err
+	}
+	return resp, nil
 }
 
 func (g *Gateway) filterProcessesForActiveProject(ctx context.Context, state *connectionState, processes []clientui.BackgroundProcess) ([]clientui.BackgroundProcess, error) {

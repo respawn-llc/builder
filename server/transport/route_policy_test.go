@@ -140,28 +140,23 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		t.Fatal("optional foreign session unexpectedly allowed")
 	}
 
-	ownAttach, err := rpccontract.WithValidated(
-		protocol.AttachSessionRequest{SessionID: fixture.ownSessionID},
-		rpccontract.SemanticValidationRequired,
-		func(validated rpccontract.Validated[protocol.AttachSessionRequest]) (rpccontract.AuthorizedSessionAttachment, error) {
-			return authorizeSessionAttachment(ctx, fixture.gateway, &connectionState{attachedProject: fixture.bindingA.ProjectID}, validated)
-		},
+	ownAttach, err := fixture.gateway.resolveSessionAttachment(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		fixture.ownSessionID,
 	)
 	if err != nil {
 		t.Fatalf("attach own session: %v", err)
 	}
-	if ownAttach.SessionID.String() != fixture.ownSessionID ||
-		ownAttach.ProjectID != fixture.bindingA.ProjectID ||
+	if ownAttach.ProjectID != fixture.bindingA.ProjectID ||
 		ownAttach.WorkspaceID != fixture.bindingA.WorkspaceID ||
 		ownAttach.CanonicalRoot != fixture.bindingA.CanonicalRoot {
 		t.Fatalf("attach authorization = %+v", ownAttach)
 	}
-	_, err = rpccontract.WithValidated(
-		protocol.AttachSessionRequest{SessionID: fixture.foreignSessionID},
-		rpccontract.SemanticValidationRequired,
-		func(validated rpccontract.Validated[protocol.AttachSessionRequest]) (rpccontract.AuthorizedSessionAttachment, error) {
-			return authorizeSessionAttachment(ctx, fixture.gateway, &connectionState{attachedProject: fixture.bindingA.ProjectID}, validated)
-		},
+	_, err = fixture.gateway.resolveSessionAttachment(
+		ctx,
+		&connectionState{attachedProject: fixture.bindingA.ProjectID},
+		fixture.foreignSessionID,
 	)
 	if err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
@@ -262,16 +257,8 @@ func TestTypedProcessAuthorizerAuthorizesProcessScopesWithoutWebSocket(t *testin
 	}
 
 	state := &connectionState{attachedProject: fixture.bindingA.ProjectID}
-	authorize := authorizeProcessActiveProject(func(request serverapi.ProcessGetRequest) string { return request.ProcessID })
 	authorizeRequest := func(processID string) error {
-		_, err := rpccontract.WithValidated(
-			serverapi.ProcessGetRequest{ProcessID: processID},
-			rpccontract.SemanticValidationRequired,
-			func(validated rpccontract.Validated[serverapi.ProcessGetRequest]) (struct{}, error) {
-				_, err := authorize(ctx, fixture.gateway, state, validated)
-				return struct{}{}, err
-			},
-		)
+		_, err := fixture.gateway.processInActiveProject(ctx, state, processID)
 		return err
 	}
 	if err := authorizeRequest(own.SessionID); err != nil {

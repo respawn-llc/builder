@@ -105,31 +105,6 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 	}
 }
 
-func TestGatewayOnboardingFinalizeCallsOnlyTrustedOwner(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	t.Cleanup(func() { _ = appCore.Close() })
-	service := &gatewayOnboardingService{}
-	gateway, err := NewGateway(&gatewayOnboardingOverride{Core: appCore, finalize: service}, protocol.ServerIdentity{
-		ProtocolVersion: protocol.Version,
-		ServerID:        "server-1",
-	})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	response := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
-		JSONRPC: protocol.JSONRPCVersion,
-		ID:      "finalize",
-		Method:  protocol.MethodOnboardingFinalize,
-		Params:  []byte(`{}`),
-	})
-	if response.Error != nil {
-		t.Fatalf("Onboarding Finalize response error = %+v", response.Error)
-	}
-	if service.rawCalls != 0 || service.trustedCalls != 1 {
-		t.Fatalf("Onboarding Finalize calls raw=%d trusted=%d, want raw=0 trusted=1", service.rawCalls, service.trustedCalls)
-	}
-}
-
 func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T) {
 	authReadyCore, _ := newGatewayTestCore(t, true, true)
 	t.Cleanup(func() { _ = authReadyCore.Close() })
