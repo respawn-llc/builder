@@ -183,7 +183,7 @@ func RuntimeLiveControlRoutesExecutable() bool {
 		protocol.MethodRuntimeLiveWatch,
 	} {
 		executable, ok := inboundExecutableRoutes[method]
-		if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
+		if !ok || executable.executeUnary == nil {
 			return false
 		}
 	}
@@ -234,7 +234,7 @@ func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, api
 	if !ok || executable.executeProgress == nil {
 		return nil, apicontract.Route{}, false
 	}
-	return executable.executeProgress, executable.route, true
+	return executable.executeProgress, route, true
 }
 
 func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Gateway, error) {
@@ -466,12 +466,24 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)
-	if !ok {
+	if !ok || route.Kind != apicontract.KindUnary {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
 	executable, ok := inboundExecutableRoutes[req.Method]
-	if !ok || executable.route.Kind != apicontract.KindUnary || executable.executeUnary == nil {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+	if !ok || executable.executeUnary == nil {
+		handler, registered := gatewayUnaryHandlerEntries[req.Method]
+		if !registered {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+		}
+		if availability, available := g.deps.(GatewayDependencyAvailability); available {
+			if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
+				return responseForError(req.ID, err)
+			}
+		}
+		if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
+			return responseForError(req.ID, err)
+		}
+		return handler(g, ctx, state, req)
 	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
 		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {

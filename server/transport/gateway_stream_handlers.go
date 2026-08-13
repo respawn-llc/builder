@@ -111,12 +111,7 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
-	executable, ok := inboundExecutableRoutes[req.Method]
-	if !ok {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
-		return
-	}
-	if executable.executeSubscription != nil {
+	if executable, ok := inboundExecutableRoutes[req.Method]; ok && executable.executeSubscription != nil {
 		executable.executeSubscription(g, conn, ctx, state, route, req)
 		return
 	}

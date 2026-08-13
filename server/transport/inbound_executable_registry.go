@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"core/server/metadata"
@@ -18,242 +17,6 @@ import (
 
 type noAuthorizationFacts struct{}
 
-type scopeAuthorizationRule string
-
-const (
-	scopeAuthorizationNoCheck                     scopeAuthorizationRule = "no scope check"
-	scopeAuthorizationAttachProjectOwner          scopeAuthorizationRule = "Attach Project owner resolves and attaches the requested Project"
-	scopeAuthorizationAttachSessionFact           scopeAuthorizationRule = "Attach Session resolves one typed Session attachment fact"
-	scopeAuthorizationProjectViewCheck            scopeAuthorizationRule = "Project View owner checks Project access"
-	scopeAuthorizationProjectWorkspaceCheck       scopeAuthorizationRule = "active Project attachment check"
-	scopeAuthorizationProjectWorkspaceBindingFact scopeAuthorizationRule = "Project and Workspace binding resolves one typed authorization fact"
-	scopeAuthorizationSessionActiveProjectFact    scopeAuthorizationRule = "Session membership resolves one typed active-Project fact"
-	scopeAuthorizationOptionalSessionFact         scopeAuthorizationRule = "optional Session membership resolves a closed absent-or-active-Project fact"
-	scopeAuthorizationAttachedProjectConstraint   scopeAuthorizationRule = "Session retarget carries the attached-Project constraint to its owner"
-	scopeAuthorizationAttachedSessionCheck        scopeAuthorizationRule = "connection attached-Session identity check"
-	scopeAuthorizationGoalSessionCheck            scopeAuthorizationRule = "Goal Session current-Project check"
-	scopeAuthorizationRuntimeLiveOwner            scopeAuthorizationRule = "Runtime Live owner handles optional Session admission"
-	scopeAuthorizationRequiredLiveNoCheck         scopeAuthorizationRule = "Runtime Live owner is the sole required-live authority"
-	scopeAuthorizationProcessActiveProjectFact    scopeAuthorizationRule = "Process ownership resolves one typed active-Project fact"
-	scopeAuthorizationProcessListCheck            scopeAuthorizationRule = "optional Process owner Session active-Project check"
-	scopeAuthorizationOutboundNotification        scopeAuthorizationRule = "outbound notification has no inbound executable"
-)
-
-type scopeAuthorizationClassification struct {
-	rule              scopeAuthorizationRule
-	authorizationType reflect.Type
-}
-
-type inboundHandlerOwner string
-
-const (
-	inboundHandlerLegacyRaw        inboundHandlerOwner = "legacy raw service"
-	inboundHandlerTrustedOwner     inboundHandlerOwner = "trusted owner"
-	inboundHandlerRuntimeLiveOwner inboundHandlerOwner = "Runtime Live authority"
-	inboundHandlerOutboundOnly     inboundHandlerOwner = "outbound only"
-)
-
-type inboundOwnerRecheck string
-
-const (
-	inboundOwnerRecheckNone                inboundOwnerRecheck = "none"
-	inboundOwnerRecheckWorktreePostLease   inboundOwnerRecheck = "Worktree post-lease execution target"
-	inboundOwnerRecheckRetargetMaintenance inboundOwnerRecheck = "Session retarget maintenance and transaction state"
-)
-
-type inboundHandlerClassification struct {
-	owner   inboundHandlerOwner
-	recheck inboundOwnerRecheck
-}
-
-type inboundRouteClassification struct {
-	authorization scopeAuthorizationClassification
-	handler       inboundHandlerClassification
-}
-
-var inboundScopeAuthorizationClassifications = map[apicontract.ScopePolicy]scopeAuthorizationClassification{
-	apicontract.ScopeNone:                       {rule: scopeAuthorizationNoCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeAttachProject:              {rule: scopeAuthorizationAttachProjectOwner, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeAttachSession:              {rule: scopeAuthorizationAttachSessionFact, authorizationType: reflect.TypeOf(apicontract.AuthorizedSessionAttachment{})},
-	apicontract.ScopeProjectView:                {rule: scopeAuthorizationProjectViewCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeProjectWorkspace:           {rule: scopeAuthorizationProjectWorkspaceCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeProjectWorkspaceBinding:    {rule: scopeAuthorizationProjectWorkspaceBindingFact, authorizationType: reflect.TypeOf(apicontract.AuthorizedProjectWorkspaceBinding{})},
-	apicontract.ScopeSessionActiveProject:       {rule: scopeAuthorizationSessionActiveProjectFact, authorizationType: reflect.TypeOf(apicontract.AuthorizedSessionInActiveProject{})},
-	apicontract.ScopeSessionActiveProjectIfSet:  {rule: scopeAuthorizationOptionalSessionFact, authorizationType: reflect.TypeOf(apicontract.OptionalAuthorizedSessionInActiveProject{})},
-	apicontract.ScopeSessionAttachedProject:     {rule: scopeAuthorizationAttachedProjectConstraint, authorizationType: reflect.TypeOf(apicontract.AttachedProjectConstraint{})},
-	apicontract.ScopeAttachedSession:            {rule: scopeAuthorizationAttachedSessionCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeGoalSession:                {rule: scopeAuthorizationGoalSessionCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeRuntimeLiveSessionOptional: {rule: scopeAuthorizationRuntimeLiveOwner, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeProcessActiveProject:       {rule: scopeAuthorizationProcessActiveProjectFact, authorizationType: reflect.TypeOf(apicontract.AuthorizedProcessInActiveProject{})},
-	apicontract.ScopeProcessListActiveProject:   {rule: scopeAuthorizationProcessListCheck, authorizationType: reflect.TypeOf(noAuthorizationFacts{})},
-	apicontract.ScopeNotification:               {rule: scopeAuthorizationOutboundNotification},
-}
-
-func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteClassification {
-	authorization, declared := inboundScopeAuthorizationClassifications[route.Scope]
-	if !declared {
-		panic(fmt.Sprintf("route %q scope %q has no authorization classification", route.Method, route.Scope))
-	}
-	handler := inboundHandlerClassification{owner: inboundHandlerLegacyRaw, recheck: inboundOwnerRecheckNone}
-	switch route.Method {
-	case protocol.MethodRuntimeLiveSteer, protocol.MethodRuntimeLiveWait:
-		authorization = scopeAuthorizationClassification{
-			rule:              scopeAuthorizationRequiredLiveNoCheck,
-			authorizationType: reflect.TypeOf(noAuthorizationFacts{}),
-		}
-		handler.owner = inboundHandlerRuntimeLiveOwner
-	case protocol.MethodRuntimeLiveStop, protocol.MethodRuntimeLiveWatch:
-		handler.owner = inboundHandlerRuntimeLiveOwner
-	case protocol.MethodAttachSession,
-		protocol.MethodAuthGetBootstrapStatus,
-		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodAuthGetStatus,
-		protocol.MethodCapabilityFactsGet,
-		protocol.MethodPromptCommandCatalogGet,
-		protocol.MethodProjectList,
-		protocol.MethodProjectHomeList,
-		protocol.MethodProjectResolvePath,
-		protocol.MethodProjectPlanWorkspaceBinding,
-		protocol.MethodProjectCreate,
-		protocol.MethodProjectEditGet,
-		protocol.MethodProjectUpdate,
-		protocol.MethodProjectSetDefaultWorkspace,
-		protocol.MethodProjectWorkspaceList,
-		protocol.MethodProjectWorkspaceGet,
-		protocol.MethodProjectUnlinkWorkspace,
-		protocol.MethodProjectDelete,
-		protocol.MethodProjectAttachWorkspace,
-		protocol.MethodProjectRebindWorkspace,
-		protocol.MethodProjectGetOverview,
-		protocol.MethodSessionPage,
-		protocol.MethodPromptAnswerBatch,
-		protocol.MethodServerReadinessGet,
-		protocol.MethodServerUpdateStatusGet,
-		protocol.MethodSessionRetargetWorkspace,
-		protocol.MethodSessionGetMainView,
-		protocol.MethodSessionGetTranscriptPage,
-		protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer,
-		protocol.MethodSessionGetExecutionEnvironment,
-		protocol.MethodSessionGetInitialInput,
-		protocol.MethodSessionPersistInputDraft,
-		protocol.MethodSessionResolveTransition,
-		protocol.MethodSessionRuntimeActivate,
-		protocol.MethodSessionRuntimeRelease,
-		protocol.MethodWorktreeWorkspaceList,
-		protocol.MethodWorktreeStatus,
-		protocol.MethodWorktreeList,
-		protocol.MethodWorktreeSelectorResolve,
-		protocol.MethodWorktreeDeletePreview,
-		protocol.MethodWorktreeCreateTargetResolve,
-		protocol.MethodWorktreeCreate,
-		protocol.MethodWorktreeEnter,
-		protocol.MethodWorktreeLeave,
-		protocol.MethodWorktreeDelete,
-		protocol.MethodProcessGet,
-		protocol.MethodProcessKill,
-		protocol.MethodProcessInlineOutput,
-		protocol.MethodProcessSubscribeOutput,
-		protocol.MethodRuntimeSetSessionName,
-		protocol.MethodRuntimeSetThinkingLevel,
-		protocol.MethodRuntimeSetFastModeEnabled,
-		protocol.MethodRuntimeSetReviewerEnabled,
-		protocol.MethodRuntimeSetAutoCompactionEnabled,
-		protocol.MethodRuntimeSetQuestionsEnabled,
-		protocol.MethodRuntimeAppendCommittedEntry,
-		protocol.MethodRuntimeShouldCompactBeforeUserMessage,
-		protocol.MethodRuntimeSubmitUserTurn,
-		protocol.MethodRuntimeSubmitUserShellCommand,
-		protocol.MethodRuntimeCompactContext,
-		protocol.MethodRuntimeInterrupt,
-		protocol.MethodRuntimeDiscardQueuedUserMessage,
-		protocol.MethodRuntimeRecordPromptHistory:
-		handler.owner = inboundHandlerTrustedOwner
-	case protocol.MethodWorkflowCreate,
-		protocol.MethodWorkflowCreateAndLinkProject,
-		protocol.MethodWorkflowUpdate,
-		protocol.MethodWorkflowList,
-		protocol.MethodWorkflowGet,
-		protocol.MethodWorkflowLinkProject,
-		protocol.MethodWorkflowListProjectLinks,
-		protocol.MethodWorkflowSetDefaultProjectLink,
-		protocol.MethodWorkflowUnlinkProject,
-		protocol.MethodWorkflowDeletePreview,
-		protocol.MethodWorkflowDelete,
-		protocol.MethodWorkflowValidate,
-		protocol.MethodWorkflowScriptPathValidate,
-		protocol.MethodWorkflowGraphValidateDraft,
-		protocol.MethodWorkflowGraphDeriveWiring,
-		protocol.MethodWorkflowGraphSavePreview,
-		protocol.MethodWorkflowGraphSave,
-		protocol.MethodWorkflowTaskCreate,
-		protocol.MethodWorkflowTaskDependencyAdd,
-		protocol.MethodWorkflowTaskDependencyRemove,
-		protocol.MethodWorkflowTaskUpdate,
-		protocol.MethodWorkflowTaskStart,
-		protocol.MethodWorkflowTaskInterrupt,
-		protocol.MethodWorkflowTaskResume,
-		protocol.MethodWorkflowTaskApprove,
-		protocol.MethodWorkflowTaskMovePreview,
-		protocol.MethodWorkflowTaskMove,
-		protocol.MethodWorkflowTaskComplete,
-		protocol.MethodWorkflowTaskDelete,
-		protocol.MethodWorkflowTaskObserve,
-		protocol.MethodWorkflowProjectLabelList,
-		protocol.MethodWorkflowTaskLabelsGet,
-		protocol.MethodWorkflowAttentionList,
-		protocol.MethodWorkflowTaskAttentionList,
-		protocol.MethodWorkflowTaskCommentList,
-		protocol.MethodWorkflowTaskActivityList,
-		protocol.MethodWorkflowTaskSessionList,
-		protocol.MethodWorkflowTaskList,
-		protocol.MethodWorkflowTaskSearch,
-		protocol.MethodWorkflowBoardGet,
-		protocol.MethodWorkflowBoardNodeCardsList,
-		protocol.MethodWorkflowTaskGet:
-		handler.owner = inboundHandlerTrustedOwner
-	case protocol.MethodRuntimeGoalShow,
-		protocol.MethodRuntimeGoalSet,
-		protocol.MethodRuntimeGoalPause,
-		protocol.MethodRuntimeGoalResume,
-		protocol.MethodRuntimeGoalComplete,
-		protocol.MethodRuntimeGoalClear:
-		handler.owner = inboundHandlerTrustedOwner
-	case protocol.MethodRunPrompt,
-		protocol.MethodSessionPlan,
-		protocol.MethodSessionWorkspaceChatDraft,
-		protocol.MethodSessionWorkspaceChatMaterialize,
-		protocol.MethodAttentionNotificationSubscribe,
-		protocol.MethodPromptFollowUpWatch:
-		handler.owner = inboundHandlerTrustedOwner
-	}
-	switch route.Method {
-	case protocol.MethodWorktreeCreate,
-		protocol.MethodWorktreeEnter,
-		protocol.MethodWorktreeLeave,
-		protocol.MethodWorktreeDelete:
-		handler.recheck = inboundOwnerRecheckWorktreePostLease
-	case protocol.MethodSessionRetargetWorkspace:
-		handler.recheck = inboundOwnerRecheckRetargetMaintenance
-	}
-	if route.Kind == apicontract.KindNotification {
-		handler = inboundHandlerClassification{owner: inboundHandlerOutboundOnly, recheck: inboundOwnerRecheckNone}
-	}
-	return inboundRouteClassification{authorization: authorization, handler: handler}
-}
-
-func inboundAuthorizationClassificationForRoute(route apicontract.Route) scopeAuthorizationClassification {
-	return inboundRouteClassificationForRoute(route).authorization
-}
-
-func inboundHandlerClassificationForRoute(route apicontract.Route) inboundHandlerClassification {
-	return inboundRouteClassificationForRoute(route).handler
-}
-
-type requestValidatorKind = apicontract.ValidationMethod
-
-const requestValidatorNone = apicontract.ValidationMethodNone
-
 type requestDecoderKind uint8
 
 const (
@@ -263,23 +26,9 @@ const (
 )
 
 type inboundExecutableRoute struct {
-	route                 apicontract.Route
-	requestType           reflect.Type
-	authorizationType     reflect.Type
-	authorizationRule     scopeAuthorizationRule
-	handlerClassification inboundHandlerClassification
-	validation            apicontract.ValidationPolicy
-	validator             requestValidatorKind
-	decoder               requestDecoderKind
-	executeUnary          func(*Gateway, context.Context, *connectionState, protocol.Request) protocol.Response
-	executeProgress       gatewayProgressHandler
-	executeSubscription   gatewaySubscriptionHandler
-}
-
-type erasedInboundRequest struct {
-	value             any
-	validated         any
-	authorizationType reflect.Type
+	executeUnary        func(*Gateway, context.Context, *connectionState, protocol.Request) protocol.Response
+	executeProgress     gatewayProgressHandler
+	executeSubscription gatewaySubscriptionHandler
 }
 
 func inboundUnary[Req any, Authz any](
@@ -293,16 +42,7 @@ func inboundUnary[Req any, Authz any](
 	if prepare == nil {
 		prepare = func(req Req, _ *connectionState) Req { return req }
 	}
-	executable := inboundExecutableRoute{
-		route:                 route,
-		requestType:           reflect.TypeOf((*Req)(nil)).Elem(),
-		authorizationType:     reflect.TypeOf((*Authz)(nil)).Elem(),
-		authorizationRule:     inboundAuthorizationClassificationForRoute(route).rule,
-		handlerClassification: inboundHandlerClassificationForRoute(route),
-		validation:            policy,
-		validator:             route.ValidationMethod,
-		decoder:               decoder,
-	}
+	executable := inboundExecutableRoute{}
 	executable.executeUnary = func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
 		return executeInboundUnary(g, ctx, state, wire, route, policy, decoder, prepare, authorize)
 	}
@@ -321,16 +61,7 @@ func inboundTrustedUnary[Req any, Authz any, Resp any](
 	if prepare == nil {
 		prepare = func(req Req, _ *connectionState) Req { return req }
 	}
-	executable := inboundExecutableRoute{
-		route:                 route,
-		requestType:           reflect.TypeOf((*Req)(nil)).Elem(),
-		authorizationType:     reflect.TypeOf((*Authz)(nil)).Elem(),
-		authorizationRule:     inboundAuthorizationClassificationForRoute(route).rule,
-		handlerClassification: inboundHandlerClassificationForRoute(route),
-		validation:            policy,
-		validator:             route.ValidationMethod,
-		decoder:               decoder,
-	}
+	executable := inboundExecutableRoute{}
 	executable.executeUnary = func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
 		request, err := decodeInboundRequest[Req](g, route, decoder, wire.Params)
 		if err != nil {
@@ -470,17 +201,12 @@ func inboundMetadata[Req any, Authz any](
 	prepare func(Req, *connectionState) Req,
 	authorize func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (Authz, error),
 ) inboundExecutableRoute {
-	route := mustInboundRoute(method, kind)
-	return inboundExecutableRoute{
-		route:                 route,
-		requestType:           reflect.TypeOf((*Req)(nil)).Elem(),
-		authorizationType:     reflect.TypeOf((*Authz)(nil)).Elem(),
-		authorizationRule:     inboundAuthorizationClassificationForRoute(route).rule,
-		handlerClassification: inboundHandlerClassificationForRoute(route),
-		validation:            policy,
-		validator:             route.ValidationMethod,
-		decoder:               decoder,
-	}
+	_ = mustInboundRoute(method, kind)
+	_ = policy
+	_ = decoder
+	_ = prepare
+	_ = authorize
+	return inboundExecutableRoute{}
 }
 
 func decodeInboundRequest[Req any](g *Gateway, route apicontract.Route, decoder requestDecoderKind, raw json.RawMessage) (Req, error) {
@@ -502,7 +228,7 @@ func decodeInboundRequest[Req any](g *Gateway, route apicontract.Route, decoder 
 	}
 	request, ok := decoded.(Req)
 	if !ok {
-		panic(fmt.Sprintf("route %q decoder returned %T, want %v", route.Method, decoded, reflect.TypeOf((*Req)(nil)).Elem()))
+		panic(fmt.Sprintf("route %q decoder returned unexpected type %T", route.Method, decoded))
 	}
 	return request, nil
 }
@@ -731,13 +457,6 @@ func responseForValidationOrOwnerError(id string, err error) protocol.Response {
 
 func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	executables := make(map[string]inboundExecutableRoute)
-	for _, route := range apicontract.Routes() {
-		switch route.Kind {
-		case apicontract.KindUnary, apicontract.KindProgress, apicontract.KindSubscription:
-			executables[route.Method] = erasedInboundExecutable(route)
-		case apicontract.KindNotification:
-		}
-	}
 	registerActiveProjectSessionRoutes(executables)
 	registerProjectAndSmallServiceRoutes(executables)
 	executables[protocol.MethodOnboardingFinalize] = inboundUnary[serverapi.OnboardingFinalizeRequest, noAuthorizationFacts](
@@ -1835,108 +1554,4 @@ func executeAttachProject(g *Gateway, ctx context.Context, state *connectionStat
 	return handlerSuccessResponse(wire.ID, response)
 }
 
-func erasedInboundExecutable(route apicontract.Route) inboundExecutableRoute {
-	policy := apicontract.SemanticValidationRequired
-	if route.ValidationMethod == apicontract.ValidationMethodNone {
-		policy = apicontract.NoSemanticValidation
-	}
-	executable := inboundExecutableRoute{
-		route:                 route,
-		requestType:           route.RequestType,
-		authorizationType:     reflect.TypeOf(noAuthorizationFacts{}),
-		authorizationRule:     inboundAuthorizationClassificationForRoute(route).rule,
-		handlerClassification: inboundHandlerClassificationForRoute(route),
-		validation:            policy,
-		validator:             route.ValidationMethod,
-		decoder:               requestDecoderDefault,
-	}
-	if route.Kind == apicontract.KindUnary {
-		executable.executeUnary = func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
-			decoded, err := route.DecodeRequest(wire.Params)
-			if err != nil {
-				return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
-			}
-			response, err := route.WithValidated(decoded, policy, func(_ any, params any) (any, error) {
-				if err := newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, params); err != nil {
-					return nil, validatedOwnerError{cause: err}
-				}
-				return gatewayUnaryHandlerEntries[wire.Method](g, ctx, state, wire), nil
-			})
-			if err != nil {
-				return responseForValidationOrOwnerError(wire.ID, err)
-			}
-			return response.(protocol.Response)
-		}
-	}
-	return executable
-}
-
 var inboundExecutableRoutes = declareInboundExecutableRoutes()
-
-func validateInboundExecutableRegistry() error {
-	return validateInboundExecutableRegistryEntries(inboundExecutableRoutes)
-}
-
-func validateInboundExecutableRegistryEntries(executables map[string]inboundExecutableRoute) error {
-	for method, executable := range executables {
-		if method != executable.route.Method {
-			return fmt.Errorf("inbound executable key %q does not match route method %q", method, executable.route.Method)
-		}
-		if executable.route.Kind == apicontract.KindNotification {
-			return fmt.Errorf("notification %q has an inbound executable", method)
-		}
-		if executable.requestType != executable.route.RequestType {
-			return fmt.Errorf("route %q request type mismatch", method)
-		}
-		switch executable.validation {
-		case apicontract.SemanticValidationRequired:
-			if executable.validator == requestValidatorNone {
-				return fmt.Errorf("semantic route %q has no validator", method)
-			}
-		case apicontract.NoSemanticValidation:
-			if executable.validator != requestValidatorNone {
-				return fmt.Errorf("no-semantic route %q bypasses an available validator", method)
-			}
-		default:
-			return fmt.Errorf("route %q has unknown validation policy", method)
-		}
-		classification := inboundAuthorizationClassificationForRoute(executable.route)
-		if executable.authorizationType != classification.authorizationType {
-			return fmt.Errorf(
-				"route %q scope %q authorization type = %v, want %v for rule %q",
-				method,
-				executable.route.Scope,
-				executable.authorizationType,
-				classification.authorizationType,
-				classification.rule,
-			)
-		}
-		if executable.authorizationRule != classification.rule {
-			return fmt.Errorf("route %q authorization rule = %q, want %q", method, executable.authorizationRule, classification.rule)
-		}
-		handler := inboundHandlerClassificationForRoute(executable.route)
-		if executable.handlerClassification != handler {
-			return fmt.Errorf("route %q handler classification = %+v, want %+v", method, executable.handlerClassification, handler)
-		}
-	}
-	for _, route := range apicontract.Routes() {
-		classification, declared := inboundScopeAuthorizationClassifications[route.Scope]
-		if !declared {
-			return fmt.Errorf("route %q scope %q has no authorization classification", route.Method, route.Scope)
-		}
-		_, registered := executables[route.Method]
-		if route.Kind == apicontract.KindNotification {
-			if classification.rule != scopeAuthorizationOutboundNotification {
-				return fmt.Errorf("notification %q has authorization rule %q", route.Method, classification.rule)
-			}
-			if registered {
-				return fmt.Errorf("notification %q has executable registration", route.Method)
-			}
-			continue
-		}
-		if !registered {
-			return fmt.Errorf("inbound route %q has no executable registration", route.Method)
-		}
-	}
-	return nil
-}
