@@ -2,9 +2,9 @@ package clientui
 
 import (
 	"bytes"
+	"core/shared/jsoncontract"
 	"encoding/json"
 	"fmt"
-	"io"
 )
 
 type TranscriptMessageKind string
@@ -285,17 +285,8 @@ func decodeOperationalDiagnosticPayload(data []byte) (TranscriptEvent, error) {
 
 func decodeStrictTranscriptPayload[T transcriptEventPayloadValue](data []byte) (TranscriptEvent, error) {
 	var payload T
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
+	if err := jsoncontract.DecodeStrict(data, &payload); err != nil {
 		return TranscriptEvent{}, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err != nil {
-			return TranscriptEvent{}, err
-		}
-		return TranscriptEvent{}, fmt.Errorf("transcript payload contains trailing JSON value")
 	}
 	return NewTranscriptEvent(payload), nil
 }

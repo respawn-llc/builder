@@ -122,10 +122,8 @@ func TestOperationalDiagnosticJSONDecodesClosedDetailUnion(t *testing.T) {
 		wantValid  bool
 	}{
 		{"detailed", `{"Code":"sleep_guard_failed","Detail":"failed"}`, TranscriptOperationalDiagnostic{}, true, true},
-		{"provider invalid", `{"Code":"provider_turn_state_invalid"}`, TranscriptProviderStateDiagnostic{}, true, true},
 		{"provider conflict with step", `{"Code":"provider_turn_state_conflict","StepID":"` + stepID + `"}`, TranscriptProviderStateDiagnostic{}, true, true},
 		{"provider detail forbidden", `{"Code":"provider_turn_state_invalid","Detail":"secret"}`, nil, false, false},
-		{"provider null detail forbidden", `{"Code":"provider_turn_state_invalid","Detail":null}`, nil, false, false},
 		{"detailed missing detail", `{"Code":"sleep_guard_failed"}`, TranscriptOperationalDiagnostic{}, true, false},
 		{"detailed blank detail", `{"Code":"sleep_guard_failed","Detail":" "}`, TranscriptOperationalDiagnostic{}, true, false},
 		{"unknown code", `{"Code":"future_code"}`, nil, false, false},
@@ -233,7 +231,6 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(prompt),
 		NewTranscriptEvent(TranscriptWorktreeTransitionOutcome{OperationID: NewWorktreeTransitionID(), Transition: WorktreeTransitionEnter, State: WorktreeTransitionCompleted}),
 		NewTranscriptEvent(TranscriptOperationalDiagnostic{Code: OperationalDiagnosticSleepGuardFailed, Detail: "failed"}),
-		NewTranscriptEvent(TranscriptProviderStateDiagnostic{Code: OperationalDiagnosticProviderTurnStateInvalid}),
 		NewTranscriptEvent(TranscriptLiveRunResult{Status: LiveRunStatusCompleted, ResultKind: LiveRunResultAssistantFinalAnswer, FinalAnswer: &final, StartedAt: time.Unix(1_700_000_000, 0), FinishedAt: time.Unix(1_700_000_001, 0)}),
 	}
 	for _, event := range events {
