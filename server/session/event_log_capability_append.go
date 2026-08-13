@@ -217,14 +217,6 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 			"event append requires materialized event-log capability",
 		)
 	}
-	if log.lastSequence != s.meta.LastSequence {
-		s.mu.Unlock()
-		return recordAppendOutcome{}, fmt.Errorf(
-			"materialized event-log revision %d does not match metadata revision %d",
-			log.lastSequence,
-			s.meta.LastSequence,
-		)
-	}
 	records := make([]EventRecord, 0, len(inputs))
 	sequence := log.lastSequence
 	for index, input := range inputs {

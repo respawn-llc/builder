@@ -39,10 +39,6 @@ func (o *goalAuthorityPersistenceObserver) ObservePersistedStore(ctx context.Con
 	return o.persistence.ObservePersistedStore(ctx, snapshot)
 }
 
-func (o *goalAuthorityPersistenceObserver) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	return o.persistence.ObserveEventLogReconciliation(ctx, reconciliation)
-}
-
 func (o *goalAuthorityPersistenceObserver) resetSnapshots() {
 	o.mu.Lock()
 	defer o.mu.Unlock()

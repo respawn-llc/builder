@@ -31,23 +31,6 @@ func (p gatedMetadataSessionPersistence) ObservePersistedStore(ctx context.Conte
 	return p.metadata.ImportSessionSnapshot(ctx, snapshot)
 }
 
-func (p gatedMetadataSessionPersistence) ObserveEventLogReconciliation(ctx context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	if err := p.sessions.ObserveEventLogReconciliation(ctx, reconciliation); err != nil {
-		return err
-	}
-	record, err := p.sessions.ResolvePersistedSession(ctx, reconciliation.SessionID)
-	if err != nil {
-		return err
-	}
-	if record.Meta == nil {
-		return errors.New("reconciled session metadata is required")
-	}
-	return p.metadata.ImportSessionSnapshot(ctx, session.PersistedStoreSnapshot{
-		SessionDir: record.SessionDir,
-		Meta:       *record.Meta,
-	})
-}
-
 func (p gatedMetadataSessionPersistence) ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error) {
 	return p.metadata.ResolvePersistedSession(ctx, sessionID)
 }

@@ -86,34 +86,6 @@ func (p *Persistence) ObservePersistedStore(_ context.Context, snapshot session.
 	return nil
 }
 
-func (p *Persistence) ObserveEventLogReconciliation(_ context.Context, reconciliation session.PersistedEventLogReconciliation) error {
-	record, ok := p.records.Get(reconciliation.SessionID)
-	if !ok {
-		return session.ErrSessionNotFound
-	}
-	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
-	if err != nil {
-		return err
-	}
-	meta := cloneMeta(record.Meta)
-	if meta.LastSequence != reconciliation.ObservedLastSequence {
-		return session.EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  meta.LastSequence,
-		}
-	}
-	meta.LastSequence = reconciliation.LastSequence
-	meta.ConversationEstablished = reconciliation.ConversationEstablished
-	meta.UpdatedAt = reconciliation.UpdatedAt
-	if invalidateUsageState {
-		meta.UsageState = nil
-	}
-	record.Meta = meta
-	p.records.Put(reconciliation.SessionID, record)
-	return nil
-}
-
 func (p *Persistence) ResolvePersistedSession(_ context.Context, sessionID string) (session.PersistedSessionRecord, error) {
 	record, ok := p.records.Get(sessionID)
 	if !ok {

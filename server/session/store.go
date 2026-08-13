@@ -1311,11 +1311,14 @@ func (s *Store) ensurePersistedLocked() error {
 	if err := os.MkdirAll(s.sessionDir, 0o755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
-	if err := os.WriteFile(s.eventsFP, nil, 0o644); err != nil {
-		return fmt.Errorf("initialize events file: %w", err)
+	if _, err := createCurrentEventLog(s.eventsFP); err != nil {
+		return fmt.Errorf("initialize current event log: %w", err)
 	}
 	if err := initializeEventLogPersistenceLock(s.sessionDir); err != nil {
 		return err
+	}
+	if err := syncSessionDirectory(s.sessionDir); err != nil {
+		return fmt.Errorf("sync session creation artifacts: %w", err)
 	}
 	s.persisted = true
 	return nil
@@ -1347,24 +1350,6 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		return nil
 	}
 	if err := s.options.observer.ObservePersistedStore(context.Background(), *observation.snapshot); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	if observation.version > s.persistedMetaVersion {
-		s.persistedMetaVersion = observation.version
-	}
-	s.mu.Unlock()
-	return nil
-}
-
-func (s *Store) observeEventLogReconciliation(observation *eventLogReconciliationObservation) error {
-	if observation == nil {
-		return nil
-	}
-	if s == nil || s.options.reconciler == nil {
-		return errEventLogReconcilerRequired
-	}
-	if err := s.options.reconciler.ObserveEventLogReconciliation(context.Background(), observation.reconciliation); err != nil {
 		return err
 	}
 	s.mu.Lock()

@@ -287,37 +287,6 @@ func (p *diagnosticCopyPersistence) ObservePersistedStore(
 	return nil
 }
 
-func (p *diagnosticCopyPersistence) ObserveEventLogReconciliation(
-	_ context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.record.Meta == nil || p.record.Meta.SessionID != reconciliation.SessionID {
-		return ErrSessionNotFound
-	}
-	if p.record.Meta.LastSequence != reconciliation.ObservedLastSequence {
-		return EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  p.record.Meta.LastSequence,
-		}
-	}
-	invalidateUsage, err := reconciliation.UsageState.InvalidatesUsageState()
-	if err != nil {
-		return err
-	}
-	meta := cloneMeta(*p.record.Meta)
-	meta.LastSequence = reconciliation.LastSequence
-	meta.ConversationEstablished = reconciliation.ConversationEstablished
-	meta.UpdatedAt = reconciliation.UpdatedAt
-	if invalidateUsage {
-		meta.UsageState = nil
-	}
-	p.record.Meta = &meta
-	return nil
-}
-
 func diagnosticCopyMeta(meta *Meta) *Meta {
 	if meta == nil {
 		return nil

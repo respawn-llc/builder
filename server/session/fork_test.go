@@ -114,13 +114,6 @@ func (p *forkReplayCountingPersistence) ObservePersistedStore(
 	return nil
 }
 
-func (p *forkReplayCountingPersistence) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	return p.base.ObserveEventLogReconciliation(ctx, reconciliation)
-}
-
 func (p *forkReplayCountingPersistence) ResolvePersistedSession(
 	ctx context.Context,
 	sessionID string,

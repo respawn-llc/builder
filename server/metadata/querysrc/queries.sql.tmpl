@@ -2019,23 +2019,6 @@ ON CONFLICT(id) DO UPDATE SET
     usage_state_json = excluded.usage_state_json,
     metadata_json = excluded.metadata_json;
 
--- name: ReconcileSessionEventLog :execrows
-UPDATE sessions
-SET
-    last_sequence = sqlc.arg(last_sequence),
-    updated_at_unix_ms = MAX(updated_at_unix_ms, sqlc.arg(updated_at_unix_ms)),
-    usage_state_json = CASE
-        WHEN sqlc.arg(invalidate_usage_state) <> 0 THEN 'null'
-        ELSE usage_state_json
-    END,
-    metadata_json = json_set(
-        CASE WHEN json_valid(metadata_json) THEN metadata_json ELSE '{}' END,
-        '$.conversation_established',
-        json(CASE WHEN sqlc.arg(conversation_established) <> 0 THEN 'true' ELSE 'false' END)
-    )
-WHERE id = sqlc.arg(session_id)
-  AND last_sequence = sqlc.arg(observed_last_sequence);
-
 -- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects

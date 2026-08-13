@@ -13,11 +13,6 @@ const (
 	currentEventLogTailRepairMaxBytes = int64(16 << 20)
 )
 
-type eventLogReconciliationObservation struct {
-	reconciliation PersistedEventLogReconciliation
-	version        uint64
-}
-
 func writeAll(fp *os.File, payload []byte) (int, error) {
 	offset := 0
 	for offset < len(payload) {

@@ -155,8 +155,8 @@ func mustCreateTestSession(t *testing.T, workspaceRoot ...string) *session.Store
 var runtimeTestSessionPersistence = sessiontest.NewPersistence()
 
 type testPersistenceObserver struct {
-	observer   session.PersistenceObserver
-	reconciler *sessiontest.Persistence
+	observer    session.PersistenceObserver
+	persistence *sessiontest.Persistence
 }
 
 func (o testPersistenceObserver) ObservePersistedStore(
@@ -164,24 +164,17 @@ func (o testPersistenceObserver) ObservePersistedStore(
 	snapshot session.PersistedStoreSnapshot,
 ) error {
 	return errors.Join(
-		o.reconciler.ObservePersistedStore(ctx, snapshot),
+		o.persistence.ObservePersistedStore(ctx, snapshot),
 		o.observer.ObservePersistedStore(ctx, snapshot),
 	)
-}
-
-func (o testPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation session.PersistedEventLogReconciliation,
-) error {
-	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
 func withRuntimeTestPersistenceObserver(
 	observer session.PersistenceObserver,
 ) session.StoreOption {
 	return session.WithPersistenceObserver(testPersistenceObserver{
-		observer:   observer,
-		reconciler: runtimeTestSessionPersistence,
+		observer:    observer,
+		persistence: runtimeTestSessionPersistence,
 	})
 }
 

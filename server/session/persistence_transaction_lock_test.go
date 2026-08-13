@@ -54,17 +54,6 @@ func (o *blockingAfterPersistenceObserver) ObservePersistedStore(
 	}
 }
 
-func (o *blockingAfterPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation PersistedEventLogReconciliation,
-) error {
-	downstream, ok := o.downstream.(EventLogReconciliationObserver)
-	if !ok {
-		return errEventLogReconcilerRequired
-	}
-	return downstream.ObserveEventLogReconciliation(ctx, reconciliation)
-}
-
 func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
 	observer := newBlockingAfterPersistenceObserver(persistence)

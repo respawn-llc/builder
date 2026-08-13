@@ -27,34 +27,6 @@ func (p *testSessionMetadata) ObservePersistedStore(_ context.Context, snapshot 
 	return nil
 }
 
-func (p *testSessionMetadata) ObserveEventLogReconciliation(_ context.Context, reconciliation PersistedEventLogReconciliation) error {
-	record, ok := p.sharedStore().Get(reconciliation.SessionID)
-	if !ok {
-		return ErrSessionNotFound
-	}
-	invalidateUsageState, err := reconciliation.UsageState.InvalidatesUsageState()
-	if err != nil {
-		return err
-	}
-	meta := cloneTestMeta(record.Meta)
-	if meta.LastSequence != reconciliation.ObservedLastSequence {
-		return EventLogReconciliationConflictError{
-			SessionID:            reconciliation.SessionID,
-			ObservedLastSequence: reconciliation.ObservedLastSequence,
-			CurrentLastSequence:  meta.LastSequence,
-		}
-	}
-	meta.LastSequence = reconciliation.LastSequence
-	meta.ConversationEstablished = reconciliation.ConversationEstablished
-	meta.UpdatedAt = reconciliation.UpdatedAt
-	if invalidateUsageState {
-		meta.UsageState = nil
-	}
-	record.Meta = meta
-	p.sharedStore().Put(reconciliation.SessionID, record)
-	return nil
-}
-
 func (p *testSessionMetadata) ResolvePersistedSession(_ context.Context, sessionID string) (PersistedSessionRecord, error) {
 	record, ok := p.sharedStore().Get(sessionID)
 	if !ok {

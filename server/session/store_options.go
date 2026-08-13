@@ -24,7 +24,6 @@ type StoreOption func(*storeOptions)
 
 type storeOptions struct {
 	observer           PersistenceObserver
-	reconciler         EventLogReconciliationObserver
 	resolver           PersistedSessionResolver
 	durabilityObserver DurabilityObserver
 	now                func() time.Time
@@ -33,9 +32,6 @@ type storeOptions struct {
 func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 	return func(options *storeOptions) {
 		options.observer = observer
-		if reconciler, ok := observer.(EventLogReconciliationObserver); ok {
-			options.reconciler = reconciler
-		}
 	}
 }
 

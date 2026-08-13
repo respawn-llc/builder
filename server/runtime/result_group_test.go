@@ -13,8 +13,7 @@ import (
 )
 
 type callbackPersistenceObserver struct {
-	delegate   session.PersistenceObserver
-	reconciler session.EventLogReconciliationObserver
+	delegate session.PersistenceObserver
 
 	mu       sync.Mutex
 	callback func()
@@ -23,11 +22,7 @@ type callbackPersistenceObserver struct {
 func newCallbackPersistenceObserver(
 	delegate session.PersistenceObserver,
 ) *callbackPersistenceObserver {
-	reconciler, _ := delegate.(session.EventLogReconciliationObserver)
-	return &callbackPersistenceObserver{
-		delegate:   delegate,
-		reconciler: reconciler,
-	}
+	return &callbackPersistenceObserver{delegate: delegate}
 }
 
 func (o *callbackPersistenceObserver) Arm(callback func()) {
@@ -54,16 +49,6 @@ func (o *callbackPersistenceObserver) ObservePersistedStore(
 		callback()
 	}
 	return nil
-}
-
-func (o *callbackPersistenceObserver) ObserveEventLogReconciliation(
-	ctx context.Context,
-	reconciliation session.PersistedEventLogReconciliation,
-) error {
-	if o.reconciler == nil {
-		return nil
-	}
-	return o.reconciler.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
 func prepareSimpleResultGroupCall(
