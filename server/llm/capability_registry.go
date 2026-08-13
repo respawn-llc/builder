@@ -100,30 +100,6 @@ func resolveProviderTransportVariant(provider Provider, endpoint ProviderTranspo
 	return registration.Variant, nil
 }
 
-func applyProviderCapabilitiesOverride(variant ProviderVariantContract, override *ProviderCapabilities) ProviderVariantContract {
-	variant.Capabilities = ApplyProviderCapabilitiesOverride(variant.Capabilities, override)
-	return variant
-}
-
-// ApplyProviderCapabilitiesOverride applies configured provider capability
-// values while keeping the endpoint-resolved provider identity authoritative.
-// The transport variant, including request compression, remains owned by the
-// endpoint resolver; this function only projects the general capability
-// override onto the resolved runtime contract.
-func ApplyProviderCapabilitiesOverride(base ProviderCapabilities, override *ProviderCapabilities) ProviderCapabilities {
-	if override == nil {
-		return base
-	}
-	overrideID := strings.TrimSpace(override.ProviderID)
-	if _, registered := lookupProviderVariantContract(overrideID); registered {
-		if overrideID != base.ProviderID {
-			return base
-		}
-		return *override
-	}
-	return *override
-}
-
 func resolveOpenAITransportProviderVariant(endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (string, error) {
 	if mode.IsOAuth {
 		if !endpoint.Explicit || isChatGPTCodexEndpoint(endpoint.URL) {

@@ -26,7 +26,8 @@ func TestSmallPackagesRemainExplicitlyClassified(t *testing.T) {
 
 	violations := make([]string, 0)
 	for path, pkg := range smallPackages {
-		if strings.TrimSpace(allowedSmallPackages[path]) == "" {
+		if strings.TrimSpace(allowedSmallPackages[path]) == "" &&
+			strings.TrimSpace(allowedPackageClassifications[path]) == "" {
 			violations = append(violations, path+" is a small/test-only first-party package without an explicit merge/exception classification"+
 				" (go_files="+strconv.Itoa(pkg.GoFiles)+", test_files="+strconv.Itoa(pkg.TestGoFiles+pkg.XTestGoFiles)+")")
 		}
@@ -42,6 +43,15 @@ func TestSmallPackagesRemainExplicitlyClassified(t *testing.T) {
 		}
 		if _, ok := smallPackages[path]; !ok {
 			violations = append(violations, path+" is a stale small-package exception for a package that is no longer small")
+		}
+	}
+	for path, reason := range allowedPackageClassifications {
+		if strings.TrimSpace(reason) == "" {
+			violations = append(violations, path+" has an empty package classification rationale")
+			continue
+		}
+		if _, ok := allPackages[path]; !ok {
+			violations = append(violations, path+" is a stale package classification for a package that no longer exists")
 		}
 	}
 	if len(violations) > 0 {
@@ -140,4 +150,9 @@ var allowedSmallPackages = map[string]string{
 	"shared/toolspec":                         "shared model-facing tool spec contract required below runtime, runtimewire, and clients",
 	"shared/transcriptdiag":                   "transcript diagnostic DTO adapter kept separate because transcript and clientui dependencies would cycle",
 	"shared/workflowkey":                      "shared workflow key contract required by workflow validation and shared server API",
+}
+
+var allowedPackageClassifications = map[string]string{
+	"internal/testharness/httpclient": "test-only shared HTTP RoundTripper adapter owned by the generic HTTP client harness and reused across external-service and model transport tests",
+	"server/httpcompression":          "cohesive production owner for third-party HTTP content coding across current callers; kept separate from provider and service packages to preserve one provider-neutral transport boundary",
 }

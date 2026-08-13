@@ -192,27 +192,27 @@ func TestProviderCapabilitiesForSettingsRejectsUnsupportedProviderOverride(t *te
 	}
 }
 
-func TestHTTPTransportUsesEndpointVariantWhenPersistedCapabilitiesTargetAnotherBuiltInVariant(t *testing.T) {
+func TestHTTPTransportPreservesConfiguredCapabilitiesOverrideAcrossEndpointVariant(t *testing.T) {
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.BaseURL = "https://proxy.example/v1"
 	transport.BaseURLExplicit = true
 	transport.ProviderCapabilitiesOverride = &ProviderCapabilities{
-		ProviderID:                     "chatgpt-codex",
-		SupportsResponsesAPI:           true,
-		SupportsResponsesCompact:       true,
-		SupportsNativeWebSearch:        true,
-		SupportsReasoningEncrypted:     true,
-		SupportsServerSideContextEdit:  true,
-		SupportsProviderVerbosity:      true,
-		IsOpenAIFirstParty:             true,
+		ProviderID:                    "chatgpt-codex",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		SupportsProviderVerbosity:     true,
+		IsOpenAIFirstParty:            true,
 	}
 
 	caps, err := transport.ProviderCapabilities(context.Background())
 	if err != nil {
 		t.Fatalf("ProviderCapabilities: %v", err)
 	}
-	if caps.ProviderID != "openai-compatible" || caps.SupportsResponsesCompact || caps.IsOpenAIFirstParty {
-		t.Fatalf("capabilities = %+v, want endpoint-owned compatible capabilities", caps)
+	if caps.ProviderID != "chatgpt-codex" || !caps.SupportsResponsesCompact || !caps.IsOpenAIFirstParty {
+		t.Fatalf("capabilities = %+v, want configured capabilities override", caps)
 	}
 }
 
