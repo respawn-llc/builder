@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
@@ -52,13 +51,6 @@ type TaskDependencyRemoveResult struct {
 }
 
 func (s *Store) AddTaskDependency(ctx context.Context, req TaskDependencyAddRequest) (TaskDependencyAddResult, error) {
-	if strings.TrimSpace(string(req.BlockerTaskID)) == "" {
-		return TaskDependencyAddResult{}, errors.New("blocker task id is required")
-	}
-	if strings.TrimSpace(string(req.BlockedTaskID)) == "" {
-		return TaskDependencyAddResult{}, errors.New("blocked task id is required")
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TaskDependencyAddResult{}, fmt.Errorf("begin task dependency transaction: %w", err)
@@ -118,30 +110,27 @@ func attachTaskDependencyWithQueries(
 	if err != nil {
 		return workflow.TaskDependencyAttachRejected, err
 	}
+	if err := (workflow.TaskDependencyPolicy{}).ValidatePair(facts.TaskDependencyPairFacts); err != nil {
+		return workflow.TaskDependencyAttachRejected, err
+	}
+	inserted, err := q.InsertTaskDependency(ctx, sqlitegen.InsertTaskDependencyParams{
+		BlockerTaskID: string(req.BlockerTaskID),
+		BlockedTaskID: string(req.BlockedTaskID),
+	})
+	if err != nil {
+		return workflow.TaskDependencyAttachRejected, fmt.Errorf("insert task dependency %q -> %q: %w", req.BlockerTaskID, req.BlockedTaskID, err)
+	}
+	if inserted == 0 {
+		return workflow.TaskDependencyAttachAlreadyPresent, nil
+	}
 	decision, err := (workflow.TaskDependencyPolicy{}).EvaluateAttach(facts)
 	if err != nil {
 		return workflow.TaskDependencyAttachRejected, err
-	}
-	if decision == workflow.TaskDependencyAttachAlreadyPresent {
-		return decision, nil
-	}
-	if err := q.InsertTaskDependency(ctx, sqlitegen.InsertTaskDependencyParams{
-		BlockerTaskID: string(req.BlockerTaskID),
-		BlockedTaskID: string(req.BlockedTaskID),
-	}); err != nil {
-		return workflow.TaskDependencyAttachRejected, fmt.Errorf("insert task dependency %q -> %q: %w", req.BlockerTaskID, req.BlockedTaskID, err)
 	}
 	return decision, nil
 }
 
 func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemoveRequest) (TaskDependencyRemoveResult, error) {
-	if strings.TrimSpace(string(req.BlockerTaskID)) == "" {
-		return TaskDependencyRemoveResult{}, errors.New("blocker task id is required")
-	}
-	if strings.TrimSpace(string(req.BlockedTaskID)) == "" {
-		return TaskDependencyRemoveResult{}, errors.New("blocked task id is required")
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return TaskDependencyRemoveResult{}, fmt.Errorf("begin task dependency removal transaction: %w", err)
@@ -157,14 +146,11 @@ func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemo
 			BlockedTaskID: req.BlockedTaskID,
 		})
 	}
-	facts, err := loadTaskDependencyAttachFacts(ctx, q, TaskDependencyAddRequest{
-		BlockerTaskID: req.BlockerTaskID,
-		BlockedTaskID: req.BlockedTaskID,
-	})
+	facts, err := loadTaskDependencyPairFacts(ctx, q, req)
 	if err != nil {
 		return TaskDependencyRemoveResult{}, err
 	}
-	if err := (workflow.TaskDependencyPolicy{}).ValidatePair(facts.TaskDependencyPairFacts); err != nil {
+	if err := (workflow.TaskDependencyPolicy{}).ValidatePair(facts); err != nil {
 		return TaskDependencyRemoveResult{}, err
 	}
 	removed, err := q.DeleteTaskDependency(ctx, sqlitegen.DeleteTaskDependencyParams{
@@ -195,6 +181,36 @@ func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemo
 		return TaskDependencyRemoveResult{}, fmt.Errorf("commit task dependency removal: %w", err)
 	}
 	return result, nil
+}
+
+func loadTaskDependencyPairFacts(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	req TaskDependencyRemoveRequest,
+) (workflow.TaskDependencyPairFacts, error) {
+	facts := workflow.TaskDependencyPairFacts{
+		BlockerTaskID: req.BlockerTaskID,
+		BlockedTaskID: req.BlockedTaskID,
+	}
+	rows, err := q.GetTaskDependencyPairSnapshot(ctx, sqlitegen.GetTaskDependencyPairSnapshotParams{
+		BlockerTaskID: string(req.BlockerTaskID),
+		BlockedTaskID: string(req.BlockedTaskID),
+	})
+	if err != nil {
+		return workflow.TaskDependencyPairFacts{}, fmt.Errorf("load task dependency pair %q -> %q: %w", req.BlockerTaskID, req.BlockedTaskID, err)
+	}
+	for _, row := range rows {
+		task := &workflow.TaskDependencyTaskFacts{ID: workflow.TaskID(row.ID), ProjectID: row.ProjectID}
+		switch row.TaskRole {
+		case "blocker":
+			facts.Blocker = task
+		case "blocked":
+			facts.Blocked = task
+		default:
+			panic(fmt.Sprintf("task dependency pair snapshot returned invalid role %q", row.TaskRole))
+		}
+	}
+	return facts, nil
 }
 
 func populateTaskDependencyIdentity(ctx context.Context, q *sqlitegen.Queries, blockerShortID, blockedShortID, projectID *string, workflowID *runtimeids.WorkflowID, blockerTaskID, blockedTaskID workflow.TaskID) error {
@@ -252,17 +268,6 @@ func loadTaskDependencyAttachFacts(
 			ID:        workflow.TaskID(blocked.ID),
 			ProjectID: blocked.ProjectID,
 		}
-	}
-	exact, err := q.GetTaskDependency(ctx, sqlitegen.GetTaskDependencyParams{
-		BlockerTaskID: string(req.BlockerTaskID),
-		BlockedTaskID: string(req.BlockedTaskID),
-	})
-	switch {
-	case err == nil:
-		facts.ExactPairPresent = exact.BlockerTaskID == string(req.BlockerTaskID) && exact.BlockedTaskID == string(req.BlockedTaskID)
-	case errors.Is(err, sql.ErrNoRows):
-	default:
-		return workflow.TaskDependencyAttachFacts{}, fmt.Errorf("load task dependency %q -> %q: %w", req.BlockerTaskID, req.BlockedTaskID, err)
 	}
 	reverse, err := q.GetTaskDependency(ctx, sqlitegen.GetTaskDependencyParams{
 		BlockerTaskID: string(req.BlockedTaskID),

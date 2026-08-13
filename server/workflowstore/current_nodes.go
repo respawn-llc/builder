@@ -550,9 +550,6 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 // caller may explicitly resume. Pending Approval sources are excluded here
 // and again atomically by ResumeCurrentNode/AdmitCurrentNode.
 func (s *Store) InterruptedExecutableCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return nil, errors.New("task id is required")
-	}
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
 		return nil, err

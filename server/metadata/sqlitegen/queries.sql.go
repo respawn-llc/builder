@@ -2449,6 +2449,69 @@ func (q *Queries) GetTaskDependency(ctx context.Context, arg GetTaskDependencyPa
 	return i, err
 }
 
+const getTaskDependencyPairSnapshot = `-- name: GetTaskDependencyPairSnapshot :many
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id
+FROM task_records AS blocker
+WHERE blocker.id = ?1
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id
+FROM task_records AS blocked
+WHERE blocked.id = ?2
+`
+
+type GetTaskDependencyPairSnapshotParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+type GetTaskDependencyPairSnapshotRow struct {
+	TaskRole   string
+	ID         string
+	ProjectID  string
+	WorkflowID runtimeids.WorkflowID
+	ShortID    string
+}
+
+func (q *Queries) GetTaskDependencyPairSnapshot(ctx context.Context, arg GetTaskDependencyPairSnapshotParams) ([]GetTaskDependencyPairSnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, getTaskDependencyPairSnapshot, arg.BlockerTaskID, arg.BlockedTaskID)
+	err = recordQueryError(ctx, err, getTaskDependencyPairSnapshot, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTaskDependencyPairSnapshotRow
+	for rows.Next() {
+		var i GetTaskDependencyPairSnapshotRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.TaskRole,
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.ShortID,
+		), getTaskDependencyPairSnapshot, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), getTaskDependencyPairSnapshot, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), getTaskDependencyPairSnapshot, 2); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getTaskIdentityForComment = `-- name: GetTaskIdentityForComment :one
 SELECT t.id AS task_id, t.project_id, t.workflow_id
 FROM task_comments c
@@ -3543,9 +3606,10 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 	return err
 }
 
-const insertTaskDependency = `-- name: InsertTaskDependency :exec
+const insertTaskDependency = `-- name: InsertTaskDependency :execrows
 INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
 VALUES (?1, ?2)
+ON CONFLICT(blocker_task_id, blocked_task_id) DO NOTHING
 `
 
 type InsertTaskDependencyParams struct {
@@ -3553,10 +3617,13 @@ type InsertTaskDependencyParams struct {
 	BlockedTaskID string
 }
 
-func (q *Queries) InsertTaskDependency(ctx context.Context, arg InsertTaskDependencyParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
+func (q *Queries) InsertTaskDependency(ctx context.Context, arg InsertTaskDependencyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertTaskDependency, arg.BlockerTaskID, arg.BlockedTaskID)
 	err = recordQueryError(ctx, err, insertTaskDependency, 2)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertTaskLabelAssignment = `-- name: InsertTaskLabelAssignment :exec

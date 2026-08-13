@@ -46,9 +46,6 @@ var (
 )
 
 func (s *Store) ReplacePendingInitialManagedBranchName(ctx context.Context, taskID workflow.TaskID, branchName string) error {
-	if strings.TrimSpace(string(taskID)) == "" {
-		return errors.New("task id is required")
-	}
 	branchName = strings.TrimSpace(branchName)
 	if branchName == "" {
 		return errors.New("pending initial managed branch name is required")

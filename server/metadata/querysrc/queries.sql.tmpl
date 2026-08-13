@@ -3387,6 +3387,24 @@ WHERE id = (
 )
 RETURNING id;
 
+-- name: GetTaskDependencyPairSnapshot :many
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id
+FROM task_records AS blocker
+WHERE blocker.id = sqlc.arg(blocker_task_id)
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id
+FROM task_records AS blocked
+WHERE blocked.id = sqlc.arg(blocked_task_id);
 
 -- name: CountTaskDependenciesByBlocker :one
 SELECT COUNT(*) AS dependency_count
@@ -3400,9 +3418,10 @@ FROM task_dependencies
 WHERE blocked_task_id = sqlc.arg(blocked_task_id);
 
 
--- name: InsertTaskDependency :exec
+-- name: InsertTaskDependency :execrows
 INSERT INTO task_dependencies (blocker_task_id, blocked_task_id)
-VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id));
+VALUES (sqlc.arg(blocker_task_id), sqlc.arg(blocked_task_id))
+ON CONFLICT(blocker_task_id, blocked_task_id) DO NOTHING;
 
 
 -- name: DeleteTaskDependency :execrows

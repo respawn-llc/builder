@@ -135,9 +135,10 @@ func (s *customRouteSessionViewService) GetSessionExecutionEnvironmentValidated(
 
 type customRouteGatewayDependencies struct {
 	*core.Core
-	launch apicontract.SessionLaunchService
-	view   apicontract.SessionViewService
-	run    apicontract.RunPromptService
+	launch   apicontract.SessionLaunchService
+	view     apicontract.SessionViewService
+	run      apicontract.RunPromptService
+	workflow apicontract.WorkflowService
 }
 
 func (d *customRouteGatewayDependencies) SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error) {
@@ -158,6 +159,58 @@ func (d *customRouteGatewayDependencies) RunPromptClientForProjectWorkspace(cont
 
 func (d *customRouteGatewayDependencies) RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error) {
 	return d.run, nil
+}
+
+func (d *customRouteGatewayDependencies) WorkflowClient() apicontract.WorkflowService {
+	if d.workflow != nil {
+		return d.workflow
+	}
+	return d.Core.WorkflowClient()
+}
+
+type rejectingRawWorkflowService struct {
+	apicontract.WorkflowService
+	apicontract.WorkflowTrustedService
+}
+
+func TestGatewayWorkflowTaskMutationsRejectMalformedRequestsBeforeTrustedOwner(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	deps := &customRouteGatewayDependencies{
+		Core:     appCore,
+		workflow: &rejectingRawWorkflowService{},
+	}
+	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	for _, method := range []string{
+		protocol.MethodWorkflowTaskCreate,
+		protocol.MethodWorkflowTaskDependencyAdd,
+		protocol.MethodWorkflowTaskDependencyRemove,
+		protocol.MethodWorkflowTaskUpdate,
+		protocol.MethodWorkflowTaskStart,
+		protocol.MethodWorkflowTaskInterrupt,
+		protocol.MethodWorkflowTaskResume,
+		protocol.MethodWorkflowTaskApprove,
+		protocol.MethodWorkflowTaskMovePreview,
+		protocol.MethodWorkflowTaskMove,
+		protocol.MethodWorkflowTaskComplete,
+		protocol.MethodWorkflowTaskDelete,
+		protocol.MethodWorkflowTaskObserve,
+	} {
+		t.Run(method, func(t *testing.T) {
+			response := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+				JSONRPC: protocol.JSONRPCVersion,
+				ID:      method,
+				Method:  method,
+				Params:  []byte(`{}`),
+			})
+			if response.Error == nil || response.Error.Code == protocol.ErrCodeInternalError {
+				t.Fatalf("response = %+v, want request validation failure before trusted owner", response)
+			}
+		})
+	}
 }
 
 func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {

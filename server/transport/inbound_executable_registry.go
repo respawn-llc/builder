@@ -185,7 +185,20 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodWorkflowGraphValidateDraft,
 		protocol.MethodWorkflowGraphDeriveWiring,
 		protocol.MethodWorkflowGraphSavePreview,
-		protocol.MethodWorkflowGraphSave:
+		protocol.MethodWorkflowGraphSave,
+		protocol.MethodWorkflowTaskCreate,
+		protocol.MethodWorkflowTaskDependencyAdd,
+		protocol.MethodWorkflowTaskDependencyRemove,
+		protocol.MethodWorkflowTaskUpdate,
+		protocol.MethodWorkflowTaskStart,
+		protocol.MethodWorkflowTaskInterrupt,
+		protocol.MethodWorkflowTaskResume,
+		protocol.MethodWorkflowTaskApprove,
+		protocol.MethodWorkflowTaskMovePreview,
+		protocol.MethodWorkflowTaskMove,
+		protocol.MethodWorkflowTaskComplete,
+		protocol.MethodWorkflowTaskDelete,
+		protocol.MethodWorkflowTaskObserve:
 		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRuntimeGoalShow,
 		protocol.MethodRuntimeGoalSet,
@@ -356,6 +369,20 @@ func trustedServiceUnary[Req any, Resp any, Trusted any](
 				return zero, fmt.Errorf("%s trusted service is required", route.Dependency)
 			}
 			return call(trusted, ctx, req)
+		},
+	)
+}
+
+func trustedServiceUnaryNoResponse[Req any, Trusted any](
+	method string,
+	client func(GatewayDependencies) any,
+	call func(Trusted, context.Context, apicontract.Validated[Req]) error,
+) inboundExecutableRoute {
+	return trustedServiceUnary(
+		method,
+		client,
+		func(trusted Trusted, ctx context.Context, req apicontract.Validated[Req]) (struct{}, error) {
+			return struct{}{}, call(trusted, ctx, req)
 		},
 	)
 }
@@ -899,6 +926,19 @@ func registerProjectAndSmallServiceRoutes(executables map[string]inboundExecutab
 	executables[protocol.MethodWorkflowGraphDeriveWiring] = trustedServiceUnary(protocol.MethodWorkflowGraphDeriveWiring, workflowClient, apicontract.WorkflowTrustedService.DeriveWorkflowGraphWiringValidated)
 	executables[protocol.MethodWorkflowGraphSavePreview] = trustedServiceUnary(protocol.MethodWorkflowGraphSavePreview, workflowClient, apicontract.WorkflowTrustedService.PreviewWorkflowGraphSaveValidated)
 	executables[protocol.MethodWorkflowGraphSave] = trustedServiceUnary(protocol.MethodWorkflowGraphSave, workflowClient, apicontract.WorkflowTrustedService.SaveWorkflowGraphValidated)
+	executables[protocol.MethodWorkflowTaskCreate] = trustedServiceUnary(protocol.MethodWorkflowTaskCreate, workflowClient, apicontract.WorkflowTrustedService.CreateWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskDependencyAdd] = trustedServiceUnary(protocol.MethodWorkflowTaskDependencyAdd, workflowClient, apicontract.WorkflowTrustedService.AddWorkflowTaskDependencyValidated)
+	executables[protocol.MethodWorkflowTaskDependencyRemove] = trustedServiceUnary(protocol.MethodWorkflowTaskDependencyRemove, workflowClient, apicontract.WorkflowTrustedService.RemoveWorkflowTaskDependencyValidated)
+	executables[protocol.MethodWorkflowTaskUpdate] = trustedServiceUnary(protocol.MethodWorkflowTaskUpdate, workflowClient, apicontract.WorkflowTrustedService.UpdateWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskStart] = trustedServiceUnary(protocol.MethodWorkflowTaskStart, workflowClient, apicontract.WorkflowTrustedService.StartWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskInterrupt] = trustedServiceUnary(protocol.MethodWorkflowTaskInterrupt, workflowClient, apicontract.WorkflowTrustedService.InterruptWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskResume] = trustedServiceUnary(protocol.MethodWorkflowTaskResume, workflowClient, apicontract.WorkflowTrustedService.ResumeWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskApprove] = trustedServiceUnary(protocol.MethodWorkflowTaskApprove, workflowClient, apicontract.WorkflowTrustedService.ApproveWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskMovePreview] = trustedServiceUnary(protocol.MethodWorkflowTaskMovePreview, workflowClient, apicontract.WorkflowTrustedService.PreviewWorkflowTaskMoveValidated)
+	executables[protocol.MethodWorkflowTaskMove] = trustedServiceUnary(protocol.MethodWorkflowTaskMove, workflowClient, apicontract.WorkflowTrustedService.MoveWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskComplete] = trustedServiceUnary(protocol.MethodWorkflowTaskComplete, workflowClient, apicontract.WorkflowTrustedService.CompleteWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskDelete] = trustedServiceUnaryNoResponse(protocol.MethodWorkflowTaskDelete, workflowClient, apicontract.WorkflowTrustedService.DeleteWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowTaskObserve] = trustedServiceUnary(protocol.MethodWorkflowTaskObserve, workflowClient, apicontract.WorkflowTrustedService.ObserveWorkflowTaskValidated)
 
 	executables[protocol.MethodAuthGetStatus] = trustedServiceUnary(
 		protocol.MethodAuthGetStatus,

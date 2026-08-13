@@ -30,7 +30,6 @@ type TaskDependencyPairFacts struct {
 
 type TaskDependencyAttachFacts struct {
 	TaskDependencyPairFacts
-	ExactPairPresent     bool
 	ReversePairPresent   bool
 	BlockerOutgoingCount int64
 	BlockedIncomingCount int64
@@ -172,9 +171,6 @@ func (TaskDependencyPolicy) AddAvailability(currentCount int64) (TaskDependencyA
 func (TaskDependencyPolicy) EvaluateAttach(facts TaskDependencyAttachFacts) (TaskDependencyAttachDecision, error) {
 	if err := (TaskDependencyPolicy{}).ValidatePair(facts.TaskDependencyPairFacts); err != nil {
 		return TaskDependencyAttachRejected, err
-	}
-	if facts.ExactPairPresent {
-		return TaskDependencyAttachAlreadyPresent, nil
 	}
 	if facts.ReversePairPresent {
 		return TaskDependencyAttachRejected, TaskDependencyPolicyError{
