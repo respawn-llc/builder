@@ -739,7 +739,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 		if !isError {
 			role = StyleRoleWarning
 		}
-		return role, ProviderModelMismatchNoticeText(row.ProviderModelMismatch)
+		return role, providerModelMismatchNoticeText(row.ProviderModelMismatch)
 	}
 	if isError && row.Reason == clientui.TranscriptNoticeLegacyUntypedNotice && row.LegacyText != nil {
 		return role, *row.LegacyText
@@ -786,7 +786,7 @@ func noticeRoleAndText(row *clientui.TranscriptNoticeRow, visibility clientui.En
 	return role, text
 }
 
-func ProviderModelMismatchNoticeText(mismatch *transcript.ProviderModelMismatchNotice) string {
+func providerModelMismatchNoticeText(mismatch *transcript.ProviderModelMismatchNotice) string {
 	return fmt.Sprintf(
 		"The provider served the request with %s instead of %s",
 		mismatch.ServedModel,

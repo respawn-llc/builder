@@ -82,6 +82,20 @@ func TestRuntimeRejectsScriptThatDoesNotEndWithAssistantFinal(t *testing.T) {
 	}
 }
 
+func TestRuntimeRejectsPresentBlankServedModel(t *testing.T) {
+	blank := " "
+	for _, script := range []ScriptFile{
+		{Final: "answer", ServedModel: &blank},
+		{Steps: []StepFile{{Final: "answer", ServedModel: &blank}}},
+	} {
+		runtime, err := NewRuntime(writeRuntimeScriptFile(t, script), nil)
+		if err == nil {
+			_ = runtime.Close()
+			t.Fatal("runtime accepted present blank served_model")
+		}
+	}
+}
+
 func writeRuntimeScriptFile(t *testing.T, script ScriptFile) string {
 	t.Helper()
 	encoded, err := json.Marshal(script)

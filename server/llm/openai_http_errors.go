@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -33,6 +34,10 @@ func (m openAIRequestErrorMapper) Map(err error, rawResp *http.Response, prefix 
 	if ok && reducedErr != nil {
 		enrichProviderAPIErrorFromResponseHeaders(reducedErr, rawResp)
 		return fmt.Errorf("%s: %w", prefix, reducedErr)
+	}
+	var providerErr *ProviderAPIError
+	if errors.As(err, &providerErr) {
+		enrichProviderAPIErrorFromResponseHeaders(providerErr, rawResp)
 	}
 	if err == nil {
 		return fmt.Errorf("%s: unknown error", prefix)

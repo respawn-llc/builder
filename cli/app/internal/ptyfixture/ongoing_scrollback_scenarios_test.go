@@ -13,7 +13,6 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
-	"core/shared/transcript"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -23,12 +22,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	bin := buildPTYFixtureBinary(t, buildCtx)
 	scenarioSlots := make(chan struct{}, 4)
 	modelMismatchCompletionDrain := time.Second
-	modelMismatchNotice := transcriptrender.ProviderModelMismatchNoticeText(
-		&transcript.ProviderModelMismatchNotice{
-			RequestedModel: "gpt-5",
-			ServedModel:    "served-model",
-		},
-	)
 
 	for _, tc := range []struct {
 		name                      string
@@ -44,6 +37,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
 		expectedDetailScreenRows  []string
+		expectedWarningAppends    int
+		expectedDetailWarnings    int
 		allowsAltScroll           bool
 		allowsFullScreen          bool
 		completionDrain           *time.Duration
@@ -142,11 +137,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
 				},
 			}},
-			expectedAppends:          []string{"❮ normal mismatch answer"},
-			forbiddenAnyAppends:      []string{modelMismatchNotice},
-			expectedDetailScreenRows: []string{" ⚠ " + modelMismatchNotice},
-			allowsAltScroll:          true,
-			allowsFullScreen:         true,
+			expectedAppends:        []string{"❮ normal mismatch answer"},
+			expectedDetailWarnings: 1,
+			allowsAltScroll:        true,
+			allowsFullScreen:       true,
 		},
 		{
 			name: "provider_model_mismatch_visible_in_debug_ongoing",
@@ -158,9 +152,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedAppends: []string{
 				"❮ debug mismatch answer",
-				"⚠ " + modelMismatchNotice,
 			},
-			completionDrain: &modelMismatchCompletionDrain,
+			expectedWarningAppends: 1,
+			completionDrain:        &modelMismatchCompletionDrain,
 		},
 		{
 			name: "parallel_tools_order_and_long_output",
@@ -432,6 +426,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("expected full-window append: %v", err)
 				}
 			}
+			if got := countAppendRowsWithRune(allAppends, '⚠'); got != tc.expectedWarningAppends {
+				t.Fatalf("warning append count = %d, want %d", got, tc.expectedWarningAppends)
+			}
 			for _, content := range tc.forbiddenAnyAppends {
 				if err := contentNotAppended(allAppends, content); err != nil {
 					t.Fatalf("forbidden full-window append: %v", err)
@@ -447,6 +444,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}
 			if len(tc.expectedDetailScreenRows) > 0 {
 				assertScenarioDetailScreenRows(t, capture, tc.expectedDetailScreenRows)
+			}
+			if tc.expectedDetailWarnings > 0 {
+				assertScenarioDetailWarningRows(t, capture, tc.expectedDetailWarnings)
 			}
 		})
 	}
@@ -552,6 +552,23 @@ func assertScenarioDetailScreenRows(t *testing.T, capture pty.Capture, expected 
 		if err := screenRowAppearsExactlyOnce(screens[0], row); err != nil {
 			t.Fatalf("expected detail screen row: %v", err)
 		}
+	}
+}
+
+func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected int) {
+	t.Helper()
+	if len(capture.FrameInputDispatches) < 4 {
+		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
+	}
+	exitDispatch := capture.FrameInputDispatches[2]
+	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
+		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
+	}})
+	if err != nil {
+		t.Fatalf("replay detail screen: %v", err)
+	}
+	if got := countScreenRowsWithCell(screens[0], "⚠"); got != expected {
+		t.Fatalf("detail warning row count = %d, want %d", got, expected)
 	}
 }
 
@@ -724,6 +741,19 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 	return nil
 }
 
+func countAppendRowsWithRune(appends []logicalAppendRow, expected rune) int {
+	count := 0
+	for _, row := range appends {
+		for _, value := range []rune(row.text()) {
+			if value == expected {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
 func contentAppendedAtLeastOnce(appends []logicalAppendRow, content string) error {
 	for _, row := range appends {
 		if row.text() == content {
@@ -770,6 +800,19 @@ func screenRowAppearsExactlyOnce(screen pty.ScreenSnapshot, expected string) err
 		return fmt.Errorf("screen row count for %q = %d, want exactly 1; complete_rows=%q", expected, count, rows)
 	}
 	return nil
+}
+
+func countScreenRowsWithCell(screen pty.ScreenSnapshot, expected string) int {
+	count := 0
+	for _, row := range screen.Cells {
+		for _, cell := range row {
+			if cell.Content == expected {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func firstOperationAtOrAfterByte(operations []pty.Operation, offset int64) int {

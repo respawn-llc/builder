@@ -266,7 +266,7 @@ func TestProviderModelMismatchNoticeRendersReadableWarningInDetailModes(t *testi
 			ServedModel:    "served-model",
 		},
 	}
-	want := ProviderModelMismatchNoticeText(notice.ProviderModelMismatch)
+	want := providerModelMismatchNoticeText(notice.ProviderModelMismatch)
 	for _, mode := range []Mode{ModeDetailCollapsed, ModeDetailExpanded} {
 		rendered := RenderCommittedRow(errorNoticeRow(notice), 120, "dark", mode)
 		var got strings.Builder
