@@ -316,6 +316,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
 			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
+			completionDrain:    &modelMismatchCompletionDrain,
 		},
 		{
 			name: "live_failed_tools_retain_input",
