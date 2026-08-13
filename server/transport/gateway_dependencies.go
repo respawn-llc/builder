@@ -81,11 +81,6 @@ func (g *Gateway) resolveSessionAttachmentTarget(ctx context.Context, state *con
 	return target, binding, nil
 }
 
-func (g *Gateway) resolveSessionAttachment(ctx context.Context, state *connectionState, sessionID string) (metadata.Binding, error) {
-	_, binding, err := g.resolveSessionAttachmentTarget(ctx, state, sessionID)
-	return binding, err
-}
-
 func (g *Gateway) promptCommandWorkspaceRootForState(ctx context.Context, state *connectionState, sessionID *runtimeids.SessionID) (string, error) {
 	if state == nil {
 		return "", errors.New("connection state is required")

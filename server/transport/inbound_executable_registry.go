@@ -10,6 +10,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -286,6 +287,44 @@ func authorizeProcessActiveProject[Req any](
 	}
 }
 
+func authorizeSessionAttachment(
+	ctx context.Context,
+	g *Gateway,
+	state *connectionState,
+	validated apicontract.Validated[protocol.AttachSessionRequest],
+) (apicontract.AuthorizedSessionAttachment, error) {
+	request := validated.Value()
+	sessionID, err := runtimeids.ParseSessionID(request.SessionID)
+	if err != nil {
+		return apicontract.AuthorizedSessionAttachment{}, err
+	}
+	metadataStore := g.deps.MetadataStore()
+	if metadataStore == nil {
+		return apicontract.AuthorizedSessionAttachment{}, errors.New("metadata store is required")
+	}
+	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, sessionID.String())
+	if err != nil {
+		return apicontract.AuthorizedSessionAttachment{}, err
+	}
+	binding, err := metadataStore.LookupWorkspaceBindingByID(ctx, target.WorkspaceID)
+	if err != nil {
+		return apicontract.AuthorizedSessionAttachment{}, err
+	}
+	activeProjectID := strings.TrimSpace(g.deps.ProjectID())
+	if state != nil && strings.TrimSpace(state.attachedProject) != "" {
+		activeProjectID = strings.TrimSpace(state.attachedProject)
+	}
+	if activeProjectID != "" && strings.TrimSpace(binding.ProjectID) != activeProjectID {
+		return apicontract.AuthorizedSessionAttachment{}, sessionOutsideActiveProjectError{sessionID: sessionID.String()}
+	}
+	return apicontract.AuthorizedSessionAttachment{
+		SessionID:     sessionID,
+		ProjectID:     binding.ProjectID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: binding.CanonicalRoot,
+	}, nil
+}
+
 func executeLegacyUnary[Req any, Authz any](
 	g *Gateway,
 	ctx context.Context,
@@ -359,6 +398,14 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	attachProject := executables[protocol.MethodAttachProject]
 	attachProject.executeUnary = executeAttachProject
 	executables[protocol.MethodAttachProject] = attachProject
+	executables[protocol.MethodAttachSession] = inboundTrustedUnary[protocol.AttachSessionRequest, apicontract.AuthorizedSessionAttachment, protocol.AttachResponse](
+		protocol.MethodAttachSession,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionAttachment,
+		handleAttachSession,
+	)
 	runPrompt := executables[protocol.MethodRunPrompt]
 	runPrompt.executeProgress = executeRunPrompt
 	executables[protocol.MethodRunPrompt] = runPrompt
@@ -438,6 +485,29 @@ func handleWorktreeWorkspaceList(
 		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree service does not implement trusted Workspace list")
 	}
 	return trusted.ListWorkspaceWorktreesValidated(ctx, request, binding)
+}
+
+func handleAttachSession(
+	_ context.Context,
+	_ *Gateway,
+	state *connectionState,
+	_ apicontract.Validated[protocol.AttachSessionRequest],
+	attachment apicontract.AuthorizedSessionAttachment,
+) (protocol.AttachResponse, error) {
+	response, err := protocol.SessionAttachResponse(
+		attachment.ProjectID,
+		attachment.WorkspaceID,
+		attachment.CanonicalRoot,
+		attachment.SessionID.String(),
+	)
+	if err != nil {
+		return protocol.AttachResponse{}, err
+	}
+	state.attachedProject = attachment.ProjectID
+	state.attachedWorkspaceID = attachment.WorkspaceID
+	state.attachedWorkspaceRoot = attachment.CanonicalRoot
+	state.attachedSession = &attachment.SessionID
+	return response, nil
 }
 
 func handleProcessGet(

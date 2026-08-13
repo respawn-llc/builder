@@ -148,11 +148,30 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 		t.Fatal("optional foreign session unexpectedly allowed")
 	}
 
-	attachSessionRoute := routeForTest(t, protocol.MethodAttachSession)
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachSessionRoute, protocol.AttachSessionRequest{SessionID: fixture.ownSessionID}); err != nil {
+	ownAttach, err := rpccontract.WithValidated(
+		protocol.AttachSessionRequest{SessionID: fixture.ownSessionID},
+		rpccontract.SemanticValidationRequired,
+		func(validated rpccontract.Validated[protocol.AttachSessionRequest]) (rpccontract.AuthorizedSessionAttachment, error) {
+			return authorizeSessionAttachment(ctx, fixture.gateway, &connectionState{attachedProject: fixture.bindingA.ProjectID}, validated)
+		},
+	)
+	if err != nil {
 		t.Fatalf("attach own session: %v", err)
 	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachSessionRoute, protocol.AttachSessionRequest{SessionID: fixture.foreignSessionID}); err == nil {
+	if ownAttach.SessionID.String() != fixture.ownSessionID ||
+		ownAttach.ProjectID != fixture.bindingA.ProjectID ||
+		ownAttach.WorkspaceID != fixture.bindingA.WorkspaceID ||
+		ownAttach.CanonicalRoot != fixture.bindingA.CanonicalRoot {
+		t.Fatalf("attach authorization = %+v", ownAttach)
+	}
+	_, err = rpccontract.WithValidated(
+		protocol.AttachSessionRequest{SessionID: fixture.foreignSessionID},
+		rpccontract.SemanticValidationRequired,
+		func(validated rpccontract.Validated[protocol.AttachSessionRequest]) (rpccontract.AuthorizedSessionAttachment, error) {
+			return authorizeSessionAttachment(ctx, fixture.gateway, &connectionState{attachedProject: fixture.bindingA.ProjectID}, validated)
+		},
+	)
+	if err == nil {
 		t.Fatal("attach foreign session unexpectedly allowed")
 	}
 }

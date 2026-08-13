@@ -1,8 +1,18 @@
 package apicontract
 
-import "core/shared/clientui"
+import (
+	"core/shared/clientui"
+	"core/shared/runtimeids"
+)
 
 type AuthorizedProjectWorkspaceBinding struct {
+	ProjectID     string
+	WorkspaceID   string
+	CanonicalRoot string
+}
+
+type AuthorizedSessionAttachment struct {
+	SessionID     runtimeids.SessionID
 	ProjectID     string
 	WorkspaceID   string
 	CanonicalRoot string

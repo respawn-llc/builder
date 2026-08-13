@@ -8,7 +8,6 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/protocol"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -173,31 +172,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			state.attachedWorkspaceRoot = attachedRoot
 			state.attachedSession = nil
 			return protocol.ProjectAttachResponseForRequest(params, attachedWorkspaceID, attachedRoot)
-		})
-	},
-	protocol.MethodAttachSession: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params protocol.AttachSessionRequest) (protocol.AttachResponse, error) {
-			if err := params.Validate(); err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			binding, err := g.resolveSessionAttachment(ctx, state, params.SessionID)
-			if err != nil {
-				return protocol.AttachResponse{}, err
-			}
-			state.attachedProject = binding.ProjectID
-			state.attachedWorkspaceID = binding.WorkspaceID
-			state.attachedWorkspaceRoot = binding.CanonicalRoot
-			parsedSessionID, parseErr := runtimeids.ParseSessionID(params.SessionID)
-			if parseErr != nil {
-				return protocol.AttachResponse{}, parseErr
-			}
-			state.attachedSession = &parsedSessionID
-			return protocol.SessionAttachResponse(
-				binding.ProjectID,
-				binding.WorkspaceID,
-				binding.CanonicalRoot,
-				params.SessionID,
-			)
 		})
 	},
 	protocol.MethodProjectList:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjects),

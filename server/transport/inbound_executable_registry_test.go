@@ -107,6 +107,14 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 		t.Fatal("worktree Workspace list registered with zero authorization facts")
 	}
 
+	attachSession := inboundExecutableRoutes[protocol.MethodAttachSession]
+	if attachSession.authorizationType != reflect.TypeOf(apicontract.AuthorizedSessionAttachment{}) {
+		t.Fatalf("Attach Session authorization type = %v, want AuthorizedSessionAttachment", attachSession.authorizationType)
+	}
+	if attachSession.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
+		t.Fatal("Attach Session registered with zero authorization facts")
+	}
+
 	for _, method := range []string{
 		protocol.MethodProcessGet,
 		protocol.MethodProcessKill,

@@ -207,9 +207,6 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 			return serverapi.ErrWorkspaceNotRegistered
 		}
 		return nil
-	case rpccontract.ScopeAttachSession:
-		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
-		return err
 	case rpccontract.ScopeSessionActiveProject:
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionActiveProjectIfSet:
