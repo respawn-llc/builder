@@ -95,6 +95,20 @@ func (m *Manager) GenerateTargets(targets []Target) error {
 	})
 }
 
+func (m *Manager) Clean(targets []Target) error {
+	return m.withLock(func() error {
+		for _, target := range targets {
+			if err := os.RemoveAll(filepath.Join(m.RepositoryRoot, target.OutputPath)); err != nil {
+				return err
+			}
+			if err := os.Remove(m.manifestPath(target)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (m *Manager) Verify(targets []Target) error {
 	return m.withLock(func() error {
 		for _, target := range targets {

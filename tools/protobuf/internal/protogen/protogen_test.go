@@ -100,6 +100,22 @@ func TestVerifyRejectsNondeterministicGeneration(t *testing.T) {
 	}
 }
 
+func TestCleanRemovesGeneratedOutputAndManifest(t *testing.T) {
+	manager, target, _ := newFixtureManager(t)
+	if err := manager.Ensure([]Target{target}); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Clean([]Target{target}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(manager.RepositoryRoot, target.OutputPath)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated output stat error = %v", err)
+	}
+	if _, err := os.Stat(manager.manifestPath(target)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("manifest stat error = %v", err)
+	}
+}
+
 func newFixtureManager(t *testing.T) (*Manager, Target, *atomic.Int32) {
 	t.Helper()
 	root := t.TempDir()

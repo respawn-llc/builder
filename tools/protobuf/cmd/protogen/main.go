@@ -10,7 +10,7 @@ import (
 
 func main() {
 	if len(os.Args) != 3 {
-		fail("usage: protogen <ensure|generate|verify> <go|ts|all>")
+		fail("usage: protogen <ensure|generate|verify|clean> <go|ts|all>")
 	}
 	repositoryRoot, err := findRepositoryRoot()
 	if err != nil {
@@ -28,8 +28,10 @@ func main() {
 		err = manager.GenerateTargets(targets)
 	case "verify":
 		err = manager.Verify(targets)
+	case "clean":
+		err = manager.Clean(targets)
 	default:
-		fail("usage: protogen <ensure|generate|verify> <go|ts|all>")
+		fail("usage: protogen <ensure|generate|verify|clean> <go|ts|all>")
 	}
 	if err != nil {
 		fail(err.Error())
