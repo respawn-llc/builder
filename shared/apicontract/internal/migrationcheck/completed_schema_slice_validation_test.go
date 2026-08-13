@@ -14,6 +14,105 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
+func TestSessionPlanActiveSettingsRejectInvalidZeroValues(t *testing.T) {
+	valid := validGeneratedActiveSettings()
+	if err := protoapi.ValidateGeneratedMessage(valid); err != nil {
+		t.Fatalf("valid active settings: %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*sessionlaunchpb.Settings)
+	}{
+		{name: "model request timeout", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.Timeouts.ModelRequestSeconds = 0
+		}},
+		{name: "server port", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.ServerPort = 0
+		}},
+		{name: "model context window", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.ModelContextWindow = 0
+		}},
+		{name: "compaction threshold", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.ContextCompactionThresholdTokens = 0
+		}},
+		{name: "pre-submit compaction lead", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.PreSubmitCompactionLeadTokens = 0
+		}},
+		{name: "minimum exec to background", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.MinimumExecToBgSeconds = 0
+		}},
+		{name: "shell output limit", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.ShellOutputMaxChars = 0
+		}},
+		{name: "reviewer context window", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.Reviewer.ModelContextWindow = 0
+		}},
+		{name: "reviewer timeout", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.Reviewer.TimeoutSeconds = 0
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			settings := proto.Clone(valid).(*sessionlaunchpb.Settings)
+			test.mutate(settings)
+			if err := protoapi.ValidateGeneratedMessage(settings); err == nil {
+				t.Fatal("invalid zero value accepted")
+			}
+		})
+	}
+}
+
+func TestSessionPlanActiveSettingsRejectUnspecifiedEnums(t *testing.T) {
+	valid := validGeneratedActiveSettings()
+	for _, test := range []struct {
+		name   string
+		mutate func(*sessionlaunchpb.Settings)
+	}{
+		{name: "compaction mode", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.CompactionMode = sessionlaunchpb.CompactionMode_COMPACTION_MODE_UNSPECIFIED
+		}},
+		{name: "background shell output", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.BgShellsOutput = sessionlaunchpb.BackgroundShellOutputMode_BACKGROUND_SHELL_OUTPUT_MODE_UNSPECIFIED
+		}},
+		{name: "cache warning mode", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.CacheWarningMode = sessionlaunchpb.CacheWarningMode_CACHE_WARNING_MODE_UNSPECIFIED
+		}},
+		{name: "sleep prevention", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.PreventSleep = sessionlaunchpb.SleepPreventionMode_SLEEP_PREVENTION_MODE_UNSPECIFIED
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			settings := proto.Clone(valid).(*sessionlaunchpb.Settings)
+			test.mutate(settings)
+			if err := protoapi.ValidateGeneratedMessage(settings); err == nil {
+				t.Fatal("unspecified active-setting enum accepted")
+			}
+		})
+	}
+}
+
+func validGeneratedActiveSettings() *sessionlaunchpb.Settings {
+	return &sessionlaunchpb.Settings{
+		ModelCapabilities:                &sessionlaunchpb.ModelCapabilitiesOverride{},
+		ProviderCapabilities:             &sessionlaunchpb.ProviderCapabilitiesOverride{},
+		ServerPort:                       53082,
+		ModelContextWindow:               40000,
+		ContextCompactionThresholdTokens: 38000,
+		PreSubmitCompactionLeadTokens:    1000,
+		MinimumExecToBgSeconds:           15,
+		CompactionMode:                   sessionlaunchpb.CompactionMode_COMPACTION_MODE_LOCAL,
+		Timeouts:                         &sessionlaunchpb.TimeoutSettings{ModelRequestSeconds: 120},
+		ShellOutputMaxChars:              16000,
+		BgShellsOutput:                   sessionlaunchpb.BackgroundShellOutputMode_BACKGROUND_SHELL_OUTPUT_MODE_DEFAULT,
+		Shell:                            &sessionlaunchpb.ShellSettings{PostprocessingMode: sessionlaunchpb.ShellPostprocessingMode_SHELL_POSTPROCESSING_MODE_BUILTIN},
+		CacheWarningMode:                 sessionlaunchpb.CacheWarningMode_CACHE_WARNING_MODE_DEFAULT,
+		Worktrees:                        &sessionlaunchpb.WorktreeSettings{},
+		Workflow:                         &sessionlaunchpb.WorkflowSettings{},
+		Reviewer:                         &sessionlaunchpb.ReviewerSettings{ModelCapabilities: &sessionlaunchpb.ModelCapabilitiesOverride{}, ProviderCapabilities: &sessionlaunchpb.ProviderCapabilitiesOverride{}, ModelContextWindow: 40000, TimeoutSeconds: 120},
+		PreventSleep:                     sessionlaunchpb.SleepPreventionMode_SLEEP_PREVENTION_MODE_ACTIVE,
+	}
+}
+
 func TestCompletedSchemaSlicePromptCommandValidationMatchesCanonicalNames(t *testing.T) {
 	for _, command := range []string{"prompt:review", "prompt:review_plan", "prompt:a1"} {
 		if err := protoapi.ValidateGeneratedMessage(&promptcommandpb.CatalogEntry{

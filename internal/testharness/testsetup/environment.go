@@ -25,6 +25,22 @@ func ClearEnvironmentAtTestProcessStart(environmentName string) {
 	}
 }
 
+// EnvironmentWithout returns the current process environment without the named variables.
+func EnvironmentWithout(names ...string) []string {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	result := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, exists := excluded[name]; !exists {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 // AssertEnvironmentUnsetAtProcessStart verifies that package initialization
 // clears environmentName before the selected test starts in a child process.
 func AssertEnvironmentUnsetAtProcessStart(

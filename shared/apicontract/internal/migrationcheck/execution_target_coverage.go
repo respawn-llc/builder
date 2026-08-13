@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "1ef661d3ad1e1e63a11a765ff29a48e479a2df65e16236e35804778ea72d7176"
+const reviewedExceptionalWireFingerprint = "4cf7670dd5dd4fc73e9e586a673a4186adb435b625f8576089780dcae0ffd6b5"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
@@ -60,7 +60,7 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[clientui.RuntimeContextUsage]("kent.api.runtime.ContextUsage", WireExceptionFieldReshape, "a332c153bf134bc681c8576ff709315aca28ce9732fbc43457ad51eb51c28fe8", "9658b31f448da501f63e1d689ad420d525fba340b4a2b1bffb5b5c1b9f5820bb"),
 		wireExceptionSignoff[clientui.TranscriptCommittedRow]("kent.api.transcript.CommittedRow", WireExceptionFieldReshape, "5c4cb3eee932c0c7e2b4adc2310d248aa8cb18ec1d0db9870e25534fd2a16902", "22b9eb76cd37d305389af3557488b1dab6790eba446a2facf5db898632876adf"),
 		wireExceptionSignoff[rollbacktarget.CandidateLocator]("kent.api.transcript.RollbackCandidate", WireExceptionFieldReshape, "f7f923a3d5d95572ad523819430c4b66f6779ef15405b31b7f96d67606b7940f", "3d73b39754b4df338bda14525d5499a1e00786d5163a1ad8882c6fa06e4984c6"),
-		wireExceptionSignoff[config.Settings]("kent.api.session_launch.Settings", WireExceptionFieldReshape, "cebb39125cc5fc4d862a2734c25d69d6b2e2df86814141e6d2fb43725457f64d", "e6b78771d34f5eac62384817512038fbb2b1f772154c91ec193a086359ab3495"),
+		wireExceptionSignoff[config.Settings]("kent.api.session_launch.Settings", WireExceptionFieldReshape, "cebb39125cc5fc4d862a2734c25d69d6b2e2df86814141e6d2fb43725457f64d", "b59579d96a280e9123936d65364d325f0995758222c6685d2fd4e4aea40a5ac4"),
 		wireExceptionSignoff[config.SourceReport]("kent.api.session_launch.SourceReport", WireExceptionFieldReshape, "e3a748894aa163453858ab8cbf5315ad99638c59dba6cbabc887af3d31b1496b", "864e5e9072e1a6dcee2266e148c8b3fa13ebb21088d14bda821249d77bd4789b"),
 		wireExceptionSignoff[serverapi.SessionDirective]("kent.api.session_launch.SessionDirective", WireExceptionOneofReshape, "b98c0a7d11cd8e6ef733d560540dca2d7c55516fceacf4ce8397789598eb3e00", "e3faa59023df316af67c75f0e54d6d44139bcf81a3bf94dbbdf570caa5d88d34"),
 		wireExceptionSignoff[protocol.SessionTranscriptEventParams]("kent.api.transcript.Message", WireExceptionOneofReshape, "3e8e179b3a8325d8b745e3e0f6f365a86eea68b826543d9f777d5fcf04c436c2", "615b3e337cd4dfb9e26576ac209e424896ef4e2ad66388e5d59481cd8bf251d7"),

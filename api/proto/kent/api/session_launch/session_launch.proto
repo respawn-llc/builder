@@ -182,7 +182,7 @@ message ProviderCapabilitiesOverride {
 }
 
 message TimeoutSettings {
-  int32 model_request_seconds = 1 [(buf.validate.field).int32.gte = 0];
+  int32 model_request_seconds = 1 [(buf.validate.field).int32.gt = 0];
 }
 
 message ShellSettings {
@@ -224,10 +224,10 @@ message ReviewerSettings {
   string openai_base_url = 6;
   ModelCapabilitiesOverride model_capabilities = 7 [(buf.validate.field).required = true];
   ProviderCapabilitiesOverride provider_capabilities = 8 [(buf.validate.field).required = true];
-  int32 model_context_window = 9 [(buf.validate.field).int32.gte = 0];
+  int32 model_context_window = 9 [(buf.validate.field).int32.gte = 40000];
   string auth = 10;
   string system_prompt_file = 11;
-  int32 timeout_seconds = 12 [(buf.validate.field).int32.gte = 0];
+  int32 timeout_seconds = 12 [(buf.validate.field).int32.gt = 0];
   bool verbose_output = 13;
 }
 
@@ -292,7 +292,7 @@ message Settings {
   string server_host = 12;
   int32 server_port = 13 [
     (buf.validate.field).int32 = {
-      gte: 0
+      gt: 0
       lte: 65535
     }
   ];
@@ -303,24 +303,36 @@ message Settings {
   ProviderCapabilitiesOverride provider_capabilities = 18 [(buf.validate.field).required = true];
   bool store = 19;
   bool allow_non_cwd_edits = 20;
-  int32 model_context_window = 21 [(buf.validate.field).int32.gte = 0];
-  int32 context_compaction_threshold_tokens = 22 [(buf.validate.field).int32.gte = 0];
-  int32 pre_submit_compaction_lead_tokens = 23 [(buf.validate.field).int32.gte = 0];
-  int32 minimum_exec_to_bg_seconds = 24 [(buf.validate.field).int32.gte = 0];
-  CompactionMode compaction_mode = 25 [(buf.validate.field).enum.defined_only = true];
+  int32 model_context_window = 21 [(buf.validate.field).int32.gte = 40000];
+  int32 context_compaction_threshold_tokens = 22 [(buf.validate.field).int32.gt = 0];
+  int32 pre_submit_compaction_lead_tokens = 23 [(buf.validate.field).int32.gt = 0];
+  int32 minimum_exec_to_bg_seconds = 24 [(buf.validate.field).int32.gt = 0];
+  CompactionMode compaction_mode = 25 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
   repeated ToolEnabledFact enabled_tools = 26;
   repeated BooleanFact skill_toggles = 27;
   TimeoutSettings timeouts = 28 [(buf.validate.field).required = true];
-  int32 shell_output_max_chars = 29 [(buf.validate.field).int32.gte = 0];
-  BackgroundShellOutputMode bg_shells_output = 30 [(buf.validate.field).enum.defined_only = true];
+  int32 shell_output_max_chars = 29 [(buf.validate.field).int32.gt = 0];
+  BackgroundShellOutputMode bg_shells_output = 30 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
   ShellSettings shell = 31 [(buf.validate.field).required = true];
-  CacheWarningMode cache_warning_mode = 32 [(buf.validate.field).enum.defined_only = true];
+  CacheWarningMode cache_warning_mode = 32 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
   WorktreeSettings worktrees = 33 [(buf.validate.field).required = true];
   WorkflowSettings workflow = 34 [(buf.validate.field).required = true];
   ReviewerSettings reviewer = 35 [(buf.validate.field).required = true];
   repeated NamedSubagentRole subagents = 36;
   int32 max_subagent_depth = 37 [(buf.validate.field).int32.gte = 0];
-  SleepPreventionMode prevent_sleep = 38 [(buf.validate.field).enum.defined_only = true];
+  SleepPreventionMode prevent_sleep = 38 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
 message SourceReport {

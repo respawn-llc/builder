@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	"core/internal/testharness/testsetup"
 )
 
 func TestProtobufEnsureIsLazyAndRepairsOutputDrift(t *testing.T) {
@@ -137,7 +139,7 @@ func newProtobufGenerationFixture(t *testing.T) protobufGenerationFixture {
 	}
 	installFakeGo(t, fixture.fakeBinRoot)
 	fixture.environment = append(
-		environmentWithout("PATH", "KENT_PROTOBUF_REAL_GO", "KENT_PROTOBUF_TEST_STATE_ROOT"),
+		testsetup.EnvironmentWithout("PATH", "KENT_PROTOBUF_REAL_GO", "KENT_PROTOBUF_TEST_STATE_ROOT"),
 		"PATH="+fixture.fakeBinRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"KENT_PROTOBUF_TEST_STATE_ROOT="+fixture.stateRoot,
 		"KENT_PROTOBUF_REAL_GO="+realGo(t),
@@ -271,27 +273,6 @@ func realGo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
-}
-
-func environmentWithout(names ...string) []string {
-	excluded := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		excluded[name] = struct{}{}
-	}
-	result := make([]string, 0, len(os.Environ()))
-	for _, item := range os.Environ() {
-		name := item
-		for index, character := range item {
-			if character == '=' {
-				name = item[:index]
-				break
-			}
-		}
-		if _, exists := excluded[name]; !exists {
-			result = append(result, item)
-		}
-	}
-	return result
 }
 
 func copyFixturePath(t *testing.T, sourceRoot, destinationRoot, relativePath string) {

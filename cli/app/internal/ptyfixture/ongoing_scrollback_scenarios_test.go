@@ -180,7 +180,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 							{
 								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
 								"name":  "exec_command",
-								"input": map[string]any{"cmd": "sleep 3; echo $((42424241+1))"},
+								"input": map[string]any{"cmd": "sleep 2; echo $((42424241+1))"},
 							},
 						},
 					},
@@ -205,7 +205,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				},
 			}},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
-			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
+			expectedScreenRows: []string{"$ sleep 2; echo $((42424241+1))"},
 			completionDrain:    &modelMismatchCompletionDrain,
 		},
 	} {
