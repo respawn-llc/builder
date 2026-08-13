@@ -10,6 +10,7 @@ import (
 	"core/prompts"
 	"core/server/llm"
 	"core/server/tools"
+	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
@@ -57,6 +58,11 @@ func (e *Engine) workflowCompletionRejectedResult(ctx context.Context, result to
 		result.Terminal = true
 	}
 	return result
+}
+
+func isWorkflowCompletionOperationalError(err error) bool {
+	var unresolved workflow.LegacyContinuationSourceUnresolvedError
+	return errors.As(err, &unresolved)
 }
 
 func (e *Engine) recordWorkflowProtocolViolation(ctx context.Context, kind workflowruntime.ViolationKind, detail string) (workflowruntime.ViolationResult, error) {

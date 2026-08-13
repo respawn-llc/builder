@@ -266,8 +266,8 @@ WHERE id = 'group-fanout'`)
 				branch.Target.CurrentNode.SessionID.String() != sourceSessionID ||
 				!reused ||
 				resolvedSessionID.String() != sourceSessionID ||
-				branch.ContextSourceResolution.ActiveSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
-				t.Fatalf("migrated continuation branch = %+v, want retained Session %q", branch, sourceSessionID)
+				branch.ContextSourceResolution.ActiveSource.Kind() != workflow.MaterializedContinuationSourceExact {
+				t.Fatalf("migrated continuation branch = %+v, want retained Session %q with exact frozen source", branch, sourceSessionID)
 			}
 		default:
 			t.Fatalf("migrated unexpected approval branch = %+v", branch)
@@ -300,8 +300,8 @@ WHERE id = 'group-fanout'`)
 		case "split_b":
 			if target.SessionID == nil ||
 				target.SessionID.String() != sourceSessionID ||
-				target.ContinuationSource.Kind() != workflow.MaterializedContinuationSourceLegacy {
-				t.Fatalf("applied migrated continuation target = %+v, want legacy Session %q", target, sourceSessionID)
+				target.ContinuationSource.Kind() != workflow.MaterializedContinuationSourceExact {
+				t.Fatalf("applied migrated continuation target = %+v, want exact Session %q", target, sourceSessionID)
 			}
 			legacyTarget = target
 		default:
@@ -320,7 +320,7 @@ WHERE id = 'group-fanout'`)
 	if err != nil {
 		t.Fatalf("ResolveCurrentNodeSessionBindingAuthority migrated Approval target: %v", err)
 	}
-	if authority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+	if authority.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
 		t.Fatalf("migrated Approval target authority = %q", authority.Kind())
 	}
 	bound, err := store.BindSessionToCurrentNode(t.Context(), CurrentNodeSessionBindingRequest{
@@ -333,11 +333,13 @@ WHERE id = 'group-fanout'`)
 	if err != nil {
 		t.Fatalf("BindSessionToCurrentNode migrated Approval target: %v", err)
 	}
-	if bound.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
+	if bound.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
 		t.Fatalf("migrated Approval target binding authority = %q", bound.Kind())
 	}
-	if _, err := store.CurrentTaskSessionForNode(t.Context(), legacyTarget.Reference); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("migrated Approval target current association = %v, want sql.ErrNoRows", err)
+	if current, err := store.CurrentTaskSessionForNode(t.Context(), legacyTarget.Reference); err != nil ||
+		current.SessionID != parsedSourceSessionID ||
+		current.SourceSessionID != parsedSourceSessionID {
+		t.Fatalf("migrated Approval target current association = %+v, %v; want exact frozen source", current, err)
 	}
 	if err := store.InterruptCurrentNode(
 		t.Context(),
