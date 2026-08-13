@@ -46,8 +46,6 @@ type reconnectCountingConn struct {
 	inner        rpcwire.Conn
 	materializes *atomic.Int32
 	goalSets     *atomic.Int32
-	closed       chan struct{}
-	closedOnce   sync.Once
 }
 
 func newReconnectCountingConn(inner rpcwire.Conn, materializations, goalSets *atomic.Int32) *reconnectCountingConn {
@@ -55,12 +53,7 @@ func newReconnectCountingConn(inner rpcwire.Conn, materializations, goalSets *at
 		inner:        inner,
 		materializes: materializations,
 		goalSets:     goalSets,
-		closed:       make(chan struct{}),
 	}
-	go func() {
-		<-inner.Closed()
-		conn.closedOnce.Do(func() { close(conn.closed) })
-	}()
 	return conn
 }
 
@@ -79,14 +72,10 @@ func (c *reconnectCountingConn) Events() <-chan rpcwire.Event {
 }
 
 func (c *reconnectCountingConn) Closed() <-chan struct{} {
-	return c.closed
+	return c.inner.Closed()
 }
 
 func (c *reconnectCountingConn) Close() error {
-	return c.inner.Close()
-}
-
-func (c *reconnectCountingConn) Drop() error {
 	return c.inner.Close()
 }
 
@@ -139,7 +128,7 @@ func TestRemoteLazyChatMaterializationReconnectDoesNotReplayGoal(t *testing.T) {
 	if first == nil {
 		t.Fatal("materialization did not use the first physical connection")
 	}
-	if err := first.Drop(); err != nil {
+	if err := first.Close(); err != nil {
 		t.Fatalf("DropFirstConnection: %v", err)
 	}
 	select {
