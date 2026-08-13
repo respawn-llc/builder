@@ -70,6 +70,53 @@ func inboundUnary[Req any, Authz any](
 	return executable
 }
 
+func inboundTrustedUnary[Req any, Authz any, Resp any](
+	method string,
+	policy apicontract.ValidationPolicy,
+	decoder requestDecoderKind,
+	prepare func(Req, *connectionState) Req,
+	authorize func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (Authz, error),
+	handle func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req], Authz) (Resp, error),
+) inboundExecutableRoute {
+	route := mustInboundRoute(method, apicontract.KindUnary)
+	if prepare == nil {
+		prepare = func(req Req, _ *connectionState) Req { return req }
+	}
+	executable := inboundExecutableRoute{
+		route:             route,
+		requestType:       reflect.TypeOf((*Req)(nil)).Elem(),
+		authorizationType: reflect.TypeOf((*Authz)(nil)).Elem(),
+		validation:        policy,
+		validator:         route.ValidationMethod,
+		decoder:           decoder,
+	}
+	executable.executeUnary = func(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {
+		request, err := decodeInboundRequest[Req](g, route, decoder, wire.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
+		}
+		prepared := prepare(request, state)
+		response, err := apicontract.WithValidated(prepared, policy, func(validated apicontract.Validated[Req]) (Resp, error) {
+			authz, err := authorize(ctx, g, state, validated)
+			if err != nil {
+				var zero Resp
+				return zero, validatedOwnerError{cause: err}
+			}
+			response, err := handle(ctx, g, state, validated, authz)
+			if err != nil {
+				var zero Resp
+				return zero, validatedOwnerError{cause: err}
+			}
+			return response, nil
+		})
+		if err != nil {
+			return responseForValidationOrOwnerError(wire.ID, err)
+		}
+		return handlerSuccessResponse(wire.ID, response)
+	}
+	return executable
+}
+
 func executeInboundUnary[Req any, Authz any](
 	g *Gateway,
 	ctx context.Context,
@@ -299,7 +346,63 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		nil,
 		authorizeProjectWorkspaceBinding,
 	)
+	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, noAuthorizationFacts, serverapi.SessionRuntimeActivateResponse](
+		protocol.MethodSessionRuntimeActivate,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		prepareSessionRuntimeActivate,
+		authorizeRouteScope[serverapi.SessionRuntimeActivateRequest](mustInboundRoute(protocol.MethodSessionRuntimeActivate, apicontract.KindUnary)),
+		handleSessionRuntimeActivate,
+	)
+	executables[protocol.MethodSessionRuntimeRelease] = inboundTrustedUnary[serverapi.SessionRuntimeReleaseRequest, noAuthorizationFacts, serverapi.SessionRuntimeReleaseResponse](
+		protocol.MethodSessionRuntimeRelease,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		prepareSessionRuntimeRelease,
+		authorizeRouteScope[serverapi.SessionRuntimeReleaseRequest](mustInboundRoute(protocol.MethodSessionRuntimeRelease, apicontract.KindUnary)),
+		handleSessionRuntimeRelease,
+	)
 	return executables
+}
+
+func prepareSessionRuntimeActivate(source serverapi.SessionRuntimeActivateRequest, state *connectionState) serverapi.SessionRuntimeActivateRequest {
+	prepared := source
+	prepared.OwnerID = strings.TrimSpace(state.runtimeOwnerID)
+	return prepared
+}
+
+func prepareSessionRuntimeRelease(source serverapi.SessionRuntimeReleaseRequest, state *connectionState) serverapi.SessionRuntimeReleaseRequest {
+	prepared := source
+	prepared.OwnerID = strings.TrimSpace(state.runtimeOwnerID)
+	return prepared
+}
+
+func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], _ noAuthorizationFacts) (serverapi.SessionRuntimeActivateResponse, error) {
+	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
+	if !ok {
+		return serverapi.SessionRuntimeActivateResponse{}, errors.New("Session Runtime trusted service is required")
+	}
+	response, err := trusted.ActivateSessionRuntimeValidated(ctx, validated)
+	if err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	if err := response.ValidateForSession(validated.Value().SessionID); err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	state.recordOwnedRuntime(response.Attachment)
+	return response, nil
+}
+
+func handleSessionRuntimeRelease(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], _ noAuthorizationFacts) (serverapi.SessionRuntimeReleaseResponse, error) {
+	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
+	if !ok {
+		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("Session Runtime trusted service is required")
+	}
+	response, err := trusted.ReleaseSessionRuntimeValidated(ctx, validated)
+	if err == nil && (response.Released || validated.Value().DropOwner) {
+		state.removeOwnedRuntime(validated.Value().Attachment)
+	}
+	return response, err
 }
 
 func executeOnboardingFinalize(g *Gateway, ctx context.Context, state *connectionState, wire protocol.Request) protocol.Response {

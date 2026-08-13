@@ -198,15 +198,56 @@ func TestActivateSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 }
 
 func TestActivateSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
-	svc := &API{}
-	_, err := svc.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		ClientRequestID:       "req-1",
-		SessionID:             "session-1",
+	for _, ownerID := range []string{"", " \t "} {
+		_, err := (&API{}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
+			ClientRequestID:       "req-1",
+			SessionID:             "session-1",
+			OwnerID:               ownerID,
+			QuestionsEnabled:      textutil.Value(true),
+			AutoCompactionEnabled: textutil.Value(true),
+		})
+		if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
+			t.Fatalf("owner %q error = %v, want ErrRuntimeOwnerIDRequired before authority access", ownerID, err)
+		}
+	}
+}
+
+func TestActivateSessionRuntimeTrimsRawOwnerBeforeOwnership(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
+	})
+	request := validSessionRuntimeActivateRequest(fixture, "  owner-a  ")
+	activation, err := fixture.api.ActivateSessionRuntime(t.Context(), request)
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	if _, err := fixture.api.ReleaseSessionRuntime(t.Context(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-trimmed-owner",
+		Attachment:      activation.Attachment,
+		OwnerID:         "owner-a",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+	}); err != nil {
+		t.Fatalf("release with trimmed owner: %v", err)
+	}
+}
+
+func validSessionRuntimeActivateRequest(fixture sessionRuntimeFixture, ownerID string) serverapi.SessionRuntimeActivateRequest {
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.ProviderOverride = "openai"
+	settings.Reviewer.Frequency = "off"
+	return serverapi.SessionRuntimeActivateRequest{
+		ClientRequestID:       "activate-trimmed-owner",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               ownerID,
+		ActiveSettings:        settings,
 		QuestionsEnabled:      textutil.Value(true),
 		AutoCompactionEnabled: textutil.Value(true),
-	})
-	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
-		t.Fatalf("expected runtime owner id rejection, got %v", err)
+		Source:                config.SourceReport{Sources: map[string]string{}},
 	}
 }
 
@@ -950,17 +991,41 @@ func TestReleaseSessionRuntimeRejectsPathLikeSessionID(t *testing.T) {
 }
 
 func TestReleaseSessionRuntimeRejectsMissingOwnerID(t *testing.T) {
-	svc := &API{}
-	_, err := svc.ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
-		ClientRequestID: "req-1",
-		Attachment: serverapi.SessionRuntimeAttachment{
-			SessionID:  "session-1",
-			Generation: 1,
-		},
-		DropOwner: true,
+	for _, ownerID := range []string{"", " \t "} {
+		_, err := (&API{}).ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
+			ClientRequestID: "req-1",
+			Attachment: serverapi.SessionRuntimeAttachment{
+				SessionID:  "session-1",
+				Generation: 1,
+			},
+			OwnerID:   ownerID,
+			DropOwner: true,
+		})
+		if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
+			t.Fatalf("owner %q error = %v, want ErrRuntimeOwnerIDRequired before authority access", ownerID, err)
+		}
+	}
+}
+
+func TestReleaseSessionRuntimeTrimsRawOwnerBeforeOwnership(t *testing.T) {
+	fixture := newSessionRuntimeFixture(t)
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
+		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
+			return &sessionRuntimeTestLLMClient{}, nil
+		}),
 	})
-	if !errors.Is(err, ErrRuntimeOwnerIDRequired) {
-		t.Fatalf("expected runtime owner id rejection, got %v", err)
+	activation, err := fixture.api.ActivateSessionRuntime(t.Context(), validSessionRuntimeActivateRequest(fixture, "owner-a"))
+	if err != nil {
+		t.Fatalf("ActivateSessionRuntime: %v", err)
+	}
+	if _, err := fixture.api.ReleaseSessionRuntime(t.Context(), serverapi.SessionRuntimeReleaseRequest{
+		ClientRequestID: "release-trimmed-owner",
+		Attachment:      activation.Attachment,
+		OwnerID:         "  owner-a  ",
+		DropOwner:       true,
+		ClosePolicy:     serverapi.SessionRuntimeReleaseClosePolicyDetachOnly,
+	}); err != nil {
+		t.Fatalf("ReleaseSessionRuntime with surrounding owner whitespace: %v", err)
 	}
 }
 

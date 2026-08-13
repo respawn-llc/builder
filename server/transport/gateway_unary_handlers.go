@@ -308,44 +308,20 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		}
 		return protocol.NewSuccessResponse(req.ID, response)
 	},
-	protocol.MethodSessionGetInitialInput:      gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
-	protocol.MethodSessionPersistInputDraft:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
-	protocol.MethodSessionRetargetWorkspace:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
-	protocol.MethodSessionResolveTransition:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
-	protocol.MethodWorktreeStatus:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.GetWorktreeStatus),
-	protocol.MethodWorktreeList:                gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
-	protocol.MethodWorktreeWorkspaceList:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorkspaceWorktrees),
-	protocol.MethodWorktreeSelectorResolve:     gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeSelector),
-	protocol.MethodWorktreeDeletePreview:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.PreviewWorktreeDelete),
-	protocol.MethodWorktreeCreateTargetResolve: gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeCreateTarget),
-	protocol.MethodWorktreeCreate:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.CreateWorktree),
-	protocol.MethodWorktreeEnter:               gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.EnterWorktree),
-	protocol.MethodWorktreeLeave:               gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.LeaveWorktree),
-	protocol.MethodWorktreeDelete:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.DeleteWorktree),
-	protocol.MethodSessionRuntimeActivate: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-			params.OwnerID = state.runtimeOwnerID
-			resp, err := g.deps.SessionRuntimeClient().ActivateSessionRuntime(ctx, params)
-			if err != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, err
-			}
-			if err := resp.ValidateForSession(params.SessionID); err != nil {
-				return serverapi.SessionRuntimeActivateResponse{}, err
-			}
-			state.recordOwnedRuntime(resp.Attachment)
-			return resp, nil
-		})
-	},
-	protocol.MethodSessionRuntimeRelease: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-			params.OwnerID = state.runtimeOwnerID
-			resp, err := g.deps.SessionRuntimeClient().ReleaseSessionRuntime(ctx, params)
-			if err == nil && (resp.Released || params.DropOwner) {
-				state.removeOwnedRuntime(params.Attachment)
-			}
-			return resp, err
-		})
-	},
+	protocol.MethodSessionGetInitialInput:                gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
+	protocol.MethodSessionPersistInputDraft:              gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
+	protocol.MethodSessionRetargetWorkspace:              gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
+	protocol.MethodSessionResolveTransition:              gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
+	protocol.MethodWorktreeStatus:                        gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.GetWorktreeStatus),
+	protocol.MethodWorktreeList:                          gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
+	protocol.MethodWorktreeWorkspaceList:                 gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorkspaceWorktrees),
+	protocol.MethodWorktreeSelectorResolve:               gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeSelector),
+	protocol.MethodWorktreeDeletePreview:                 gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.PreviewWorktreeDelete),
+	protocol.MethodWorktreeCreateTargetResolve:           gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeCreateTarget),
+	protocol.MethodWorktreeCreate:                        gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateRequest, serverapi.WorktreeCreateResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.CreateWorktree),
+	protocol.MethodWorktreeEnter:                         gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeEnterRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.EnterWorktree),
+	protocol.MethodWorktreeLeave:                         gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeLeaveRequest, serverapi.WorktreeScheduledAcknowledgement](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.LeaveWorktree),
+	protocol.MethodWorktreeDelete:                        gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeleteRequest, serverapi.WorktreeDeleteResult](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.DeleteWorktree),
 	protocol.MethodRuntimeSetSessionName:                 gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeSetSessionNameRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetSessionName),
 	protocol.MethodRuntimeSetThinkingLevel:               gatewayClientCallNoResponse[apicontract.RuntimeControlService, serverapi.RuntimeSetThinkingLevelRequest](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetThinkingLevel),
 	protocol.MethodRuntimeSetFastModeEnabled:             gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeSetFastModeEnabledRequest, serverapi.RuntimeSetFastModeEnabledResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.SetFastModeEnabled),

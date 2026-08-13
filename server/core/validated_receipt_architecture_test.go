@@ -55,7 +55,8 @@ func TestValidatedReceiptsCannotEscapeSynchronousCallbacks(t *testing.T) {
 					selector, ok := typed.Fun.(*ast.SelectorExpr)
 					if ok && selector.Sel.IsExported() && selector.Sel.Name != "WithValidated" &&
 						strings.HasSuffix(selector.Sel.Name, "Validated") &&
-						!nodeInsideImmediateConsumer(file, typed, immediateConsumers) {
+						!nodeInsideImmediateConsumer(file, typed, immediateConsumers) &&
+						!nodeInsideValidatedFunction(pkg, file, typed) {
 						violations = append(violations, validatedViolation(pkg, typed.Pos(), "trusted invocation must occur inside an immediate WithValidated callback"))
 					}
 				}
@@ -67,6 +68,18 @@ func TestValidatedReceiptsCannotEscapeSynchronousCallbacks(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("validated receipt architecture violations:\n%s", strings.Join(violations, "\n"))
 	}
+}
+
+func nodeInsideValidatedFunction(pkg *packages.Package, file *ast.File, target ast.Node) bool {
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if !ok || function.Body == nil ||
+			target.Pos() < function.Body.Pos() || function.Body.End() < target.End() {
+			continue
+		}
+		return functionReceivesValidatedReceipt(pkg, function.Type)
+	}
+	return false
 }
 
 func functionReceivesValidatedReceipt(pkg *packages.Package, function *ast.FuncType) bool {

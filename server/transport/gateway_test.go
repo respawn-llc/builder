@@ -445,6 +445,28 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Contex
 	return c.SessionRuntimeService.ActivateSessionRuntime(ctx, req)
 }
 
+func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
+	req := validated.Value()
+	if c.activateRequests != nil {
+		c.activateRequests <- req
+	}
+	if len(c.activateAttachments) != 0 {
+		attachment := c.activateAttachments[0]
+		c.activateAttachments = c.activateAttachments[1:]
+		if attachment == nil {
+			return serverapi.SessionRuntimeActivateResponse{}, nil
+		}
+		value := *attachment
+		value.SessionID = req.SessionID
+		return serverapi.SessionRuntimeActivateResponse{Attachment: value}, nil
+	}
+	trusted, ok := c.SessionRuntimeService.(apicontract.SessionRuntimeTrustedService)
+	if !ok {
+		return serverapi.SessionRuntimeActivateResponse{}, errors.New("test Session Runtime trusted service is required")
+	}
+	return trusted.ActivateSessionRuntimeValidated(ctx, validated)
+}
+
 func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	c.releaseCount.Add(1)
 	if c.releaseRequests != nil {
@@ -454,6 +476,22 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context
 		return *c.releaseResponse, nil
 	}
 	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
+}
+
+func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest]) (serverapi.SessionRuntimeReleaseResponse, error) {
+	req := validated.Value()
+	c.releaseCount.Add(1)
+	if c.releaseRequests != nil {
+		c.releaseRequests <- req
+	}
+	if c.releaseResponse != nil {
+		return *c.releaseResponse, nil
+	}
+	trusted, ok := c.SessionRuntimeService.(apicontract.SessionRuntimeTrustedService)
+	if !ok {
+		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("test Session Runtime trusted service is required")
+	}
+	return trusted.ReleaseSessionRuntimeValidated(ctx, validated)
 }
 
 type gatewayRuntimeClientOverride struct {
@@ -495,6 +533,9 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 		if activationRequest.OwnerID == "" || activationRequest.OwnerID == "client-spoof" {
 			t.Fatalf("gateway did not inject connection owner id: %+v", activationRequest)
 		}
+		if activationRequest.OwnerID != strings.TrimSpace(activationRequest.OwnerID) {
+			t.Fatalf("trusted activation owner was not trimmed: %q", activationRequest.OwnerID)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for activation request")
 	}
@@ -511,6 +552,9 @@ func TestGatewayConnectionCloseReleasesOwnedIdleRuntime(t *testing.T) {
 	case request := <-counter.releaseRequests:
 		if request.Attachment != activation.Attachment || request.OwnerID != activationRequest.OwnerID {
 			t.Fatalf("explicit stale release request = %+v", request)
+		}
+		if request.OwnerID != strings.TrimSpace(request.OwnerID) {
+			t.Fatalf("trusted release owner was not trimmed: %q", request.OwnerID)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for stale explicit release")

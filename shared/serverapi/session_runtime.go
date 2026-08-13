@@ -45,6 +45,8 @@ type SessionRuntimeReleaseResponse struct {
 
 type SessionRuntimeReleaseClosePolicy string
 
+var ErrRuntimeOwnerIDRequired = errors.New("runtime owner id is required")
+
 const (
 	SessionRuntimeReleaseClosePolicyCloseIfIdle SessionRuntimeReleaseClosePolicy = "close_if_idle"
 	SessionRuntimeReleaseClosePolicyDetachOnly  SessionRuntimeReleaseClosePolicy = "detach_only"
@@ -56,6 +58,9 @@ func (r SessionRuntimeActivateRequest) Validate() error {
 	}
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
+	}
+	if strings.TrimSpace(r.OwnerID) == "" {
+		return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 	}
 	if r.QuestionsEnabled == nil {
 		return errors.New("questions_enabled is required")
@@ -94,6 +99,9 @@ func (r SessionRuntimeReleaseRequest) Validate() error {
 	}
 	if err := r.Attachment.Validate(); err != nil {
 		return err
+	}
+	if strings.TrimSpace(r.OwnerID) == "" {
+		return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 	}
 	switch r.ClosePolicy {
 	case "", SessionRuntimeReleaseClosePolicyCloseIfIdle:
