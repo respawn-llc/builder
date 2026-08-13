@@ -58,7 +58,7 @@ func TestResolveWorktreeSelectorUsesReadOnlyTopology(t *testing.T) {
 	env := newServiceTestEnv(t)
 	response, err := env.service.ResolveWorktreeSelector(env.ctx, serverapi.WorktreeSelectorPreviewRequest{
 		SessionID: env.session.Meta().SessionID,
-		Selector:  env.workspaceRoot,
+		Selector:  " " + env.workspaceRoot + " ",
 	})
 	if err != nil {
 		t.Fatalf("ResolveWorktreeSelector: %v", err)

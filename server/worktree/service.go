@@ -156,17 +156,6 @@ type setupScriptPayload struct {
 	CreatedBranch       bool    `json:"created_branch"`
 }
 
-func normalizeSetupSessionID(sessionID *string) (*string, error) {
-	if sessionID == nil {
-		return nil, nil
-	}
-	normalized := strings.TrimSpace(*sessionID)
-	if normalized == "" {
-		return nil, errors.New("setup session_id must be non-empty when present")
-	}
-	return &normalized, nil
-}
-
 type TaskExecutionRootPreparationRequest struct {
 	TaskID           workflow.TaskID
 	SetupOperationID *serverapi.WorktreeSetupOperationID
@@ -1107,10 +1096,7 @@ func (s *Service) createManagedTaskWorktree(ctx context.Context, req managedTask
 }
 
 func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req managedTaskWorktreeCreationRequest) (resp boundManagedTaskWorktree, err error) {
-	createSpec, err := normalizeCreateSpec(req.CreateSpec)
-	if err != nil {
-		return boundManagedTaskWorktree{}, err
-	}
+	createSpec := req.CreateSpec
 	var worktreeRoot string
 	rootKind := managedRootKindExplicit
 	if req.RequestedRoot == nil {
@@ -1774,7 +1760,7 @@ func (s *Service) resolveWorktreeCreateTarget(
 	req serverapi.WorktreeCreateTargetResolveRequest,
 	workspaceCtx sessionWorkspaceContext,
 ) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, req.Target)
+	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, strings.TrimSpace(req.Target))
 	if err != nil {
 		return serverapi.WorktreeCreateTargetResolveResponse{}, err
 	}
@@ -1833,9 +1819,10 @@ func (s *Service) createWorktree(
 		}
 		err = serverapi.NewWorktreeCreateError(serverapi.WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}()
-	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
+	createSpec := CreateSpec{
+		BaseRef:      strings.TrimSpace(req.BaseRef),
+		CreateBranch: req.CreateBranch,
+		BranchName:   strings.TrimSpace(req.BranchName),
 	}
 	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, initialWorkspaceCtx)
 	if err != nil {
@@ -1920,10 +1907,7 @@ func (s *Service) createWorktree(
 		return serverapi.WorktreeCreateResponse{}, err
 	}
 	cleanup.worktreeID = strings.TrimSpace(created.record.ID)
-	setupSessionID, err := normalizeSetupSessionID(&workspaceCtx.sessionID)
-	if err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
+	setupSessionID := workspaceCtx.sessionID
 	branchName, named := worktreeNamedBranch(created.git)
 	if !named {
 		return serverapi.WorktreeCreateResponse{}, errors.New("created managed worktree does not have a named branch")
@@ -1934,7 +1918,7 @@ func (s *Service) createWorktree(
 		BranchName:          branchName,
 		WorktreeRoot:        created.record.CanonicalRoot,
 		ScriptPayload: setupScriptPayload{
-			SessionID:   setupSessionID,
+			SessionID:   &setupSessionID,
 			ProjectID:   workspaceCtx.projectID,
 			WorkspaceID: workspaceCtx.workspaceID,
 			WorktreeID:  created.record.ID,
@@ -2313,9 +2297,6 @@ func (s *Service) taskSetupAttemptObserver(setupOperationID *serverapi.WorktreeS
 		return setupAttemptObserverFunc(func(serverapi.WorktreeSetupStarted) {}), nil
 	}
 	operationID := *setupOperationID
-	if err := operationID.Validate(); err != nil {
-		return nil, err
-	}
 	return setupAttemptObserverFunc(func(started serverapi.WorktreeSetupStarted) {
 		s.publishSetupEvent(serverapi.WorktreeSetupEvent{
 			SetupOperationID: operationID,
@@ -2484,15 +2465,11 @@ func (s *Service) prepareSetupAttempt(req setupExecutionRequest) (*preparedSetup
 			WorktreeRoot: strings.TrimSpace(req.WorktreeRoot),
 		}
 	}
-	sessionID, err := normalizeSetupSessionID(req.ScriptPayload.SessionID)
-	if err != nil {
-		return nil, err
-	}
 	payload := setupScriptPayload{
 		SourceWorkspaceRoot: strings.TrimSpace(req.SourceWorkspaceRoot),
 		BranchName:          strings.TrimSpace(req.BranchName),
 		WorktreeRoot:        strings.TrimSpace(req.WorktreeRoot),
-		SessionID:           sessionID,
+		SessionID:           req.ScriptPayload.SessionID,
 		ProjectID:           strings.TrimSpace(req.ScriptPayload.ProjectID),
 		WorkspaceID:         strings.TrimSpace(req.ScriptPayload.WorkspaceID),
 		WorktreeID:          strings.TrimSpace(req.ScriptPayload.WorktreeID),
@@ -2622,9 +2599,6 @@ func setupFailureFromError(err error, retained *serverapi.WorktreeTopologyEntry)
 }
 
 func (s *Service) runSetupForWorktree(ctx context.Context, operationID serverapi.WorktreeSetupOperationID, req setupExecutionRequest) error {
-	if err := operationID.Validate(); err != nil {
-		return err
-	}
 	attempt, err := s.prepareSetupAttempt(req)
 	if err != nil {
 		s.publishSetupEvent(serverapi.WorktreeSetupEvent{

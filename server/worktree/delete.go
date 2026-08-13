@@ -65,7 +65,7 @@ func (s *Service) deleteWorktree(
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	match, err := resolveTopologySelector(topology, req.Selector)
+	match, err := resolveTopologySelector(topology, transitionRequest.selector)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
@@ -102,7 +102,7 @@ func (s *Service) deleteWorktree(
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	match, err = resolveTopologySelector(topology, req.Selector)
+	match, err = resolveTopologySelector(topology, transitionRequest.selector)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
 	}

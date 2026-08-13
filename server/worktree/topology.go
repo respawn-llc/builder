@@ -132,7 +132,7 @@ func (s *Service) resolveWorktreeSelectorPreview(
 	selector string,
 	workspaceCtx sessionWorkspaceContext,
 ) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, selector)
+	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, strings.TrimSpace(selector))
 	if err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
 	}
@@ -189,7 +189,7 @@ func (s *Service) previewWorktreeDelete(
 	selector string,
 	workspaceCtx sessionWorkspaceContext,
 ) (serverapi.WorktreeDeletePreviewResponse, error) {
-	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, selector)
+	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, strings.TrimSpace(selector))
 	if err != nil {
 		return serverapi.WorktreeDeletePreviewResponse{}, err
 	}

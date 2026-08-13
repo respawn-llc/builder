@@ -102,14 +102,6 @@ func TestBuildSetupEnvironmentOmitsAbsentSessionAcrossPlatformPolicies(t *testin
 	}
 }
 
-func TestNormalizeSetupSessionIDRejectsEmptyPresentIdentity(t *testing.T) {
-	for _, sessionID := range []string{"", " \t "} {
-		if _, err := normalizeSetupSessionID(&sessionID); err == nil {
-			t.Fatalf("normalizeSetupSessionID accepted invalid present identity %q", sessionID)
-		}
-	}
-}
-
 func setupEnvironmentEntry(t *testing.T, env []string, key string, canonicalize setupEnvironmentKeyCanonicalizer) (string, bool) {
 	t.Helper()
 	values := setupEnvironmentValues(env, key, canonicalize)

@@ -12,7 +12,6 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/serverapi"
 )
 
 var errGitTargetNotFound = errors.New("git target not found")
@@ -923,34 +922,30 @@ func (i *GitInspector) ResolveCreateTarget(ctx context.Context, workspaceRoot st
 	if err != nil {
 		return CreateTargetResolution{}, err
 	}
-	trimmedTarget := strings.TrimSpace(rawTarget)
-	if trimmedTarget == "" {
-		return CreateTargetResolution{}, fmt.Errorf("target is required")
-	}
-	validBranchName, err := i.isValidBranchName(ctx, canonicalRoot, trimmedTarget)
+	validBranchName, err := i.isValidBranchName(ctx, canonicalRoot, rawTarget)
 	if err != nil {
 		return CreateTargetResolution{}, err
 	}
 	if validBranchName {
-		branchOutput, branchExit, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+trimmedTarget+"^{object}")
+		branchOutput, branchExit, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+rawTarget+"^{object}")
 		if err == nil {
-			return CreateTargetResolution{Input: trimmedTarget, Kind: CreateTargetResolutionKindExistingBranch, ResolvedRef: trimmedTarget}, nil
+			return CreateTargetResolution{Input: rawTarget, Kind: CreateTargetResolutionKindExistingBranch, ResolvedRef: rawTarget}, nil
 		}
 		if branchExit != 1 {
-			return CreateTargetResolution{}, formatGitRunError(branchExit, err, branchOutput, "rev-parse", "--verify", "--quiet", "refs/heads/"+trimmedTarget+"^{object}")
+			return CreateTargetResolution{}, formatGitRunError(branchExit, err, branchOutput, "rev-parse", "--verify", "--quiet", "refs/heads/"+rawTarget+"^{object}")
 		}
 	}
-	refOutput, refExit, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--verify", "--quiet", trimmedTarget+"^{object}")
+	refOutput, refExit, err := i.runner.Run(ctx, canonicalRoot, "rev-parse", "--verify", "--quiet", rawTarget+"^{object}")
 	if err != nil {
 		if refExit == 1 {
 			if !validBranchName {
-				return CreateTargetResolution{}, &InvalidCreateTargetError{Target: trimmedTarget}
+				return CreateTargetResolution{}, &InvalidCreateTargetError{Target: rawTarget}
 			}
-			return CreateTargetResolution{Input: trimmedTarget, Kind: CreateTargetResolutionKindNewBranch}, nil
+			return CreateTargetResolution{Input: rawTarget, Kind: CreateTargetResolutionKindNewBranch}, nil
 		}
-		return CreateTargetResolution{}, formatGitRunError(refExit, err, refOutput, "rev-parse", "--verify", "--quiet", trimmedTarget+"^{object}")
+		return CreateTargetResolution{}, formatGitRunError(refExit, err, refOutput, "rev-parse", "--verify", "--quiet", rawTarget+"^{object}")
 	}
-	return CreateTargetResolution{Input: trimmedTarget, Kind: CreateTargetResolutionKindDetachedRef, ResolvedRef: strings.TrimSpace(string(refOutput))}, nil
+	return CreateTargetResolution{Input: rawTarget, Kind: CreateTargetResolutionKindDetachedRef, ResolvedRef: strings.TrimSpace(string(refOutput))}, nil
 }
 
 func (i *GitInspector) isValidBranchName(ctx context.Context, workspaceRoot string, branchName string) (bool, error) {
@@ -987,23 +982,19 @@ func (i *GitInspector) Add(ctx context.Context, workspaceRoot string, worktreeRo
 	if err != nil {
 		return false, err
 	}
-	normalized, err := normalizeCreateSpec(spec)
-	if err != nil {
-		return false, err
-	}
 	args := []string{"worktree", "add"}
-	if normalized.CreateBranch {
-		args = append(args, "-b", normalized.BranchName, canonicalWorktreeRoot)
-		if normalized.BaseRef != "" {
-			args = append(args, normalized.BaseRef)
+	if spec.CreateBranch {
+		args = append(args, "-b", spec.BranchName, canonicalWorktreeRoot)
+		if spec.BaseRef != "" {
+			args = append(args, spec.BaseRef)
 		}
 	} else {
-		args = append(args, canonicalWorktreeRoot, normalized.BaseRef)
+		args = append(args, canonicalWorktreeRoot, spec.BaseRef)
 	}
 	if _, err := i.runner.Output(ctx, canonicalWorkspaceRoot, args...); err != nil {
 		return false, err
 	}
-	return normalized.CreateBranch, nil
+	return spec.CreateBranch, nil
 }
 
 func (i *GitInspector) ProbeDirtyState(ctx context.Context, worktreeRoot string) (clientui.WorktreeDirtyState, error) {
@@ -1186,15 +1177,6 @@ func (i *GitInspector) deleteBranch(ctx context.Context, workspaceRoot string, b
 	}
 	_, err = i.runner.Output(ctx, canonicalWorkspaceRoot, "branch", deleteArg, trimmedBranch)
 	return err
-}
-
-func normalizeCreateSpec(spec CreateSpec) (CreateSpec, error) {
-	baseRef := strings.TrimSpace(spec.BaseRef)
-	branchName := strings.TrimSpace(spec.BranchName)
-	if err := serverapi.ValidateWorktreeCreateSpec(baseRef, spec.CreateBranch, branchName); err != nil {
-		return CreateSpec{}, err
-	}
-	return CreateSpec{BaseRef: baseRef, CreateBranch: spec.CreateBranch, BranchName: branchName}, nil
 }
 
 type execGitCommandRunner struct{}
