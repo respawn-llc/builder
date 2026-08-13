@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	testharness "core/internal/testharness/testsetup"
 )
 
 func TestBrewTapGeneratorMakesAppleSiliconFormulaLoadableOnIntelMac(t *testing.T) {
@@ -43,7 +45,7 @@ func TestBrewTapGeneratorKeepsAppleSiliconPrebuiltInstall(t *testing.T) {
 
 func generateBrewFormula(t *testing.T) string {
 	t.Helper()
-	repoRoot := findRepoRoot(t)
+	repoRoot := testharness.RepositoryRoot(t)
 	scriptPath := filepath.Join(repoRoot, "scripts", "update-brew-tap.sh")
 	tapDir := t.TempDir()
 	fakeBinDir := t.TempDir()

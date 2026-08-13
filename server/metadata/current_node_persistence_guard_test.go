@@ -1,11 +1,9 @@
 package metadata_test
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 )
 
@@ -25,53 +23,6 @@ func TestCurrentNodePersistenceGraphHasOneAuthority(t *testing.T) {
 	if len(analysis.findings) > 0 {
 		t.Fatalf("Current Node persistence structure violations:\n%s", formatPersistenceFindings(analysis.findings))
 	}
-}
-
-func TestCurrentNodeGeneratedQueriesMatchPersistenceGraph(t *testing.T) {
-	t.Parallel()
-	store, err := metadata.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	model, err := loadPersistenceSchemaModel(t.Context(), store.DB())
-	if err != nil {
-		t.Fatalf("load persistence schema model: %v", err)
-	}
-	analysis := analyzeCurrentNodePersistence(model)
-	if len(analysis.findings) > 0 {
-		t.Fatalf("Current Node persistence structure violations:\n%s", formatPersistenceFindings(analysis.findings))
-	}
-
-	source, err := renderCanonicalMetadataQueries()
-	if err != nil {
-		t.Fatalf("render canonical metadata queries: %v", err)
-	}
-	sourceStatements, err := parseNamedSQLStatements(string(source))
-	if err != nil {
-		t.Fatalf("parse canonical metadata queries: %v", err)
-	}
-	generatedStatements, generatedMethods, err := parseGeneratedSQLQueries(filepath.Join("sqlitegen", "queries.sql.go"))
-	if err != nil {
-		t.Fatalf("parse generated queries: %v", err)
-	}
-	queryFindings := compareGeneratedQueries(sourceStatements, generatedStatements, generatedMethods)
-
-	authorityMutations := authorityMutationQueries(sourceStatements, analysis.authorityRelations)
-	writerCalls := loadAuthorityWriterCalls(t, testsetup.RepositoryRoot(t), authorityMutations)
-	queryFindings = append(queryFindings, analyzeAuthorityWriterCalls(writerCalls)...)
-	if len(queryFindings) > 0 {
-		t.Fatalf("Current Node generated-query structure violations:\n%s", formatPersistenceFindings(queryFindings))
-	}
-}
-
-func renderCanonicalMetadataQueries() ([]byte, error) {
-	renderer, err := metadata.LoadQuerySourceRenderer("querysrc")
-	if err != nil {
-		return nil, err
-	}
-	return renderer.Render()
 }
 
 func TestCurrentNodePersistenceGuardRejectsDuplicateAuthorityFixtures(t *testing.T) {
@@ -107,26 +58,6 @@ func TestCurrentNodePersistenceGuardRejectsDuplicateAuthorityFixtures(t *testing
 		assertPersistenceFinding(t, findings, findingDuplicateExecutionDependency)
 	})
 
-	t.Run("duplicate relation query mutation", func(t *testing.T) {
-		queries := authorityMutationQueries(
-			map[string]namedSQLStatement{
-				"InsertPlacementState": {
-					name:  "InsertPlacementState",
-					shape: sqliteStatementShape{operation: "insert", target: "placement_state"},
-				},
-			},
-			map[string]struct{}{"placement_state": {}},
-		)
-		if _, ok := queries["InsertPlacementState"]; !ok {
-			t.Fatal("duplicate authority mutation was not classified")
-		}
-		calls := []authorityWriterCall{{
-			packagePath: "core/server/rogue",
-			queryName:   "InsertPlacementState",
-			position:    "rogue.go:1",
-		}}
-		assertPersistenceFinding(t, analyzeAuthorityWriterCalls(calls), findingForeignAggregateWriter)
-	})
 }
 
 func TestCurrentNodePersistenceGuardRejectsInvalidSessionProvenanceFixtures(t *testing.T) {

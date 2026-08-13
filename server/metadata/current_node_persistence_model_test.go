@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 
 	testharness "core/internal/testharness/testsetup"
 
+	"github.com/antlr4-go/antlr/v4"
 	"github.com/tursodatabase/libsql-client-go/sqliteparser"
 )
 
@@ -164,6 +166,43 @@ ORDER BY name`)
 		return persistenceSchemaModel{}, err
 	}
 	return model, nil
+}
+
+func sqliteReferencedRelations(source string) (map[string]struct{}, error) {
+	tokens, err := testharness.SQLiteTokens(source)
+	if err != nil {
+		return nil, err
+	}
+	references := make(map[string]struct{})
+	for index, token := range tokens {
+		switch token.GetTokenType() {
+		case sqliteparser.SQLiteParserFROM_, sqliteparser.SQLiteParserJOIN_, sqliteparser.SQLiteParserINTO_, sqliteparser.SQLiteParserUPDATE_:
+			if relation := sqliteIdentifierAfter(tokens, index); relation != "" {
+				references[relation] = struct{}{}
+			}
+		}
+	}
+	return references, nil
+}
+
+func sqliteIdentifierAfter(tokens []antlr.Token, index int) string {
+	if index+1 >= len(tokens) {
+		return ""
+	}
+	token := tokens[index+1]
+	if token.GetTokenType() != sqliteparser.SQLiteParserIDENTIFIER {
+		return ""
+	}
+	value := strings.TrimSpace(token.GetText())
+	if len(value) >= 2 {
+		switch {
+		case value[0] == '"' && value[len(value)-1] == '"',
+			value[0] == '`' && value[len(value)-1] == '`',
+			value[0] == '[' && value[len(value)-1] == ']':
+			value = value[1 : len(value)-1]
+		}
+	}
+	return strings.ToLower(value)
 }
 
 func loadPersistenceRelation(ctx context.Context, db *sql.DB, tableName string) (*persistenceRelation, error) {
