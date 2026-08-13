@@ -32,23 +32,11 @@ func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.Se
 	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
-func (unregisteredSessionLaunchClient) PlanSessionValidated(context.Context, apicontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
-	return serverapi.SessionPlanResponse{}, serverapi.ErrWorkspaceNotRegistered
-}
-
 func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
-func (unregisteredSessionLaunchClient) WorkspaceChatDraftValidated(context.Context, apicontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
-	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
-}
-
 func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
-	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
-}
-
-func (unregisteredSessionLaunchClient) MaterializeWorkspaceChatValidated(context.Context, apicontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
 	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
@@ -58,17 +46,9 @@ func (unregisteredRunPromptClient) RunPrompt(context.Context, serverapi.RunPromp
 	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
-func (unregisteredRunPromptClient) RunPromptValidated(context.Context, apicontract.Validated[serverapi.RunPromptRequest], serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
-	return serverapi.RunPromptResponse{}, serverapi.ErrWorkspaceNotRegistered
-}
-
 type unavailableAttentionNotificationClient struct{}
 
 func (unavailableAttentionNotificationClient) SubscribeAttentionNotifications(context.Context, serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	return nil, serverapi.ErrStreamUnavailable
-}
-
-func (unavailableAttentionNotificationClient) SubscribeAttentionNotificationsValidated(context.Context, apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
 	return nil, serverapi.ErrStreamUnavailable
 }
 
@@ -318,7 +298,7 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 		return cached
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
-		PlanSession:            s.sessionLaunchServiceForProjectContext(projectCtx).PlanLaunchSessionValidated,
+		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
 		PromptHistory:          s.safeBundles().Persistence.metadataStore,
 		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
 		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
@@ -443,10 +423,6 @@ type configuredCoreOnboardingFinalizeService struct {
 }
 
 func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
-}
-
-func (s configuredCoreOnboardingFinalizeService) FinalizeOnboardingValidated(context.Context, apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
 	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
 }
 

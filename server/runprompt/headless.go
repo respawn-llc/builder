@@ -39,7 +39,7 @@ type promptHistoryStore interface {
 }
 
 type HeadlessBootstrap struct {
-	PlanSession      func(context.Context, apicontract.Validated[serverapi.SessionPlanRequest]) (sessionlaunch.PlanResult, error)
+	SessionLaunch    *sessionlaunch.Service
 	PromptHistory    promptHistoryStore
 	RuntimeAuthority *sessionruntime.Authority
 	// ManagedWorktreeBaseDir is the server-owned managed Worktree namespace.
@@ -59,7 +59,7 @@ type headlessPromptLauncher struct {
 }
 
 func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (*headlessPromptRuntime, error) {
-	if l.boot.PlanSession == nil {
+	if l.boot.SessionLaunch == nil {
 		return nil, errors.New("headless session launch service is required")
 	}
 	_, openingExisting := req.Intent.SessionID()
@@ -70,13 +70,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		CallerSessionID: req.CallerSessionID,
 		Overrides:       req.Overrides,
 	}
-	result, err := apicontract.WithValidated(
-		launchReq,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionPlanRequest]) (sessionlaunch.PlanResult, error) {
-			return l.boot.PlanSession(ctx, validated)
-		},
-	)
+	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
 	if err != nil {
 		return nil, err
 	}
