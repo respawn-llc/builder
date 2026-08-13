@@ -7,33 +7,17 @@ import (
 
 	"core/prompts"
 	"core/server/session"
-	"core/shared/config"
 	"core/shared/toolspec"
 )
-
-type PromptFacingSnapshotReloader interface {
-	ReloadPromptFacingSnapshotConfig(ctx context.Context, sessionID string) (PromptFacingSnapshotConfig, error)
-}
-
-type PromptFacingSnapshotConfig struct {
-	Settings      config.Settings
-	Source        config.SourceReport
-	ActiveToolIDs []toolspec.ID
-	WebSearchMode string
-}
 
 func (e *Engine) ensureMainPromptFacingContractFresh(ctx context.Context, locked session.LockedContract) (session.LockedContract, error) {
 	if locked.HasSystemPrompt || strings.TrimSpace(locked.SystemPrompt) != "" {
 		return locked, nil
 	}
-	reloaded, err := e.reloadPromptFacingSnapshotConfig(ctx)
-	if err != nil {
-		return session.LockedContract{}, err
-	}
 	next := locked
-	next.ToolPreambles = e.promptRefreshToolPreambles(reloaded.Settings.ToolPreambles)
-	if reloaded.Settings.ModelContextWindow > 0 {
-		next.ContextWindow = reloaded.Settings.ModelContextWindow
+	next.ToolPreambles = e.promptRefreshToolPreambles(e.cfg.ToolPreambles)
+	if e.cfg.ContextWindowTokens > 0 {
+		next.ContextWindow = e.cfg.ContextWindowTokens
 	}
 	if next.ContextPercent <= 0 {
 		next.ContextPercent = e.cfg.EffectiveContextWindowPercent
@@ -44,8 +28,8 @@ func (e *Engine) ensureMainPromptFacingContractFresh(ctx context.Context, locked
 	prompt, err := e.buildSystemPromptSnapshotFromConfig(next, e.systemPromptWorkspaceRoot(), systemPromptSnapshotOptions{
 		WorkspaceRoot:     e.systemPromptWorkspaceRoot(),
 		GlobalConfigDir:   e.cfg.GlobalConfigDir,
-		SystemPromptFiles: reloaded.Settings.SystemPromptFiles,
-	}, reloaded.ActiveToolIDs)
+		SystemPromptFiles: e.cfg.SystemPromptFiles,
+	}, e.lockedToolIDsFromConfigFallback())
 	if err != nil {
 		return session.LockedContract{}, err
 	}
@@ -72,11 +56,7 @@ func (e *Engine) ensureReviewerPromptFresh(ctx context.Context) (string, bool, e
 	if prompt, ok := e.lockedReviewerPromptSnapshot(); ok || strings.TrimSpace(prompt) != "" {
 		return "", false, nil
 	}
-	reloaded, err := e.reloadPromptFacingSnapshotConfig(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	path := strings.TrimSpace(reloaded.Settings.Reviewer.SystemPromptFile)
+	path := strings.TrimSpace(e.cfg.Reviewer.SystemPromptFile)
 	if path == "" {
 		return prompts.ReviewerSystemPrompt, true, nil
 	}
@@ -95,35 +75,6 @@ func (e *Engine) ensureReviewerPromptFresh(ctx context.Context) (string, bool, e
 		return "", false, err
 	}
 	return prompt, true, nil
-}
-
-func (e *Engine) reloadPromptFacingSnapshotConfig(ctx context.Context) (PromptFacingSnapshotConfig, error) {
-	if e.cfg.PromptFacingSnapshotReloader != nil {
-		return e.cfg.PromptFacingSnapshotReloader.ReloadPromptFacingSnapshotConfig(ctx, e.SessionID())
-	}
-	return PromptFacingSnapshotConfig{
-		Settings: config.Settings{
-			SystemPromptFiles:  e.cfg.SystemPromptFiles,
-			ToolPreambles:      e.cfg.ToolPreambles,
-			ModelContextWindow: e.cfg.ContextWindowTokens,
-			Reviewer: config.ReviewerSettings{
-				SystemPromptFile: e.cfg.Reviewer.SystemPromptFile,
-			},
-		},
-		ActiveToolIDs: e.lockedToolIDsFromConfigFallback(),
-		WebSearchMode: e.cfg.WebSearchMode,
-	}, nil
-}
-
-func (e *Engine) reconstructionSkillPolicy(ctx context.Context) (config.SkillPolicy, error) {
-	if e.cfg.PromptFacingSnapshotReloader == nil {
-		return e.cfg.SkillPolicy, nil
-	}
-	reloaded, err := e.reloadPromptFacingSnapshotConfig(ctx)
-	if err != nil {
-		return config.SkillPolicy{}, err
-	}
-	return config.ResolveSkillPolicy(reloaded.Settings), nil
 }
 
 func (e *Engine) promptRefreshToolPreambles(enabled bool) *bool {

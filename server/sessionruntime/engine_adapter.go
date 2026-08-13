@@ -36,7 +36,6 @@ type AgentRuntimePlanOptions struct {
 	ReviewerClientFactory               runtimewire.RuntimeClientFactory
 	CurrentNodeExecution                *workflowruntime.CurrentNodeExecutionConfig
 	AskQuestionBatchSkipped             func(tools.AskQuestionBatchMetadata)
-	PromptFacingSnapshotReloader        runtime.PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride        *llm.ProviderCapabilities
 	SkipContinuationAgentRoleValidation bool
 	OnEvent                             func(runtime.Event)
@@ -246,7 +245,6 @@ func (a *Authority) newRuntimeWiringFromPlan(resource *agentResource, store *ses
 		ReviewerClientFactory:               options.ReviewerClientFactory,
 		CurrentNodeExecution:                options.CurrentNodeExecution,
 		AskQuestionBatchSkipped:             options.AskQuestionBatchSkipped,
-		PromptFacingSnapshotReloader:        options.PromptFacingSnapshotReloader,
 		ProviderCapabilitiesOverride:        options.ProviderCapabilitiesOverride,
 		SkipContinuationAgentRoleValidation: options.SkipContinuationAgentRoleValidation,
 		GlobalConfigDir:                     a.options.persistenceRoot,

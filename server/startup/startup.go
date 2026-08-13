@@ -41,7 +41,6 @@ type OnboardingRequest struct {
 	Config                config.App
 	AuthManager           *auth.Manager
 	CapabilityFactsClient apicontract.CapabilityFactsService
-	ReloadConfig          func() (config.App, error)
 }
 
 func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Request, requireAuth bool, authHandler AuthHandler, onboardingHandler OnboardingHandler) (*core.Core, error) {
@@ -66,16 +65,17 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 			Config:                cfg,
 			AuthManager:           authSupport.AuthManager,
 			CapabilityFactsClient: factsService,
-			ReloadConfig: func() (config.App, error) {
-				refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
-				if err != nil {
-					return config.App{}, err
-				}
-				return refreshed.Config, nil
-			},
 		})
 		if err != nil {
 			return nil, err
+		}
+		if cfg.Source.CreatedDefaultConfig {
+			refreshed, refreshErr := serverbootstrap.ResolveConfig(bootstrapReq)
+			if refreshErr != nil {
+				return nil, refreshErr
+			}
+			cfg = refreshed.Config
+			cfg.Source.CreatedDefaultConfig = true
 		}
 	}
 	if !cfg.Source.SettingsFileExists {

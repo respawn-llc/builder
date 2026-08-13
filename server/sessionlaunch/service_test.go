@@ -259,27 +259,16 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 			AgentCallableSet: true,
 		},
 	}
-	reloads := 0
 	service := NewService(launch.Planner{
 		Config:                   snapshot,
 		ContainerDir:             t.TempDir(),
 		StoreOptions:             serviceTestPersistence.Options(),
 		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: snapshot.WorkspaceRoot},
-		ReloadConfig: func() (config.App, error) {
-			reloads++
-			if reloads != 1 {
-				t.Fatalf("ReloadConfig called %d times, want exactly once", reloads)
-			}
-			configPath := filepath.Join(home, config.ConfigDirName, "config.toml")
-			if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
-				t.Fatalf("MkdirAll config dir: %v", err)
-			}
-			if err := os.WriteFile(configPath, []byte("this is not valid toml = ["), 0o644); err != nil {
-				t.Fatalf("WriteFile changed config: %v", err)
-			}
-			return snapshot, nil
-		},
 	})
+	configPath := filepath.Join(home, config.ConfigDirName, "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll config dir: %v", err)
+	}
 	role := "worker"
 
 	response, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
@@ -293,9 +282,6 @@ func TestPlanLaunchSessionUsesOneConfigSnapshotForNamedRole(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("PlanSession: %v", err)
-	}
-	if reloads != 1 {
-		t.Fatalf("ReloadConfig called %d times, want exactly once", reloads)
 	}
 	if response.Plan.ActiveSettings.Model != "gpt-5.4" {
 		t.Fatalf("model = %q, want request override from the captured snapshot", response.Plan.ActiveSettings.Model)

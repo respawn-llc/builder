@@ -22,6 +22,7 @@ func TestServiceMaterializesCompleteResolvedWorkspaceChatDraft(t *testing.T) {
 	cfg.Settings.ThinkingLevel = "  provider-specific-depth  "
 	cfg.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
 	service.planner.Config = cfg
+	service.planner.GlobalConfig = cfg
 	draft := metadata.WorkspaceChatDraftDocument{
 		Message:        "unsent composer",
 		Agent:          "default",
@@ -85,9 +86,6 @@ func TestServiceMaterializationDoesNotValidateProviderReadiness(t *testing.T) {
 	cfg.Settings.ProviderOverride = "unsupported-provider"
 	cfg.Source.Sources["model"] = "file"
 	service.planner.Config = cfg
-	service.planner.ReloadConfig = func() (config.App, error) {
-		return cfg, nil
-	}
 	draft := metadata.WorkspaceChatDraftDocument{
 		Message:        "persist before provider validation",
 		Agent:          "default",
@@ -195,15 +193,18 @@ func TestServiceTreatsSeparatelyReceivedMaterializationRequestsIndependently(t *
 	}
 }
 
-func TestServiceResolutionFailureCreatesNoSession(t *testing.T) {
+func TestServiceWorkspaceConfigFailureCreatesNoSession(t *testing.T) {
 	ctx := context.Background()
-	service, metadataStore, _, binding := newWorkspaceChatMaterializationService(t)
-	wantErr := errors.New("reload failed")
-	service.planner.ReloadConfig = func() (config.App, error) {
-		return config.App{}, wantErr
+	service, metadataStore, cfg, binding := newWorkspaceChatMaterializationService(t)
+	configPath := filepath.Join(cfg.WorkspaceRoot, config.ConfigDirName, "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll config dir: %v", err)
 	}
-	if _, err := service.materializeWorkspaceChatSession(ctx); !errors.Is(err, wantErr) {
-		t.Fatalf("MaterializeWorkspaceChatSession error = %v, want %v", err, wantErr)
+	if err := os.WriteFile(configPath, []byte("invalid = ["), 0o644); err != nil {
+		t.Fatalf("WriteFile invalid workspace config: %v", err)
+	}
+	if _, err := service.materializeWorkspaceChatSession(ctx); err == nil {
+		t.Fatal("expected invalid Workspace config error")
 	}
 	page, err := metadataStore.ListSessionPage(ctx, serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
@@ -235,6 +236,10 @@ func newWorkspaceChatMaterializationService(t *testing.T) (*Service, *metadata.S
 	cfg.Settings.Reviewer.Frequency = "edits"
 	cfg.Settings.Reviewer.Model = cfg.Settings.Model
 	cfg.Settings.Reviewer.ThinkingLevel = cfg.Settings.ThinkingLevel
+	globalCfg, err := config.LoadGlobal(config.LoadOptions{ConfigRoot: persistenceRoot})
+	if err != nil {
+		t.Fatalf("config.LoadGlobal: %v", err)
+	}
 	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
 	if err != nil {
 		t.Fatalf("metadata.Open: %v", err)
@@ -250,6 +255,7 @@ func newWorkspaceChatMaterializationService(t *testing.T) (*Service, *metadata.S
 	}
 	service := NewService(launch.Planner{
 		Config:                   cfg,
+		GlobalConfig:             globalCfg,
 		ContainerDir:             containerDir,
 		StoreOptions:             metadataStore.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        metadataStore,

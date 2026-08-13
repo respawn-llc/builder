@@ -382,7 +382,7 @@ func TestLoadGlobalSkipsWorkspaceConfigLayer(t *testing.T) {
 		t.Fatalf("write home config: %v", err)
 	}
 
-	cfg, err := LoadGlobal(LoadOptions{})
+	cfg, err := LoadGlobal(LoadOptions{ConfigRoot: filepath.Join(home, ConfigDirName)})
 	if err != nil {
 		t.Fatalf("load global: %v", err)
 	}
@@ -394,6 +394,81 @@ func TestLoadGlobalSkipsWorkspaceConfigLayer(t *testing.T) {
 	}
 	if cfg.Source.WorkspaceSettingsLayerEnabled || cfg.Source.WorkspaceSettingsPath != "" {
 		t.Fatalf("unexpected workspace source report: %+v", cfg.Source)
+	}
+}
+
+func TestLoadWorkspaceOverlayUsesCapturedGlobalEnvironmentAndCLI(t *testing.T) {
+	home, workspace := newConfigTestEnv(t)
+	t.Setenv("KENT_MODEL", "env-model")
+	if err := os.MkdirAll(filepath.Join(home, ConfigDirName), 0o755); err != nil {
+		t.Fatalf("create home config dir: %v", err)
+	}
+	globalPath := filepath.Join(home, ConfigDirName, "config.toml")
+	if err := os.WriteFile(globalPath, []byte("model = \"global-model\"\n"), 0o644); err != nil {
+		t.Fatalf("write global config: %v", err)
+	}
+
+	global, err := LoadGlobal(LoadOptions{ConfigRoot: filepath.Join(home, ConfigDirName), ThinkingLevel: "low"})
+	if err != nil {
+		t.Fatalf("load global: %v", err)
+	}
+	if err := os.WriteFile(globalPath, []byte("invalid = ["), 0o644); err != nil {
+		t.Fatalf("invalidate global config after snapshot: %v", err)
+	}
+	t.Setenv("KENT_MODEL", "changed-env-model")
+	if err := os.MkdirAll(filepath.Join(workspace, ConfigDirName), 0o755); err != nil {
+		t.Fatalf("create workspace config dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(workspace, ConfigDirName, "config.toml"),
+		[]byte("model = \"workspace-model\"\nthinking_level = \"high\"\ntheme = \"light\"\n"),
+		0o644,
+	); err != nil {
+		t.Fatalf("write workspace config: %v", err)
+	}
+
+	cfg, err := LoadWorkspaceOverlay(global, workspace)
+	if err != nil {
+		t.Fatalf("load workspace overlay: %v", err)
+	}
+	if cfg.Settings.Model != "env-model" {
+		t.Fatalf("model = %q, want captured environment value", cfg.Settings.Model)
+	}
+	if cfg.Settings.ThinkingLevel != "low" {
+		t.Fatalf("thinking level = %q, want captured CLI value", cfg.Settings.ThinkingLevel)
+	}
+	if cfg.Settings.Theme != "light" {
+		t.Fatalf("theme = %q, want workspace value", cfg.Settings.Theme)
+	}
+}
+
+func TestLoadWorkspaceOverlayReadsWorkspaceOncePerOperation(t *testing.T) {
+	home, workspace := newConfigTestEnv(t)
+	global, err := LoadGlobal(LoadOptions{ConfigRoot: filepath.Join(home, ConfigDirName)})
+	if err != nil {
+		t.Fatalf("load global: %v", err)
+	}
+	workspaceDir := filepath.Join(workspace, ConfigDirName)
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("create workspace config dir: %v", err)
+	}
+	workspacePath := filepath.Join(workspaceDir, "config.toml")
+	if err := os.WriteFile(workspacePath, []byte("model = \"first-model\"\n"), 0o644); err != nil {
+		t.Fatalf("write first workspace config: %v", err)
+	}
+	first, err := LoadWorkspaceOverlay(global, workspace)
+	if err != nil {
+		t.Fatalf("load first workspace overlay: %v", err)
+	}
+	if err := os.WriteFile(workspacePath, []byte("model = \"second-model\"\n"), 0o644); err != nil {
+		t.Fatalf("write second workspace config: %v", err)
+	}
+	second, err := LoadWorkspaceOverlay(global, workspace)
+	if err != nil {
+		t.Fatalf("load second workspace overlay: %v", err)
+	}
+	if first.Settings.Model != "first-model" || second.Settings.Model != "second-model" {
+		t.Fatalf("workspace snapshots = %q then %q", first.Settings.Model, second.Settings.Model)
 	}
 }
 

@@ -199,13 +199,13 @@ func (s *Service) materializeResolvedWorkspaceChat(
 }
 
 func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (WorkspaceChatDraftResolverInput, error) {
-	planner := s.planner
-	if planner.ReloadConfig != nil {
-		snapshot, err := planner.ReloadConfig()
+	snapshot := s.planner.Config
+	if s.planner.GlobalConfig.AppName != "" {
+		var err error
+		snapshot, err = config.LoadWorkspaceOverlay(s.planner.GlobalConfig, s.planner.Config.WorkspaceRoot)
 		if err != nil {
 			return WorkspaceChatDraftResolverInput{}, err
 		}
-		planner.Config = snapshot
 	}
 	authState := auth.EmptyState()
 	if s.authStates != nil {
@@ -215,7 +215,7 @@ func (s *Service) workspaceChatDraftResolverInput(ctx context.Context) (Workspac
 			return WorkspaceChatDraftResolverInput{}, err
 		}
 	}
-	return WorkspaceChatDraftResolverInput{Settings: planner.Config.Settings, Source: planner.Config.Source, AuthState: authState}, nil
+	return WorkspaceChatDraftResolverInput{Settings: snapshot.Settings, Source: snapshot.Source, AuthState: authState}, nil
 }
 
 func (s *Service) workspaceChatDraftOwner() (*WorkspaceChatDraftOwner, string, error) {
@@ -340,13 +340,12 @@ func (s *Service) planLaunchSession(ctx context.Context, req serverapi.SessionPl
 	}
 	return s.plans.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionPlanMemoRequest, func(ctx context.Context) (PlanResult, error) {
 		planner := s.planner
-		if planner.ReloadConfig != nil {
-			snapshot, snapshotErr := planner.ReloadConfig()
+		if planner.GlobalConfig.AppName != "" {
+			snapshot, snapshotErr := config.LoadWorkspaceOverlay(planner.GlobalConfig, planner.Config.WorkspaceRoot)
 			if snapshotErr != nil {
 				return PlanResult{}, snapshotErr
 			}
 			planner.Config = snapshot
-			planner.ReloadConfig = nil
 		}
 		roleOverride, err := req.Overrides.AgentRoleOverride()
 		if err != nil {

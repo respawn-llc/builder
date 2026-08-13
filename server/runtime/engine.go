@@ -90,7 +90,6 @@ type Config struct {
 	ModelCapabilities               session.LockedModelCapabilities
 	FastModeEnabled                 bool
 	WebSearchMode                   string
-	PromptFacingSnapshotReloader    PromptFacingSnapshotReloader
 	ProviderCapabilitiesOverride    *llm.ProviderCapabilities
 	EnabledTools                    []toolspec.ID
 	SkillPolicy                     config.SkillPolicy

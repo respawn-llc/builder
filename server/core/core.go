@@ -256,21 +256,7 @@ func (s *Core) configForWorkspace(workspaceRoot string) (config.App, error) {
 	if s == nil {
 		return config.App{}, errors.New("core is required")
 	}
-	if strings.TrimSpace(s.safeBundles().Projects.cfg.WorkspaceRoot) != "" {
-		currentRoot, currentErr := config.CanonicalWorkspaceRoot(s.safeBundles().Projects.cfg.WorkspaceRoot)
-		requestedRoot, requestedErr := config.CanonicalWorkspaceRoot(workspaceRoot)
-		if currentErr == nil && requestedErr == nil && currentRoot == requestedRoot {
-			projectCfg := s.safeBundles().Projects.cfg
-			projectCfg.WorkspaceRoot = requestedRoot
-			return projectCfg, nil
-		}
-	}
-	projectCfg, err := config.Load(workspaceRoot, config.LoadOptions{})
-	if err != nil {
-		return config.App{}, err
-	}
-	projectCfg.PersistenceRoot = s.safeBundles().Projects.cfg.PersistenceRoot
-	return projectCfg, nil
+	return config.LoadWorkspaceOverlay(s.safeBundles().Projects.cfg, workspaceRoot)
 }
 
 func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) apicontract.SessionLaunchService {
@@ -305,14 +291,12 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	}
 	service := sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
+		GlobalConfig:             s.safeBundles().Projects.cfg,
 		ContainerDir:             projectCtx.projectSession,
 		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        s.safeBundles().Persistence.metadataStore,
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
-		ReloadConfig: func() (config.App, error) {
-			return s.configForWorkspace(projectCtx.projectRoot)
-		},
 	}).
 		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
 		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).

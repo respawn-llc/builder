@@ -100,24 +100,24 @@ func runStartupOnboardingHandler(ctx context.Context, cfg config.App, bootstrapR
 		return config.App{}, false, err
 	}
 	factsService := capabilityfacts.NewService(capabilityfacts.Options{Config: cfg, AuthManager: authSupport.AuthManager})
-	reloadConfig := func() (config.App, error) {
-		refreshed, err := serverbootstrap.ResolveConfig(bootstrapReq)
-		if err != nil {
-			return config.App{}, err
-		}
-		return refreshed.Config, nil
-	}
 	onboardingCfg, err := onboardingHandler(ctx, OnboardingRequest{
 		Config:                cfg,
 		AuthManager:           authSupport.AuthManager,
 		CapabilityFactsClient: factsService,
-		ReloadConfig:          reloadConfig,
 	})
 	if errors.Is(err, ErrOnboardingRequired) {
 		return cfg, false, nil
 	}
 	if err != nil {
 		return config.App{}, false, err
+	}
+	if onboardingCfg.Source.CreatedDefaultConfig {
+		refreshed, refreshErr := serverbootstrap.ResolveConfig(bootstrapReq)
+		if refreshErr != nil {
+			return config.App{}, false, refreshErr
+		}
+		onboardingCfg = refreshed.Config
+		onboardingCfg.Source.CreatedDefaultConfig = true
 	}
 	return onboardingCfg, onboardingCfg.Source.SettingsFileExists, nil
 }

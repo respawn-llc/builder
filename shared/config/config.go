@@ -276,11 +276,12 @@ type SourceReport struct {
 }
 
 type App struct {
-	AppName         string
-	WorkspaceRoot   string
-	PersistenceRoot string
-	Settings        Settings
-	Source          SourceReport
+	AppName          string
+	WorkspaceRoot    string
+	PersistenceRoot  string
+	Settings         Settings
+	Source           SourceReport
+	workspaceOverlay *workspaceOverlaySnapshot
 }
 
 type settingsFile map[string]any
