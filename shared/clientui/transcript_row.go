@@ -1,7 +1,6 @@
 package clientui
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -43,16 +42,6 @@ type TranscriptUserRow struct {
 	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
 }
 
-func (r *TranscriptUserRow) UnmarshalJSON(data []byte) error {
-	type rowAlias TranscriptUserRow
-	decoded, err := decodeTranscriptMessageRow[rowAlias](data)
-	if err != nil {
-		return err
-	}
-	*r = TranscriptUserRow(decoded)
-	return nil
-}
-
 type TranscriptAssistantRow struct {
 	StepID            runtimeids.StepID
 	StreamID          *runtimeids.AssistantStreamID
@@ -60,27 +49,6 @@ type TranscriptAssistantRow struct {
 	CondensedText     *string
 	Phase             transcript.AssistantPhase
 	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
-}
-
-func (r *TranscriptAssistantRow) UnmarshalJSON(data []byte) error {
-	type rowAlias TranscriptAssistantRow
-	decoded, err := decodeTranscriptMessageRow[rowAlias](data)
-	if err != nil {
-		return err
-	}
-	*r = TranscriptAssistantRow(decoded)
-	return nil
-}
-
-func decodeTranscriptMessageRow[T any](data []byte) (T, error) {
-	var decoded T
-	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
-		return decoded, err
-	}
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return decoded, err
-	}
-	return decoded, nil
 }
 
 type TranscriptToolRow struct {

@@ -70,14 +70,11 @@ type committedAtUnixMsField struct {
 }
 
 func (field *committedAtUnixMsField) UnmarshalJSON(data []byte) error {
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
-		return fmt.Errorf("committed time must be omitted or an integer")
+	var value CommittedAtUnixMs
+	if err := value.UnmarshalJSON(data); err != nil {
+		return err
 	}
-	var raw int64
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("decode committed time: %w", err)
-	}
-	field.value = CommittedAtUnixMs(raw)
+	field.value = value
 	field.present = true
 	return nil
 }
