@@ -119,9 +119,13 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		return OpenAIResponse{}, err
 	}
 
+	requestClient := t.Client
+	if mode.IsOAuth {
+		requestClient = t.streamingHTTPClient()
+	}
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.Client),
+		option.WithHTTPClient(requestClient),
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID, projection, request.CodexDispatch)
