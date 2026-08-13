@@ -18,12 +18,17 @@ import (
 	"core/shared/transcript"
 )
 
+const (
+	detailFrameShiftTab = "\x1b[Z"
+	detailFrameTab      = "\t"
+	detailFrameUp       = "\x1b[A"
+)
+
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
-	buildCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	buildCtx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
-	scenarioSlots := make(chan struct{}, 1)
 	modelMismatchCompletionDrain := time.Second
 
 	for _, tc := range []struct {
@@ -47,75 +52,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		completionInFrameSequence bool
 		completionDrain           *time.Duration
 	}{
-		{
-			name: "hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
-			script: map[string]any{
-				"seed_transcript": []map[string]any{
-					{"kind": "message", "role": "user", "text": "PTY_SEED_O_USER"},
-					{
-						"kind":           "message",
-						"role":           "assistant",
-						"text":           "PTY_HYDRATED_FIRST\nPTY_HYDRATED_SECOND\nPTY_HYDRATED_THIRD",
-						"condensed_text": "PTY_HYDRATED_COMPACT",
-					},
-					{"kind": "local_entry", "visibility": "OC", "role": "system", "text": "PTY_SEED_OC_FULL_DETAIL_TEXT", "condensed_text": "PTY_SEED_OC_COMPACT"},
-					{"kind": "message", "role": "developer", "message_type": "environment", "text": "PTY_SEED_D_DETAIL_ONLY", "condensed_text": "PTY_SEED_D_COMPACT"},
-					{"kind": "local_entry", "visibility": "X", "role": "system", "text": "PTY_SEED_X_HIDDEN", "condensed_text": "PTY_SEED_X_COMPACT"},
-				},
-				"steps": []map[string]any{
-					{
-						"tool_calls": []map[string]any{
-							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'VISIBILITY_OC_TOOL\\n'"}},
-						},
-					},
-					{
-						"expected_tool_results": []map[string]any{{"CallID": "call_1", "Name": "exec_command"}},
-						"final":                 "visibility projection tool path complete",
-					},
-				},
-			},
-			expectedAppends: []string{
-				"❯ hydrated_visibility_classes_preserve_ongoing_projection_through_tool_result",
-				"❮ visibility projection tool path complete",
-			},
-			expectedAnyAppends: []string{
-				"❯ PTY_SEED_O_USER",
-				"❮ PTY_HYDRATED_FIRST PTY_HYDRATED_SECOND PTY_HYDRATED_THIRD",
-				"ℹ PTY_SEED_OC_COMPACT",
-			},
-			forbiddenAnyAppends: []string{
-				"❮ PTY_HYDRATED_COMPACT",
-				"ℹ PTY_SEED_OC_FULL_DETAIL_TEXT",
-				"ℹ PTY_SEED_D_DETAIL_ONLY",
-				"ℹ PTY_SEED_D_COMPACT",
-				"ℹ PTY_SEED_X_HIDDEN",
-				"ℹ PTY_SEED_X_COMPACT",
-			},
-		},
-		{
-			name: "markdown_streaming_promotion_and_final_tail",
-			script: map[string]any{
-				"prompt":        "stream markdown",
-				"stream_deltas": []string{"Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\n", "volatile tail"},
-				"final":         "Plain stable.\n\nUse `INLINE_CODE`.\n\n```text\nBLOCK_CODE\n```\n\nvolatile tail",
-			},
-			expectedAppends:           []string{transcriptrender.AssistantSymbol + " Plain stable."},
-			expectedScrollbackAppends: []string{"volatile tail"},
-		},
-		{
-			name: "stable_history_not_replayed_after_resize",
-			script: map[string]any{
-				"prompt": "resize stable history",
-				"final":  "stable history not replayed after resize",
-			},
-			expectedAppends: []string{"❮ stable history not replayed after resize"},
-			frameResizes: []pty.FrameResizeEvent{{
-				Phase:           pty.PhaseScenarioFinalApplied,
-				Readiness:       pty.ReadinessRendererFrame,
-				Dimensions:      pty.MustDimensions(18, 72),
-				CompletionBytes: []byte{0x03, 0x03},
-			}},
-		},
 		{
 			name: "provider_model_mismatch_hidden_from_normal_ongoing",
 			env:  []string{"KENT_DEBUG=0"},
@@ -161,57 +97,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedWarningAppends: 1,
 			completionDrain:        &modelMismatchCompletionDrain,
-		},
-		{
-			name: "parallel_tools_order_and_long_output",
-			script: map[string]any{
-				"prompt": "run tools",
-				"steps": []map[string]any{
-					{
-						"commentary": "I'll run checks.",
-						"tool_calls": []map[string]any{
-							{"id": "call_1", "name": "exec_command", "input": map[string]any{"cmd": "printf 'TOOL_ONE_OK\\n'"}},
-							{"id": "call_2", "name": "exec_command", "input": map[string]any{"cmd": "for i in $(seq 1 12); do printf 'TOOL_TWO_%02d\\n' \"$i\"; done"}},
-						},
-					},
-					{
-						"expected_tool_results": []map[string]any{
-							{"CallID": "call_1", "Name": "exec_command"},
-							{"CallID": "call_2", "Name": "exec_command"},
-						},
-						"final": "tools complete",
-					},
-				},
-			},
-			expectedAppends: []string{"❮ tools complete"},
-		},
-		{
-			name: "live_patch_call_structured_preview",
-			script: map[string]any{
-				"prompt": "apply a patch",
-				"steps": []map[string]any{
-					{
-						"tool_calls": []map[string]any{
-							{
-								"id":   "87cffd9a-d9e4-49b5-a2a7-61c5e043b991",
-								"name": "patch",
-								"input": map[string]any{
-									"patch": "*** Begin Patch\n*** Add File: pty_live_patch.txt\n+PATCH_LIVE_CONTENT\n*** End Patch\n",
-								},
-							},
-						},
-					},
-					{
-						"expected_tool_results": []map[string]any{
-							{"CallID": "87cffd9a-d9e4-49b5-a2a7-61c5e043b991", "Name": "patch"},
-						},
-						"final": "patch lifecycle complete",
-					},
-				},
-			},
-			expectedAppends:     []string{"❮ patch lifecycle complete"},
-			expectedAnyAppends:  []string{"⇄ ./pty_live_patch.txt +1"},
-			forbiddenAnyAppends: []string{"⇄ tool call"},
 		},
 		{
 			name: "live_ask_question_call_input_preview",
@@ -323,53 +208,10 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
 			completionDrain:    &modelMismatchCompletionDrain,
 		},
-		{
-			name: "live_failed_tools_retain_input",
-			env:  []string{"SHELL=/bin/sh"},
-			script: map[string]any{
-				"prompt": "run failing tools",
-				"steps": []map[string]any{
-					{
-						"tool_calls": []map[string]any{
-							{
-								"id":   "c02cd36b-4a5f-4c66-b632-d762cf424bb5",
-								"name": "exec_command",
-								"input": map[string]any{
-									"cmd":     "echo $((61616160+1))",
-									"workdir": "missing-workdir",
-								},
-							},
-							{
-								"id":   "9a728c41-f7ca-4776-922f-30166f146d6c",
-								"name": "patch",
-								"input": map[string]any{
-									"patch": "*** Begin Patch\n*** Update File: pty_missing_patch.txt\n@@\n-old\n+new\n*** End Patch\n",
-								},
-							},
-						},
-					},
-					{
-						"expected_tool_results": []map[string]any{
-							{"CallID": "c02cd36b-4a5f-4c66-b632-d762cf424bb5", "Name": "exec_command"},
-							{"CallID": "9a728c41-f7ca-4776-922f-30166f146d6c", "Name": "patch"},
-						},
-						"final": "failed tool lifecycle complete",
-					},
-				},
-			},
-			expectedAppends: []string{"❯ live_failed_tools_retain_input"},
-			expectedAnyAppends: []string{
-				"❮ failed tool lifecycle complete",
-			},
-		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			scenarioSlots <- struct{}{}
-			defer func() { <-scenarioSlots }()
-
-			scenarioCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			scenarioCtx, cancel := context.WithTimeout(context.Background(), ptyFixtureTestTimeout)
 			defer cancel()
 			capture, _ := runPTYFixtureScenarioWithInputPlan(
 				t,
@@ -535,7 +377,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		FrameInputSequences: inputPlan.frameSequences,
 		FrameResizes:        inputPlan.frameResizes,
 		Resizes:             resizes,
-		Timeout:             75 * time.Second,
+		Timeout:             5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))

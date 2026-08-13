@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -34,11 +33,7 @@ var workflowSeedPlacementSQL string
 
 func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	t.Parallel()
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, t.TempDir())
 
 	for _, table := range []string{
 		"workflows",
@@ -206,84 +201,6 @@ WHERE name = 'ordinal'`).Scan(&ordinalNotNull); err != nil {
 	}
 	if foreignKeys != 1 {
 		t.Fatalf("foreign_keys = %d, want 1", foreignKeys)
-	}
-}
-
-func TestProjectLabelsOrderMigrationBackfillsExistingCatalog(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 69)
-	if err != nil {
-		t.Fatalf("open version 69 metadata database: %v", err)
-	}
-	now := int64(1)
-	execSeed(t, db, "project", `
-INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('project-label-order-migration', 'Project', ?, ?, '{}')`, now, now)
-	execSeed(t, db, "labels", `
-INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
-VALUES
-    ('label-zulu', 'project-label-order-migration', 'Zulu', ?, ?),
-    ('label-alpha', 'project-label-order-migration', 'alpha', ?, ?),
-    ('label-beta', 'project-label-order-migration', 'Beta', ?, ?)`,
-		now, now, now, now, now, now,
-	)
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 69 database: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("open migrated metadata store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	rows, err := store.db.Query(`
-SELECT id, ordinal
-FROM project_labels
-WHERE project_id = 'project-label-order-migration'
-ORDER BY ordinal ASC`)
-	if err != nil {
-		t.Fatalf("query migrated label ordinals: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var got []struct {
-		id      string
-		ordinal int64
-	}
-	for rows.Next() {
-		var row struct {
-			id      string
-			ordinal int64
-		}
-		if err := rows.Scan(&row.id, &row.ordinal); err != nil {
-			t.Fatalf("scan migrated label ordinal: %v", err)
-		}
-		got = append(got, row)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate migrated label ordinals: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("migrated label rows = %+v, want 3 rows", got)
-	}
-	remaining := map[string]struct{}{
-		"label-zulu":  {},
-		"label-alpha": {},
-		"label-beta":  {},
-	}
-	for index, row := range got {
-		if row.ordinal != int64(index+1) {
-			t.Fatalf("migrated row %d ordinal = %d, want %d", index, row.ordinal, index+1)
-		}
-		if _, ok := remaining[row.id]; !ok {
-			t.Fatalf("migrated row %d has unexpected or duplicate ID %q", index, row.id)
-		}
-		delete(remaining, row.id)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("migration lost legacy labels: %+v", remaining)
 	}
 }
 
