@@ -243,6 +243,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			forbiddenAnyAppends: []string{"? PTY_LIVE_QUESTION", "? tool call"},
+			completionDrain:     &modelMismatchCompletionDrain,
 		},
 		{
 			name: "live_background_shell_completion_style",
