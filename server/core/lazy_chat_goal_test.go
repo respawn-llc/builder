@@ -62,6 +62,7 @@ type lazyGoalFixture struct {
 	materialized serverapi.WorkspaceChatMaterializeResponse
 	planned      serverapi.SessionPlanResponse
 	activation   serverapi.SessionRuntimeActivateResponse
+	ownerID      string
 	released     bool
 }
 
@@ -154,7 +155,7 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	if len(page.Sessions) != 1 {
 		t.Fatalf("materialized Session list = %+v, want one", page.Sessions)
 	}
-	fixture.release(t, "lazy-goal")
+	fixture.release(t)
 }
 
 func TestCoreLazyChatGoalRejectsUnavailableCapabilityAfterMaterialization(t *testing.T) {
@@ -185,7 +186,7 @@ func TestCoreLazyChatGoalRejectsUnavailableCapabilityAfterMaterialization(t *tes
 	}
 	fixture.requireNoTranscript(t)
 	fixture.requireOneSession(t)
-	fixture.release(t, "lazy-capability")
+	fixture.release(t)
 }
 
 func TestCoreLazyChatGoalAdmissionRejectionRetainsMaterializedSession(t *testing.T) {
@@ -271,7 +272,7 @@ func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	fixture.release(t, "lazy-failure")
+	fixture.release(t)
 	client.mu.Lock()
 	calls := client.calls
 	client.mu.Unlock()
@@ -286,12 +287,10 @@ func TestCoreLazyChatGoalProviderFailurePreservesAcceptedGoal(t *testing.T) {
 		t.Fatalf("durable Goal = %+v, want accepted active Goal", record.Meta.Goal)
 	}
 	fixture.requireDraftAndTranscript(t, nil)
+	fixture.requireOneSession(t)
 }
 
-func newLazyGoalCore(t *testing.T, enabledTools map[toolspec.ID]bool, client llm.Client) (*Core, metadata.Binding, interface {
-	PlanSession(context.Context, serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error)
-	MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
-}) {
+func newLazyGoalCore(t *testing.T, enabledTools map[toolspec.ID]bool, client llm.Client) (*Core, metadata.Binding, lazyGoalLaunchClient) {
 	t.Helper()
 	workspace := t.TempDir()
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
@@ -336,7 +335,7 @@ func newLazyGoalFixture(t *testing.T, enabledTools map[toolspec.ID]bool, client 
 		_, _ = appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 			ClientRequestID: "lazy-goal-release-cleanup",
 			Attachment:      fixture.activation.Attachment,
-			OwnerID:         "lazy-goal-cleanup",
+			OwnerID:         fixture.ownerID,
 			DropOwner:       true,
 		})
 	})
@@ -364,10 +363,11 @@ func (f *lazyGoalFixture) materializeAndActivate(t *testing.T, prefix string) {
 		t.Fatalf("PlanSession: %v", err)
 	}
 	f.planned = planned
+	f.ownerID = prefix + "-owner"
 	activation, err := f.appCore.SessionRuntimeClient().ActivateSessionRuntime(t.Context(), serverapi.SessionRuntimeActivateRequest{
 		ClientRequestID:          prefix + "-activate",
 		SessionID:                f.materialized.SessionID.String(),
-		OwnerID:                  prefix + "-owner",
+		OwnerID:                  f.ownerID,
 		ActiveSettings:           planned.Plan.ActiveSettings,
 		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
 		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
@@ -381,12 +381,12 @@ func (f *lazyGoalFixture) materializeAndActivate(t *testing.T, prefix string) {
 	f.activation = activation
 }
 
-func (f *lazyGoalFixture) release(t *testing.T, ownerID string) {
+func (f *lazyGoalFixture) release(t *testing.T) {
 	t.Helper()
 	response, err := f.appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
 		ClientRequestID: "lazy-goal-release",
 		Attachment:      f.activation.Attachment,
-		OwnerID:         ownerID,
+		OwnerID:         f.ownerID,
 		DropOwner:       true,
 	})
 	if err != nil {
@@ -411,25 +411,13 @@ func (f *lazyGoalFixture) requireDraftAndTranscript(t *testing.T, wantRecords *i
 	if state.Message != f.draft.Message {
 		t.Fatalf("composer draft = %q, want %q", state.Message, f.draft.Message)
 	}
-	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
+	records := f.collectMessageRecords(t, record.SessionDir)
 	if wantRecords != nil && len(records) != *wantRecords {
 		t.Fatalf("materialized transcript records = %d, want %d", len(records), *wantRecords)
 	}
 	for _, event := range records {
-		payload, payloadErr := event.Payload()
-		if payloadErr != nil {
-			t.Fatalf("event payload: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if ok && message.Role == session.MessageRoleUser {
-			t.Fatalf("materialized transcript contains user message: %+v", message)
+		if event.Role == session.MessageRoleUser {
+			t.Fatalf("materialized transcript contains user message: %+v", event)
 		}
 	}
 }
@@ -446,24 +434,10 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	store, err := session.Open(record.SessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
-	if err != nil {
-		t.Fatalf("open materialized Session: %v", err)
-	}
-	records, err := sessiontest.CollectRecords(store)
-	if err != nil {
-		t.Fatalf("CollectRecords: %v", err)
-	}
+	records := f.collectMessageRecords(t, record.SessionDir)
 	goalNotices, userMessages := 0, 0
 	for _, event := range records {
-		payload, payloadErr := event.Payload()
-		if payloadErr != nil {
-			t.Fatalf("event payload: %v", payloadErr)
-		}
-		message, ok := payload.(session.MessageRecord)
-		if !ok {
-			continue
-		}
+		message := event
 		if message.MessageType != nil && *message.MessageType == session.MessageTypeGoal {
 			goalNotices++
 		}
@@ -474,6 +448,30 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	if goalNotices != 1 || userMessages != 0 {
 		t.Fatalf("materialized Goal records = notices:%d user_messages:%d, want one notice and no user message", goalNotices, userMessages)
 	}
+}
+
+func (f *lazyGoalFixture) collectMessageRecords(t *testing.T, sessionDir string) []session.MessageRecord {
+	t.Helper()
+	store, err := session.Open(sessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
+	if err != nil {
+		t.Fatalf("open materialized Session: %v", err)
+	}
+	records, err := sessiontest.CollectRecords(store)
+	if err != nil {
+		t.Fatalf("CollectRecords: %v", err)
+	}
+	messages := make([]session.MessageRecord, 0, len(records))
+	for _, event := range records {
+		payload, payloadErr := event.Payload()
+		if payloadErr != nil {
+			t.Fatalf("event payload: %v", payloadErr)
+		}
+		message, ok := payload.(session.MessageRecord)
+		if ok {
+			messages = append(messages, message)
+		}
+	}
+	return messages
 }
 
 func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
