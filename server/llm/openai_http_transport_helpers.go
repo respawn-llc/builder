@@ -59,6 +59,13 @@ func servedModelMetadata(rawResp *http.Response, standardModel string) *string {
 	return nil
 }
 
+func observeStandardServedModel(target **string, model string) {
+	model = strings.TrimSpace(model)
+	if target != nil && *target == nil && model != "" {
+		*target = textutil.Value(model)
+	}
+}
+
 func reasoningIncludedMetadata(rawResp *http.Response) bool {
 	if rawResp == nil {
 		return false

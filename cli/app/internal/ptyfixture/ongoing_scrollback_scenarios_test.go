@@ -725,14 +725,11 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 }
 
 func countAppendRowsWithSymbol(appends []logicalAppendRow, expected string) int {
-	expectedRunes := []rune(expected)
-	if len(expectedRunes) != 1 {
-		panic(fmt.Sprintf("append-row symbol must be one rune: %q", expected))
-	}
+	expectedRune, _ := utf8.DecodeRuneInString(expected)
 	count := 0
 	for _, row := range appends {
 		for _, value := range []rune(row.text()) {
-			if value == expectedRunes[0] {
+			if value == expectedRune {
 				count++
 				break
 			}
