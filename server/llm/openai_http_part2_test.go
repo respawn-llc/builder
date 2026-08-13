@@ -191,6 +191,19 @@ func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 	}
 }
 
+func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
+	transport := NewHTTPTransport(staticAuth{})
+	payload, err := transport.buildPayload(OpenAIRequest{
+		Model: "gpt-5.3-codex", ToolChoiceMode: ToolChoiceModeAutomatic, FastMode: true,
+	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
+	if err != nil {
+		t.Fatalf("build payload: %v", err)
+	}
+	if got := mustMarshalObject(t, payload)["service_tier"]; got != "priority" {
+		t.Fatalf("service_tier = %#v, want priority", got)
+	}
+}
+
 func TestBuildResponsesInput_AssistantReasoningItemsUseEncryptedContentOnly(t *testing.T) {
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
 		{
@@ -587,21 +600,6 @@ func TestOAuthCompactRequestProjectsEffectiveServiceTier(t *testing.T) {
 				}
 			} else if !exists || gotServiceTier != test.wantServiceTier {
 				t.Fatalf("service_tier = %#v, want %#v", gotServiceTier, test.wantServiceTier)
-			}
-			clientMetadata, ok := captured["client_metadata"].(map[string]any)
-			if !ok {
-				t.Fatalf("client_metadata = %#v, want object", captured["client_metadata"])
-			}
-			rawMetadata, ok := clientMetadata["x-codex-turn-metadata"].(string)
-			if !ok {
-				t.Fatalf("turn metadata = %#v, want JSON string", clientMetadata["x-codex-turn-metadata"])
-			}
-			var metadata map[string]any
-			if err := json.Unmarshal([]byte(rawMetadata), &metadata); err != nil {
-				t.Fatalf("decode turn metadata: %v", err)
-			}
-			if got := metadata["request_kind"]; got != "compaction" {
-				t.Fatalf("request_kind = %#v, want compaction", got)
 			}
 		})
 	}

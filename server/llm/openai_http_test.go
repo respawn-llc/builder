@@ -786,7 +786,9 @@ func TestResolveAuth_AllowsAnonymousWhenBaseURLExplicitAndAuthNotConfigured(t *t
 
 func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	authHeaderErrs := make(chan error, 1)
+	var capturedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
 		if r.URL.Path != "/v1/responses" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -838,6 +840,9 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	}
 	if optionalStringValue(resp.AssistantText) != "hello from anonymous compatible server" {
 		t.Fatalf("assistant text = %q", optionalStringValue(resp.AssistantText))
+	}
+	if originator, userAgent, sessionID := capturedHeaders.Get("originator"), capturedHeaders.Get("User-Agent"), capturedHeaders.Get("session-id"); originator != transport.ProviderIdentifier || userAgent != transport.providerUserAgent() || sessionID != "session-1" {
+		t.Fatalf("common identity headers = (%q, %q, %q), want originator, User-Agent, and session-1", originator, userAgent, sessionID)
 	}
 }
 

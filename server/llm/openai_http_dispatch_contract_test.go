@@ -90,7 +90,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	}
 }
 
-func TestOAuthFastGenerateSendsCanonicalCodexIdentityAuthAndRoutingTier(t *testing.T) {
+func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.T) {
 	var capturedHeaders http.Header
 	var capturedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -117,15 +117,25 @@ func TestOAuthFastGenerateSendsCanonicalCodexIdentityAuthAndRoutingTier(t *testi
 	transport.BaseURLExplicit = true
 	transport.Client = server.Client()
 
-	_, err = transport.Generate(context.Background(), OpenAIRequest{
+	request := OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
-		FastMode:       true,
 		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
-	})
+	}
+	_, err = transport.Generate(context.Background(), request)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
+	}
+	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol" {
+		t.Fatalf("standard routing hint = %q, want model only", got)
+	}
+	if _, exists := capturedBody["service_tier"]; exists {
+		t.Fatalf("standard service_tier = %#v, want omitted", capturedBody["service_tier"])
+	}
+	request.FastMode = true
+	if _, err = transport.Generate(context.Background(), request); err != nil {
+		t.Fatalf("fast generate: %v", err)
 	}
 	if got := capturedHeaders.Get("session-id"); got != "session-1" {
 		t.Fatalf("session-id = %q, want session-1", got)
