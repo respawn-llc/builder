@@ -43,11 +43,15 @@ func (o *WorkspaceChatDraftOperation) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*o = WorkspaceChatDraftOperation(decoded)
-	return o.Validate()
+	return nil
 }
 
 type WorkspaceChatDraftRequest struct {
 	Operation WorkspaceChatDraftOperation `json:"operation"`
+}
+
+func (r WorkspaceChatDraftRequest) Validate() error {
+	return r.Operation.Validate()
 }
 
 func (r *WorkspaceChatDraftRequest) UnmarshalJSON(data []byte) error {
@@ -57,7 +61,7 @@ func (r *WorkspaceChatDraftRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*r = WorkspaceChatDraftRequest(decoded)
-	return r.Operation.Validate()
+	return nil
 }
 
 type WorkspaceChatDraftResponse struct {

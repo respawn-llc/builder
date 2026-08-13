@@ -26,6 +26,13 @@ type inProcessRunPromptService struct {
 }
 
 func (s *inProcessRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RunPromptRequest]) (serverapi.RunPromptResponse, error) {
+		return s.RunPromptValidated(ctx, validated, progress)
+	})
+}
+
+func (s *inProcessRunPromptService) RunPromptValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RunPromptRequest], progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	req := validated.Value()
 	overrides, err := req.Overrides.CanonicalKey()
 	if err != nil {
 		return serverapi.RunPromptResponse{}, err

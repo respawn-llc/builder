@@ -7,6 +7,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflow/label"
 	"core/server/workflowstore"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
@@ -86,9 +87,13 @@ func (s *Service) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.
 }
 
 func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelReorderResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
-		return serverapi.WorkflowProjectLabelReorderResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error) {
+		return s.ReorderWorkflowProjectLabelsValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ReorderWorkflowProjectLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error) {
+	req := validated.Value()
 	orderedIDs := make([]label.ID, 0, len(req.LabelIDs))
 	for _, rawID := range req.LabelIDs {
 		id, err := label.ParseID(rawID)
@@ -144,9 +149,13 @@ func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsUpdateRequest) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
-		return serverapi.WorkflowTaskLabelsUpdateResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
+		return s.UpdateWorkflowTaskLabelsValidated(ctx, validated)
+	})
+}
+
+func (s *Service) UpdateWorkflowTaskLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
+	req := validated.Value()
 	scope, err := s.store.GetTaskLabelScope(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsUpdateResponse{}, workflowLabelError(err, workflowLabelErrorScope{

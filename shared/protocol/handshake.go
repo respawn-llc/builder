@@ -398,9 +398,6 @@ func (r *AttachProjectRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	value := AttachProjectRequest{ProjectID: *wire.ProjectID, workspace: selector}
-	if err := value.Validate(); err != nil {
-		return err
-	}
 	*r = value
 	return nil
 }

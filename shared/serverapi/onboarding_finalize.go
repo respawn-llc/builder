@@ -102,6 +102,10 @@ type OnboardingFinalizeRequest struct {
 	DisabledSkillNames  []string                       `json:"disabled_skill_names,omitempty"`
 }
 
+func (r OnboardingFinalizeRequest) Validate() error {
+	return ValidateOnboardingFinalizeRequest(r)
+}
+
 type OnboardingFinalizeRequestWire struct {
 	Theme               *OnboardingTheme               `json:"theme,omitempty" jsonschema:"nullable"`
 	MainProvider        *OnboardingProviderChoice      `json:"main_provider,omitempty" jsonschema:"nullable"`

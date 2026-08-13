@@ -42,9 +42,6 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if l == nil {
 		return serverapi.WorkflowTaskListResponse{}, errors.New("task list is required")
 	}
-	if err := req.ValidateRPC(); err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
 	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err

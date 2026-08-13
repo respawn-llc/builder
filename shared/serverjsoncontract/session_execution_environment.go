@@ -99,11 +99,7 @@ func (c SessionExecutionEnvironmentRequest) Decode(raw []byte) (serverapi.Sessio
 	if err != nil {
 		return serverapi.SessionExecutionEnvironmentRequest{}, err
 	}
-	request := serverapi.SessionExecutionEnvironmentRequest{SessionID: sessionID}
-	if err := request.Validate(); err != nil {
-		return serverapi.SessionExecutionEnvironmentRequest{}, err
-	}
-	return request, nil
+	return serverapi.SessionExecutionEnvironmentRequest{SessionID: sessionID}, nil
 }
 
 type SessionExecutionEnvironmentResponse struct {

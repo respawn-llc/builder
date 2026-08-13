@@ -244,9 +244,13 @@ func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, tran
 }
 
 func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
-	if err := req.Operation.Validate(); err != nil {
-		return serverapi.WorkspaceChatDraftResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
+		return s.WorkspaceChatDraftValidated(ctx, validated)
+	})
+}
+
+func (s *Service) WorkspaceChatDraftValidated(ctx context.Context, validated servicecontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
+	req := validated.Value()
 	switch req.Operation.Kind {
 	case serverapi.WorkspaceChatDraftReadMessage:
 		resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
@@ -280,13 +284,18 @@ func (s *Service) WorkspaceChatDraft(ctx context.Context, req serverapi.Workspac
 			return serverapi.WorkspaceChatDraftResponse{}, err
 		}
 		return serverapi.WorkspaceChatDraftResponse{GoalAvailability: runtimeview.GoalAvailabilityFromSession(resolved.GoalAvailability)}, nil
-	default:
-		return serverapi.WorkspaceChatDraftResponse{}, fmt.Errorf("workspace Chat draft operation kind %q is invalid", req.Operation.Kind)
 	}
+	panic(fmt.Sprintf("validated workspace Chat draft operation kind %q is invalid", req.Operation.Kind))
 }
 
 func (s *Service) PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
-	result, err := s.PlanLaunchSession(ctx, req)
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+		return s.PlanSessionValidated(ctx, validated)
+	})
+}
+
+func (s *Service) PlanSessionValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
+	result, err := s.planLaunchSession(ctx, validated.Value())
 	if err != nil {
 		return serverapi.SessionPlanResponse{}, err
 	}
@@ -298,9 +307,16 @@ func (s *Service) PlanSession(ctx context.Context, req serverapi.SessionPlanRequ
 }
 
 func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
-	if err := req.Validate(); err != nil {
-		return PlanResult{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPlanRequest]) (PlanResult, error) {
+		return s.PlanLaunchSessionValidated(ctx, validated)
+	})
+}
+
+func (s *Service) PlanLaunchSessionValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionPlanRequest]) (PlanResult, error) {
+	return s.planLaunchSession(ctx, validated.Value())
+}
+
+func (s *Service) planLaunchSession(ctx context.Context, req serverapi.SessionPlanRequest) (PlanResult, error) {
 	var selectedSessionID *runtimeids.SessionID
 	var parentAgentSessionID *runtimeids.SessionID
 	switch req.Intent.Kind() {

@@ -477,7 +477,15 @@ func isRouteMethod(signature *types.Signature) bool {
 func isServerAPIType(typ types.Type) bool {
 	switch typed := types.Unalias(typ).(type) {
 	case *types.Named:
-		return typed.Obj().Pkg() != nil && typed.Obj().Pkg().Path() == "core/shared/serverapi"
+		if typed.Obj().Pkg() != nil && typed.Obj().Pkg().Path() == "core/shared/serverapi" {
+			return true
+		}
+		return typed.Obj().Pkg() != nil &&
+			typed.Obj().Pkg().Path() == "core/shared/apicontract" &&
+			typed.Obj().Name() == "Validated" &&
+			typed.TypeArgs() != nil &&
+			typed.TypeArgs().Len() == 1 &&
+			isServerAPIType(typed.TypeArgs().At(0))
 	case *types.Pointer:
 		return isServerAPIType(typed.Elem())
 	default:

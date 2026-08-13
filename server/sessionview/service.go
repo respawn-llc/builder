@@ -204,9 +204,13 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 }
 
 func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionExecutionEnvironmentResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+		return s.GetSessionExecutionEnvironmentValidated(ctx, validated)
+	})
+}
+
+func (s *Service) GetSessionExecutionEnvironmentValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+	req := validated.Value()
 	if s == nil || s.sessions == nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, errSessionStoreResolverRequired
 	}

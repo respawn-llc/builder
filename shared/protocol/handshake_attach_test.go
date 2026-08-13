@@ -92,8 +92,6 @@ func TestAttachProjectRequestRejectsMalformedWorkspaceSelection(t *testing.T) {
 	tests := []string{
 		`{}`,
 		`{"project_id":"project-1"}`,
-		`{"project_id":" ","workspace":null}`,
-		`{"project_id":" project-1 ","workspace":null}`,
 		`{"project_id":"project-1","workspace_id":"workspace-1"}`,
 		`{"project_id":"project-1","workspace_root":"/workspace"}`,
 		`{"project_id":"project-1","workspace":{"kind":""}}`,
@@ -110,6 +108,21 @@ func TestAttachProjectRequestRejectsMalformedWorkspaceSelection(t *testing.T) {
 		var request AttachProjectRequest
 		if err := json.Unmarshal([]byte(data), &request); err == nil {
 			t.Fatalf("Unmarshal(%s) error = nil", data)
+		}
+	}
+}
+
+func TestAttachProjectRequestSemanticValidationRunsAfterDecode(t *testing.T) {
+	for _, data := range []string{
+		`{"project_id":" ","workspace":null}`,
+		`{"project_id":" project-1 ","workspace":null}`,
+	} {
+		var request AttachProjectRequest
+		if err := json.Unmarshal([]byte(data), &request); err != nil {
+			t.Fatalf("Unmarshal(%s): %v", data, err)
+		}
+		if err := request.Validate(); err == nil {
+			t.Fatalf("Validate(%s) error = nil", data)
 		}
 	}
 }

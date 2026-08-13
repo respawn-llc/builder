@@ -126,7 +126,6 @@ var allowedSmallPackages = map[string]string{
 	"server/workflow/label":                   "workflow-owned label identity and name-validation module shared by persistence without coupling the workflow root package to label comparison consumers",
 	"server/workflow/labelcomparisongen":      "repo-owned generator command that materializes the versioned desktop label comparison adapter from the shared fixture corpus",
 	"server/workflowruntime":                  "runtime/workflow contract boundary imported by server runtime; merging into runner would invert dependencies",
-	"shared/apicontract":                      "shared API route/service contract owner after absorbing RPC and service contracts",
 	"shared/auth":                             "low-level shared auth contract required below server/auth and shared/serverapi",
 	"shared/authstatus":                       "provider-fact projection shared by CLI launch/status clients and server auth status after canonical runtime provider resolution",
 	"shared/boundedio":                        "single bounded-output writer shared by lifecycle hooks and existing shell, workflow, and worktree consumers",
