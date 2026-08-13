@@ -83,14 +83,6 @@ type OpenAITransport interface {
 	Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error)
 }
 
-type OpenAIInputTokenCountTransport interface {
-	CountRequestInputTokens(ctx context.Context, request OpenAIRequest) (int, error)
-}
-
-type OpenAIInputTokenCountSupportTransport interface {
-	SupportsRequestInputTokenCount(ctx context.Context) (bool, error)
-}
-
 type OpenAIModelContextWindowTransport interface {
 	ResolveModelContextWindow(ctx context.Context, model string) (int, error)
 }
@@ -264,42 +256,6 @@ func (c *OpenAIClient) ProviderCapabilities(ctx context.Context) (ProviderCapabi
 		return transport.ProviderCapabilities(ctx)
 	}
 	return ProviderCapabilities{}, fmt.Errorf("openai provider capabilities are not supported by transport %T", c.transport)
-}
-
-func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Request) (int, error) {
-	if c == nil || c.transport == nil {
-		return 0, ErrMissingTransport
-	}
-	if err := request.Validate(); err != nil {
-		return 0, err
-	}
-	counter, ok := c.transport.(OpenAIInputTokenCountTransport)
-	if !ok {
-		return 0, fmt.Errorf("openai request token counting is not supported by transport")
-	}
-
-	providerReq := RequestAsOpenAI(request)
-
-	count, err := counter.CountRequestInputTokens(ctx, providerReq)
-	if err != nil {
-		return 0, fmt.Errorf("openai request token counting failed: %w", err)
-	}
-	if count < 0 {
-		return 0, nil
-	}
-	return count, nil
-}
-
-func (c *OpenAIClient) SupportsRequestInputTokenCount(ctx context.Context) (bool, error) {
-	if c == nil || c.transport == nil {
-		return false, ErrMissingTransport
-	}
-	support, ok := c.transport.(OpenAIInputTokenCountSupportTransport)
-	if !ok {
-		_, counterSupported := c.transport.(OpenAIInputTokenCountTransport)
-		return counterSupported, nil
-	}
-	return support.SupportsRequestInputTokenCount(ctx)
 }
 
 func (c *OpenAIClient) ResolveModelContextWindow(ctx context.Context, model string) (int, error) {

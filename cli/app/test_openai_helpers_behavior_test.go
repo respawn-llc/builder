@@ -2,72 +2,12 @@ package app
 
 import (
 	"encoding/json"
-	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	modelstub "core/internal/testharness/pty/blackbox"
 )
-
-func TestHandleInputTokenCountHandlesResponsesInputTokensPath(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/responses/input_tokens", nil)
-
-	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
-	if !handled {
-		t.Fatal("expected request to be handled")
-	}
-	if got := recorder.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("content type = %q, want application/json", got)
-	}
-
-	var payload struct {
-		Object      string `json:"object"`
-		InputTokens int    `json:"input_tokens"`
-	}
-	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
-		t.Fatalf("unmarshal response body: %v", err)
-	}
-	if payload.Object != "response.input_tokens" {
-		t.Fatalf("object = %q, want response.input_tokens", payload.Object)
-	}
-	if payload.InputTokens != 123 {
-		t.Fatalf("input_tokens = %d, want 123", payload.InputTokens)
-	}
-}
-
-func TestHandleInputTokenCountIgnoresOtherPaths(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/responses", nil)
-
-	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
-	if handled {
-		t.Fatal("expected non-input-token path to be ignored")
-	}
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, want default 200", recorder.Code)
-	}
-	if recorder.Body.Len() != 0 {
-		t.Fatalf("expected empty body, got %q", recorder.Body.String())
-	}
-}
-
-func TestHandleInputTokenCountSetsAllowHeaderForWrongMethod(t *testing.T) {
-	recorder := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/responses/input_tokens", nil)
-
-	handled := modelstub.HandleInputTokenCount(recorder, req, 123)
-	if !handled {
-		t.Fatal("expected wrong-method request to be handled")
-	}
-	if recorder.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
-	}
-	if got := recorder.Header().Get("Allow"); got != http.MethodPost {
-		t.Fatalf("Allow header = %q, want %q", got, http.MethodPost)
-	}
-}
 
 func TestWriteCompletedResponseStreamWritesExpectedEvent(t *testing.T) {
 	recorder := httptest.NewRecorder()

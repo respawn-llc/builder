@@ -41,10 +41,10 @@ func (c compactionReminderCoordinator) maybeAppend(ctx context.Context, stepID s
 	if e.compactionRuntimeState().SoonReminderIssued() {
 		return nil
 	}
-	// Re-snapshot after the forced-compaction gate so the estimate reads the post-recount usage the
-	// gate just resolved (usageAtOrAboveLimit warms the precise current-token cache). The entry
-	// snapshot holds the pre-recount usage, which can sit above the forced limit even when the gate's
-	// precise recount cleared it, so using it here would trip the unreachable-state panic spuriously.
+	// Re-snapshot after the forced-compaction gate so the estimate reads the
+	// current usage the gate just resolved. The entry snapshot may be stale after
+	// runtime mutations, so using it here could trip the unreachable-state panic
+	// spuriously.
 	estimatedToolCalls := planner.estimatedToolCallsUntilForcedHandoff(e.compactionPlanningSnapshot())
 	content := prompts.RenderCompactionSoonReminderPrompt(e.triggerHandoffConfigured(), estimatedToolCalls)
 	if content == "" {

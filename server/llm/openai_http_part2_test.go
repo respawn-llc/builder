@@ -700,114 +700,6 @@ func newRewritingHTTPClient(t *testing.T, server *httptest.Server) *http.Client 
 	})}
 }
 
-func TestInputTokenCountPayloadMatchesCompactPayloadInputShape(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	canonicalItems := PrepareOpenAIInputItems([]ResponseItem{
-		{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
-		{Type: ResponseItemTypeFunctionCall, ID: textutil.Value("call_1"), CallID: textutil.Value("call_1"), Name: textutil.Value("shell"), Arguments: json.RawMessage(`{"command":"pwd"}`)},
-		{
-			Type:   ResponseItemTypeFunctionCallOutput,
-			CallID: textutil.Value("call_1"),
-			Name:   textutil.Value(string(toolspec.ToolViewImage)),
-			Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
-		},
-		{Type: ResponseItemTypeReasoning, ID: textutil.Value("rs_1"), EncryptedContent: textutil.Value("enc_reasoning")},
-		{Type: ResponseItemTypeCompaction, ID: textutil.Value("cmp_1"), EncryptedContent: textutil.Value("enc_compaction")},
-	})
-
-	compactPayload, err := newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, requireProviderCapabilities(t, transport, OpenAIAuthMode{})).BuildCompactV2(OpenAICompactionRequest{
-		Model:        "gpt-5",
-		Instructions: "compaction instructions",
-		InputItems:   canonicalItems,
-	})
-	if err != nil {
-		t.Fatalf("build compact payload: %v", err)
-	}
-	countPayload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:        "gpt-5",
-		SystemPrompt: "compaction instructions",
-		Items:        canonicalItems,
-	}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-
-	compactJSON := mustMarshalJSONMap(t, compactPayload)
-	countJSON := mustMarshalJSONMap(t, countPayload)
-	compactInput := compactJSON["input"].([]any)
-	compactInput = compactInput[:len(compactInput)-1]
-	if !reflect.DeepEqual(compactInput, countJSON["input"]) {
-		t.Fatalf("expected input shape parity between compact and input-token-count payloads\ncompact=%#v\ncount=%#v", compactJSON["input"], countJSON["input"])
-	}
-	if compactJSON["instructions"] != countJSON["instructions"] {
-		t.Fatalf("expected instructions parity between compact and input-token-count payloads, compact=%#v count=%#v", compactJSON["instructions"], countJSON["instructions"])
-	}
-}
-
-func TestBuildInputTokenCountPreservesRequiredToolChoiceAndEffectiveTools(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	request := OpenAIRequest{
-		Model:                 "gpt-5",
-		ToolChoiceMode:        ToolChoiceModeRequired,
-		EnableNativeWebSearch: true,
-		Tools: []Tool{
-			{Name: "shell", Schema: mustTestFunctionSchema(t, struct{}{})},
-			{Name: "patch", Schema: mustTestFunctionSchema(t, struct{}{})},
-		},
-	}
-	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
-	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
-	if err != nil {
-		t.Fatalf("build generation payload: %v", err)
-	}
-	count, err := transport.buildInputTokenCountParams(request, caps)
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-	generationJSON := mustMarshalJSONMap(t, generation)
-	countJSON := mustMarshalJSONMap(t, count)
-	if countJSON["tool_choice"] != "required" {
-		t.Fatalf("count tool_choice = %#v, want required", countJSON["tool_choice"])
-	}
-	if !reflect.DeepEqual(generationJSON["tools"], countJSON["tools"]) {
-		t.Fatalf("effective tools differ\ngeneration=%#v\ncount=%#v", generationJSON["tools"], countJSON["tools"])
-	}
-	if countJSON["parallel_tool_calls"] != true {
-		t.Fatalf("count parallel_tool_calls = %#v, want true", countJSON["parallel_tool_calls"])
-	}
-}
-
-func TestBuildInputTokenCountForwardsPreparedStructuredOutputLikeGeneration(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	request := OpenAIRequest{
-		Model:          "gpt-5",
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-		StructuredOutput: &StructuredOutput{
-			Name:        "workflow_completion",
-			Description: "Complete the current workflow node.",
-			Schema:      mustTestStructuredSchema(t, testWorkflowStructuredOutput{}),
-		},
-	}
-	caps := requireProviderCapabilities(t, transport, OpenAIAuthMode{})
-	generation, err := transport.buildPayload(request, OpenAIAuthMode{}, caps)
-	if err != nil {
-		t.Fatalf("build generation payload: %v", err)
-	}
-	count, err := transport.buildInputTokenCountParams(request, caps)
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-	generationJSON := mustMarshalJSONMap(t, generation)
-	countJSON := mustMarshalJSONMap(t, count)
-	if !reflect.DeepEqual(generationJSON["text"], countJSON["text"]) {
-		t.Fatalf(
-			"structured output differs between generation and token count\ngeneration=%#v\ncount=%#v",
-			generationJSON["text"],
-			countJSON["text"],
-		)
-	}
-}
-
 func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	unpreparedItems := []ResponseItem{unmaterializedViewImageInputFileOutput()}
@@ -832,9 +724,6 @@ func TestOpenAIRequestBuildersRejectUnpreparedViewImageInputFileOutput(t *testin
 	_, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, OpenAIAuthMode{}, caps)
 	checkErr("buildPayload", err)
 
-	_, err = transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", Items: unpreparedItems}, caps)
-	checkErr("buildInputTokenCountParams", err)
-
 	_, err = newOpenAIRequestPayloadBuilder(transport.Store, transport.ModelVerbosity, caps).BuildCompactV2(OpenAICompactionRequest{Model: "gpt-5", InputItems: unpreparedItems})
 	checkErr("buildCompactPayload", err)
 }
@@ -845,58 +734,6 @@ func unmaterializedViewImageInputFileOutput() ResponseItem {
 		CallID: textutil.Value("call_1"),
 		Name:   textutil.Value(string(toolspec.ToolViewImage)),
 		Output: json.RawMessage(`[{"type":"input_file","file_data":"data:application/pdf;base64,Zm9v","filename":"doc.pdf"}]`),
-	}
-}
-
-func TestBuildInputTokenCountParams_AppliesConfiguredModelVerbosity(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	transport.ModelVerbosity = "medium"
-	payload, err := transport.buildInputTokenCountParams(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build input-token-count payload: %v", err)
-	}
-
-	jsonPayload := mustMarshalJSONMap(t, payload)
-	text, ok := jsonPayload["text"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected text config in payload, got %#v", jsonPayload["text"])
-	}
-	if got := text["verbosity"]; got != "medium" {
-		t.Fatalf("expected text.verbosity=medium, got %#v", got)
-	}
-}
-
-func TestCountRequestInputTokensTargetsResponsesInputTokensPath(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/responses/input_tokens" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"object":"response.input_tokens","input_tokens":12345}`))
-	}))
-	defer server.Close()
-
-	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL + "/v1"
-	transport.Client = server.Client()
-
-	count, err := transport.CountRequestInputTokens(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:        "gpt-5",
-		SystemPrompt: "sys",
-		Items: PrepareOpenAIInputItems([]ResponseItem{
-			{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")},
-		}),
-	})
-	if err != nil {
-		t.Fatalf("count request input tokens failed: %v", err)
-	}
-	if count != 12345 {
-		t.Fatalf("expected input token count 12345, got %d", count)
 	}
 }
 

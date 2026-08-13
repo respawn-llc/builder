@@ -86,22 +86,6 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	client := &fakeCompactionClient{
-		inputTokenCountFn: func(req llm.Request) int {
-			total := 0
-			for _, item := range req.Items {
-				switch item.Type {
-				case llm.ResponseItemTypeMessage:
-					total += 1000
-				case llm.ResponseItemTypeFunctionCall:
-					total += 3000
-				case llm.ResponseItemTypeFunctionCallOutput:
-					total += 1000
-				default:
-					total += 500
-				}
-			}
-			return total
-		},
 		compactionErrors: []error{
 			&llm.ProviderAPIError{ProviderID: "openai", StatusCode: 400, Code: llm.UnifiedErrorCodeContextLengthOverflow, ProviderCode: "context_length_exceeded", Message: "prompt exceeded"},
 			nil,

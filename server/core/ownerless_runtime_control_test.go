@@ -70,9 +70,6 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	releaseRun := func() { releaseOnce.Do(func() { close(release) }) }
 	defer releaseRun()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 			return

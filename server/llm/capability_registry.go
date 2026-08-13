@@ -154,18 +154,16 @@ func LockedModelCapabilitiesForConfig(model string, override config.ModelCapabil
 func LockedProviderCapabilitiesFromContract(contract ProviderCapabilities) session.LockedProviderCapabilities {
 	supportsProviderVerbosity := contract.SupportsProviderVerbosity
 	return session.LockedProviderCapabilities{
-		ProviderID:                        strings.TrimSpace(contract.ProviderID),
-		SupportsResponsesAPI:              contract.SupportsResponsesAPI,
-		SupportsResponsesCompact:          contract.SupportsResponsesCompact,
-		SupportsRequestInputTokenCount:    contract.SupportsRequestInputTokenCount,
-		HasSupportsRequestInputTokenCount: true,
-		SupportsPromptCacheKey:            contract.SupportsPromptCacheKey,
-		HasSupportsPromptCacheKey:         true,
-		SupportsNativeWebSearch:           contract.SupportsNativeWebSearch,
-		SupportsReasoningEncrypted:        contract.SupportsReasoningEncrypted,
-		SupportsServerSideContextEdit:     contract.SupportsServerSideContextEdit,
-		SupportsProviderVerbosity:         &supportsProviderVerbosity,
-		IsOpenAIFirstParty:                contract.IsOpenAIFirstParty,
+		ProviderID:                    strings.TrimSpace(contract.ProviderID),
+		SupportsResponsesAPI:          contract.SupportsResponsesAPI,
+		SupportsResponsesCompact:      contract.SupportsResponsesCompact,
+		SupportsPromptCacheKey:        contract.SupportsPromptCacheKey,
+		HasSupportsPromptCacheKey:     true,
+		SupportsNativeWebSearch:       contract.SupportsNativeWebSearch,
+		SupportsReasoningEncrypted:    contract.SupportsReasoningEncrypted,
+		SupportsServerSideContextEdit: contract.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:     &supportsProviderVerbosity,
+		IsOpenAIFirstParty:            contract.IsOpenAIFirstParty,
 	}
 }
 
@@ -175,16 +173,15 @@ func ProviderCapabilitiesFromOverride(override config.ProviderCapabilitiesOverri
 		return ProviderCapabilities{}, false
 	}
 	return ProviderCapabilities{
-		ProviderID:                     providerID,
-		SupportsResponsesAPI:           override.SupportsResponsesAPI,
-		SupportsResponsesCompact:       override.SupportsResponsesCompact,
-		SupportsRequestInputTokenCount: override.SupportsRequestInputTokenCount,
-		SupportsPromptCacheKey:         override.SupportsPromptCacheKey,
-		SupportsNativeWebSearch:        override.SupportsNativeWebSearch,
-		SupportsReasoningEncrypted:     override.SupportsReasoningEncrypted,
-		SupportsServerSideContextEdit:  override.SupportsServerSideContextEdit,
-		SupportsProviderVerbosity:      override.SupportsProviderVerbosity,
-		IsOpenAIFirstParty:             override.IsOpenAIFirstParty,
+		ProviderID:                    providerID,
+		SupportsResponsesAPI:          override.SupportsResponsesAPI,
+		SupportsResponsesCompact:      override.SupportsResponsesCompact,
+		SupportsPromptCacheKey:        override.SupportsPromptCacheKey,
+		SupportsNativeWebSearch:       override.SupportsNativeWebSearch,
+		SupportsReasoningEncrypted:    override.SupportsReasoningEncrypted,
+		SupportsServerSideContextEdit: override.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:     override.SupportsProviderVerbosity,
+		IsOpenAIFirstParty:            override.IsOpenAIFirstParty,
 	}, true
 }
 
@@ -195,12 +192,6 @@ func ProviderCapabilitiesFromLocked(locked *session.LockedContract) (ProviderCap
 	providerID := strings.TrimSpace(locked.ProviderContract.ProviderID)
 	if providerID == "" {
 		return ProviderCapabilities{}, false
-	}
-	supportsRequestInputTokenCount := locked.ProviderContract.SupportsRequestInputTokenCount
-	if !locked.ProviderContract.HasSupportsRequestInputTokenCount {
-		if contract, ok := LookupProviderCapabilityContract(providerID); ok {
-			supportsRequestInputTokenCount = contract.SupportsRequestInputTokenCount
-		}
 	}
 	supportsPromptCacheKey := locked.ProviderContract.SupportsPromptCacheKey
 	if !locked.ProviderContract.HasSupportsPromptCacheKey {
@@ -214,16 +205,15 @@ func ProviderCapabilitiesFromLocked(locked *session.LockedContract) (ProviderCap
 		supportsProviderVerbosity = *locked.ProviderContract.SupportsProviderVerbosity
 	}
 	return ProviderCapabilities{
-		ProviderID:                     providerID,
-		SupportsResponsesAPI:           locked.ProviderContract.SupportsResponsesAPI,
-		SupportsResponsesCompact:       locked.ProviderContract.SupportsResponsesCompact,
-		SupportsRequestInputTokenCount: supportsRequestInputTokenCount,
-		SupportsPromptCacheKey:         supportsPromptCacheKey,
-		SupportsNativeWebSearch:        locked.ProviderContract.SupportsNativeWebSearch,
-		SupportsReasoningEncrypted:     locked.ProviderContract.SupportsReasoningEncrypted,
-		SupportsServerSideContextEdit:  locked.ProviderContract.SupportsServerSideContextEdit,
-		SupportsProviderVerbosity:      supportsProviderVerbosity,
-		IsOpenAIFirstParty:             locked.ProviderContract.IsOpenAIFirstParty,
+		ProviderID:                    providerID,
+		SupportsResponsesAPI:          locked.ProviderContract.SupportsResponsesAPI,
+		SupportsResponsesCompact:      locked.ProviderContract.SupportsResponsesCompact,
+		SupportsPromptCacheKey:        supportsPromptCacheKey,
+		SupportsNativeWebSearch:       locked.ProviderContract.SupportsNativeWebSearch,
+		SupportsReasoningEncrypted:    locked.ProviderContract.SupportsReasoningEncrypted,
+		SupportsServerSideContextEdit: locked.ProviderContract.SupportsServerSideContextEdit,
+		SupportsProviderVerbosity:     supportsProviderVerbosity,
+		IsOpenAIFirstParty:            locked.ProviderContract.IsOpenAIFirstParty,
 	}, true
 }
 

@@ -36,11 +36,6 @@ func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode,
 	return builder.BuildResponse(request, mode)
 }
 
-func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabilities ProviderCapabilities) (responses.InputTokenCountParams, error) {
-	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
-	return builder.BuildInputTokenCount(request)
-}
-
 func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
 	input, err := buildResponsesInput(request.Items)
 	if err != nil {
@@ -87,45 +82,6 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode O
 	textConfig, ok, err := buildResponseTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
 	if err != nil {
 		return responses.ResponseNewParams{}, err
-	}
-	if ok {
-		out.Text = textConfig
-	}
-	return out, nil
-}
-
-func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest) (responses.InputTokenCountParams, error) {
-	input, err := buildResponsesInput(request.Items)
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
-	}
-	toolControls, err := b.prepareToolControls(request)
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
-	}
-
-	out := responses.InputTokenCountParams{
-		Model: param.NewOpt(strings.TrimSpace(request.Model)),
-		ToolChoice: responses.InputTokenCountParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(toolControls.choice),
-		},
-	}
-	if len(input) > 0 {
-		out.Input = responses.InputTokenCountParamsInputUnion{OfResponseInputItemArray: input}
-	}
-	if instructions := strings.TrimSpace(request.SystemPrompt); instructions != "" {
-		out.Instructions = param.NewOpt(instructions)
-	}
-	if len(toolControls.tools) > 0 {
-		out.Tools = toolControls.tools
-		out.ParallelToolCalls = param.NewOpt(true)
-	}
-	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
-		out.Reasoning = buildReasoningParam(request.Model, request.ReasoningEffort)
-	}
-	textConfig, ok, err := buildInputTokenCountTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
 	}
 	if ok {
 		out.Text = textConfig
@@ -272,25 +228,6 @@ func buildResponseTextConfig(output *StructuredOutput, verbosity string) (respon
 	format, err := buildStructuredOutputFormat(output)
 	if err != nil {
 		return responses.ResponseTextConfigParam{}, false, err
-	}
-	text.Format = format
-	return text, true, nil
-}
-
-func buildInputTokenCountTextConfig(output *StructuredOutput, verbosity string) (responses.InputTokenCountParamsText, bool, error) {
-	text := responses.InputTokenCountParamsText{}
-	if verbosity != "" {
-		text.Verbosity = verbosity
-	}
-	if output == nil {
-		return text, text.Verbosity != "", nil
-	}
-	if !output.Schema.Prepared() {
-		return responses.InputTokenCountParamsText{}, false, errors.New("structured output schema is not prepared")
-	}
-	format, err := buildStructuredOutputFormat(output)
-	if err != nil {
-		return responses.InputTokenCountParamsText{}, false, err
 	}
 	text.Format = format
 	return text, true, nil

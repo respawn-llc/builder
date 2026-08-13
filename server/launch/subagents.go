@@ -192,9 +192,6 @@ func applyReviewerProviderCapabilityInheritance(settings *config.Settings, sourc
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_responses_compact"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.SupportsResponsesCompact = settings.ProviderCapabilities.SupportsResponsesCompact
 	}
-	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_request_input_token_count"]) == "default" {
-		settings.Reviewer.ProviderCapabilities.SupportsRequestInputTokenCount = settings.ProviderCapabilities.SupportsRequestInputTokenCount
-	}
 	if strings.TrimSpace(sources["reviewer.provider_capabilities.supports_prompt_cache_key"]) == "default" {
 		settings.Reviewer.ProviderCapabilities.SupportsPromptCacheKey = settings.ProviderCapabilities.SupportsPromptCacheKey
 	}
