@@ -43,16 +43,18 @@ type TranscriptCommittedRowFact struct {
 }
 
 type TranscriptUserRowFact struct {
-	Text             string
-	CondensedText    string
-	RollbackTargetID *string
+	Text              string
+	CondensedText     string
+	RollbackTargetID  *string
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 type TranscriptAssistantRowFact struct {
-	Text          string
-	CondensedText string
-	Phase         llm.MessagePhase
-	StreamID      *uuid.UUID
+	Text              string
+	CondensedText     string
+	Phase             llm.MessagePhase
+	StreamID          *uuid.UUID
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 type TranscriptToolRowFact struct {
@@ -183,6 +185,16 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 		} else if facts[index].Provenance == nil {
 			facts[index].Provenance = cloneTranscriptCommittedRowProvenance(evt.CommittedProvenance)
 		}
+		if facts[index].User != nil {
+			if facts[index].Provenance != nil {
+				facts[index].User.CommittedAtUnixMs = textutil.Pointer(facts[index].Provenance.CommittedAtUnixMs)
+			}
+		}
+		if facts[index].Assistant != nil {
+			if facts[index].Provenance != nil {
+				facts[index].Assistant.CommittedAtUnixMs = textutil.Pointer(facts[index].Provenance.CommittedAtUnixMs)
+			}
+		}
 	}
 	facts = transcriptCommittedRowFactsForStep(evt.StepID, facts)
 	return locateTranscriptCommittedRowFacts(facts)
@@ -287,6 +299,16 @@ func transcriptCommittedRowFactsFromMessage(
 	}
 	for index := range facts {
 		facts[index].Provenance = cloneTranscriptCommittedRowProvenance(provenance)
+		if facts[index].User != nil {
+			if provenance != nil {
+				facts[index].User.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
+			}
+		}
+		if facts[index].Assistant != nil {
+			if provenance != nil {
+				facts[index].Assistant.CommittedAtUnixMs = textutil.Pointer(provenance.CommittedAtUnixMs)
+			}
+		}
 		if facts[index].Tool != nil && completionProvenance != nil {
 			if owner := completionProvenance[facts[index].Tool.ToolCallID]; owner != nil {
 				facts[index].Provenance = cloneTranscriptCommittedRowProvenance(owner)
@@ -371,6 +393,10 @@ func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommitt
 }
 
 func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
+	var committedAtUnixMs *transcript.CommittedAtUnixMs
+	if entry.CommittedProvenance != nil {
+		committedAtUnixMs = entry.CommittedProvenance.CommittedAtUnixMs
+	}
 	visibility := normalizeRuntimeEntryVisibility(entry.Visibility)
 	if visibility == transcript.EntryVisibilityHidden {
 		return TranscriptCommittedRowFact{}, false
@@ -413,9 +439,10 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			StepID: entry.StepID,
 			Kind:   TranscriptCommittedRowFactUser,
 			User: &TranscriptUserRowFact{
-				Text:             text,
-				CondensedText:    entry.CondensedText,
-				RollbackTargetID: textutil.Pointer(entry.RollbackTargetID),
+				Text:              text,
+				CondensedText:     entry.CondensedText,
+				RollbackTargetID:  textutil.Pointer(entry.RollbackTargetID),
+				CommittedAtUnixMs: textutil.Pointer(committedAtUnixMs),
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,
@@ -430,9 +457,10 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			StepID: entry.StepID,
 			Kind:   TranscriptCommittedRowFactAssistant,
 			Assistant: &TranscriptAssistantRowFact{
-				Text:          text,
-				CondensedText: entry.CondensedText,
-				Phase:         entry.Phase,
+				Text:              text,
+				CondensedText:     entry.CondensedText,
+				Phase:             entry.Phase,
+				CommittedAtUnixMs: textutil.Pointer(committedAtUnixMs),
 			},
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing), integrity),
 			Integrity:  integrity,

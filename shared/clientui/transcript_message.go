@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+
+	"core/shared/transcript"
 )
 
 type TranscriptMessageKind string
@@ -257,6 +259,44 @@ func decodeTranscriptPayload[T transcriptEventPayloadValue](data []byte) (Transc
 	var payload T
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return TranscriptEvent{}, err
+	}
+	validateTime := func(owner json.RawMessage) error {
+		if len(owner) == 0 || bytes.Equal(bytes.TrimSpace(owner), []byte("null")) {
+			return nil
+		}
+		_, _, err := transcript.DecodeCommittedAtUnixMsField(owner, "committed_at_unix_ms")
+		return err
+	}
+	validateRow := func(row json.RawMessage) error {
+		var fields struct {
+			User      json.RawMessage
+			Assistant json.RawMessage
+		}
+		if err := json.Unmarshal(row, &fields); err != nil {
+			return err
+		}
+		if err := validateTime(fields.User); err != nil {
+			return err
+		}
+		return validateTime(fields.Assistant)
+	}
+	switch any(payload).(type) {
+	case TranscriptCommittedRow:
+		if err := validateRow(data); err != nil {
+			return TranscriptEvent{}, err
+		}
+	case TranscriptHydration:
+		var fields struct {
+			CommittedRows []json.RawMessage
+		}
+		if err := json.Unmarshal(data, &fields); err != nil {
+			return TranscriptEvent{}, err
+		}
+		for _, row := range fields.CommittedRows {
+			if err := validateRow(row); err != nil {
+				return TranscriptEvent{}, err
+			}
+		}
 	}
 	return NewTranscriptEvent(payload), nil
 }

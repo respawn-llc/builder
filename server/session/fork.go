@@ -269,10 +269,11 @@ func streamReplayIntoChild(parentLog MaterializedEventLog, childLog Materialized
 				replacement,
 				latestRollbackCandidate,
 			)
-			rebasedRecord, err := NewEventRecord(
+			rebasedRecord, err := newEventRecord(
 				record.Seq(),
 				record.StepID(),
 				rebasedReplacement,
+				record.CommittedAtUnixMs(),
 			)
 			if err != nil {
 				return err
