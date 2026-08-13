@@ -240,11 +240,7 @@ function BoardContent({
     },
     [push, t],
   );
-  const {
-    actionsDisabled: initiatingActionsDisabled,
-    initiatingAction,
-    runCardAction,
-  } = useBoardInitiatingActionController({
+  const { initiatingAction, runCardAction } = useBoardInitiatingActionController({
     api,
     connected: connection.phase === "connected",
     moveErrorTitle: t("board.moveFailed"),

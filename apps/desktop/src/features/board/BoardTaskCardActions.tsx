@@ -4,6 +4,20 @@ import { useTranslation } from "react-i18next";
 import { IconTooltipButton } from "@/ui";
 import type { KanbanCardVM } from "./BoardColumnViewModel";
 
+function optimisticTaskActions(
+  actions: KanbanCardVM["actions"],
+  pendingInterrupt: boolean,
+  pendingResume: boolean,
+): Readonly<{ canInterrupt: boolean; canResume: boolean }> {
+  if (pendingInterrupt) {
+    return { canInterrupt: false, canResume: true };
+  }
+  if (pendingResume) {
+    return { canInterrupt: true, canResume: false };
+  }
+  return actions;
+}
+
 export function BoardTaskCardActions({
   actionsDisabled,
   card,
@@ -20,17 +34,18 @@ export function BoardTaskCardActions({
   pendingResume: boolean;
 }>) {
   const { t } = useTranslation();
-  const availableActions = {
-    canInterrupt: pendingResume || (!pendingInterrupt && card.actions.canInterrupt),
-    canResume: pendingInterrupt || (!pendingResume && card.actions.canResume),
-  };
   const actionPending = pendingInterrupt || pendingResume;
-  if (!availableActions.canInterrupt && !availableActions.canResume) {
+  const { canInterrupt, canResume } = optimisticTaskActions(
+    card.actions,
+    pendingInterrupt,
+    pendingResume,
+  );
+  if (!canInterrupt && !canResume) {
     return null;
   }
   return (
     <div className="flex shrink-0 flex-wrap justify-end gap-[var(--space-2)]">
-      {availableActions.canResume ? (
+      {canResume ? (
         <IconTooltipButton
           label={card.statusKind === "queued" ? t("board.waitingDueToConcurrencyLimits") : t("board.resume")}
           onClick={(event) => {
@@ -48,7 +63,7 @@ export function BoardTaskCardActions({
           )}
         </IconTooltipButton>
       ) : null}
-      {availableActions.canInterrupt ? (
+      {canInterrupt ? (
         <IconTooltipButton
           label={t("board.interrupt")}
           onClick={(event) => {
