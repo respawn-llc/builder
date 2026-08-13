@@ -69,13 +69,6 @@ func taskCreateStoreError(err error) error {
 // message text, which is free to change without affecting behavior. Dynamic
 // context (ids, keys, counts) is wrapped via fmt.Errorf("... %w", Err...).
 var (
-	// ErrWorkflowIDRequired is returned when a Workflow identity is required
-	// but missing.
-	ErrWorkflowIDRequired = errors.New("workflow id is required")
-
-	// ErrWorkflowNameRequired is returned when a workflow name is blank.
-	ErrWorkflowNameRequired = errors.New("workflow name is required")
-
 	// ErrCommentAuthorKindInvalid is returned when a comment author kind is not
 	// one of the accepted values.
 	ErrCommentAuthorKindInvalid = errors.New("comment author kind must be user or agent")

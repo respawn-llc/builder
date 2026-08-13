@@ -257,9 +257,8 @@ func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCrea
 
 func (s *Service) CreateWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowCreateRequest]) (serverapi.WorkflowCreateResponse, error) {
 	req := validated.Value()
-	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
-	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: req.Name, Description: req.Description})
+	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: validated.WorkflowName(req.Name), Description: req.Description})
 	if err != nil {
 		return serverapi.WorkflowCreateResponse{}, err
 	}
@@ -274,11 +273,10 @@ func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request se
 
 func (s *Service) CreateAndLinkWorkflowToProjectValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowCreateAndLinkProjectRequest]) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
 	request := validated.Value()
-	request.Name = strings.TrimSpace(request.Name)
 	request.Description = strings.TrimSpace(request.Description)
 	request.ProjectID = strings.TrimSpace(request.ProjectID)
 	created, link, err := s.store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
-		Name:          request.Name,
+		Name:          validated.WorkflowName(request.Name),
 		Description:   request.Description,
 		ProjectID:     request.ProjectID,
 		DefaultPolicy: workflowStoreDefaultPolicy(request.DefaultPolicy),
@@ -343,11 +341,11 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 
 func (s *Service) UpdateWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowUpdateRequest]) (serverapi.WorkflowGetResponse, error) {
 	req := validated.Value()
-	req.Name = strings.TrimSpace(req.Name)
 	req.Description = strings.TrimSpace(req.Description)
+	name := validated.WorkflowName(req.Name)
 	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
 		_, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, name, req.Description)
 		})
 		return struct{}{}, err
 	}); err != nil {

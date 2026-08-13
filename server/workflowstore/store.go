@@ -344,7 +344,6 @@ type ListWorkflowsResult struct {
 }
 
 func (s *Store) CreateWorkflow(ctx context.Context, req CreateWorkflowRequest) (WorkflowRecord, error) {
-	name := strings.TrimSpace(req.Name)
 	now := s.now().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -352,7 +351,7 @@ func (s *Store) CreateWorkflow(ctx context.Context, req CreateWorkflowRequest) (
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	record, err := insertWorkflow(ctx, q, now, CreateWorkflowRequest{Name: name, Description: req.Description})
+	record, err := insertWorkflow(ctx, q, now, req)
 	if err != nil {
 		return WorkflowRecord{}, err
 	}
@@ -385,7 +384,7 @@ func (s *Store) CreateAndLinkWorkflow(ctx context.Context, req CreateAndLinkWork
 }
 
 func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req CreateWorkflowRequest) (WorkflowRecord, error) {
-	name := strings.TrimSpace(req.Name)
+	name := req.Name
 	description := strings.TrimSpace(req.Description)
 	workflowID := runtimeids.NewWorkflowID()
 	startID := runtimeids.NewGraphEntityID()
@@ -412,7 +411,6 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 }
 
 func (s *Store) UpdateWorkflowInfo(ctx context.Context, workflowID runtimeids.WorkflowID, name string, description string) error {
-	name = strings.TrimSpace(name)
 	updated, err := s.queries.UpdateWorkflowInfo(ctx, sqlitegen.UpdateWorkflowInfoParams{ID: workflowID, Name: name, Description: strings.TrimSpace(description), UpdatedAtUnixMs: s.now().UnixMilli()})
 	if err != nil {
 		return fmt.Errorf("update workflow info: %w", err)

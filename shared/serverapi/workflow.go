@@ -1833,11 +1833,11 @@ type WorkflowTaskSessionStarted struct {
 }
 
 func (r WorkflowCreateRequest) Validate() error {
-	return validateWorkflowName(r.Name)
+	return validateWorkflowName(r.Name, "name")
 }
 
 func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
-	if err := validateWorkflowName(r.Name); err != nil {
+	if err := validateWorkflowName(r.Name, "name"); err != nil {
 		return err
 	}
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
@@ -1847,7 +1847,10 @@ func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
 }
 
 func (r WorkflowUpdateRequest) Validate() error {
-	return validateWorkflowIDAndName(r.WorkflowID, r.Name)
+	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
+		return err
+	}
+	return validateWorkflowName(r.Name, "name")
 }
 
 func (r WorkflowListRequest) Validate() error {
@@ -2274,15 +2277,12 @@ func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
 	if metadata == nil {
 		return nil
 	}
-	name := strings.TrimSpace(metadata.Name)
-	if name == "" {
-		return workflowRequestError(WorkflowRequestErrorRequired, "metadata.name", "metadata.name is required")
+	name, err := workflowcontract.NewWorkflowName(metadata.Name)
+	if err != nil {
+		return workflowNameRequestError(err, "metadata.name")
 	}
-	if name != metadata.Name {
+	if name.String() != metadata.Name {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "metadata.name", "metadata.name must not have leading or trailing whitespace")
-	}
-	if len([]rune(name)) > 120 {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "metadata.name", "metadata.name is too long")
 	}
 	if metadata.Description != strings.TrimSpace(metadata.Description) {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "metadata.description", "metadata.description must not have leading or trailing whitespace")
@@ -2293,6 +2293,22 @@ func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
 		}
 	}
 	return nil
+}
+
+func validateWorkflowName(raw string, field string) error {
+	_, err := workflowcontract.NewWorkflowName(raw)
+	return workflowNameRequestError(err, field)
+}
+
+func workflowNameRequestError(err error, field string) error {
+	switch {
+	case errors.Is(err, workflowcontract.ErrWorkflowNameRequired):
+		return workflowRequestError(WorkflowRequestErrorRequired, field, field+" is required")
+	case errors.Is(err, workflowcontract.ErrWorkflowNameTooLong):
+		return workflowRequestError(WorkflowRequestErrorTooLong, field, field+" must be <= 120 characters")
+	default:
+		return err
+	}
 }
 
 func validateWorkflowGraphValidationModes(modes []WorkflowValidationMode) error {
@@ -3365,24 +3381,6 @@ func validateRequiredFields(fields ...requiredWorkflowField) error {
 		if err := validateRequired(field.name, field.value); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func validateWorkflowIDAndName(workflowID runtimeids.WorkflowID, name string) error {
-	if err := validateRequiredWorkflowID(workflowID); err != nil {
-		return err
-	}
-	return validateWorkflowName(name)
-}
-
-func validateWorkflowName(name string) error {
-	trimmed := strings.TrimSpace(name)
-	if trimmed == "" {
-		return workflowRequestError(WorkflowRequestErrorRequired, "name", "name is required")
-	}
-	if len([]rune(trimmed)) > 120 {
-		return workflowRequestError(WorkflowRequestErrorTooLong, "name", "name must be <= 120 characters")
 	}
 	return nil
 }

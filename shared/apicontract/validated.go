@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/shared/runtimeids"
+	"core/shared/workflowcontract"
 )
 
 type ValidationPolicy uint8
@@ -45,6 +46,25 @@ func (v Validated[T]) RuntimeClientRequestID(raw string) runtimeids.RuntimeClien
 		panic(fmt.Sprintf("validated request contains invalid Runtime Client Request ID %q: %v", raw, err))
 	}
 	return id
+}
+
+func (v Validated[T]) WorkflowName(raw string) string {
+	name, err := workflowcontract.NewWorkflowName(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Workflow name %q: %v", raw, err))
+	}
+	return name.String()
+}
+
+func (v Validated[T]) OptionalProjectKey(raw string) *runtimeids.ProjectKey {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	key, err := runtimeids.ParseProjectKey(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Project Key %q: %v", raw, err))
+	}
+	return &key
 }
 
 func WithValidated[T any, R any](

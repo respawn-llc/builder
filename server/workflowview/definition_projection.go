@@ -66,9 +66,6 @@ func (p *DefinitionProjection) snapshot(ctx context.Context, workflowID runtimei
 	if p == nil {
 		return definitionSnapshot{}, errors.New("definition projection is required")
 	}
-	if workflowID.IsZero() {
-		return definitionSnapshot{}, errors.New("workflow_id is required")
-	}
 	domain, record, err := p.store.GetDefinition(ctx, workflowID)
 	if err != nil {
 		return definitionSnapshot{}, err

@@ -79,7 +79,7 @@ type sessionMetadataDocument struct {
 }
 
 var (
-	ErrInvalidProjectKey      = errors.New("invalid project key")
+	ErrInvalidProjectKey      = runtimeids.ErrInvalidProjectKey
 	ErrProjectKeyAlreadyInUse = errors.New("project key already in use")
 
 	// ErrWorkspaceAlreadyBound is returned when a rebind target canonical root
@@ -763,10 +763,10 @@ func bindingFromCanonicalRootRows(canonicalRoot string, rows []sqlitegen.ListWor
 }
 
 func (s *Store) CreateProjectForWorkspace(ctx context.Context, workspaceRoot string, projectName string) (Binding, error) {
-	return s.CreateProjectForWorkspaceWithKey(ctx, workspaceRoot, projectName, "")
+	return s.CreateProjectForWorkspaceWithKey(ctx, workspaceRoot, projectName, nil)
 }
 
-func (s *Store) CreateProjectForWorkspaceWithKey(ctx context.Context, workspaceRoot string, projectName string, projectKey string) (Binding, error) {
+func (s *Store) CreateProjectForWorkspaceWithKey(ctx context.Context, workspaceRoot string, projectName string, projectKey *runtimeids.ProjectKey) (Binding, error) {
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
 	}
@@ -782,7 +782,7 @@ func (s *Store) CreateProjectForWorkspaceWithKey(ctx context.Context, workspaceR
 	projectID := "project-" + uuid.NewString()
 	workspaceID := "workspace-" + uuid.NewString()
 	workspaceName := filepath.Base(canonicalRoot)
-	return s.insertWorkspaceBinding(ctx, canonicalRoot, trimmedProjectName, strings.TrimSpace(projectKey), workspaceName, projectID, workspaceID, now, true)
+	return s.insertWorkspaceBinding(ctx, canonicalRoot, trimmedProjectName, projectKey, workspaceName, projectID, workspaceID, now, true)
 }
 
 type ProjectWorkspaceAttachResult struct {
@@ -827,10 +827,10 @@ func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectI
 }
 
 // UpdateProjectMetadata updates a project's display name and, when projectKey is
-// non-empty, its project key in a single transaction. An empty projectKey leaves
+// present, its project key in a single transaction. An absent projectKey leaves
 // the existing key unchanged. Existing task short IDs are frozen at creation, so
 // changing the key only affects the prefix applied to future tasks.
-func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, displayName string, projectKey string) error {
+func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, displayName string, projectKey *runtimeids.ProjectKey) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
@@ -839,12 +839,8 @@ func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, dis
 		return errors.New("project id is required")
 	}
 	var normalizedKey string
-	if strings.TrimSpace(projectKey) != "" {
-		var err error
-		normalizedKey, err = normalizeProjectKey(projectKey)
-		if err != nil {
-			return err
-		}
+	if projectKey != nil {
+		normalizedKey = projectKey.String()
 	}
 	now := time.Now().UTC().UnixMilli()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1399,7 +1395,7 @@ func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonical
 	}); err != nil {
 		return Binding{}, fmt.Errorf("upsert project: %w", err)
 	}
-	storedProjectKey, err := setInitialProjectKey(ctx, q, projectID, displayName, "", now.UnixMilli())
+	storedProjectKey, err := setInitialProjectKey(ctx, q, projectID, displayName, nil, now.UnixMilli())
 	if err != nil {
 		return Binding{}, err
 	}
@@ -1568,9 +1564,8 @@ func setMissingProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 	return fmt.Errorf("set project key for %q: exhausted unique-key retries", projectID)
 }
 
-func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID string, displayName string, projectKey string, updatedAtUnixMs int64) (string, error) {
-	trimmedKey := strings.TrimSpace(projectKey)
-	if trimmedKey == "" {
+func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID string, displayName string, projectKey *runtimeids.ProjectKey, updatedAtUnixMs int64) (string, error) {
+	if projectKey == nil {
 		if err := setMissingProjectKey(ctx, q, projectID, displayName, updatedAtUnixMs); err != nil {
 			return "", err
 		}
@@ -1580,10 +1575,7 @@ func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 		}
 		return strings.TrimSpace(state.ProjectKey), nil
 	}
-	normalizedKey, err := normalizeProjectKey(trimmedKey)
-	if err != nil {
-		return "", err
-	}
+	normalizedKey := projectKey.String()
 	updated, err := q.SetProjectKey(ctx, sqlitegen.SetProjectKeyParams{ProjectKey: normalizedKey, UpdatedAtUnixMs: updatedAtUnixMs, ProjectID: projectID})
 	if err != nil {
 		if IsSQLiteUniqueConstraint(err) {
@@ -1597,7 +1589,7 @@ func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 	return normalizedKey, nil
 }
 
-func (s *Store) SetProjectKey(ctx context.Context, projectID string, projectKey string) error {
+func (s *Store) SetProjectKey(ctx context.Context, projectID string, rawProjectKey string) error {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
@@ -1605,10 +1597,11 @@ func (s *Store) SetProjectKey(ctx context.Context, projectID string, projectKey 
 	if trimmedProjectID == "" {
 		return errors.New("project id is required")
 	}
-	normalizedKey, err := normalizeProjectKey(projectKey)
+	projectKey, err := runtimeids.ParseProjectKey(rawProjectKey)
 	if err != nil {
 		return err
 	}
+	key := projectKey.String()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin set project key tx: %w", err)
@@ -1624,17 +1617,17 @@ func (s *Store) SetProjectKey(ctx context.Context, projectID string, projectKey 
 	}
 	// The key is mutable even after tasks exist: existing task short IDs are
 	// frozen at creation, so a rename only changes the prefix of future tasks.
-	if strings.TrimSpace(state.ProjectKey) == normalizedKey {
+	if strings.TrimSpace(state.ProjectKey) == key {
 		return nil
 	}
 	updated, err := q.SetProjectKey(ctx, sqlitegen.SetProjectKeyParams{
-		ProjectKey:      normalizedKey,
+		ProjectKey:      key,
 		UpdatedAtUnixMs: time.Now().UTC().UnixMilli(),
 		ProjectID:       trimmedProjectID,
 	})
 	if err != nil {
 		if IsSQLiteUniqueConstraint(err) {
-			return fmt.Errorf("%w: %q", ErrProjectKeyAlreadyInUse, normalizedKey)
+			return fmt.Errorf("%w: %q", ErrProjectKeyAlreadyInUse, key)
 		}
 		return fmt.Errorf("set project key: %w", err)
 	}
@@ -1682,33 +1675,6 @@ func (s *Store) AllocateProjectTaskSequence(ctx context.Context, projectID strin
 	return key, row.NextTaskSeq - 1, nil
 }
 
-func normalizeProjectKey(raw string) (string, error) {
-	key := strings.ToUpper(strings.TrimSpace(raw))
-	if !isValidProjectKey(key) {
-		return "", fmt.Errorf("%w: must match ^[A-Z][A-Z0-9]{1,7}$", ErrInvalidProjectKey)
-	}
-	return key, nil
-}
-
-func isValidProjectKey(key string) bool {
-	if len(key) < 2 || len(key) > 8 {
-		return false
-	}
-	for i, r := range key {
-		if i == 0 {
-			if r < 'A' || r > 'Z' {
-				return false
-			}
-			continue
-		}
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 func suggestProjectKey(displayName string, projectID string, used map[string]bool) string {
 	base := projectKeyBase(displayName)
 	if len(base) < 2 {
@@ -1720,7 +1686,7 @@ func suggestProjectKey(displayName string, projectID string, used map[string]boo
 	if len(base) > 3 {
 		base = base[:3]
 	}
-	if isValidProjectKey(base) && !used[base] {
+	if _, err := runtimeids.ParseProjectKey(base); err == nil && !used[base] {
 		return base
 	}
 	for suffix := 2; ; suffix++ {
@@ -1734,7 +1700,7 @@ func suggestProjectKey(displayName string, projectID string, used map[string]boo
 			prefix = "P"
 		}
 		candidate := prefix + suffixText
-		if isValidProjectKey(candidate) && !used[candidate] {
+		if _, err := runtimeids.ParseProjectKey(candidate); err == nil && !used[candidate] {
 			return candidate
 		}
 	}
@@ -1809,7 +1775,7 @@ func insertWorkspaceBindingWithQueries(ctx context.Context, q *sqlitegen.Queries
 	return true, nil
 }
 
-func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string, projectDisplayName string, projectKey string, workspaceDisplayName string, projectID string, workspaceID string, now time.Time, isPrimary bool) (Binding, error) {
+func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string, projectDisplayName string, projectKey *runtimeids.ProjectKey, workspaceDisplayName string, projectID string, workspaceID string, now time.Time, isPrimary bool) (Binding, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Binding{}, fmt.Errorf("begin workspace binding tx: %w", err)

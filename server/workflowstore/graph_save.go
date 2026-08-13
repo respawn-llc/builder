@@ -432,7 +432,7 @@ func prepareWorkflowGraphSaveMetadata(currentName string, currentDescription str
 	if metadata.ExecutionTargetPolicy != nil {
 		policy = normalizeWorkflowExecutionTargetPolicy(*metadata.ExecutionTargetPolicy)
 	}
-	prepared := WorkflowGraphSaveMetadata{Name: strings.TrimSpace(metadata.Name), Description: strings.TrimSpace(metadata.Description), ExecutionTargetPolicy: &policy}
+	prepared := WorkflowGraphSaveMetadata{Name: metadata.Name, Description: strings.TrimSpace(metadata.Description), ExecutionTargetPolicy: &policy}
 	changed := prepared.Name != currentName || prepared.Description != currentDescription || !workflowExecutionTargetPoliciesEqual(*prepared.ExecutionTargetPolicy, currentPolicy)
 	return &prepared, changed, nil
 }

@@ -495,9 +495,6 @@ func (s *TaskStatusDurableSnapshot) Definitions(
 	}
 	definitions := make(map[runtimeids.WorkflowID]definitionSnapshot, len(workflowIDs))
 	for _, workflowID := range workflowIDs {
-		if workflowID.IsZero() {
-			return nil, errors.New("workflow id is required")
-		}
 		if _, exists := definitions[workflowID]; exists {
 			continue
 		}

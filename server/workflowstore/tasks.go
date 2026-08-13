@@ -75,7 +75,7 @@ func (s *Store) TaskExecutionScope(ctx context.Context, taskID workflow.TaskID) 
 	if err != nil {
 		return TaskExecutionScope{}, err
 	}
-	if strings.TrimSpace(row.ProjectID) == "" || row.WorkflowID.IsZero() {
+	if strings.TrimSpace(row.ProjectID) == "" {
 		return TaskExecutionScope{}, fmt.Errorf("task %q has incomplete execution scope", taskID)
 	}
 	return TaskExecutionScope{ProjectID: row.ProjectID, WorkflowID: row.WorkflowID}, nil

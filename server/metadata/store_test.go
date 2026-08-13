@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/session"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"database/sql"
@@ -637,7 +638,11 @@ func TestWorkspaceUnlinkRuntimePreparationDoesNotBlockUnrelatedMetadata(t *testi
 	if _, err := store.ListProjects(ctx); err != nil {
 		t.Fatalf("ListProjects during workspace unlink runtime preparation: %v", err)
 	}
-	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", other.ProjectKey); err != nil {
+	otherKey, err := runtimeids.ParseProjectKey(other.ProjectKey)
+	if err != nil {
+		t.Fatalf("NewProjectKey: %v", err)
+	}
+	if err := store.UpdateProjectMetadata(ctx, other.ProjectID, "Other project", &otherKey); err != nil {
 		t.Fatalf("UpdateProjectMetadata during workspace unlink runtime preparation: %v", err)
 	}
 	select {
@@ -710,7 +715,7 @@ func TestProjectWorkspaceMutationsDoNotRequireWorkflowEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AttachWorkspaceToProject: %v", err)
 	}
-	if err := store.UpdateProjectMetadata(ctx, binding.ProjectID, "Events", ""); err != nil {
+	if err := store.UpdateProjectMetadata(ctx, binding.ProjectID, "Events", nil); err != nil {
 		t.Fatalf("UpdateProjectMetadata: %v", err)
 	}
 	if err := store.SetProjectDefaultWorkspace(ctx, binding.ProjectID, attached.WorkspaceID); err != nil {
@@ -1588,7 +1593,7 @@ func TestInsertWorkspaceBindingRollsBackProjectOnWorkspaceFailure(t *testing.T) 
 	ctx, cancel := context.WithCancel(ctx)
 	insertWorkspaceBindingAfterProjectUpsertHook = cancel
 	t.Cleanup(func() { insertWorkspaceBindingAfterProjectUpsertHook = nil })
-	_, err = store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), "", filepath.Base(canonicalRoot), "project-cancelled", "workspace-cancelled", time.Now().UTC(), true)
+	_, err = store.insertWorkspaceBinding(ctx, canonicalRoot, filepath.Base(canonicalRoot), nil, filepath.Base(canonicalRoot), "project-cancelled", "workspace-cancelled", time.Now().UTC(), true)
 	if err == nil {
 		t.Fatal("expected insertWorkspaceBinding to fail after context cancellation")
 	}

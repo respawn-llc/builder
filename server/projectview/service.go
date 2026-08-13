@@ -242,7 +242,7 @@ func (s *Service) CreateProjectValidated(ctx context.Context, validated servicec
 	if s == nil {
 		return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
 	}
-	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, req.ProjectKey)
+	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, validated.OptionalProjectKey(req.ProjectKey))
 	if err != nil {
 		return serverapi.ProjectCreateResponse{}, err
 	}
@@ -260,7 +260,7 @@ func (s *Service) UpdateProjectValidated(ctx context.Context, validated servicec
 	if s == nil {
 		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
 	}
-	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, req.ProjectKey); err != nil {
+	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, validated.OptionalProjectKey(req.ProjectKey)); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
 	project, err := s.projectHomeSummary(ctx, req.ProjectID)
