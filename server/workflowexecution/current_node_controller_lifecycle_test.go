@@ -93,7 +93,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 		store: &currentNodeControllerStore{
 			pendingApproval: workflow.PendingApproval{Source: source},
 		},
-		permit:    NewMutationPermit(),
+		mutations: NewTaskMutationCoordinator(),
 		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
 		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
 			key: scopeID,
@@ -290,7 +290,7 @@ func newPostTurnFinalizationControllerForTest(
 		t.Fatalf("source key: %v", err)
 	}
 	controller := &CurrentNodeController{
-		permit:    NewMutationPermit(),
+		mutations: NewTaskMutationCoordinator(),
 		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
 		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
 			key: scopeID,
@@ -460,7 +460,7 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: steerer,
 	})
@@ -526,7 +526,7 @@ func TestCompleteIdleCurrentNodeInterruptsOnlyFailedAgentAndStartsHealthyScriptS
 		},
 		started: make(chan workflow.CurrentNodeReference, 2),
 	}
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			byReference: map[workflow.CurrentNodeReferenceKey]currentNodeAssignmentSteerOutcome{
@@ -615,7 +615,7 @@ func TestCompleteIdleCurrentNodePreparesFanOutAssignmentsIndependently(t *testin
 		},
 		started: make(chan workflow.CurrentNodeReference, 2),
 	}
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: &blockingCurrentNodeAssignmentSteerer{
 			blocked:         first,
@@ -786,6 +786,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 	successor := currentNodeReferenceForControllerTest(t, "task-late-assignment-interrupt", "node-successor")
 	occupier := currentNodeReferenceForControllerTest(t, "task-capacity-occupier", "node-occupier")
 	interruptible := currentNodeReferenceForControllerTest(t, string(source.TaskID), "node-interruptible")
+	unrelated := currentNodeReferenceForControllerTest(t, "task-unrelated-assignment", "node-unrelated")
 	releaseAssignment, assignmentStarted, assignmentResumed := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	interruptStarted, interruptRelease, releaseSuccessor := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	assignmentErr := errors.New("assignment was not committed")
@@ -798,6 +799,12 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		},
 		interruptStarted: interruptStarted,
 		interruptRelease: interruptRelease,
+		resumeClassifications: []workflowstore.CurrentNodeResumeClassification{{
+			CurrentNode: workflow.CurrentNode{
+				Reference:  unrelated,
+				Scheduling: &workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingInterrupted},
+			},
+		}},
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
@@ -817,7 +824,7 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		store,
 		runner,
 		authority,
-		NewMutationPermit(),
+		NewTaskMutationCoordinator(),
 		CurrentNodeControllerConfig{
 			AgentConcurrency: 1,
 			AssignmentSteerer: lateCommitCurrentNodeAssignmentSteerer{
@@ -853,6 +860,18 @@ func TestTaskInterruptDispositionsTransferredSuccessorBeforeLateAssignmentDelive
 		completionDone <- completeErr
 	}()
 	<-assignmentStarted
+	unrelatedDone := make(chan error, 1)
+	go func() {
+		unrelatedDone <- controller.EnsureTaskResumeEligible(context.Background(), unrelated.TaskID)
+	}()
+	select {
+	case unrelatedErr := <-unrelatedDone:
+		if unrelatedErr != nil {
+			t.Fatalf("unrelated Task mutation: %v", unrelatedErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successor assignment wait blocked unrelated Task mutation")
+	}
 	cancelCompletion()
 	select {
 	case completeErr := <-completionDone:
