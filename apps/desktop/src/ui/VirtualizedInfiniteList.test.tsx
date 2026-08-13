@@ -318,6 +318,7 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
         isFetchingNextPage={false}
         itemRole="row"
         items={["header", "task"]}
+        getItemWrapperProps={(item) => ({ "aria-label": `${item} wrapper` })}
         loadingLabel="Loading"
         onLoadMore={() => undefined}
         renderItem={(item) => <div role={item === "header" ? "columnheader" : "gridcell"}>{item}</div>}
@@ -328,8 +329,8 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
 
     expect(screen.getByRole("grid")).toBeInTheDocument();
     expect(screen.getAllByRole("row")).toHaveLength(2);
-    expect(screen.getByRole("columnheader").parentElement).toHaveClass("sticky", "top-0");
-    expect(screen.getByRole("gridcell").parentElement).not.toHaveClass("sticky");
+    expect(screen.getByLabelText("header wrapper")).toHaveClass("sticky", "top-0");
+    expect(screen.getByLabelText("task wrapper")).not.toHaveClass("sticky");
   });
 
   it("loads independent visible items once per request generation", () => {

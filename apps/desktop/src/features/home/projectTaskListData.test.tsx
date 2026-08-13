@@ -166,15 +166,21 @@ describe("Project Task-list data ownership", () => {
     await act(async () => {
       await result.current.active.fetchNextPage();
     });
-    await waitFor(() => expect(result.current.active.pages).toHaveLength(2));
+    await waitFor(() => {
+      expect(result.current.active.pages).toHaveLength(2);
+    });
     await act(async () => {
       await result.current.active.fetchNextPage();
     });
-    await waitFor(() => expect(result.current.active.pages).toHaveLength(3));
+    await waitFor(() => {
+      expect(result.current.active.pages).toHaveLength(3);
+    });
     await act(async () => {
       await result.current.active.fetchNextPage();
     });
-    await waitFor(() => expect(result.current.active.pages).toHaveLength(3));
+    await waitFor(() => {
+      expect(result.current.active.pages).toHaveLength(3);
+    });
     expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
     expect(result.current.active.pages).toHaveLength(3);
     expect(result.current.backlog.pages).toEqual([]);

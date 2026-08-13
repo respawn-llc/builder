@@ -5,6 +5,7 @@ import type { useTranslation } from "react-i18next";
 import type { TaskListItem } from "@/api";
 import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
+import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
@@ -41,7 +42,7 @@ export type ProjectTaskListEntry =
       key: string;
       groupKey: ProjectTaskGroup;
       direction: "initial" | "previous" | "next";
-      state?: import("@/ui").VirtualizedInfiniteListBoundaryState | undefined;
+      state?: VirtualizedInfiniteListBoundaryState | undefined;
       hasMore?: boolean | undefined;
       isFetching?: boolean | undefined;
       loadingLabel: string;
