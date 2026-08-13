@@ -102,8 +102,10 @@ func TestNewProviderClient_OpenAI(t *testing.T) {
 
 func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) {
 	var requestEncoding string
+	var acceptEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestEncoding = r.Header.Get("Content-Encoding")
+		acceptEncoding = r.Header.Get("Accept-Encoding")
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
@@ -128,12 +130,17 @@ func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) 
 	if requestEncoding != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
 	}
+	if acceptEncoding == "zstd,gzip" {
+		t.Fatalf("injected client unexpectedly received Kent response negotiation: %q", acceptEncoding)
+	}
 }
 
 func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing.T) {
 	var requestEncoding string
+	var acceptEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestEncoding = r.Header.Get("Content-Encoding")
+		acceptEncoding = r.Header.Get("Accept-Encoding")
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
@@ -163,6 +170,9 @@ func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing
 	}
 	if requestEncoding != "zstd" {
 		t.Fatalf("Content-Encoding = %q, want zstd", requestEncoding)
+	}
+	if acceptEncoding == "zstd,gzip" {
+		t.Fatalf("injected client unexpectedly received Kent response negotiation: %q", acceptEncoding)
 	}
 }
 

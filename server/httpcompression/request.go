@@ -12,7 +12,6 @@ import (
 )
 
 const MinimumRequestBodySize = 1024
-const responseContentCodings = "zstd,gzip"
 
 func Middleware(coding RequestContentCoding) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -25,19 +24,14 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 		if coding == ContentCodingIdentity {
 			return next(request)
 		}
-		nextRequest := request
-		if request.Header.Get("Accept-Encoding") == "" {
-			nextRequest = request.Clone(request.Context())
-			nextRequest.Header.Set("Accept-Encoding", responseContentCodings)
-		}
-		if nextRequest.Body == nil ||
-			nextRequest.ContentLength < MinimumRequestBodySize ||
-			nextRequest.GetBody == nil ||
-			nextRequest.Header.Get("Content-Encoding") != "" {
-			return next(nextRequest)
+		if request.Body == nil ||
+			request.ContentLength < MinimumRequestBodySize ||
+			request.GetBody == nil ||
+			request.Header.Get("Content-Encoding") != "" {
+			return next(request)
 		}
 
-		replay, err := nextRequest.GetBody()
+		replay, err := request.GetBody()
 		if err != nil {
 			return nil, err
 		}
@@ -54,8 +48,8 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 			return nil, err
 		}
 
-		prepared := nextRequest.Clone(request.Context())
-		if err := nextRequest.Body.Close(); err != nil {
+		prepared := request.Clone(request.Context())
+		if err := request.Body.Close(); err != nil {
 			return nil, err
 		}
 		if err := request.Context().Err(); err != nil {

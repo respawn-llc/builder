@@ -1,9 +1,14 @@
 package llm
 
 import (
+	"bytes"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 type stubRoundTripper struct{}
@@ -55,6 +60,37 @@ func TestNewProviderHTTPClientKeepsLoopbackTransportUncompressed(t *testing.T) {
 	remote := NewProviderHTTPClient("https://api.openai.com/v1", 0)
 	if remote.Transport != sharedCompressedHTTPTransport {
 		t.Fatalf("remote transport = %T, want shared compressed transport", remote.Transport)
+	}
+}
+
+func TestNewProviderHTTPClientNegotiatesAndDecodesCompressedResponse(t *testing.T) {
+	payload := []byte("decoded provider response")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Accept-Encoding"); got != "zstd,gzip" {
+			t.Fatalf("Accept-Encoding = %q, want zstd,gzip", got)
+		}
+		encoder, err := zstd.NewWriter(nil)
+		if err != nil {
+			t.Fatalf("create zstd encoder: %v", err)
+		}
+		defer encoder.Close()
+		w.Header().Set("Content-Encoding", "zstd")
+		_, _ = w.Write(encoder.EncodeAll(payload, nil))
+	}))
+	defer server.Close()
+
+	response, err := NewProviderHTTPClient("https://api.openai.com/v1", 0).Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if !bytes.Equal(body, payload) {
+		t.Fatalf("body = %q, want %q", body, payload)
 	}
 }
 
