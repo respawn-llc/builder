@@ -39,6 +39,8 @@ const fixture = vi.hoisted<{
     refetch: ReturnType<typeof vi.fn>;
   };
   counts: ProjectTaskGroupCounts["counts"];
+  countsError: Error | null;
+  countsPending: boolean;
   invalidations: unknown[];
   open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
@@ -69,6 +71,8 @@ const fixture = vi.hoisted<{
     refetch: vi.fn(),
   },
   counts: { active: 2, backlog: 1, done: 1 },
+  countsError: null,
+  countsPending: false,
   invalidations: [],
   open: vi.fn<SidebarRootController["open"]>(() => ({
     lifecycle: Promise.resolve("closed"),
@@ -110,8 +114,10 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
   return {
     ...actual,
     useProjectTaskListEvents: () => undefined,
-    useProjectTaskListData: () => ({
-      counts: countsQuery(fixture.counts),
+    useProjectTaskListData: ({
+      anchors,
+    }: Readonly<{ anchors: ProjectTaskListData.ProjectTaskGroupAnchors }>) => ({
+      counts: countsQuery(fixture.counts, fixture.countsError, fixture.countsPending),
       active: groupData(
         mockedActiveTasks ?? [
           task("active-1", "KNT-1", "Active task"),
@@ -119,7 +125,12 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
         ],
       ),
       backlog: groupData([task("backlog-1", "KNT-3", "Backlog task")]),
-      done: groupData([task("done-1", "KNT-4", "Done task")]),
+      done: groupData(
+        anchors.done === 75
+          ? [task("done-final", "KNT-84", "Final done task")]
+          : [task("done-1", "KNT-4", "Done task")],
+        anchors.done,
+      ),
     }),
   };
 });
@@ -147,6 +158,8 @@ describe("ProjectTasksSurface", () => {
       ],
     };
     fixture.counts = { active: 2, backlog: 1, done: 1 };
+    fixture.countsError = null;
+    fixture.countsPending = false;
     fixture.activeDestination = null;
     fixture.open.mockReset();
     fixture.invalidations = [];
@@ -340,6 +353,37 @@ describe("ProjectTasksSurface", () => {
     expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("requests the exact final bounded page before jumping Down in an expanded lowest group", () => {
+    fixture.counts = { active: 0, backlog: 0, done: 84 };
+    const memory = createProjectTasksViewMemory();
+    memory.setDisclosure({ active: true, backlog: true, done: true });
+    const view = renderSurface(memory);
+    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    Object.defineProperties(grid, {
+      clientHeight: { configurable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 40, writable: true },
+    });
+    view.rerender(withQueryClient(surface(memory)));
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+
+    expect(memory.read().anchors.done).toBe(75);
+    view.rerender(withQueryClient(surface(memory)));
+    expect(screen.getByRole("row", { name: "KNT-84 Final done task" })).toBeInTheDocument();
+  });
+
+  it("replaces the complete Tasks surface when initial exact counts fail", () => {
+    fixture.countsError = new Error("Counts unavailable");
+
+    renderSurface();
+
+    expect(screen.getByRole("alert")).toHaveTextContent("Counts unavailable");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delivery" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
+  });
+
   it("renders canonical six-column content and opens Task Detail with the containing sidebar mode", () => {
     const view = renderSurface(createProjectTasksViewMemory(), "overlay", [
       task("active-1", "KNT-LONG-1001", "Canonical row", {
@@ -488,18 +532,22 @@ function openedDestination(): SidebarDestination {
   return destination;
 }
 
-function countsQuery(counts: ProjectTaskGroupCounts["counts"]) {
+function countsQuery(
+  counts: ProjectTaskGroupCounts["counts"],
+  error: Error | null,
+  pending: boolean,
+) {
   return {
-    data: { projectID: "project-1", counts, generatedAt: 1 },
-    error: null,
-    isError: false,
+    data: error === null && !pending ? { projectID: "project-1", counts, generatedAt: 1 } : undefined,
+    error,
+    isError: error !== null,
     isFetching: false,
-    isPending: false,
+    isPending: pending,
     refetch: vi.fn(),
   };
 }
 
-function groupData(tasks: readonly TaskListItem[]) {
+function groupData(tasks: readonly TaskListItem[], anchor = 0) {
   return {
     error: null,
     fetchNextPage: vi.fn(),
@@ -513,7 +561,7 @@ function groupData(tasks: readonly TaskListItem[]) {
     isFetchingNextPage: false,
     isFetchingPreviousPage: false,
     isPending: false,
-    pageParams: [0],
+    pageParams: [anchor],
     pages: [],
     refetch: vi.fn(),
     tasks,

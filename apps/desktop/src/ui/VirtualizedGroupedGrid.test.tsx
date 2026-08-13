@@ -254,6 +254,34 @@ describe("VirtualizedGroupedGrid", () => {
     expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(160, { behavior: "auto" });
   });
 
+  it("keeps pixel restoration pending until row content is ready", () => {
+    const view = render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        canApplyPixelOffset={false}
+        columnCount={2}
+        entries={entries.slice(0, 1)}
+        estimateSize={() => 40}
+        pixelOffsetRequest={{ key: "restore-pending", offsetPx: 160 }}
+      />,
+    );
+
+    expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
+
+    view.rerender(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        canApplyPixelOffset
+        columnCount={2}
+        entries={entries}
+        estimateSize={() => 40}
+        pixelOffsetRequest={{ key: "restore-pending", offsetPx: 160 }}
+      />,
+    );
+
+    expect(virtualizer.scrollToOffset).toHaveBeenCalledWith(160, { behavior: "auto" });
+  });
+
   it("uses absolute top and the keyed disclosure-aware final entry for visual navigation", () => {
     render(
       <VirtualizedGroupedGrid
@@ -355,6 +383,66 @@ describe("VirtualizedGroupedGrid", () => {
     );
 
     expect(screen.getByRole("button", { name: "Jump to bottom" })).toBeEnabled();
+  });
+
+  it("requests an asynchronous final entry and scrolls when it becomes available", () => {
+    const onRequestFinalEntry = vi.fn();
+    const view = render(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={entries.slice(0, 2)}
+        estimateSize={() => 40}
+        onScrollElementChange={makeScrollable}
+        navigation={{
+          downLabel: "Jump to bottom",
+          finalEntryKey: "task-final",
+          onRequestFinalEntry,
+          requestKey: null,
+          requiresFinalEntryRequest: true,
+          upLabel: "Jump to top",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
+    expect(onRequestFinalEntry).toHaveBeenCalledOnce();
+    expect(virtualizer.scrollToIndex).not.toHaveBeenCalled();
+
+    view.rerender(
+      <VirtualizedGroupedGrid
+        ariaLabel="Project tasks"
+        columnCount={2}
+        entries={[
+          ...entries.slice(0, 2),
+          {
+            kind: "task",
+            key: "task-final",
+            groupKey: "active",
+            ariaLabel: "Task KENT-99",
+            cells: [
+              { key: "status", content: "Done" },
+              { key: "title", content: "Final task" },
+            ],
+          },
+        ]}
+        estimateSize={() => 40}
+        onScrollElementChange={makeScrollable}
+        navigation={{
+          downLabel: "Jump to bottom",
+          finalEntryKey: "task-final",
+          onRequestFinalEntry,
+          requestKey: "final-1",
+          requiresFinalEntryRequest: false,
+          upLabel: "Jump to top",
+        }}
+      />,
+    );
+
+    expect(virtualizer.scrollToIndex).toHaveBeenCalledWith(2, {
+      align: "end",
+      behavior: "auto",
+    });
   });
 
   it("updates navigation visibility when the scrollport viewport resizes", () => {

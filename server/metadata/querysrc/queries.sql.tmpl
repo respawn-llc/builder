@@ -1632,9 +1632,9 @@ eligible_rows AS (
 {{taskDependencyFilter "          " "t.id" "args.dependency_filter"}}
 )
 SELECT
-    CAST(COUNT(*) FILTER (WHERE kind IN ('waiting_question', 'waiting_approval', 'interrupted', 'running', 'queued', 'active')) AS INTEGER) AS active_count,
-    CAST(COUNT(*) FILTER (WHERE kind = 'backlog') AS INTEGER) AS backlog_count,
-    CAST(COUNT(*) FILTER (WHERE kind = 'done') AS INTEGER) AS done_count
+{{- range $group := .TaskGroups}}
+    CAST(COUNT(*) FILTER (WHERE kind IN ({{range $index, $kind := $group.StatusKinds}}{{if $index}}, {{end}}'{{$kind}}'{{end}})) AS INTEGER) AS {{$group.Name}}_count{{if ne $group.Name "done"}},{{end}}
+{{- end}}
 FROM eligible_rows;
 
 -- name: UpdateTaskEditableFields :execrows

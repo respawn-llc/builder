@@ -78,6 +78,7 @@ export type VirtualizedGroupedGridProps = Readonly<{
   columnCount: number;
   estimateSize: () => number;
   ariaLabel: string;
+  canApplyPixelOffset?: boolean | undefined;
   id?: string | undefined;
   testId?: string | undefined;
   className?: string | undefined;
@@ -91,6 +92,9 @@ export type VirtualizedGroupedGridProps = Readonly<{
         upLabel: string;
         downLabel: string;
         finalEntryKey: string;
+        onRequestFinalEntry?: (() => void) | undefined;
+        requestKey?: string | null | undefined;
+        requiresFinalEntryRequest?: boolean | undefined;
         upDisabled?: boolean | undefined;
         downDisabled?: boolean | undefined;
       }>
@@ -102,6 +106,7 @@ export function VirtualizedGroupedGrid({
   columnCount,
   estimateSize,
   ariaLabel,
+  canApplyPixelOffset = entries.some((entry) => entry.kind === "task"),
   id,
   testId,
   className,
@@ -112,11 +117,8 @@ export function VirtualizedGroupedGrid({
   pixelOffsetRequest,
   navigation,
 }: VirtualizedGroupedGridProps) {
-  if (!Number.isInteger(columnCount) || columnCount < 1) {
-    throw new Error(
-      `virtualized grouped grid column count must be a positive integer: ${columnCount.toString()}`,
-    );
-  }
+  requirePositiveColumnCount(columnCount);
+  const navigationState = useGroupedGridNavigation(entries, navigation);
   const frameEntries = useMemo(
     () => entries.map((entry) => groupedFrameEntry(entry, columnCount)),
     [columnCount, entries],
@@ -126,13 +128,6 @@ export function VirtualizedGroupedGrid({
     () => new Set(entries.flatMap((entry) => (entry.kind === "column-header" ? [entry.key] : []))),
     [entries],
   );
-  const finalEntryReady =
-    navigation !== undefined && entries.some((entry) => entry.key === navigation.finalEntryKey);
-  const [scrollCommand, setScrollCommand] = useState<
-    | Readonly<{ key: string; target: "top" }>
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | undefined
-  >();
   const [scrollMetrics, setScrollMetrics] = useState<VirtualizedFrameScrollMetrics>({
     atBottom: true,
     atTop: true,
@@ -147,31 +142,11 @@ export function VirtualizedGroupedGrid({
         : next,
     );
   }, []);
-  const scrollCommandSequenceRef = useRef(0);
-  const nextScrollCommandSequence = () => {
-    scrollCommandSequenceRef.current += 1;
-    return scrollCommandSequenceRef.current;
-  };
-  const requestTop = () => {
-    const sequence = nextScrollCommandSequence();
-    setScrollCommand({ key: `top-${sequence.toString()}`, target: "top" });
-  };
-  const requestFinalEntry = () => {
-    if (navigation === undefined || !finalEntryReady) return;
-    const sequence = nextScrollCommandSequence();
-    setScrollCommand({
-      align: "end",
-      entryKey: navigation.finalEntryKey,
-      key: `final-${sequence.toString()}`,
-      target: "entry",
-    });
-  };
-
   return (
     <div className="relative">
       <VirtualizedFrame
         ariaLabel={ariaLabel}
-        canApplyPixelOffset={entries.length > 0}
+        canApplyPixelOffset={canApplyPixelOffset}
         className={className}
         entries={frameEntries}
         estimateSize={estimateSize}
@@ -187,7 +162,7 @@ export function VirtualizedGroupedGrid({
         role="grid"
         rowRole="row"
         rowSpacing={rowSpacing}
-        scrollCommand={scrollCommand}
+        scrollCommand={navigationState.scrollCommand}
         testId={testId}
       />
       {navigation === undefined || !scrollMetrics.overflows ? null : (
@@ -195,15 +170,20 @@ export function VirtualizedGroupedGrid({
           <IconTooltipButton
             disabled={navigation.upDisabled === true || scrollMetrics.atTop}
             label={navigation.upLabel}
-            onClick={requestTop}
+            onClick={navigationState.requestTop}
             size="icon-sm"
           >
             <ArrowUp aria-hidden="true" size={16} />
           </IconTooltipButton>
           <IconTooltipButton
-            disabled={navigation.downDisabled === true || scrollMetrics.atBottom || !finalEntryReady}
+            disabled={
+              navigation.downDisabled === true ||
+              scrollMetrics.atBottom ||
+              (!navigationState.finalEntryReady &&
+                navigation.requiresFinalEntryRequest !== true)
+            }
             label={navigation.downLabel}
-            onClick={requestFinalEntry}
+            onClick={navigationState.requestFinalEntry}
             size="icon-sm"
           >
             <ArrowDown aria-hidden="true" size={16} />
@@ -212,6 +192,95 @@ export function VirtualizedGroupedGrid({
       )}
     </div>
   );
+}
+
+function requirePositiveColumnCount(columnCount: number): void {
+  if (Number.isInteger(columnCount) && columnCount >= 1) return;
+  throw new Error(
+    `virtualized grouped grid column count must be a positive integer: ${columnCount.toString()}`,
+  );
+}
+
+function useGroupedGridNavigation(
+  entries: readonly VirtualizedGroupedGridEntry[],
+  navigation: VirtualizedGroupedGridProps["navigation"],
+) {
+  const finalEntryReady =
+    navigation !== undefined && entries.some((entry) => entry.key === navigation.finalEntryKey);
+  const [scrollCommand, setScrollCommand] = useState<
+    | Readonly<{ key: string; target: "top" }>
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | undefined
+  >();
+  const sequenceRef = useRef(0);
+  const nextSequence = () => {
+    sequenceRef.current += 1;
+    return sequenceRef.current;
+  };
+  const requestTop = () => {
+    setScrollCommand({ key: `top-${nextSequence().toString()}`, target: "top" });
+  };
+  const requestFinalEntry = () => {
+    const request = requestedFinalEntryAction({
+      finalEntryReady,
+      navigation,
+      sequence: nextSequence,
+    });
+    if (request?.kind === "load") request.run();
+    if (request?.kind === "scroll") setScrollCommand(request.command);
+  };
+  const requestedScrollCommand =
+    scrollCommand !== undefined ||
+    navigation?.requestKey === undefined ||
+    navigation.requestKey === null ||
+    !finalEntryReady
+      ? scrollCommand
+      : {
+          align: "end" as const,
+          entryKey: navigation.finalEntryKey,
+          key: navigation.requestKey,
+          target: "entry" as const,
+        };
+  return {
+    finalEntryReady,
+    requestFinalEntry,
+    requestTop,
+    scrollCommand: requestedScrollCommand,
+  };
+}
+
+function requestedFinalEntryAction({
+  finalEntryReady,
+  navigation,
+  sequence,
+}: Readonly<{
+  finalEntryReady: boolean;
+  navigation: VirtualizedGroupedGridProps["navigation"];
+  sequence: () => number;
+}>):
+  | Readonly<{ kind: "load"; run: () => void }>
+  | Readonly<{
+      command: Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>;
+      kind: "scroll";
+    }>
+  | null {
+  if (navigation === undefined) return null;
+  if (
+    navigation.requiresFinalEntryRequest === true &&
+    navigation.onRequestFinalEntry !== undefined
+  ) {
+    return { kind: "load", run: navigation.onRequestFinalEntry };
+  }
+  if (!finalEntryReady) return null;
+  return {
+    command: {
+      align: "end",
+      entryKey: navigation.finalEntryKey,
+      key: `final-${sequence().toString()}`,
+      target: "entry",
+    },
+    kind: "scroll",
+  };
 }
 
 function groupedFrameEntry(entry: VirtualizedGroupedGridEntry, columnCount: number): VirtualizedFrameEntry {

@@ -26,6 +26,7 @@ import {
 } from "@/ui";
 import {
   projectTaskGroups,
+  projectTaskFinalPageAnchor,
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
@@ -52,6 +53,9 @@ export function ProjectTasksSurface({
   const [disclosure, setDisclosure] = useState(initialMemory.disclosure);
   const [anchors, setAnchors] = useState(initialMemory.anchors);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
+  const [finalNavigationRequest, setFinalNavigationRequest] = useState<
+    Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null
+  >(null);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
@@ -149,6 +153,21 @@ export function ProjectTasksSurface({
     }
     setDisclosure(next);
   };
+  const requestFinalEntry = useCallback(
+    (group: ProjectTaskGroup, count: number) => {
+      const offset = projectTaskFinalPageAnchor(count);
+      const nextAnchors = { ...anchors, [group]: offset };
+      const key = `final-${group}-${offset.toString()}`;
+      viewMemory.setAnchors(nextAnchors);
+      setAnchors(nextAnchors);
+      setFinalNavigationRequest({
+        group,
+        key,
+        offset,
+      });
+    },
+    [anchors, viewMemory],
+  );
   const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
   const activeTaskDetailMode =
     activeDestination?.kind === "taskDetail" ? (activeDestination.mode ?? "shift") : null;
@@ -175,14 +194,26 @@ export function ProjectTasksSurface({
     taskDetailID,
     t,
   });
+  const finalNavigation = finalNavigationState({
+    counts,
+    data,
+    disclosure,
+    request: finalNavigationRequest,
+  });
   return (
     <ProjectTasksContent
       boardBoundary={boardBoundary}
       countsBoundary={countsBoundary}
       entries={presentation.entries}
-      finalEntryKey={presentation.finalEntryKey}
+      finalEntryKey={finalNavigation.entryKey}
+      finalEntryRequestKey={finalNavigation.requestKey}
+      finalNavigationRequiresRequest={finalNavigation.requiresRequest}
       onLinkWorkflow={openLinkWorkflow}
       onNewTask={openNewTask}
+      onRequestFinalEntry={() => {
+        if (finalNavigation.request === null) return;
+        requestFinalEntry(finalNavigation.request.group, finalNavigation.request.count);
+      }}
       onScrollElementChange={onScrollElementChange}
       projectID={projectID}
       taskCount={presentation.taskCount}
@@ -216,19 +247,11 @@ function projectTasksPresentation({
   t: ReturnType<typeof useTranslation>["t"];
 }>): Readonly<{
   entries: readonly VirtualizedGroupedGridEntry[];
-  finalEntryKey: string;
   taskCount: number | null;
 }> {
   if (counts === undefined) {
-    return { entries: [projectTaskColumnEntry(t)], finalEntryKey: "columns", taskCount: null };
+    return { entries: [projectTaskColumnEntry(t)], taskCount: null };
   }
-  const lastVisibleGroup = [...projectTaskGroups].reverse().find((group) => counts[group] > 0) ?? null;
-  const finalEntryKey =
-    lastVisibleGroup === null
-      ? "columns"
-      : disclosure[lastVisibleGroup]
-        ? (data[lastVisibleGroup].tasks.at(-1)?.id ?? `group-${lastVisibleGroup}`)
-        : `group-${lastVisibleGroup}`;
   return {
     entries: groupedEntries({
       counts,
@@ -242,9 +265,72 @@ function projectTasksPresentation({
       taskDetailID,
       t,
     }),
-    finalEntryKey,
     taskCount: counts.active + counts.backlog + counts.done,
   };
+}
+
+function finalNavigationState({
+  counts,
+  data,
+  disclosure,
+  request,
+}: Readonly<{
+  counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
+  data: ReturnType<typeof useProjectTaskListData>;
+  disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
+  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
+}>): Readonly<{
+  entryKey: string;
+  request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
+  requestKey: string | null;
+  requiresRequest: boolean;
+}> {
+  if (counts === undefined) {
+    return { entryKey: "columns", request: null, requestKey: null, requiresRequest: false };
+  }
+  const group = [...projectTaskGroups].reverse().find((candidate) => counts[candidate] > 0) ?? null;
+  if (group === null) {
+    return { entryKey: "columns", request: null, requestKey: null, requiresRequest: false };
+  }
+  if (!disclosure[group]) {
+    return finalNavigationReady(`group-${group}`);
+  }
+  return expandedFinalNavigationState(group, counts[group], data[group], request);
+}
+
+function expandedFinalNavigationState(
+  group: ProjectTaskGroup,
+  count: number,
+  data: ProjectTaskGroupData,
+  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
+): Readonly<{
+  entryKey: string;
+  request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
+  requestKey: string | null;
+  requiresRequest: boolean;
+}> {
+  const finalOffset = projectTaskFinalPageAnchor(count);
+  const finalPageReady = data.pageParams.includes(finalOffset);
+  const finalTaskID = finalPageReady
+    ? (data.tasks.at(-1)?.id ?? `group-${group}`)
+    : `group-${group}`;
+  const pendingRequest =
+    request?.group === group && request.offset === finalOffset ? request.key : null;
+  return {
+    entryKey: finalTaskID,
+    request: pendingRequest === null && !finalPageReady ? { count, group } : null,
+    requestKey: finalPageReady ? pendingRequest : null,
+    requiresRequest: !finalPageReady,
+  };
+}
+
+function finalNavigationReady(entryKey: string): Readonly<{
+  entryKey: string;
+  request: null;
+  requestKey: null;
+  requiresRequest: false;
+}> {
+  return { entryKey, request: null, requestKey: null, requiresRequest: false };
 }
 
 function ProjectTasksContent({
@@ -252,8 +338,11 @@ function ProjectTasksContent({
   countsBoundary,
   entries,
   finalEntryKey,
+  finalEntryRequestKey,
+  finalNavigationRequiresRequest,
   onLinkWorkflow,
   onNewTask,
+  onRequestFinalEntry,
   onScrollElementChange,
   projectID,
   taskCount,
@@ -264,8 +353,11 @@ function ProjectTasksContent({
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   entries: readonly VirtualizedGroupedGridEntry[];
   finalEntryKey: string;
+  finalEntryRequestKey: string | null;
+  finalNavigationRequiresRequest: boolean;
   onLinkWorkflow: () => void;
   onNewTask: () => void;
+  onRequestFinalEntry: () => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
   taskCount: number | null;
@@ -275,6 +367,9 @@ function ProjectTasksContent({
   const { t } = useTranslation();
   if (boardBoundary !== undefined) {
     return <InfiniteListBoundary direction="initial" state={boardBoundary} />;
+  }
+  if (countsBoundary?.state === "error") {
+    return <InfiniteListBoundary direction="initial" state={countsBoundary} />;
   }
   if (workflows.length === 0) {
     return (
@@ -314,8 +409,12 @@ function ProjectTasksContent({
           navigation={{
             downLabel: t("home.prototype.jumpToBottom"),
             finalEntryKey,
+            onRequestFinalEntry,
+            requestKey: finalEntryRequestKey,
+            requiresFinalEntryRequest: finalNavigationRequiresRequest,
             upLabel: t("home.prototype.jumpToTop"),
           }}
+          canApplyPixelOffset={entries.some((entry) => entry.kind === "task")}
           onScrollElementChange={onScrollElementChange}
           pixelOffsetRequest={createVirtualizedPixelOffsetRequest(
             `restore-${memory.scrollRequestSequence.toString()}`,
@@ -350,13 +449,16 @@ function TasksShell({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 gap-[var(--space-2)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] hide-scrollbar">
         {workflows.map((workflow) => (
-          <WorkflowBoardChip
+          <InteractiveChip
+            className="shrink-0"
             key={workflow.id}
             onClick={() => {
               void navigation.openProject(projectID, workflow.id);
             }}
-            workflow={workflow}
-          />
+            title={workflow.description}
+          >
+            {workflow.name}
+          </InteractiveChip>
         ))}
         <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
           <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
@@ -431,9 +533,12 @@ function groupedEntries({
           kind: "group-header",
           key: `group-${group}`,
           groupKey: group,
-          label: groupName(group),
+          label: t(`home.prototype.statusGroups.${group}`),
           count,
-          ariaLabel: `${groupName(group)}, ${count.toString()} ${count === 1 ? "task" : "tasks"}`,
+          ariaLabel: t("home.prototype.taskGroupCount", {
+            count,
+            group: t(`home.prototype.statusGroups.${group}`),
+          }),
           expanded: disclosure[group],
           onToggle: () => {
             onToggle(group);
@@ -444,14 +549,22 @@ function groupedEntries({
       if (!disclosure[group]) return entries;
       const initial = groupBoundary(groupData, "initial", t);
       if (initial !== undefined) {
-        entries.push(boundaryEntry(group, "initial", initial, groupData));
+        entries.push(boundaryEntry({ data: groupData, direction: "initial", group, state: initial, t }));
       } else {
         if (
           groupData.hasPreviousPage ||
           groupData.isFetchingPreviousPage ||
           groupData.isFetchPreviousPageError
         ) {
-          entries.push(boundaryEntry(group, "previous", groupBoundary(groupData, "previous", t), groupData));
+          entries.push(
+            boundaryEntry({
+              data: groupData,
+              direction: "previous",
+              group,
+              state: groupBoundary(groupData, "previous", t),
+              t,
+            }),
+          );
         }
         entries.push(
           ...groupData.tasks.map((task) =>
@@ -468,7 +581,15 @@ function groupedEntries({
           ),
         );
         if (groupData.hasNextPage || groupData.isFetchingNextPage || groupData.isFetchNextPageError) {
-          entries.push(boundaryEntry(group, "next", groupBoundary(groupData, "next", t), groupData));
+          entries.push(
+            boundaryEntry({
+              data: groupData,
+              direction: "next",
+              group,
+              state: groupBoundary(groupData, "next", t),
+              t,
+            }),
+          );
         }
       }
       return entries;
@@ -476,12 +597,19 @@ function groupedEntries({
   ];
 }
 
-function boundaryEntry(
-  group: ProjectTaskGroup,
-  direction: "initial" | "previous" | "next",
-  state: VirtualizedInfiniteListBoundaryState | undefined,
-  data: ProjectTaskGroupData,
-): VirtualizedGroupedGridEntry {
+function boundaryEntry({
+  data,
+  direction,
+  group,
+  state,
+  t,
+}: Readonly<{
+  data: ProjectTaskGroupData;
+  direction: "initial" | "previous" | "next";
+  group: ProjectTaskGroup;
+  state: VirtualizedInfiniteListBoundaryState | undefined;
+  t: ReturnType<typeof useTranslation>["t"];
+}>): VirtualizedGroupedGridEntry {
   return {
     kind: "boundary",
     key: `${group}-${direction}`,
@@ -490,7 +618,7 @@ function boundaryEntry(
     state,
     hasMore: direction === "previous" ? data.hasPreviousPage : data.hasNextPage,
     isFetching: direction === "previous" ? data.isFetchingPreviousPage : data.isFetchingNextPage,
-    loadingLabel: "Loading",
+    loadingLabel: t("app.loadingMore"),
     onLoadMore:
       direction === "previous"
         ? () => {
@@ -532,19 +660,4 @@ function groupBoundary(
     },
     retryLabel: t("app.retry"),
   });
-}
-
-function groupName(group: ProjectTaskGroup): string {
-  return group === "active" ? "Active" : group === "backlog" ? "Backlog" : "Done";
-}
-
-function WorkflowBoardChip({
-  onClick,
-  workflow,
-}: Readonly<{ onClick: () => void; workflow: WorkflowPickerItem }>) {
-  return (
-    <InteractiveChip className="shrink-0" onClick={onClick} title={workflow.description}>
-      {workflow.name}
-    </InteractiveChip>
-  );
 }

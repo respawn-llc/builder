@@ -91,16 +91,6 @@ export default tseslint.config(
     },
   },
   {
-    // TanStack Virtual's useVirtualizer returns instance methods that cannot be memoized by the
-    // React Compiler. This is an inherent library boundary (the windowing layer owns its own
-    // mutable state), so the compiler-compatibility check is scoped off here at the single
-    // dedicated windowing component instead of suppressed inline.
-    files: ["src/ui/VirtualizedFrame.tsx"],
-    rules: {
-      "react-hooks/incompatible-library": "off",
-    },
-  },
-  {
     files: ["**/*.{tsx}"],
     ...jsxA11y.flatConfigs.recommended,
   },

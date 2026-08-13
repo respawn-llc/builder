@@ -217,23 +217,8 @@ func workflowTaskGroupStatusKinds(group *serverapi.WorkflowTaskGroup) []serverap
 	if group == nil {
 		return nil
 	}
-	switch *group {
-	case serverapi.WorkflowTaskGroupActive:
-		return []serverapi.WorkflowTaskStatusKind{
-			serverapi.WorkflowTaskStatusKindWaitingQuestion,
-			serverapi.WorkflowTaskStatusKindWaitingApproval,
-			serverapi.WorkflowTaskStatusKindInterrupted,
-			serverapi.WorkflowTaskStatusKindRunning,
-			serverapi.WorkflowTaskStatusKindQueued,
-			serverapi.WorkflowTaskStatusKindActive,
-		}
-	case serverapi.WorkflowTaskGroupBacklog:
-		return []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindBacklog}
-	case serverapi.WorkflowTaskGroupDone:
-		return []serverapi.WorkflowTaskStatusKind{serverapi.WorkflowTaskStatusKindDone}
-	default:
-		return nil
-	}
+	kinds, _ := serverapi.WorkflowTaskGroupStatusKinds(*group)
+	return kinds
 }
 
 func workflowTaskStatusKindsJSON(kinds []serverapi.WorkflowTaskStatusKind) (string, error) {

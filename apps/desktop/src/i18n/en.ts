@@ -168,6 +168,8 @@ export const englishResources = {
           backlog: "Backlog",
           done: "Done",
         },
+        taskGroupCount_one: "{{group}}, {{count}} task",
+        taskGroupCount_other: "{{group}}, {{count}} tasks",
         statusDescriptions: {
           waiting_question: "Needs an answer",
           waiting_approval: "Needs approval",

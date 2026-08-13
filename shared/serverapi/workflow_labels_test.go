@@ -206,6 +206,33 @@ func TestWorkflowTaskListRequestRoundTripsAndValidatesGroup(t *testing.T) {
 	}
 }
 
+func TestWorkflowTaskGroupStatusKindsAreExactAndExhaustive(t *testing.T) {
+	tests := map[WorkflowTaskGroup][]WorkflowTaskStatusKind{
+		WorkflowTaskGroupActive: {
+			WorkflowTaskStatusKindWaitingQuestion,
+			WorkflowTaskStatusKindWaitingApproval,
+			WorkflowTaskStatusKindInterrupted,
+			WorkflowTaskStatusKindRunning,
+			WorkflowTaskStatusKindQueued,
+			WorkflowTaskStatusKindActive,
+		},
+		WorkflowTaskGroupBacklog: {WorkflowTaskStatusKindBacklog},
+		WorkflowTaskGroupDone:    {WorkflowTaskStatusKindDone},
+	}
+	for group, want := range tests {
+		got, valid := WorkflowTaskGroupStatusKinds(group)
+		if !valid {
+			t.Fatalf("WorkflowTaskGroupStatusKinds(%q) is invalid", group)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("WorkflowTaskGroupStatusKinds(%q) = %v, want %v", group, got, want)
+		}
+	}
+	if kinds, valid := WorkflowTaskGroupStatusKinds(WorkflowTaskGroup("future")); valid || kinds != nil {
+		t.Fatalf("invalid group kinds = %v, valid = %t", kinds, valid)
+	}
+}
+
 func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {
 	requestType := reflect.TypeOf(WorkflowProjectTaskGroupCountsRequest{})
 	for _, field := range []string{"Offset", "Limit", "WorkflowID", "Group"} {

@@ -1254,6 +1254,26 @@ const (
 	WorkflowTaskGroupDone    WorkflowTaskGroup = "done"
 )
 
+func WorkflowTaskGroupStatusKinds(group WorkflowTaskGroup) ([]WorkflowTaskStatusKind, bool) {
+	switch group {
+	case WorkflowTaskGroupActive:
+		return []WorkflowTaskStatusKind{
+			WorkflowTaskStatusKindWaitingQuestion,
+			WorkflowTaskStatusKindWaitingApproval,
+			WorkflowTaskStatusKindInterrupted,
+			WorkflowTaskStatusKindRunning,
+			WorkflowTaskStatusKindQueued,
+			WorkflowTaskStatusKindActive,
+		}, true
+	case WorkflowTaskGroupBacklog:
+		return []WorkflowTaskStatusKind{WorkflowTaskStatusKindBacklog}, true
+	case WorkflowTaskGroupDone:
+		return []WorkflowTaskStatusKind{WorkflowTaskStatusKindDone}, true
+	default:
+		return nil, false
+	}
+}
+
 type WorkflowTaskListRequest struct {
 	ProjectID        *string                     `json:"project_id,omitempty"`
 	WorkflowID       *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
@@ -3266,9 +3286,7 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 		return err
 	}
 	if r.Group != nil {
-		switch *r.Group {
-		case WorkflowTaskGroupActive, WorkflowTaskGroupBacklog, WorkflowTaskGroupDone:
-		default:
+		if _, valid := WorkflowTaskGroupStatusKinds(*r.Group); !valid {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "group", "group must be active, backlog, or done")
 		}
 	}

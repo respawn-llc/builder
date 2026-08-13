@@ -1052,8 +1052,8 @@ eligible_rows AS (
 )
 SELECT
     CAST(COUNT(*) FILTER (WHERE kind IN ('waiting_question', 'waiting_approval', 'interrupted', 'running', 'queued', 'active')) AS INTEGER) AS active_count,
-    CAST(COUNT(*) FILTER (WHERE kind = 'backlog') AS INTEGER) AS backlog_count,
-    CAST(COUNT(*) FILTER (WHERE kind = 'done') AS INTEGER) AS done_count
+    CAST(COUNT(*) FILTER (WHERE kind IN ('backlog')) AS INTEGER) AS backlog_count,
+    CAST(COUNT(*) FILTER (WHERE kind IN ('done')) AS INTEGER) AS done_count
 FROM eligible_rows
 `
 

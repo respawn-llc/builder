@@ -134,7 +134,6 @@ export function VirtualizedFrame({
     return indexes;
   }, [entries, pinnedItemKeys]);
   // TanStack Virtual is the single windowing owner. Adapters supply typed entries and edge triggers.
-  // The react-hooks/incompatible-library check is scoped off for this module in eslint.config.js.
   const virtualizer = useVirtualizer({
     count: entries.length,
     getScrollElement: () => scrollRef.current,
