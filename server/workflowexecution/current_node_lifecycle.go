@@ -149,7 +149,19 @@ func (c *CurrentNodeController) StartTask(
 	})
 }
 
-func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+type TaskResumeOutcome string
+
+const (
+	TaskResumeApplied TaskResumeOutcome = "applied"
+	TaskResumeNoOp    TaskResumeOutcome = "no_op"
+)
+
+type TaskResumeResult struct {
+	Outcome      TaskResumeOutcome
+	CurrentNodes []workflow.CurrentNode
+}
+
+func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) (TaskResumeResult, error) {
 	return c.resumeTask(ctx, taskID, nil, nil)
 }
 
@@ -202,12 +214,12 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	preparation TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (TaskResumeResult, error) {
 	if err := preparation.validate(); err != nil {
-		return nil, err
+		return TaskResumeResult{}, err
 	}
 	if finalizer == nil {
-		return nil, errors.New("task resume preparation finalizer is required")
+		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
 	return c.resumeTask(ctx, taskID, &preparation, finalizer)
 }
@@ -237,8 +249,9 @@ func (c *CurrentNodeController) EnsureTaskResumeEligible(
 }
 
 type taskResumeClassification struct {
-	resumable     []workflow.CurrentNode
-	validationErr error
+	resumable      []workflow.CurrentNode
+	alreadyResumed []workflow.CurrentNode
+	validationErr  error
 }
 
 func (c *CurrentNodeController) classifyTaskResume(
@@ -256,6 +269,19 @@ func (c *CurrentNodeController) classifyTaskResume(
 		return taskResumeClassification{}, err
 	}
 	if len(classifications) == 0 {
+		currentNodes, err := c.store.ListCurrentNodes(ctx, taskID)
+		if err != nil {
+			return taskResumeClassification{}, err
+		}
+		for _, currentNode := range currentNodes {
+			if currentNode.Scheduling == nil {
+				continue
+			}
+			switch currentNode.Scheduling.State {
+			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+				return taskResumeClassification{alreadyResumed: currentNodes}, nil
+			}
+		}
 		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
 	}
 	result := taskResumeClassification{
@@ -285,18 +311,24 @@ func (c *CurrentNodeController) resumeTask(
 	taskID workflow.TaskID,
 	preparation *TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (TaskResumeResult, error) {
 	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
+		return TaskResumeResult{}, errors.New("current node workflow controller is required")
 	}
 	if preparation != nil && finalizer == nil {
-		return nil, errors.New("task resume preparation finalizer is required")
+		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
-	resumed, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+	result, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
-			return nil, err
+			return TaskResumeResult{}, err
+		}
+		if len(classification.alreadyResumed) != 0 {
+			return TaskResumeResult{
+				Outcome:      TaskResumeNoOp,
+				CurrentNodes: classification.alreadyResumed,
+			}, nil
 		}
 		var resumeErrs []error
 		if classification.validationErr != nil {
@@ -340,13 +372,13 @@ func (c *CurrentNodeController) resumeTask(
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
-			return nil, errors.Join(errors.Join(resumeErrs...), err)
+			return TaskResumeResult{}, errors.Join(errors.Join(resumeErrs...), err)
 		}
 		for _, start := range eligibleStarts {
 			key, _ := start.reference.Key()
 			if c.currentNodeOwnedLocked(key) {
 				c.mu.Unlock()
-				return nil, errors.Join(
+				return TaskResumeResult{}, errors.Join(
 					errors.Join(resumeErrs...),
 					fmt.Errorf("current node %v cannot resume while controller ownership remains: %w", start.reference, ErrTaskExecutionNotQuiescent),
 				)
@@ -394,9 +426,12 @@ func (c *CurrentNodeController) resumeTask(
 			}
 		}
 		c.mu.Unlock()
-		return resumed, errors.Join(resumeErrs...)
+		return TaskResumeResult{
+			Outcome:      TaskResumeApplied,
+			CurrentNodes: resumed,
+		}, errors.Join(resumeErrs...)
 	})
-	return resumed, err
+	return result, err
 }
 
 func (c *CurrentNodeController) ApplyPendingApproval(

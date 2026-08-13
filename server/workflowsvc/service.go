@@ -36,8 +36,8 @@ type Service struct {
 		StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
 		PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 		EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
-		ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
+		ResumeTask(context.Context, workflow.TaskID) (workflowexecution.TaskResumeResult, error)
+		ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
@@ -180,8 +180,8 @@ func WithCurrentNodeExecution(execution interface {
 	StartTask(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowstore.StartTaskResult, error)
 	PromoteConcurrencyQueuedTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, bool, error)
 	EnsureTaskResumeEligible(context.Context, workflow.TaskID) error
-	ResumeTask(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
-	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) ([]workflow.CurrentNode, error)
+	ResumeTask(context.Context, workflow.TaskID) (workflowexecution.TaskResumeResult, error)
+	ResumeTaskWithPreparation(context.Context, workflow.TaskID, workflowexecution.TaskStartPreparation, workflowexecution.TaskPreparationFinalizer) (workflowexecution.TaskResumeResult, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
 	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 	ManualMoveDisposition(workflow.TaskID) (workflowexecution.ManualMoveDisposition, error)
@@ -1611,15 +1611,24 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 		}
 		preparation = &prepared
 	}
-	var resumed []workflow.CurrentNode
+	var resumeResult workflowexecution.TaskResumeResult
 	if preparation == nil {
-		resumed, err = s.currentNodeExecution.ResumeTask(ctx, taskID)
+		resumeResult, err = s.currentNodeExecution.ResumeTask(ctx, taskID)
 	} else {
-		resumed, err = s.currentNodeExecution.ResumeTaskWithPreparation(ctx, taskID, *preparation, observation.finalize)
+		resumeResult, err = s.currentNodeExecution.ResumeTaskWithPreparation(ctx, taskID, *preparation, observation.finalize)
 	}
 	if err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
+	if resumeResult.Outcome == workflowexecution.TaskResumeNoOp {
+		return serverapi.WorkflowTaskResumeResponse{
+			Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+			NoOp: &serverapi.WorkflowTaskResumeNoOp{
+				CurrentNodes: workflowview.ProjectCurrentNodes(resumeResult.CurrentNodes),
+			},
+		}, nil
+	}
+	resumed := resumeResult.CurrentNodes
 	if len(resumed) == 0 {
 		return serverapi.WorkflowTaskResumeResponse{}, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
 	}

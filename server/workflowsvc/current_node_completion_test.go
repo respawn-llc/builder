@@ -498,20 +498,23 @@ func (s *currentNodeCompletionExecutionStub) StartTask(
 	return started, nil
 }
 
-func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) (workflowexecution.TaskResumeResult, error) {
 	if s.store == nil {
-		return nil, errors.New("workflow store is required")
+		return workflowexecution.TaskResumeResult{}, errors.New("workflow store is required")
 	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	for _, currentNode := range selected {
 		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
-			return nil, err
+			return workflowexecution.TaskResumeResult{}, err
 		}
 	}
-	return selected, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome:      workflowexecution.TaskResumeApplied,
+		CurrentNodes: selected,
+	}, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
@@ -519,35 +522,38 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
 	finalizer workflowexecution.TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (workflowexecution.TaskResumeResult, error) {
 	if s.store == nil {
-		return nil, errors.New("workflow store is required")
+		return workflowexecution.TaskResumeResult{}, errors.New("workflow store is required")
 	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	if err := preparation.Prepare(ctx); err != nil {
 		finalizer(workflowexecution.TaskPreparationFinalization{
 			Kind:  workflowexecution.TaskPreparationFailed,
 			Cause: err,
 		})
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	if err := preparation.Commit(ctx); err != nil {
 		finalizer(workflowexecution.TaskPreparationFinalization{
 			Kind:  workflowexecution.TaskPreparationFailed,
 			Cause: err,
 		})
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	for _, currentNode := range selected {
 		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
-			return nil, err
+			return workflowexecution.TaskResumeResult{}, err
 		}
 	}
 	finalizer(workflowexecution.TaskPreparationFinalization{Kind: workflowexecution.TaskPreparationHandedOff})
-	return selected, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome:      workflowexecution.TaskResumeApplied,
+		CurrentNodes: selected,
+	}, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {

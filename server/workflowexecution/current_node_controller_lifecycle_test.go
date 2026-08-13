@@ -69,7 +69,7 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("resume error = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
-	if len(resumed) != 0 {
+	if len(resumed.CurrentNodes) != 0 {
 		t.Fatalf("resumed Current Nodes = %+v, want none", resumed)
 	}
 	fixture.store.mu.Lock()
