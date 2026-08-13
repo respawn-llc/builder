@@ -249,6 +249,9 @@ func (t *defaultToolExecutor) executePreparedToolCall(
 	}
 	if toolID == toolspec.ToolCompleteNode {
 		result, diagnostic := t.executeCompleteNodeTool(ctx, stepID, call)
+		if isWorkflowCompletionOperationalError(diagnostic) {
+			return result, diagnostic, true, diagnostic
+		}
 		return result, diagnostic, true, nil
 	}
 	if inputErr != nil {

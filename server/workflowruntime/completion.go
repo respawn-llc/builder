@@ -191,6 +191,10 @@ type PostTurnFinalizer interface {
 	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
 }
 
+type OperationalCompletionBlockFinalizer interface {
+	FinalizeCurrentNodeOperationalCompletionBlock(context.Context, runtimeids.ExecutionScopeID) error
+}
+
 type ViolationKind string
 
 const (

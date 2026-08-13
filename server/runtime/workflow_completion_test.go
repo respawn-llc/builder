@@ -1006,6 +1006,7 @@ func TestWorkflowOperationalCompletionErrorDoesNotConsumeProtocolBudget(t *testi
 				"complete",
 				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
 			),
+			wantSubmitError: true,
 		},
 	}
 	for _, tt := range tests {
