@@ -35,29 +35,8 @@ func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOpt
 	}
 }
 
-func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.NoSemanticValidation,
-		func(request servicecontract.Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error) {
-			return s.GetAuthBootstrapStatusValidated(ctx, request)
-		},
-	)
-}
-
-func (s *BootstrapService) GetAuthBootstrapStatusValidated(ctx context.Context, _ servicecontract.Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	if s == nil {
-		return serverapi.AuthGetBootstrapStatusResponse{}, nil
-	}
-	var (
-		manager      *auth.Manager
-		authRequired bool
-	)
-	authRequired = s.authRequired
-	if authRequired {
-		manager = s.manager
-	}
-	readiness, err := EvaluateReadiness(ctx, manager, authRequired)
+func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, _ serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
+	ready, err := s.authReady(ctx)
 	if err != nil {
 		return serverapi.AuthGetBootstrapStatusResponse{}, err
 	}
@@ -66,8 +45,8 @@ func (s *BootstrapService) GetAuthBootstrapStatusValidated(ctx context.Context, 
 		return serverapi.AuthGetBootstrapStatusResponse{}, err
 	}
 	return serverapi.AuthGetBootstrapStatusResponse{
-		AuthReady:              readiness.Ready,
-		AuthRequired:           readiness.Required,
+		AuthReady:              ready,
+		AuthRequired:           s.authRequired,
 		NoAuthSelected:         stored.IsNoAuthSelected(),
 		AuthBootstrapSupported: true,
 		AllowedPreAuthMethods:  append([]string(nil), s.allowedPreAuth...),
@@ -79,17 +58,7 @@ func (s *BootstrapService) GetAuthBootstrapStatusValidated(ctx context.Context, 
 	}, nil
 }
 
-func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.NoSemanticValidation,
-		func(request servicecontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-			return s.AcknowledgeNoAuthValidated(ctx, request)
-		},
-	)
-}
-
-func (s *BootstrapService) AcknowledgeNoAuthValidated(ctx context.Context, _ servicecontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
 	if s == nil || s.manager == nil {
 		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 	}
@@ -97,31 +66,24 @@ func (s *BootstrapService) AcknowledgeNoAuthValidated(ctx context.Context, _ ser
 	if err != nil {
 		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
 	}
-	readiness, err := EvaluateReadiness(ctx, s.manager, s.authRequired)
+	current, err := s.manager.Load(ctx)
 	if err != nil {
 		return serverapi.AuthAcknowledgeNoAuthResponse{}, err
 	}
+	ready := !s.authRequired || auth.EvaluateStartupGate(current).Ready
 	if stored.IsNoAuthSelected() {
-		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: readiness.Ready, NoAuthSelected: true}, nil
+		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: ready, NoAuthSelected: true}, nil
 	}
-	if readiness.Ready {
+	if ready {
 		return serverapi.AuthAcknowledgeNoAuthResponse{AuthReady: true}, nil
 	}
 	return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 }
 
 func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.SemanticValidationRequired,
-		func(request servicecontract.Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error) {
-			return s.CompleteAuthBootstrapValidated(ctx, request)
-		},
-	)
-}
-
-func (s *BootstrapService) CompleteAuthBootstrapValidated(ctx context.Context, validated servicecontract.Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.AuthCompleteBootstrapResponse{}, err
+	}
 	if s == nil || s.manager == nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
 	}
@@ -154,6 +116,8 @@ func (s *BootstrapService) CompleteAuthBootstrapValidated(ctx context.Context, v
 		}, req.CallbackInput)
 	case serverapi.AuthBootstrapModeDeviceCode:
 		method, completeErr = auth.CompleteOpenAIDeviceAuthorizationGrant(ctx, s.oauthOptions, strings.TrimSpace(req.DeviceAuthorizationCode), strings.TrimSpace(req.DeviceCodeVerifier))
+	default:
+		return serverapi.AuthCompleteBootstrapResponse{}, req.Validate()
 	}
 	if completeErr != nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, completeErr
@@ -163,6 +127,20 @@ func (s *BootstrapService) CompleteAuthBootstrapValidated(ctx context.Context, v
 		return serverapi.AuthCompleteBootstrapResponse{}, err
 	}
 	return s.bootstrapResponseFromState(state), nil
+}
+
+func (s *BootstrapService) authReady(ctx context.Context) (bool, error) {
+	if s == nil || s.manager == nil {
+		return false, nil
+	}
+	if !s.authRequired {
+		return true, nil
+	}
+	state, err := s.manager.Load(ctx)
+	if err != nil {
+		return false, err
+	}
+	return auth.EvaluateStartupGate(state).Ready, nil
 }
 
 func (s *BootstrapService) storedState(ctx context.Context) (auth.State, error) {

@@ -9,7 +9,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/onboardingimports"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -32,54 +31,32 @@ type Options struct {
 }
 
 type Service struct {
-	cfg            config.App
-	authManager    *auth.Manager
-	homeDir        string
-	modelContracts []llm.ModelCapabilityContract
-	defaults       serverapi.CapabilityDefaultFacts
-	staticFactsErr error
+	cfg         config.App
+	authManager *auth.Manager
+	homeDir     string
 }
 
 func NewService(opts Options) *Service {
-	modelContracts := llm.KnownModelCapabilityContracts()
-	validateModelContracts(modelContracts)
-	defaults, err := defaultFacts(opts.Config.Settings)
 	return &Service{
-		cfg:            opts.Config,
-		authManager:    opts.AuthManager,
-		homeDir:        opts.HomeDir,
-		modelContracts: modelContracts,
-		defaults:       defaults,
-		staticFactsErr: err,
+		cfg:         opts.Config,
+		authManager: opts.AuthManager,
+		homeDir:     opts.HomeDir,
 	}
 }
 
 func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error) {
-			return s.GetCapabilityFactsValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *Service) GetCapabilityFactsValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.CapabilityFactsRequest],
-) (serverapi.CapabilityFactsResponse, error) {
-	return s.getCapabilityFacts(ctx, validated.Value())
-}
-
-func (s *Service) getCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	if s.staticFactsErr != nil {
-		return serverapi.CapabilityFactsResponse{}, s.staticFactsErr
+	if err := req.Validate(); err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
 	}
 	currentProvider, err := s.currentProviderFacts(ctx)
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
 	explicitProviders, err := explicitProviderFacts(req.NormalizedExplicitLLMProviderIDs())
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	defaults, err := defaultFacts(s.cfg.Settings)
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
@@ -92,7 +69,10 @@ func (s *Service) getCapabilityFacts(ctx context.Context, req serverapi.Capabili
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
-	models := modelFacts(s.modelContracts, currentProvider)
+	models, err := modelFacts(currentProvider)
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
 	return serverapi.CapabilityFactsResponse{
 		Models: models,
 		Providers: serverapi.ProviderCapabilityFacts{
@@ -100,22 +80,8 @@ func (s *Service) getCapabilityFacts(ctx context.Context, req serverapi.Capabili
 			Explicit:         explicitProviders,
 		},
 		Imports:  importFacts(imports),
-		Defaults: cloneDefaultFacts(s.defaults),
+		Defaults: defaults,
 	}, nil
-}
-
-func cloneDefaultFacts(facts serverapi.CapabilityDefaultFacts) serverapi.CapabilityDefaultFacts {
-	cloned := facts
-	if facts.Thinking.Level != nil {
-		cloned.Thinking.Level = ptr(*facts.Thinking.Level)
-	}
-	if facts.Thinking.Value != nil {
-		cloned.Thinking.Value = ptr(*facts.Thinking.Value)
-	}
-	if facts.Verbosity != nil {
-		cloned.Verbosity = ptr(*facts.Verbosity)
-	}
-	return cloned
 }
 
 func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabilities, error) {
@@ -145,24 +111,32 @@ func explicitProviderFacts(providerIDs []string) ([]serverapi.LLMProviderCapabil
 	return facts, nil
 }
 
-func modelFacts(contracts []llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFacts {
+func modelFacts(providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFacts, error) {
+	contracts := llm.KnownModelCapabilityContracts()
 	known := make([]serverapi.ModelCapabilityFact, 0, len(contracts))
 	for _, contract := range contracts {
-		known = append(known, modelFact(contract, providerCaps))
+		fact, err := modelFact(contract, providerCaps)
+		if err != nil {
+			return serverapi.ModelCapabilityFacts{}, err
+		}
+		known = append(known, fact)
 	}
 	return serverapi.ModelCapabilityFacts{
 		KnownModels:     known,
 		UnknownFallback: unknownModelFallback(providerCaps),
-	}
+	}, nil
 }
 
-func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFact {
-	modelID := contract.Model
+func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCapabilities) (serverapi.ModelCapabilityFact, error) {
+	modelID := strings.TrimSpace(contract.Model)
+	if modelID == "" {
+		return serverapi.ModelCapabilityFact{}, errBlankModelCatalogEntry
+	}
 	verbosity := llm.VerbositySupportForModelAndProvider(modelID, providerCaps)
 	fact := serverapi.ModelCapabilityFact{
 		ModelID:                  &modelID,
 		Known:                    true,
-		ContextWindowTokens:      contextWindowPtr(contract.ContextWindowTokens),
+		ContextWindowTokens:      positiveIntPtr(contract.ContextWindowTokens),
 		SupportsThinking:         contract.SupportsReasoningEffort,
 		SupportedThinkingLevels:  cloneStrings(llm.SupportedThinkingLevelsModel(modelID)),
 		SupportsReasoningSummary: contract.SupportsReasoningSummary,
@@ -173,21 +147,7 @@ func modelFact(contract llm.ModelCapabilityContract, providerCaps llm.ProviderCa
 		fact.LargeWindow = &serverapi.ModelLargeWindowFact{Tokens: contract.LargeContextWindowTokens}
 		fact.DefaultContextWindowMode = ptr(contextWindowModeStandard)
 	}
-	return fact
-}
-
-func validateModelContracts(contracts []llm.ModelCapabilityContract) {
-	for _, contract := range contracts {
-		if strings.TrimSpace(contract.Model) == "" {
-			panic(errBlankModelCatalogEntry)
-		}
-		if contract.ContextWindowTokens < 0 {
-			panic(fmt.Sprintf("capability facts model %q has negative context window %d", contract.Model, contract.ContextWindowTokens))
-		}
-		if contract.LargeContextWindowTokens < 0 {
-			panic(fmt.Sprintf("capability facts model %q has negative large context window %d", contract.Model, contract.LargeContextWindowTokens))
-		}
-	}
+	return fact, nil
 }
 
 func unknownModelFallback(providerCaps llm.ProviderCapabilities) serverapi.ModelCapabilityFact {
@@ -412,8 +372,8 @@ func modeRecommendationFact(recommendation *onboardingimports.ModeRecommendation
 	}
 }
 
-func contextWindowPtr(value int) *int {
-	if value == 0 {
+func positiveIntPtr(value int) *int {
+	if value <= 0 {
 		return nil
 	}
 	return &value

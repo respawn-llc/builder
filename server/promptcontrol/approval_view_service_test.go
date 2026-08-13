@@ -7,9 +7,7 @@ import (
 
 	"core/server/registry"
 	askquestion "core/server/tools"
-	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -23,13 +21,9 @@ func (s *stubApprovalPendingPromptSource) ListPendingPrompts(string) []registry.
 
 func TestServiceListsPendingApprovalsBySession(t *testing.T) {
 	now := time.Now().UTC()
-	stepID, err := runtimeids.ParseStepID(promptViewStepID)
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
 	svc := NewApprovalViewService(&stubApprovalPendingPromptSource{items: []registry.PendingPromptSnapshot{
-		{Request: askquestion.AskQuestionRequest{ID: "ask-1", StepID: promptViewStepID, Question: "one?"}, PromptID: "ask-1", StepID: stepID, CreatedAt: now},
-		{Request: askquestion.AskQuestionRequest{ID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true, ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}}, PromptID: "approval-1", StepID: stepID, CreatedAt: now.Add(time.Second)},
+		{Request: askquestion.AskQuestionRequest{ID: "ask-1", StepID: promptViewStepID, Question: "one?"}, CreatedAt: now},
+		{Request: askquestion.AskQuestionRequest{ID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true, ApprovalOptions: []askquestion.AskQuestionApprovalOption{{Decision: askquestion.AskQuestionApprovalDecisionAllowOnce, Label: "Allow once"}, {Decision: askquestion.AskQuestionApprovalDecisionDeny, Label: "Deny"}}}, CreatedAt: now.Add(time.Second)},
 	}})
 
 	resp, err := svc.ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{SessionID: "session-1"})
@@ -49,24 +43,22 @@ func TestServiceListsPendingApprovalsBySession(t *testing.T) {
 	}
 }
 
-func TestApprovalViewServiceRequiresSessionID(t *testing.T) {
-	if _, err := NewApprovalViewService(&stubApprovalPendingPromptSource{}).ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{}); err == nil {
-		t.Fatal("expected validation error")
+func TestApprovalViewServiceRejectsMalformedPendingPromptIdentity(t *testing.T) {
+	for name, request := range map[string]askquestion.AskQuestionRequest{
+		"prompt": {ID: " approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true},
+		"step":   {ID: "approval-1", StepID: "step-1", Question: "allow?", Approval: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := NewApprovalViewService(&stubApprovalPendingPromptSource{items: []registry.PendingPromptSnapshot{{Request: request}}})
+			if _, err := svc.ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{SessionID: "session-1"}); err == nil {
+				t.Fatal("accepted malformed pending prompt identity")
+			}
+		})
 	}
 }
 
-func TestApprovalViewServiceConsumesValidatedRequest(t *testing.T) {
-	service := NewApprovalViewService(&stubApprovalPendingPromptSource{})
-	request := serverapi.ApprovalListPendingBySessionRequest{SessionID: "session-1"}
-	_, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.ApprovalListPendingBySessionRequest]) (struct{}, error) {
-			_, err := service.ListPendingApprovalsBySessionValidated(context.Background(), validated)
-			return struct{}{}, err
-		},
-	)
-	if err != nil {
-		t.Fatalf("ListPendingApprovalsBySessionValidated: %v", err)
+func TestApprovalViewServiceRequiresSessionID(t *testing.T) {
+	if _, err := NewApprovalViewService(&stubApprovalPendingPromptSource{}).ListPendingApprovalsBySession(context.Background(), serverapi.ApprovalListPendingBySessionRequest{}); err == nil {
+		t.Fatal("expected validation error")
 	}
 }

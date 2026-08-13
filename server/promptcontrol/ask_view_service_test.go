@@ -7,9 +7,7 @@ import (
 
 	"core/server/registry"
 	askquestion "core/server/tools"
-	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -25,13 +23,9 @@ func (s *stubAskPendingPromptSource) ListPendingPrompts(string) []registry.Pendi
 
 func TestServiceListsPendingAsksBySession(t *testing.T) {
 	now := time.Now().UTC()
-	stepID, err := runtimeids.ParseStepID(promptViewStepID)
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{
-		{Request: askquestion.AskQuestionRequest{ID: "ask-1", StepID: promptViewStepID, Question: "one?", Suggestions: []string{"a", "b"}, RecommendedOptionIndex: 2}, PromptID: "ask-1", StepID: stepID, CreatedAt: now},
-		{Request: askquestion.AskQuestionRequest{ID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true}, PromptID: "approval-1", StepID: stepID, CreatedAt: now.Add(time.Second)},
+		{Request: askquestion.AskQuestionRequest{ID: "ask-1", StepID: promptViewStepID, Question: "one?", Suggestions: []string{"a", "b"}, RecommendedOptionIndex: 2}, CreatedAt: now},
+		{Request: askquestion.AskQuestionRequest{ID: "approval-1", StepID: promptViewStepID, Question: "allow?", Approval: true}, CreatedAt: now.Add(time.Second)},
 	}})
 
 	resp, err := svc.ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{SessionID: "session-1"})
@@ -50,11 +44,21 @@ func TestServiceListsPendingAsksBySession(t *testing.T) {
 	}
 }
 
-func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
-	stepID, err := runtimeids.ParseStepID(promptViewStepID)
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
+func TestAskViewServiceRejectsMalformedPendingPromptIdentity(t *testing.T) {
+	for name, request := range map[string]askquestion.AskQuestionRequest{
+		"prompt": {ID: " ask-1", StepID: promptViewStepID, Question: "one?"},
+		"step":   {ID: "ask-1", StepID: "step-1", Question: "one?"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{Request: request}}})
+			if _, err := svc.ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{SessionID: "session-1"}); err == nil {
+				t.Fatal("accepted malformed pending prompt identity")
+			}
+		})
 	}
+}
+
+func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{
 		Request: askquestion.AskQuestionRequest{
 			ID:          "ask-1",
@@ -62,8 +66,6 @@ func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
 			Question:    "one?",
 			Suggestions: []string{"a"},
 		},
-		PromptID: "ask-1",
-		StepID:   stepID,
 	}}})
 
 	resp, err := svc.ListPendingAsksBySession(
@@ -79,10 +81,6 @@ func TestServiceEncodesAbsentPendingAskRecommendationAsNil(t *testing.T) {
 }
 
 func TestServiceRejectsInvalidPendingAskRecommendation(t *testing.T) {
-	stepID, err := runtimeids.ParseStepID(promptViewStepID)
-	if err != nil {
-		t.Fatalf("ParseStepID: %v", err)
-	}
 	svc := NewAskViewService(&stubAskPendingPromptSource{items: []registry.PendingPromptSnapshot{{
 		Request: askquestion.AskQuestionRequest{
 			ID:                     "ask-1",
@@ -91,8 +89,6 @@ func TestServiceRejectsInvalidPendingAskRecommendation(t *testing.T) {
 			Suggestions:            []string{"a"},
 			RecommendedOptionIndex: 2,
 		},
-		PromptID: "ask-1",
-		StepID:   stepID,
 	}}})
 
 	if _, err := svc.ListPendingAsksBySession(
@@ -106,21 +102,5 @@ func TestServiceRejectsInvalidPendingAskRecommendation(t *testing.T) {
 func TestAskViewServiceRequiresSessionID(t *testing.T) {
 	if _, err := NewAskViewService(&stubAskPendingPromptSource{}).ListPendingAsksBySession(context.Background(), serverapi.AskListPendingBySessionRequest{}); err == nil {
 		t.Fatal("expected validation error")
-	}
-}
-
-func TestAskViewServiceConsumesValidatedRequest(t *testing.T) {
-	service := NewAskViewService(&stubAskPendingPromptSource{})
-	request := serverapi.AskListPendingBySessionRequest{SessionID: "session-1"}
-	_, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.AskListPendingBySessionRequest]) (struct{}, error) {
-			_, err := service.ListPendingAsksBySessionValidated(context.Background(), validated)
-			return struct{}{}, err
-		},
-	)
-	if err != nil {
-		t.Fatalf("ListPendingAsksBySessionValidated: %v", err)
 	}
 }

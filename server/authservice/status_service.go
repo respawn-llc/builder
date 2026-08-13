@@ -31,17 +31,9 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 }
 
 func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.SemanticValidationRequired,
-		func(request servicecontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-			return s.GetAuthStatusValidated(ctx, request)
-		},
-	)
-}
-
-func (s *StatusService) GetAuthStatusValidated(ctx context.Context, validated servicecontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
 	state := auth.EmptyState()
 	var authStateErr error
 	if s != nil && s.manager != nil {
@@ -51,9 +43,9 @@ func (s *StatusService) GetAuthStatusValidated(ctx context.Context, validated se
 		}
 		if err != nil {
 			if resolution.Loaded == nil {
-				return serverapi.AuthStatusResponse{
+				return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
 					Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
-				}, nil
+				})
 			}
 			authStateErr = err
 		} else {
@@ -67,15 +59,15 @@ func (s *StatusService) GetAuthStatusValidated(ctx context.Context, validated se
 	subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
 	if authStateErr != nil {
 		failure := authStatusFailure(authStateErr)
-		return serverapi.AuthStatusResponse{
+		return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
 			Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
 			Subscription: subscriptionStatus(ctx, state, authStateErr, subscriptionUsageSupported),
-		}, nil
+		})
 	}
-	return serverapi.AuthStatusResponse{
+	return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
 		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
 		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
-	}, nil
+	})
 }
 
 func (s *StatusService) resolveProvider(
@@ -99,6 +91,13 @@ func (s *StatusService) resolveProvider(
 		return provider, capabilities.IsOpenAIFirstParty, nil
 	}
 	return provider, authstatus.SupportsSubscriptionUsage(settings, capabilities.IsOpenAIFirstParty), nil
+}
+
+func validatedAuthStatusResponse(response serverapi.AuthStatusResponse) (serverapi.AuthStatusResponse, error) {
+	if err := response.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, fmt.Errorf("validate auth status response: %w", err)
+	}
+	return response, nil
 }
 
 func authFacts(state auth.State, provider serverapi.AuthProviderFacts) serverapi.AuthStatusFacts {
