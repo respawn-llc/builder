@@ -212,6 +212,8 @@ func (a *Authority) addWorkflowExecutionLocked(ref WorkflowExecutionRef, key wor
 }
 
 func (a *Authority) beginWorkflowExecution(item *execution) {
+	item.exactMu.Lock()
+	defer item.exactMu.Unlock()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.byScope[item.scope.ID()] != item {
