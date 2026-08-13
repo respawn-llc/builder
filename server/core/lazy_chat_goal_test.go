@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -61,7 +63,7 @@ type lazyGoalFixture struct {
 	draft        metadata.WorkspaceChatDraftDocument
 	materialized serverapi.WorkspaceChatMaterializeResponse
 	planned      serverapi.SessionPlanResponse
-	activation   serverapi.SessionRuntimeActivateResponse
+	activation   *serverapi.SessionRuntimeActivateResponse
 	ownerID      string
 	released     bool
 }
@@ -94,7 +96,7 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	page, err := appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     intPointer(20),
+		Limit:     textutil.Value(20),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage before materialization: %v", err)
@@ -147,7 +149,7 @@ func TestCoreLazyChatMaterializesBeforeGoalSet(t *testing.T) {
 	page, err = appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 		ProjectID: binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     intPointer(20),
+		Limit:     textutil.Value(20),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage after Goal: %v", err)
@@ -164,7 +166,7 @@ func TestCoreLazyChatGoalRejectsUnavailableCapabilityAfterMaterialization(t *tes
 	fixture.materializeAndActivate(t, "lazy-capability")
 	materialized := fixture.materialized
 	appCore := fixture.appCore
-	if containsTool(fixture.planned.Plan.EnabledToolIDs, string(toolspec.ToolAskQuestion)) {
+	if slices.Contains(fixture.planned.Plan.EnabledToolIDs, string(toolspec.ToolAskQuestion)) {
 		t.Fatalf("planned materialized tool contract unexpectedly enables ask_question: %v", fixture.planned.Plan.EnabledToolIDs)
 	}
 
@@ -327,7 +329,7 @@ func newLazyGoalFixture(t *testing.T, enabledTools map[toolspec.ID]bool, client 
 		draft:   writeLazyGoalDraft(t, appCore, binding),
 	}
 	t.Cleanup(func() {
-		if fixture.released || fixture.activation.Attachment.SessionID == "" {
+		if fixture.released || fixture.activation == nil {
 			return
 		}
 		_, _ = appCore.SessionRuntimeClient().ReleaseSessionRuntime(context.Background(), serverapi.SessionRuntimeReleaseRequest{
@@ -366,15 +368,15 @@ func (f *lazyGoalFixture) materializeAndActivate(t *testing.T, prefix string) {
 		OwnerID:                  f.ownerID,
 		ActiveSettings:           planned.Plan.ActiveSettings,
 		EnabledToolIDs:           planned.Plan.EnabledToolIDs,
-		QuestionsEnabled:         boolPointer(planned.Plan.QuestionsEnabled),
-		AutoCompactionEnabled:    boolPointer(planned.Plan.AutoCompactionEnabled),
+		QuestionsEnabled:         textutil.Value(planned.Plan.QuestionsEnabled),
+		AutoCompactionEnabled:    textutil.Value(planned.Plan.AutoCompactionEnabled),
 		ThinkingOverrideExplicit: planned.Plan.ThinkingOverrideExplicit,
 		Source:                   planned.Plan.Source,
 	})
 	if err != nil {
 		t.Fatalf("ActivateSessionRuntime: %v", err)
 	}
-	f.activation = activation
+	f.activation = &activation
 }
 
 func (f *lazyGoalFixture) release(t *testing.T) {
@@ -469,7 +471,7 @@ func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
 	page, err := f.appCore.ProjectViewClient().ListSessionPage(t.Context(), serverapi.SessionPageRequest{
 		ProjectID: f.binding.ProjectID,
 		Category:  sessioncontract.SessionCategoryMain,
-		Limit:     intPointer(20),
+		Limit:     textutil.Value(20),
 	})
 	if err != nil {
 		t.Fatalf("ListSessionPage: %v", err)
@@ -493,21 +495,4 @@ func writeLazyGoalDraft(t *testing.T, appCore *Core, binding metadata.Binding) m
 		t.Fatalf("ReplaceWorkspaceChatDraft: %v", err)
 	}
 	return draft
-}
-
-func containsTool(tools []string, want string) bool {
-	for _, tool := range tools {
-		if tool == want {
-			return true
-		}
-	}
-	return false
-}
-
-func boolPointer(value bool) *bool {
-	return &value
-}
-
-func intPointer(value int) *int {
-	return &value
 }
