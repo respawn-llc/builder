@@ -3425,16 +3425,57 @@ SELECT
 FROM task_records AS blocked
 WHERE blocked.id = sqlc.arg(blocked_task_id);
 
--- name: CountTaskDependenciesByBlocker :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocker_task_id = sqlc.arg(blocker_task_id);
-
-
--- name: CountTaskDependenciesByBlocked :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocked_task_id = sqlc.arg(blocked_task_id);
+-- name: GetTaskDependencyAttachSnapshot :many
+WITH args AS (
+    SELECT
+        sqlc.arg(blocker_task_id) AS blocker_task_id,
+        sqlc.arg(blocked_task_id) AS blocked_task_id
+),
+policy AS (
+    SELECT
+        CAST(EXISTS (
+            SELECT 1
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocked_task_id
+              AND blocked_task_id = args.blocker_task_id
+        ) AS INTEGER) AS reverse_pair_present,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocker_task_id
+        ) AS INTEGER) AS blocker_outgoing_count,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocked_task_id = args.blocked_task_id
+        ) AS INTEGER) AS blocked_incoming_count
+    FROM args
+)
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocker ON blocker.id = args.blocker_task_id
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocked ON blocked.id = args.blocked_task_id;
 
 
 -- name: InsertTaskDependency :execrows

@@ -932,34 +932,6 @@ func (q *Queries) CountTaskComments(ctx context.Context, taskID string) (int64, 
 	return column_1, err
 }
 
-const countTaskDependenciesByBlocked = `-- name: CountTaskDependenciesByBlocked :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocked_task_id = ?1
-`
-
-func (q *Queries) CountTaskDependenciesByBlocked(ctx context.Context, blockedTaskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocked, blockedTaskID)
-	var dependency_count int64
-	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocked, 1)
-
-	return dependency_count, err
-}
-
-const countTaskDependenciesByBlocker = `-- name: CountTaskDependenciesByBlocker :one
-SELECT COUNT(*) AS dependency_count
-FROM task_dependencies
-WHERE blocker_task_id = ?1
-`
-
-func (q *Queries) CountTaskDependenciesByBlocker(ctx context.Context, blockerTaskID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskDependenciesByBlocker, blockerTaskID)
-	var dependency_count int64
-	err := recordQueryError(ctx, row.Scan(&dependency_count), countTaskDependenciesByBlocker, 1)
-
-	return dependency_count, err
-}
-
 const countTaskEdgeReferences = `-- name: CountTaskEdgeReferences :one
 SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
@@ -2427,6 +2399,108 @@ func (q *Queries) GetTaskDependency(ctx context.Context, arg GetTaskDependencyPa
 	err := recordQueryError(ctx, row.Scan(&i.BlockerTaskID, &i.BlockedTaskID), getTaskDependency, 2)
 
 	return i, err
+}
+
+const getTaskDependencyAttachSnapshot = `-- name: GetTaskDependencyAttachSnapshot :many
+WITH args AS (
+    SELECT
+        ?1 AS blocker_task_id,
+        ?2 AS blocked_task_id
+),
+policy AS (
+    SELECT
+        CAST(EXISTS (
+            SELECT 1
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocked_task_id
+              AND blocked_task_id = args.blocker_task_id
+        ) AS INTEGER) AS reverse_pair_present,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocker_task_id = args.blocker_task_id
+        ) AS INTEGER) AS blocker_outgoing_count,
+        CAST((
+            SELECT COUNT(*)
+            FROM task_dependencies
+            WHERE blocked_task_id = args.blocked_task_id
+        ) AS INTEGER) AS blocked_incoming_count
+    FROM args
+)
+SELECT
+    CAST('blocker' AS TEXT) AS task_role,
+    blocker.id,
+    blocker.project_id,
+    blocker.workflow_id,
+    blocker.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocker ON blocker.id = args.blocker_task_id
+UNION ALL
+SELECT
+    CAST('blocked' AS TEXT) AS task_role,
+    blocked.id,
+    blocked.project_id,
+    blocked.workflow_id,
+    blocked.short_id,
+    policy.reverse_pair_present,
+    policy.blocker_outgoing_count,
+    policy.blocked_incoming_count
+FROM args
+CROSS JOIN policy
+JOIN task_records AS blocked ON blocked.id = args.blocked_task_id
+`
+
+type GetTaskDependencyAttachSnapshotParams struct {
+	BlockerTaskID string
+	BlockedTaskID string
+}
+
+type GetTaskDependencyAttachSnapshotRow struct {
+	TaskRole             string
+	ID                   string
+	ProjectID            string
+	WorkflowID           runtimeids.WorkflowID
+	ShortID              string
+	ReversePairPresent   int64
+	BlockerOutgoingCount int64
+	BlockedIncomingCount int64
+}
+
+func (q *Queries) GetTaskDependencyAttachSnapshot(ctx context.Context, arg GetTaskDependencyAttachSnapshotParams) ([]GetTaskDependencyAttachSnapshotRow, error) {
+	rows, err := q.db.QueryContext(ctx, getTaskDependencyAttachSnapshot, arg.BlockerTaskID, arg.BlockedTaskID)
+	err = recordQueryError(ctx, err, getTaskDependencyAttachSnapshot, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetTaskDependencyAttachSnapshotRow
+	for rows.Next() {
+		var i GetTaskDependencyAttachSnapshotRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.TaskRole,
+			&i.ID,
+			&i.ProjectID,
+			&i.WorkflowID,
+			&i.ShortID,
+			&i.ReversePairPresent,
+			&i.BlockerOutgoingCount,
+			&i.BlockedIncomingCount,
+		), getTaskDependencyAttachSnapshot, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), getTaskDependencyAttachSnapshot, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), getTaskDependencyAttachSnapshot, 2); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getTaskDependencyPairSnapshot = `-- name: GetTaskDependencyPairSnapshot :many

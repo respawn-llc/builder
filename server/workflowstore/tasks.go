@@ -258,7 +258,7 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 		if err != nil {
 			return TaskRecord{}, fmt.Errorf("attach task dependency during task creation: %w", err)
 		}
-		if decision == workflow.TaskDependencyAttachAdded {
+		if decision.Decision == workflow.TaskDependencyAttachAdded {
 			for _, taskID := range []workflow.TaskID{dependencyRequest.BlockerTaskID, dependencyRequest.BlockedTaskID} {
 				if err := touchTaskUpdatedAt(ctx, q, string(taskID), prepared.nowUnixMs); err != nil {
 					return TaskRecord{}, fmt.Errorf("touch task %q after dependency creation: %w", taskID, err)
