@@ -96,26 +96,41 @@ func resolveProviderTransportVariant(provider Provider, endpoint ProviderTranspo
 	return registration.Variant, nil
 }
 
+func applyProviderCapabilitiesOverride(variant ProviderVariantContract, override *ProviderCapabilities) ProviderVariantContract {
+	if override == nil {
+		return variant
+	}
+	overrideID := strings.TrimSpace(override.ProviderID)
+	if overrideID == variant.ProviderID {
+		variant.Capabilities = *override
+		return variant
+	}
+	if _, registered := lookupProviderVariantContract(overrideID); !registered {
+		variant.Capabilities = *override
+	}
+	return variant
+}
+
 func resolveOpenAITransportProviderVariant(endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (string, error) {
 	if mode.IsOAuth {
-		if !endpoint.Explicit || isChatGPTCodexEndpoint(endpoint.BaseURL) {
+		if !endpoint.Explicit || isChatGPTCodexEndpoint(endpoint.URL) {
 			return "chatgpt-codex", nil
 		}
 		return "openai-compatible", nil
 	}
-	normalizedBaseURL := normalizeOpenAIBaseURL(endpoint.BaseURL)
-	if normalizedBaseURL == normalizeOpenAIBaseURL(defaultOpenAIBaseURL) || IsOpenAIFirstPartyBaseURL(normalizedBaseURL) {
+	normalizedBaseURL := normalizeOpenAIBaseURL(endpoint.URL)
+	defaultURL, _ := url.Parse(defaultOpenAIBaseURL)
+	if normalizedBaseURL == normalizeOpenAIBaseURL(defaultURL) || IsOpenAIFirstPartyBaseURL(normalizedBaseURL) {
 		return "openai", nil
 	}
-	if strings.TrimSpace(endpoint.BaseURL) != "" {
+	if endpoint.URL != nil {
 		return "openai-compatible", nil
 	}
-	return "", fmt.Errorf("%w: openai base URL %q does not map to a registered provider contract", ErrUnsupportedProvider, strings.TrimSpace(endpoint.BaseURL))
+	return "", fmt.Errorf("%w: openai base URL is absent and does not map to a registered provider contract", ErrUnsupportedProvider)
 }
 
-func isChatGPTCodexEndpoint(rawURL string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
+func isChatGPTCodexEndpoint(parsed *url.URL) bool {
+	if parsed == nil {
 		return false
 	}
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
@@ -127,12 +142,12 @@ func isChatGPTCodexEndpoint(rawURL string) bool {
 	return strings.TrimSuffix(parsed.EscapedPath(), "/") == "/backend-api/codex"
 }
 
-func normalizeOpenAIBaseURL(baseURL string) string {
-	trimmed := strings.TrimSpace(baseURL)
-	trimmed = strings.TrimSuffix(trimmed, "/")
-	if trimmed == "" {
+func normalizeOpenAIBaseURL(rawURL *url.URL) string {
+	if rawURL == nil {
 		return strings.TrimSuffix(defaultOpenAIBaseURL, "/")
 	}
+	trimmed := strings.TrimSpace(rawURL.String())
+	trimmed = strings.TrimSuffix(trimmed, "/")
 	if IsOpenAIFirstPartyBaseURL(trimmed) {
 		return strings.TrimSuffix(defaultOpenAIBaseURL, "/")
 	}

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"core/internal/testharness/httpclient"
 	"core/server/auth"
 	"core/shared/config"
 	"core/shared/textutil"
@@ -820,7 +821,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	transport := NewHTTPTransport(nil)
 	transport.BaseURL = "https://example.openrouter.ai/v1"
 	transport.BaseURLExplicit = true
-	transport.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+	transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		cloned := req.Clone(req.Context())
 		cloned.URL.Scheme = targetURL.Scheme
 		cloned.URL.Host = targetURL.Host
@@ -850,12 +851,6 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	if optionalStringValue(resp.AssistantText) != "hello from anonymous compatible server" {
 		t.Fatalf("assistant text = %q", optionalStringValue(resp.AssistantText))
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
 }
 
 func TestBuildPayload_UsesTransportStoreSetting(t *testing.T) {

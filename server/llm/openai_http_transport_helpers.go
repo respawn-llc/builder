@@ -15,12 +15,8 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 )
 
-func (t *HTTPTransport) requestCompressionOption(mode OpenAIAuthMode) (option.RequestOption, error) {
-	variant, err := t.providerVariantForMode(mode)
-	if err != nil {
-		return nil, err
-	}
-	return option.WithMiddleware(httpcompression.Middleware(variant.RequestCompression)), nil
+func requestCompressionOption(variant ProviderVariantContract) option.RequestOption {
+	return option.WithMiddleware(httpcompression.Middleware(variant.RequestCompression))
 }
 
 func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
@@ -70,10 +66,11 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 	if provider == "" {
 		provider = ProviderOpenAI
 	}
-	variant, err := resolveProviderTransportVariant(provider, ProviderTransportEndpoint{
-		BaseURL:  t.BaseURL,
-		Explicit: t.BaseURLExplicit,
-	}, mode)
+	endpoint, err := newProviderTransportEndpoint(t.BaseURL, t.BaseURLExplicit)
+	if err != nil {
+		return ProviderVariantContract{}, err
+	}
+	variant, err := resolveProviderTransportVariant(provider, endpoint, mode)
 	if err != nil {
 		providerID := strings.TrimSpace(string(provider))
 		if providerID == "" {
@@ -81,13 +78,10 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 		}
 		return ProviderVariantContract{}, llmerrors.NewProviderContractError(providerID, 0, err)
 	}
-	return variant, nil
+	return applyProviderCapabilitiesOverride(variant, t.ProviderCapabilitiesOverride), nil
 }
 
 func (t *HTTPTransport) providerCapabilitiesForMode(mode OpenAIAuthMode) (ProviderCapabilities, error) {
-	if t.ProviderCapabilitiesOverride != nil {
-		return *t.ProviderCapabilitiesOverride, nil
-	}
 	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return ProviderCapabilities{}, err

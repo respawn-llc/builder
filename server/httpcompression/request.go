@@ -41,7 +41,7 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 		if err != nil {
 			return nil, err
 		}
-		plain, err := io.ReadAll(replay)
+		compressed, err := encode(coding, replay)
 		closeErr := replay.Close()
 		if err != nil {
 			return nil, err
@@ -50,10 +50,6 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 			return nil, closeErr
 		}
 
-		compressed, err := encode(coding, plain)
-		if err != nil {
-			return nil, err
-		}
 		if err := request.Context().Err(); err != nil {
 			return nil, err
 		}
@@ -86,12 +82,12 @@ func contentCodingHeader(coding RequestContentCoding) string {
 	}
 }
 
-func encode(coding RequestContentCoding, plain []byte) ([]byte, error) {
+func encode(coding RequestContentCoding, plain io.Reader) ([]byte, error) {
 	switch coding {
 	case ContentCodingGzip:
 		var compressed bytes.Buffer
 		writer := gzip.NewWriter(&compressed)
-		if _, err := writer.Write(plain); err != nil {
+		if _, err := io.Copy(writer, plain); err != nil {
 			return nil, err
 		}
 		if err := writer.Close(); err != nil {
@@ -104,7 +100,7 @@ func encode(coding RequestContentCoding, plain []byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err := writer.Write(plain); err != nil {
+		if _, err := io.Copy(writer, plain); err != nil {
 			return nil, err
 		}
 		if err := writer.Close(); err != nil {

@@ -92,14 +92,12 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	compressionOption, err := t.requestCompressionOption(mode)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
+	providerCaps := variant.Capabilities
+	compressionOption := requestCompressionOption(variant)
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
@@ -159,14 +157,12 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	compressionOption, err := t.requestCompressionOption(mode)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
+	providerCaps := variant.Capabilities
+	compressionOption := requestCompressionOption(variant)
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
@@ -310,27 +306,22 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
+	providerCaps := variant.Capabilities
 	switch variant.RemoteCompactionProtocol {
 	case remoteCompactionResponsesTriggerV2:
-		return t.compactResponsesTriggerV2(ctx, request, authHeader, mode, providerCaps, windowTokens)
+		return t.compactResponsesTriggerV2(ctx, request, authHeader, mode, variant, windowTokens)
 	default:
 		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", providerCaps.ProviderID)
 	}
 }
 
-func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, providerCaps ProviderCapabilities, windowTokens int) (OpenAICompactionResponse, error) {
+func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request OpenAICompactionRequest, authHeader string, mode OpenAIAuthMode, variant ProviderVariantContract, windowTokens int) (OpenAICompactionResponse, error) {
+	providerCaps := variant.Capabilities
 	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-	compressionOption, err := t.requestCompressionOption(mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
+	compressionOption := requestCompressionOption(variant)
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
 		option.WithHTTPClient(t.streamingHTTPClient()),

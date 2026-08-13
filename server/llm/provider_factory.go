@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -40,7 +41,7 @@ type ProviderErrorReducerFactory func(providerID string) ProviderErrorReducer
 type ProviderModelMatcher func(model string) bool
 
 type ProviderTransportEndpoint struct {
-	BaseURL  string
+	URL      *url.URL
 	Explicit bool
 }
 
@@ -265,11 +266,14 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 	if opts.Auth == nil && !allowsAnonymousOpenAIBaseURL(opts.OpenAIBaseURL) {
 		return nil, fmt.Errorf("openai auth provider is required")
 	}
-	transport := newOpenAIHTTPTransport(opts)
+	transport, err := newOpenAIHTTPTransport(opts)
+	if err != nil {
+		return nil, err
+	}
 	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
 }
 
-func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
+func newOpenAIHTTPTransport(opts ProviderClientOptions) (*HTTPTransport, error) {
 	transport := NewHTTPTransport(opts.Auth)
 	if opts.Provider != "" {
 		transport.Provider = opts.Provider
@@ -278,7 +282,11 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.Client = opts.HTTPClient
 	}
 	if v := strings.TrimSpace(opts.OpenAIBaseURL); v != "" {
-		normalizedBaseURL := normalizeOpenAIBaseURL(v)
+		parsedBaseURL, err := url.Parse(v)
+		if err != nil {
+			return nil, fmt.Errorf("parse OpenAI base URL: %w", err)
+		}
+		normalizedBaseURL := normalizeOpenAIBaseURL(parsedBaseURL)
 		transport.BaseURL = normalizedBaseURL
 		transport.BaseURLExplicit = !IsOpenAIFirstPartyBaseURL(normalizedBaseURL)
 	}
@@ -297,7 +305,7 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.ProviderCapabilitiesOverride = &caps
 	}
 	transport.Store = opts.Store
-	return transport
+	return transport, nil
 }
 
 func allowsAnonymousOpenAIBaseURL(baseURL string) bool {

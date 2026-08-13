@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"core/internal/testharness/httpclient"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -53,7 +54,7 @@ func TestDefaultGitHubReleaseMetadataSourceNegotiatesAndDecodesCompressedRespons
 
 func TestGitHubReleaseMetadataSourceClassifiesTransportFailure(t *testing.T) {
 	cause := errors.New("network unavailable")
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, cause
 	})}
 
@@ -88,10 +89,4 @@ func TestGitHubReleaseMetadataSourceBoundsInvalidMetadata(t *testing.T) {
 	if !errors.As(err, &metadataError) {
 		t.Fatalf("error = %v, want metadata error", err)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
 }
