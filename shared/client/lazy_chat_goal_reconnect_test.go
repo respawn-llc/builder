@@ -131,11 +131,7 @@ func TestRemoteLazyChatMaterializationReconnectDoesNotReplayGoal(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("DropFirstConnection: %v", err)
 	}
-	select {
-	case <-first.Closed():
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for first physical connection closure")
-	}
+	waitForRemoteControlDisconnect(t, remote, nil)
 
 	pollCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
