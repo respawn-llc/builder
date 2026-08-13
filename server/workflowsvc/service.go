@@ -325,11 +325,8 @@ func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpda
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
-	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
-		_, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
-		})
-		return struct{}{}, err
+	if _, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+		return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
 	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
@@ -475,14 +472,6 @@ func (s *Service) ensureWorkflowTasksQuiescent(ctx context.Context, workflowID r
 	return nil
 }
 
-func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, workflowID runtimeids.WorkflowID, mutation func(context.Context) (T, error)) (T, error) {
-	var result T
-	if service == nil {
-		return result, errors.New("workflow service is required")
-	}
-	return mutation(ctx)
-}
-
 func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
@@ -619,24 +608,22 @@ func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowG
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, err
 	}
-	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		return s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-			currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-			if err != nil {
-				return workflowstore.WorkflowGraphSaveResult{}, err
-			}
-			if currentVersion != req.ExpectedVersion {
-				return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
-			}
-			if err := req.Validate(); err != nil {
-				return workflowstore.WorkflowGraphSaveResult{}, err
-			}
-			storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
-			if err != nil {
-				return workflowstore.WorkflowGraphSaveResult{}, err
-			}
-			return s.store.SaveWorkflowGraph(ctx, storeRequest)
-		})
+	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
+		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		if currentVersion != req.ExpectedVersion {
+			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+		}
+		if err := req.Validate(); err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
+		if err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
+		}
+		return s.store.SaveWorkflowGraph(ctx, storeRequest)
 	})
 	if err != nil {
 		return serverapi.WorkflowGraphSaveResponse{}, workflowGraphSaveError(err)
