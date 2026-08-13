@@ -2,6 +2,7 @@ package launch
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -174,6 +175,12 @@ func TestPrepareChatAgentCatalogClassifiesAgentPreparationFailures(t *testing.T)
 	providerSelection := &llm.ProviderSelectionError{Model: "custom"}
 	if got := classifyChatAgentPreparationError(errors.Join(llm.ErrUnsupportedProvider, providerSelection)); got != serverapi.ChatSettingsAgentProviderUnavailable {
 		t.Fatalf("provider category = %q", got)
+	}
+	if got := classifyChatAgentPreparationError(fmt.Errorf("%w: invalid model", errInvalidPreparedConfiguration)); got != serverapi.ChatSettingsAgentInvalidConfiguration {
+		t.Fatalf("configuration category = %q", got)
+	}
+	if got := classifyChatAgentPreparationError(ErrPatchEditToolsConflict); got != serverapi.ChatSettingsAgentInvalidConfiguration {
+		t.Fatalf("tool category = %q", got)
 	}
 	if got := classifyChatAgentPreparationError(errors.New("unexpected")); got != serverapi.ChatSettingsAgentInternalPreparation {
 		t.Fatalf("internal category = %q", got)

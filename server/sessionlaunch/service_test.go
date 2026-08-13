@@ -105,6 +105,31 @@ func TestServiceLazyChatSettingsReturnsReadOnlyCompleteProjection(t *testing.T) 
 	}
 }
 
+func TestServiceLazyChatSettingsUsesReloadedCompactionPolicy(t *testing.T) {
+	settings := config.DefaultOnboardingSettings()
+	settings.Model = "gpt-5"
+	settings.ThinkingLevel = "medium"
+	settings.Reviewer.Model = settings.Model
+	settings.Reviewer.ThinkingLevel = settings.ThinkingLevel
+	settings.Reviewer.ModelContextWindow = settings.ModelContextWindow
+	reloaded := settings
+	reloaded.CompactionMode = config.CompactionModeNone
+	service := NewService(launch.Planner{
+		Config: config.App{Settings: settings},
+		ReloadConfig: func() (config.App, error) {
+			return config.App{Settings: reloaded}, nil
+		},
+	}).WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(&draftPersistence{}), "workspace-1")
+
+	response, err := service.LazyChatSettings(t.Context())
+	if err != nil {
+		t.Fatalf("LazyChatSettings: %v", err)
+	}
+	if response.Settings.AutoCompaction.Policy != serverapi.ChatSettingsAutoCompactionDisabled {
+		t.Fatalf("Auto-compaction = %+v", response.Settings.AutoCompaction)
+	}
+}
+
 type sessionLaunchBoundaryResolver struct{ root string }
 
 func (r sessionLaunchBoundaryResolver) ResolveSessionProjectWorkspaceBoundary(context.Context, string) (metadata.ProjectWorkspaceBoundary, error) {

@@ -70,26 +70,14 @@ func (s chatSettingsService) materializedService(
 	if err != nil {
 		return nil, err
 	}
-	if scope.WorkspaceID != nil {
-		projectCtx, err := s.core.resolveProjectContext(
-			ctx,
-			scope.ProjectID,
-			*scope.WorkspaceID,
-			"",
-		)
-		if err != nil {
-			return nil, err
-		}
-		return s.core.sessionLaunchServiceForProjectContext(projectCtx), nil
-	}
-	projectCfg, err := s.core.configForWorkspace(scope.WorkspaceRoot)
+	projectCfg, err := s.core.configForWorkspace(scope.EffectiveRoot)
 	if err != nil {
 		return nil, err
 	}
 	projectCtx := projectContext{
 		config:         projectCfg,
 		projectID:      scope.ProjectID,
-		projectRoot:    scope.WorkspaceRoot,
+		projectRoot:    scope.EffectiveRoot,
 		projectSession: filepath.Join(projectCfg.PersistenceRoot, "projects", scope.ProjectID, "sessions"),
 	}
 	return s.core.detachedChatSettingsService(projectCtx), nil

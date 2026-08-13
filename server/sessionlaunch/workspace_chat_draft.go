@@ -33,6 +33,7 @@ type WorkspaceChatDraftResolution struct {
 	Baselines                map[string]WorkspaceChatDraft
 	GoalAvailability         session.GoalAvailability
 	PersistedQuestionsPolicy bool
+	CompactionMode           config.CompactionMode
 	Catalog                  launch.PreparedChatAgentCatalog
 	limits                   map[string]workspaceChatDraftLimits
 }
@@ -211,6 +212,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 		return workspaceChatDraftResolution(
 			defaults.draft,
 			defaults.draft.Questions,
+			input.Settings.CompactionMode,
 			baselines,
 			catalog,
 			limits,
@@ -229,7 +231,8 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 		draft.Message = message
 		persistedQuestions = draft.Questions
 	} else {
-		if _, ok := limit.thinking[draft.Thinking]; !ok {
+		draft.Thinking = strings.TrimSpace(draft.Thinking)
+		if draft.Thinking == "" {
 			draft.Thinking = limit.draft.Thinking
 		}
 		if draft.Fast && !limit.fast {
@@ -239,12 +242,20 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 			draft.Questions = false
 		}
 	}
-	return workspaceChatDraftResolution(draft, persistedQuestions, baselines, catalog, limits)
+	return workspaceChatDraftResolution(
+		draft,
+		persistedQuestions,
+		input.Settings.CompactionMode,
+		baselines,
+		catalog,
+		limits,
+	)
 }
 
 func workspaceChatDraftResolution(
 	draft WorkspaceChatDraft,
 	persistedQuestions bool,
+	compactionMode config.CompactionMode,
 	baselines map[string]WorkspaceChatDraft,
 	catalog launch.PreparedChatAgentCatalog,
 	limits map[string]workspaceChatDraftLimits,
@@ -262,6 +273,7 @@ func workspaceChatDraftResolution(
 		Baselines:                baselines,
 		GoalAvailability:         availability,
 		PersistedQuestionsPolicy: persistedQuestions,
+		CompactionMode:           compactionMode,
 		Catalog:                  catalog,
 		limits:                   limits,
 	}, nil

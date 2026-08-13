@@ -46,8 +46,8 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	}
 	stored = &WorkspaceChatDraft{Message: "preserve", Agent: "worker", Supervisor: "off", Thinking: "bad", Fast: true, Questions: true}
 	got, err = ResolveWorkspaceChatDraft(draftInput(base), stored)
-	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "high" || got.Draft.Fast {
-		t.Fatalf("repair=%+v err=%v", got.Draft, err)
+	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "bad" || got.Draft.Fast {
+		t.Fatalf("custom Thinking=%+v err=%v", got.Draft, err)
 	}
 }
 

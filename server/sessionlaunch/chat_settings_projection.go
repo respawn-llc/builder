@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"core/server/launch"
 	"core/server/llm"
@@ -170,7 +171,8 @@ func normalizeProjectedChatSettings(
 	current session.ChatSettings,
 	prepared launch.PreparedChatSettings,
 ) session.ChatSettings {
-	if !slices.Contains(prepared.SupportedThinkingValues, current.Thinking) {
+	current.Thinking = strings.TrimSpace(current.Thinking)
+	if current.Thinking == "" {
 		current.Thinking = prepared.Baseline.Thinking
 	}
 	if current.Fast && !prepared.FastAvailable {

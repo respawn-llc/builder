@@ -189,6 +189,7 @@ type PreparedRunPromptOverrides struct {
 	AgentRole                  serverapi.RunPromptAgentRoleOverride
 	BaseTarget                 *PreparedBaseTarget
 	NamedTarget                *PreparedSubagentTarget
+	ProviderCapabilities       llm.ProviderCapabilities
 	FastAvailable              bool
 	ProviderReadinessValidated bool
 }
@@ -724,7 +725,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	if overrides.HasConfigOverrides() {
 		overrideConfig, err = config.ApplyLoadOptionsToSnapshot(app, runPromptLoadOptions(overrides))
 		if err != nil {
-			return PreparedRunPromptOverrides{}, err
+			return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, err)
 		}
 	}
 	prepared := PreparedRunPromptOverrides{
@@ -735,19 +736,19 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		if !roleOverride.Present && preparation.OmittedTarget != nil {
 			target, targetErr := preparePreparedBaseTarget(*preparation.OmittedTarget, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, targetErr
+				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
 			}
 			prepared.BaseTarget = &target
 		} else if preparation.SkipProviderReadinessValidation {
 			target, targetErr := prepareBaseTargetWithoutProviderReadiness(app, preparation.ModelLock, preparation.ToolLock)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, targetErr
+				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
 			}
 			prepared.BaseTarget = &target
 		} else {
 			target, targetErr := prepareBaseTarget(app, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, targetErr
+				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
 			}
 			prepared.BaseTarget = &target
 		}
@@ -757,6 +758,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 				return PreparedRunPromptOverrides{}, capabilityErr
 			}
 			prepared.FastAvailable = llm.SupportsFastModeProvider(capabilities)
+			prepared.ProviderCapabilities = capabilities
 			prepared.ProviderReadinessValidated = true
 		}
 		return prepared, nil
@@ -775,11 +777,13 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	providerID := persistedRoleProviderID(providerSettings)
 	fastAvailable := false
+	var providerCapabilities llm.ProviderCapabilities
 	if !preparation.SkipProviderReadinessValidation {
 		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
 		if err != nil {
 			return PreparedRunPromptOverrides{}, err
 		}
+		providerCapabilities = providerCaps
 		providerID = strings.TrimSpace(providerCaps.ProviderID)
 		fastAvailable = llm.SupportsFastModeProvider(providerCaps)
 	}
@@ -796,11 +800,12 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		applyBudget,
 	)
 	if err != nil {
-		return PreparedRunPromptOverrides{}, err
+		return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, err)
 	}
 	prepared.NamedTarget = &target
 	if !preparation.SkipProviderReadinessValidation {
 		prepared.FastAvailable = fastAvailable
+		prepared.ProviderCapabilities = providerCapabilities
 		prepared.ProviderReadinessValidated = true
 	}
 	return prepared, nil

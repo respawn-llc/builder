@@ -57,7 +57,7 @@ func TestProjectChatSettingsRepairsUnlockedAgentsAndInvalidControls(t *testing.T
 			want:     catalogBaseline(t, catalog, "default"),
 		},
 		{
-			name: "available Agent repairs invalid Thinking and Fast",
+			name: "available Agent preserves custom Thinking and repairs Fast",
 			input: ChatSettingsProjectionInput{
 				Catalog: catalog,
 				Agent:   "worker",
@@ -74,7 +74,7 @@ func TestProjectChatSettingsRepairsUnlockedAgentsAndInvalidControls(t *testing.T
 			wantRole: "worker",
 			want: session.ChatSettings{
 				Supervisor:     "off",
-				Thinking:       "high",
+				Thinking:       "invalid",
 				Fast:           false,
 				Questions:      false,
 				AutoCompaction: true,
@@ -124,6 +124,27 @@ func TestProjectChatSettingsSeparatesQuestionsCapabilityAndPolicy(t *testing.T) 
 	if got.Questions.Capable || !got.Questions.Enabled ||
 		got.Questions.Editability != serverapi.ChatSettingsEditable {
 		t.Fatalf("Questions = %+v", got.Questions)
+	}
+}
+
+func TestProjectChatSettingsTrimsCustomThinkingAndReturnsCustomMode(t *testing.T) {
+	catalog := projectionCatalog(t)
+	got, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog:                  catalog,
+		Agent:                    "worker",
+		Settings:                 session.ChatSettings{Supervisor: "edits", Thinking: "  provider-depth  "},
+		PersistedQuestionsPolicy: false,
+		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
+	})
+	if err != nil {
+		t.Fatalf("ProjectChatSettings: %v", err)
+	}
+	if got.SelectedAgent.Thinking != "provider-depth" ||
+		got.Thinking == nil ||
+		got.Thinking.Kind != serverapi.ChatSettingsThinkingCustom ||
+		got.Thinking.Value != "provider-depth" ||
+		got.Thinking.BaselineValue != "high" {
+		t.Fatalf("Thinking = %+v, selected = %+v", got.Thinking, got.SelectedAgent)
 	}
 }
 

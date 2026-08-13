@@ -443,6 +443,35 @@ func TestObservedSessionMetadataPersistencePreservesExecutionTarget(t *testing.T
 	}
 }
 
+func TestResolveSessionChatSettingsScopeUsesEffectiveWorktreeRoot(t *testing.T) {
+	ctx := context.Background()
+	store, cfg, binding := newMetadataTestStore(t)
+	worktreeRoot := createMetadataTestWorktree(
+		t,
+		ctx,
+		store,
+		binding.WorkspaceID,
+		"worktree-settings",
+		filepath.Join(cfg.WorkspaceRoot, "settings-worktree"),
+	)
+	sess := createMetadataTestSession(t, store, cfg, binding)
+	if err := store.UpdateSessionExecutionTarget(ctx, SessionExecutionTargetUpdate{
+		SessionID: sess.Meta().SessionID,
+		Workspace: &SessionExecutionTargetUpdateWorkspace{ID: binding.WorkspaceID},
+		Worktree:  &SessionExecutionTargetUpdateWorktree{ID: "worktree-settings"},
+	}); err != nil {
+		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
+	}
+
+	scope, err := store.ResolveSessionChatSettingsScope(ctx, sess.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ResolveSessionChatSettingsScope: %v", err)
+	}
+	if scope.ProjectID != binding.ProjectID || scope.EffectiveRoot != worktreeRoot {
+		t.Fatalf("scope = %+v, want project %q root %q", scope, binding.ProjectID, worktreeRoot)
+	}
+}
+
 func TestUpdateSessionExecutionTargetRejectsCrossWorkspaceWorktree(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

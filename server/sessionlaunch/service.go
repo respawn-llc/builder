@@ -255,7 +255,7 @@ func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsR
 	}
 	draft := resolved.Draft
 	policy := serverapi.ChatSettingsAutoCompactionOptional
-	if s.planner.Config.Settings.CompactionMode == config.CompactionModeNone {
+	if resolved.CompactionMode == config.CompactionModeNone {
 		policy = serverapi.ChatSettingsAutoCompactionDisabled
 	}
 	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{

@@ -2065,8 +2065,7 @@ func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID str
 
 type SessionChatSettingsScope struct {
 	ProjectID     string
-	WorkspaceID   *string
-	WorkspaceRoot string
+	EffectiveRoot string
 }
 
 func (s *Store) ResolveSessionChatSettingsScope(
@@ -2078,25 +2077,28 @@ func (s *Store) ResolveSessionChatSettingsScope(
 		return SessionChatSettingsScope{}, err
 	}
 	projectID := strings.TrimSpace(row.ProjectID)
-	workspaceRoot := strings.TrimSpace(row.WorkspaceRoot)
+	effectiveRoot := strings.TrimSpace(row.WorkspaceRoot)
 	if projectID == "" {
 		return SessionChatSettingsScope{}, errors.New("session project id is required")
 	}
-	if workspaceRoot == "" {
-		return SessionChatSettingsScope{}, errors.New("session workspace root is required")
+	if row.WorktreeID.Valid {
+		if !row.WorktreeRoot.Valid || strings.TrimSpace(row.WorktreeRoot.String) == "" {
+			return SessionChatSettingsScope{}, errors.New("session worktree root is required")
+		}
+		effectiveRoot = strings.TrimSpace(row.WorktreeRoot.String)
 	}
-	var workspaceID *string
+	if effectiveRoot == "" {
+		return SessionChatSettingsScope{}, errors.New("session effective workspace root is required")
+	}
 	if row.ExecutionTargetWorkspaceBinding.Valid {
 		value := strings.TrimSpace(row.ExecutionTargetWorkspaceBinding.String)
 		if value == "" {
 			return SessionChatSettingsScope{}, errors.New("session workspace binding is invalid")
 		}
-		workspaceID = &value
 	}
 	return SessionChatSettingsScope{
 		ProjectID:     projectID,
-		WorkspaceID:   workspaceID,
-		WorkspaceRoot: workspaceRoot,
+		EffectiveRoot: effectiveRoot,
 	}, nil
 }
 
