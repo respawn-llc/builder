@@ -489,7 +489,8 @@ func isServiceContractValueType(typ types.Type) bool {
 	}
 	return named.Obj().Name() == "Validated" ||
 		strings.HasPrefix(named.Obj().Name(), "Authorized") ||
-		strings.HasSuffix(named.Obj().Name(), "Candidate")
+		strings.HasSuffix(named.Obj().Name(), "Candidate") ||
+		strings.HasSuffix(named.Obj().Name(), "Constraint")
 }
 
 func isServerAPIType(typ types.Type) bool {

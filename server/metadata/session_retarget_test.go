@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"core/server/session"
+	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
@@ -80,6 +81,33 @@ func TestPlanSessionWorkspaceRetargetRejectsForeignOnlyDefaultWithoutMutation(t 
 	}
 	if target.WorkspaceID != fixture.source.WorkspaceID {
 		t.Fatalf("session workspace = %q, want unchanged %q", target.WorkspaceID, fixture.source.WorkspaceID)
+	}
+}
+
+func TestPlanSessionWorkspaceRetargetChecksAttachedProjectBeforeTargetPlanning(t *testing.T) {
+	t.Parallel()
+	fixture := newSessionRetargetFixture(t)
+	missingTargetProjectID := "project-that-does-not-exist"
+
+	_, err := fixture.store.PlanSessionWorkspaceRetarget(context.Background(), SessionWorkspaceRetargetRequest{
+		SessionID:     fixture.session.Meta().SessionID,
+		WorkspaceRoot: t.TempDir(),
+		ProjectID:     &missingTargetProjectID,
+		AttachedProjectConstraint: apicontract.PresentAttachedProjectConstraint(
+			fixture.targetProject.ProjectID,
+		),
+	})
+	var mismatch *AttachedProjectMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("PlanSessionWorkspaceRetarget error = %v, want AttachedProjectMismatchError", err)
+	}
+	if mismatch.SessionID != fixture.session.Meta().SessionID ||
+		mismatch.SourceProjectID != fixture.source.ProjectID ||
+		mismatch.AttachedProjectID != fixture.targetProject.ProjectID {
+		t.Fatalf("attached-Project mismatch = %+v", mismatch)
+	}
+	if errors.Is(err, serverapi.ErrProjectNotFound) {
+		t.Fatalf("attached-Project mismatch reached target planning: %v", err)
 	}
 }
 

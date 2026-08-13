@@ -194,6 +194,19 @@ type SessionLifecycleService interface {
 	ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error)
 }
 
+type SessionLifecycleTrustedService interface {
+	RetargetSessionWorkspaceValidated(
+		ctx context.Context,
+		req Validated[serverapi.SessionRetargetWorkspaceRequest],
+		constraint AttachedProjectConstraint,
+	) (serverapi.SessionRetargetWorkspaceResponse, error)
+}
+
+type SessionLifecycleGatewayService interface {
+	SessionLifecycleService
+	SessionLifecycleTrustedService
+}
+
 type SessionRuntimeService interface {
 	ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error)
 	ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error)

@@ -215,7 +215,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
-		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
+		panic(fmt.Sprintf("scope %q for route %q must execute through its typed attached-Project constraint", route.Scope, route.Method))
 	case rpccontract.ScopeAttachedSession:
 		if state.attachedSession == nil || state.attachedSession.String() != scopeParams.sessionID {
 			return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
@@ -461,14 +461,6 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 		return nil
 	}
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
-}
-
-func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {
-	projectID := strings.TrimSpace(state.attachedProject)
-	if projectID == "" {
-		return nil
-	}
-	return g.deps.SessionBelongsToProject(ctx, sessionID, projectID)
 }
 
 func (g *Gateway) filterProcessesForActiveProject(ctx context.Context, state *connectionState, processes []clientui.BackgroundProcess) ([]clientui.BackgroundProcess, error) {

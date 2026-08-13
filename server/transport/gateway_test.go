@@ -1443,7 +1443,7 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	configureGatewayTestServerPort(t)
 
 	resolvedA := resolveGatewayTestConfig(t, workspaceA)
-	bindingA := registerGatewayTestBinding(t, resolvedA.Config)
+	registerGatewayTestBinding(t, resolvedA.Config)
 	resolvedB := resolveGatewayTestConfig(t, workspaceB)
 	bindingB := registerGatewayTestBinding(t, resolvedB.Config)
 	metadataStore, err := metadata.Open(resolvedA.Config.PersistenceRoot)
@@ -1478,11 +1478,18 @@ func TestGatewayAllowsUnscopedSessionRetargetOutsideServerDefaultProject(t *test
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{}, foreignSession.Meta().SessionID); err != nil {
-		t.Fatalf("requireSessionInAttachedProject unscoped: %v", err)
-	}
-	if err := gateway.requireSessionInAttachedProject(context.Background(), &connectionState{attachedProject: bindingA.ProjectID}, foreignSession.Meta().SessionID); err == nil {
-		t.Fatal("expected attached project scope to reject foreign session retarget")
+	response := gateway.dispatch(context.Background(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "unscoped-session-retarget",
+		Method:  protocol.MethodSessionRetargetWorkspace,
+		Params: mustJSON(t, serverapi.SessionRetargetWorkspaceRequest{
+			ClientRequestID: "unscoped-session-retarget",
+			SessionID:       foreignSession.Meta().SessionID,
+			WorkspaceRoot:   resolvedB.Config.WorkspaceRoot,
+		}),
+	})
+	if response.Error != nil {
+		t.Fatalf("unscoped Session retarget response error = %+v", response.Error)
 	}
 }
 

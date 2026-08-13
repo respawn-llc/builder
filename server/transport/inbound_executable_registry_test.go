@@ -115,6 +115,14 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 		t.Fatal("Attach Session registered with zero authorization facts")
 	}
 
+	retarget := inboundExecutableRoutes[protocol.MethodSessionRetargetWorkspace]
+	if retarget.authorizationType != reflect.TypeOf(apicontract.AttachedProjectConstraint{}) {
+		t.Fatalf("Session Retarget authorization type = %v, want AttachedProjectConstraint", retarget.authorizationType)
+	}
+	if retarget.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
+		t.Fatal("Session Retarget registered with zero attached-Project constraint")
+	}
+
 	for _, method := range []string{
 		protocol.MethodProcessGet,
 		protocol.MethodProcessKill,

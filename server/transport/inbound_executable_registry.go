@@ -349,6 +349,18 @@ func authorizeSessionAttachment(
 	return resolveAuthorizedSessionAttachment(ctx, g.deps.MetadataStore(), activeProjectID, request.SessionID)
 }
 
+func attachedProjectConstraint(
+	_ context.Context,
+	_ *Gateway,
+	state *connectionState,
+	_ apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest],
+) (apicontract.AttachedProjectConstraint, error) {
+	if state == nil || strings.TrimSpace(state.attachedProject) == "" {
+		return apicontract.AbsentAttachedProjectConstraint(), nil
+	}
+	return apicontract.PresentAttachedProjectConstraint(state.attachedProject), nil
+}
+
 type sessionAttachmentMetadata interface {
 	ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error)
 	LookupWorkspaceBindingByID(context.Context, string) (metadata.Binding, error)
@@ -468,6 +480,14 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		nil,
 		authorizeSessionAttachment,
 		handleAttachSession,
+	)
+	executables[protocol.MethodSessionRetargetWorkspace] = inboundTrustedUnary[serverapi.SessionRetargetWorkspaceRequest, apicontract.AttachedProjectConstraint, serverapi.SessionRetargetWorkspaceResponse](
+		protocol.MethodSessionRetargetWorkspace,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		attachedProjectConstraint,
+		handleSessionWorkspaceRetarget,
 	)
 	runPrompt := executables[protocol.MethodRunPrompt]
 	runPrompt.executeProgress = executeRunPrompt
@@ -671,6 +691,20 @@ func handleWorktreeWorkspaceList(
 		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree service does not implement trusted Workspace list")
 	}
 	return trusted.ListWorkspaceWorktreesValidated(ctx, request, binding)
+}
+
+func handleSessionWorkspaceRetarget(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest],
+	constraint apicontract.AttachedProjectConstraint,
+) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionLifecycleTrustedService)
+	if !ok {
+		return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("Session Lifecycle trusted service is required")
+	}
+	return trusted.RetargetSessionWorkspaceValidated(ctx, request, constraint)
 }
 
 func handleAttachSession(

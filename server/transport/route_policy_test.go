@@ -132,14 +132,6 @@ func TestRoutePolicyAuthorizesSessionScopesWithoutWebSocket(t *testing.T) {
 	); err == nil {
 		t.Fatal("active project foreign prompt follow-up watch unexpectedly allowed")
 	}
-	attachedRoute := routeForTest(t, protocol.MethodSessionRetargetWorkspace)
-	if err := executor.authorizeScope(ctx, &connectionState{}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err != nil {
-		t.Fatalf("attached-project unscoped session: %v", err)
-	}
-	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, attachedRoute, serverapi.SessionRetargetWorkspaceRequest{SessionID: fixture.foreignSessionID}); err == nil {
-		t.Fatal("attached-project foreign session unexpectedly allowed")
-	}
-
 	optionalRoute := routeForTest(t, protocol.MethodSessionGetInitialInput)
 	if err := executor.authorizeScope(ctx, &connectionState{attachedProject: fixture.bindingA.ProjectID}, optionalRoute, serverapi.SessionInitialInputRequest{}); err != nil {
 		t.Fatalf("optional empty session: %v", err)

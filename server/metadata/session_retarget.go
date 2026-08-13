@@ -11,15 +11,35 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
 )
 
 type SessionWorkspaceRetargetRequest struct {
-	SessionID     string
-	WorkspaceRoot string
-	ProjectID     *string
+	SessionID                 string
+	WorkspaceRoot             string
+	ProjectID                 *string
+	AttachedProjectConstraint apicontract.AttachedProjectConstraint
+}
+
+type AttachedProjectMismatchError struct {
+	SessionID         string
+	SourceProjectID   string
+	AttachedProjectID string
+}
+
+func (e *AttachedProjectMismatchError) Error() string {
+	if e == nil {
+		return "attached Project does not own Session"
+	}
+	return fmt.Sprintf(
+		"session %q belongs to project %q, not attached project %q",
+		e.SessionID,
+		e.SourceProjectID,
+		e.AttachedProjectID,
+	)
 }
 
 type SessionWorkspaceRetargetPlan struct {
@@ -67,6 +87,14 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 		return SessionWorkspaceRetargetPlan{}, fmt.Errorf("get session retarget state: %w", err)
 	}
 	sourceProject := serverapi.ProjectReference{ID: state.ProjectID, Name: state.ProjectDisplayName}
+	if attachedProjectID, constrained := req.AttachedProjectConstraint.ProjectID(); constrained &&
+		sourceProject.ID != attachedProjectID {
+		return SessionWorkspaceRetargetPlan{}, &AttachedProjectMismatchError{
+			SessionID:         sessionID,
+			SourceProjectID:   sourceProject.ID,
+			AttachedProjectID: attachedProjectID,
+		}
+	}
 	targetProject := sourceProject
 	explicitProject := req.ProjectID != nil
 	if explicitProject {
