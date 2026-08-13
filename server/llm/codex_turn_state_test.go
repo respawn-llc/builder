@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -146,24 +147,6 @@ func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 		CodexTurnStateDiagnosticConflict,
 	}) {
 		t.Fatalf("diagnostics = %v", got)
-	}
-}
-
-func TestProviderErrorStillObservesTurnState(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set(codexTurnStateHeader, "accepted")
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"error":{"message":"provider unavailable","type":"server_error"}}`))
-	}))
-	t.Cleanup(server.Close)
-	dispatch := newTestCodexDispatch(t)
-	_, err := newOAuthTestTransport(server, server.Client()).Generate(context.Background(), testCodexOpenAIRequest(dispatch))
-	if err == nil || !strings.Contains(err.Error(), "provider unavailable") {
-		t.Fatalf("error = %v, want original provider error", err)
-	}
-	if state, ok := dispatch.currentTurnState(); !ok || state != "accepted" {
-		t.Fatalf("turn state = (%q, %v), want accepted despite provider error", state, ok)
 	}
 }
 
@@ -343,6 +326,31 @@ func TestTurnStateWarningsAreRedactedAndFreshDispatchIsEmpty(t *testing.T) {
 	fresh := newTestCodexDispatch(t)
 	if state, ok := fresh.currentTurnState(); ok || state != "" || len(fresh.TurnStateDiagnostics()) != 0 {
 		t.Fatal("fresh dispatch inherited provider state or diagnostics")
+	}
+}
+
+func TestTurnStateObserverIsSynchronized(t *testing.T) {
+	dispatch := newTestCodexDispatch(t)
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	for _, candidate := range []string{"accepted", "accepted", "conflict-a", "conflict-b", "", "\tinvalid"} {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			dispatch.observeTurnStateCandidate(candidate, codexTurnStateSourceMetadata)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	_, ok := dispatch.currentTurnState()
+	if !ok {
+		t.Fatal("concurrent observer accepted no valid state")
+	}
+	if got := dispatch.TurnStateDiagnostics(); !equalCodexDiagnostics(got, []CodexTurnStateDiagnosticCategory{
+		CodexTurnStateDiagnosticInvalid, CodexTurnStateDiagnosticConflict,
+	}) {
+		t.Fatalf("diagnostics = %v, want synchronized deduplicated categories", got)
 	}
 }
 

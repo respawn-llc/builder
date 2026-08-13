@@ -131,6 +131,39 @@ func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *test
 	}
 }
 
+func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing.T) {
+	var states []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		states = append(states, request.Header.Get("x-codex-turn-state"))
+		if len(states) == 1 {
+			w.Header().Set("x-codex-turn-state", "generation-repair-state")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
+			return
+		}
+		writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
+	}))
+	t.Cleanup(server.Close)
+	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
+	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
+	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{ID: "missing", Name: "exec_command", Input: []byte(`{}`)})
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, err := engine.generateWithMissingToolOutputRepair(ctx, stepID, func() (llm.Request, error) {
+			return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+		}, nil, nil, nil)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("generation repair: %v", err)
+	}
+	if fmt.Sprint(states) != fmt.Sprint([]string{"", ""}) {
+		t.Fatalf("changed generation payload states = %q, want no inherited state", states)
+	}
+}
+
 func TestChangedCompactionPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 	tests := []struct {
 		name string

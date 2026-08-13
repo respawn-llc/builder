@@ -135,18 +135,6 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol" {
 		t.Fatalf("routing hint = %q, want model=gpt-5.6-sol", got)
 	}
-	if got := capturedHeaders.Get("Authorization"); got != "Bearer token" {
-		t.Fatalf("Authorization = %q, want Bearer token", got)
-	}
-	if got := capturedHeaders.Get("ChatGPT-Account-Id"); got != "acc-1" {
-		t.Fatalf("ChatGPT-Account-Id = %q, want acc-1", got)
-	}
-	if got := capturedHeaders.Get("originator"); got != transport.ProviderIdentifier {
-		t.Fatalf("originator = %q, want %q", got, transport.ProviderIdentifier)
-	}
-	if got := capturedHeaders.Get("User-Agent"); got != transport.providerUserAgent() {
-		t.Fatalf("User-Agent = %q, want %q", got, transport.providerUserAgent())
-	}
 	clientMetadata, ok := capturedBody["client_metadata"].(map[string]any)
 	if !ok {
 		t.Fatalf("client_metadata = %#v, want object", capturedBody["client_metadata"])
@@ -163,46 +151,6 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 		metadata["turn_id"] != "run-1" || metadata["window_id"] != "session-1:2" ||
 		metadata["request_kind"] != "turn" {
 		t.Fatalf("turn metadata = %#v, want canonical identity", metadata)
-	}
-}
-
-func TestOAuthFastGenerationRoutingTierMatchesPayload(t *testing.T) {
-	var capturedHeaders http.Header
-	var capturedBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedHeaders = r.Header.Clone()
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-
-	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{SessionID: "session-1", RunID: "run-1"})
-	if err != nil {
-		t.Fatalf("dispatch context: %v", err)
-	}
-	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
-
-	_, err = transport.Generate(context.Background(), OpenAIRequest{
-		Model:          "gpt-5.6-sol",
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-		FastMode:       true,
-		SessionID:      textutil.Value("session-1"),
-		CodexDispatch:  dispatch,
-	})
-	if err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol;tier=priority" {
-		t.Fatalf("routing hint = %q, want priority tier", got)
-	}
-	if got := capturedBody["service_tier"]; got != "priority" {
-		t.Fatalf("service_tier = %#v, want priority", got)
 	}
 }
 

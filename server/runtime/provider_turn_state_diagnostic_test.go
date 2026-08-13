@@ -125,42 +125,53 @@ func TestCompactionAttemptPublishesProviderStateDiagnosticsOnceBeforeRetry(t *te
 }
 
 func TestCompactionDiagnosticPublicationFailureRemainsPending(t *testing.T) {
+	withCompactionRetryDelays(t, []time.Duration{0})
 	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
 		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindCompaction.Optional(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	var attempts atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("x-codex-turn-state", "")
+		if attempts.Add(1) == 1 {
+			w.Header().Set("x-codex-turn-state", "")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"retry","type":"server_error"}}`))
+			return
+		}
 		writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"compaction","id":"cmp_1","encrypted_content":"enc_1"}]`))
 	}))
 	t.Cleanup(server.Close)
 	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
 	transport.BaseURL, transport.BaseURLExplicit, transport.Client = server.URL, true, server.Client()
 	client := providerTurnStateCompactionClient{client: llm.NewOpenAIClient(transport)}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	var events []Event
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			events = append(events, event)
+		},
+	})
 	engine.closed.Store(true)
 	var logs bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
-	published := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 1)
-
-	response, compactErr := client.Compact(context.Background(), llm.CompactionRequest{Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch})
-	engine.publishProviderTurnStateDiagnostics("step-1", dispatch, published)
-	if compactErr != nil || len(response.OutputItems) != 1 {
+	response, compactErr := engine.compactWithRetry(context.Background(), "step-1", client, llm.CompactionRequest{
+		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
+	})
+	if compactErr != nil || len(response.OutputItems) != 1 || attempts.Load() != 2 {
 		t.Fatalf("compaction changed by diagnostic failure: response=%+v error=%v", response, compactErr)
 	}
-	if _, marked := published[llm.CodexTurnStateDiagnosticInvalid]; marked {
-		t.Fatal("failed diagnostic publication was marked published")
-	}
-	if logs.Len() == 0 {
+	if !bytes.Contains(logs.Bytes(), []byte("publish provider turn-state diagnostic")) {
 		t.Fatal("failed diagnostic publication was not operator-logged")
 	}
 	engine.closed.Store(false)
+	published := make(map[llm.CodexTurnStateDiagnosticCategory]struct{}, 1)
 	engine.publishProviderTurnStateDiagnostics("step-1", dispatch, published)
-	if _, marked := published[llm.CodexTurnStateDiagnosticInvalid]; !marked {
+	if _, marked := published[llm.CodexTurnStateDiagnosticInvalid]; !marked || len(events) != 1 {
 		t.Fatal("pending diagnostic was not eligible for later publication")
 	}
 }
