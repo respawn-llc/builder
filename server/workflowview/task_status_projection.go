@@ -257,7 +257,6 @@ func (p *TaskStatusProjection) Project(
 			CurrentNodes:      currentNodes,
 			LiveExecutions:    liveExecutions,
 			ConcurrencyQueued: concurrencyQueued,
-			Interruptible:     observation.Live.Interruptible[taskID],
 			Definition:        definition,
 			CanDelete:         quiescent,
 		})

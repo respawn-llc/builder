@@ -15,7 +15,6 @@ type WorkflowTaskExecutionObservation struct {
 	Executions        map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
 	ConcurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
 	Quiescence        map[workflow.TaskID]bool
-	Interruptible     map[workflow.TaskID]bool
 }
 
 type workflowTaskControllerReadSnapshot struct {
@@ -45,18 +44,12 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		Executions:        map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{},
 		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		Quiescence:        map[workflow.TaskID]bool{},
-		Interruptible:     map[workflow.TaskID]bool{},
 	}
 	executions, err := c.authority.CurrentWorkflowTaskExecutionReadSnapshot()
 	if err != nil {
 		return WorkflowTaskExecutionObservation{}, err
 	}
 	observation.Executions = executions
-	interruptible, err := c.authority.CurrentWorkflowTaskInterruptibility(taskIDs)
-	if err != nil {
-		return WorkflowTaskExecutionObservation{}, err
-	}
-	observation.Interruptible = interruptible
 	if c.mu.TryLock() {
 		snapshot := &workflowTaskControllerReadSnapshot{
 			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},

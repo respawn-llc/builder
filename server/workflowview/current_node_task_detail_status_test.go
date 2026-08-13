@@ -168,8 +168,7 @@ func TestTaskDetailMaterializesAndOrdersLiveScripts(t *testing.T) {
 		Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
 			started.task.ID: {Executions: executions},
 		},
-		Quiescence:    map[workflow.TaskID]bool{started.task.ID: false},
-		Interruptible: map[workflow.TaskID]bool{started.task.ID: true},
+		Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
 	})
 	projected, err := detail.GetTask(fixture.ctx, string(started.task.ID))
 	if err != nil {
@@ -226,8 +225,7 @@ func TestTaskDetailProjectsLiveAgentStates(t *testing.T) {
 				Executions: map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot{
 					started.task.ID: {Executions: []sessionruntime.TaskExecution{execution}},
 				},
-				Quiescence:    map[workflow.TaskID]bool{started.task.ID: false},
-				Interruptible: map[workflow.TaskID]bool{started.task.ID: test.wantInterrupt},
+				Quiescence: map[workflow.TaskID]bool{started.task.ID: false},
 			})
 			projected, err := detail.GetTask(fixture.ctx, string(started.task.ID))
 			if err != nil {
