@@ -8,6 +8,7 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
@@ -1413,6 +1414,32 @@ func TestManualMovePreviewPrefillsAndOverridesPendingApprovalValues(t *testing.T
 	if !errors.Is(err, ErrManualMoveValuesInvalid) {
 		t.Fatalf("oversized nested value error = %v, want values-invalid", err)
 	}
+}
+
+func TestPreviewManualMoveFailsFastForUnresolvedLegacySourceInDebug(t *testing.T) {
+	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
+	fixture.store.invariantPolicy = invariant.NewPolicy(invariant.WithMode(invariant.ModePanic))
+	markCurrentNodeContinuationSourceLegacy(t, fixture)
+	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	review := nodeByKey(t, definition, "review")
+	transitionKey := workflow.TransitionID("rework")
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("PreviewManualMove did not panic for unresolved legacy source in debug")
+		}
+	}()
+	_, _ = fixture.store.PreviewManualMove(fixture.ctx, ManualMoveRequest{
+		TaskID:        fixture.audit.Reference.TaskID,
+		TargetNodeID:  workflow.NodeIDOf(review),
+		TransitionKey: &transitionKey,
+		Values: map[workflow.ModelKey]map[string]string{
+			"audit": {"summary": "review again"},
+		},
+	})
 }
 
 func TestManualMovePreviewPrefillsPartiallyArrivedFanoutValuesBySourceNode(t *testing.T) {

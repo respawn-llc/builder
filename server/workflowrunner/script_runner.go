@@ -91,7 +91,20 @@ func (s *Starter) startCurrentNodeScript(
 			if err != nil {
 				var unresolved workflow.LegacyContinuationSourceUnresolvedError
 				if errors.As(err, &unresolved) {
-					return err
+					finalizer, ok := controller.(workflowruntime.OperationalCompletionBlockFinalizer)
+					if !ok {
+						return errors.Join(
+							err,
+							errors.New("workflow controller cannot finalize an operational completion block"),
+						)
+					}
+					return errors.Join(
+						err,
+						finalizer.FinalizeCurrentNodeOperationalCompletionBlock(
+							finalizeCtx,
+							scope.ID(),
+						),
+					)
 				}
 				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
 			}

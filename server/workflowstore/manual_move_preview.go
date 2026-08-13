@@ -114,7 +114,9 @@ type ManualMovePreview struct {
 }
 
 func (s *Store) PreviewManualMove(ctx context.Context, req ManualMoveRequest) (ManualMovePreview, error) {
-	return s.resolveManualMove(ctx, s.queries, req)
+	preview, err := s.resolveManualMove(ctx, s.queries, req)
+	reportWorkflowInvariantError(s.invariantPolicy, err)
+	return preview, err
 }
 
 func (s *Store) resolveManualMove(ctx context.Context, q *sqlitegen.Queries, req ManualMoveRequest) (ManualMovePreview, error) {
