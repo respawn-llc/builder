@@ -96,9 +96,6 @@
 - Live refresh preserves the leading visible Task and its screen position when possible. If that Task becomes hidden, the list retains the nearest visible position and does not expand a group.
 - An open Task Detail remains open when its Task moves off-screen or into a collapsed group. Live reordering does not scroll to keep the selected Task visible.
 - The visual vertical scrollbar is hidden while wheel, trackpad, touch, and keyboard scrolling remain available. A horizontal scrollbar remains visible when columns overflow.
-- A compact floating Up and Down pair appears at the island's bottom-right only while the list overflows. Up jumps to the absolute top.
-- Down jumps to the lowest visible group header when that group is collapsed. When it is expanded, Down requests only its final bounded page and jumps to the final Task. It never expands a group or loads skipped pages.
-- Up and Down are unavailable at their respective endpoints and have tooltips and accessible names.
 - Activating Status, Dependencies, ID, Title, or Workflow opens the Task's general Task Detail. The Dependencies chip does not focus the Dependencies section from this list.
 - Activating Labels opens the existing Task Label assignment chooser without opening Task Detail. Successful assignment updates the row; pending and failure behavior follows the existing assignment flow.
 - An open Task Detail or Label chooser gives its Task row the selected treatment. Only the most recently opened interaction shows selection. Closing a Label chooser restores an already-open Task Detail's selection when its row is visible.
@@ -110,7 +107,7 @@
 - With no linked Workflows, the empty state's primary action is `Link Workflow`.
 - With linked Workflows but no Tasks, the empty state says `No tasks yet`. Its primary action is `New Task` when exactly one Workflow is linked or when multiple are linked with a default; otherwise it is `Link Workflow`.
 - A successful Link Workflow action opened from the Tasks empty state returns to Tasks rather than opening the Workflow board. Cancel uses the existing close behavior. Failure keeps the linking page open with its entered state and existing error behavior.
-- A successful New Task action closes creation and refreshes the list. If Backlog is expanded, the created Task is revealed. If Backlog was manually collapsed, it stays collapsed. Task Detail does not open automatically.
+- A successful New Task action closes creation and refreshes the authoritative list. It preserves the current Backlog disclosure state and does not programmatically reveal the created Task or open Task Detail.
 - Canceling New Task uses the existing close behavior. Creation failure keeps the form open with its Draft and existing error behavior.
 - The Project Task list has no persistent New Task action outside its empty state.
 

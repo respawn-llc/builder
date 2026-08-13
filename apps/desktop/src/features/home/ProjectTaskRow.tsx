@@ -1,20 +1,67 @@
 import { GitFork } from "lucide-react";
-import type { KeyboardEvent, MouseEvent } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { useTranslation } from "react-i18next";
 
 import type { TaskListItem } from "@/api";
 import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
-import { type VirtualizedGroupedGridEntry } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 
 export const projectTaskColumnCount = 6;
 
-export function projectTaskColumnEntry(
-  t: ReturnType<typeof useTranslation>["t"],
-): VirtualizedGroupedGridEntry {
+export type ProjectTaskGridCell = Readonly<{
+  key: string;
+  content: ReactNode;
+  ariaLabel?: string | undefined;
+  className?: string | undefined;
+}>;
+
+export type ProjectTaskListEntry =
+  | Readonly<{
+      kind: "column-header";
+      key: string;
+      cells: readonly ProjectTaskGridCell[];
+      className?: string | undefined;
+    }>
+  | Readonly<{
+      kind: "group-header";
+      key: string;
+      groupKey: ProjectTaskGroup;
+      label: string;
+      count: number;
+      ariaLabel: string;
+      expanded: boolean;
+      onToggle: () => void;
+      className?: string | undefined;
+    }>
+  | Readonly<{
+      kind: "boundary";
+      key: string;
+      groupKey: ProjectTaskGroup;
+      direction: "initial" | "previous" | "next";
+      state?: import("@/ui").VirtualizedInfiniteListBoundaryState | undefined;
+      hasMore?: boolean | undefined;
+      isFetching?: boolean | undefined;
+      loadingLabel: string;
+      requestGeneration: string;
+      onLoadMore?: (() => void) | undefined;
+      className?: string | undefined;
+    }>
+  | Readonly<{
+      kind: "task";
+      key: string;
+      groupKey: ProjectTaskGroup;
+      ariaLabel: string;
+      cells: readonly ProjectTaskGridCell[];
+      selected?: boolean | undefined;
+      onActivate?: ((event: MouseEvent<HTMLDivElement>) => void) | undefined;
+      onKeyDown?: ((event: KeyboardEvent<HTMLDivElement>) => void) | undefined;
+      className?: string | undefined;
+    }>;
+
+export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]): ProjectTaskListEntry {
   return {
     kind: "column-header",
     key: "columns",
@@ -58,7 +105,7 @@ export function projectTaskEntry({
   task: TaskListItem;
   taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
-}>): VirtualizedGroupedGridEntry {
+}>): ProjectTaskListEntry {
   const selected = labelEditorTaskID === task.id || (labelEditorTaskID === null && taskDetailID === task.id);
   return {
     kind: "task",

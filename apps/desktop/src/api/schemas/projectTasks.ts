@@ -2,9 +2,9 @@ import { z } from "zod";
 
 import type { ProjectTaskGroupCounts, TaskListPage } from "../workflowLabels";
 import { projectLabelSchema } from "./workflowLabels";
-import { coherentTaskStatusSchema, workflowIDSchema } from "./common";
+import { taskStatusSchema, workflowIDSchema } from "./common";
 
-const taskListPageWireSchema = z
+export const taskListPageSchema: z.ZodType<TaskListPage> = z
   .object({
     scope: z
       .object({
@@ -26,7 +26,7 @@ const taskListPageWireSchema = z
           created_at_unix_ms: z.number(),
           updated_at_unix_ms: z.number(),
           column_keys: z.array(z.string()).optional(),
-          status: coherentTaskStatusSchema,
+          status: taskStatusSchema,
           labels: z.array(projectLabelSchema),
           dependency_progress: z
             .object({
@@ -59,70 +59,17 @@ const taskListPageWireSchema = z
         })),
     ),
   })
-  .strict();
-
-export function taskListPageSchemaForRequest(
-  projectID: string,
-  workflowID: string | undefined,
-): z.ZodType<TaskListPage> {
-  return taskListPageWireSchema
-    .superRefine((value, context) => {
-      if (value.scope.project_id !== projectID) {
-        context.addIssue({
-          code: "custom",
-          message: "response Project scope does not match request",
-          path: ["scope", "project_id"],
-        });
-      }
-      if (value.scope.workflow_id !== workflowID) {
-        context.addIssue({
-          code: "custom",
-          message: "response Workflow scope does not match request",
-          path: ["scope", "workflow_id"],
-        });
-      }
-      if (value.matching_workflow_cardinality === "none" && value.tasks.length > 0) {
-        context.addIssue({
-          code: "custom",
-          message: "none cardinality cannot contain Tasks",
-          path: ["matching_workflow_cardinality"],
-        });
-      }
-      if (workflowID !== undefined && value.matching_workflow_cardinality === "multiple") {
-        context.addIssue({
-          code: "custom",
-          message: "Workflow-narrowed response cannot match multiple Workflows",
-          path: ["matching_workflow_cardinality"],
-        });
-      }
-
-      const taskWorkflowIDs = new Set(value.tasks.map((task) => task.workflowID));
-      if (value.matching_workflow_cardinality === "one" && taskWorkflowIDs.size > 1) {
-        context.addIssue({
-          code: "custom",
-          message: "one cardinality cannot contain Tasks from multiple Workflows",
-          path: ["tasks"],
-        });
-      }
-      if (workflowID !== undefined && value.tasks.some((task) => task.workflowID !== workflowID)) {
-        context.addIssue({
-          code: "custom",
-          message: "Task Workflow does not match response scope",
-          path: ["tasks"],
-        });
-      }
-    })
-    .transform((value) => ({
-      scope: {
-        projectID: value.scope.project_id,
-        workflowID: value.scope.workflow_id ?? null,
-      },
-      matchingWorkflowCardinality: value.matching_workflow_cardinality,
-      nextOffset: value.next_offset ?? null,
-      generatedAt: value.generated_at_unix_ms,
-      tasks: value.tasks,
-    }));
-}
+  .strict()
+  .transform((value) => ({
+    scope: {
+      projectID: value.scope.project_id,
+      workflowID: value.scope.workflow_id ?? null,
+    },
+    matchingWorkflowCardinality: value.matching_workflow_cardinality,
+    nextOffset: value.next_offset ?? null,
+    generatedAt: value.generated_at_unix_ms,
+    tasks: value.tasks,
+  }));
 
 export const projectTaskGroupCountsSchema: z.ZodType<ProjectTaskGroupCounts> = z
   .object({

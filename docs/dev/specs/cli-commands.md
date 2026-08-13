@@ -449,8 +449,8 @@ To respond, run: kent run steer <source-session-id> "message"
 - Catalog JSON returns Label records for create, rename, and list, and the deleted Label ID for delete.
 - Assignment JSON returns the Task ID and authoritative resulting Label IDs.
 - Human assignment output is a short acknowledgement.
-- Human Task show output adds one `Labels:` line only for assigned Labels and quotes every name.
-- Task show JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
+- Human Task show/list output adds one `Labels:` line only for assigned Labels and quotes every name.
+- Task show/list JSON exposes one `label_ids` field and does not duplicate assignments as named objects.
 - Task-list Label filtering uses repeatable literal `--label` selectors for included conditions and repeatable literal `--not-label` selectors for excluded conditions.
 - `--label-match any|all` combines every included and excluded condition and defaults to `any`.
 - `--unlabeled` selects Tasks with no assignments and is mutually exclusive with both selector flags and an explicitly supplied match mode.
@@ -464,17 +464,11 @@ To respond, run: kent run steer <source-session-id> "message"
 - `--attention` filters typed attention.
 - `--column` filters Workflow Node Keys and requires an explicit Workflow.
 - Column sorting requires an explicit Workflow.
+- Project-wide human Task rows omit column output.
+- Project-wide JSON Task items omit `column_keys`.
 - Workflow-narrowed lists expose all Current Node Keys in board order.
-- Task list JSON is the validated typed Task-list response from the server, including response scope, matching-Workflow cardinality, pagination metadata, and enriched Task rows.
-- Each Task list JSON row includes its bare Workflow UUID, optional Workflow name, nullable column keys, ordered assigned Label display records, and nullable dependency progress exactly as supplied by the server.
-- Human Task list output renders each Task from the same enriched row.
-- Each human Task row starts with `<SHORT_ID>: <TITLE>.` followed by `Status: <status>`.
-- A human Task row includes `Workflow: <workflow_name>` when the row has a Workflow name.
-- A human Task row includes `Columns: <column list>` when column keys are present.
-- Present but empty column keys render as `Columns: (none)`.
-- A human Task row includes `Deps: <satisfied>/<total>` only when dependency progress has a positive total and at least one dependency is unsatisfied.
-- Human Task rows omit dependency progress when it is absent or fully satisfied.
-- A human Task row ends with `Labels: <quoted names>` when Labels are assigned, preserving server order.
+- Human rows include Workflow names only when the filtered query can return Tasks from several Workflows.
+- JSON Task items always include their bare Workflow UUID.
 - `kent task list --unblocked` includes Tasks with zero unsatisfied direct Task Dependencies.
 - `kent task list --blocked` includes Tasks with one or more unsatisfied direct Task Dependencies.
 - The two dependency flags are mutually exclusive.

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, Plus } from "lucide-react";
+import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowPickerItem } from "@/api";
@@ -15,31 +15,26 @@ import {
 } from "@/app-facade";
 import {
   Button,
+  createVirtualizedPixelOffsetRequest,
   directionalBoundary,
   EmptyState,
   InfiniteListBoundary,
   InteractiveChip,
-  VirtualizedGroupedGrid,
-  type VirtualizedGroupedGridEntry,
+  Spinner,
+  VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
-  createVirtualizedPixelOffsetRequest,
+  type VirtualizedItemVisibilityTrigger,
 } from "@/ui";
 import {
-  projectTaskGroups,
-  projectTaskFinalPageAnchor,
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
-  type ProjectTaskGroupData,
 } from "./projectTaskListData";
-import {
-  firstExpandedProjectTaskGroup,
-  projectTaskTopNavigationRequiresRequest,
-  topNavigationScrollRequest,
-} from "./projectTaskListNavigation";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-import { projectTaskColumnCount } from "./ProjectTaskRow";
+import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
+
+const stickyColumnKeys = new Set(["columns"]);
 
 export function ProjectTasksSurface({
   projectID,
@@ -55,24 +50,8 @@ export function ProjectTasksSurface({
   const queryClient = useQueryClient();
   const { open } = useOwnedSidebarRoots();
   const { activeDestination } = useSidebarShell();
-  const initialMemory = viewMemory.read();
-  const [disclosure, setDisclosure] = useState(initialMemory.disclosure);
-  const [anchors, setAnchors] = useState(initialMemory.anchors);
+  const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
-  const [finalNavigationRequest, setFinalNavigationRequest] = useState<
-    Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null
-  >(null);
-  const [pendingTaskReveal, setPendingTaskReveal] = useState<
-    Readonly<{ key: string; taskID: string }> | null
-  >(null);
-  const [topNavigationRequest, setTopNavigationRequest] = useState<
-    Readonly<{ group: ProjectTaskGroup; key: string }> | null
-  >(null);
-  const scrollRequestSequence = useRef(0);
-  const nextScrollRequestKey = useCallback((prefix: string) => {
-    scrollRequestSequence.current += 1;
-    return `${prefix}-${scrollRequestSequence.current.toString()}`;
-  }, []);
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
@@ -89,24 +68,17 @@ export function ProjectTasksSurface({
     queryFn: async () => api.getBoard(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
   });
   const data = useProjectTaskListData({
-    anchors,
     expanded: disclosure,
     gateReady: query.isSuccess && query.data.workflows.length > 0,
     projectID,
   });
-  useProjectTaskListEvents({
-    enabled: query.isSuccess,
-    labelEditorTaskID,
-    projectID,
-  });
+  useProjectTaskListEvents({ enabled: query.isSuccess, projectID });
   const boardBoundary = directionalBoundary({
     failed: query.isError,
     loading: query.isPending,
     loadingLabel: t("states.loading"),
     message: query.isError ? errorMessage(query.error) : "",
-    onRetry: () => {
-      void query.refetch();
-    },
+    onRetry: () => void query.refetch(),
     retryLabel: t("app.retry"),
   });
   const workflows = query.data?.workflows ?? [];
@@ -134,17 +106,7 @@ export function ProjectTasksSurface({
       boardQueryWorkflowID: undefined,
       kind: "newTask",
       mode: sidebarMode,
-      onCreated: async (taskID) => {
-        const memory = viewMemory.read();
-        if (memory.disclosure.backlog) {
-          const nextAnchors = { ...memory.anchors, backlog: 0 };
-          viewMemory.setAnchors(nextAnchors);
-          setAnchors(nextAnchors);
-          setPendingTaskReveal({
-            key: nextScrollRequestKey(`created-${taskID}`),
-            taskID,
-          });
-        }
+      onCreated: async () => {
         await queryClient.invalidateQueries({
           queryKey: queryKeys.projectTaskListsRoot(projectID),
           refetchType: "active",
@@ -158,130 +120,47 @@ export function ProjectTasksSurface({
     loading: data.counts.isPending,
     loadingLabel: t("states.loading"),
     message: data.counts.isError ? errorMessage(data.counts.error) : "",
-    onRetry: () => {
-      void data.counts.refetch();
-    },
+    onRetry: () => void data.counts.refetch(),
     retryLabel: t("app.retry"),
   });
-  const counts = data.counts.data?.counts;
   const toggleGroup = (group: ProjectTaskGroup) => {
     const next = { ...disclosure, [group]: !disclosure[group] };
     viewMemory.setDisclosure(next);
-    if (!next[group]) {
-      const nextAnchors = { ...anchors, [group]: 0 };
-      viewMemory.setAnchors(nextAnchors);
-      setAnchors(nextAnchors);
-      setFinalNavigationRequest((request) => (request?.group === group ? null : request));
-      setTopNavigationRequest((request) => (request?.group === group ? null : request));
-    }
     setDisclosure(next);
   };
-  const requestFinalEntry = useCallback(
-    (group: ProjectTaskGroup, count: number) => {
-      const offset = projectTaskFinalPageAnchor(count);
-      const nextAnchors = { ...anchors, [group]: offset };
-      const key = nextScrollRequestKey(`final-${group}-${offset.toString()}`);
-      viewMemory.setAnchors(nextAnchors);
-      setAnchors(nextAnchors);
-      setFinalNavigationRequest({
-        group,
-        key,
-        offset,
-      });
-      if (anchors[group] === offset) {
-        void data[group].refetch();
-      }
-    },
-    [anchors, data, nextScrollRequestKey, viewMemory],
-  );
   const taskDetailID = activeDestination?.kind === "taskDetail" ? activeDestination.taskID : null;
   const activeTaskDetailMode =
     activeDestination?.kind === "taskDetail" ? (activeDestination.mode ?? "shift") : null;
   const openTaskDetail = useCallback(
     (taskID: string) => {
       setLabelEditorTaskID(null);
-      const mode = activeTaskDetailMode ?? sidebarMode;
-      open({ kind: "taskDetail", mode, taskID });
+      open({ kind: "taskDetail", mode: activeTaskDetailMode ?? sidebarMode, taskID });
     },
     [activeTaskDetailMode, open, sidebarMode],
   );
-  const toggleLabelEditor = useCallback((taskID: string) => {
-    setLabelEditorTaskID((current) => (current === taskID ? null : taskID));
-  }, []);
   const presentation = projectTasksPresentation({
-    counts,
+    counts: data.counts.data?.counts,
     data,
     disclosure,
     labelEditorTaskID,
-    onLabelsActivate: toggleLabelEditor,
+    onLabelsActivate: (taskID) => {
+      setLabelEditorTaskID((current) => (current === taskID ? null : taskID));
+    },
     onTaskActivate: openTaskDetail,
     onToggle: toggleGroup,
     projectID,
     taskDetailID,
     t,
   });
-  const finalNavigation = finalNavigationState({
-    counts,
-    data,
-    disclosure,
-    request: finalNavigationRequest,
-  });
-  const topNavigationRequiresRequest = projectTaskTopNavigationRequiresRequest(
-    counts,
-    disclosure,
-    anchors,
-  );
-  const scrollRequest = preferredScrollRequest(
-    topNavigationScrollRequest(topNavigationRequest, data, disclosure),
-    finalNavigation.scrollRequest,
-    createdTaskScrollRequest(pendingTaskReveal, presentation.entries),
-  );
-  const onScrollRequestApplied = scrollRequestAppliedHandler({
-    finalNavigationRequest,
-    pendingTaskReveal,
-    topNavigationRequest,
-    setFinalNavigationRequest,
-    setPendingTaskReveal,
-    setTopNavigationRequest,
-  });
   return (
     <ProjectTasksContent
       boardBoundary={boardBoundary}
       countsBoundary={countsBoundary}
       entries={presentation.entries}
-      finalEntryKey={finalNavigation.entryKey}
-      finalEntryRequestKey={finalNavigation.requestKey}
-      finalNavigationInFlight={finalNavigation.inFlight}
-      finalNavigationRequiresRequest={finalNavigation.requiresRequest}
-      topNavigationRequiresRequest={topNavigationRequiresRequest}
       onLinkWorkflow={openLinkWorkflow}
       onNewTask={openNewTask}
-      onRequestFinalEntry={() => {
-        if (finalNavigation.request === null) return;
-        requestFinalEntry(finalNavigation.request.group, finalNavigation.request.count);
-      }}
-      onRequestTop={() => {
-        setFinalNavigationRequest(null);
-        setPendingTaskReveal(null);
-        const group = firstExpandedProjectTaskGroup(counts, disclosure);
-        const currentAnchors = viewMemory.read().anchors;
-        if (group === null || currentAnchors[group] === 0) {
-          setTopNavigationRequest(null);
-          return false;
-        }
-        const nextAnchors = { ...currentAnchors, [group]: 0 };
-        viewMemory.setAnchors(nextAnchors);
-        setAnchors(nextAnchors);
-        setTopNavigationRequest({
-          group,
-          key: nextScrollRequestKey(`top-${group}`),
-        });
-        return true;
-      }}
-      onScrollRequestApplied={onScrollRequestApplied}
       onScrollElementChange={onScrollElementChange}
       projectID={projectID}
-      scrollRequest={scrollRequest}
       taskCount={presentation.taskCount}
       viewMemory={viewMemory}
       workflows={workflows}
@@ -289,226 +168,25 @@ export function ProjectTasksSurface({
   );
 }
 
-function finalNavigationState({
-  counts,
-  data,
-  disclosure,
-  request,
-}: Readonly<{
-  counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
-  data: ReturnType<typeof useProjectTaskListData>;
-  disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
-  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
-}>): Readonly<{
-  entryKey: string;
-  inFlight: boolean;
-  request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
-  requestKey: string | null;
-  requiresRequest: boolean;
-  scrollRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | undefined;
-}> {
-  if (counts === undefined) {
-    return {
-      entryKey: "columns",
-      inFlight: false,
-      request: null,
-      requestKey: null,
-      requiresRequest: false,
-      scrollRequest: undefined,
-    };
-  }
-  const group = [...projectTaskGroups].reverse().find((candidate) => counts[candidate] > 0) ?? null;
-  if (group === null) {
-    return {
-      entryKey: "columns",
-      inFlight: false,
-      request: null,
-      requestKey: null,
-      requiresRequest: false,
-      scrollRequest: undefined,
-    };
-  }
-  if (!disclosure[group]) {
-    return finalNavigationReady(`group-${group}`);
-  }
-  return expandedFinalNavigationState(group, counts[group], data[group], request);
-}
-
-function expandedFinalNavigationState(
-  group: ProjectTaskGroup,
-  count: number,
-  data: ProjectTaskGroupData,
-  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
-): Readonly<{
-  entryKey: string;
-  inFlight: boolean;
-  request: Readonly<{ count: number; group: ProjectTaskGroup }> | null;
-  requestKey: string | null;
-  requiresRequest: boolean;
-  scrollRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | undefined;
-}> {
-  const finalOffset = projectTaskFinalPageAnchor(count);
-  const finalPageReady = data.pageParams.includes(finalOffset) && !data.isPlaceholderData;
-  const finalTaskID = finalPageReady
-    ? (data.tasks.at(-1)?.id ?? `group-${group}`)
-    : `group-${group}`;
-  const requestInFlight = finalNavigationRequestInFlight(request, group, finalOffset, data.isError);
-  return {
-    entryKey: finalTaskID,
-    inFlight: requestInFlight,
-    request: !requestInFlight && !finalPageReady ? { count, group } : null,
-    requestKey: request?.key ?? null,
-    requiresRequest: !finalPageReady,
-    scrollRequest: finalNavigationScrollRequest(finalPageReady, finalTaskID, request),
-  };
-}
-
-function finalNavigationRequestInFlight(
-  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
-  group: ProjectTaskGroup,
-  finalOffset: number,
-  failed: boolean,
-): boolean {
-  return request?.group === group && request.offset === finalOffset && !failed;
-}
-
-function finalNavigationScrollRequest(
-  finalPageReady: boolean,
-  finalTaskID: string,
-  request: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null,
-) {
-  if (!finalPageReady || request === null) return undefined;
-  return {
-    align: "end" as const,
-    entryKey: finalTaskID,
-    key: request.key,
-    target: "entry" as const,
-  };
-}
-
-function finalNavigationReady(entryKey: string): Readonly<{
-  entryKey: string;
-  inFlight: false;
-  request: null;
-  requestKey: null;
-  requiresRequest: false;
-  scrollRequest: undefined;
-}> {
-  return {
-    entryKey,
-    inFlight: false,
-    request: null,
-    requestKey: null,
-    requiresRequest: false,
-    scrollRequest: undefined,
-  };
-}
-
-function createdTaskScrollRequest(
-  reveal: Readonly<{ key: string; taskID: string }> | null,
-  entries: readonly VirtualizedGroupedGridEntry[],
-) {
-  if (
-    reveal === null ||
-    !entries.some((entry) => entry.kind === "task" && entry.key === reveal.taskID)
-  ) {
-    return undefined;
-  }
-  return {
-    align: "end" as const,
-    entryKey: reveal.taskID,
-    key: reveal.key,
-    target: "entry" as const,
-  };
-}
-
-function preferredScrollRequest(
-  topRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | Readonly<{ key: string; target: "top" }>
-    | undefined,
-  finalRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | undefined,
-  createdTaskRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | undefined,
-) {
-  return topRequest ?? finalRequest ?? createdTaskRequest;
-}
-
-function scrollRequestAppliedHandler({
-  finalNavigationRequest,
-  pendingTaskReveal,
-  topNavigationRequest,
-  setFinalNavigationRequest,
-  setPendingTaskReveal,
-  setTopNavigationRequest,
-}: Readonly<{
-  finalNavigationRequest: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
-  pendingTaskReveal: Readonly<{ key: string; taskID: string }> | null;
-  topNavigationRequest: Readonly<{ group: ProjectTaskGroup; key: string }> | null;
-  setFinalNavigationRequest: (request: null) => void;
-  setPendingTaskReveal: (request: null) => void;
-  setTopNavigationRequest: (request: null) => void;
-}>): (key: string) => void {
-  return (key) => {
-    if (finalNavigationRequest?.key === key) {
-      setFinalNavigationRequest(null);
-    }
-    if (pendingTaskReveal?.key === key) {
-      setPendingTaskReveal(null);
-    }
-    if (topNavigationRequest?.key === key) {
-      setTopNavigationRequest(null);
-    }
-  };
-}
-
 function ProjectTasksContent({
   boardBoundary,
   countsBoundary,
   entries,
-  finalEntryKey,
-  finalEntryRequestKey,
-  finalNavigationInFlight,
-  finalNavigationRequiresRequest,
-  topNavigationRequiresRequest,
   onLinkWorkflow,
   onNewTask,
-  onRequestFinalEntry,
-  onRequestTop,
-  onScrollRequestApplied,
   onScrollElementChange,
   projectID,
-  scrollRequest,
   taskCount,
   viewMemory,
   workflows,
 }: Readonly<{
   boardBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   countsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
-  entries: readonly VirtualizedGroupedGridEntry[];
-  finalEntryKey: string;
-  finalEntryRequestKey: string | null;
-  finalNavigationInFlight: boolean;
-  finalNavigationRequiresRequest: boolean;
-  topNavigationRequiresRequest: boolean;
+  entries: readonly ProjectTaskListEntry[];
   onLinkWorkflow: () => void;
   onNewTask: () => void;
-  onRequestFinalEntry: () => void;
-  onRequestTop: () => boolean;
-  onScrollRequestApplied: (key: string) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
-  scrollRequest:
-    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
-    | Readonly<{ key: string; target: "top" }>
-    | undefined;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
   workflows: readonly WorkflowPickerItem[];
@@ -532,49 +210,43 @@ function ProjectTasksContent({
       </TasksShell>
     );
   }
+  const newTaskAvailable = workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
   const memory = viewMemory.read();
-  const newTaskWorkflowSelectionAvailable =
-    workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
   return (
     <TasksShell workflows={workflows} onLinkWorkflow={onLinkWorkflow} projectID={projectID}>
       {taskCount === 0 ? (
         <ProjectTasksEmpty
-          actionLabel={
-            newTaskWorkflowSelectionAvailable
-              ? t("board.newTask")
-              : t("workflowLibrary.linkWorkflow")
-          }
+          actionLabel={newTaskAvailable ? t("board.newTask") : t("workflowLibrary.linkWorkflow")}
           body={t("home.prototype.noTasksBody")}
-          onAction={newTaskWorkflowSelectionAvailable ? onNewTask : onLinkWorkflow}
+          onAction={newTaskAvailable ? onNewTask : onLinkWorkflow}
           title={t("home.prototype.noTasksTitle")}
         />
       ) : (
-        <VirtualizedGroupedGrid
+        <VirtualizedInfiniteList
           ariaLabel={t("home.prototype.projectTasksGrid")}
           className="h-full min-h-0 min-w-[880px] overflow-auto [scrollbar-width:thin] [&::-webkit-scrollbar:vertical]:hidden"
-          columnCount={projectTaskColumnCount}
-          entries={entries}
           estimateSize={() => 38}
-          navigation={{
-            downLabel: t("home.prototype.jumpToBottom"),
-            downDisabled: finalNavigationInFlight,
-            finalEntryKey,
-            onRequestFinalEntry,
-            onRequestTop,
-            requestKey: finalEntryRequestKey,
-            requiresFinalEntryRequest: finalNavigationRequiresRequest,
-            requiresTopEntryRequest: topNavigationRequiresRequest,
-            upLabel: t("home.prototype.jumpToTop"),
-          }}
-          canApplyPixelOffset={entries.some((entry) => entry.kind === "task")}
+          getItemAnchorKey={(entry) => (entry.kind === "task" ? entry.key : "")}
+          getItemKey={(entry) => entry.key}
+          getItemOccurrenceKey={(entry) => entry.key}
+          getItemWrapperProps={projectTaskEntryWrapperProps}
+          hasNextPage={false}
+          isFetchingNextPage={false}
+          itemRole="row"
+          items={entries}
+          loadingLabel={t("app.loadingMore")}
+          onLoadMore={() => undefined}
           onScrollElementChange={onScrollElementChange}
-          onScrollRequestApplied={onScrollRequestApplied}
           pixelOffsetRequest={createVirtualizedPixelOffsetRequest(
             `restore-${memory.scrollRequestSequence.toString()}`,
             memory.verticalOffsetPx,
           )}
-          scrollRequest={scrollRequest}
+          renderItem={renderProjectTaskEntry}
+          role="grid"
+          rowSpacing="tight"
+          stickyItemKeys={stickyColumnKeys}
           testId="project-task-list-grid"
+          visibilityTriggers={projectTaskVisibilityTriggers(entries)}
         />
       )}
       {countsBoundary === undefined ? null : (
@@ -583,6 +255,88 @@ function ProjectTasksContent({
         </div>
       )}
     </TasksShell>
+  );
+}
+
+function projectTaskEntryWrapperProps(entry: ProjectTaskListEntry): HTMLAttributes<HTMLDivElement> {
+  if (entry.kind !== "task") {
+    return { className: entry.className };
+  }
+  return {
+    "aria-label": entry.ariaLabel,
+    "aria-selected": entry.selected,
+    className: entry.className,
+    onClick: entry.onActivate,
+    onKeyDown: entry.onKeyDown,
+    tabIndex: 0,
+  };
+}
+
+function renderProjectTaskEntry(entry: ProjectTaskListEntry): ReactNode {
+  switch (entry.kind) {
+    case "column-header":
+      return entry.cells.map((cell) => (
+        <div aria-label={cell.ariaLabel} className={cell.className} key={cell.key} role="columnheader">
+          {cell.content}
+        </div>
+      ));
+    case "group-header":
+      return (
+        <div aria-colspan={projectTaskColumnCount} role="gridcell">
+          <button aria-expanded={entry.expanded} className="w-full" onClick={entry.onToggle} type="button">
+            <ChevronRight
+              aria-hidden="true"
+              className={entry.expanded ? "inline-block rotate-90" : "inline-block"}
+              size={16}
+            />
+            <span aria-hidden="true">
+              {entry.label} {entry.count}
+            </span>
+            <span className="sr-only">{entry.ariaLabel}</span>
+          </button>
+        </div>
+      );
+    case "boundary":
+      return (
+        <div aria-colspan={projectTaskColumnCount} role="gridcell">
+          {entry.state === undefined ? (
+            <div
+              aria-label={entry.isFetching === true ? entry.loadingLabel : undefined}
+              aria-live="polite"
+              className="grid min-h-12 place-items-center"
+              role={entry.isFetching === true ? "status" : undefined}
+            >
+              {entry.isFetching === true ? <Spinner size="sm" /> : null}
+            </div>
+          ) : (
+            <InfiniteListBoundary direction={entry.direction} state={entry.state} />
+          )}
+        </div>
+      );
+    case "task":
+      return entry.cells.map((cell) => (
+        <div aria-label={cell.ariaLabel} className={cell.className} key={cell.key} role="gridcell">
+          {cell.content}
+        </div>
+      ));
+  }
+}
+
+function projectTaskVisibilityTriggers(
+  entries: readonly ProjectTaskListEntry[],
+): readonly VirtualizedItemVisibilityTrigger[] {
+  return entries.flatMap((entry) =>
+    entry.kind === "boundary" && entry.direction !== "initial"
+      ? [
+          {
+            enabled: entry.hasMore ?? false,
+            fetching: entry.isFetching ?? false,
+            itemKey: entry.key,
+            onVisible: entry.onLoadMore ?? (() => undefined),
+            requestGeneration: `${entry.groupKey}:${entry.direction}:${entry.requestGeneration}`,
+          },
+        ]
+      : [],
   );
 }
 
@@ -606,9 +360,7 @@ function TasksShell({
           <InteractiveChip
             className="shrink-0"
             key={workflow.id}
-            onClick={() => {
-              void navigation.openProject(projectID, workflow.id);
-            }}
+            onClick={() => void navigation.openProject(projectID, workflow.id)}
             title={workflow.description}
           >
             {workflow.name}
@@ -629,20 +381,18 @@ function TasksShell({
 function ProjectTasksEmpty({
   actionLabel,
   body,
-  disabled = false,
   onAction,
   title,
 }: Readonly<{
   actionLabel: string;
   body: string;
-  disabled?: boolean;
   onAction?: () => void;
   title: string;
 }>) {
   return (
     <EmptyState
       action={
-        <Button disabled={disabled} onClick={onAction} variant="primary">
+        <Button onClick={onAction} variant="primary">
           {actionLabel}
         </Button>
       }

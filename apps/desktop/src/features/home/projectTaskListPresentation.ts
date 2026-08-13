@@ -1,18 +1,14 @@
 import type { TFunction } from "i18next";
 
 import { errorMessage } from "@/api";
-import {
-  directionalBoundary,
-  type VirtualizedGroupedGridEntry,
-  type VirtualizedInfiniteListBoundaryState,
-} from "@/ui";
+import { directionalBoundary, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import {
   projectTaskGroups,
   type ProjectTaskGroup,
   type ProjectTaskGroupData,
   type ProjectTaskListData,
 } from "./projectTaskListData";
-import { projectTaskColumnEntry, projectTaskEntry } from "./ProjectTaskRow";
+import { projectTaskColumnEntry, projectTaskEntry, type ProjectTaskListEntry } from "./ProjectTaskRow";
 
 type ProjectTaskPresentationInput = Readonly<{
   counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
@@ -27,10 +23,8 @@ type ProjectTaskPresentationInput = Readonly<{
   t: TFunction;
 }>;
 
-export function projectTasksPresentation(
-  input: ProjectTaskPresentationInput,
-): Readonly<{
-  entries: readonly VirtualizedGroupedGridEntry[];
+export function projectTasksPresentation(input: ProjectTaskPresentationInput): Readonly<{
+  entries: readonly ProjectTaskListEntry[];
   taskCount: number | null;
 }> {
   if (input.counts === undefined) {
@@ -46,7 +40,7 @@ function groupedEntries(
   input: ProjectTaskPresentationInput & {
     counts: Readonly<Record<ProjectTaskGroup, number>>;
   },
-): readonly VirtualizedGroupedGridEntry[] {
+): readonly ProjectTaskListEntry[] {
   return [
     projectTaskColumnEntry(input.t),
     ...projectTaskGroups.flatMap((group) => groupEntries(group, input)),
@@ -58,11 +52,11 @@ function groupEntries(
   input: ProjectTaskPresentationInput & {
     counts: Readonly<Record<ProjectTaskGroup, number>>;
   },
-): readonly VirtualizedGroupedGridEntry[] {
+): readonly ProjectTaskListEntry[] {
   const count = input.counts[group];
   if (count === 0) return [];
   const data = input.data[group];
-  const entries: VirtualizedGroupedGridEntry[] = [
+  const entries: ProjectTaskListEntry[] = [
     {
       kind: "group-header",
       key: `group-${group}`,
@@ -77,8 +71,7 @@ function groupEntries(
       onToggle: () => {
         input.onToggle(group);
       },
-      className:
-        "border-b border-[var(--color-outline)] bg-[var(--color-island-2)] px-[var(--space-3)]",
+      className: "border-b border-[var(--color-outline)] bg-[var(--color-island-2)] px-[var(--space-3)]",
     },
   ];
   if (!input.disclosure[group]) return entries;
@@ -112,12 +105,6 @@ function groupEntries(
       }),
     ),
   );
-  const replacement = groupBoundary(data, "replacement", input.t);
-  if (replacement !== undefined) {
-    entries.push(
-      boundaryEntry({ data, direction: "replacement", group, state: replacement, t: input.t }),
-    );
-  }
   if (data.hasNextPage || data.isFetchingNextPage || data.isFetchNextPageError) {
     entries.push(
       boundaryEntry({
@@ -132,7 +119,7 @@ function groupEntries(
   return entries;
 }
 
-type BoundaryDirection = "initial" | "next" | "previous" | "replacement";
+type BoundaryDirection = "initial" | "next" | "previous";
 
 function boundaryEntry({
   data,
@@ -146,7 +133,7 @@ function boundaryEntry({
   group: ProjectTaskGroup;
   state: VirtualizedInfiniteListBoundaryState | undefined;
   t: TFunction;
-}>): VirtualizedGroupedGridEntry {
+}>): ProjectTaskListEntry {
   return {
     kind: "boundary",
     key: `${group}-${direction}`,
@@ -154,11 +141,7 @@ function boundaryEntry({
     direction,
     state,
     hasMore:
-      direction === "previous"
-        ? data.hasPreviousPage
-        : direction === "next"
-          ? data.hasNextPage
-          : false,
+      direction === "previous" ? data.hasPreviousPage : direction === "next" ? data.hasNextPage : false,
     isFetching:
       direction === "previous"
         ? data.isFetchingPreviousPage
@@ -166,6 +149,7 @@ function boundaryEntry({
           ? data.isFetchingNextPage
           : data.isFetching,
     loadingLabel: t("app.loadingMore"),
+    requestGeneration: `${direction}:${data.pages.length.toString()}`,
     onLoadMore:
       direction === "previous"
         ? () => {
@@ -185,28 +169,23 @@ function groupBoundary(
   t: TFunction,
 ): VirtualizedInfiniteListBoundaryState | undefined {
   const initial = direction === "initial";
-  const replacement = direction === "replacement";
   const failed = initial
     ? data.isError && data.tasks.length === 0
-    : replacement
-      ? data.isError && data.tasks.length > 0
-      : direction === "previous"
-        ? data.isFetchPreviousPageError
-        : data.isFetchNextPageError;
+    : direction === "previous"
+      ? data.isFetchPreviousPageError
+      : data.isFetchNextPageError;
   const loading = initial
     ? data.isPending
-    : replacement
-      ? data.isPlaceholderData && data.isFetching
-      : direction === "previous"
-        ? data.isFetchingPreviousPage
-        : data.isFetchingNextPage;
+    : direction === "previous"
+      ? data.isFetchingPreviousPage
+      : data.isFetchingNextPage;
   return directionalBoundary({
     failed,
     loading,
     loadingLabel: t("states.loading"),
     message: failed ? errorMessage(data.error) : "",
     onRetry: () => {
-      void (initial || replacement
+      void (initial
         ? data.refetch()
         : direction === "previous"
           ? data.fetchPreviousPage()

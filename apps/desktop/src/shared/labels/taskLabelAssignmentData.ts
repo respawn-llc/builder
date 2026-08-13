@@ -41,14 +41,12 @@ type AssignmentBasis = Readonly<{
 
 export function useManagedTaskLabelAssignment({
   availableLabelIDs,
-  enabled = true,
   projectID,
   scheduleCatalogRefresh,
   scheduleTaskAssignmentRefresh,
   taskID,
 }: Readonly<{
   availableLabelIDs: readonly string[];
-  enabled?: boolean | undefined;
   projectID: string;
   scheduleCatalogRefresh(): void;
   scheduleTaskAssignmentRefresh(taskID: string): void;
@@ -65,7 +63,6 @@ export function useManagedTaskLabelAssignment({
       assertTaskAssignment(loaded, taskID);
       return loaded;
     },
-    enabled,
     retry: false,
   });
   const [local, setLocal] = useState<LocalAssignmentState>(emptyLocalState);
@@ -75,8 +72,7 @@ export function useManagedTaskLabelAssignment({
   const isMountedOwnerLive = useStableCallback((): boolean => mounted.current);
   const canMutateTask = useStableCallback(
     (): boolean =>
-      isMountedOwnerLive() &&
-      queryClient.getQueryData<TaskLabelAssignment>(assignmentKey) !== undefined,
+      isMountedOwnerLive() && queryClient.getQueryData<TaskLabelAssignment>(assignmentKey) !== undefined,
   );
   const clearIfMounted = useStableCallback((): void => {
     if (mounted.current) {
@@ -134,8 +130,12 @@ export function useManagedTaskLabelAssignment({
       const available = new Set(catalog.labels.map((label) => label.id));
       const installed = response.labelIDs.filter((labelID) => available.has(labelID));
       patchExistingTaskLabelAssignment(queryClient, { taskID, labelIDs: installed });
-      patchExistingTaskLabelProjections(queryClient, taskID, installed, catalog.labels);
+      patchExistingTaskLabelProjections(queryClient, taskID, installed);
       setLocal((state) => settleAssignmentSuccess(state, intent, installed, available));
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.projectTaskListsRoot(projectID),
+        refetchType: "active",
+      });
       scheduleTaskAssignmentRefresh(taskID);
     } catch (error: unknown) {
       if (!canMutateTask()) {
@@ -195,7 +195,6 @@ export function useManagedTaskLabelAssignment({
       queryClient,
       taskID,
       base.labelIDs.filter((labelID) => available.has(labelID)),
-      catalog.labels,
     );
     setLocal((state) => prepareNext(state, base.labelIDs, available));
   }, [

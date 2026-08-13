@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 
+	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -157,7 +158,12 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			})
 			return 1
 		}
-		return writeTaskListResponse(stdout, stderr, resp, request, *jsonOut)
+		expectedScope := taskListExpectedScope{
+			ProjectID:     projectID,
+			WorkflowID:    selectedWorkflowID,
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
+		}
+		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
 	})
 }
 
@@ -198,34 +204,54 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 	return mode, nil
 }
 
-func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, request serverapi.WorkflowTaskListRequest, jsonOut bool) int {
-	if err := resp.ValidateForRequest(request); err != nil {
+func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writer, remote apicontract.WorkflowService, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+	projection, err := taskListProjectionFromResponse(resp, expectedScope)
+	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	if jsonOut {
-		return writeCommandJSON(stdout, stderr, resp)
+		return writeCommandJSON(stdout, stderr, projection.Output)
 	}
-	for _, task := range resp.Tasks {
-		statusText, err := taskStatusText(task.Status)
+	hasLabels := false
+	for _, row := range projection.Rows {
+		if len(row.Item.LabelIDs) > 0 {
+			hasLabels = true
+			break
+		}
+	}
+	if hasLabels {
+		_, snapshot, err := loadWorkflowProjectLabelCatalog(ctx, remote, resp.Scope.ProjectID)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", task.ShortID, task.Title, statusText)
-		if task.WorkflowName != nil {
-			fmt.Fprintf(stdout, "Workflow: %s\n", *task.WorkflowName)
+		for index := range projection.Rows {
+			names, err := workflowProjectLabelNames(snapshot, projection.Rows[index].Item.LabelIDs)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			projection.Rows[index].LabelNames = names
 		}
-		if task.ColumnKeys != nil {
-			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*task.ColumnKeys))
+	}
+	for _, row := range projection.Rows {
+		statusText, err := taskStatusText(row.Item.Status)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
-		if progress := task.DependencyProgress; progress != nil && progress.SatisfiedCount < progress.TotalCount {
-			fmt.Fprintf(stdout, "Deps: %d/%d\n", progress.SatisfiedCount, progress.TotalCount)
+		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", row.Item.ShortID, row.Item.Title, statusText)
+		if row.ShowWorkflow {
+			fmt.Fprintf(stdout, "Workflow: %s\n", row.WorkflowName)
 		}
-		if len(task.Labels) > 0 {
+		if row.ShowColumns {
+			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
+		}
+		if len(row.LabelNames) > 0 {
 			fmt.Fprint(stdout, "Labels:")
-			for _, label := range task.Labels {
-				fmt.Fprintf(stdout, " %q", label.Name)
+			for _, name := range row.LabelNames {
+				fmt.Fprintf(stdout, " %q", name)
 			}
 			fmt.Fprintln(stdout)
 		}

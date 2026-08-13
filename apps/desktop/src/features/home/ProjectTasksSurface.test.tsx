@@ -1,27 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import {
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
 import { canonicalBoardFilter, type ProjectTaskGroupCounts, type TaskListItem } from "@/api";
-import {
-  queryKeys,
-  type SidebarDestination,
-  type SidebarRootController,
-} from "@/app-facade";
+import { queryKeys, type SidebarDestination, type SidebarRootController } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
-import type * as UI from "@/ui";
 
-type CapturedScrollRequest =
-  | Readonly<{ key: string; target: "top" }>
-  | Readonly<{
-      align: "auto" | "center" | "end" | "start";
-      entryKey: string;
-      key: string;
-      target: "entry";
-    }>;
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
 
@@ -58,7 +42,6 @@ const fixture = vi.hoisted<{
   open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
   assignmentRequests: number;
-  scrollRequests: (CapturedScrollRequest | undefined)[];
 }>(() => ({
   activeDestination: null,
   board: {
@@ -97,7 +80,6 @@ const fixture = vi.hoisted<{
   })),
   labelCatalogRequests: 0,
   assignmentRequests: 0,
-  scrollRequests: [],
 }));
 
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -132,9 +114,7 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
   return {
     ...actual,
     useProjectTaskListEvents: () => undefined,
-    useProjectTaskListData: ({
-      anchors,
-    }: Readonly<{ anchors: ProjectTaskListData.ProjectTaskGroupAnchors }>) => ({
+    useProjectTaskListData: () => ({
       counts: countsQuery(
         fixture.counts,
         fixture.countsError,
@@ -147,30 +127,12 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
           task("active-2", "KNT-2", "Running task"),
         ],
       ),
-      backlog: groupData(fixture.backlogTasks, anchors.backlog),
+      backlog: groupData(fixture.backlogTasks),
       done: {
-        ...groupData(
-          anchors.done === 75
-            ? [task("done-final", "KNT-84", "Final done task")]
-            : [task("done-1", "KNT-4", "Done task")],
-          anchors.done,
-        ),
+        ...groupData([task("done-1", "KNT-4", "Done task")]),
         ...fixture.doneDataOverrides,
       },
     }),
-  };
-});
-
-vi.mock("@/ui", async (importOriginal) => {
-  const actual = await importOriginal<typeof UI>();
-  return {
-    ...actual,
-    VirtualizedGroupedGrid: (
-      props: React.ComponentProps<typeof actual.VirtualizedGroupedGrid>,
-    ) => {
-      fixture.scrollRequests.push(props.scrollRequest);
-      return <actual.VirtualizedGroupedGrid {...props} />;
-    },
   };
 });
 
@@ -207,7 +169,6 @@ describe("ProjectTasksSurface", () => {
     fixture.invalidations = [];
     fixture.labelCatalogRequests = 0;
     fixture.assignmentRequests = 0;
-    fixture.scrollRequests = [];
     mockedActiveTasks = undefined;
   });
 
@@ -342,7 +303,6 @@ describe("ProjectTasksSurface", () => {
   it("reveals authoritative Backlog after New Task success without opening Task Detail", async () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const memory = createProjectTasksViewMemory();
-    memory.setAnchors({ active: 0, backlog: 80, done: 0 });
     const view = renderSurface(memory);
     fireEvent.click(screen.getByRole("button", { name: "New Task" }));
     const destination = openedDestination();
@@ -353,7 +313,6 @@ describe("ProjectTasksSurface", () => {
       await destination.onCreated?.("task-created");
     });
 
-    expect(memory.read().anchors.backlog).toBe(0);
     expect(memory.read().disclosure.backlog).toBe(true);
     expect(fixture.invalidations).toContainEqual({
       queryKey: queryKeys.projectTaskListsRoot("project-1"),
@@ -364,20 +323,13 @@ describe("ProjectTasksSurface", () => {
     fixture.counts = { active: 0, backlog: 1, done: 0 };
     fixture.backlogTasks = [task("task-created", "KNT-5", "Created task")];
     view.rerender(withQueryClient(surface(memory)));
-    expect(fixture.scrollRequests).toContainEqual(
-      expect.objectContaining({
-        align: "end",
-        entryKey: "task-created",
-        target: "entry",
-      }),
-    );
+    expect(screen.getByRole("row", { name: "KNT-5 Created task" })).toBeInTheDocument();
   });
 
   it("preserves collapsed Backlog after New Task success and exposes no persistent New Task action", async () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const memory = createProjectTasksViewMemory();
     memory.setDisclosure({ active: true, backlog: false, done: false });
-    memory.setAnchors({ active: 0, backlog: 80, done: 0 });
     const view = renderSurface(memory);
     fireEvent.click(screen.getByRole("button", { name: "New Task" }));
     const destination = openedDestination();
@@ -388,7 +340,6 @@ describe("ProjectTasksSurface", () => {
     });
 
     expect(memory.read().disclosure.backlog).toBe(false);
-    expect(memory.read().anchors.backlog).toBe(80);
 
     fixture.counts = { active: 1, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface(memory)));
@@ -405,134 +356,6 @@ describe("ProjectTasksSurface", () => {
 
     renderSurface(memory);
     expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("requests the exact final bounded page before jumping Down in an expanded lowest group", () => {
-    fixture.counts = { active: 0, backlog: 0, done: 84 };
-    const memory = createProjectTasksViewMemory();
-    memory.setDisclosure({ active: true, backlog: true, done: true });
-    const view = renderSurface(memory);
-    const grid = screen.getByRole("grid", { name: "Project tasks" });
-    Object.defineProperties(grid, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-      scrollTop: { configurable: true, value: 40, writable: true },
-    });
-    view.rerender(withQueryClient(surface(memory)));
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-
-    expect(memory.read().anchors.done).toBe(75);
-    view.rerender(withQueryClient(surface(memory)));
-    expect(screen.getByRole("row", { name: "KNT-84 Final done task" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
-    expect(memory.read().anchors.done).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-    expect(memory.read().anchors.done).toBe(75);
-  });
-
-  it("shows final-page replacement loading and lets a failed jump retry", async () => {
-    fixture.counts = { active: 0, backlog: 0, done: 84 };
-    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
-    const memory = createProjectTasksViewMemory();
-    memory.setDisclosure({ active: true, backlog: true, done: true });
-    const view = renderSurface(memory);
-    const grid = screen.getByRole("grid", { name: "Project tasks" });
-    Object.defineProperties(grid, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-      scrollTop: { configurable: true, value: 40, writable: true },
-    });
-    view.rerender(withQueryClient(surface(memory)));
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-    view.rerender(withQueryClient(surface(memory)));
-    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
-
-    const refetch = vi.fn();
-    fixture.doneDataOverrides = {
-      error: new Error("Final page unavailable"),
-      isError: true,
-      isFetching: false,
-      isPlaceholderData: true,
-      refetch,
-    };
-    view.rerender(withQueryClient(surface(memory)));
-    expect(screen.getByRole("alert")).toHaveTextContent("Final page unavailable");
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
-    expect(refetch).toHaveBeenCalledOnce();
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-    expect(refetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("rejects duplicate Down and makes newer Up restore the real top window", () => {
-    fixture.counts = { active: 0, backlog: 0, done: 84 };
-    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
-    const memory = createProjectTasksViewMemory();
-    memory.setDisclosure({ active: true, backlog: true, done: true });
-    const view = renderSurface(memory);
-    const grid = screen.getByRole("grid", { name: "Project tasks" });
-    Object.defineProperties(grid, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-      scrollTop: { configurable: true, value: 40, writable: true },
-    });
-    view.rerender(withQueryClient(surface(memory)));
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-    fireEvent.click(screen.getByRole("button", { name: "Jump to bottom" }));
-    expect(memory.read().anchors.done).toBe(75);
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
-    expect(memory.read().anchors.done).toBe(0);
-    fixture.scrollRequests = [];
-    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
-    view.rerender(withQueryClient(surface(memory)));
-    expect(
-      fixture.scrollRequests.filter((request) => request?.target === "top"),
-    ).toEqual([]);
-
-    fixture.doneDataOverrides = {};
-    view.rerender(withQueryClient(surface(memory)));
-    expect(screen.getByRole("row", { name: "KNT-4 Done task" })).toBeInTheDocument();
-    expect(
-      fixture.scrollRequests.filter((request) => request?.target === "entry"),
-    ).toEqual([]);
-    expect(
-      fixture.scrollRequests.filter((request) => request?.target === "top"),
-    ).toHaveLength(1);
-  });
-
-  it("cancels an in-flight Up when its group collapses before page zero arrives", () => {
-    fixture.counts = { active: 0, backlog: 0, done: 84 };
-    const memory = createProjectTasksViewMemory();
-    memory.setDisclosure({ active: true, backlog: true, done: true });
-    memory.setAnchors({ active: 0, backlog: 0, done: 75 });
-    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
-    const view = renderSurface(memory);
-    const grid = screen.getByRole("grid", { name: "Project tasks" });
-    Object.defineProperties(grid, {
-      clientHeight: { configurable: true, value: 100 },
-      scrollHeight: { configurable: true, value: 300 },
-      scrollTop: { configurable: true, value: 40, writable: true },
-    });
-    view.rerender(withQueryClient(surface(memory)));
-
-    fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
-    expect(memory.read().anchors.done).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
-    fixture.scrollRequests = [];
-    fixture.doneDataOverrides = {};
-    view.rerender(withQueryClient(surface(memory)));
-    fireEvent.click(screen.getByRole("button", { name: "Done, 84 tasks" }));
-
-    expect(screen.getByRole("row", { name: "KNT-4 Done task" })).toBeInTheDocument();
-    expect(
-      fixture.scrollRequests.filter((request) => request?.target === "top"),
-    ).toEqual([]);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
@@ -722,7 +545,7 @@ function countsQuery(
   };
 }
 
-function groupData(tasks: readonly TaskListItem[], anchor = 0) {
+function groupData(tasks: readonly TaskListItem[]) {
   return {
     error: null,
     fetchNextPage: vi.fn(),
@@ -736,8 +559,6 @@ function groupData(tasks: readonly TaskListItem[], anchor = 0) {
     isFetchingNextPage: false,
     isFetchingPreviousPage: false,
     isPending: false,
-    isPlaceholderData: false,
-    pageParams: [anchor],
     pages: [],
     refetch: vi.fn(),
     tasks,

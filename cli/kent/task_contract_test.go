@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
 
 	"core/shared/apicontract"
 	"core/shared/config"
-	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -220,13 +218,11 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	request := serverapi.WorkflowTaskListRequest{
-		ProjectID: func() *string {
-			projectID := "project-1"
-			return &projectID
-		}(),
+	expected := taskListExpectedScope{
+		ProjectID:     "project-1",
+		WorkflowOwner: taskListExpectedWorkflowFromRequest,
 	}
-	if code := writeTaskListResponse(&stdout, &stderr, response, request, true); code != 0 || stderr.Len() != 0 {
+	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, true); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var output struct {
@@ -242,7 +238,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 ||
+	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, false); code != 0 ||
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -259,132 +255,6 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-}
-
-func TestTaskListResponseRejectsMismatchedRequestScopeBeforeOutput(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	response := serverapi.WorkflowTaskListResponse{
-		Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
-		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
-		Tasks: []serverapi.WorkflowTaskListItem{{
-			TaskID:     "task-1",
-			WorkflowID: workflowID,
-			Status: serverapi.WorkflowTaskStatus{
-				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
-				NativeState: serverapi.WorkflowTaskNativeStateActive,
-			},
-		}},
-	}
-	otherProjectID := "project-2"
-	request := serverapi.WorkflowTaskListRequest{ProjectID: &otherProjectID}
-	for _, jsonOut := range []bool{false, true} {
-		var stdout, stderr bytes.Buffer
-		if code := writeTaskListResponse(&stdout, &stderr, response, request, jsonOut); code != 1 {
-			t.Fatalf("json=%t exit=%d, want 1", jsonOut, code)
-		}
-		if stdout.Len() != 0 || stderr.Len() == 0 {
-			t.Fatalf("json=%t stdout=%q stderr=%q", jsonOut, stdout.String(), stderr.String())
-		}
-	}
-}
-
-func TestTaskListResponseUsesEnrichedSharedResponse(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	workflowName := "Delivery"
-	emptyColumns := []string{}
-	response := serverapi.WorkflowTaskListResponse{
-		Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
-		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple,
-		GeneratedAtUnixMs:           7,
-		Tasks: []serverapi.WorkflowTaskListItem{{
-			TaskID:       "task-1",
-			ShortID:      "KNT-1",
-			WorkflowID:   workflowID,
-			WorkflowName: &workflowName,
-			Title:        "Ship list",
-			ColumnKeys:   &emptyColumns,
-			Status: serverapi.WorkflowTaskStatus{
-				Kind:        serverapi.WorkflowTaskStatusKindBacklog,
-				NativeState: serverapi.WorkflowTaskNativeStateActive,
-			},
-			Labels: []serverapi.WorkflowProjectLabel{
-				{ID: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf", Name: `Needs "review"`},
-				{ID: "2d40537d-307f-4351-b659-363538189fac", Name: "Urgent"},
-			},
-			DependencyProgress: &serverapi.WorkflowTaskDependencyProgress{SatisfiedCount: 1, TotalCount: 2},
-		}},
-	}
-	request := serverapi.WorkflowTaskListRequest{
-		ProjectID: func() *string {
-			projectID := "project-1"
-			return &projectID
-		}(),
-	}
-	var stdout, stderr bytes.Buffer
-	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 {
-		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	if got := stdout.String(); got != "KNT-1: Ship list.\nStatus: backlog\nWorkflow: Delivery\nColumns: (none)\nDeps: 1/2\nLabels: \"Needs \\\"review\\\"\" \"Urgent\"\n" {
-		t.Fatalf("human output = %q", got)
-	}
-
-	stdout.Reset()
-	stderr.Reset()
-	if code := writeTaskListResponse(&stdout, &stderr, response, request, true); code != 0 {
-		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	var got serverapi.WorkflowTaskListResponse
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		t.Fatalf("decode JSON: %v", err)
-	}
-	if !reflect.DeepEqual(got, response) {
-		t.Fatalf("JSON response = %+v, want %+v", got, response)
-	}
-}
-
-func TestTaskListResponseWorkflowNarrowedAndDependencyOmission(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	columns := []string{"todo", "review"}
-	projectID := "project-1"
-	response := serverapi.WorkflowTaskListResponse{
-		Scope: serverapi.WorkflowTaskListScope{
-			ProjectID:  projectID,
-			WorkflowID: &workflowID,
-		},
-		MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
-		Tasks: []serverapi.WorkflowTaskListItem{
-			{
-				TaskID:     "task-1",
-				ShortID:    "KNT-1",
-				WorkflowID: workflowID,
-				Title:      "No dependencies",
-				ColumnKeys: &columns,
-				Status: serverapi.WorkflowTaskStatus{
-					Kind:        serverapi.WorkflowTaskStatusKindActive,
-					NativeState: serverapi.WorkflowTaskNativeStateActive,
-				},
-			},
-			{
-				TaskID:     "task-2",
-				ShortID:    "KNT-2",
-				WorkflowID: workflowID,
-				Title:      "Dependencies satisfied",
-				Status: serverapi.WorkflowTaskStatus{
-					Kind:        serverapi.WorkflowTaskStatusKindDone,
-					NativeState: serverapi.WorkflowTaskNativeStateTerminal,
-				},
-				DependencyProgress: &serverapi.WorkflowTaskDependencyProgress{SatisfiedCount: 2, TotalCount: 2},
-			},
-		},
-	}
-	request := serverapi.WorkflowTaskListRequest{ProjectID: &projectID, WorkflowID: &workflowID}
-	var stdout, stderr bytes.Buffer
-	if code := writeTaskListResponse(&stdout, &stderr, response, request, false); code != 0 {
-		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-	}
-	if got := stdout.String(); got != "KNT-1: No dependencies.\nStatus: active\nColumns: todo, review\nKNT-2: Dependencies satisfied.\nStatus: done\n" {
-		t.Fatalf("human output = %q", got)
 	}
 }
 

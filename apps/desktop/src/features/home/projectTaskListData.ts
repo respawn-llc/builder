@@ -17,27 +17,13 @@ import {
   type TaskListPage,
   type WorkflowProjectEvent,
 } from "@/api";
-import {
-  queryKeys,
-  useAppServices,
-  useConnectionSnapshot,
-  useRetainedQueryData,
-} from "@/app-facade";
+import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
 
 export const projectTaskGroups = ["active", "backlog", "done"] as const;
 export type ProjectTaskGroup = (typeof projectTaskGroups)[number];
 
-export const projectTaskGroupStatusKinds: Readonly<
-  Record<ProjectTaskGroup, readonly TaskStatusKind[]>
-> = {
-  active: [
-    "waiting_question",
-    "waiting_approval",
-    "interrupted",
-    "running",
-    "queued",
-    "active",
-  ],
+export const projectTaskGroupStatusKinds: Readonly<Record<ProjectTaskGroup, readonly TaskStatusKind[]>> = {
+  active: ["waiting_question", "waiting_approval", "interrupted", "running", "queued", "active"],
   backlog: ["backlog"],
   done: ["done"],
 };
@@ -46,8 +32,6 @@ export const projectTaskGroupPageSize = boardNodeCardsPageSize;
 export const projectTaskGroupRetainedPages = 3;
 
 export type ProjectTaskGroupDisclosure = Readonly<Record<ProjectTaskGroup, boolean>>;
-export type ProjectTaskGroupAnchors = Readonly<Record<ProjectTaskGroup, number>>;
-
 export type ProjectTaskGroupData = Readonly<{
   error: Error | null;
   fetchNextPage(): Promise<unknown>;
@@ -61,8 +45,6 @@ export type ProjectTaskGroupData = Readonly<{
   isFetchingNextPage: boolean;
   isFetchingPreviousPage: boolean;
   isPending: boolean;
-  isPlaceholderData: boolean;
-  pageParams: readonly number[];
   pages: readonly TaskListPage[];
   refetch(): Promise<unknown>;
   tasks: readonly TaskListItem[];
@@ -77,47 +59,20 @@ export type ProjectTaskListData = Readonly<{
 
 const updatedDescending = [{ field: "updated", direction: "desc" }] as const;
 
-export function projectTaskFinalPageAnchor(taskCount: number): number {
-  if (!Number.isSafeInteger(taskCount) || taskCount < 0) {
-    throw new TypeError("Project Task group count must be a non-negative safe integer.");
-  }
-  if (taskCount === 0) {
-    return 0;
-  }
-  return Math.floor((taskCount - 1) / projectTaskGroupPageSize) * projectTaskGroupPageSize;
-}
-
 export function useProjectTaskListData({
-  anchors,
   expanded,
   gateReady,
   projectID,
 }: Readonly<{
-  anchors: ProjectTaskGroupAnchors;
   expanded: ProjectTaskGroupDisclosure;
   gateReady: boolean;
   projectID: string;
 }>): ProjectTaskListData {
   const counts = useProjectTaskGroupCounts(projectID, gateReady);
   const enabledGroups = enabledProjectTaskGroups(gateReady, expanded, counts.data);
-  const active = useProjectTaskGroupData(
-    projectID,
-    "active",
-    anchors.active,
-    enabledGroups.active,
-  );
-  const backlog = useProjectTaskGroupData(
-    projectID,
-    "backlog",
-    anchors.backlog,
-    enabledGroups.backlog,
-  );
-  const done = useProjectTaskGroupData(
-    projectID,
-    "done",
-    anchors.done,
-    enabledGroups.done,
-  );
+  const active = useProjectTaskGroupData(projectID, "active", enabledGroups.active);
+  const backlog = useProjectTaskGroupData(projectID, "backlog", enabledGroups.backlog);
+  const done = useProjectTaskGroupData(projectID, "done", enabledGroups.done);
   return { active, backlog, counts, done };
 }
 
@@ -156,12 +111,11 @@ function useProjectTaskGroupCounts(projectID: string, enabled: boolean) {
 function useProjectTaskGroupData(
   projectID: string,
   group: ProjectTaskGroup,
-  anchorOffset: number,
   enabled: boolean,
 ): ProjectTaskGroupData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const queryKey = queryKeys.projectTaskGroup(projectID, group, anchorOffset);
+  const queryKey = queryKeys.projectTaskGroup(projectID, group);
   const query = useInfiniteQuery<
     TaskListPage,
     Error,
@@ -179,7 +133,7 @@ function useProjectTaskGroupData(
         offset: pageParam,
         limit: projectTaskGroupPageSize,
       }),
-    initialPageParam: anchorOffset,
+    initialPageParam: 0,
     enabled: enabled && projectID.length > 0,
     getPreviousPageParam: (_firstPage, _allPages, firstPageParam) =>
       firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - projectTaskGroupPageSize),
@@ -187,40 +141,26 @@ function useProjectTaskGroupData(
     maxPages: projectTaskGroupRetainedPages,
     gcTime: 0,
   });
-  const retainedData = useRetainedQueryData(
-    { group, projectID },
-    enabled ? query.data : undefined,
-    projectTaskGroupScopesEqual,
-    enabled,
-  );
   useEffect(() => {
     if (enabled) {
       return;
     }
     queryClient.removeQueries({
-      queryKey: queryKeys.projectTaskGroup(projectID, group, anchorOffset),
+      queryKey: queryKeys.projectTaskGroup(projectID, group),
       exact: true,
     });
-  }, [anchorOffset, enabled, group, projectID, queryClient]);
-  return projectTaskGroupData(query, retainedData, enabled);
-}
-
-function projectTaskGroupScopesEqual(
-  left: Readonly<{ group: ProjectTaskGroup; projectID: string }>,
-  right: Readonly<{ group: ProjectTaskGroup; projectID: string }>,
-): boolean {
-  return left.group === right.group && left.projectID === right.projectID;
+  }, [enabled, group, projectID, queryClient]);
+  return projectTaskGroupData(query, enabled);
 }
 
 function projectTaskGroupData(
   query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>,
-  retainedData: InfiniteData<TaskListPage, number> | undefined,
   enabled: boolean,
 ): ProjectTaskGroupData {
   if (!enabled) {
     return emptyProjectTaskGroupData;
   }
-  const pages = retainedData?.pages ?? [];
+  const pages = query.data?.pages ?? [];
   return {
     error: query.error,
     fetchNextPage: query.fetchNextPage,
@@ -234,8 +174,6 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
-    isPlaceholderData: query.isPlaceholderData || query.data !== retainedData,
-    pageParams: retainedData?.pageParams ?? [],
     pages,
     refetch: query.refetch,
     tasks: pages.flatMap((page) => page.tasks),
@@ -255,8 +193,6 @@ const emptyProjectTaskGroupData: ProjectTaskGroupData = {
   isFetchingNextPage: false,
   isFetchingPreviousPage: false,
   isPending: false,
-  isPlaceholderData: false,
-  pageParams: [],
   pages: [],
   refetch: async () => undefined,
   tasks: [],
@@ -264,20 +200,14 @@ const emptyProjectTaskGroupData: ProjectTaskGroupData = {
 
 export function useProjectTaskListEvents({
   enabled,
-  labelEditorTaskID,
   projectID,
 }: Readonly<{
   enabled: boolean;
-  labelEditorTaskID: string | null;
   projectID: string;
 }>): void {
   const { api, logger } = useAppServices();
   const connection = useConnectionSnapshot();
   const queryClient = useQueryClient();
-  const editorTaskIDRef = useRef(labelEditorTaskID);
-  useEffect(() => {
-    editorTaskIDRef.current = labelEditorTaskID;
-  }, [labelEditorTaskID]);
   const reportBackgroundError = useCallback(
     (error: unknown): void => {
       void logger.append("warn", "Project Task-list refresh failed.", {
@@ -287,67 +217,21 @@ export function useProjectTaskListEvents({
     },
     [logger, projectID],
   );
-  const refreshTaskLists = useCallback(
-    async (): Promise<void> => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.projectTaskListsRoot(projectID),
-        refetchType: "active",
-      });
-    },
-    [projectID, queryClient],
-  );
-  const refreshBoardGate = useCallback(
-    async (): Promise<void> => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.projectBoardsRoot(projectID),
-        refetchType: "active",
-      });
-    },
-    [projectID, queryClient],
-  );
-  const refreshLabelCatalog = useCallback(
-    async (): Promise<void> => {
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.projectLabels(projectID),
-        exact: true,
-        refetchType: "active",
-      });
-    },
-    [projectID, queryClient],
-  );
-  const refreshEditorAssignment = useCallback(
-    async (event: WorkflowProjectEvent): Promise<void> => {
-      if (
-        event.resource !== "task" ||
-        event.action !== "labels_changed" ||
-        editorTaskIDRef.current !== event.primaryEntityID
-      ) {
-        return;
-      }
-      await queryClient.invalidateQueries({
-        queryKey: queryKeys.taskLabels(event.primaryEntityID),
-        exact: true,
-        refetchType: "active",
-      });
-    },
-    [queryClient],
-  );
+  const refreshTaskLists = useCallback(async (): Promise<void> => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.projectTaskListsRoot(projectID),
+      refetchType: "active",
+    });
+  }, [projectID, queryClient]);
+  const refreshBoardGate = useCallback(async (): Promise<void> => {
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.projectBoardsRoot(projectID),
+      refetchType: "active",
+    });
+  }, [projectID, queryClient]);
   const refreshBoundary = useCallback(async (): Promise<void> => {
-    await Promise.all([
-      refreshBoardGate(),
-      refreshTaskLists(),
-      ...(editorTaskIDRef.current === null
-        ? []
-        : [
-            refreshLabelCatalog(),
-            queryClient.invalidateQueries({
-              queryKey: queryKeys.taskLabels(editorTaskIDRef.current),
-              exact: true,
-              refetchType: "active",
-            }),
-          ]),
-    ]);
-  }, [queryClient, refreshBoardGate, refreshLabelCatalog, refreshTaskLists]);
+    await Promise.all([refreshBoardGate(), refreshTaskLists()]);
+  }, [refreshBoardGate, refreshTaskLists]);
 
   useEffect(() => {
     if (!enabled || projectID.length === 0 || connection.phase !== "connected") {
@@ -365,22 +249,15 @@ export function useProjectTaskListEvents({
           return;
         }
         if (event.resource === "workflow" || event.resource === "workflow_link") {
-          run(
-            Promise.all([refreshBoardGate(), refreshTaskLists()]).then(() => undefined),
-          );
+          run(Promise.all([refreshBoardGate(), refreshTaskLists()]).then(() => undefined));
           return;
         }
         if (event.resource === "label") {
-          run(
-            Promise.all([
-              refreshTaskLists(),
-              ...(editorTaskIDRef.current === null ? [] : [refreshLabelCatalog()]),
-            ]).then(() => undefined),
-          );
+          run(refreshTaskLists());
           return;
         }
         if (projectTaskListEventCanChangeRows(event)) {
-          run(Promise.all([refreshEditorAssignment(event), refreshTaskLists()]).then(() => undefined));
+          run(refreshTaskLists());
         }
       },
       onComplete() {
@@ -402,8 +279,6 @@ export function useProjectTaskListEvents({
     projectID,
     refreshBoardGate,
     refreshBoundary,
-    refreshEditorAssignment,
-    refreshLabelCatalog,
     refreshTaskLists,
     reportBackgroundError,
   ]);

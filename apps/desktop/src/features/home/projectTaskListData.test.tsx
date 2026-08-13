@@ -1,7 +1,4 @@
-import {
-  QueryClient,
-  QueryClientProvider,
-} from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, vi } from "vitest";
@@ -16,7 +13,6 @@ import type {
 } from "@/api";
 import { queryKeys } from "@/app-facade";
 import {
-  projectTaskFinalPageAnchor,
   projectTaskGroupPageSize,
   projectTaskGroupStatusKinds,
   useProjectTaskListData,
@@ -97,7 +93,6 @@ describe("Project Task-list data ownership", () => {
           projectID: "project-1",
           gateReady,
           expanded: { active, backlog, done },
-          anchors: { active: 0, backlog: 0, done: 0 },
         }),
       {
         initialProps: { gateReady: false, active: true, backlog: true, done: false },
@@ -123,39 +118,38 @@ describe("Project Task-list data ownership", () => {
     ]);
     await waitFor(() => {
       expect(
-        harness.queryClient.getQueriesData({
-          queryKey: queryKeys.projectTaskListsRoot("project-1"),
-        }).filter(([, data]) => data !== undefined),
+        harness.queryClient
+          .getQueriesData({
+            queryKey: queryKeys.projectTaskListsRoot("project-1"),
+          })
+          .filter(([, data]) => data !== undefined),
       ).toHaveLength(3);
     });
 
     rerender({ gateReady: true, active: false, backlog: true, done: false });
     await waitFor(() => {
       expect(
-        harness.queryClient.getQueryData(
-          queryKeys.projectTaskGroup("project-1", "active", 0),
-        ),
+        harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active")),
       ).toBeUndefined();
     });
     expect(result.current.active.tasks).toEqual([]);
     expect(
-      harness.queryClient.getQueriesData({
-        queryKey: queryKeys.projectTaskListsRoot("project-1"),
-      }).filter(([, data]) => data !== undefined),
+      harness.queryClient
+        .getQueriesData({
+          queryKey: queryKeys.projectTaskListsRoot("project-1"),
+        })
+        .filter(([, data]) => data !== undefined),
     ).toHaveLength(2);
   });
 
-  it("anchors directly at the final bounded page and retains only three independently paged pages", async () => {
+  it("starts at zero and retains only three independently paged pages", async () => {
     const harness = createHarness();
-    const anchor = projectTaskFinalPageAnchor(105);
-    expect(anchor).toBe(100);
     const { result } = renderHook(
       () =>
         useProjectTaskListData({
           projectID: "project-1",
           gateReady: true,
           expanded: { active: true, backlog: false, done: false },
-          anchors: { active: anchor, backlog: 0, done: 0 },
         }),
       { wrapper: ({ children }) => harness.render(children) },
     );
@@ -163,28 +157,25 @@ describe("Project Task-list data ownership", () => {
     await waitFor(() => {
       expect(state.listRequests[0]).toMatchObject({
         limit: projectTaskGroupPageSize,
-        offset: 100,
+        offset: 0,
         projectID: "project-1",
-        statusKinds: [
-          "waiting_question",
-          "waiting_approval",
-          "interrupted",
-          "running",
-          "queued",
-          "active",
-        ],
+        statusKinds: ["waiting_question", "waiting_approval", "interrupted", "running", "queued", "active"],
         sort: [{ field: "updated", direction: "desc" }],
       });
     });
     await act(async () => {
-      await result.current.active.fetchPreviousPage();
-      await result.current.active.fetchPreviousPage();
-      await result.current.active.fetchPreviousPage();
+      await result.current.active.fetchNextPage();
     });
-    await waitFor(() => {
-      expect(result.current.active.pageParams).toEqual([25, 50, 75]);
+    await waitFor(() => expect(result.current.active.pages).toHaveLength(2));
+    await act(async () => {
+      await result.current.active.fetchNextPage();
     });
-    expect(state.listRequests.map((request) => request.offset)).toEqual([100, 75, 50, 25]);
+    await waitFor(() => expect(result.current.active.pages).toHaveLength(3));
+    await act(async () => {
+      await result.current.active.fetchNextPage();
+    });
+    await waitFor(() => expect(result.current.active.pages).toHaveLength(3));
+    expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
     expect(result.current.active.pages).toHaveLength(3);
     expect(result.current.backlog.pages).toEqual([]);
   });
@@ -200,9 +191,7 @@ describe("Project Task-list data ownership", () => {
     };
     state.listPage = async (input) => {
       pageCall += 1;
-      return pageCall === 1
-        ? pageResponse(taskGroupForInput(input), input.offset ?? 0)
-        : pendingPage.promise;
+      return pageCall === 1 ? pageResponse(taskGroupForInput(input), input.offset ?? 0) : pendingPage.promise;
     };
     const harness = createHarness();
     const { result } = renderHook(
@@ -211,7 +200,6 @@ describe("Project Task-list data ownership", () => {
           projectID: "project-1",
           gateReady: true,
           expanded: { active: true, backlog: false, done: false },
-          anchors: { active: 0, backlog: 0, done: 0 },
         }),
       { wrapper: ({ children }) => harness.render(children) },
     );
@@ -239,41 +227,6 @@ describe("Project Task-list data ownership", () => {
     });
   });
 
-  it("keeps the prior bounded window when a direct replacement anchor fails", async () => {
-    state.listPage = async (input) => {
-      if (input.offset === 0) {
-        return pageResponse(taskGroupForInput(input), 0);
-      }
-      throw new Error("final page failed");
-    };
-    const harness = createHarness();
-    const { result, rerender } = renderHook(
-      ({ anchor }) =>
-        useProjectTaskListData({
-          projectID: "project-1",
-          gateReady: true,
-          expanded: { active: true, backlog: false, done: false },
-          anchors: { active: anchor, backlog: 0, done: 0 },
-        }),
-      {
-        initialProps: { anchor: 0 },
-        wrapper: ({ children }) => harness.render(children),
-      },
-    );
-    await waitFor(() => {
-      expect(result.current.active.tasks).toHaveLength(1);
-    });
-
-    rerender({ anchor: projectTaskGroupPageSize });
-    await waitFor(() => {
-      expect(result.current.active.isError).toBe(true);
-    });
-
-    expect(result.current.active.tasks).toHaveLength(1);
-    expect(result.current.active.pageParams).toEqual([0]);
-    expect(result.current.active.isPlaceholderData).toBe(true);
-  });
-
   it("clears retained rows on collapse so reopen failure is an initial error", async () => {
     let fail = false;
     state.listPage = async (input) => {
@@ -287,7 +240,6 @@ describe("Project Task-list data ownership", () => {
           projectID: "project-1",
           gateReady: true,
           expanded: { active: expanded, backlog: false, done: false },
-          anchors: { active: 0, backlog: 0, done: 0 },
         }),
       {
         initialProps: { expanded: true },
@@ -302,9 +254,7 @@ describe("Project Task-list data ownership", () => {
     expect(result.current.active.tasks).toEqual([]);
     await waitFor(() => {
       expect(
-        harness.queryClient.getQueryData(
-          queryKeys.projectTaskGroup("project-1", "active", 0),
-        ),
+        harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active")),
       ).toBeUndefined();
     });
     fail = true;
@@ -314,7 +264,6 @@ describe("Project Task-list data ownership", () => {
     });
 
     expect(result.current.active.tasks).toEqual([]);
-    expect(result.current.active.isPlaceholderData).toBe(false);
   });
 
   it("distinguishes a first-page failure from a retained next-edge failure", async () => {
@@ -328,7 +277,6 @@ describe("Project Task-list data ownership", () => {
           projectID: "project-1",
           gateReady: true,
           expanded: { active: true, backlog: false, done: false },
-          anchors: { active: 0, backlog: 0, done: 0 },
         }),
       { wrapper: ({ children }) => initialHarness.render(children) },
     );
@@ -354,7 +302,6 @@ describe("Project Task-list data ownership", () => {
           projectID: "project-1",
           gateReady: true,
           expanded: { active: true, backlog: false, done: false },
-          anchors: { active: 0, backlog: 0, done: 0 },
         }),
       { wrapper: ({ children }) => edgeHarness.render(children) },
     );
@@ -370,38 +317,6 @@ describe("Project Task-list data ownership", () => {
     expect(edgeResult.current.active.tasks).toHaveLength(1);
   });
 
-  it("keeps retained rows when loading the previous page edge fails", async () => {
-    let pageCall = 0;
-    state.listPage = async (input) => {
-      pageCall += 1;
-      if (pageCall === 1) {
-        return pageResponse(taskGroupForInput(input), input.offset ?? 50);
-      }
-      throw new Error("previous page failed");
-    };
-    const harness = createHarness();
-    const { result } = renderHook(
-      () =>
-        useProjectTaskListData({
-          projectID: "project-1",
-          gateReady: true,
-          expanded: { active: true, backlog: false, done: false },
-          anchors: { active: 50, backlog: 0, done: 0 },
-        }),
-      { wrapper: ({ children }) => harness.render(children) },
-    );
-    await waitFor(() => {
-      expect(result.current.active.tasks).toHaveLength(1);
-    });
-    await act(async () => {
-      await result.current.active.fetchPreviousPage();
-    });
-    await waitFor(() => {
-      expect(result.current.active.isFetchPreviousPageError).toBe(true);
-    });
-    expect(result.current.active.tasks).toHaveLength(1);
-  });
-
   it("owns one typed Project subscription and refreshes only the affected roots", async () => {
     const harness = createHarness();
     const invalidations: (readonly unknown[])[] = [];
@@ -410,17 +325,11 @@ describe("Project Task-list data ownership", () => {
       .mockImplementation(async (...args) => {
         invalidations.push(args[0]?.queryKey ?? []);
       });
-    const initialProps: { editorTaskID: string | null } = { editorTaskID: "task-1" };
-    const { rerender, unmount } = renderHook(
-      ({ editorTaskID }: { editorTaskID: string | null }) => {
-        useProjectTaskListEvents({
-          enabled: true,
-          projectID: "project-1",
-          labelEditorTaskID: editorTaskID,
-        });
+    const { unmount } = renderHook(
+      () => {
+        useProjectTaskListEvents({ enabled: true, projectID: "project-1" });
       },
       {
-        initialProps,
         wrapper: ({ children }) => harness.render(children),
       },
     );
@@ -450,9 +359,9 @@ describe("Project Task-list data ownership", () => {
       state.handlers[0]?.onEvent(workflowEvent("label", "renamed", "label-1"));
     });
     await waitFor(() => {
-      expect(invalidations).toContainEqual(queryKeys.projectLabels("project-1"));
+      expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
     });
-    expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
+    expect(invalidations).not.toContainEqual(queryKeys.projectLabels("project-1"));
 
     invalidations.length = 0;
     act(() => {
@@ -466,9 +375,9 @@ describe("Project Task-list data ownership", () => {
       state.handlers[0]?.onEvent(workflowEvent("task", "labels_changed", "task-1"));
     });
     await waitFor(() => {
-      expect(invalidations).toContainEqual(queryKeys.taskLabels("task-1"));
+      expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
     });
-    expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
+    expect(invalidations).not.toContainEqual(queryKeys.taskLabels("task-1"));
 
     invalidations.length = 0;
     act(() => {
@@ -488,21 +397,10 @@ describe("Project Task-list data ownership", () => {
     });
     expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
 
-    rerender({ editorTaskID: null });
-    expect(state.handlers).toHaveLength(1);
-    invalidations.length = 0;
-    act(() => {
-      state.handlers[0]?.onEvent(workflowEvent("label", "renamed", "label-1"));
-    });
-    await waitFor(() => {
-      expect(invalidations).toContainEqual(queryKeys.projectTaskListsRoot("project-1"));
-    });
-    expect(invalidations).not.toContainEqual(queryKeys.projectLabels("project-1"));
     unmount();
     expect(state.subscriptionCloses).toBe(1);
     invalidateSpy.mockRestore();
   });
-
 });
 
 function createHarness() {
@@ -583,12 +481,7 @@ function workflowEvent(
     projectID: resource === "workflow" ? null : "project-1",
     relatedIDs: [],
     resource,
-    workflowID:
-      resource === "label"
-        ? null
-        : resource === "workflow"
-          ? primaryEntityID
-          : "workflow-1",
+    workflowID: resource === "label" ? null : resource === "workflow" ? primaryEntityID : "workflow-1",
   };
 }
 

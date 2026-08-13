@@ -1,6 +1,6 @@
 import { FakeRpcTransport } from "@/test-support/api";
 import { ApiClient } from "./client";
-import { ContractError, RpcError } from "./errors";
+import { ContractError } from "./errors";
 import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
@@ -8,38 +8,6 @@ const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
 
 describe("ApiClient workflow labels", () => {
-  it("loads exact Project task-group counts without pagination fields", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "workflow.task.groupCounts",
-        result: {
-          project_id: "project-1",
-          counts: { active: 3, backlog: 2, done: 1 },
-          generated_at_unix_ms: 7,
-        },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(
-      client.getProjectTaskGroupCounts({
-        projectID: "project-1",
-      }),
-    ).resolves.toEqual({
-      projectID: "project-1",
-      counts: { active: 3, backlog: 2, done: 1 },
-      generatedAt: 7,
-    });
-    expect(transport.calls).toEqual([
-      {
-        method: "workflow.task.groupCounts",
-        params: {
-          project_id: "project-1",
-        },
-      },
-    ]);
-  });
-
   it("reorders a Project label catalog and preserves the authoritative response order", async () => {
     const transport = new FakeRpcTransport([
       {
@@ -292,75 +260,6 @@ describe("ApiClient workflow labels", () => {
     ]);
   });
 
-  it("omits Workflow selection for Project-scoped task creation", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "workflow.task.create",
-        result: { task: { id: "task-project-scoped" } },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(
-      client.createTask({
-        projectID: "project-1",
-        title: "Let the server select",
-        body: "Use the Project's authoritative Workflow links.",
-        sourceWorkspaceID: "workspace-1",
-        labelIDs: [],
-      }),
-    ).resolves.toBe("task-project-scoped");
-    expect(transport.calls).toEqual([
-      {
-        method: "workflow.task.create",
-        params: {
-          project_id: "project-1",
-          title: "Let the server select",
-          body: "Use the Project's authoritative Workflow links.",
-          source_workspace_id: "workspace-1",
-          label_ids: [],
-        },
-      },
-    ]);
-  });
-
-  it.each(["no_linked_workflows", "ambiguous_without_default"] as const)(
-    "decodes %s Project-scoped Workflow selection failure",
-    async (reason) => {
-      const transport = new FakeRpcTransport([
-        {
-          method: "workflow.task.create",
-          error: new RpcError({
-            code: -32045,
-            message: "workflow selection failed",
-            method: "workflow.task.create",
-            data: {
-              type: "workflow_task_create_selection_error",
-              reason,
-              project_id: "project-1",
-            },
-          }),
-        },
-      ]);
-      const client = new ApiClient(transport);
-
-      await expect(
-        client.createTask({
-          projectID: "project-1",
-          title: "Let the server select",
-          body: "",
-          sourceWorkspaceID: "workspace-1",
-          labelIDs: [],
-        }),
-      ).rejects.toMatchObject({
-        name: "WorkflowTaskCreateSelectionError",
-        reason,
-        projectID: "project-1",
-        workflowID: null,
-      });
-    },
-  );
-
   it("rejects malformed and prefixed Workflow IDs before task RPCs", async () => {
     const transport = new FakeRpcTransport([]);
     const client = new ApiClient(transport);
@@ -387,7 +286,7 @@ describe("ApiClient workflow labels", () => {
     expect(transport.calls).toEqual([]);
   });
 
-  it("lists grouped task projections with ordered label display data and dependency progress", async () => {
+  it("lists label-filtered task projections with ordered Label display data", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.list",
@@ -412,10 +311,7 @@ describe("ApiClient workflow labels", () => {
                 node_ids: ["node-1"],
                 attention_types: [],
               },
-              labels: [
-                { id: urgentID, name: "Urgent" },
-                { id: priorityID, name: "Priority" },
-              ],
+              labels: [{ id: priorityID, name: "Priority" }],
               dependency_progress: { satisfied_count: 1, total_count: 2 },
             },
           ],
@@ -428,7 +324,6 @@ describe("ApiClient workflow labels", () => {
       client.listTasks({
         projectID: "project-1",
         workflowID: "11111111-1111-4111-8111-111111111111",
-        statusKinds: ["waiting_question", "active"],
         labelFilter: {
           kind: "named",
           mode: "any",
@@ -443,10 +338,7 @@ describe("ApiClient workflow labels", () => {
       tasks: [
         {
           id: "task-1",
-          labels: [
-            { id: urgentID, name: "Urgent" },
-            { id: priorityID, name: "Priority" },
-          ],
+          labels: [{ id: priorityID, name: "Priority" }],
           dependencyProgress: { satisfiedCount: 1, totalCount: 2 },
         },
       ],
@@ -458,7 +350,7 @@ describe("ApiClient workflow labels", () => {
           project_id: "project-1",
           workflow_id: "11111111-1111-4111-8111-111111111111",
           column_keys: [],
-          status_kinds: ["waiting_question", "active"],
+          status_kinds: [],
           attention_kinds: [],
           label_filter: {
             kind: "named",
@@ -499,146 +391,4 @@ describe("ApiClient workflow labels", () => {
       }),
     ).rejects.toBeInstanceOf(ContractError);
   });
-
-  it.each([
-    {
-      name: "another Project",
-      input: { projectID: "project-1", labelFilter: { kind: "none" } as const },
-      scope: { project_id: "project-2" },
-    },
-    {
-      name: "another Workflow",
-      input: {
-        projectID: "project-1",
-        workflowID: smallID,
-        labelFilter: { kind: "none" } as const,
-      },
-      scope: { project_id: "project-1", workflow_id: urgentID },
-    },
-    {
-      name: "a Workflow scope for a Project-wide request",
-      input: { projectID: "project-1", labelFilter: { kind: "none" } as const },
-      scope: { project_id: "project-1", workflow_id: smallID },
-    },
-  ])("rejects a Task-list response scoped to $name", async ({ input, scope }) => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "workflow.task.list",
-          result: {
-            scope,
-            matching_workflow_cardinality: "one",
-            next_offset: null,
-            generated_at_unix_ms: 7,
-            tasks: [],
-          },
-        },
-      ]),
-    );
-
-    await expect(client.listTasks(input)).rejects.toBeInstanceOf(ContractError);
-  });
-
-  it.each([
-    {
-      name: "none with Tasks",
-      cardinality: "none",
-      tasks: [taskListRow(smallID)],
-    },
-    {
-      name: "one with mixed Workflow IDs",
-      cardinality: "one",
-      tasks: [taskListRow(smallID), taskListRow(urgentID)],
-    },
-    {
-      name: "multiple for a Workflow-narrowed request",
-      cardinality: "multiple",
-      tasks: [taskListRow(smallID)],
-      workflowID: smallID,
-    },
-    {
-      name: "a Task outside the narrowed Workflow",
-      cardinality: "one",
-      tasks: [taskListRow(urgentID)],
-      workflowID: smallID,
-    },
-  ] as const)("rejects a Task-list response with $name", async ({ cardinality, tasks, workflowID }) => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "workflow.task.list",
-          result: {
-            scope: {
-              project_id: "project-1",
-              ...(workflowID === undefined ? {} : { workflow_id: workflowID }),
-            },
-            matching_workflow_cardinality: cardinality,
-            next_offset: null,
-            generated_at_unix_ms: 7,
-            tasks,
-          },
-        },
-      ]),
-    );
-
-    await expect(
-      client.listTasks({
-        projectID: "project-1",
-        ...(workflowID === undefined ? {} : { workflowID }),
-        labelFilter: { kind: "none" },
-      }),
-    ).rejects.toBeInstanceOf(ContractError);
-  });
-
-  it("rejects a Task-list status whose native state does not match its kind", async () => {
-    const client = new ApiClient(
-      new FakeRpcTransport([
-        {
-          method: "workflow.task.list",
-          result: {
-            scope: { project_id: "project-1" },
-            matching_workflow_cardinality: "one",
-            next_offset: null,
-            generated_at_unix_ms: 7,
-            tasks: [
-              {
-                ...taskListRow(smallID),
-                status: {
-                  kind: "done",
-                  native_state: "active",
-                  node_ids: [],
-                  attention_types: [],
-                },
-              },
-            ],
-          },
-        },
-      ]),
-    );
-
-    await expect(
-      client.listTasks({
-        projectID: "project-1",
-        labelFilter: { kind: "none" },
-      }),
-    ).rejects.toBeInstanceOf(ContractError);
-  });
 });
-
-function taskListRow(workflowID: string) {
-  return {
-    task_id: `task-${workflowID}`,
-    short_id: "PROJ-1",
-    workflow_id: workflowID,
-    title: "Ship validation",
-    created_at_unix_ms: 1,
-    updated_at_unix_ms: 2,
-    status: {
-      kind: "active",
-      native_state: "active",
-      node_ids: [],
-      attention_types: [],
-    },
-    labels: [],
-  };
-}

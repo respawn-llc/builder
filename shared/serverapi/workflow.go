@@ -2537,16 +2537,6 @@ func (r WorkflowTaskListItem) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
-		return err
-	}
-	expectedNativeState, validStatus := r.Status.Kind.NativeState()
-	if !validStatus {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "status.kind", "status kind is invalid")
-	}
-	if r.Status.NativeState != expectedNativeState {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "status.native_state", "native state must match status kind")
-	}
 	if err := validateProjectLabels("labels", r.Labels); err != nil {
 		return err
 	}
@@ -2564,62 +2554,10 @@ func (r WorkflowTaskCreateRequest) ValidateRPC() error {
 }
 
 func (r WorkflowTaskListResponse) Validate() error {
-	if err := validateRequired("scope.project_id", r.Scope.ProjectID); err != nil {
-		return err
-	}
-	if strings.TrimSpace(r.Scope.ProjectID) != r.Scope.ProjectID {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "scope.project_id", "project_id must not have leading or trailing whitespace")
-	}
-	if err := validateOptionalWorkflowID(r.Scope.WorkflowID); err != nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "scope.workflow_id", "workflow_id is required")
-	}
-	switch r.MatchingWorkflowCardinality {
-	case WorkflowTaskListMatchingWorkflowCardinalityNone:
-		if len(r.Tasks) != 0 {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "matching_workflow_cardinality", "none cannot contain tasks")
-		}
-	case WorkflowTaskListMatchingWorkflowCardinalityOne, WorkflowTaskListMatchingWorkflowCardinalityMultiple:
-	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "matching_workflow_cardinality", "matching workflow cardinality is invalid")
-	}
-	if r.Scope.WorkflowID != nil && r.MatchingWorkflowCardinality == WorkflowTaskListMatchingWorkflowCardinalityMultiple {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "matching_workflow_cardinality", "workflow-narrowed response cannot match multiple workflows")
-	}
-	var soleWorkflowID *runtimeids.WorkflowID
 	for index, task := range r.Tasks {
 		if err := task.Validate(); err != nil {
 			return prefixWorkflowProjectionValidationField("tasks", index, err)
 		}
-		if r.Scope.WorkflowID != nil && task.WorkflowID != *r.Scope.WorkflowID {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("tasks[%d].workflow_id", index), "workflow_id must match response scope")
-		}
-		if r.MatchingWorkflowCardinality == WorkflowTaskListMatchingWorkflowCardinalityOne {
-			if soleWorkflowID == nil {
-				workflowID := task.WorkflowID
-				soleWorkflowID = &workflowID
-			} else if task.WorkflowID != *soleWorkflowID {
-				return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("tasks[%d].workflow_id", index), "one-workflow response cannot mix workflow IDs")
-			}
-		}
-	}
-	return nil
-}
-
-func (r WorkflowTaskListResponse) ValidateForRequest(req WorkflowTaskListRequest) error {
-	if err := r.Validate(); err != nil {
-		return err
-	}
-	if req.ProjectID == nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "project_id", "project_id is required to bind response scope")
-	}
-	if r.Scope.ProjectID != *req.ProjectID {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "scope.project_id", "response project_id must match request")
-	}
-	if (r.Scope.WorkflowID == nil) != (req.WorkflowID == nil) {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "scope.workflow_id", "response workflow scope must match request")
-	}
-	if req.WorkflowID != nil && *r.Scope.WorkflowID != *req.WorkflowID {
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "scope.workflow_id", "response workflow_id must match request")
 	}
 	return nil
 }

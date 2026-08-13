@@ -11,7 +11,7 @@ import {
 import {
   projectTaskGroupCountsSchema,
   taskCreateResponseSchema,
-  taskListPageSchemaForRequest,
+  taskListPageSchema,
 } from "./schemas/workflowBoard";
 import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
@@ -172,7 +172,7 @@ export async function createTask(transport: RpcTransport, input: TaskMutationInp
 export async function listTasks(transport: RpcTransport, input: TaskListInput): Promise<TaskListPage> {
   return parse(
     "workflow.task.list",
-    taskListPageSchemaForRequest(input.projectID, input.workflowID),
+    taskListPageSchema,
     await transport.call(
       "workflow.task.list",
       compactJsonObject({

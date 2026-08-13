@@ -42,7 +42,7 @@ import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
-export { projectTaskGroupCountsSchema, taskListPageSchemaForRequest } from "./projectTasks";
+export { projectTaskGroupCountsSchema, taskListPageSchema } from "./projectTasks";
 export {
   taskDependenciesSchema,
   taskDependencyAddResponseSchema,

@@ -111,21 +111,11 @@ export { Toaster } from "./Sonner";
 export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "./radix/popover";
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 export { dismissStatusToast, showStatusToast } from "./statusToast";
-export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
 export {
-  VirtualizedGroupedGrid,
-  type VirtualizedGroupedGridCell,
-  type VirtualizedGroupedGridEntry,
-  type VirtualizedGroupedGridProps,
-} from "./VirtualizedGroupedGrid";
-export {
-  VirtualizedFrame,
-  type VirtualizedFrameEntry,
-  type VirtualizedFrameLoadTrigger,
-  type VirtualizedFrameProps,
-  type VirtualizedFrameScrollCommand,
-  type VirtualizedFrameScrollMetrics,
-} from "./VirtualizedFrame";
+  VirtualizedInfiniteList,
+  type VirtualizedInfiniteListProps,
+  type VirtualizedItemVisibilityTrigger,
+} from "./VirtualizedInfiniteList";
 export {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
