@@ -14,11 +14,7 @@ import (
 func TestSessionContextFactsPersistIndependentlyFromFullSnapshots(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, root)
 	workspaceRoot := root + "/workspace"
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace: %v", err)
@@ -70,11 +66,7 @@ WHERE id = ?`, sessionStore.Meta().SessionID).Scan(&count, &eligible); err != ni
 
 func TestOlderSessionContextFactsRemainAbsent(t *testing.T) {
 	root := t.TempDir()
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, root)
 	workspaceRoot := root + "/workspace"
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace: %v", err)
@@ -113,14 +105,10 @@ func TestOlderSessionContextFactsRemainAbsent(t *testing.T) {
 }
 
 func TestSessionContextFactWriterRejectsMissingSession(t *testing.T) {
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, t.TempDir())
 	count := 1
 	eligible := true
-	err = store.WriteSessionContextFacts(context.Background(), "missing", session.SessionContextFacts{
+	err := store.WriteSessionContextFacts(context.Background(), "missing", session.SessionContextFacts{
 		CompletedCompactionCount: &count,
 		ManualCompactEligible:    &eligible,
 	})
@@ -132,11 +120,7 @@ func TestSessionContextFactWriterRejectsMissingSession(t *testing.T) {
 func TestFailedContextWriteIsNotPublishedByLaterFullSnapshot(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, root)
 	workspaceRoot := root + "/workspace"
 	if err := os.MkdirAll(workspaceRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll workspace: %v", err)
