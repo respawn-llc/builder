@@ -65,7 +65,7 @@ func (o *blockingAfterPersistenceObserver) ObserveEventLogReconciliation(
 	return downstream.ObserveEventLogReconciliation(ctx, reconciliation)
 }
 
-func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
+func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
 	observer := newBlockingAfterPersistenceObserver(persistence)
 	root := t.TempDir()
@@ -101,24 +101,6 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 		t.Fatal("append did not reach metadata persistence")
 	}
 
-	recovery, err := store.readAppendRecoveryRecord()
-	if err != nil {
-		close(observer.release)
-		t.Fatalf("read active append recovery: %v", err)
-	}
-	if recovery == nil || recovery.Events == nil {
-		close(observer.release)
-		t.Fatalf("active append recovery = %+v, want event transaction", recovery)
-	}
-	// The observer gate gives the test a deterministic active transaction.
-	// Restoring its prepared phase models the state a concurrent opener could
-	// observe before the writer reaches the recovery commit point.
-	recovery.Phase = appendRecoveryPrepared
-	if err := store.writeAppendRecoveryRecord(*recovery); err != nil {
-		close(observer.release)
-		t.Fatalf("stage active append recovery: %v", err)
-	}
-
 	type openOutcome struct {
 		store *Store
 		err   error
@@ -152,7 +134,7 @@ func TestConcurrentOpenCannotRecoverActiveAppendTransaction(t *testing.T) {
 		}
 	}
 	if openedEarly {
-		t.Fatal("concurrent open recovered an append transaction that was still active")
+		t.Fatal("concurrent open bypassed the active event-log persistence lock")
 	}
 	if appended.err != nil {
 		t.Fatalf("first append: %v", appended.err)

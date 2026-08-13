@@ -3,8 +3,6 @@ package session
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
 )
 
 type recordAppendOutcome struct {
@@ -304,47 +302,11 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		committed:     true,
 		endByteCursor: endByteCursor,
 	}
-	return outcome, s.observePersistenceAndClearAppendRecovery(observation)
+	return outcome, s.observePersistence(observation)
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {
-	var recovery appendRecoveryRecord
-	return log.appendRecordsWithTransaction(records, &currentEventLogAppendTransaction{
-		prepare: func(startOffset int64, payload []byte) error {
-			record, err := s.newAppendRecoveryRecord(preMeta, postMeta, appendRecoveryPrepared, &appendRecoveryEvents{
-				StartOffset: startOffset, EndOffset: startOffset + int64(len(payload)),
-				EventCount: len(records), FirstSequence: records[0].Seq(),
-				LastSequence: records[len(records)-1].Seq(), SHA256: digestBytes(payload),
-			})
-			if err != nil {
-				return err
-			}
-			recovery = record
-			return s.writeAppendRecoveryRecord(recovery)
-		},
-		commit: func() error {
-			recovery.Phase = appendRecoveryCommitted
-			return s.writeAppendRecoveryRecord(recovery)
-		},
-		rollback: s.rollbackPreparedCurrentEventAppend,
-	})
-}
-
-func (s *Store) rollbackPreparedCurrentEventAppend(fp *os.File, startOffset int64, appendErr error) error {
-	rollbackErr := fp.Truncate(startOffset)
-	if rollbackErr == nil {
-		rollbackErr = fp.Sync()
-	}
-	if rollbackErr == nil {
-		_, rollbackErr = fp.Seek(0, io.SeekEnd)
-	}
-	if rollbackErr == nil {
-		rollbackErr = s.clearAppendRecoveryRecord()
-	}
-	if rollbackErr != nil {
-		return s.closeMutationAuthorityLocked("rollback failed current event append", errors.Join(appendErr, rollbackErr))
-	}
-	return appendErr
+	return log.appendRecords(records)
 }
 
 func (s *Store) captureFirstPromptPreviewFromRecordsLocked(records []EventRecord) error {

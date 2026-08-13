@@ -422,6 +422,87 @@ func TestCurrentEventLogTornTailIsReadOnlyUntilAuthoritativeOpen(t *testing.T) {
 	}
 }
 
+func TestClassifyCurrentEventLogTailDoesNotMutate(t *testing.T) {
+	tests := []struct {
+		name string
+		tail []byte
+		want currentEventLogTailKind
+	}{
+		{name: "valid terminated", tail: []byte("{record}\n"), want: currentEventLogTailValidTerminated},
+		{name: "valid unterminated", tail: []byte("{record}"), want: currentEventLogTailValidUnterminated},
+		{name: "malformed incomplete", tail: []byte(`{"seq":1`), want: currentEventLogTailMalformedIncomplete},
+		{name: "complete invalid", tail: []byte(`{"seq":1}`), want: currentEventLogTailCompleteInvalid},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), eventsFile)
+			log, err := createCurrentEventLog(path)
+			if err != nil {
+				t.Fatalf("create current event log: %v", err)
+			}
+			record := currentTestMessageRecord(t, 1, "tail")
+			encoded, err := encodeEventRecordV1(record)
+			if err != nil {
+				t.Fatalf("encode current event record: %v", err)
+			}
+			tail := bytes.ReplaceAll(test.tail, []byte("{record}"), encoded)
+			appendCurrentTestBytes(t, path, tail)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read current event log before classification: %v", err)
+			}
+			fp, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("open current event log: %v", err)
+			}
+			info, err := fp.Stat()
+			if err != nil {
+				_ = fp.Close()
+				t.Fatalf("stat current event log: %v", err)
+			}
+			classification, err := classifyCurrentEventLogTail(fp, info.Size(), log.firstEventOffset)
+			if closeErr := fp.Close(); closeErr != nil {
+				t.Fatalf("close current event log: %v", closeErr)
+			}
+			if err != nil {
+				t.Fatalf("classify current event log tail: %v", err)
+			}
+			if classification.kind != test.want {
+				t.Fatalf("tail kind = %v, want %v", classification.kind, test.want)
+			}
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read current event log after classification: %v", err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatal("tail classification mutated current event log")
+			}
+		})
+	}
+}
+
+func TestCurrentEventLogRejectsMalformedTailBeyondRepairBudgetWithoutMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), eventsFile)
+	if _, err := createCurrentEventLog(path); err != nil {
+		t.Fatalf("create current event log: %v", err)
+	}
+	appendCurrentTestBytes(t, path, bytes.Repeat([]byte{'x'}, int(currentEventLogTailRepairMaxBytes)+1))
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read malformed current event log: %v", err)
+	}
+	if _, err := openCurrentEventLog(path, currentEventLogAuthoritative); err == nil {
+		t.Fatal("expected over-budget tail error")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read current event log after rejected repair: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("over-budget repair rejection mutated current event log")
+	}
+}
+
 func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name string

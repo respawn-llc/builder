@@ -2,13 +2,15 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 )
 
 const (
-	eventLogScanChunkSize       = int64(4096)
-	activeTailReverseChunkBytes = int64(1 << 20)
+	eventLogScanChunkSize             = int64(4096)
+	activeTailReverseChunkBytes       = int64(1 << 20)
+	currentEventLogTailRepairMaxBytes = int64(16 << 20)
 )
 
 type eventLogReconciliationObservation struct {
@@ -31,15 +33,33 @@ func writeAll(fp *os.File, payload []byte) (int, error) {
 	return offset, nil
 }
 
+func syncAndClose(fp *os.File, err error) error {
+	if fp == nil {
+		return errors.Join(err, os.ErrInvalid)
+	}
+	return errors.Join(err, fp.Sync(), fp.Close())
+}
+
 func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
+	return lastNewlineOffsetWithin(fp, fileSize, fileSize)
+}
+
+func lastNewlineOffsetWithin(fp *os.File, fileSize int64, maxBytes int64) (int64, error) {
 	if fileSize == 0 {
 		return -1, nil
 	}
+	if maxBytes < 0 {
+		return -1, fmt.Errorf("newline scan byte limit must be non-negative")
+	}
 	position := fileSize
-	for position > 0 {
+	lowerBound := fileSize - maxBytes
+	if lowerBound < 0 {
+		lowerBound = 0
+	}
+	for position > lowerBound {
 		chunkSize := eventLogScanChunkSize
-		if position < chunkSize {
-			chunkSize = position
+		if position-lowerBound < chunkSize {
+			chunkSize = position - lowerBound
 		}
 		start := position - chunkSize
 		chunk := make([]byte, chunkSize)

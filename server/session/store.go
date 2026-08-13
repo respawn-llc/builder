@@ -62,7 +62,6 @@ type Store struct {
 	options                 storeOptions
 	materializedEventLog    *currentEventLog
 	eventLogMaterialization *eventLogMaterializationSnapshot
-	recoveryErr             error
 }
 
 type persistenceObservation struct {
@@ -340,9 +339,6 @@ func openPersistedSession(
 		return nil, err
 	}
 	defer joinEventLogPersistenceLockRelease(&resultErr, lock, lockPath)
-	if err := s.recoverAppendTransactionWithEventLogLockHeld(); err != nil {
-		return nil, err
-	}
 	s.metadataVersion = 1
 	s.persistedMetaVersion = 1
 	if s.meta.ConversationEstablished {
@@ -581,16 +577,6 @@ func (s *Store) restoreMetadataMutationLocked(checkpoint metadataMutationCheckpo
 	s.persistedMetaVersion = checkpoint.persistedMetaVersion
 }
 
-func (s *Store) closeMutationAuthorityLocked(operation string, err error) error {
-	recoveryErr := s.recoveryError(operation, err)
-	s.recoveryErr = recoveryErr
-	return recoveryErr
-}
-
-func (s *Store) recoveryError(operation string, err error) error {
-	return storeRecoveryError(s.meta.SessionID, operation, err)
-}
-
 func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metadataMutationCheckpoint) (CommitReceipt, error) {
 	observation, err := s.persistMetaLocked()
 	if err != nil {
@@ -598,21 +584,8 @@ func (s *Store) persistMetadataMutationWithCommitReceiptLocked(checkpoint metada
 		s.mu.Unlock()
 		return CommitReceipt{}, err
 	}
-	record, recordErr := s.newAppendRecoveryRecord(checkpoint.meta, s.meta, appendRecoveryCommitted, nil)
-	if recordErr == nil {
-		recordErr = s.writeAppendRecoveryRecord(record)
-	}
-	if recordErr != nil {
-		s.restoreMetadataMutationLocked(checkpoint)
-		if cleanupErr := s.clearAppendRecoveryRecord(); cleanupErr != nil {
-			recordErr = s.closeMutationAuthorityLocked("rollback metadata recovery", errors.Join(recordErr, cleanupErr))
-		}
-		s.mu.Unlock()
-		return CommitReceipt{}, recordErr
-	}
 	s.mu.Unlock()
-	return CommitReceipt{Committed: true},
-		s.observePersistenceAndClearAppendRecovery(observation)
+	return CommitReceipt{Committed: true}, s.observePersistence(observation)
 }
 
 func (s *Store) mutateLockedContractWithCommitStatus(mutator func(*LockedContract)) (LockedContractMutationResult, error) {
@@ -1360,28 +1333,10 @@ func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
 }
 
 func (s *Store) requireMetadataPersistenceLocked() error {
-	if s.recoveryErr != nil {
-		return s.recoveryErr
-	}
 	if s.options.observer == nil {
 		return errPersistenceObserverRequired
 	}
-	record, err := s.readAppendRecoveryRecord()
-	if err != nil || record == nil {
-		return err
-	}
-	digest, err := digestMeta(s.meta)
-	if err != nil {
-		return err
-	}
-	if record.Phase != appendRecoveryCommitted || digest != record.Post.SHA256 {
-		return s.closeMutationAuthorityLocked("supersede unresolved recovery", errors.New("pending recovery does not describe current metadata"))
-	}
-	observation := &persistenceObservation{snapshot: s.persistenceSnapshotLocked(), version: s.metadataVersion}
-	s.mu.Unlock()
-	err = s.observePersistenceAndClearAppendRecovery(observation)
-	s.mu.Lock()
-	return err
+	return nil
 }
 
 func (s *Store) observePersistence(observation *persistenceObservation) error {
@@ -1399,21 +1354,6 @@ func (s *Store) observePersistence(observation *persistenceObservation) error {
 		s.persistedMetaVersion = observation.version
 	}
 	s.mu.Unlock()
-	return nil
-}
-
-func (s *Store) observePersistenceAndClearAppendRecovery(
-	observation *persistenceObservation,
-) error {
-	if err := s.observePersistence(observation); err != nil {
-		return err
-	}
-	if observation == nil || observation.snapshot == nil {
-		return nil
-	}
-	if err := s.clearAppendRecoveryRecord(); err != nil {
-		return storeRecoveryError(observation.snapshot.Meta.SessionID, "clear committed mutation", err)
-	}
 	return nil
 }
 
