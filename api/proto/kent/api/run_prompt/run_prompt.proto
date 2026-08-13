@@ -19,7 +19,14 @@ enum MessagePhase {
 message Request {
   kent.api.session_launch.SessionLaunchIntent intent = 1 [(buf.validate.field).required = true];
   optional string caller_session_id = 2 [(buf.validate.field).string.min_len = 1];
-  string prompt = 3 [(buf.validate.field).string.min_len = 1];
+  string prompt = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.run_prompt.prompt_nonblank"
+      message: "prompt must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   google.protobuf.Duration timeout = 4;
   kent.api.session_launch.RunPromptOverrides overrides = 5;
 }

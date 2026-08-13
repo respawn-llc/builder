@@ -15,6 +15,7 @@ import (
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
 	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -128,6 +129,21 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	runProgress.GetSessionStarted().SessionId = "not-a-uuid"
 	if err := protoapi.ValidateGeneratedMessage(runProgress); err == nil {
 		t.Fatal("accepted non-UUIDv4 run prompt session id")
+	}
+	runRequest := &runpromptpb.Request{
+		Intent: &sessionlaunchpb.SessionLaunchIntent{
+			Intent: &sessionlaunchpb.SessionLaunchIntent_CreateNew{
+				CreateNew: &sessionlaunchpb.SessionCreateOrigin{
+					Origin: &sessionlaunchpb.SessionCreateOrigin_Independent{
+						Independent: &emptypb.Empty{},
+					},
+				},
+			},
+		},
+		Prompt: " ",
+	}
+	if err := protoapi.ValidateGeneratedMessage(runRequest); err == nil {
+		t.Fatal("accepted blank run prompt")
 	}
 
 	notice := &transcriptpb.NoticeRow{

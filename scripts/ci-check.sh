@@ -88,9 +88,9 @@ run_protobuf() {
 	echo "==> Protobuf deterministic generation"
 	./scripts/generate-protobuf.sh verify all
 	echo "==> Protobuf migration lint"
-	go run ./shared/apicontract/cmd/migrationlint
+	./scripts/generate-protobuf.sh run go -- go run ./shared/apicontract/cmd/migrationlint
 	echo "==> Protobuf descriptor policy"
-	go test ./shared/apicontract/internal/migrationcheck \
+	./scripts/generate-protobuf.sh run go -- go test ./shared/apicontract/internal/migrationcheck \
 		-run '^TestDescriptorPolicy' \
 		-count=1
 	echo "==> Protobuf schema/protocol version"
