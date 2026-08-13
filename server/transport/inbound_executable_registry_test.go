@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"maps"
 	"reflect"
 	"testing"
 
@@ -159,6 +160,126 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 				t.Errorf("%s registered with zero authorization facts", route.Method)
 			}
 		}
+	}
+}
+
+func TestInboundExecutableRegistryExhaustivelyClassifiesScopeAuthorization(t *testing.T) {
+	seenScopes := make(map[apicontract.ScopePolicy]bool)
+	for _, route := range apicontract.Routes() {
+		scopeClassification, declared := inboundScopeAuthorizationClassifications[route.Scope]
+		if !declared {
+			t.Errorf("scope %q has no authorization classification", route.Scope)
+			continue
+		}
+		seenScopes[route.Scope] = true
+		classification := inboundAuthorizationClassificationForRoute(route)
+
+		executable, registered := inboundExecutableRoutes[route.Method]
+		if route.Kind == apicontract.KindNotification {
+			if scopeClassification.rule != scopeAuthorizationOutboundNotification {
+				t.Errorf("notification scope classification = %q, want outbound notification", scopeClassification.rule)
+			}
+			if registered {
+				t.Errorf("notification route %q has an inbound executable", route.Method)
+			}
+			continue
+		}
+		if !registered {
+			t.Errorf("inbound route %q has no executable", route.Method)
+			continue
+		}
+		if executable.authorizationType != classification.authorizationType {
+			t.Errorf(
+				"route %q scope %q authorization type = %v, want %v for rule %q",
+				route.Method,
+				route.Scope,
+				executable.authorizationType,
+				classification.authorizationType,
+				classification.rule,
+			)
+		}
+		if executable.authorizationRule != classification.rule {
+			t.Errorf(
+				"route %q authorization rule = %q, want %q",
+				route.Method,
+				executable.authorizationRule,
+				classification.rule,
+			)
+		}
+		expectedHandler := inboundHandlerClassificationForRoute(route)
+		if executable.handlerClassification != expectedHandler {
+			t.Errorf(
+				"route %q handler classification = %+v, want %+v",
+				route.Method,
+				executable.handlerClassification,
+				expectedHandler,
+			)
+		}
+	}
+
+	for scope := range inboundScopeAuthorizationClassifications {
+		if !seenScopes[scope] {
+			t.Errorf("authorization classification exists for undeclared scope %q", scope)
+		}
+	}
+
+	zeroFactRules := make(map[scopeAuthorizationRule]string)
+	for _, route := range apicontract.Routes() {
+		classification := inboundAuthorizationClassificationForRoute(route)
+		if classification.authorizationType != reflect.TypeOf(noAuthorizationFacts{}) {
+			continue
+		}
+		if classification.rule == "" {
+			t.Errorf("zero-fact route %q has no named authorization rule", route.Method)
+			continue
+		}
+		key := string(route.Scope)
+		if route.Method == protocol.MethodRuntimeLiveSteer || route.Method == protocol.MethodRuntimeLiveWait {
+			key = "required_live"
+		}
+		if previous, duplicate := zeroFactRules[classification.rule]; duplicate && previous != key {
+			t.Errorf("zero-fact classifications %q and %q share rule %q", previous, key, classification.rule)
+		}
+		zeroFactRules[classification.rule] = key
+	}
+
+	for _, method := range []string{protocol.MethodRuntimeLiveSteer, protocol.MethodRuntimeLiveWait} {
+		route, ok := apicontract.RouteByMethod(method)
+		if !ok {
+			t.Fatalf("required-live route %q is not declared", method)
+		}
+		if classification := inboundAuthorizationClassificationForRoute(route); classification.rule != scopeAuthorizationRequiredLiveNoCheck {
+			t.Errorf("required-live route %q rule = %q, want required-live no-check", method, classification.rule)
+		}
+	}
+}
+
+func TestInboundExecutableRegistryRejectsMisclassifiedAuthorizerAndHandler(t *testing.T) {
+	entries := maps.Clone(inboundExecutableRoutes)
+	process := entries[protocol.MethodProcessGet]
+	process.authorizationRule = scopeAuthorizationSessionActiveProjectFact
+	entries[protocol.MethodProcessGet] = process
+	if err := validateInboundExecutableRegistryEntries(entries); err == nil {
+		t.Fatal("registry accepted Process Get with a Session authorizer classification")
+	}
+
+	entries = maps.Clone(inboundExecutableRoutes)
+	wait := entries[protocol.MethodRuntimeLiveWait]
+	wait.handlerClassification = inboundHandlerClassification{
+		owner:   inboundHandlerLegacyRaw,
+		recheck: inboundOwnerRecheckNone,
+	}
+	entries[protocol.MethodRuntimeLiveWait] = wait
+	if err := validateInboundExecutableRegistryEntries(entries); err == nil {
+		t.Fatal("registry accepted Runtime Live Wait with the legacy raw handler classification")
+	}
+
+	entries = maps.Clone(inboundExecutableRoutes)
+	create := entries[protocol.MethodWorktreeCreate]
+	create.handlerClassification.recheck = inboundOwnerRecheckNone
+	entries[protocol.MethodWorktreeCreate] = create
+	if err := validateInboundExecutableRegistryEntries(entries); err == nil {
+		t.Fatal("registry accepted Worktree Create without its named post-lease recheck")
 	}
 }
 
