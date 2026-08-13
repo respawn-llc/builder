@@ -297,6 +297,20 @@ WHERE edge.target_node_id = ? AND edge.edge_key = 'repair'`,
 		workflowGraphSeedID(t, fixture.db, "node-done"),
 		fixture.targetNodeID,
 	)
+	deferredEdgeID := legacyProvenanceGraphID(t)
+	execSeed(t, fixture.db, "deferred-self Fan-Out Edge", `
+INSERT INTO workflow_edges (
+    id, transition_group_id, edge_key, target_node_id, context_mode, context_source_kind,
+    assignee_selection, thinking_selection
+)
+SELECT ?, edge.transition_group_id, 'repair-c', ?, 'new_session', 'immediate_source',
+       'configured', 'configured'
+FROM workflow_edges edge
+WHERE edge.target_node_id = ? AND edge.edge_key = 'repair'`,
+		deferredEdgeID,
+		fixture.targetNodeID,
+		fixture.targetNodeID,
+	)
 	execSeed(t, fixture.db, "active Fan-Out", `
 INSERT INTO task_active_fanouts (task_id) VALUES (?)`, fixture.taskID)
 	execSeed(t, fixture.db, "active Fan-Out branches", `
@@ -305,7 +319,9 @@ INSERT INTO task_active_fanout_branches (
     continuation_source_kind, continuation_source_session_id, legacy_materialized
 ) VALUES
     (?, 'branch-a', 'pending', NULL, NULL, NULL, 1),
-    (?, 'branch-b', 'arrived', '{}', NULL, NULL, 1)`,
+    (?, 'branch-b', 'arrived', '{}', NULL, NULL, 1),
+    (?, 'branch-c', 'pending', NULL, NULL, NULL, 1)`,
+		fixture.taskID,
 		fixture.taskID,
 		fixture.taskID,
 	)
@@ -324,6 +340,20 @@ WHERE edge.target_node_id = ? AND edge.edge_key = 'repair'`,
 		fixture.targetNodeID,
 		fixture.targetSessionID,
 		fixture.targetNodeID,
+	)
+	execSeed(t, fixture.db, "deferred-self branch Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin, continuation_source_kind,
+    continuation_source_session_id, legacy_materialized
+) VALUES (
+    ?, ?, 'branch-c', '{}', '{"transition_parameters":{}}', NULL, 'ready', ?,
+    'default', 'configured_fallback', 'deferred_self', NULL, 0
+)`,
+		fixture.taskID,
+		fixture.targetNodeID,
+		deferredEdgeID,
 	)
 
 	fixture.migrate(t)
@@ -368,6 +398,17 @@ ORDER BY transition_branch_key`, fixture.taskID)
 					legacyMaterialized,
 				)
 			}
+		case "branch-c":
+			if !sourceKind.Valid || sourceKind.String != "deferred_self" ||
+				sourceSessionID.Valid || legacyMaterialized != 0 {
+				t.Fatalf(
+					"deferred-self Fan-Out branch %q = kind %v Session %v legacy %d; want deferred self",
+					branchKey,
+					sourceKind,
+					sourceSessionID,
+					legacyMaterialized,
+				)
+			}
 		default:
 			t.Fatalf("unexpected Fan-Out branch %q", branchKey)
 		}
@@ -376,8 +417,8 @@ ORDER BY transition_branch_key`, fixture.taskID)
 	if err := rows.Err(); err != nil {
 		t.Fatalf("iterate repaired Fan-Out branches: %v", err)
 	}
-	if count != 2 {
-		t.Fatalf("Fan-Out branch count = %d, want 2", count)
+	if count != 3 {
+		t.Fatalf("Fan-Out branch count = %d, want 3", count)
 	}
 }
 

@@ -235,6 +235,22 @@ CREATE TEMP TABLE workflow_legacy_fanout_branch_source_candidates (
     source_session_id TEXT NOT NULL
 );
 
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = 'deferred_self',
+    continuation_source_session_id = NULL,
+    legacy_materialized = 0
+WHERE legacy_materialized = 1
+  AND EXISTS (
+      SELECT 1
+      FROM task_current_nodes current_node
+      WHERE current_node.task_id = task_active_fanout_branches.task_id
+        AND current_node.transition_branch_key = task_active_fanout_branches.transition_branch_key
+        AND current_node.continuation_source_kind = 'deferred_self'
+        AND current_node.continuation_source_session_id IS NULL
+        AND current_node.legacy_materialized = 0
+  );
+
 INSERT INTO workflow_legacy_fanout_branch_source_candidates (
     task_id,
     transition_branch_key,
