@@ -916,6 +916,48 @@ func TestCurrentNodeControllerCloseCancelsAdmissionBeforeWaitingForLifecycleBarr
 	}
 }
 
+func TestCurrentNodeControllerClosingDoesNotStartQueuedTaskPreparation(t *testing.T) {
+	taskID := workflow.TaskID("task-close-queued-preparation")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-start")
+	prepareCalled := false
+	batch, err := newTaskPreparationBatch(
+		context.Background(),
+		taskID,
+		[]currentNodeQueuedStart{{
+			reference: reference,
+			policy:    currentNodeAdmissionExplicitOverride,
+		}},
+		TaskStartPreparation{
+			Prepare: func(context.Context) error {
+				prepareCalled = true
+				return nil
+			},
+			Commit: func(context.Context) error { return nil },
+		},
+		func(TaskPreparationFinalization) {},
+	)
+	if err != nil {
+		t.Fatalf("newTaskPreparationBatch: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, &currentNodeControllerStore{}, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	controller.mu.Lock()
+	controller.preparationQueue = append(controller.preparationQueue, batch)
+	controller.closing = true
+	controller.mu.Unlock()
+
+	if taken, ok := controller.takeTaskPreparationBatch(); ok || taken != nil {
+		t.Fatalf("takeTaskPreparationBatch while closing = %+v, %t; want no batch", taken, ok)
+	}
+	if prepareCalled {
+		t.Fatal("closing controller invoked queued Task preparation")
+	}
+}
+
 func TestCompleteIdleCurrentNodeRejectsSessionMovingToAnotherTask(t *testing.T) {
 	first := workflow.CurrentNode{
 		Reference: currentNodeReferenceForControllerTest(t, "task-idle-first", "node-first"),

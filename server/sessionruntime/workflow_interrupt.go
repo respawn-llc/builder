@@ -180,6 +180,7 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	promptLocked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	hasQuestion := false
+	hasApproval := false
 	for _, execution := range executions {
 		execution.prompts.mu.RLock()
 		promptLocked = append(promptLocked, execution)
@@ -189,6 +190,8 @@ func (a *Authority) WithWorkflowInterruptSelection(
 			}
 			if !entry.snapshot.Request.Approval {
 				hasQuestion = true
+			} else {
+				hasApproval = true
 			}
 		}
 		handle := executionHandle{execution: execution}
@@ -222,6 +225,9 @@ func (a *Authority) WithWorkflowInterruptSelection(
 	if len(selection.Interruptible) == 0 {
 		if hasQuestion {
 			return ErrWorkflowQuestionPending
+		}
+		if hasApproval {
+			return ErrWorkflowApprovalPending
 		}
 		return ErrExecutionNoLongerLive
 	}

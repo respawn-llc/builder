@@ -117,6 +117,40 @@ func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedWaitingQuest
 	}
 }
 
+func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedPendingApproval(t *testing.T) {
+	fixture := newCurrentNodeQuestionFixture(t)
+	reference := currentNodeReferenceForControllerTest(t, "task-interrupted-approval", "node-approval")
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-interrupted-approval",
+		StepID:   uuid.NewString(),
+		Question: "Approve?",
+		Approval: true,
+	}
+	pending := fixture.startPendingPrompt(t, reference, request)
+	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
+	t.Cleanup(func() {
+		pending.handle.RequestStop()
+		_, _ = pending.handle.Wait(context.Background())
+	})
+	fixture.store.currentNodes = []workflow.CurrentNode{{
+		Reference: reference,
+		SessionID: &pending.sessionID,
+		Scheduling: &workflow.CurrentNodeScheduling{
+			State: workflow.CurrentNodeSchedulingInterrupted,
+		},
+	}}
+
+	if err := fixture.controller.Interrupt(
+		context.Background(),
+		InterruptSelector{TaskID: reference.TaskID},
+	); !errors.Is(err, sessionruntime.ErrWorkflowApprovalPending) {
+		t.Fatalf("Interrupt durably interrupted pending Approval error = %v, want %v", err, sessionruntime.ErrWorkflowApprovalPending)
+	}
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); !live {
+		t.Fatal("Interrupt stopped the pending Approval")
+	}
+}
+
 func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSibling(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
