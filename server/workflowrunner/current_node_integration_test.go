@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -80,6 +81,11 @@ type failingManualMoveAssignmentSteerer struct {
 	cause    error
 }
 
+type failAfterManualMoveAssignmentPreparationSteerer struct {
+	delegate *Starter
+	cause    error
+}
+
 type diagnosticManualMoveAssignmentSteerer struct {
 	delegate   *Starter
 	diagnostic error
@@ -101,6 +107,28 @@ func (s failingManualMoveAssignmentSteerer) PrepareManualMoveAssignments(
 	error,
 ) {
 	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, s.cause
+}
+
+func (s failAfterManualMoveAssignmentPreparationSteerer) SteerCurrentNodeAssignment(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return s.delegate.SteerCurrentNodeAssignment(ctx, reference)
+}
+
+func (s failAfterManualMoveAssignmentPreparationSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	preparation, _, err := s.delegate.PrepareManualMoveAssignments(ctx, inputs)
+	if err != nil {
+		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
+	}
+	return preparation, nil, s.cause
 }
 
 func (s diagnosticManualMoveAssignmentSteerer) SteerCurrentNodeAssignment(
@@ -1269,6 +1297,72 @@ func TestManualMoveAssignmentPreparationFailureLeavesOriginCurrent(t *testing.T)
 	}
 	if len(f.client.Requests()) != 0 {
 		t.Fatalf("model requests after assignment failure = %d, want none", len(f.client.Requests()))
+	}
+}
+
+func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata(t *testing.T) {
+	cause := errors.New("assignment preparation failed after retained Session mutation")
+	f := newCurrentNodeRunnerFixtureWithAssignmentSteerer(
+		t,
+		NewScriptedClient(
+			llm.ProviderCapabilities{ProviderID: "test", SupportsResponsesAPI: true},
+			ScriptedRuntimeError(ErrScriptedRuntime),
+		),
+		func(starter *Starter) workflowexecution.CurrentNodeAssignmentSteerer {
+			return failAfterManualMoveAssignmentPreparationSteerer{delegate: starter, cause: cause}
+		},
+	)
+	workflowID := createCurrentNodeChainedWorkflow(t, f.store, workflow.ContextModeCompactAndContinueSession)
+	task := f.createTask(t, workflowID)
+	origin := f.startTask(t, task)
+	nodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 &&
+			nodes[0].Reference.Equal(origin) &&
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.Interruption != nil &&
+			nodes[0].SessionID != nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	sessionID := *nodes[0].SessionID
+	before, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID.String())
+	if err != nil || before.Meta == nil {
+		t.Fatalf("resolve retained Session before Manual Move: %+v, %v", before, err)
+	}
+	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	var target workflow.NodeID
+	for _, node := range definition.Nodes {
+		if node.Kind() == workflow.NodeKindAgent && workflow.NodeIDOf(node) != origin.NodeID {
+			target = workflow.NodeIDOf(node)
+			break
+		}
+	}
+	if target == "" {
+		t.Fatal("workflow has no retained Agent target")
+	}
+	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: target,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if _, err := f.controller.ApplyManualMove(context.Background(), prepared, nil); !errors.Is(err, cause) {
+		t.Fatalf("ApplyManualMove error = %v, want %v", err, cause)
+	}
+	after, err := f.metadata.ResolvePersistedSession(context.Background(), sessionID.String())
+	if err != nil || after.Meta == nil {
+		t.Fatalf("resolve retained Session after rejected Manual Move: %+v, %v", after, err)
+	}
+	if before.Meta.Name != after.Meta.Name ||
+		before.Meta.FirstPromptPreview != after.Meta.FirstPromptPreview ||
+		!reflect.DeepEqual(before.Meta.Continuation, after.Meta.Continuation) ||
+		!reflect.DeepEqual(before.Meta.ChatSettings, after.Meta.ChatSettings) ||
+		before.Meta.PromptCacheLineageGeneration != after.Meta.PromptCacheLineageGeneration ||
+		!reflect.DeepEqual(before.Meta.Locked, after.Meta.Locked) {
+		t.Fatalf("retained Session prompt-facing metadata changed after rejected Manual Move:\nbefore=%+v\nafter=%+v", before.Meta, after.Meta)
 	}
 }
 

@@ -218,6 +218,17 @@ type Meta struct {
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
 }
 
+// PromptFacingMetadataSnapshot captures metadata that Session planning may
+// change before a Workflow assignment commits.
+type PromptFacingMetadataSnapshot struct {
+	Name                         string
+	FirstPromptPreview           string
+	Continuation                 *ContinuationContext
+	ChatSettings                 *ChatSettingsOverrides
+	PromptCacheLineageGeneration int
+	Locked                       *LockedContract
+}
+
 type PendingModelRecovery struct {
 	RecoveryID             string    `json:"recovery_id"`
 	StepID                 string    `json:"step_id,omitempty"`

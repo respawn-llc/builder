@@ -2012,7 +2012,10 @@ func (r *workflowAttentionRecorder) resolvedApprovalIDs() []workflow.ApprovalID 
 
 func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
 	return &manualMoveExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+		},
 	}
 }
 
@@ -3517,7 +3520,11 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	baseExecution := &currentNodeCompletionExecutionStub{
+		store:                 store,
+		manualMoveAssignments: workflowServiceTestManualMoveAssignments(t, metadataStore),
+	}
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(baseExecution))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

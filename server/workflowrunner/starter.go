@@ -348,6 +348,27 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, err
 	}
+	var retainedSnapshot *session.PromptFacingMetadataSnapshot
+	policy, err := resolveCurrentNodeSessionPolicy(input)
+	if err != nil {
+		return preparedCurrentNodeAgentSession{}, err
+	}
+	if !sessionPrepared && input.CurrentNode.SessionID != nil && !policy.cloneRetainedSession {
+		descriptor, descriptorErr := session.NewScopedOpenSessionDescriptor(
+			*input.CurrentNode.SessionID,
+			filepath.Join(s.cfg.PersistenceRoot, "projects", input.Task.ProjectID, "sessions"),
+		)
+		if descriptorErr != nil {
+			return preparedCurrentNodeAgentSession{}, descriptorErr
+		}
+		if err := s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
+			snapshot := store.PromptFacingMetadataSnapshot()
+			retainedSnapshot = &snapshot
+			return nil
+		}); err != nil {
+			return preparedCurrentNodeAgentSession{}, err
+		}
+	}
 	plan, disposable, err := s.planCurrentNodeSession(ctx, input, root, sessionPrepared)
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, err
@@ -355,7 +376,14 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	sessionBound := false
 	cleanup := func(err error) error {
 		if !disposable {
-			return err
+			if retainedSnapshot == nil {
+				return err
+			}
+			cleanupCtx := context.WithoutCancel(ctx)
+			restoreErr := s.withSessionStore(cleanupCtx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+				return store.RestorePromptFacingMetadata(*retainedSnapshot)
+			})
+			return errors.Join(err, restoreErr)
 		}
 		cleanupCtx := context.WithoutCancel(ctx)
 		if sessionBound && input.CurrentNode.SessionID != nil {

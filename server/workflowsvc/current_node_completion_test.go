@@ -593,7 +593,9 @@ func workflowServiceTestManualMoveAssignments(
 	t *testing.T,
 	metadataStore *metadata.Store,
 ) workflowstore.ManualMoveTargetAssignmentPreparer {
-	t.Helper()
+	if t != nil {
+		t.Helper()
+	}
 	return func(
 		_ context.Context,
 		inputs []workflowstore.CurrentNodeStartContext,
@@ -634,6 +636,14 @@ func workflowServiceTestManualMoveAssignments(
 		}
 		return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
 	}
+}
+
+func workflowServiceManualMoveAssignments(service *Service) workflowstore.ManualMoveTargetAssignmentPreparer {
+	execution, ok := service.currentNodeExecution.(*currentNodeCompletionExecutionStub)
+	if !ok || execution.manualMoveAssignments == nil {
+		panic("workflow service test Manual Move assignment preparer is required")
+	}
+	return execution.manualMoveAssignments
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

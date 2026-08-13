@@ -514,7 +514,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 			) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
 				preparation, steers, err := c.steerer.PrepareManualMoveAssignments(ctx, contexts)
 				if err != nil {
-					return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+					return preparation, err
 				}
 				preparedAssignments = steers
 				assignmentDiagnostic = preparation.Diagnostic

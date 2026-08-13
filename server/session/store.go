@@ -535,6 +535,31 @@ func (s *Store) Meta() Meta {
 	return cloneMeta(s.meta)
 }
 
+func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
+	meta := s.Meta()
+	return PromptFacingMetadataSnapshot{
+		Name:                         meta.Name,
+		FirstPromptPreview:           meta.FirstPromptPreview,
+		Continuation:                 cloneContinuationContext(meta.Continuation),
+		ChatSettings:                 cloneChatSettingsOverrides(meta.ChatSettings),
+		PromptCacheLineageGeneration: meta.PromptCacheLineageGeneration,
+		Locked:                       cloneLockedContract(meta.Locked),
+	}
+}
+
+func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapshot) error {
+	return s.mutateAndPersist(func() error {
+		s.meta.Name = snapshot.Name
+		s.meta.FirstPromptPreview = snapshot.FirstPromptPreview
+		s.meta.Continuation = cloneContinuationContext(snapshot.Continuation)
+		s.meta.ChatSettings = cloneChatSettingsOverrides(snapshot.ChatSettings)
+		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
+		s.meta.Locked = cloneLockedContract(snapshot.Locked)
+		s.meta.UpdatedAt = time.Now().UTC()
+		return nil
+	})
+}
+
 func (s *Store) metaSnapshot() metaSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()

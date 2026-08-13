@@ -239,6 +239,83 @@ func TestManualMoveRetainedAssignmentBlocksWorkflowSaveUntilMoveCommits(t *testi
 	}
 }
 
+func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	firstTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	secondTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, firstTask.ID)
+	startTask(t, ctx, store, secondTask.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepare := func(taskID workflow.TaskID) ManualMovePreparation {
+		prepared, prepareErr := store.PrepareManualMove(ctx, ManualMoveRequest{
+			TaskID:       taskID,
+			TargetNodeID: workflow.NodeIDOf(target),
+			Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		})
+		if prepareErr != nil {
+			t.Fatalf("PrepareManualMove %q: %v", taskID, prepareErr)
+		}
+		return prepared
+	}
+	firstPrepared := prepare(firstTask.ID)
+	secondPrepared := prepare(secondTask.ID)
+	firstWaiting := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			firstPrepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				close(firstWaiting)
+				<-releaseFirst
+				return ManualMoveTargetAssignmentPreparation{}, nil
+			},
+		)
+		firstDone <- moveErr
+	}()
+	select {
+	case <-firstWaiting:
+	case <-time.After(time.Second):
+		t.Fatal("first Manual Move did not reach assignment wait")
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			secondPrepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				return ManualMoveTargetAssignmentPreparation{}, nil
+			},
+		)
+		secondDone <- moveErr
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second Manual Move: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second Task Manual Move blocked on first Task assignment wait")
+	}
+	releaseOnce.Do(func() { close(releaseFirst) })
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Manual Move: %v", err)
+	}
+}
+
 func TestApplyManualMoveRejectsScriptDestinationWithAgentFanoutWithoutAssignmentPreparation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMixedExecutableFanoutWorkflow(t, ctx, store)

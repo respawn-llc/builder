@@ -429,7 +429,10 @@ type taskMutationAuthorizationExecutionStub struct {
 
 func newTaskMutationAuthorizationExecutionStub(service *Service) *taskMutationAuthorizationExecutionStub {
 	return &taskMutationAuthorizationExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+		},
 	}
 }
 

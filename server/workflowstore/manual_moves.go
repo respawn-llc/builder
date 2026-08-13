@@ -175,11 +175,12 @@ func (s *Store) applyManualMove(
 		return ManualMoveResult{}, err
 	}
 	workflowID := runtimeids.WorkflowID(task.WorkflowID)
-	_, err = s.RunWorkflowGraphSaveOperation(ctx, workflowID, func(ctx context.Context) (WorkflowGraphSaveResult, error) {
-		result, resultErr = s.applyManualMoveWithinWorkflowLane(ctx, prepared, executionTarget, prepareAssignments)
-		return WorkflowGraphSaveResult{}, resultErr
-	})
-	return result, err
+	lease, err := s.graphSaves.AcquireShared(ctx, workflowID)
+	if err != nil {
+		return ManualMoveResult{}, err
+	}
+	defer lease.Release()
+	return s.applyManualMoveWithinWorkflowLane(ctx, prepared, executionTarget, prepareAssignments)
 }
 
 func (s *Store) applyManualMoveWithinWorkflowLane(
@@ -213,11 +214,11 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		preparedAssignments.targets = targets
 		preparedAssignments.workflowVersion = &workflowVersion
 		assignmentPreparation, err := prepareAssignments(ctx, contexts)
+		preparedAssignments.abort = assignmentPreparation.Abort
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
 		preparedAssignments.assignments = assignmentPreparation.Assignments
-		preparedAssignments.abort = assignmentPreparation.Abort
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

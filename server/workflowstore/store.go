@@ -28,7 +28,7 @@ type Store struct {
 	roleResolver        workflow.RoleResolver
 	now                 func() time.Time
 	approvalGate        chan struct{}
-	graphSaves          *requestmemo.MutationLaneRegistry[runtimeids.WorkflowID]
+	graphSaves          *requestmemo.SharedMutationLaneRegistry[runtimeids.WorkflowID]
 	eventMu             sync.RWMutex
 	eventSink           WorkflowEventPublisher
 	invariantPolicy     invariant.Policy
@@ -88,7 +88,7 @@ func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 		priorValuesContract: priorValues,
 		now:                 func() time.Time { return time.Now().UTC() },
 		approvalGate:        make(chan struct{}, 1),
-		graphSaves:          requestmemo.NewMutationLaneRegistry[runtimeids.WorkflowID](),
+		graphSaves:          requestmemo.NewSharedMutationLaneRegistry[runtimeids.WorkflowID](),
 		eventSink:           noopWorkflowEventPublisher{},
 		invariantPolicy:     invariant.NewPolicy(invariant.WithSink(workflowInvariantSlogSink{})),
 	}
