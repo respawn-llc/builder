@@ -20,7 +20,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
-	scenarioSlots := make(chan struct{}, 4)
+	scenarioSlots := make(chan struct{}, 1)
 	modelMismatchCompletionDrain := time.Second
 
 	for _, tc := range []struct {
