@@ -584,12 +584,54 @@ func registerActiveProjectSessionRoutes(executables map[string]inboundExecutable
 		executables[method] = executable
 	}
 
-	registerRequiredSessionUnary(protocol.MethodSessionGetMainView, activeProjectSessionUnary[serverapi.SessionMainViewRequest](protocol.MethodSessionGetMainView, func(req serverapi.SessionMainViewRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodSessionGetTranscriptPage, activeProjectSessionUnary[serverapi.SessionTranscriptPageRequest](protocol.MethodSessionGetTranscriptPage, func(req serverapi.SessionTranscriptPageRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, activeProjectSessionUnary[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest](protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, func(req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodSessionPersistInputDraft, activeProjectSessionUnary[serverapi.SessionPersistInputDraftRequest](protocol.MethodSessionPersistInputDraft, func(req serverapi.SessionPersistInputDraftRequest) string { return req.SessionID }))
-	registerOptionalSessionUnary(protocol.MethodSessionGetInitialInput, optionalActiveProjectSessionUnary[serverapi.SessionInitialInputRequest](protocol.MethodSessionGetInitialInput, func(req serverapi.SessionInitialInputRequest) string { return req.SessionID }))
-	registerOptionalSessionUnary(protocol.MethodSessionResolveTransition, optionalActiveProjectSessionUnary[serverapi.SessionResolveTransitionRequest](protocol.MethodSessionResolveTransition, func(req serverapi.SessionResolveTransitionRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodSessionGetMainView, inboundTrustedUnary(
+		protocol.MethodSessionGetMainView,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.SessionMainViewRequest) string { return req.SessionID }),
+		handleSessionMainView,
+	))
+	registerRequiredSessionUnary(protocol.MethodSessionGetTranscriptPage, inboundTrustedUnary(
+		protocol.MethodSessionGetTranscriptPage,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.SessionTranscriptPageRequest) string { return req.SessionID }),
+		handleSessionTranscriptPage,
+	))
+	registerRequiredSessionUnary(protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer, inboundTrustedUnary(
+		protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) string { return req.SessionID }),
+		handleLatestCommittedAssistantFinalAnswer,
+	))
+	registerRequiredSessionUnary(protocol.MethodSessionPersistInputDraft, inboundTrustedUnary(
+		protocol.MethodSessionPersistInputDraft,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(func(req serverapi.SessionPersistInputDraftRequest) string { return req.SessionID }),
+		handleSessionPersistInputDraft,
+	))
+	registerOptionalSessionUnary(protocol.MethodSessionGetInitialInput, inboundTrustedUnary(
+		protocol.MethodSessionGetInitialInput,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeOptionalSessionActiveProject(func(req serverapi.SessionInitialInputRequest) string { return req.SessionID }),
+		handleSessionInitialInput,
+	))
+	registerOptionalSessionUnary(protocol.MethodSessionResolveTransition, inboundTrustedUnary(
+		protocol.MethodSessionResolveTransition,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeOptionalSessionActiveProject(func(req serverapi.SessionResolveTransitionRequest) string { return req.SessionID }),
+		handleSessionResolveTransition,
+	))
 
 	registerRequiredSessionUnary(protocol.MethodWorktreeStatus, activeProjectSessionUnary[serverapi.WorktreeStatusRequest](protocol.MethodWorktreeStatus, func(req serverapi.WorktreeStatusRequest) string { return req.SessionID }))
 	registerRequiredSessionUnary(protocol.MethodWorktreeList, activeProjectSessionUnary[serverapi.WorktreeListRequest](protocol.MethodWorktreeList, func(req serverapi.WorktreeListRequest) string { return req.SessionID }))
@@ -677,6 +719,90 @@ func handleRuntimeLiveWait(
 		return serverapi.RuntimeLiveWaitResponse{}, errors.New("Runtime Live Control trusted service is required")
 	}
 	return trusted.LiveWaitValidated(ctx, request)
+}
+
+func handleSessionMainView(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionMainViewRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionMainViewResponse, error) {
+	trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
+	if !ok {
+		return serverapi.SessionMainViewResponse{}, errors.New("Session View trusted service is required")
+	}
+	return trusted.GetSessionMainViewValidated(ctx, request, authorization)
+}
+
+func handleSessionTranscriptPage(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionTranscriptPageRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionTranscriptPageResponse, error) {
+	trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
+	if !ok {
+		return serverapi.SessionTranscriptPageResponse{}, errors.New("Session View trusted service is required")
+	}
+	return trusted.GetSessionTranscriptPageValidated(ctx, request, authorization)
+}
+
+func handleLatestCommittedAssistantFinalAnswer(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
+	if !ok {
+		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("Session View trusted service is required")
+	}
+	return trusted.GetLatestCommittedAssistantFinalAnswerValidated(ctx, request, authorization)
+}
+
+func handleSessionPersistInputDraft(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionPersistInputDraftRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionPersistInputDraftResponse, error) {
+	trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionLifecycleTrustedService)
+	if !ok {
+		return serverapi.SessionPersistInputDraftResponse{}, errors.New("Session Lifecycle trusted service is required")
+	}
+	return trusted.PersistInputDraftValidated(ctx, request, authorization)
+}
+
+func handleSessionInitialInput(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionInitialInputRequest],
+	authorization apicontract.OptionalAuthorizedSessionInActiveProject,
+) (serverapi.SessionInitialInputResponse, error) {
+	trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionLifecycleTrustedService)
+	if !ok {
+		return serverapi.SessionInitialInputResponse{}, errors.New("Session Lifecycle trusted service is required")
+	}
+	return trusted.GetInitialInputValidated(ctx, request, authorization)
+}
+
+func handleSessionResolveTransition(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.SessionResolveTransitionRequest],
+	authorization apicontract.OptionalAuthorizedSessionInActiveProject,
+) (serverapi.SessionResolveTransitionResponse, error) {
+	trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionLifecycleTrustedService)
+	if !ok {
+		return serverapi.SessionResolveTransitionResponse{}, errors.New("Session Lifecycle trusted service is required")
+	}
+	return trusted.ResolveTransitionValidated(ctx, request, authorization)
 }
 
 func handleWorktreeWorkspaceList(
@@ -784,12 +910,12 @@ func prepareSessionRuntimeRelease(source serverapi.SessionRuntimeReleaseRequest,
 	return prepared
 }
 
-func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], _ apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
+func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
 	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
 	if !ok {
 		return serverapi.SessionRuntimeActivateResponse{}, errors.New("Session Runtime trusted service is required")
 	}
-	response, err := trusted.ActivateSessionRuntimeValidated(ctx, validated)
+	response, err := trusted.ActivateSessionRuntimeValidated(ctx, validated, authorization)
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
@@ -800,12 +926,12 @@ func handleSessionRuntimeActivate(ctx context.Context, g *Gateway, state *connec
 	return response, nil
 }
 
-func handleSessionRuntimeRelease(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], _ apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
+func handleSessionRuntimeRelease(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
 	trusted, ok := g.deps.SessionRuntimeClient().(apicontract.SessionRuntimeTrustedService)
 	if !ok {
 		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("Session Runtime trusted service is required")
 	}
-	response, err := trusted.ReleaseSessionRuntimeValidated(ctx, validated)
+	response, err := trusted.ReleaseSessionRuntimeValidated(ctx, validated, authorization)
 	if err == nil && (response.Released || validated.Value().DropOwner) {
 		state.removeOwnedRuntime(validated.Value().Attachment)
 	}
@@ -843,16 +969,17 @@ func executeSessionExecutionEnvironment(g *Gateway, ctx context.Context, state *
 		return protocol.NewErrorResponse(wire.ID, protocol.ErrCodeInvalidParams, err.Error())
 	}
 	response, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
-		if _, err := authorizeSessionActiveProject(
+		authorization, err := authorizeSessionActiveProject(
 			func(req serverapi.SessionExecutionEnvironmentRequest) string { return req.SessionID.String() },
-		)(ctx, g, state, validated); err != nil {
+		)(ctx, g, state, validated)
+		if err != nil {
 			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
 		}
 		trusted, ok := g.deps.SessionViewClient().(apicontract.SessionViewTrustedService)
 		if !ok {
 			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: errors.New("Session View trusted service is required")}
 		}
-		response, err := trusted.GetSessionExecutionEnvironmentValidated(ctx, validated)
+		response, err := trusted.GetSessionExecutionEnvironmentValidated(ctx, validated, authorization)
 		if err != nil {
 			return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
 		}

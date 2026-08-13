@@ -12,6 +12,7 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/worktree"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -85,6 +86,39 @@ func TestSessionExecutionEnvironmentRejectsMismatchedIdentity(t *testing.T) {
 		SessionID: otherID,
 	}); err == nil {
 		t.Fatal("environment read accepted a response for another session")
+	}
+}
+
+func TestSessionExecutionEnvironmentValidatedUsesAuthorizedExecutionTarget(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
+	sessionID := sessionExecutionEnvironmentSessionID(t, store)
+	workspaceRoot := t.TempDir()
+	target := availableSessionExecutionTarget(workspaceRoot)
+	service := NewService(
+		newTestSessionResolver(store),
+		nil,
+		nil,
+		failingExecutionTargetResolver{err: errors.New("duplicate target lookup")},
+	).WithExecutionEnvironmentConfig(config.App{Settings: config.Settings{Model: "gpt-5.6-sol"}})
+	request := serverapi.SessionExecutionEnvironmentRequest{SessionID: sessionID}
+	response, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+			return service.GetSessionExecutionEnvironmentValidated(t.Context(), validated, apicontract.AuthorizedSessionInActiveProject{
+				SessionID:       sessionID,
+				ActiveProjectID: "project-1",
+				OwningProjectID: "project-1",
+				ExecutionTarget: target,
+			})
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetSessionExecutionEnvironmentValidated: %v", err)
+	}
+	workspace, ok := response.Environment.Workspace.Value()
+	if !ok || workspace.Path != workspaceRoot {
+		t.Fatalf("workspace = %+v/%v, want %q", workspace, ok, workspaceRoot)
 	}
 }
 

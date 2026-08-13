@@ -101,7 +101,19 @@ func (s *customRouteSessionViewService) GetSessionExecutionEnvironment(context.C
 	return serverapi.SessionExecutionEnvironmentResponse{}, errRawCustomRouteCalled
 }
 
-func (s *customRouteSessionViewService) GetSessionExecutionEnvironmentValidated(context.Context, apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+func (s *customRouteSessionViewService) GetSessionMainViewValidated(context.Context, apicontract.Validated[serverapi.SessionMainViewRequest], apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionMainViewResponse, error) {
+	return serverapi.SessionMainViewResponse{}, errors.New("unexpected Session Main View call")
+}
+
+func (s *customRouteSessionViewService) GetSessionTranscriptPageValidated(context.Context, apicontract.Validated[serverapi.SessionTranscriptPageRequest], apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionTranscriptPageResponse, error) {
+	return serverapi.SessionTranscriptPageResponse{}, errors.New("unexpected Session Transcript Page call")
+}
+
+func (s *customRouteSessionViewService) GetLatestCommittedAssistantFinalAnswerValidated(context.Context, apicontract.Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest], apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+	return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("unexpected latest final answer call")
+}
+
+func (s *customRouteSessionViewService) GetSessionExecutionEnvironmentValidated(context.Context, apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest], apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionExecutionEnvironmentResponse, error) {
 	s.trustedCalls++
 	return serverapi.SessionExecutionEnvironmentResponse{Environment: serverapi.SessionExecutionEnvironment{
 		SessionID: runtimeids.NewSessionID(),

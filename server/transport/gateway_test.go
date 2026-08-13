@@ -445,7 +445,7 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Contex
 	return c.SessionRuntimeService.ActivateSessionRuntime(ctx, req)
 }
 
-func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
+func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
 	req := validated.Value()
 	if c.activateRequests != nil {
 		c.activateRequests <- req
@@ -464,7 +464,7 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx conte
 	if !ok {
 		return serverapi.SessionRuntimeActivateResponse{}, errors.New("test Session Runtime trusted service is required")
 	}
-	return trusted.ActivateSessionRuntimeValidated(ctx, validated)
+	return trusted.ActivateSessionRuntimeValidated(ctx, validated, authorization)
 }
 
 func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
@@ -478,7 +478,7 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context
 	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
 }
 
-func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest]) (serverapi.SessionRuntimeReleaseResponse, error) {
+func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
 	req := validated.Value()
 	c.releaseCount.Add(1)
 	if c.releaseRequests != nil {
@@ -491,7 +491,7 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx contex
 	if !ok {
 		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("test Session Runtime trusted service is required")
 	}
-	return trusted.ReleaseSessionRuntimeValidated(ctx, validated)
+	return trusted.ReleaseSessionRuntimeValidated(ctx, validated, authorization)
 }
 
 type gatewayRuntimeClientOverride struct {

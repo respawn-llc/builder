@@ -11,8 +11,10 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
 )
@@ -206,6 +208,46 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 	}
 	if resp.MainView.Session.ExecutionTarget.EffectiveWorkdir != dir {
 		t.Fatalf("effective workdir = %q, want %q", resp.MainView.Session.ExecutionTarget.EffectiveWorkdir, dir)
+	}
+}
+
+func TestServiceGetSessionMainViewValidatedUsesAuthorizedExecutionTarget(t *testing.T) {
+	dir := t.TempDir()
+	store := newSessionViewStore(t, dir, "ws", dir)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	target := clientui.SessionExecutionTarget{
+		WorkspaceID:      "authorized-workspace",
+		WorkspaceRoot:    dir,
+		CwdRelpath:       ".",
+		EffectiveWorkdir: dir,
+	}
+	svc := NewService(
+		newTestSessionResolver(store),
+		nil,
+		nil,
+		failingExecutionTargetResolver{err: errors.New("duplicate target lookup")},
+	)
+	request := serverapi.SessionMainViewRequest{SessionID: sessionID.String()}
+	response, err := apicontract.WithValidated(
+		request,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.SessionMainViewRequest]) (serverapi.SessionMainViewResponse, error) {
+			return svc.GetSessionMainViewValidated(t.Context(), validated, apicontract.AuthorizedSessionInActiveProject{
+				SessionID:       sessionID,
+				ActiveProjectID: "project-1",
+				OwningProjectID: "project-1",
+				ExecutionTarget: target,
+			})
+		},
+	)
+	if err != nil {
+		t.Fatalf("GetSessionMainViewValidated: %v", err)
+	}
+	if got := response.MainView.Session.ExecutionTarget; got.WorkspaceID != target.WorkspaceID {
+		t.Fatalf("execution target = %+v, want %+v", got, target)
 	}
 }
 

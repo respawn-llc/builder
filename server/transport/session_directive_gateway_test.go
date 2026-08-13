@@ -37,6 +37,22 @@ func (s *lifecycleResultGatewayService) ResolveTransition(_ context.Context, req
 	return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationKeepCurrent), nil
 }
 
+func (s *lifecycleResultGatewayService) GetInitialInputValidated(ctx context.Context, req apicontract.Validated[serverapi.SessionInitialInputRequest], _ apicontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionInitialInputResponse, error) {
+	return s.GetInitialInput(ctx, req.Value())
+}
+
+func (s *lifecycleResultGatewayService) PersistInputDraftValidated(ctx context.Context, req apicontract.Validated[serverapi.SessionPersistInputDraftRequest], _ apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionPersistInputDraftResponse, error) {
+	return s.PersistInputDraft(ctx, req.Value())
+}
+
+func (s *lifecycleResultGatewayService) RetargetSessionWorkspaceValidated(ctx context.Context, req apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest], _ apicontract.AttachedProjectConstraint) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	return s.RetargetSessionWorkspace(ctx, req.Value())
+}
+
+func (s *lifecycleResultGatewayService) ResolveTransitionValidated(ctx context.Context, req apicontract.Validated[serverapi.SessionResolveTransitionRequest], _ apicontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionResolveTransitionResponse, error) {
+	return s.ResolveTransition(ctx, req.Value())
+}
+
 type lifecycleResultGatewayDependencies struct {
 	*core.Core
 	lifecycle apicontract.SessionLifecycleService
