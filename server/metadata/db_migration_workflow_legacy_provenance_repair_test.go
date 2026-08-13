@@ -227,7 +227,7 @@ WHERE task_id = ?`, fixture.taskID).Scan(&legacyMaterialized); err != nil {
 	}
 }
 
-func TestWorkflowLegacyProvenanceRepairMigrationRepairsAllActiveFanoutBranchesFromOneProvedSource(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationRepairsOnlyFanoutBranchesWithBranchLocalProof(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
 		{sessionID: "session-fanout-source", associatedAtOffset: 1},
@@ -297,19 +297,37 @@ ORDER BY transition_branch_key`, fixture.taskID)
 	defer func() { _ = rows.Close() }()
 	var count int
 	for rows.Next() {
-		var branchKey, sourceKind, sourceSessionID string
+		var branchKey string
+		var sourceKind, sourceSessionID sql.NullString
 		var legacyMaterialized int64
 		if err := rows.Scan(&branchKey, &sourceKind, &sourceSessionID, &legacyMaterialized); err != nil {
 			t.Fatalf("scan repaired Fan-Out branch: %v", err)
 		}
-		if sourceKind != "exact" || sourceSessionID != "session-fanout-source" || legacyMaterialized != 0 {
-			t.Fatalf(
-				"repaired Fan-Out branch %q = kind %q Session %q legacy %d; want one proved source",
-				branchKey,
-				sourceKind,
-				sourceSessionID,
-				legacyMaterialized,
-			)
+		switch branchKey {
+		case "branch-a":
+			if !sourceKind.Valid || sourceKind.String != "exact" ||
+				!sourceSessionID.Valid || sourceSessionID.String != "session-fanout-source" ||
+				legacyMaterialized != 0 {
+				t.Fatalf(
+					"repaired Fan-Out branch %q = kind %v Session %v legacy %d; want branch-local proof",
+					branchKey,
+					sourceKind,
+					sourceSessionID,
+					legacyMaterialized,
+				)
+			}
+		case "branch-b":
+			if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
+				t.Fatalf(
+					"unproved Fan-Out branch %q = kind %v Session %v legacy %d; want unresolved legacy",
+					branchKey,
+					sourceKind,
+					sourceSessionID,
+					legacyMaterialized,
+				)
+			}
+		default:
+			t.Fatalf("unexpected Fan-Out branch %q", branchKey)
 		}
 		count++
 	}
@@ -317,7 +335,7 @@ ORDER BY transition_branch_key`, fixture.taskID)
 		t.Fatalf("iterate repaired Fan-Out branches: %v", err)
 	}
 	if count != 2 {
-		t.Fatalf("repaired Fan-Out branch count = %d, want 2", count)
+		t.Fatalf("Fan-Out branch count = %d, want 2", count)
 	}
 }
 
@@ -394,7 +412,7 @@ INSERT INTO task_pending_approval_branches (
         'display_name', 'Agent',
         'current_input_values', json('{}'),
         'prior_values', json('{"transition_parameters":{}}'),
-        'session_id', NULL
+        'session_id', ?
     ),
     json_object(
         'id', 'edge-done-1',
@@ -406,7 +424,7 @@ INSERT INTO task_pending_approval_branches (
         'target_session', json_object('kind', 'create'),
         'active_source', json_object('kind', 'legacy')
     )
-)`, approvalID)
+)`, approvalID, sessionID)
 
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
@@ -429,6 +447,79 @@ WHERE approval_id = ?`, approvalID).Scan(&sourceKind, &repairedSessionID); err !
 			"repaired pending Approval source = kind %q Session %q; want frozen exact source",
 			sourceKind,
 			repairedSessionID,
+		)
+	}
+}
+
+func TestWorkflowLegacyProvenanceRepairMigrationLeavesApprovalWithoutFrozenBranchSessionUnresolved(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-approval-header-only", associatedAtOffset: 1},
+	}, 2)
+	execSeed(t, fixture.db, "use retained target as Approval source", `
+UPDATE task_current_nodes
+SET continuation_source_kind = 'exact',
+    continuation_source_session_id = 'session-approval-header-only',
+    legacy_materialized = 0
+WHERE task_id = ?`, fixture.taskID)
+	execSeed(t, fixture.db, "pending Approval", `
+INSERT INTO task_pending_approvals (
+    id, source_task_id, source_node_id, source_transition_branch_key,
+    source_session_id, workflow_version, transition_snapshot_json,
+    materialized_values_json, created_at_unix_ms
+) VALUES (
+    'approval-header-only', ?, ?, NULL,
+    ?, 1, '{}', '{}', ?
+)`,
+		fixture.taskID,
+		fixture.targetNodeID,
+		fixture.targetSessionID,
+		time.Now().UTC().UnixMilli(),
+	)
+	execSeed(t, fixture.db, "pending Approval branch", `
+INSERT INTO task_pending_approval_branches (
+    approval_id, transition_branch_key, target_snapshot_json,
+    effective_edge_configuration_json, context_source_resolution_json
+) VALUES (
+    'approval-header-only',
+    'target',
+    json_object(
+        'node_id', 'node-agent',
+        'display_name', 'Agent',
+        'current_input_values', json('{}'),
+        'prior_values', json('{"transition_parameters":{}}'),
+        'session_id', NULL
+    ),
+    json_object(
+        'id', 'edge-done-1',
+        'transition_group_id', 'group-done',
+        'target_node_id', 'node-agent',
+        'context_mode', 'continue_session',
+        'context_source', json_object('kind', 'selected_node', 'node_key', 'agent')
+    ),
+    json_object(
+        'target_session', json_object('kind', 'create'),
+        'active_source', json_object('kind', 'legacy')
+    )
+)`)
+
+	fixture.migrate(t)
+
+	var sourceKind string
+	var sourceSessionID sql.NullString
+	if err := fixture.db.QueryRow(`
+SELECT
+    json_extract(context_source_resolution_json, '$.active_source.kind'),
+    json_extract(context_source_resolution_json, '$.active_source.session_id')
+FROM task_pending_approval_branches
+WHERE approval_id = 'approval-header-only'`).Scan(&sourceKind, &sourceSessionID); err != nil {
+		t.Fatalf("read unresolved pending Approval: %v", err)
+	}
+	if sourceKind != "legacy" || sourceSessionID.Valid {
+		t.Fatalf(
+			"header-only pending Approval source = kind %q Session %v; want unresolved legacy",
+			sourceKind,
+			sourceSessionID,
 		)
 	}
 }

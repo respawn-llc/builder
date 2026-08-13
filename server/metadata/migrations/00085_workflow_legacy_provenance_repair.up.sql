@@ -204,26 +204,51 @@ WHERE association_status = 'historical'
         )
   );
 
+CREATE TEMP TABLE workflow_legacy_fanout_branch_source_candidates (
+    task_id TEXT NOT NULL,
+    transition_branch_key TEXT NOT NULL,
+    source_session_id TEXT NOT NULL
+);
+
+INSERT INTO workflow_legacy_fanout_branch_source_candidates (
+    task_id,
+    transition_branch_key,
+    source_session_id
+)
+SELECT
+    current_node.task_id,
+    current_node.transition_branch_key,
+    current_node.continuation_source_session_id
+FROM task_current_nodes current_node
+WHERE current_node.transition_branch_key IS NOT NULL
+  AND current_node.continuation_source_kind = 'exact'
+  AND current_node.legacy_materialized = 0
+UNION
+SELECT
+    association.task_id,
+    association.transition_branch_key,
+    association.source_session_id
+FROM session_workflow_node_associations association
+WHERE association.transition_branch_key IS NOT NULL
+  AND association.association_status = 'current'
+  AND association.source_session_id IS NOT NULL;
+
 UPDATE task_active_fanout_branches
 SET
     continuation_source_kind = 'exact',
     continuation_source_session_id = (
-        SELECT MIN(current_node.continuation_source_session_id)
-        FROM task_current_nodes current_node
-        WHERE current_node.task_id = task_active_fanout_branches.task_id
-          AND current_node.transition_branch_key IS NOT NULL
-          AND current_node.continuation_source_kind = 'exact'
-          AND current_node.legacy_materialized = 0
+        SELECT MIN(candidate.source_session_id)
+        FROM workflow_legacy_fanout_branch_source_candidates candidate
+        WHERE candidate.task_id = task_active_fanout_branches.task_id
+          AND candidate.transition_branch_key = task_active_fanout_branches.transition_branch_key
     ),
     legacy_materialized = 0
 WHERE legacy_materialized = 1
   AND 1 = (
-      SELECT COUNT(DISTINCT current_node.continuation_source_session_id)
-      FROM task_current_nodes current_node
-      WHERE current_node.task_id = task_active_fanout_branches.task_id
-        AND current_node.transition_branch_key IS NOT NULL
-        AND current_node.continuation_source_kind = 'exact'
-        AND current_node.legacy_materialized = 0
+      SELECT COUNT(DISTINCT candidate.source_session_id)
+      FROM workflow_legacy_fanout_branch_source_candidates candidate
+      WHERE candidate.task_id = task_active_fanout_branches.task_id
+        AND candidate.transition_branch_key = task_active_fanout_branches.transition_branch_key
   );
 
 UPDATE task_pending_approval_branches
@@ -236,22 +261,23 @@ SET
             'kind',
             'exact',
             'session_id',
-            (
-                SELECT approval.source_session_id
-                FROM task_pending_approvals approval
-                WHERE approval.id = task_pending_approval_branches.approval_id
-            )
+            json_extract(task_pending_approval_branches.target_snapshot_json, '$.session_id')
         )
     )
 WHERE json_extract(context_source_resolution_json, '$.active_source.kind') = 'legacy'
+  AND json_extract(target_snapshot_json, '$.session_id') IS NOT NULL
   AND EXISTS (
       SELECT 1
       FROM task_pending_approvals approval
       JOIN sessions source_session
-        ON source_session.id = approval.source_session_id
+        ON source_session.id = json_extract(
+            task_pending_approval_branches.target_snapshot_json,
+            '$.session_id'
+        )
        AND source_session.task_id = approval.source_task_id
       WHERE approval.id = task_pending_approval_branches.approval_id
   );
 
+DROP TABLE workflow_legacy_fanout_branch_source_candidates;
 DROP TABLE workflow_legacy_current_node_source_winners;
 DROP TABLE workflow_legacy_current_node_source_candidates;

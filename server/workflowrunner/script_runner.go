@@ -89,6 +89,10 @@ func (s *Starter) startCurrentNodeScript(
 				Commentary:   parsed.Commentary,
 			})
 			if err != nil {
+				var unresolved workflow.LegacyContinuationSourceUnresolvedError
+				if errors.As(err, &unresolved) {
+					return err
+				}
 				return s.failCurrentNodeScope(finalizeCtx, controller, scope, ReasonScriptCompletionFailed, err)
 			}
 			return nil

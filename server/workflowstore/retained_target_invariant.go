@@ -113,7 +113,9 @@ func legacyContinuationSourceError(
 	policy invariant.Policy,
 	detail legacyContinuationSourceFallbackDetail,
 ) error {
-	policy.Check(false, legacyContinuationSourceDiagnostic(detail))
+	if policy.Mode() == invariant.ModePanic {
+		policy.Check(false, legacyContinuationSourceDiagnostic(detail))
+	}
 	return workflow.LegacyContinuationSourceUnresolvedError{
 		Source:       detail.Source,
 		TargetNodeID: detail.TargetNodeID,
