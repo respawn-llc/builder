@@ -136,13 +136,23 @@
 - Goal CLI never mutates Session storage directly. It submits Goal commands to the server.
 - A successful Goal mutation prints authoritative Goal details when present, prints objective and status for a queued Set or replacement preview, and prints no applied Goal-state output when neither is present.
 - Any `kent service` command that affects server state detects invocation by Kent itself and refuses to run because it is human-only.
-- On Linux and Windows, server exit status `2` must suppress automatic crash recovery for the current service-manager activation. A later independent service-manager activation may run the installed service again.
-- On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run. On macOS, every server exit must retain automatic restoration while the current service-manager activation expects Kent to run.
+- On Linux, macOS, and Windows, server exit status `2` means a critical infrastructure failure has ended the current service-manager activation. It must suppress automatic crash recovery for that activation. A later explicit human start or restart may run the installed service again.
+- On Linux, every server exit other than status `2` must retain automatic restoration while the current service-manager activation expects Kent to run.
+- On macOS, one service activation must own at most one Kent server process. The service manager may remain active while that server is starting or after it has settled.
+- macOS determines service ownership independently from server health. Service readiness requires both proven ownership and a healthy server that identifies itself as the same process. A healthy endpoint alone never proves service ownership.
+- Service status reports the owned server process and its expected server command when the process exists. While an activation has not started a server or its server has settled, status reports the activation without inventing a server PID.
+- Stop, uninstall-with-stop, restart, and stale-service cleanup must remain able to control an owned server that is starting, wedged, unhealthy, no longer listening, or already absent. Ambiguous ownership blocks lifecycle changes without terminating an unproven process or starting a replacement.
+- An activation must not start a server while a server from an earlier activation may still be running. Losing the service manager or losing server health must not permit overlapping Kent servers.
+- A normal macOS service stop first requests graceful server termination. If the owned server does not settle within the existing shutdown bound, Kent force-stops only that proven server and confirms settlement before completing.
+- If the macOS service manager disappears unexpectedly while Kent can still identify and control the activation's server, Kent stops only that proven server. It uses the same graceful-then-bounded-force policy and confirms server settlement before allowing restoration.
+- If Kent loses the ability to guarantee exclusive ownership while the service manager remains available, the activation must fail closed and stop its owned server. The server must also attempt to stop itself when it detects that loss.
+- If the service manager disappears while Kent simultaneously loses the ability to identify or control the activation's server, Kent must still prevent a replacement server from overlapping the prior server. An unresponsive orphan may block automatic restoration until explicit operator or machine intervention.
+- Server status `2` ends the current macOS activation without restoration. Any other unexpected confirmed server failure retains automatic restoration. A later explicit human start, restart, or install-with-start begins a new activation.
 - On Windows, every observed numeric server exit status other than `2` must retain automatic restoration while the current service-manager activation expects Kent to run.
 - On Windows, status `2` must make the registered service report `Stopped` without Windows recovery. An unexpected registered-service failure must retain Windows recovery.
 - When Kent cannot confirm Windows server termination, Kent must retain ownership. Kent must not report `Stopped`. Kent must not start a replacement.
 - When Windows confirms termination without a numeric status, Kent must release the server. Kent must not start a replacement. Kent must report `Stopped` for the current activation.
-- A human start or restart must begin a new activation. An install that requests startup must begin a new activation. `kent service install --no-start` must not start the service.
+- A human start or restart must begin a new activation. An install that requests startup must begin a new activation. `kent service install --no-start` must not start the service. Kent must not persist a fatal activation state or carry it into a later activation.
 
 ## Headless Run And Shared Control
 

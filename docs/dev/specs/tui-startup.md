@@ -89,4 +89,4 @@ Ordered gates; each gate is skipped when its condition does not apply, never byp
 - A successful request after reconnection clears the notice.
 - If the TUI cannot preserve a coherent connection-loss state, it exits with a clear error.
 - Any startup exit path (success, cancel, failure) restores the terminal best-effort: alt-screen exited, cursor restored, no residual control state. Ongoing-mode output already written to the normal buffer is permanent by design and is not restored.
-- Debug mode fails fast with diagnostics on startup invariant violations. Normal operation surfaces the error and recovers or exits clearly.
+- Debug mode fails fast with diagnostics on startup invariant violations. Production surfaces and contains developer-caused invariant violations according to the core failure-classification contract; critical infrastructure failures terminate in every mode.
