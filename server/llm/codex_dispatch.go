@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openai/openai-go/v3/responses"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -21,11 +22,15 @@ const (
 	CodexRequestKindCompaction CodexRequestKind = "compaction"
 )
 
+func (k CodexRequestKind) Optional() *CodexRequestKind {
+	return &k
+}
+
 type CodexDispatchFacts struct {
 	SessionID            string
 	RunID                string
 	CompactionGeneration int
-	RequestKind          CodexRequestKind
+	RequestKind          *CodexRequestKind
 }
 
 type CodexDispatchContext struct {
@@ -77,28 +82,16 @@ func NewCodexDispatchContext(facts CodexDispatchFacts) (*CodexDispatchContext, e
 	}, nil
 }
 
-func (c *CodexDispatchContext) Fresh() (*CodexDispatchContext, error) {
-	if c == nil {
-		return nil, fmt.Errorf("%w: Codex dispatch context is required", ErrInvalidRequest)
-	}
-	return NewCodexDispatchContext(c.facts)
-}
-
 func (c *CodexDispatchContext) TurnMetadataJSON() (string, error) {
 	if err := c.validate(); err != nil {
 		return "", err
-	}
-	var requestKind *CodexRequestKind
-	if c.facts.RequestKind != "" {
-		kind := c.facts.RequestKind
-		requestKind = &kind
 	}
 	payload, err := json.Marshal(codexTurnMetadata{
 		SessionID:   c.facts.SessionID,
 		ThreadID:    c.facts.SessionID,
 		TurnID:      c.facts.RunID,
 		WindowID:    fmt.Sprintf("%s:%d", c.facts.SessionID, c.facts.CompactionGeneration),
-		RequestKind: requestKind,
+		RequestKind: c.facts.RequestKind,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal Codex turn metadata: %w", err)
@@ -106,11 +99,10 @@ func (c *CodexDispatchContext) TurnMetadataJSON() (string, error) {
 	return string(payload), nil
 }
 
-func (c *CodexDispatchContext) SameState(other *CodexDispatchContext) bool {
-	return c != nil && other != nil && c.state == other.state
-}
-
-func (c *CodexDispatchContext) outboundProjection(model string, serviceTier string) (codexDispatchProjection, error) {
+func (c *CodexDispatchContext) outboundProjection(
+	model string,
+	serviceTier *responses.ResponseNewParamsServiceTier,
+) (codexDispatchProjection, error) {
 	metadata, err := c.TurnMetadataJSON()
 	if err != nil {
 		return codexDispatchProjection{}, err
@@ -125,19 +117,8 @@ func (c *CodexDispatchContext) outboundProjection(model string, serviceTier stri
 	}, nil
 }
 
-func (s *CodexDispatchState) acceptTurnState(value string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.turnState = value
-	s.hasTurnState = true
-}
-
-func (c *CodexDispatchContext) turnStateForRetry() string {
-	value, ok := c.currentTurnState()
-	if !ok {
-		return ""
-	}
-	return value
+func (c *CodexDispatchContext) turnStateForRetry() (string, bool) {
+	return c.currentTurnState()
 }
 
 func (c *CodexDispatchContext) currentTurnState() (string, bool) {
@@ -153,28 +134,28 @@ func (c *CodexDispatchContext) observeTurnStateCandidate(value string, source co
 	if c == nil || c.state == nil {
 		return
 	}
-	category := CodexTurnStateDiagnosticCategory("")
 	c.state.mu.Lock()
 	switch {
 	case validateCodexHeaderValue(value) != nil:
-		category = CodexTurnStateDiagnosticInvalid
+		shouldWarn := c.state.recordDiagnosticLocked(CodexTurnStateDiagnosticInvalid)
+		requestKind := c.facts.RequestKind
+		c.state.mu.Unlock()
+		c.warnUnusableTurnState(shouldWarn, CodexTurnStateDiagnosticInvalid, source, requestKind)
+		return
 	case !c.state.hasTurnState:
 		c.state.turnState = value
 		c.state.hasTurnState = true
+		c.state.mu.Unlock()
+		return
 	case c.state.turnState != value:
-		category = CodexTurnStateDiagnosticConflict
-	}
-	shouldWarn := c.state.recordDiagnosticLocked(category)
-	requestKind := c.facts.RequestKind
-	c.state.mu.Unlock()
-
-	if shouldWarn {
-		slog.Warn(
-			"ignored unusable provider turn state",
-			"category", category,
-			"source", source,
-			"request_kind", requestKind,
-		)
+		shouldWarn := c.state.recordDiagnosticLocked(CodexTurnStateDiagnosticConflict)
+		requestKind := c.facts.RequestKind
+		c.state.mu.Unlock()
+		c.warnUnusableTurnState(shouldWarn, CodexTurnStateDiagnosticConflict, source, requestKind)
+		return
+	default:
+		c.state.mu.Unlock()
+		return
 	}
 }
 
@@ -186,20 +167,15 @@ func (c *CodexDispatchContext) observeInvalidTurnStateContainer(source codexTurn
 	shouldWarn := c.state.recordDiagnosticLocked(CodexTurnStateDiagnosticInvalid)
 	requestKind := c.facts.RequestKind
 	c.state.mu.Unlock()
-	if shouldWarn {
-		slog.Warn(
-			"ignored unusable provider turn state",
-			"category", CodexTurnStateDiagnosticInvalid,
-			"source", source,
-			"request_kind", requestKind,
-		)
-	}
+	c.warnUnusableTurnState(
+		shouldWarn,
+		CodexTurnStateDiagnosticInvalid,
+		source,
+		requestKind,
+	)
 }
 
 func (s *CodexDispatchState) recordDiagnosticLocked(category CodexTurnStateDiagnosticCategory) bool {
-	if category == "" {
-		return false
-	}
 	if s.diagnostics == nil {
 		s.diagnostics = make(map[CodexTurnStateDiagnosticCategory]struct{}, 2)
 	}
@@ -208,6 +184,25 @@ func (s *CodexDispatchState) recordDiagnosticLocked(category CodexTurnStateDiagn
 	}
 	s.diagnostics[category] = struct{}{}
 	return true
+}
+
+func (c *CodexDispatchContext) warnUnusableTurnState(
+	shouldWarn bool,
+	category CodexTurnStateDiagnosticCategory,
+	source codexTurnStateSource,
+	requestKind *CodexRequestKind,
+) {
+	if !shouldWarn {
+		return
+	}
+	attributes := []any{
+		"category", category,
+		"source", source,
+	}
+	if requestKind != nil {
+		attributes = append(attributes, "request_kind", *requestKind)
+	}
+	slog.Warn("ignored unusable provider turn state", attributes...)
 }
 
 func (c *CodexDispatchContext) TurnStateDiagnostics() []CodexTurnStateDiagnosticCategory {
@@ -265,18 +260,22 @@ func validateOpenAIDispatchForMode(
 	model string,
 	dispatch *CodexDispatchContext,
 	mode OpenAIAuthMode,
-	serviceTier string,
-) (codexDispatchProjection, error) {
+	serviceTier *responses.ResponseNewParamsServiceTier,
+) (*codexDispatchProjection, error) {
 	if !mode.IsOAuth {
-		return codexDispatchProjection{}, nil
+		return nil, nil
 	}
 	if dispatch == nil {
-		return codexDispatchProjection{}, fmt.Errorf("%w: Codex dispatch context is required for OAuth dispatch", ErrInvalidRequest)
+		return nil, fmt.Errorf("%w: Codex dispatch context is required for OAuth dispatch", ErrInvalidRequest)
 	}
 	if err := dispatch.validateForSession(sessionID); err != nil {
-		return codexDispatchProjection{}, err
+		return nil, err
 	}
-	return dispatch.outboundProjection(model, serviceTier)
+	projection, err := dispatch.outboundProjection(model, serviceTier)
+	if err != nil {
+		return nil, err
+	}
+	return &projection, nil
 }
 
 func validateCodexHeaderValue(value string) error {
@@ -295,7 +294,7 @@ func validateCodexHeaderValue(value string) error {
 	return nil
 }
 
-func buildCodexRoutingHint(model string, serviceTier string) (string, error) {
+func buildCodexRoutingHint(model string, serviceTier *responses.ResponseNewParamsServiceTier) (string, error) {
 	if len(model) == 0 {
 		return "", fmt.Errorf("%w: Codex routing model is required", ErrInvalidRequest)
 	}
@@ -309,8 +308,8 @@ func buildCodexRoutingHint(model string, serviceTier string) (string, error) {
 		return "", fmt.Errorf("%w: Codex routing model is not a valid HTTP header field value", ErrInvalidRequest)
 	}
 	hint := "model=" + model
-	if serviceTier != "" {
-		hint += ";tier=" + serviceTier
+	if serviceTier != nil {
+		hint += ";tier=" + string(*serviceTier)
 	}
 	if err := validateCodexHeaderValue(hint); err != nil {
 		return "", fmt.Errorf("%w: Codex routing hint is not wire-realizable: %v", ErrInvalidRequest, err)
@@ -328,10 +327,13 @@ func (f CodexDispatchFacts) validate() error {
 	if f.CompactionGeneration < 0 {
 		return fmt.Errorf("%w: Codex compaction generation must be >= 0", ErrInvalidRequest)
 	}
-	switch f.RequestKind {
-	case "", CodexRequestKindTurn, CodexRequestKindCompaction:
+	if f.RequestKind == nil {
+		return nil
+	}
+	switch *f.RequestKind {
+	case CodexRequestKindTurn, CodexRequestKindCompaction:
 		return nil
 	default:
-		return fmt.Errorf("%w: unknown Codex request kind %q", ErrInvalidRequest, f.RequestKind)
+		return fmt.Errorf("%w: unknown Codex request kind %q", ErrInvalidRequest, *f.RequestKind)
 	}
 }

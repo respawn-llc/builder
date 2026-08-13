@@ -356,7 +356,7 @@ func assertFreshGenerationDispatchesWithSameMetadata(t *testing.T, calls []llm.R
 			if got != metadata {
 				t.Fatalf("generation call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
 			}
-			if calls[index-1].CodexDispatch.SameState(call.CodexDispatch) {
+			if calls[index-1].CodexDispatch == call.CodexDispatch {
 				t.Fatalf("generation call %d reused changed-payload dispatch state", index+1)
 			}
 		}
@@ -392,7 +392,7 @@ func assertFreshCompactionDispatchesWithSameMetadata(t *testing.T, calls []llm.C
 			if got != metadata {
 				t.Fatalf("compaction call %d identity changed:\nfirst=%s\n got=%s", index+1, metadata, got)
 			}
-			if calls[index-1].CodexDispatch.SameState(call.CodexDispatch) {
+			if calls[index-1].CodexDispatch == call.CodexDispatch {
 				t.Fatalf("compaction call %d reused changed-payload dispatch state", index+1)
 			}
 		}

@@ -262,7 +262,7 @@ func (e *Engine) compactLocal(ctx context.Context, stepID string, input []llm.Re
 }
 
 func (e *Engine) localCompactionSummary(ctx context.Context, input []llm.ResponseItem, instructions string, mode compactionMode) (string, error) {
-	factory, err := e.activeDispatchRequestFactory(activeRunStepID(e), "")
+	factory, err := e.activeDispatchRequestFactory(activeRunStepID(e), nil)
 	if err != nil {
 		return "", err
 	}

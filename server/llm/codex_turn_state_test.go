@@ -150,7 +150,7 @@ func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 		w.Header().Add(codexTurnStateHeader, "accepted")
 		w.Header().Add(codexTurnStateHeader, "accepted")
 		w.Header().Add(codexTurnStateHeader, "conflict")
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 	dispatch := newTestCodexDispatch(t)
@@ -172,7 +172,7 @@ func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
 
 func TestGenerateAbsentTurnStateIsNoop(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 	dispatch := newTestCodexDispatch(t)
@@ -225,7 +225,7 @@ func TestGenerateRetryReplaysExactTurnStateOverHTTP1AndHTTP2(t *testing.T) {
 				if attempt == 1 {
 					w.Header().Set(codexTurnStateHeader, state)
 				}
-				writeCompletedResponseSSE(w)
+				writeCompletedResponseJSON(w)
 			})
 
 			var server *httptest.Server
@@ -266,12 +266,66 @@ func TestGenerateRetryReplaysExactTurnStateOverHTTP1AndHTTP2(t *testing.T) {
 	}
 }
 
+func TestNonOAuthGenerateDoesNotObserveProviderTurnState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(codexTurnStateHeader, "must-not-be-observed")
+		writeCompletedResponseJSON(w)
+	}))
+	t.Cleanup(server.Close)
+	dispatch := newTestCodexDispatch(t)
+	transport := NewHTTPTransport(staticAuth{})
+	transport.BaseURL = server.URL
+	transport.Client = server.Client()
+
+	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch)); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, ok := dispatch.currentTurnState(); ok {
+		t.Fatal("API-key response mutated OAuth-only provider turn state")
+	}
+	if diagnostics := dispatch.TurnStateDiagnostics(); len(diagnostics) != 0 {
+		t.Fatalf("API-key response diagnostics = %v, want none", diagnostics)
+	}
+}
+
+func TestNonOAuthStreamDoesNotObserveProviderTurnStateMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(codexTurnStateHeader, "must-not-be-observed")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(
+			w,
+			"data: %s\n\ndata: %s\n\ndata: [DONE]\n\n",
+			`{"type":"response.metadata","headers":{"x-codex-turn-state":null}}`,
+			completedResponseSSEJSON,
+		)
+	}))
+	t.Cleanup(server.Close)
+	dispatch := newTestCodexDispatch(t)
+	transport := NewHTTPTransport(staticAuth{})
+	transport.BaseURL = server.URL
+	transport.Client = server.Client()
+
+	if _, err := transport.GenerateStreamWithEvents(
+		context.Background(),
+		testCodexOpenAIRequest(dispatch),
+		StreamCallbacks{},
+	); err != nil {
+		t.Fatalf("GenerateStreamWithEvents: %v", err)
+	}
+	if _, ok := dispatch.currentTurnState(); ok {
+		t.Fatal("API-key stream mutated OAuth-only provider turn state")
+	}
+	if diagnostics := dispatch.TurnStateDiagnostics(); len(diagnostics) != 0 {
+		t.Fatalf("API-key stream diagnostics = %v, want none", diagnostics)
+	}
+}
+
 func TestRetryReadsTurnStateImmediatelyBeforeBuildingRequestOptions(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get(codexTurnStateHeader); got != "accepted-after-projection" {
 			t.Errorf("turn-state request header = %q, want accepted-after-projection", got)
 		}
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 	dispatch := newTestCodexDispatch(t)
@@ -282,7 +336,7 @@ func TestRetryReadsTurnStateImmediatelyBeforeBuildingRequestOptions(t *testing.T
 		"gpt-5",
 		dispatch,
 		OpenAIAuthMode{IsOAuth: true, AccountID: "account-1"},
-		"",
+		nil,
 	); err != nil {
 		t.Fatalf("initial projection: %v", err)
 	}
@@ -300,7 +354,7 @@ func TestInvalidEdgeWhitespaceTurnStateIsNeverReplayed(t *testing.T) {
 		if got := r.Header.Get(codexTurnStateHeader); got != "" {
 			t.Errorf("turn-state request header = %q, want absent", got)
 		}
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 	transport := newOAuthTestTransport(server, server.Client())
@@ -476,7 +530,7 @@ func TestFreshCodexDispatchDoesNotInheritTurnStateOrDiagnostics(t *testing.T) {
 	dispatch := newTestCodexDispatch(t)
 	dispatch.observeTurnStateCandidate("", codexTurnStateSourceHTTPHeader)
 	dispatch.observeTurnStateCandidate("accepted", codexTurnStateSourceHTTPHeader)
-	fresh, err := dispatch.Fresh()
+	fresh, err := NewCodexDispatchContext(dispatch.facts)
 	if err != nil {
 		t.Fatalf("Fresh: %v", err)
 	}
@@ -540,7 +594,7 @@ func newTestCodexDispatch(t *testing.T) *CodexDispatchContext {
 		SessionID:            "session-1",
 		RunID:                "run-1",
 		CompactionGeneration: 1,
-		RequestKind:          CodexRequestKindTurn,
+		RequestKind:          CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)

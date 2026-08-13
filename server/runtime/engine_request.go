@@ -26,7 +26,7 @@ type dispatchRequestIdentity struct {
 	SessionID            string
 	RunID                string
 	CompactionGeneration int
-	RequestKind          llm.CodexRequestKind
+	RequestKind          *llm.CodexRequestKind
 }
 
 type dispatchRequestFactory struct {
@@ -70,7 +70,7 @@ func (e *Engine) buildDispatchRequest(ctx context.Context, stepID string, extra 
 }
 
 func (e *Engine) buildActiveTurnDispatchRequest(ctx context.Context, stepID string, extra []llm.ResponseItem, allowTools bool) (llm.Request, error) {
-	factory, err := e.activeDispatchRequestFactory(stepID, llm.CodexRequestKindTurn)
+	factory, err := e.activeDispatchRequestFactory(stepID, llm.CodexRequestKindTurn.Optional())
 	if err != nil {
 		return llm.Request{}, err
 	}
@@ -189,7 +189,7 @@ func newDispatchRequestFactory(identity dispatchRequestIdentity) (dispatchReques
 	return dispatchRequestFactory{identity: identity}, nil
 }
 
-func (e *Engine) activeDispatchRequestFactory(stepID string, requestKind llm.CodexRequestKind) (dispatchRequestFactory, error) {
+func (e *Engine) activeDispatchRequestFactory(stepID string, requestKind *llm.CodexRequestKind) (dispatchRequestFactory, error) {
 	runID := activeRunIDForStep(e, stepID)
 	if runID == "" {
 		return dispatchRequestFactory{}, fmt.Errorf("%w: active Run identity is required for dispatch", llm.ErrInvalidRequest)

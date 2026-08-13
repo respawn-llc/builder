@@ -117,7 +117,7 @@ func TestCodexDispatchContextProjectsApprovedTurnEnvelope(t *testing.T) {
 		SessionID:            "session-1",
 		RunID:                "run-1",
 		CompactionGeneration: 3,
-		RequestKind:          CodexRequestKindTurn,
+		RequestKind:          CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
@@ -178,7 +178,7 @@ func TestCodexDispatchContextRejectsInvalidFacts(t *testing.T) {
 		{name: "blank session", facts: CodexDispatchFacts{RunID: "run-1"}},
 		{name: "blank run", facts: CodexDispatchFacts{SessionID: "session-1"}},
 		{name: "negative generation", facts: CodexDispatchFacts{SessionID: "session-1", RunID: "run-1", CompactionGeneration: -1}},
-		{name: "unknown kind", facts: CodexDispatchFacts{SessionID: "session-1", RunID: "run-1", RequestKind: "review"}},
+		{name: "unknown kind", facts: CodexDispatchFacts{SessionID: "session-1", RunID: "run-1", RequestKind: CodexRequestKind("review").Optional()}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -218,15 +218,15 @@ func TestNewCodexDispatchContextAllocatesDistinctState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second context: %v", err)
 	}
-	if first.SameState(second) {
-		t.Fatal("new contexts unexpectedly share dispatch state")
+	if first == second {
+		t.Fatal("new dispatch factory calls unexpectedly returned the same context")
 	}
-	fresh, err := first.Fresh()
+	fresh, err := NewCodexDispatchContext(facts)
 	if err != nil {
-		t.Fatalf("Fresh: %v", err)
+		t.Fatalf("fresh context: %v", err)
 	}
-	if first.SameState(fresh) {
-		t.Fatal("fresh context unexpectedly shares dispatch state")
+	if first == fresh {
+		t.Fatal("fresh dispatch factory call unexpectedly returned the same context")
 	}
 	firstMetadata, err := first.TurnMetadataJSON()
 	if err != nil {
@@ -286,7 +286,7 @@ func TestCodexDispatchDoesNotAffectRequestJSONOrPreciseTokenFingerprint(t *testi
 		SessionID:            base.SessionID,
 		RunID:                "run-1",
 		CompactionGeneration: 2,
-		RequestKind:          CodexRequestKindTurn,
+		RequestKind:          CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
@@ -300,7 +300,7 @@ func TestCodexDispatchDoesNotAffectRequestJSONOrPreciseTokenFingerprint(t *testi
 		t.Fatalf("Codex context changed request JSON/fingerprint:\nbase=%s\ncontext=%s", baseJSON, contextJSON)
 	}
 
-	context.state.acceptTurnState("opaque-state")
+	context.observeTurnStateCandidate("opaque-state", codexTurnStateSourceHTTPHeader)
 	stateJSON, stateFingerprint := requestJSONAndFingerprint(t, withContext)
 	if string(stateJSON) != string(baseJSON) || stateFingerprint != baseFingerprint {
 		t.Fatalf("retry-local state changed request JSON/fingerprint:\nbase=%s\nstate=%s", baseJSON, stateJSON)

@@ -697,15 +697,15 @@ func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	opts := transport.buildRequestOptions("Bearer x", OpenAIAuthMode{
 		IsOAuth:   true,
 		AccountID: "acc-1",
-	}, "session-1", codexDispatchProjection{RoutingHint: "model=gpt-5"}, nil)
+	}, openaiTestOptionalString("session-1"), &codexDispatchProjection{RoutingHint: "model=gpt-5"}, nil)
 
 	if len(opts) != 6 {
 		t.Fatalf("expected 6 request options, got %d", len(opts))
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "session-1", codexDispatchProjection{}, nil)) != 4 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, openaiTestOptionalString("session-1"), nil, nil)) != 4 {
 		t.Fatal("expected non-oauth options to include auth/session/caching headers")
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 3 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, nil, nil, nil)) != 3 {
 		t.Fatal("expected non-oauth options to include auth/caching headers")
 	}
 }
@@ -752,15 +752,19 @@ func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing
 
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 2 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, nil, nil, nil)) != 2 {
 		t.Fatal("expected empty auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, "", codexDispatchProjection{}, nil)) != 2 {
+	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, nil, nil, nil)) != 2 {
 		t.Fatal("expected whitespace auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "session-1", codexDispatchProjection{}, nil)) != 3 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, openaiTestOptionalString("session-1"), nil, nil)) != 3 {
 		t.Fatal("expected session header to remain when Authorization is omitted")
 	}
+}
+
+func openaiTestOptionalString(value string) *string {
+	return &value
 }
 
 func TestResolveAuth_AllowsAnonymousWhenBaseURLExplicitAndAuthNotConfigured(t *testing.T) {

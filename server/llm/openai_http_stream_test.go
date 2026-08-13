@@ -74,8 +74,12 @@ func TestOAuthGenerateAndGenerateStreamUseTheSameResponsesWireMode(t *testing.T)
 		}
 		stream, _ := payload["stream"].(bool)
 		requestModes <- stream
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = io.WriteString(w, "data: "+completedStreamEventJSON+"\n\ndata: [DONE]\n\n")
+		if stream {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: "+completedStreamEventJSON+"\n\ndata: [DONE]\n\n")
+			return
+		}
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -86,7 +90,7 @@ func TestOAuthGenerateAndGenerateStreamUseTheSameResponsesWireMode(t *testing.T)
 	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 		SessionID:   "test-session",
 		RunID:       "test-run",
-		RequestKind: CodexRequestKindTurn,
+		RequestKind: CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("dispatch context: %v", err)
@@ -106,8 +110,8 @@ func TestOAuthGenerateAndGenerateStreamUseTheSameResponsesWireMode(t *testing.T)
 
 	nonstreamMode := <-requestModes
 	streamMode := <-requestModes
-	if !nonstreamMode || !streamMode {
-		t.Fatalf("Responses wire modes differ: nonstream stream=%t, stream stream=%t; both must stream", nonstreamMode, streamMode)
+	if nonstreamMode || !streamMode {
+		t.Fatalf("Responses wire modes differ: Generate stream=%t, GenerateStreamWithEvents stream=%t", nonstreamMode, streamMode)
 	}
 }
 

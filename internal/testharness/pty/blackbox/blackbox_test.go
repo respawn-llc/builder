@@ -863,7 +863,7 @@ func testCodexDispatch(t *testing.T, sessionID string, requestKind llm.CodexRequ
 	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
 		SessionID:   sessionID,
 		RunID:       "run-1",
-		RequestKind: requestKind,
+		RequestKind: requestKind.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)

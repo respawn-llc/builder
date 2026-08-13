@@ -35,7 +35,7 @@ func TestGenerateAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalRetur
 	t.Cleanup(server.Close)
 
 	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindTurn,
+		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
@@ -90,7 +90,7 @@ func TestCompactionAttemptPublishesProviderStateDiagnosticsOnceBeforeTerminalRet
 	t.Cleanup(server.Close)
 
 	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindCompaction,
+		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindCompaction.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)
@@ -130,7 +130,7 @@ func assertProviderTurnStateDiagnosticEvents(t *testing.T, events []Event) {
 
 func TestProviderStateDiagnosticPublicationFailureIsLoggedAndRemainsPending(t *testing.T) {
 	dispatch, err := llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
-		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindTurn,
+		SessionID: "session-1", RunID: "run-1", RequestKind: llm.CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("NewCodexDispatchContext: %v", err)

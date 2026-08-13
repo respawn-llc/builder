@@ -289,8 +289,8 @@ func writeDispatchIsolationSuccess(w http.ResponseWriter) {
 }
 
 func writeDispatchIsolationResponse(w http.ResponseWriter, output string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_success\",\"object\":\"response\",\"output\":%s,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\ndata: [DONE]\n\n", output)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, "{\"id\":\"resp_success\",\"object\":\"response\",\"output\":%s,\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}", output)
 }
 
 func assertDistinctDispatchHandles(t *testing.T, first llm.Request, second llm.Request) {
@@ -298,7 +298,7 @@ func assertDistinctDispatchHandles(t *testing.T, first llm.Request, second llm.R
 	if first.CodexDispatch == nil || second.CodexDispatch == nil {
 		t.Fatal("provider request omitted Codex dispatch context")
 	}
-	if first.CodexDispatch.SameState(second.CodexDispatch) {
+	if first.CodexDispatch == second.CodexDispatch {
 		t.Fatal("newly built provider requests shared a retry-local state handle")
 	}
 }

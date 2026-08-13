@@ -698,9 +698,9 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 	var result compactionResult
 	enginePlan := planner.enginePlan(planningSnapshot, caps)
-	requestKind := llm.CodexRequestKind("")
+	var requestKind *llm.CodexRequestKind
 	if enginePlan.engineKind == compactionEngineRemote {
-		requestKind = llm.CodexRequestKindCompaction
+		requestKind = llm.CodexRequestKindCompaction.Optional()
 	}
 	dispatchFactory, err := e.activeDispatchRequestFactory(stepID, requestKind)
 	if err != nil {
@@ -709,7 +709,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	if enginePlan.engineKind == compactionEngineRemote {
 		result, err = e.compactRemote(ctx, stepID, input, providerID, instructions, dispatchFactory)
 		if err != nil && enginePlan.fallbackToLocalOnBadCheckpoint && errors.Is(err, errRemoteCompactionMissingCheckpoint) {
-			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, "")
+			localFactory, factoryErr := e.activeDispatchRequestFactory(stepID, nil)
 			if factoryErr != nil {
 				return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, factoryErr)
 			}

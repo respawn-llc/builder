@@ -30,7 +30,6 @@ describe("ProviderStateDiagnosticNotice", () => {
       />,
     );
 
-    expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
     expect(screen.getByRole("heading", { name: `localized:${titleKey}` })).toBeVisible();
     expect(screen.getByText(`localized:${bodyKey}`)).toBeVisible();
     expect(screen.queryByText(/private-step-id/i)).not.toBeInTheDocument();

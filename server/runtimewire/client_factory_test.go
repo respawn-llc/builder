@@ -277,7 +277,7 @@ func TestResumedMainClientUsesLockedProviderVerbosityForBothRequestPaths(t *test
 	request.CodexDispatch, err = llm.NewCodexDispatchContext(llm.CodexDispatchFacts{
 		SessionID:   request.SessionID,
 		RunID:       uuid.NewString(),
-		RequestKind: llm.CodexRequestKindTurn,
+		RequestKind: llm.CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("create generation dispatch identity: %v", err)

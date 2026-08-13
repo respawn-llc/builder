@@ -62,7 +62,7 @@ func TestDispatchRequestAssemblyUsesOnlyExplicitIdentityFacts(t *testing.T) {
 		SessionID:            "explicit-session",
 		RunID:                "explicit-run",
 		CompactionGeneration: 4,
-		RequestKind:          llm.CodexRequestKindTurn,
+		RequestKind:          llm.CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("build dispatch request: %v", err)
@@ -108,7 +108,7 @@ func TestActiveRunDispatchesKeepImmutableIdentityAndAllocateFreshState(t *testin
 			if first.CodexDispatch == nil || continuation.CodexDispatch == nil {
 				t.Fatal("active Run dispatch omitted Codex context")
 			}
-			if first.CodexDispatch.SameState(continuation.CodexDispatch) {
+			if first.CodexDispatch == continuation.CodexDispatch {
 				t.Fatal("tool continuation reused the preceding dispatch-state handle")
 			}
 			firstMetadata, err := first.CodexDispatch.TurnMetadataJSON()

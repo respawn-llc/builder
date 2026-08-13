@@ -202,7 +202,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -210,7 +210,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 		SessionID:            "session-1",
 		RunID:                "run-1",
 		CompactionGeneration: 2,
-		RequestKind:          CodexRequestKindTurn,
+		RequestKind:          CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("dispatch context: %v", err)
@@ -278,7 +278,7 @@ func TestOAuthFastGenerationRoutingTierMatchesPayload(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeCompletedResponseSSE(w)
+		writeCompletedResponseJSON(w)
 	}))
 	t.Cleanup(server.Close)
 
@@ -465,7 +465,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 					SessionID:   "session-1",
 					RunID:       "run-1",
-					RequestKind: CodexRequestKindTurn,
+					RequestKind: CodexRequestKindTurn.Optional(),
 				})
 				if err != nil {
 					t.Fatalf("dispatch context: %v", err)
@@ -512,7 +512,7 @@ func TestOAuthCompactRejectsUnrepresentableRoutingModelForEveryEffectiveTierBefo
 				dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 					SessionID:   "session-1",
 					RunID:       "run-1",
-					RequestKind: CodexRequestKindCompaction,
+					RequestKind: CodexRequestKindCompaction.Optional(),
 				})
 				if err != nil {
 					t.Fatalf("dispatch context: %v", err)

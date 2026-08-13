@@ -519,7 +519,7 @@ func mustTestDispatchRequestFactory(t *testing.T, sessionID string, runID string
 	factory, err := newDispatchRequestFactory(dispatchRequestIdentity{
 		SessionID:   sessionID,
 		RunID:       runID,
-		RequestKind: requestKind,
+		RequestKind: requestKind.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("new dispatch request factory: %v", err)

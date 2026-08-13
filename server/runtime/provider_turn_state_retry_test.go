@@ -84,7 +84,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *test
 					_, _ = w.Write([]byte(`{"error":{"message":"retry me","type":"server_error"}}`))
 					return
 				}
-				writeRuntimeCompletedResponseSSE(w, nil)
+				writeRuntimeCompletedResponseJSON(w, nil)
 			})
 
 			var server *httptest.Server
@@ -101,7 +101,7 @@ func TestGenerateWithRetryReplaysExactProviderTurnStateOverHTTP1AndHTTP2(t *test
 				SessionID:            "session-1",
 				RunID:                "run-1",
 				CompactionGeneration: 1,
-				RequestKind:          llm.CodexRequestKindTurn,
+				RequestKind:          llm.CodexRequestKindTurn.Optional(),
 			})
 			if err != nil {
 				t.Fatalf("NewCodexDispatchContext: %v", err)
@@ -175,7 +175,7 @@ func TestChangedGenerationPayloadDoesNotInheritProviderTurnState(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":{"message":"missing tool output","type":"invalid_request_error"}}`))
 			return
 		}
-		writeRuntimeCompletedResponseSSE(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
+		writeRuntimeCompletedResponseJSON(w, []byte(`[{"type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"repaired","annotations":[]}]}]`))
 	}))
 	t.Cleanup(server.Close)
 
@@ -354,6 +354,18 @@ func writeRuntimeCompletedResponseSSE(w http.ResponseWriter, output []byte) {
 	_, _ = fmt.Fprintf(
 		w,
 		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}}\n\ndata: [DONE]\n\n",
+		output,
+	)
+}
+
+func writeRuntimeCompletedResponseJSON(w http.ResponseWriter, output []byte) {
+	if output == nil {
+		output = []byte(`[]`)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(
+		w,
+		"{\"id\":\"resp_1\",\"object\":\"response\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2},\"output\":%s}",
 		output,
 	)
 }

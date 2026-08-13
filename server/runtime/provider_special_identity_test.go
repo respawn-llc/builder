@@ -83,7 +83,7 @@ func TestStandaloneCompactionUsesExclusiveRunIdentityAndFreshRebuildState(t *tes
 		WindowID:    store.Meta().SessionID + ":0",
 		RequestKind: llm.CodexRequestKindCompaction,
 	})
-	if client.calls[0].CodexDispatch.SameState(client.calls[1].CodexDispatch) {
+	if client.calls[0].CodexDispatch == client.calls[1].CodexDispatch {
 		t.Fatal("changed standalone compaction payload reused retry-local state")
 	}
 }
@@ -130,10 +130,10 @@ func TestReviewerRequestsUseSupervisorIdentityAndIsolateRetryState(t *testing.T)
 			t.Fatalf("Reviewer call %d SessionID = %q, want %q", index+1, call.SessionID, wantSessionID)
 		}
 	}
-	if !reviewerClient.calls[0].CodexDispatch.SameState(reviewerClient.calls[1].CodexDispatch) {
+	if reviewerClient.calls[0].CodexDispatch != reviewerClient.calls[1].CodexDispatch {
 		t.Fatal("unchanged Reviewer retry did not reuse retry-local state")
 	}
-	if reviewerClient.calls[1].CodexDispatch.SameState(reviewerClient.calls[2].CodexDispatch) {
+	if reviewerClient.calls[1].CodexDispatch == reviewerClient.calls[2].CodexDispatch {
 		t.Fatal("later Reviewer request reused preceding retry-local state")
 	}
 }

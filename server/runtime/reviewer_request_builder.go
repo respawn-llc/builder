@@ -82,7 +82,7 @@ func (e *Engine) buildReviewerDispatchRequest(
 		SessionID:            reviewerSessionID(e.store.Meta().SessionID),
 		RunID:                runID,
 		CompactionGeneration: e.compactionRuntimeState().Count(),
-		RequestKind:          llm.CodexRequestKindTurn,
+		RequestKind:          llm.CodexRequestKindTurn.Optional(),
 	})
 	if err != nil {
 		return llm.Request{}, err

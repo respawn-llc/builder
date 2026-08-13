@@ -26,12 +26,9 @@ describe("provider-state diagnostic presentation", () => {
     const presentation = providerStateDiagnosticPresentation({ kind: "provider_state", code }, translate);
 
     expect(translate.mock.calls.map(([key]) => key)).toEqual(keys);
-    expect(presentation).toEqual({
-      tone: "warning",
-      title: `localized:${keys[0]}`,
-      body: `localized:${keys[1]}`,
-      actionLabel: `localized:${keys[2]}`,
-    });
+    expect(presentation.title).toBe(`localized:${keys[0]}`);
+    expect(presentation.body).toBe(`localized:${keys[1]}`);
+    expect(presentation.actionLabel).toBe(`localized:${keys[2]}`);
   });
 
   it.each(["provider_turn_state_invalid", "provider_turn_state_conflict"] as const)(

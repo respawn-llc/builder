@@ -160,7 +160,7 @@ func TestRemoteCompactionTransientRetryReusesUnchangedDispatchState(t *testing.T
 	if first == nil || second == nil {
 		t.Fatal("transient retry omitted Codex dispatch state")
 	}
-	if !first.SameState(second) {
+	if first != second {
 		t.Fatal("unchanged transient retry allocated a fresh dispatch-state handle")
 	}
 }

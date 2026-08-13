@@ -796,7 +796,7 @@ func testOAuthCompactionRequest(t *testing.T, model string) OpenAICompactionRequ
 	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
 		SessionID:   "test-session",
 		RunID:       "test-run",
-		RequestKind: CodexRequestKindCompaction,
+		RequestKind: CodexRequestKindCompaction.Optional(),
 	})
 	if err != nil {
 		t.Fatalf("dispatch context: %v", err)

@@ -27,18 +27,20 @@ type openAIPayloadToolControls struct {
 	choice responses.ToolChoiceOptions
 }
 
-func effectiveGenerationServiceTier(request OpenAIRequest, capabilities ProviderCapabilities) responses.ResponseNewParamsServiceTier {
+func effectiveGenerationServiceTier(request OpenAIRequest, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
 	if request.FastMode && SupportsFastModeProvider(capabilities) {
-		return responses.ResponseNewParamsServiceTierPriority
+		tier := responses.ResponseNewParamsServiceTierPriority
+		return &tier
 	}
-	return ""
+	return nil
 }
 
-func effectiveCompactionServiceTier(request OpenAICompactionRequest, capabilities ProviderCapabilities) responses.ResponseNewParamsServiceTier {
+func effectiveCompactionServiceTier(request OpenAICompactionRequest, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
 	if request.FastMode && SupportsFastModeProvider(capabilities) {
-		return responses.ResponseNewParamsServiceTierPriority
+		tier := responses.ResponseNewParamsServiceTierPriority
+		return &tier
 	}
-	return ""
+	return nil
 }
 
 func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilities ProviderCapabilities) openAIRequestPayloadBuilder {
@@ -54,7 +56,7 @@ func (t *HTTPTransport) buildDispatchPayload(
 	request OpenAIRequest,
 	mode OpenAIAuthMode,
 	capabilities ProviderCapabilities,
-	projection codexDispatchProjection,
+	projection *codexDispatchProjection,
 ) (responses.ResponseNewParams, error) {
 	payload, err := t.buildPayload(request, mode, capabilities)
 	if err != nil {
@@ -215,14 +217,14 @@ func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequ
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
 		out.Instructions = openai.String(instructions)
 	}
-	if serviceTier := effectiveCompactionServiceTier(request, b.capabilities); serviceTier != "" {
-		out.ServiceTier = serviceTier
+	if serviceTier := effectiveCompactionServiceTier(request, b.capabilities); serviceTier != nil {
+		out.ServiceTier = *serviceTier
 	}
 	return out, nil
 }
 
-func applyCodexClientMetadata(payload *responses.ResponseNewParams, projection codexDispatchProjection) {
-	if projection.TurnMetadataJSON == "" {
+func applyCodexClientMetadata(payload *responses.ResponseNewParams, projection *codexDispatchProjection) {
+	if projection == nil {
 		return
 	}
 	payload.SetExtraFields(map[string]any{

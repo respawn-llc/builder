@@ -2,7 +2,7 @@ package llm
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -46,227 +46,137 @@ func (c *CodexDispatchContext) observeTurnStateMetadata(raw string) {
 }
 
 func decodeCodexTurnStateMetadata(raw string) ([]string, bool) {
-	parser := codexMetadataParser{raw: raw}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	nextString := func() (string, bool) {
+		token, err := decoder.Token()
+		if err != nil {
+			return "", false
+		}
+		value, ok := token.(string)
+		return value, ok
+	}
+	var skipValue func() bool
+	skipValue = func() bool {
+		token, err := decoder.Token()
+		if err != nil {
+			return false
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return true
+		}
+		if delim != json.Delim('{') && delim != json.Delim('[') {
+			return false
+		}
+		for decoder.More() {
+			if delim == json.Delim('{') {
+				if _, ok := nextString(); !ok {
+					return false
+				}
+			}
+			if !skipValue() {
+				return false
+			}
+		}
+		last, err := decoder.Token()
+		return err == nil &&
+			((delim == json.Delim('{') && last == json.Delim('}')) ||
+				(delim == json.Delim('[') && last == json.Delim(']')))
+	}
+	decodeValue := func() ([]string, bool) {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, false
+		}
+		if value, ok := token.(string); ok {
+			return []string{value}, true
+		}
+		if token != json.Delim('[') {
+			return nil, false
+		}
+		values := make([]string, 0)
+		for decoder.More() {
+			value, ok := nextString()
+			if !ok {
+				return nil, false
+			}
+			values = append(values, value)
+		}
+		last, err := decoder.Token()
+		if err != nil || last != json.Delim(']') || len(values) == 0 {
+			return nil, false
+		}
+		return values, true
+	}
+	decodeHeaders := func() ([]string, bool) {
+		first, err := decoder.Token()
+		if err != nil || first != json.Delim('{') {
+			return nil, false
+		}
+		var (
+			found      bool
+			candidates []string
+		)
+		for decoder.More() {
+			name, ok := nextString()
+			if !ok {
+				return nil, false
+			}
+			if !strings.EqualFold(name, codexTurnStateHeader) {
+				if !skipValue() {
+					return nil, false
+				}
+				continue
+			}
+			if found {
+				return nil, false
+			}
+			found = true
+			var valid bool
+			candidates, valid = decodeValue()
+			if !valid {
+				return nil, false
+			}
+		}
+		last, err := decoder.Token()
+		return candidates, err == nil && last == json.Delim('}')
+	}
+
+	first, err := decoder.Token()
+	if err != nil || first != json.Delim('{') {
+		return nil, true
+	}
 	var (
 		headersFound bool
 		candidates   []string
-		invalid      bool
 	)
-	err := parser.parseObject(func(name string) error {
+	for decoder.More() {
+		name, ok := nextString()
+		if !ok {
+			return nil, true
+		}
 		if !strings.EqualFold(name, "headers") {
-			return parser.skipValue()
-		}
-		if headersFound {
-			invalid = true
-			return parser.skipValue()
-		}
-		headersFound = true
-		var headersInvalid bool
-		candidates, headersInvalid = parser.parseTurnStateHeaders()
-		if headersInvalid {
-			invalid = true
-		}
-		return nil
-	})
-	if err != nil || !parser.atEnd() {
-		return nil, true
-	}
-	if invalid {
-		return nil, true
-	}
-	return candidates, false
-}
-
-func (p *codexMetadataParser) parseTurnStateHeaders() ([]string, bool) {
-	var (
-		found      bool
-		candidates []string
-		invalid    bool
-	)
-	err := p.parseObject(func(name string) error {
-		if !strings.EqualFold(name, codexTurnStateHeader) {
-			return p.skipValue()
-		}
-		if found {
-			invalid = true
-			return p.skipValue()
-		}
-		found = true
-		var valueInvalid bool
-		candidates, valueInvalid = p.parseTurnStateValue()
-		if valueInvalid {
-			candidates = nil
-			invalid = true
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, true
-	}
-	if invalid {
-		return nil, true
-	}
-	return candidates, false
-}
-
-func (p *codexMetadataParser) parseTurnStateValue() ([]string, bool) {
-	p.skipSpace()
-	if p.peek() == '"' {
-		value, err := p.parseString()
-		if err != nil {
-			return nil, true
-		}
-		return []string{value}, false
-	}
-	if !p.consume('[') {
-		return nil, true
-	}
-	values := make([]string, 0)
-	p.skipSpace()
-	if p.consume(']') {
-		return nil, true
-	}
-	for {
-		value, err := p.parseString()
-		if err != nil {
-			return nil, true
-		}
-		values = append(values, value)
-		p.skipSpace()
-		if p.consume(']') {
-			return values, false
-		}
-		if !p.consume(',') {
-			return nil, true
-		}
-	}
-}
-
-type codexMetadataParser struct {
-	raw   string
-	index int
-}
-
-func (p *codexMetadataParser) parseObject(visit func(string) error) error {
-	p.skipSpace()
-	if !p.consume('{') {
-		return fmt.Errorf("expected JSON object")
-	}
-	p.skipSpace()
-	if p.consume('}') {
-		return nil
-	}
-	for {
-		name, err := p.parseString()
-		if err != nil {
-			return err
-		}
-		p.skipSpace()
-		if !p.consume(':') {
-			return fmt.Errorf("expected JSON object member separator")
-		}
-		if err := visit(name); err != nil {
-			return err
-		}
-		p.skipSpace()
-		if p.consume('}') {
-			return nil
-		}
-		if !p.consume(',') {
-			return fmt.Errorf("expected JSON object member delimiter")
-		}
-	}
-}
-
-func (p *codexMetadataParser) skipValue() error {
-	p.skipSpace()
-	switch p.peek() {
-	case '"':
-		_, err := p.parseString()
-		return err
-	case '{':
-		return p.parseObject(func(string) error { return p.skipValue() })
-	case '[':
-		p.index++
-		p.skipSpace()
-		if p.consume(']') {
-			return nil
-		}
-		for {
-			if err := p.skipValue(); err != nil {
-				return err
+			if !skipValue() {
+				return nil, true
 			}
-			p.skipSpace()
-			if p.consume(']') {
-				return nil
-			}
-			if !p.consume(',') {
-				return fmt.Errorf("expected JSON array element delimiter")
-			}
-		}
-	default:
-		start := p.index
-		for p.index < len(p.raw) && !strings.ContainsRune(" \t\r\n,]}", rune(p.raw[p.index])) {
-			p.index++
-		}
-		if start == p.index || !json.Valid([]byte(p.raw[start:p.index])) {
-			return fmt.Errorf("invalid JSON scalar")
-		}
-		return nil
-	}
-}
-
-func (p *codexMetadataParser) parseString() (string, error) {
-	p.skipSpace()
-	if p.peek() != '"' {
-		return "", fmt.Errorf("expected JSON string")
-	}
-	start := p.index
-	p.index++
-	escaped := false
-	for p.index < len(p.raw) {
-		current := p.raw[p.index]
-		p.index++
-		if escaped {
-			escaped = false
 			continue
 		}
-		switch current {
-		case '\\':
-			escaped = true
-		case '"':
-			var value string
-			if err := json.Unmarshal([]byte(p.raw[start:p.index]), &value); err != nil {
-				return "", err
-			}
-			return value, nil
+		if headersFound {
+			return nil, true
+		}
+		headersFound = true
+		var valid bool
+		candidates, valid = decodeHeaders()
+		if !valid {
+			return nil, true
 		}
 	}
-	return "", fmt.Errorf("unterminated JSON string")
-}
-
-func (p *codexMetadataParser) atEnd() bool {
-	p.skipSpace()
-	return p.index == len(p.raw)
-}
-
-func (p *codexMetadataParser) skipSpace() {
-	for p.index < len(p.raw) && strings.ContainsRune(" \t\r\n", rune(p.raw[p.index])) {
-		p.index++
+	last, err := decoder.Token()
+	if err != nil || last != json.Delim('}') {
+		return nil, true
 	}
-}
-
-func (p *codexMetadataParser) consume(expected byte) bool {
-	if p.peek() != expected {
-		return false
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, true
 	}
-	p.index++
-	return true
-}
-
-func (p *codexMetadataParser) peek() byte {
-	if p.index >= len(p.raw) {
-		return 0
-	}
-	return p.raw[p.index]
+	return candidates, false
 }
