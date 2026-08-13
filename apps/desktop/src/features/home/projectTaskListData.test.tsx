@@ -531,7 +531,13 @@ function taskGroupForInput(input: TaskListInput): TaskGroup {
       return "backlog";
     case "done":
       return "done";
-    default:
+    case "active":
+    case "waiting_question":
+    case "waiting_approval":
+    case "interrupted":
+    case "running":
+    case "queued":
+    case undefined:
       return "active";
   }
 }
