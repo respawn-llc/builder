@@ -14,7 +14,7 @@ import (
 )
 
 func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFixture(t, db)
 
@@ -111,7 +111,7 @@ func TestListTaskSearchPageDescriptorsAllocatesSourceOrdinalsFromOneFTSRelation(
 }
 
 func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFixture(t, db)
 	matcher, err := tasksearchtext.NewLiteralMatcher("tas-1", tasksearchtext.LiteralCaseInsensitive)
@@ -142,7 +142,7 @@ func TestListTaskSearchPageDescriptorsFiltersShortIDIndexBeforeSourceRelations(t
 }
 
 func TestListTaskSearchPageDescriptorsSkipsDirectlyToLargeOffset(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFixture(t, db)
 	params := taskSearchPageDescriptorParams(
@@ -166,7 +166,7 @@ func TestListTaskSearchPageDescriptorsSkipsDirectlyToLargeOffset(t *testing.T) {
 }
 
 func TestListTaskSearchPageDescriptorsFiltersCanonicalDocumentsBeforeTaskWinnerSelection(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFilteringFixture(t, db)
 
@@ -242,7 +242,7 @@ func TestListTaskSearchPageDescriptorsFiltersCanonicalDocumentsBeforeTaskWinnerS
 }
 
 func TestListTaskSearchPageDescriptorsRanksAndPaginatesShortIDMatches(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchShortIDRankingFixture(t, db)
 	matcher, err := tasksearchtext.NewLiteralMatcher("345", tasksearchtext.LiteralCaseInsensitive)
@@ -318,7 +318,7 @@ func TestListTaskSearchPageDescriptorsRanksAndPaginatesShortIDMatches(t *testing
 }
 
 func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNewestCommentsAndOffsets(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFilteringFixture(t, db)
 
@@ -417,7 +417,7 @@ func TestListTaskSearchPageDescriptorsFiltersProjectAndStatusBeforeAllocatingNew
 }
 
 func TestListTaskSearchPageDescriptorsOrdersCommentsByWeightedRankBeforeRecency(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	createTaskSearchPageDescriptorFilteringFixture(t, db)
 	weakerNewComment := "needle " + strings.Repeat("filler ", 256)
@@ -480,7 +480,7 @@ func TestListTaskSearchPageDescriptorsKeepsSelectiveStatusPageWorkNearLinear(t *
 			measurements := make([]measurement, 0, 2)
 			for _, taskCount := range []int{128, 256} {
 				t.Run(fmt.Sprintf("%d_tasks", taskCount), func(t *testing.T) {
-					db := openSQLiteFixture(t, ":memory:")
+					db := openSQLiteFixture(t)
 					t.Cleanup(func() { _ = db.Close() })
 					db.SetMaxOpenConns(1)
 					createTaskSearchHighCardinalityFixture(t, db, taskCount)
@@ -529,7 +529,7 @@ func TestListTaskSearchPageDescriptorsKeepsSelectiveShortIDPageWorkBounded(t *te
 	measurements := make([]measurement, 0, 2)
 	for _, taskCount := range []int{128, 4096} {
 		t.Run(fmt.Sprintf("%d_tasks", taskCount), func(t *testing.T) {
-			db := openSQLiteFixture(t, ":memory:")
+			db := openSQLiteFixture(t)
 			t.Cleanup(func() { _ = db.Close() })
 			db.SetMaxOpenConns(1)
 			createTaskSearchHighCardinalityFixture(t, db, taskCount)

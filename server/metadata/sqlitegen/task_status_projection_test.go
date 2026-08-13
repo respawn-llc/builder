@@ -3,7 +3,7 @@ package sqlitegen
 import "testing"
 
 func TestListWorkflowTaskStatusProjectionByTasksUsesLiveQuestionAndApprovalPrecedence(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE workflow_task_status_records (

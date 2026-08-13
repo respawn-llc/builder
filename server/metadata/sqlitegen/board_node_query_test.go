@@ -13,7 +13,7 @@ import (
 const boardQueryNodeID = "55555555-5555-4555-8555-555555555555"
 
 func TestListBoardNodeTasksSortsAndOffsetsFilteredRows(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE tasks (
