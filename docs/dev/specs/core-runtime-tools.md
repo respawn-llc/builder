@@ -180,6 +180,8 @@
 - The existing actionable authentication error surfaces the provider authorization diagnostic and correlated provider request ID when present while preserving its authentication classification.
 - A provider-supplied authorization diagnostic never changes authentication state by itself.
 
+OpenAI-family request identity, ChatGPT Codex routing, and provider turn state are defined in [OpenAI Provider Dispatch](openai-provider-dispatch.md).
+
 ## Compaction
 
 - Compaction starts a new bounded active conversation from compacted output while retaining the full durable session history. The compacted output and all new generation context are committed atomically before later model work.

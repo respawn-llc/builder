@@ -33,7 +33,7 @@ func TestAcceptedResponsePersistsProviderModelMismatchAndAdjustedUsage(t *testin
 				Debug: test.debug,
 			})
 
-			if _, err := engine.runStepLoop(context.Background(), "step-1"); err != nil {
+			if _, err := runStepLoopInActiveTestRun(t, context.Background(), engine); err != nil {
 				t.Fatal(err)
 			}
 			warnings := providerModelMismatchWarnings(t, store)
@@ -61,7 +61,7 @@ func TestConsecutiveAcceptedToolLoopResponsesPersistOneMismatchEach(t *testing.T
 	second.ServedModel = stringPointer("served-model")
 	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{first, second}}, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "requested-model"})
-	if _, err := engine.runStepLoop(context.Background(), "shared-step"); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, context.Background(), engine); err != nil {
 		t.Fatal(err)
 	}
 	if warnings := providerModelMismatchWarnings(t, store); len(warnings) != 1 {

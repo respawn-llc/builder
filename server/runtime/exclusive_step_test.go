@@ -24,6 +24,7 @@ type stubExclusiveStepLifecycle struct {
 	runCalls     int
 	runNextCalls int
 	runFn        func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error
+	snapshotFn   func() *RunSnapshot
 	snapshot     *RunSnapshot
 	activeStepID string
 }
@@ -130,6 +131,9 @@ func (s *stubExclusiveStepLifecycle) IsBusy() bool {
 }
 
 func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
+	if s.snapshotFn != nil {
+		return s.snapshotFn()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneRunSnapshot(s.snapshot)
@@ -1120,7 +1124,9 @@ func TestBackgroundNoticeSchedulerSchedulesAfterBusyStepEnds(t *testing.T) {
 	}}}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
-	steps := &stubExclusiveStepLifecycle{}
+	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(context.Context, string) error) error {
+		return eng.stepLifecycle.Run(ctx, options, fn)
+	}}
 	steps.setBusy(true)
 	scheduler := &defaultBackgroundNoticeScheduler{engine: eng, steps: steps}
 	backgroundActivityID := uuid.NewString()
@@ -1203,7 +1209,9 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	steps := &stubExclusiveStepLifecycle{}
+	steps := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(context.Context, string) error) error {
+		return eng.stepLifecycle.Run(ctx, options, fn)
+	}}
 	compactor := &defaultContextCompactor{engine: eng, steps: steps}
 	if _, err := compactor.CompactContextWithAcceptance(context.Background(), "", nil, nil); err != nil {
 		t.Fatalf("compact context: %v", err)

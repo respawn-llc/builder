@@ -2,14 +2,9 @@ package serverapi
 
 import (
 	"testing"
-
-	"core/shared/protocol"
 )
 
 func TestProjectWorkspaceCatalogHardCutoverContract(t *testing.T) {
-	if protocol.Version != "122" {
-		t.Fatalf("protocol version = %q, want 122", protocol.Version)
-	}
 	if err := (ProjectWorkspaceListRequest{ProjectID: "project-1", Offset: 500, Limit: MaxProjectWorkspacePageSize}).Validate(); err != nil {
 		t.Fatalf("valid request: %v", err)
 	}

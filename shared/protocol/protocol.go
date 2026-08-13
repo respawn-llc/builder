@@ -33,7 +33,6 @@ type CapabilityFlags struct {
 	RuntimeControl         bool `json:"runtime_control"`
 	RuntimeLiveControl     bool `json:"runtime_live_control"`
 	PromptControl          bool `json:"prompt_control"`
-	ProcessOutput          bool `json:"process_output"`
 	AttentionNotifications bool `json:"attention_notifications"`
 	OnboardingFinalize     bool `json:"onboarding_finalize"`
 	PromptCommands         bool `json:"prompt_commands"`

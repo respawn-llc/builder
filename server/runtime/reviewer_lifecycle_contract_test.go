@@ -45,13 +45,16 @@ func TestDefaultStepExecutorOwnsReviewerLifecycleAndPropagatesFatalError(t *test
 		messages: engine.messageFlow,
 	}
 
-	_, err := engine.runStepLoopWithOptions(
-		context.Background(),
-		"step-1",
-		"all",
-		&fakeClient{},
-		false,
-	)
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		_, runErr := engine.runStepLoopWithOptions(
+			ctx,
+			stepID,
+			"all",
+			&fakeClient{},
+			false,
+		)
+		return runErr
+	})
 	if !errors.Is(err, fatalErr) {
 		t.Fatalf("outer Agent Step error = %v, want %v", err, fatalErr)
 	}
@@ -212,7 +215,10 @@ func TestReviewerFactCommitFenceRunsThroughCallerLifecycle(t *testing.T) {
 						engine: engine, phase: engine.phaseProtocol, reviewer: pipeline,
 						messages: engine.messageFlow,
 					}
-					_, runErr := engine.runStepLoopWithOptions(context.Background(), "11111111-1111-4111-8111-111111111111", "all", &fakeClient{}, false)
+					runErr := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+						_, err := engine.runStepLoopWithOptions(ctx, stepID, "all", &fakeClient{}, false)
+						return err
+					})
 					if blocker != nil {
 						if err := blocker.Restore(); err != nil {
 							t.Fatalf("restore append blocker: %v", err)

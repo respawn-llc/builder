@@ -370,7 +370,7 @@ func TestRunStepLoopSkipsCompactionSoonReminderWhenImmediateAutoCompactionRuns(t
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 9_990, WindowTokens: 20_000})
 
-	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	msg, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
 
-	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	msg, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
@@ -485,7 +485,7 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	msg, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}

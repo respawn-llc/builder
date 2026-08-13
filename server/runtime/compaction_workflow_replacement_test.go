@@ -65,9 +65,9 @@ func TestWorkflowPostCompletionCompactionKeepsCompletedOutputAndDormantMetaConte
 		t.Fatalf("persist terminal output: %v", err)
 	}
 
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"workflow-post-completion",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeWorkflowPostCompletion,
 		compactionInstructionsInput{},
 		false,
@@ -138,9 +138,9 @@ func TestWorkflowPostCompletionCompactionRestoresBoundaryAndLazyContinuationCons
 		remoteCompactionReplacement(1_000, 100, 200_000),
 	}
 
-	_, receipt, err := fixture.engine.compactNow(
-		context.Background(),
-		"workflow-post-completion",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		fixture.engine,
 		compactionModeWorkflowPostCompletion,
 		compactionInstructionsInput{},
 		false,
@@ -563,7 +563,7 @@ func TestRemoteCompactionRefreshesWorkflowTaskAwareness(t *testing.T) {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	if _, _, err := engine.compactNow(context.Background(), "compact", compactionModeManual, compactionInstructionsInput{}, false); err != nil {
+	if _, _, err := compactNowInActiveTestRun(t, engine, compactionModeManual, compactionInstructionsInput{}, false); err != nil {
 		t.Fatalf("compact workflow context: %v", err)
 	}
 	expectedIdentity := workflowruntime.CurrentNodePromptIdentity(
@@ -754,9 +754,9 @@ func TestWorkflowCompactionResetsProtocolViolationBudget(t *testing.T) {
 		}
 	}
 
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

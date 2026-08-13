@@ -259,7 +259,10 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptLiveRunFinishedMessages(evt)
 	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
 		return transcriptReviewerStateMessages(evt)
-	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed, runtime.EventInFlightClearFailed:
+	case runtime.EventSleepGuardFailed,
+		runtime.EventPromptHistoryPersistFailed,
+		runtime.EventInFlightClearFailed,
+		runtime.EventProviderTurnStateInvalid:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -658,22 +661,28 @@ func transcriptReviewerStateMessages(evt runtime.Event) []clientui.TranscriptEve
 }
 
 func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.TranscriptEvent {
-	diagnostic := clientui.TranscriptOperationalDiagnostic{Detail: strings.TrimSpace(evt.Error)}
+	var stepID *runtimeids.StepID
 	if strings.TrimSpace(evt.StepID) != "" {
-		stepID := mustTranscriptStepID(evt.StepID, "operational diagnostic")
-		diagnostic.StepID = &stepID
+		parsed := mustTranscriptStepID(evt.StepID, "operational diagnostic")
+		stepID = &parsed
+	}
+	diagnostic := func(code clientui.OperationalDiagnosticCode, detail string) []clientui.TranscriptEvent {
+		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+			Code: code, StepID: stepID, Detail: detail,
+		})}
 	}
 	switch evt.Kind {
 	case runtime.EventSleepGuardFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticSleepGuardFailed
+		return diagnostic(clientui.OperationalDiagnosticSleepGuardFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventPromptHistoryPersistFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticPromptHistoryPersistFailed
+		return diagnostic(clientui.OperationalDiagnosticPromptHistoryPersistFailed, strings.TrimSpace(evt.Error))
 	case runtime.EventInFlightClearFailed:
-		diagnostic.Code = clientui.OperationalDiagnosticInFlightClearFailed
+		return diagnostic(clientui.OperationalDiagnosticInFlightClearFailed, strings.TrimSpace(evt.Error))
+	case runtime.EventProviderTurnStateInvalid:
+		return diagnostic(clientui.OperationalDiagnosticProviderTurnStateInvalid, "")
 	default:
 		panic(fmt.Sprintf("runtime event %q is not an operational diagnostic", evt.Kind))
 	}
-	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(diagnostic)}
 }
 
 func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.TranscriptCommittedRow {

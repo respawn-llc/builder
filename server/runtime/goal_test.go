@@ -417,7 +417,7 @@ func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	_, err := engine.runStepLoop(t.Context(), "step-1")
+	_, err := runStepLoopInActiveTestRun(t, t.Context(), engine)
 	if !errors.Is(err, ErrGoalRequiresAskQuestion) {
 		t.Fatalf("runStepLoop error = %v, want ErrGoalRequiresAskQuestion", err)
 	}
@@ -448,7 +448,7 @@ func TestActiveGoalAllowsModelTurnWithAskQuestionEnabled(t *testing.T) {
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	if _, err := engine.runStepLoop(t.Context(), "step-1"); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, t.Context(), engine); err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -463,7 +463,7 @@ func TestActiveGoalAllowsModelTurnWithQuestionsDisabledWhenAskQuestionToolVisibl
 		t.Fatalf("SetGoal: %v", err)
 	}
 
-	if _, err := engine.runStepLoop(t.Context(), "step-1"); err != nil {
+	if _, err := runStepLoopInActiveTestRun(t, t.Context(), engine); err != nil {
 		t.Fatalf("runStepLoop with questions disabled: %v", err)
 	}
 	assertModelCallCount(t, client, 1)
@@ -1000,13 +1000,17 @@ func TestGoalLoopRetriesWhenExclusiveStepIsBusy(t *testing.T) {
 	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	baseLifecycle := engine.stepLifecycle
 	attempts := 0
-	engine.stepLifecycle = &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
+	wrappedLifecycle := &stubExclusiveStepLifecycle{runFn: func(ctx context.Context, options exclusiveStepOptions, fn func(stepCtx context.Context, stepID string) error) error {
 		attempts++
 		if attempts == 1 {
 			return ErrAgentBusy
 		}
 		return baseLifecycle.Run(ctx, options, fn)
-	}}
+	}, snapshotFn: baseLifecycle.Snapshot}
+	engine.stepLifecycle = wrappedLifecycle
+	t.Cleanup(func() {
+		engine.stepLifecycle = baseLifecycle
+	})
 	client.beforeReturn = func(call int) {
 		if call == 1 {
 			_, _ = engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)

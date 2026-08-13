@@ -431,7 +431,7 @@ func TestScriptedResponsesSetsSSEContentTypeBeforeStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequest: %v", err)
 	}
-	request.Header.Set("session_id", runtimeids.NewSessionID().String())
+	request.Header.Set("session-id", runtimeids.NewSessionID().String())
 	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		t.Fatalf("POST responses: %v", err)
@@ -487,7 +487,7 @@ func providerClientWithWindow(t *testing.T, stub *blackbox.ResponsesStub, window
 }
 
 func request(sessionID string, items []llm.ResponseItem) llm.Request {
-	return llm.Request{Model: "gpt-5", SessionID: sessionID, Items: items, ToolChoiceMode: llm.ToolChoiceModeAutomatic}
+	return llm.Request{Model: "gpt-5", SessionID: textutil.Value(sessionID), Items: items, ToolChoiceMode: llm.ToolChoiceModeAutomatic}
 }
 
 func generate(t *testing.T, client llm.Client, sessionID string, items []llm.ResponseItem) llm.Response {

@@ -14,10 +14,7 @@ import (
 
 type responseMetadataMode bool
 
-const (
-	responseMetadataNonStreaming responseMetadataMode = false
-	responseMetadataStreaming    responseMetadataMode = true
-)
+const responseMetadataStreaming responseMetadataMode = true
 
 func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 	tests := []struct {
@@ -30,20 +27,17 @@ func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 	}{
 		{
 			name:           "non-streaming standard model wins",
-			mode:           responseMetadataNonStreaming,
 			completedModel: " standard-model ",
 			headers:        http.Header{"Openai-Model": {"header-model"}, "X-Openai-Model": {"fallback-model"}},
 			want:           stringPointer("standard-model"),
 		},
 		{
 			name:    "non-streaming provider header priority",
-			mode:    responseMetadataNonStreaming,
 			headers: http.Header{"Openai-Model": {" ", " routed-model "}, "X-Openai-Model": {"fallback-model"}},
 			want:    stringPointer("routed-model"),
 		},
 		{
 			name:    "non-streaming provider header fallback",
-			mode:    responseMetadataNonStreaming,
 			headers: http.Header{"Openai-Model": {" ", "\t"}, "X-Openai-Model": {" fallback-model "}},
 			want:    stringPointer("fallback-model"),
 		},
@@ -72,8 +66,7 @@ func TestOpenAIClientSelectsServedModelMetadata(t *testing.T) {
 				capturedModel = decodeRequestedModel(t, request)
 				writeSuccessfulMetadataResponse(t, w, test.mode, test.createdModel, test.completedModel)
 			})
-			request := Request{Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
-
+			request := Request{SessionID: stringPointer("metadata-session"), Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
 			client := NewOpenAIClient(transport)
 			response, err := client.Generate(context.Background(), request)
 			if test.mode == responseMetadataStreaming {
@@ -103,7 +96,7 @@ func TestOpenAIClientParsesStrictReasoningIncludedHeader(t *testing.T) {
 		{name: "malformed", value: stringPointer("1")},
 		{name: "absent"},
 	}
-	for _, mode := range []responseMetadataMode{responseMetadataNonStreaming, responseMetadataStreaming} {
+	for _, mode := range []responseMetadataMode{false, responseMetadataStreaming} {
 		for _, header := range headers {
 			modeName := "non-streaming"
 			if mode == responseMetadataStreaming {
@@ -118,10 +111,7 @@ func TestOpenAIClientParsesStrictReasoningIncludedHeader(t *testing.T) {
 					writeSuccessfulMetadataResponse(t, w, mode, "", "")
 				})
 
-				request := Request{
-					Model:          "requested-model",
-					ToolChoiceMode: ToolChoiceModeAutomatic,
-				}
+				request := Request{SessionID: stringPointer("metadata-session"), Model: "requested-model", ToolChoiceMode: ToolChoiceModeAutomatic}
 				client := NewOpenAIClient(transport)
 				response, err := client.Generate(context.Background(), request)
 				if mode == responseMetadataStreaming {
@@ -155,21 +145,14 @@ func TestOpenAIResponseErrorsPreserveHeaderDiagnostics(t *testing.T) {
 		{name: "normalized structured error fallback", streamEvent: `{"type":"error","error":{"type":"server_error","code":"server_is_overloaded","param":"request","message":"overloaded"}}`, wantCode: UnifiedErrorCodeProviderOverload, wantRetriable: true},
 		{name: "direct provider contract error", streamEvent: `{"type":"response.output_text.delta","output_index":0,"delta":"partial"}`, wantCode: UnifiedErrorCodeProviderContract},
 	}
-	diagnosticHeaders := http.Header{
-		"X-Request-Id":                 {" ", " request-primary "},
-		"X-Oai-Request-Id":             {"request-fallback"},
-		"X-Openai-Authorization-Error": {" ", " token rejected "},
-	}
+	diagnosticHeaders := http.Header{"X-Request-Id": {" ", " request-primary "}, "X-Oai-Request-Id": {"request-fallback"},
+		"X-Openai-Authorization-Error": {" ", " token rejected "}}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var err error
 			if test.streamEvent == "" {
-				rawResp := &http.Response{
-					StatusCode: test.statusCode,
-					Header:     diagnosticHeaders.Clone(),
-					Body:       io.NopCloser(strings.NewReader(test.body)),
-				}
+				rawResp := &http.Response{StatusCode: test.statusCode, Header: diagnosticHeaders.Clone(), Body: io.NopCloser(strings.NewReader(test.body))}
 				err = newOpenAIRequestErrorMapper(test.providerID).Map(nil, rawResp, "request failed")
 			} else {
 				transport := newResponseMetadataTransport(t, diagnosticHeaders, func(w http.ResponseWriter, _ *http.Request) {
@@ -180,6 +163,7 @@ func TestOpenAIResponseErrorsPreserveHeaderDiagnostics(t *testing.T) {
 					}
 				})
 				_, err = NewOpenAIClient(transport).GenerateStreamWithEvents(context.Background(), Request{
+					SessionID:      stringPointer("metadata-session"),
 					Model:          "requested-model",
 					ToolChoiceMode: ToolChoiceModeAutomatic,
 				}, StreamCallbacks{})
@@ -205,11 +189,7 @@ func TestOpenAIResponseErrorsPreserveHeaderDiagnostics(t *testing.T) {
 	}
 }
 
-func newResponseMetadataTransport(
-	t *testing.T,
-	headers http.Header,
-	writeResponse func(http.ResponseWriter, *http.Request),
-) *HTTPTransport {
+func newResponseMetadataTransport(t *testing.T, headers http.Header, writeResponse func(http.ResponseWriter, *http.Request)) *HTTPTransport {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		for name, values := range headers {
@@ -236,19 +216,13 @@ func decodeRequestedModel(t *testing.T, request *http.Request) string {
 	return payload.Model
 }
 
-func writeSuccessfulMetadataResponse(
-	t *testing.T,
-	w http.ResponseWriter,
-	mode responseMetadataMode,
-	createdModel string,
-	completedModel string,
-) {
+func writeSuccessfulMetadataResponse(t *testing.T, w http.ResponseWriter, mode responseMetadataMode, createdModel string, completedModel string) {
 	t.Helper()
 	response := fmt.Sprintf(
 		`{"id":"resp_1","object":"response","model":%q,"output":[{"type":"message","id":"msg_1","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
 		completedModel,
 	)
-	if mode == responseMetadataNonStreaming {
+	if !bool(mode) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(response))
 		return
