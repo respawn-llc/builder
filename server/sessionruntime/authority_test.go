@@ -205,6 +205,9 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
 	selectionDone := make(chan error, 1)
 	go func() {
 		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(WorkflowInterruptSelection) error {
@@ -236,7 +239,7 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 		t.Fatal("Task execution read snapshot waited for lifecycle selection")
 	}
 
-	close(release)
+	releaseSelection()
 	if err := <-selectionDone; err == nil {
 		t.Fatal("lifecycle selection unexpectedly committed")
 	}

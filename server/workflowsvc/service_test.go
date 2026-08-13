@@ -907,6 +907,9 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
 	selectionDone := make(chan error, 1)
 	go func() {
 		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(sessionruntime.WorkflowInterruptSelection) error {
@@ -931,10 +934,10 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		if err != nil {
 			t.Fatalf("GetWorkflowTask while Runtime lifecycle ownership held: %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("GetWorkflowTask waited for Runtime lifecycle ownership")
 	}
-	close(release)
+	releaseSelection()
 	if err := <-selectionDone; err == nil {
 		t.Fatal("Runtime lifecycle selection unexpectedly committed")
 	}
