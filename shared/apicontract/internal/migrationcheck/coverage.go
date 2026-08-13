@@ -73,9 +73,21 @@ type WireFieldRename struct {
 type WireException struct {
 	LegacyType            reflect.Type
 	Message               protoreflect.FullName
+	Classification        WireExceptionClassification
 	LegacyFingerprint     string
 	DescriptorFingerprint string
 }
+
+type WireExceptionClassification int
+
+const (
+	WireExceptionClassificationUnspecified WireExceptionClassification = iota
+	WireExceptionCustomWire
+	WireExceptionOneofReshape
+	WireExceptionFieldReshape
+	WireExceptionCollectionReshape
+	WireExceptionEmptyAcknowledment
+)
 
 type CoverageIssueCode string
 
@@ -190,9 +202,10 @@ func fingerprintWireExceptions(exceptions []WireException) string {
 	for _, exception := range sorted {
 		fmt.Fprintf(
 			&canonical,
-			"%s\t%s\t%s\t%s\n",
+			"%s\t%s\t%d\t%s\t%s\n",
 			legacySemanticTypePath(exception.LegacyType),
 			exception.Message,
+			exception.Classification,
 			exception.LegacyFingerprint,
 			exception.DescriptorFingerprint,
 		)
@@ -348,6 +361,18 @@ func checkCoverageWireShapes(
 			*issues = append(*issues, CoverageIssue{
 				Code:   IssueCoverageWireException,
 				Detail: "exception has no descriptor message for " + legacySemanticTypePath(legacyType),
+			})
+			continue
+		}
+		if !exception.Classification.valid() {
+			*issues = append(*issues, CoverageIssue{
+				Code: IssueCoverageWireException,
+				Detail: fmt.Sprintf(
+					"exception %s -> %s has invalid classification %d",
+					legacySemanticTypePath(legacyType),
+					exception.Message,
+					exception.Classification,
+				),
 			})
 			continue
 		}
@@ -526,6 +551,19 @@ func checkCoverageWireShapes(
 				),
 			})
 		}
+	}
+}
+
+func (classification WireExceptionClassification) valid() bool {
+	switch classification {
+	case WireExceptionCustomWire,
+		WireExceptionOneofReshape,
+		WireExceptionFieldReshape,
+		WireExceptionCollectionReshape,
+		WireExceptionEmptyAcknowledment:
+		return true
+	default:
+		return false
 	}
 }
 
