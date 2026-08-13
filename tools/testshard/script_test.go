@@ -21,11 +21,11 @@ func TestDefaultScriptPrebuildsPTYFixtureBinaryBeforeCappedShardRunner(t *testin
 	phaseWriterPathRecord := filepath.Join(t.TempDir(), "phase-writer-path")
 	writeFakeGoCommand(t, filepath.Join(fakeGoDir, "go"))
 
-	command := exec.Command("bash", "scripts/test.sh", "server")
+	command := exec.Command("bash", "scripts/test.sh", "server", "--inherit-env")
 	command.Dir = repoRoot
-	command.Env = append(
-		os.Environ(),
+	command.Env = append(environmentWithout("KENT_PROTOBUF_OUTPUTS_READY"),
 		"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"KENT_PROTOBUF_TEST_BYPASS_LOCK=1",
 		"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
 		"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
 		"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,
@@ -37,7 +37,7 @@ func TestDefaultScriptPrebuildsPTYFixtureBinaryBeforeCappedShardRunner(t *testin
 	)
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Fatalf("run capped default server script: %v\n%s", err, output)
+		t.Fatalf("run capped default server script: %v\n%q", err, output)
 	}
 
 	assertRemovedPrebuiltExecutable(t, fixturePathRecord, "PTY fixture")
@@ -45,6 +45,27 @@ func TestDefaultScriptPrebuildsPTYFixtureBinaryBeforeCappedShardRunner(t *testin
 	assertRemovedPrebuiltExecutable(t, ansiWriterPathRecord, "ANSI writer")
 	assertRemovedPrebuiltExecutable(t, phaseInputWriterPathRecord, "phase input writer")
 	assertRemovedPrebuiltExecutable(t, phaseWriterPathRecord, "phase writer")
+}
+
+func environmentWithout(names ...string) []string {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	environment := make([]string, 0, len(os.Environ()))
+	for _, item := range os.Environ() {
+		name := item
+		for index, character := range item {
+			if character == '=' {
+				name = item[:index]
+				break
+			}
+		}
+		if _, exists := excluded[name]; !exists {
+			environment = append(environment, item)
+		}
+	}
+	return environment
 }
 
 func assertRemovedPrebuiltExecutable(t *testing.T, recordPath string, name string) {

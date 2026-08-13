@@ -72,12 +72,26 @@ message RunPromptOverrides {
     }
   ];
   optional string model = 2 [(buf.validate.field).string.min_len = 1];
-  optional string provider_override = 3 [(buf.validate.field).string.min_len = 1];
+  optional string provider_override = 3 [
+    (buf.validate.field).string = {
+      in: ["openai", "anthropic"]
+    }
+  ];
   optional string thinking_level = 4 [(buf.validate.field).string.min_len = 1];
-  optional string theme = 5 [(buf.validate.field).string.min_len = 1];
+  optional string theme = 5 [
+    (buf.validate.field).string = {
+      in: ["auto", "light", "dark"]
+    }
+  ];
   optional int32 model_timeout_seconds = 6 [(buf.validate.field).int32.gte = 1];
   optional string tools = 7 [(buf.validate.field).string.min_len = 1];
   optional string openai_base_url = 8 [(buf.validate.field).string.min_len = 1];
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.run_prompt_openai_base_url_provider"
+    message: "openai_base_url requires provider_override=openai or no provider override"
+    expression:
+      "!has(this.openai_base_url) || !has(this.provider_override) || this.provider_override == 'openai'"
+  };
 }
 
 enum ModelVerbosity {

@@ -29,12 +29,26 @@ enum TranscriptCloseReason {
 }
 
 message StreamCompletion {
-  optional int32 code = 1;
-  optional string message = 2;
+  optional int32 code = 1 [(buf.validate.field).int32.lt = 0];
+  optional string message = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.shared.stream_completion_message_nonblank"
+      message: "message must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional TranscriptCloseReason transcript_close_reason = 3 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
   }];
+  option (buf.validate.message).cel = {
+    id: "kent.shared.stream_completion_shape"
+    message: "stream completion must be empty success or code/message failure"
+    expression:
+      "(!has(this.code) && !has(this.message) && !has(this.transcript_close_reason)) || "
+      "(has(this.code) && has(this.message))"
+  };
 }
 
 message Envelope {

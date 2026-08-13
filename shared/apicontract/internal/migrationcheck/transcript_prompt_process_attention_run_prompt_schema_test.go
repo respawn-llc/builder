@@ -175,6 +175,36 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
 		t.Fatal("accepted zero present model timeout override")
 	}
+	overrides = &sessionlaunchpb.RunPromptOverrides{ProviderOverride: stringPointer("bogus")}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted unknown provider override")
+	}
+	overrides = &sessionlaunchpb.RunPromptOverrides{Theme: stringPointer("bogus")}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted unknown theme override")
+	}
+	overrides = &sessionlaunchpb.RunPromptOverrides{
+		ProviderOverride: stringPointer("anthropic"),
+		OpenaiBaseUrl:    stringPointer("https://example.test/v1"),
+	}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted OpenAI base URL with Anthropic provider override")
+	}
+
+	streamCompletion := &sharedpb.StreamCompletion{Code: int32Pointer(0)}
+	if err := protoapi.ValidateGeneratedMessage(streamCompletion); err == nil {
+		t.Fatal("accepted zero stream completion code")
+	}
+	streamCompletion = &sharedpb.StreamCompletion{Message: stringPointer("failed")}
+	if err := protoapi.ValidateGeneratedMessage(streamCompletion); err == nil {
+		t.Fatal("accepted stream completion message without code")
+	}
+	streamCompletion = &sharedpb.StreamCompletion{
+		TranscriptCloseReason: sharedpb.TranscriptCloseReason_TRANSCRIPT_CLOSE_REASON_SUBSCRIBER_OVERFLOW.Enum(),
+	}
+	if err := protoapi.ValidateGeneratedMessage(streamCompletion); err == nil {
+		t.Fatal("accepted stream close reason without code and message")
+	}
 
 	background := &transcriptpb.BackgroundActivity{
 		ActivityId:        validUUID,
