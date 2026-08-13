@@ -1,0 +1,185 @@
+syntax = "proto3";
+
+package kent.api.prompt_command;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/prompt_command;promptcommandpb";
+
+message GetCatalogRequest {
+  optional string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.session_id.trimmed"
+      message: "session_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message CatalogEntry {
+  string name = 1 [
+    (buf.validate.field).string = {
+      min_len: 8
+      prefix: "prompt:"
+    },
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.name.canonical"
+      message: "name must be canonical prompt command text"
+      expression:
+        "this == this.trim() && this == this.lowerAscii() && "
+        "size(this) > 7 && "
+        "this.substring(7).split('').all(character, "
+        "(character >= 'a' && character <= 'z') || "
+        "(character >= '0' && character <= '9') || character == '_') && "
+        "!this.substring(7).startsWith('_') && "
+        "!this.endsWith('_') && "
+        "!this.contains('__')"
+    }
+  ];
+  string preview = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 256
+    },
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.preview.single_line"
+      message: "preview must be one-line whitespace-collapsed text"
+      expression:
+        "this == this.trim() && "
+        "!this.contains('\\n') && !this.contains('\\r') && !this.contains('\\t') && "
+        "!this.contains('  ')"
+    }
+  ];
+}
+
+message Catalog {
+  repeated CatalogEntry commands = 1;
+
+  option (buf.validate.message).cel = {
+    id: "kent.prompt_command.catalog.unique_names"
+    message: "command names must be unique"
+    expression: "this.commands.map(command, command.name).unique()"
+  };
+}
+
+message CatalogReadDetails {
+  optional string command = 1 [
+    (buf.validate.field).string = {
+      min_len: 8
+      prefix: "prompt:"
+    },
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.catalog_read.command.canonical"
+      message: "command must be canonical prompt command text"
+      expression:
+        "this == this.trim() && this == this.lowerAscii() && "
+        "size(this) > 7 && "
+        "this.substring(7).split('').all(character, "
+        "(character >= 'a' && character <= 'z') || "
+        "(character >= '0' && character <= '9') || character == '_') && "
+        "!this.substring(7).startsWith('_') && "
+        "!this.endsWith('_') && "
+        "!this.contains('__')"
+    }
+  ];
+}
+
+message CommandNotFoundDetails {
+  string command = 1 [
+    (buf.validate.field).string = {
+      min_len: 8
+      prefix: "prompt:"
+    },
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.not_found.command.canonical"
+      message: "command must be canonical prompt command text"
+      expression:
+        "this == this.trim() && this == this.lowerAscii() && "
+        "size(this) > 7 && "
+        "this.substring(7).split('').all(character, "
+        "(character >= 'a' && character <= 'z') || "
+        "(character >= '0' && character <= '9') || character == '_') && "
+        "!this.substring(7).startsWith('_') && "
+        "!this.endsWith('_') && "
+        "!this.contains('__')"
+    }
+  ];
+}
+
+message CommandReadDetails {
+  string command = 1 [
+    (buf.validate.field).string = {
+      min_len: 8
+      prefix: "prompt:"
+    },
+    (buf.validate.field).cel = {
+      id: "kent.prompt_command.read.command.canonical"
+      message: "command must be canonical prompt command text"
+      expression:
+        "this == this.trim() && this == this.lowerAscii() && "
+        "size(this) > 7 && "
+        "this.substring(7).split('').all(character, "
+        "(character >= 'a' && character <= 'z') || "
+        "(character >= '0' && character <= '9') || character == '_') && "
+        "!this.substring(7).startsWith('_') && "
+        "!this.endsWith('_') && "
+        "!this.contains('__')"
+    }
+  ];
+}
+
+message GetCatalogError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    CatalogReadDetails catalog_read = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "catalog_read"
+      }
+    ];
+    CommandNotFoundDetails command_not_found = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "command_not_found"
+      }
+    ];
+    CommandReadDetails command_read = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "command_read"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetCatalogResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    Catalog success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetCatalogError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service PromptCommandService {
+  rpc GetCatalog(GetCatalogRequest) returns (GetCatalogResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "promptCommands.catalog.get"
+    };
+  }
+}

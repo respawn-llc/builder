@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package fixture.newer;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/fixture/newer;newerfixturepb";
+
+message FutureCreateSuccess {
+  string resource_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message FutureInvalidInputDetails {
+  string field = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message FutureResourceConflictDetails {
+  string resource_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message FutureConflictDetails {
+  string resource_id = 1 [(buf.validate.field).string.min_len = 1];
+  uint32 generation = 2;
+}
+
+message FutureCreateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    FutureInvalidInputDetails invalid_input = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "invalid_input"
+      }
+    ];
+    FutureResourceConflictDetails resource_conflict = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "resource_conflict"
+      }
+    ];
+    FutureConflictDetails future_conflict = 101 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "future_failure"
+      }
+    ];
+  }
+}
+
+message FutureCreateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    FutureCreateSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    FutureCreateError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}

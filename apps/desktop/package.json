@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@app/native-bridge": "workspace:*",
+    "@app/server-api-contract": "workspace:*",
     "@app/ui-kit": "workspace:*",
     "@fontsource-variable/montserrat": "5.3.0",
     "@hookform/resolvers": "^5.5.7",

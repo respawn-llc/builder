@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+package kent.api.connection;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/connection;connectionpb";
+
+message HandshakeRequest {
+  string protocol_version = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.connection.protocol_version.trimmed"
+      message: "protocol_version must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message ServerIdentity {
+  string protocol_version = 1 [(buf.validate.field).string.min_len = 1];
+  string server_id = 2 [(buf.validate.field).string.min_len = 1];
+  int32 pid = 3 [(buf.validate.field).int32.gt = 0];
+  optional string persistence_root_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.connection.persistence_root_id.trimmed"
+      message: "persistence_root_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message HandshakeSuccess {
+  ServerIdentity identity = 1 [(buf.validate.field).required = true];
+}
+
+message ProtocolVersionMismatchDetails {
+  string required_protocol_version = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message HandshakeError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProtocolVersionMismatchDetails protocol_version_mismatch = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "protocol_version_mismatch"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message HandshakeResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    HandshakeSuccess success = 1 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS
+    ];
+    HandshakeError error = 2 [
+      (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR
+    ];
+  }
+}
+
+message AttachProjectRequest {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.connection.attach_project.project_id.trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  oneof workspace {
+    string workspace_id = 2 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.connection.attach_project.workspace_id.trimmed"
+        message: "workspace_id must not have surrounding whitespace"
+        expression: "this == this.trim()"
+      }
+    ];
+    string workspace_root = 3 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.connection.attach_project.workspace_root.trimmed"
+        message: "workspace_root must not have surrounding whitespace"
+        expression: "this == this.trim()"
+      }
+    ];
+  }
+}
+
+message AttachSessionRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.connection.attach_session.session_id.trimmed"
+      message: "session_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message WorkspaceIDSelection {
+  string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message WorkspaceRootSelection {
+  string requested_root = 1 [(buf.validate.field).string.min_len = 1];
+  string canonical_root = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectAttachment {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+  oneof workspace_selection {
+    WorkspaceIDSelection selected_by_id = 4;
+    WorkspaceRootSelection selected_by_root = 5;
+  }
+}
+
+message SessionAttachment {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+  string session_id = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message AttachmentSuccess {
+  oneof attachment {
+    option (buf.validate.oneof).required = true;
+    ProjectAttachment project = 1;
+    SessionAttachment session = 2;
+  }
+}
+
+message AttachProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message AttachProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    AttachmentSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    AttachProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message AttachSessionError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message AttachSessionResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    AttachmentSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    AttachSessionError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service ConnectionService {
+  rpc Handshake(HandshakeRequest) returns (HandshakeResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "protocol.handshake"
+    };
+  }
+
+  rpc AttachProject(AttachProjectRequest) returns (AttachProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_ATTACH_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "project.attach"
+    };
+  }
+
+  rpc AttachSession(AttachSessionRequest) returns (AttachSessionResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_ATTACH_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.attach"
+    };
+  }
+}

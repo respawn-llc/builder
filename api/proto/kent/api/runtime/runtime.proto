@@ -1,0 +1,1005 @@
+syntax = "proto3";
+
+package kent.api.runtime;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/worktree/worktree.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/runtime;runtimepb";
+
+enum ConversationFreshness {
+  CONVERSATION_FRESHNESS_UNSPECIFIED = 0;
+  CONVERSATION_FRESHNESS_FRESH = 1;
+  CONVERSATION_FRESHNESS_ESTABLISHED = 2;
+}
+
+enum GoalStatus {
+  RUNTIME_GOAL_STATUS_UNSPECIFIED = 0;
+  RUNTIME_GOAL_STATUS_ACTIVE = 1;
+  RUNTIME_GOAL_STATUS_PAUSED = 2;
+  RUNTIME_GOAL_STATUS_COMPLETE = 3;
+}
+
+enum ActivityState {
+  RUNTIME_ACTIVITY_STATE_UNSPECIFIED = 0;
+  RUNTIME_ACTIVITY_UNAVAILABLE = 1;
+  RUNTIME_ACTIVITY_REGISTERED_IDLE = 2;
+  RUNTIME_ACTIVITY_STARTING = 3;
+  RUNTIME_ACTIVITY_RUNNING = 4;
+  RUNTIME_ACTIVITY_AWAITING_PROMPT = 5;
+  RUNTIME_ACTIVITY_DRAINING = 6;
+  RUNTIME_ACTIVITY_CLOSING = 7;
+}
+
+enum ActivityActiveKind {
+  RUNTIME_ACTIVITY_ACTIVE_KIND_UNSPECIFIED = 0;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_USER_TURN = 1;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_WORKFLOW_TURN = 2;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_GOAL_LOOP = 3;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_COMPACTION = 4;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_PRE_SUBMIT_COMPACTION = 5;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_USER_SHELL = 6;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_BACKGROUND = 7;
+  RUNTIME_ACTIVITY_ACTIVE_KIND_RUNTIME_MAINTENANCE = 8;
+}
+
+message ReadModelVersion {
+  string epoch = 1 [(buf.validate.field).string.min_len = 1];
+  uint64 generation = 2 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  uint64 sequence = 3 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+}
+
+message ActiveStep {
+  string run_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.active_step_run_id.uuid_v4"
+      message: "run_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.active_step_step_id.uuid_v4"
+      message: "step_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  ActivityActiveKind active_kind = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message Activity {
+  ActivityState state = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional ActiveStep active_step = 2;
+  bool queue_accepting = 3;
+  bool diagnostic_recovery = 4;
+
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.activity_active_step"
+    message: "runtime activity state must agree with active_step and queue acceptance"
+    expression:
+      "((this.state == 4 || this.state == 5) && has(this.active_step)) || "
+      "((this.state != 4 && this.state != 5) && !has(this.active_step))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.activity_queue_acceptance"
+    message: "unavailable, starting, draining, and closing states cannot accept queue work"
+    expression: "this.state in [2, 4, 5] || !this.queue_accepting"
+  };
+}
+
+message ContextUsage {
+  int32 used_tokens = 1 [(buf.validate.field).int32.gte = 0];
+  int32 window_tokens = 2 [(buf.validate.field).int32.gte = 0];
+  optional int32 cache_hit_percent = 3 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 100
+  }];
+}
+
+message GoalView {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  GoalStatus status = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool suspended = 4;
+
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.goal_suspension"
+    message: "paused and complete goals cannot be suspended"
+    expression: "this.status == 1 || !this.suspended"
+  };
+}
+
+message WorkflowSessionStatus {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message Status {
+  string reviewer_frequency = 1 [(buf.validate.field).string.min_len = 1];
+  bool reviewer_enabled = 2;
+  bool auto_compaction_enabled = 3;
+  bool questions_enabled = 4;
+  bool fast_mode_available = 5;
+  bool fast_mode_enabled = 6;
+  ConversationFreshness conversation_freshness = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string previous_session_id = 8 [(buf.validate.field).string.min_len = 1];
+  optional string parent_agent_session_id = 9 [(buf.validate.field).string.min_len = 1];
+  optional string navigation_target_session_id = 10 [(buf.validate.field).string.min_len = 1];
+  optional string last_committed_assistant_final_answer = 11;
+  string thinking_level = 12 [(buf.validate.field).string.min_len = 1];
+  string compaction_mode = 13 [(buf.validate.field).string.min_len = 1];
+  ContextUsage context_usage = 14 [(buf.validate.field).required = true];
+  int32 compaction_count = 15 [(buf.validate.field).int32.gte = 0];
+  optional GoalView goal = 16;
+  optional WorkflowSessionStatus workflow_session = 17;
+
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.fast_mode_availability"
+    message: "fast mode cannot be enabled when unavailable"
+    expression: "!this.fast_mode_enabled || this.fast_mode_available"
+  };
+}
+
+message SessionView {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_name = 2;
+  optional string agent_role = 3 [(buf.validate.field).string.min_len = 1];
+  ConversationFreshness conversation_freshness = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  kent.api.worktree.SessionExecutionTarget execution_target = 5 [(buf.validate.field).required = true];
+}
+
+message MainView {
+  ReadModelVersion version = 1 [(buf.validate.field).required = true];
+  Status status = 2 [(buf.validate.field).required = true];
+  SessionView session = 3 [(buf.validate.field).required = true];
+  Activity activity = 4 [(buf.validate.field).required = true];
+}
+
+message RuntimeUnavailableDetails {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message RuntimeCommandNotAcceptedDetails {
+  oneof cause {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty canceled = 1;
+    RuntimeUnavailableDetails runtime_unavailable = 2;
+    google.protobuf.Empty no_active_run = 3;
+    kent.api.shared.InternalFailureDetails internal_failure = 4;
+  }
+}
+
+message ManualCompactionDetails {}
+
+message SetSessionNameRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2;
+}
+
+message SetThinkingLevelRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string level = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ToggleRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  bool enabled = 2;
+}
+
+message ToggleSuccess {
+  bool changed = 1;
+}
+
+message ReviewerToggleSuccess {
+  bool changed = 1;
+  string mode = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message EffectiveToggleSuccess {
+  bool changed = 1;
+  bool enabled = 2;
+}
+
+message ShouldCompactRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string text = 2;
+}
+
+message ShouldCompactSuccess {
+  bool should_compact = 1;
+}
+
+message PromptCommandInput {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string arguments = 2;
+}
+
+message UserTurnInput {
+  oneof input {
+    option (buf.validate.oneof).required = true;
+    string text = 1 [(buf.validate.field).string.min_len = 1];
+    PromptCommandInput prompt_command = 2;
+  }
+}
+
+message SubmitUserTurnRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  UserTurnInput input = 2 [(buf.validate.field).required = true];
+}
+
+message SubmitUserTurnQueued {
+  string queue_item_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.queue_item_id.uuid_v4"
+      message: "queue_item_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  bool compacted = 2;
+  bool steered = 3;
+
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.queued_is_steered"
+    message: "queued user turns must be steered"
+    expression: "this.steered"
+  };
+}
+
+message SubmitUserTurnNoFinal {
+  bool compacted = 1;
+}
+
+message SubmitUserTurnAssistantFinal {
+  string message = 1 [(buf.validate.field).string.min_len = 1];
+  bool compacted = 2;
+}
+
+message SubmitUserTurnSilentFinal {
+  string message = 1 [(buf.validate.field).string.const = ""];
+  bool compacted = 2;
+}
+
+message SubmitUserTurnSuccess {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    SubmitUserTurnQueued queued = 1;
+    SubmitUserTurnNoFinal no_final = 2;
+    SubmitUserTurnAssistantFinal assistant_final = 3;
+    SubmitUserTurnSilentFinal silent_final = 4;
+  }
+}
+
+message ShellCommandRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string command = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message CompactContextRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string args = 2;
+}
+
+message InterruptRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message InterruptSuccess {
+  ReadModelVersion version = 1 [(buf.validate.field).required = true];
+  Activity activity = 2 [(buf.validate.field).required = true];
+}
+
+message LiveSteerRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_steer_session_id.uuid_v4"
+      message: "session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  optional string caller_session_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_steer_caller_session_id.uuid_v4"
+      message: "caller_session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string text = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message LiveSteerSuccess {
+  string queue_item_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_steer_queue_item_id.uuid_v4"
+      message: "queue_item_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string text = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message LiveStopRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_stop_session_id.uuid_v4"
+      message: "session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+}
+
+enum LiveStopStatus {
+  RUNTIME_LIVE_STOP_STATUS_UNSPECIFIED = 0;
+  RUNTIME_LIVE_STOP_STATUS_STOPPED = 1;
+  RUNTIME_LIVE_STOP_STATUS_IDLE = 2;
+}
+
+message LiveStopSuccess {
+  LiveStopStatus status = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message LiveWaitRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_session_id.uuid_v4"
+      message: "session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+}
+
+message LiveWaitAssistantFinalAnswer {
+  string result = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LiveWaitNoFinalAnswer {
+  string reason = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LiveWaitSuccess {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_result_session_id.uuid_v4"
+      message: "session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string session_name = 2 [(buf.validate.field).string.min_len = 1];
+  int64 duration_millis = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  string live_run_group_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_group_id.uuid_v4"
+      message: "live_run_group_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string terminal_run_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_terminal_run_id.uuid_v4"
+      message: "terminal_run_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string terminal_step_id = 6 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.live_wait_terminal_step_id.uuid_v4"
+      message: "terminal_step_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string terminal_status = 7 [(buf.validate.field).string.min_len = 1];
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    LiveWaitAssistantFinalAnswer assistant_final_answer = 8;
+    LiveWaitNoFinalAnswer no_final_answer = 9;
+  }
+}
+
+message DiscardQueuedUserMessageRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string queue_item_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message DiscardQueuedUserMessageSuccess {
+  bool discarded = 1;
+}
+
+message Goal {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  string status = 3 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+}
+
+message GoalShowRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GoalMutationRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string actor = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_mutation_actor"
+      message: "actor must normalize to user, agent, or system"
+      expression: "this.trim() in ['user', 'agent', 'system']"
+    }
+  ];
+  optional string run_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string step_id = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message GoalSetRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  string actor = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_set_actor"
+      message: "actor must normalize to user, agent, or system"
+      expression: "this.trim() in ['user', 'agent', 'system']"
+    }
+  ];
+  optional string run_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string step_id = 5 [(buf.validate.field).string.min_len = 1];
+}
+
+message GoalClearRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string actor = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_clear_actor"
+      message: "actor must normalize to user, agent, or system"
+      expression: "this.trim() in ['user', 'agent', 'system']"
+    }
+  ];
+}
+
+message GoalSuccess {
+  optional Goal goal = 1;
+}
+
+message StandardError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message RuntimeCommandError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeCommandNotAcceptedDetails runtime_command_not_accepted = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_command_not_accepted"
+    }];
+    RuntimeUnavailableDetails runtime_unavailable = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message CompactContextError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeCommandNotAcceptedDetails runtime_command_not_accepted = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_command_not_accepted"
+    }];
+    RuntimeUnavailableDetails runtime_unavailable = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    ManualCompactionDetails manual_compaction_too_soon = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "manual_compaction_too_soon"
+    }];
+    ManualCompactionDetails manual_compaction_disabled = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "manual_compaction_disabled"
+    }];
+    ManualCompactionDetails manual_compaction_active = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "manual_compaction_active"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message LiveSteerError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    google.protobuf.Empty no_active_run = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "no_active_run"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message LiveStopError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message LiveWaitError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    google.protobuf.Empty no_active_run = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "no_active_run"
+    }];
+    google.protobuf.Empty no_final_answer = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "no_final_answer"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GoalShowError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GoalMutationError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RuntimeUnavailableDetails runtime_unavailable = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "runtime_unavailable"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message EmptyResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message CommandEmptyResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message CompactContextResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    CompactContextError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ToggleResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ReviewerToggleResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ReviewerToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message EffectiveToggleResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    EffectiveToggleSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ShouldCompactResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ShouldCompactSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SubmitUserTurnResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    SubmitUserTurnSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message InterruptResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    InterruptSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    RuntimeCommandError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message LiveSteerResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    LiveSteerSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    LiveSteerError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message LiveStopResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    LiveStopSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    LiveStopError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message LiveWaitResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    LiveWaitSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    LiveWaitError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message DiscardQueuedUserMessageResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    DiscardQueuedUserMessageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StandardError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GoalShowResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GoalSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GoalShowError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GoalMutationResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GoalSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GoalMutationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service SettingsService {
+  rpc SetSessionName(SetSessionNameRequest) returns (EmptyResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setSessionName"
+    };
+  }
+  rpc SetThinkingLevel(SetThinkingLevelRequest) returns (EmptyResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setThinkingLevel"
+    };
+  }
+  rpc SetFastModeEnabled(ToggleRequest) returns (ToggleResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setFastModeEnabled"
+    };
+  }
+  rpc SetReviewerEnabled(ToggleRequest) returns (ReviewerToggleResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setReviewerEnabled"
+    };
+  }
+  rpc SetAutoCompactionEnabled(ToggleRequest) returns (EffectiveToggleResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setAutoCompactionEnabled"
+    };
+  }
+  rpc SetQuestionsEnabled(ToggleRequest) returns (EffectiveToggleResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.setQuestionsEnabled"
+    };
+  }
+}
+
+service TurnService {
+  rpc ShouldCompactBeforeUserMessage(ShouldCompactRequest) returns (ShouldCompactResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.shouldCompactBeforeUserMessage"
+    };
+  }
+  rpc SubmitUserTurn(SubmitUserTurnRequest) returns (SubmitUserTurnResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.submitUserTurn"
+    };
+  }
+  rpc SubmitUserShellCommand(ShellCommandRequest) returns (CommandEmptyResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.submitUserShellCommand"
+    };
+  }
+  rpc CompactContext(CompactContextRequest) returns (CompactContextResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.compactContext"
+    };
+  }
+  rpc Interrupt(InterruptRequest) returns (InterruptResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.interrupt"
+    };
+  }
+  rpc DiscardQueuedUserMessage(DiscardQueuedUserMessageRequest) returns (DiscardQueuedUserMessageResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.discardQueuedUserMessage"
+    };
+  }
+}
+
+service LiveService {
+  rpc Steer(LiveSteerRequest) returns (LiveSteerResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_RUNTIME_LIVE_SESSION_REQUIRED
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.liveSteer"
+    };
+  }
+  rpc Stop(LiveStopRequest) returns (LiveStopResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_RUNTIME_LIVE_SESSION_OPTIONAL
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.liveStop"
+    };
+  }
+  rpc Wait(LiveWaitRequest) returns (LiveWaitResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_RUNTIME_LIVE_SESSION_REQUIRED
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "runtime.liveWait"
+    };
+  }
+}
+
+service GoalService {
+  rpc Show(GoalShowRequest) returns (GoalShowResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.show"
+    };
+  }
+  rpc Set(GoalSetRequest) returns (GoalMutationResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.set"
+    };
+  }
+  rpc Pause(GoalMutationRequest) returns (GoalMutationResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.pause"
+    };
+  }
+  rpc Resume(GoalMutationRequest) returns (GoalMutationResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.resume"
+    };
+  }
+  rpc Complete(GoalMutationRequest) returns (GoalMutationResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.complete"
+    };
+  }
+  rpc Clear(GoalClearRequest) returns (GoalMutationResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_GOAL_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "runtime.goal.clear"
+    };
+  }
+}

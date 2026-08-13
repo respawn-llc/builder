@@ -24,4 +24,5 @@ Area specs:
 - `desktop-gui.md`: desktop navigation, projects, workflow boards, task detail, connection loss, and native capabilities.
 - `workflow-editor.md`: workflow editor, draft editing, library/linking, sidebar, and save/conflict decisions.
 - `release-distribution.md`: supported releases, installers, update channels, and compatibility behavior.
+- `server-api-contract.md`: external Server API contract ownership, compatibility, operations, transport, validation, errors, dynamic content, and identifiers.
 - `terminology.md`: domain terms used consistently across specs, product surfaces, and public contracts.

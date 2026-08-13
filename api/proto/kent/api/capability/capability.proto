@@ -1,0 +1,290 @@
+syntax = "proto3";
+
+package kent.api.capability;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/capability;capabilitypb";
+
+message GetFactsRequest {
+  optional string workspace_root = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string explicit_llm_provider_ids = 2 [
+    (buf.validate.field).repeated.items.string.min_len = 1
+  ];
+}
+
+message ModelLargeWindowFact {
+  uint32 tokens = 1 [(buf.validate.field).uint32.gt = 0];
+}
+
+message ModelVerbosityFact {
+  bool supported = 1;
+  string source = 2 [(buf.validate.field).string.min_len = 1];
+  repeated string levels = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message ModelFact {
+  optional string model_id = 1 [(buf.validate.field).string.min_len = 1];
+  bool known = 2;
+  optional uint32 context_window_tokens = 3 [(buf.validate.field).uint32.gt = 0];
+  ModelLargeWindowFact large_window = 4;
+  optional string default_context_window_mode = 5 [(buf.validate.field).string.min_len = 1];
+  bool supports_thinking = 6;
+  repeated string supported_thinking_levels = 7 [(buf.validate.field).repeated.items.string.min_len = 1];
+  bool supports_reasoning_summary = 8;
+  bool supports_vision_inputs = 9;
+  ModelVerbosityFact verbosity = 10 [(buf.validate.field).required = true];
+}
+
+message ModelFacts {
+  repeated ModelFact known_models = 1;
+  ModelFact unknown_fallback = 2 [(buf.validate.field).required = true];
+}
+
+message ProviderFact {
+  string llm_provider_id = 1 [(buf.validate.field).string.min_len = 1];
+  string role = 2 [(buf.validate.field).string.min_len = 1];
+  bool supports_responses_api = 3;
+  bool supports_native_compaction = 4;
+  bool supports_input_token_count = 5;
+  bool supports_prompt_cache_key = 6;
+  bool supports_native_web_search = 7;
+  bool supports_reasoning_encryption = 8;
+  bool supports_server_side_context_edit = 9;
+  bool is_openai_first_party = 10;
+  bool supports_provider_verbosity = 11;
+}
+
+message ProviderFacts {
+  ProviderFact current_effective = 1;
+  repeated ProviderFact explicit = 2;
+}
+
+enum ImportItemKind {
+  IMPORT_ITEM_KIND_UNSPECIFIED = 0;
+  IMPORT_ITEM_KIND_SKILL = 1;
+  IMPORT_ITEM_KIND_COMMAND = 2;
+}
+
+enum ImportChoiceMode {
+  IMPORT_CHOICE_MODE_UNSPECIFIED = 0;
+  IMPORT_CHOICE_MODE_NONE = 1;
+  IMPORT_CHOICE_MODE_SYMLINK_SOURCE = 2;
+}
+
+enum ImportSourceKind {
+  IMPORT_SOURCE_KIND_UNSPECIFIED = 0;
+  IMPORT_SOURCE_KIND_EXTERNAL_PROVIDER = 1;
+  IMPORT_SOURCE_KIND_GENERATED = 2;
+  IMPORT_SOURCE_KIND_GLOBAL = 3;
+  IMPORT_SOURCE_KIND_WORKSPACE = 4;
+}
+
+message ImportChoiceRef {
+  ImportChoiceMode mode = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional ImportSourceKind source_kind = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string import_provider_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportConflictFact {
+  ImportSourceKind source_kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string import_provider_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string path = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportChoiceFact {
+  ImportChoiceRef ref = 1 [(buf.validate.field).required = true];
+  optional string import_provider_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 3 [(buf.validate.field).string.min_len = 1];
+  uint32 item_count = 4;
+}
+
+message ImportRootFact {
+  ImportSourceKind source_kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string import_provider_id = 2 [(buf.validate.field).string.min_len = 1];
+  string path = 3 [(buf.validate.field).string.min_len = 1];
+  bool exists = 4;
+}
+
+message ImportItemRef {
+  ImportItemKind item_kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  ImportSourceKind source_kind = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string import_provider_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 4 [(buf.validate.field).string.min_len = 1];
+  optional string source_path = 5 [(buf.validate.field).string.min_len = 1];
+  string target_name = 6 [(buf.validate.field).string.min_len = 1];
+  optional string name = 7 [(buf.validate.field).string.min_len = 1];
+  optional int64 modified_unix_ms = 8 [
+    (buf.validate.field).int64 = {
+      gte: -9007199254740991
+      lte: 9007199254740991
+    }
+  ];
+}
+
+message ImportItemFact {
+  ImportItemRef ref = 1 [(buf.validate.field).required = true];
+  repeated ImportConflictFact conflicts = 2;
+  optional bool default_enabled = 3;
+}
+
+message ImportTargetFact {
+  bool skip = 1;
+  repeated ImportConflictFact conflicts = 2;
+}
+
+message ImportItemGroupFact {
+  repeated ImportChoiceFact choices = 1;
+  repeated ImportRootFact roots = 2;
+  repeated ImportItemFact items = 3;
+  ImportTargetFact target = 4 [(buf.validate.field).required = true];
+}
+
+message SkillEnablementProjectionFact {
+  ImportChoiceRef choice_ref = 1 [(buf.validate.field).required = true];
+  repeated ImportItemFact candidates = 2;
+}
+
+message ImportErrorFact {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  string scope = 2 [(buf.validate.field).string.min_len = 1];
+  optional ImportItemKind item_kind = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string import_provider_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string path = 5 [(buf.validate.field).string.min_len = 1];
+  string operation = 6 [(buf.validate.field).string.min_len = 1];
+  string message = 7 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportModeRecommendationFact {
+  ImportChoiceRef choice_ref = 1 [(buf.validate.field).required = true];
+  uint32 item_count = 2;
+  repeated string source_paths = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message ImportRecommendationFacts {
+  ImportModeRecommendationFact skills = 1;
+  ImportModeRecommendationFact commands = 2;
+}
+
+message ImportWorkspaceFact {
+  optional string root = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportFacts {
+  ImportWorkspaceFact workspace = 1 [(buf.validate.field).required = true];
+  ImportItemGroupFact skills = 2 [(buf.validate.field).required = true];
+  ImportItemGroupFact commands = 3 [(buf.validate.field).required = true];
+  repeated SkillEnablementProjectionFact skill_enablement = 4;
+  repeated ImportErrorFact errors = 5;
+  ImportRecommendationFacts recommendations = 6 [(buf.validate.field).required = true];
+}
+
+message ThinkingDefaultFact {
+  string mode = 1 [(buf.validate.field).string.min_len = 1];
+  optional string level = 2 [(buf.validate.field).string.min_len = 1];
+  optional string value = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message VerbosityDefaultFact {
+  string level = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message DefaultFacts {
+  string primary_model_id = 1 [(buf.validate.field).string.min_len = 1];
+  ThinkingDefaultFact thinking = 2 [(buf.validate.field).required = true];
+  VerbosityDefaultFact verbosity = 3;
+  string compaction_mode = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message RecommendationFacts {}
+
+message Facts {
+  ModelFacts models = 1 [(buf.validate.field).required = true];
+  ProviderFacts providers = 2 [(buf.validate.field).required = true];
+  ImportFacts imports = 3 [(buf.validate.field).required = true];
+  DefaultFacts defaults = 4 [(buf.validate.field).required = true];
+  RecommendationFacts recommendations = 5 [(buf.validate.field).required = true];
+}
+
+message UnsupportedProviderDetails {
+  string provider_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message GetFactsError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    UnsupportedProviderDetails unsupported_provider = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "unsupported_provider"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message GetFactsResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    Facts success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetFactsError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service CapabilityService {
+  rpc GetFacts(GetFactsRequest) returns (GetFactsResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "capability.facts.get"
+    };
+  }
+}

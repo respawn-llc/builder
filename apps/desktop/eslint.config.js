@@ -13,6 +13,7 @@ const parserProjects = [
   "./tsconfig.app.json",
   "./tsconfig.node.json",
   "./packages/native-bridge/tsconfig.json",
+  "./packages/server-api-contract/tsconfig.json",
   "./packages/ui-kit/tsconfig.json",
 ];
 
@@ -34,12 +35,18 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
     files: ["**/*.{js,mjs,cjs}"],
   },
+  {
+    files: ["packages/server-api-contract/src/gen/**/*.ts"],
+    ...tseslint.configs.disableTypeChecked,
+    rules: {},
+  },
   ...createArchitecturePolicy({
     rootPath: import.meta.dirname,
     parserProjects,
   }),
   {
     files: ["**/*.{ts,tsx}"],
+    ignores: ["packages/server-api-contract/src/gen/**/*.ts"],
     languageOptions: {
       parserOptions: {
         project: parserProjects,

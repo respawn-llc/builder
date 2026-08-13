@@ -79,10 +79,27 @@ run_rust_policy() {
 	cargo run --manifest-path tui-rs/Cargo.toml --locked -p manifest-check -- check --repo-root "$repo_root"
 }
 
+run_protobuf() {
+	echo "==> Protobuf lint"
+	(
+		cd tools/protobuf
+		go tool buf lint "$repo_root" --config "$repo_root/buf.yaml"
+	)
+	echo "==> Protobuf generated-output freshness"
+	./scripts/generate-protobuf.sh check
+	echo "==> Protobuf descriptor policy"
+	go test ./shared/apicontract/internal/migrationcheck \
+		-run '^(TestDescriptorPolicy|TestExecutionTarget)' \
+		-count=1
+	echo "==> Protobuf schema/protocol version"
+	./scripts/check-protobuf-schema-version.sh
+}
+
 mode="${1:-all}"
 
 case "$mode" in
 all)
+	run_protobuf
 	run_frontend_deps_policy
 	run_frontend_lint
 	run_format
@@ -111,11 +128,15 @@ build)
 	;;
 test)
 	shift
+	run_protobuf
 	run_test "$@"
+	;;
+protobuf)
+	run_protobuf
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]]" >&2
+	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]|protobuf]" >&2
 	exit 1
 	;;
 esac

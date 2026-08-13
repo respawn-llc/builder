@@ -1,0 +1,25 @@
+{
+  "name": "@app/server-api-contract",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
+    "test": "pnpm build && node --test test/index.node.mjs",
+    "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.13.0",
+    "@bufbuild/protovalidate": "1.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "typescript7": "npm:typescript@7.0.2"
+  }
+}

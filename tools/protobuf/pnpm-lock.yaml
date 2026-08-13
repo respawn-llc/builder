@@ -1,0 +1,54 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@bufbuild/protobuf':
+        specifier: 2.13.0
+        version: 2.13.0
+      '@bufbuild/protovalidate':
+        specifier: 1.2.0
+        version: 1.2.0(@bufbuild/protobuf@2.13.0)
+
+packages:
+
+  '@bufbuild/cel-spec@0.4.0':
+    resolution: {integrity: sha512-dUS6f2fNt6KEumsYGE7YFxERZE5ZuyME1hQmGjtO8tkZhR6ow6/ne3v4Gik9cfdb9lSLK3AJ+vDxCdGWmDbWvA==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.6.2
+
+  '@bufbuild/cel@0.4.0':
+    resolution: {integrity: sha512-CdW/JgiTJCYXqnwuaJRo7NcoYhR37AaF58MMiog0/t8nudn86ZyLXYaA1f2yGhm2U17h8pKGZNksTHVSTcpmAw==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.6.2
+
+  '@bufbuild/protobuf@2.13.0':
+    resolution: {integrity: sha512-acq7c49vxfm1ggJ95P70TX7ABDM0vxr1SYD3BB0o0jnBLB4OAqeHyKuN+cD3w80gXEDQ2zxHpR6CUeA+O/aU9g==}
+
+  '@bufbuild/protovalidate@1.2.0':
+    resolution: {integrity: sha512-tD08DwGrHIV88khLz1Kdz9DYUwEo1TsoepaIg7/B/zd//AymaTx67kvCS1jlkcG/+vgQaSOl6f0HCE3sL8vI7w==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.8.0
+
+snapshots:
+
+  '@bufbuild/cel-spec@0.4.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/protobuf': 2.13.0
+
+  '@bufbuild/cel@0.4.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/cel-spec': 0.4.0(@bufbuild/protobuf@2.13.0)
+      '@bufbuild/protobuf': 2.13.0
+
+  '@bufbuild/protobuf@2.13.0': {}
+
+  '@bufbuild/protovalidate@1.2.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/cel': 0.4.0(@bufbuild/protobuf@2.13.0)
+      '@bufbuild/protobuf': 2.13.0

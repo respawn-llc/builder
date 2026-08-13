@@ -1,0 +1,772 @@
+syntax = "proto3";
+
+package kent.api.transcript;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/prompt/prompt.proto";
+import "kent/api/runtime/runtime.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/worktree/worktree.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/transcript;transcriptpb";
+
+enum EntryVisibility {
+  ENTRY_VISIBILITY_UNSPECIFIED = 0;
+  ENTRY_VISIBILITY_ONGOING = 1;
+  ENTRY_VISIBILITY_ONGOING_COLLAPSED = 2;
+  ENTRY_VISIBILITY_DETAIL = 3;
+  ENTRY_VISIBILITY_HIDDEN = 4;
+}
+
+enum AppendVisibility {
+  APPEND_VISIBILITY_UNSPECIFIED = 0;
+  APPEND_VISIBILITY_AUTO = 1;
+  APPEND_VISIBILITY_ONGOING = 2;
+  APPEND_VISIBILITY_ONGOING_COLLAPSED = 3;
+  APPEND_VISIBILITY_DETAIL = 4;
+  APPEND_VISIBILITY_HIDDEN = 5;
+}
+
+enum RowIntegrity {
+  ROW_INTEGRITY_UNSPECIFIED = 0;
+  ROW_INTEGRITY_VALID = 1;
+  ROW_INTEGRITY_RECOVERABLE_MALFORMED = 2;
+  ROW_INTEGRITY_UNRECOVERABLE_MALFORMED = 3;
+}
+
+enum AssistantPhase {
+  ASSISTANT_PHASE_UNSPECIFIED = 0;
+  ASSISTANT_PHASE_COMMENTARY = 1;
+  ASSISTANT_PHASE_FINAL = 2;
+}
+
+enum AssistantAbortReason {
+  ASSISTANT_ABORT_REASON_UNSPECIFIED = 0;
+  ASSISTANT_ABORT_REASON_INTERRUPTED = 1;
+  ASSISTANT_ABORT_REASON_FAILED = 2;
+  ASSISTANT_ABORT_REASON_SUPERSEDED = 3;
+}
+
+enum ToolAbortReason {
+  TOOL_ABORT_REASON_UNSPECIFIED = 0;
+  TOOL_ABORT_REASON_CANCELED = 1;
+  TOOL_ABORT_REASON_FAILED = 2;
+}
+
+enum QueuedMessageStatus {
+  QUEUED_MESSAGE_STATUS_UNSPECIFIED = 0;
+  QUEUED_MESSAGE_STATUS_ACCEPTED = 1;
+  QUEUED_MESSAGE_STATUS_SUBMITTED = 2;
+  QUEUED_MESSAGE_STATUS_FAILED = 3;
+  QUEUED_MESSAGE_STATUS_DISCARDED = 4;
+}
+
+enum QueuedMessageFailureReason {
+  QUEUED_MESSAGE_FAILURE_REASON_UNSPECIFIED = 0;
+  QUEUED_MESSAGE_FAILURE_REASON_CLOSING = 1;
+  QUEUED_MESSAGE_FAILURE_REASON_TERMINAL_WORKFLOW_COMPLETION = 2;
+  QUEUED_MESSAGE_FAILURE_REASON_RUNTIME_UNAVAILABLE = 3;
+  QUEUED_MESSAGE_FAILURE_REASON_STOPPED = 4;
+}
+
+enum StepLifecycle {
+  STEP_LIFECYCLE_UNSPECIFIED = 0;
+  STEP_LIFECYCLE_STARTED = 1;
+  STEP_LIFECYCLE_FINISHED = 2;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_RUNNING = 1;
+  RUN_STATUS_COMPLETED = 2;
+  RUN_STATUS_INTERRUPTED = 3;
+  RUN_STATUS_FAILED = 4;
+}
+
+enum ReviewerState {
+  REVIEWER_STATE_UNSPECIFIED = 0;
+  REVIEWER_STATE_RUNNING = 1;
+  REVIEWER_STATE_COMPLETED = 2;
+}
+
+enum CompactionState {
+  COMPACTION_STATE_UNSPECIFIED = 0;
+  COMPACTION_STATE_STARTED = 1;
+  COMPACTION_STATE_COMPLETED = 2;
+  COMPACTION_STATE_FAILED = 3;
+}
+
+enum BackgroundLifecycle {
+  BACKGROUND_LIFECYCLE_UNSPECIFIED = 0;
+  BACKGROUND_LIFECYCLE_BACKGROUNDED = 1;
+  BACKGROUND_LIFECYCLE_COMPLETED = 2;
+  BACKGROUND_LIFECYCLE_KILLED = 3;
+}
+
+enum PromptStatus {
+  PROMPT_STATUS_UNSPECIFIED = 0;
+  PROMPT_STATUS_PENDING = 1;
+  PROMPT_STATUS_RESOLVED = 2;
+}
+
+enum OperationalDiagnosticCode {
+  OPERATIONAL_DIAGNOSTIC_CODE_UNSPECIFIED = 0;
+  OPERATIONAL_DIAGNOSTIC_CODE_SLEEP_GUARD_FAILED = 1;
+  OPERATIONAL_DIAGNOSTIC_CODE_PROMPT_HISTORY_PERSIST_FAILED = 2;
+  OPERATIONAL_DIAGNOSTIC_CODE_IN_FLIGHT_CLEAR_FAILED = 3;
+}
+
+enum LiveRunStatus {
+  LIVE_RUN_STATUS_UNSPECIFIED = 0;
+  LIVE_RUN_STATUS_COMPLETED = 1;
+  LIVE_RUN_STATUS_INTERRUPTED = 2;
+  LIVE_RUN_STATUS_FAILED = 3;
+}
+
+enum LiveRunResultKind {
+  LIVE_RUN_RESULT_KIND_UNSPECIFIED = 0;
+  LIVE_RUN_RESULT_KIND_ASSISTANT_FINAL_ANSWER = 1;
+  LIVE_RUN_RESULT_KIND_NO_FINAL_ANSWER = 2;
+}
+
+enum NoticeReason {
+  NOTICE_REASON_UNSPECIFIED = 0;
+  NOTICE_REASON_CACHE_WARNING = 1;
+  NOTICE_REASON_COMPACTION = 2;
+  NOTICE_REASON_LEGACY_UNTYPED_NOTICE = 3;
+  NOTICE_REASON_RUNTIME_DIAGNOSTIC = 4;
+  NOTICE_REASON_TOOL_OUTPUT_REPAIR = 5;
+}
+
+enum NoticeSeverity {
+  NOTICE_SEVERITY_UNSPECIFIED = 0;
+  NOTICE_SEVERITY_INFO = 1;
+  NOTICE_SEVERITY_WARNING = 2;
+  NOTICE_SEVERITY_ERROR = 3;
+}
+
+enum NoticeMessageType {
+  NOTICE_MESSAGE_TYPE_UNSPECIFIED = 0;
+  NOTICE_MESSAGE_TYPE_AGENTS_MD = 1;
+  NOTICE_MESSAGE_TYPE_SKILLS = 2;
+  NOTICE_MESSAGE_TYPE_SUBAGENTS = 3;
+  NOTICE_MESSAGE_TYPE_ENVIRONMENT = 4;
+  NOTICE_MESSAGE_TYPE_COMPACTION_SUMMARY = 5;
+  NOTICE_MESSAGE_TYPE_INTERRUPTION = 6;
+  NOTICE_MESSAGE_TYPE_ERROR_FEEDBACK = 7;
+  NOTICE_MESSAGE_TYPE_COMPACTION_SOON_REMINDER = 8;
+  NOTICE_MESSAGE_TYPE_HANDOFF_FUTURE_MESSAGE = 9;
+  NOTICE_MESSAGE_TYPE_REVIEWER_FEEDBACK = 10;
+  NOTICE_MESSAGE_TYPE_BACKGROUND_NOTICE = 11;
+  NOTICE_MESSAGE_TYPE_CUSTOM_TOOL_CALL_OUTPUT = 12;
+  NOTICE_MESSAGE_TYPE_COMPACTION_PRESERVED_USER_MESSAGE = 13;
+  NOTICE_MESSAGE_TYPE_HEADLESS_MODE = 14;
+  NOTICE_MESSAGE_TYPE_HEADLESS_MODE_EXIT = 15;
+  NOTICE_MESSAGE_TYPE_WORKFLOW_MODE = 16;
+  NOTICE_MESSAGE_TYPE_WORKTREE_MODE = 17;
+  NOTICE_MESSAGE_TYPE_WORKTREE_MODE_EXIT = 18;
+  NOTICE_MESSAGE_TYPE_GOAL = 19;
+  NOTICE_MESSAGE_TYPE_ACTIVE_GOAL_CONTINUATION = 20;
+  NOTICE_MESSAGE_TYPE_AGENT_STEER = 21;
+}
+
+message Diagnostic {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  string detail = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message CommittedRowLocator {
+  int64 event_sequence = 1 [(buf.validate.field).int64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  int32 row_ordinal = 2 [(buf.validate.field).int32.gte = 1];
+}
+
+message UserRow {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string text = 2 [(buf.validate.field).string.min_len = 1];
+  optional string condensed_text = 3 [(buf.validate.field).string.min_len = 1];
+  optional string rollback_target_id = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message AssistantRow {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  optional string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+}
+
+message ToolRow {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
+  string tool_name = 3 [(buf.validate.field).string.min_len = 1];
+  bool is_error = 4;
+}
+
+message ReasoningTraceRow {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  optional int64 duration_millis = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message ReviewerFeedbackRow {
+  string id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 2 [(buf.validate.field).string.uuid = true];
+  int32 suggestion_count = 3 [(buf.validate.field).int32.gte = 1];
+}
+
+message ReviewerErrorRow {
+  string id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message CacheWarning {
+  string scope = 1 [(buf.validate.field).string.min_len = 1];
+  string reason = 2 [(buf.validate.field).string.min_len = 1];
+  optional int32 lost_input_tokens = 3 [(buf.validate.field).int32.gte = 1];
+  EntryVisibility visibility = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+}
+
+message CompactionNotice {
+  optional int32 count = 1 [(buf.validate.field).int32.gte = 1];
+  optional string detail = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ToolOutputRepair {
+  string kind = 1 [(buf.validate.field).string.min_len = 1];
+  int32 count = 2 [(buf.validate.field).int32.gte = 1];
+}
+
+message BackgroundNoticeIdentity {
+  string activity_id = 1 [(buf.validate.field).string.uuid = true];
+  string process_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional int32 exit_code = 3;
+}
+
+message WorktreeContext {
+  optional string branch = 1 [(buf.validate.field).string.min_len = 1];
+  string worktree_path = 2 [(buf.validate.field).string.min_len = 1];
+  string workspace_root = 3 [(buf.validate.field).string.min_len = 1];
+  string effective_cwd = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message NoticeRow {
+  optional string step_id = 1 [(buf.validate.field).string.uuid = true];
+  NoticeReason reason = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  NoticeSeverity severity = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional NoticeMessageType message_type = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional string legacy_text = 5 [(buf.validate.field).string.min_len = 1];
+  optional string notice_id = 6 [(buf.validate.field).string.min_len = 1];
+  optional string source_path = 7 [(buf.validate.field).string.min_len = 1];
+  optional WorktreeContext worktree = 8;
+  optional CacheWarning cache_warning = 9;
+  optional CompactionNotice compaction = 10;
+  optional ToolOutputRepair tool_output_repair = 11;
+  optional Diagnostic diagnostic = 12;
+  optional BackgroundNoticeIdentity background = 13;
+  optional string condensed_text = 14 [(buf.validate.field).string.min_len = 1];
+  optional string compact_label = 15 [(buf.validate.field).string.min_len = 1];
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.notice_reason_payload"
+    message: "notice payload must match reason"
+    expression:
+      "(this.reason == 1 && has(this.cache_warning) && !has(this.legacy_text) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 2 && has(this.compaction) && has(this.message_type) && this.message_type == 5 && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 3 && (has(this.legacy_text) || has(this.message_type)) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair) && !has(this.diagnostic) && !has(this.background)) || "
+      "(this.reason == 4 && has(this.diagnostic) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.tool_output_repair)) || "
+      "(this.reason == 5 && has(this.tool_output_repair) && !has(this.legacy_text) && !has(this.cache_warning) && !has(this.compaction) && !has(this.diagnostic) && !has(this.background))"
+  };
+}
+
+message CommittedRow {
+  EntryVisibility visibility = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  RowIntegrity integrity = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  CommittedRowLocator locator = 3 [(buf.validate.field).required = true];
+  oneof row {
+    option (buf.validate.oneof).required = true;
+    UserRow user = 4;
+    AssistantRow assistant = 5;
+    ToolRow tool = 6;
+    ReasoningTraceRow reasoning_trace = 7;
+    NoticeRow notice = 8;
+    ReviewerFeedbackRow reviewer_feedback = 9;
+    ReviewerErrorRow reviewer_error = 10;
+  }
+}
+
+message RuntimeReadModelUpdate {
+  kent.api.runtime.ReadModelVersion version = 1 [(buf.validate.field).required = true];
+  kent.api.runtime.Activity activity = 2 [(buf.validate.field).required = true];
+}
+
+message SessionIdentity {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string session_name = 2 [(buf.validate.field).string.min_len = 1];
+  kent.api.runtime.ConversationFreshness conversation_freshness = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional kent.api.worktree.SessionExecutionTarget execution_target = 4;
+}
+
+message SessionStatus {
+  string reviewer_frequency = 1 [(buf.validate.field).string.min_len = 1];
+  bool reviewer_enabled = 2;
+  bool auto_compaction_enabled = 3;
+  bool questions_enabled = 4;
+  bool fast_mode_available = 5;
+  bool fast_mode_enabled = 6;
+  string thinking_level = 7 [(buf.validate.field).string.min_len = 1];
+  string compaction_mode = 8 [(buf.validate.field).string.min_len = 1];
+  int32 compaction_count = 9 [(buf.validate.field).int32.gte = 0];
+  optional string previous_session_id = 10 [(buf.validate.field).string.min_len = 1];
+  optional string parent_agent_session_id = 11 [(buf.validate.field).string.min_len = 1];
+  optional string navigation_target_session_id = 12 [(buf.validate.field).string.min_len = 1];
+  optional kent.api.runtime.WorkflowSessionStatus workflow = 13;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.fast_mode_availability"
+    message: "fast mode cannot be enabled when unavailable"
+    expression: "!this.fast_mode_enabled || this.fast_mode_available"
+  };
+}
+
+message AssistantStream {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+}
+
+message AssistantDelta {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+}
+
+message AssistantStreamAbort {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  AssistantAbortReason reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional Diagnostic diagnostic = 4;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.assistant_abort_diagnostic"
+    message: "only failed assistant aborts carry a diagnostic"
+    expression: "(this.reason == 2 && has(this.diagnostic)) || (this.reason != 2 && !has(this.diagnostic))"
+  };
+}
+
+message ThinkingStatusUpdate {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string text = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ReasoningTraceUpdate {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  optional string kent_trace_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message ReasoningTraceReset {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+}
+
+message ToolStart {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
+  string tool_name = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ToolAbort {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
+  ToolAbortReason reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional Diagnostic diagnostic = 4;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.tool_abort_diagnostic"
+    message: "only failed tool aborts carry a diagnostic"
+    expression: "(this.reason == 2 && has(this.diagnostic)) || (this.reason != 2 && !has(this.diagnostic))"
+  };
+}
+
+message UserMessageFlushed {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  repeated string queue_item_ids = 2 [(buf.validate.field).repeated = {
+    min_items: 1
+    unique: true
+    items: {string: {uuid: true}}
+  }];
+}
+
+message QueuedMessageState {
+  string queue_item_id = 1 [(buf.validate.field).string.uuid = true];
+  QueuedMessageStatus status = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional QueuedMessageFailureReason failure_reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional string text = 4 [(buf.validate.field).string.min_len = 1];
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.queued_message_payload"
+    message: "queued message payload must match status"
+    expression:
+      "(this.status == 1 && !has(this.failure_reason) && has(this.text)) || "
+      "(this.status in [2, 4] && !has(this.failure_reason) && !has(this.text)) || "
+      "(this.status == 3 && has(this.failure_reason) && has(this.text))"
+  };
+}
+
+message StepState {
+  string run_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 2 [(buf.validate.field).string.uuid = true];
+  StepLifecycle lifecycle = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  kent.api.runtime.ActivityActiveKind active_kind = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  RunStatus status = 5 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.step_lifecycle_status"
+    message: "step lifecycle must match status"
+    expression: "(this.lifecycle == 1 && this.status == 1) || (this.lifecycle == 2 && this.status in [2, 3, 4])"
+  };
+}
+
+message ReviewerStatus {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  ReviewerState state = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+}
+
+message CompactionStatus {
+  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  CompactionState state = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  string mode = 3 [(buf.validate.field).string.min_len = 1];
+  int32 count = 4 [(buf.validate.field).int32.gte = 0];
+  optional Diagnostic diagnostic = 5;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.compaction_diagnostic"
+    message: "only failed compaction carries a diagnostic"
+    expression: "(this.state == 3 && has(this.diagnostic)) || (this.state != 3 && !has(this.diagnostic))"
+  };
+}
+
+message ContextUsage {
+  int32 used_tokens = 1 [(buf.validate.field).int32.gte = 0];
+  int32 window_tokens = 2 [(buf.validate.field).int32.gte = 1];
+  optional int32 cache_hit_percent = 3 [(buf.validate.field).int32 = {gte: 0 lte: 100}];
+}
+
+message GoalStatus {
+  optional kent.api.runtime.GoalView goal = 1;
+}
+
+message BackgroundActivity {
+  string activity_id = 1 [(buf.validate.field).string.uuid = true];
+  string process_id = 2 [(buf.validate.field).string.min_len = 1];
+  string owner_run_id = 3 [(buf.validate.field).string.uuid = true];
+  string owner_step_id = 4 [(buf.validate.field).string.uuid = true];
+  BackgroundLifecycle lifecycle = 5 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  string command = 6 [(buf.validate.field).string.min_len = 1];
+  string workdir = 7 [(buf.validate.field).string.min_len = 1];
+  optional string log_path = 8 [(buf.validate.field).string.min_len = 1];
+  optional string preview = 9 [(buf.validate.field).string.min_len = 1];
+  optional int32 exit_code = 10;
+  bool user_requested_kill = 11;
+  bool notice_suppressed = 12;
+  optional Diagnostic diagnostic = 13;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.background_lifecycle"
+    message: "background activity terminal facts must match lifecycle"
+    expression:
+      "(this.lifecycle == 1 && !has(this.exit_code) && !this.user_requested_kill && !has(this.diagnostic)) || "
+      "(this.lifecycle == 2 && !this.user_requested_kill) || "
+      "(this.lifecycle == 3)"
+  };
+}
+
+message Prompt {
+  PromptStatus status = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  oneof prompt {
+    option (buf.validate.oneof).required = true;
+    kent.api.prompt.Question question = 2;
+    kent.api.prompt.Approval approval = 3;
+  }
+}
+
+message WorktreeTransitionOutcome {
+  string operation_id = 1 [(buf.validate.field).string.uuid = true];
+  kent.api.worktree.TransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  kent.api.worktree.TransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional Diagnostic failure = 4;
+  optional kent.api.worktree.DeletePreconditionDetails delete_precondition = 5;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.worktree_transition_failure"
+    message: "only failed worktree transitions carry failure"
+    expression:
+      "(this.state == 2 && has(this.failure)) || "
+      "(this.state == 1 && !has(this.failure) && !has(this.delete_precondition))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.worktree_transition_delete_precondition"
+    message: "delete precondition belongs only to a failed delete transition"
+    expression: "!has(this.delete_precondition) || (this.transition == 3 && this.state == 2)"
+  };
+}
+
+message OperationalDiagnostic {
+  OperationalDiagnosticCode code = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional string step_id = 2 [(buf.validate.field).string.uuid = true];
+  string detail = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message LiveRunFinished {
+  LiveRunStatus status = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  LiveRunResultKind result_kind = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  string no_final_reason = 3;
+  bool work_performed = 4;
+  optional string final_answer = 5;
+  optional string failure = 6 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.live_run_failure_nonblank"
+      message: "failure must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  google.protobuf.Timestamp started_at = 7 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp finished_at = 8 [(buf.validate.field).required = true];
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.live_run_result"
+    message: "live-run final-answer presence must match result kind"
+    expression:
+      "(this.result_kind == 1 && has(this.final_answer)) || "
+      "(this.result_kind == 2 && !has(this.final_answer))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.live_run_failure"
+    message: "only failed live runs carry failure"
+    expression: "(this.status == 3 && has(this.failure)) || (this.status != 3 && !has(this.failure))"
+  };
+}
+
+message Hydration {
+  SessionIdentity session_identity = 1 [(buf.validate.field).required = true];
+  SessionStatus session_status = 2 [(buf.validate.field).required = true];
+  RuntimeReadModelUpdate runtime_read_model_update = 3 [(buf.validate.field).required = true];
+  repeated CommittedRow committed_rows = 4 [(buf.validate.field).repeated.items.required = true];
+  optional AssistantStream active_assistant = 5;
+  optional ThinkingStatusUpdate active_thinking_status = 6;
+  repeated ReasoningTraceUpdate active_reasoning_traces = 7 [(buf.validate.field).repeated.items.required = true];
+  optional StepState active_step = 8;
+  optional ReviewerStatus active_reviewer = 9;
+  optional CompactionStatus active_compaction = 10;
+  repeated ToolStart in_flight_tools = 11 [(buf.validate.field).repeated.items.required = true];
+  repeated QueuedMessageState queued_messages = 12 [(buf.validate.field).repeated.items.required = true];
+  repeated Prompt pending_prompts = 13 [(buf.validate.field).repeated.items.required = true];
+  repeated BackgroundActivity background_activities = 14 [(buf.validate.field).repeated.items.required = true];
+  optional ContextUsage context_usage = 15;
+  optional GoalStatus goal_status = 16;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_active_state"
+    message: "hydrated active facts must be active"
+    expression:
+      "(!has(this.active_step) || this.active_step.lifecycle == 1) && "
+      "(!has(this.active_reviewer) || this.active_reviewer.state == 1) && "
+      "(!has(this.active_compaction) || this.active_compaction.state == 1)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_queued_messages"
+    message: "hydrated queued messages must be accepted and unique"
+    expression:
+      "this.queued_messages.all(message, message.status == 1) && "
+      "this.queued_messages.map(message, message.queue_item_id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_pending_prompts"
+    message: "hydrated prompts must be pending and unique"
+    expression:
+      "this.pending_prompts.all(prompt, prompt.status == 1) && "
+      "this.pending_prompts.map(prompt, has(prompt.question) ? prompt.question.prompt_id : prompt.approval.prompt_id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_backgrounds"
+    message: "hydrated backgrounds must be active and unique"
+    expression:
+      "this.background_activities.all(activity, activity.lifecycle == 1) && "
+      "this.background_activities.map(activity, activity.activity_id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_tools"
+    message: "hydrated tool calls must be unique"
+    expression: "this.in_flight_tools.map(tool, tool.tool_call_id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_active_ownership"
+    message: "step-scoped hydrated facts must match the canonical runtime active step"
+    expression:
+      "(!has(this.active_step) || (has(this.runtime_read_model_update.activity.active_step) && this.active_step.run_id == this.runtime_read_model_update.activity.active_step.run_id && this.active_step.step_id == this.runtime_read_model_update.activity.active_step.step_id && this.active_step.active_kind == this.runtime_read_model_update.activity.active_step.active_kind)) && "
+      "(!has(this.active_assistant) || (has(this.runtime_read_model_update.activity.active_step) && this.active_assistant.step_id == this.runtime_read_model_update.activity.active_step.step_id)) && "
+      "(!has(this.active_thinking_status) || (has(this.runtime_read_model_update.activity.active_step) && this.active_thinking_status.step_id == this.runtime_read_model_update.activity.active_step.step_id)) && "
+      "this.active_reasoning_traces.all(trace, has(this.runtime_read_model_update.activity.active_step) && trace.step_id == this.runtime_read_model_update.activity.active_step.step_id) && "
+      "(!has(this.active_reviewer) || (has(this.runtime_read_model_update.activity.active_step) && this.active_reviewer.step_id == this.runtime_read_model_update.activity.active_step.step_id)) && "
+      "(!has(this.active_compaction) || (has(this.runtime_read_model_update.activity.active_step) && this.active_compaction.step_id == this.runtime_read_model_update.activity.active_step.step_id)) && "
+      "this.in_flight_tools.all(tool, has(this.runtime_read_model_update.activity.active_step) && tool.step_id == this.runtime_read_model_update.activity.active_step.step_id) && "
+      "this.pending_prompts.all(prompt, has(this.runtime_read_model_update.activity.active_step) && (has(prompt.question) ? (prompt.question.session_id == this.session_identity.session_id && prompt.question.step_id == this.runtime_read_model_update.activity.active_step.step_id) : (prompt.approval.session_id == this.session_identity.session_id && prompt.approval.step_id == this.runtime_read_model_update.activity.active_step.step_id)))"
+  };
+}
+
+message Message {
+  uint64 sequence = 1 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    Hydration hydration = 2;
+    CommittedRow committed_row = 3;
+    AssistantDelta assistant_delta = 4;
+    AssistantStreamAbort assistant_stream_abort = 5;
+    ThinkingStatusUpdate thinking_status_update = 6;
+    ReasoningTraceUpdate reasoning_trace_update = 7;
+    ReasoningTraceReset reasoning_trace_reset = 8;
+    ToolStart tool_start = 9;
+    ToolAbort tool_abort = 10;
+    UserMessageFlushed user_message_flushed = 11;
+    QueuedMessageState queued_message_state = 12;
+    StepState step_state = 13;
+    ReviewerStatus reviewer_state = 14;
+    RuntimeReadModelUpdate runtime_read_model_update = 15;
+    SessionStatus session_status = 16;
+    SessionIdentity session_identity = 17;
+    CompactionStatus compaction_status = 18;
+    ContextUsage context_usage = 19;
+    GoalStatus goal_status = 20;
+    BackgroundActivity background_activity = 21;
+    Prompt prompt = 22;
+    WorktreeTransitionOutcome worktree_transition_outcome = 23;
+    OperationalDiagnostic operational_diagnostic = 24;
+    LiveRunFinished live_run_finished = 25;
+  }
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.message_sequence"
+    message: "hydration is sequence 1 and live events begin at sequence 2"
+    expression: "(has(this.hydration) && this.sequence == 1) || (!has(this.hydration) && this.sequence >= 2)"
+  };
+}
+
+message PageRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  oneof direction {
+    int64 cursor = 2 [(buf.validate.field).int64 = {gte: 1 lte: 9007199254740991}];
+    int64 newer_cursor = 3 [(buf.validate.field).int64 = {gte: 1 lte: 9007199254740991}];
+  }
+}
+
+message RollbackCandidate {
+  int64 event_sequence = 1 [(buf.validate.field).int64 = {gte: 1 lte: 9007199254740991}];
+  int32 row_ordinal = 2 [(buf.validate.field).int32.gte = 1];
+}
+
+message Page {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_name = 2;
+  kent.api.runtime.ConversationFreshness conversation_freshness = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional int64 older_cursor = 4 [(buf.validate.field).int64 = {gte: 1 lte: 9007199254740991}];
+  bool has_more_above = 5;
+  optional int64 newer_cursor = 6 [(buf.validate.field).int64 = {gte: 1 lte: 9007199254740991}];
+  bool has_more_below = 7;
+  optional RollbackCandidate latest_rollback_candidate = 8;
+  repeated CommittedRow entries = 9 [(buf.validate.field).repeated.items.required = true];
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.page_older_cursor"
+    message: "older_cursor presence must match has_more_above"
+    expression: "this.has_more_above == has(this.older_cursor)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.page_newer_cursor"
+    message: "newer_cursor presence must match has_more_below"
+    expression: "this.has_more_below == has(this.newer_cursor)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.page_unique_locators"
+    message: "transcript page committed row locators must be unique"
+    expression:
+      "this.entries.map(entry, string(entry.locator.event_sequence) + ':' + string(entry.locator.row_ordinal)).unique()"
+  };
+}
+
+message PageSuccess { Page transcript = 1 [(buf.validate.field).required = true]; }
+message LatestFinalAnswerRequest { string session_id = 1 [(buf.validate.field).string.min_len = 1]; }
+message LatestFinalAnswerSuccess { optional string answer = 1; }
+message SubscribeRequest { string session_id = 1 [(buf.validate.field).string.min_len = 1]; }
+message AppendCommittedEntryRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string role = 2;
+  string text = 3;
+  optional AppendVisibility visibility = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string notice_id = 5 [(buf.validate.field).string.min_len = 1];
+}
+message OperationError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL error_code: "internal_failure"
+    }];
+  }
+}
+
+message PageResult { oneof outcome { option (buf.validate.oneof).required = true; PageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message LatestFinalAnswerResult { oneof outcome { option (buf.validate.oneof).required = true; LatestFinalAnswerSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message SubscribeResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+message EmptyResult { oneof outcome { option (buf.validate.oneof).required = true; google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS]; OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR]; } }
+
+service ReadService {
+  rpc GetPage(PageRequest) returns (PageResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "session.getTranscriptPage"
+    };
+  }
+  rpc GetLatestFinalAnswer(LatestFinalAnswerRequest) returns (LatestFinalAnswerResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "session.getLatestCommittedAssistantFinalAnswer"
+    };
+  }
+}
+
+service StreamService {
+  rpc Subscribe(SubscribeRequest) returns (SubscribeResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_ATTACHED_SESSION direction: DIRECTION_CLIENT_TO_SERVER
+      event: {package: "kent.api.transcript" service: "StreamService" method: "Event"}
+      completion: {package: "kent.api.transcript" service: "StreamService" method: "Complete"}
+      legacy_wire_name: "session.subscribeTranscript"
+    };
+  }
+  rpc Event(Message) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "session.transcript"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "session.transcript.complete"
+    };
+  }
+}
+
+service AppendService {
+  rpc AppendCommittedEntry(AppendCommittedEntryRequest) returns (EmptyResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "runtime.appendCommittedEntry"
+    };
+  }
+}

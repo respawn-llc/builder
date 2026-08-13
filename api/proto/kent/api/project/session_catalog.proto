@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package kent.api.project;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/project;projectpb";
+
+enum SessionCategory {
+  SESSION_CATEGORY_UNSPECIFIED = 0;
+  SESSION_CATEGORY_MAIN = 1;
+  SESSION_CATEGORY_SUBAGENT = 2;
+}
+
+message SessionSummary {
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "session_summary.session_id.trimmed"
+      message: "session_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  SessionCategory category = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string name = 3 [(buf.validate.field).string.min_len = 1];
+  optional string first_prompt_preview = 4 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp updated_at = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+}
+
+message SessionPageRequest {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "session_page.project_id.trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  SessionCategory category = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional int32 offset = 3 [(buf.validate.field).int32.gte = 0];
+  optional int32 limit = 4 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 100
+  }];
+}
+
+message SessionPageSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  SessionCategory category = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated SessionSummary sessions = 3 [(buf.validate.field).repeated.max_items = 100];
+  optional int32 next_offset = 4 [(buf.validate.field).int32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "session_page.categories"
+    message: "every session category must match the page category"
+    expression: "this.sessions.all(session, session.category == this.category)"
+  };
+}
+
+message SessionPageError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionPageResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    SessionPageSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionPageError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service SessionCatalogService {
+  rpc Page(SessionPageRequest) returns (SessionPageResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.page"
+    };
+  }
+}

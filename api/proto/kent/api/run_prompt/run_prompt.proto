@@ -1,0 +1,128 @@
+syntax = "proto3";
+
+package kent.api.run_prompt;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "kent/api/session_launch/session_launch.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/run_prompt;runpromptpb";
+
+enum MessagePhase {
+  MESSAGE_PHASE_UNSPECIFIED = 0;
+  MESSAGE_PHASE_COMMENTARY = 1;
+  MESSAGE_PHASE_FINAL = 2;
+}
+
+message Request {
+  kent.api.session_launch.SessionLaunchIntent intent = 1 [(buf.validate.field).required = true];
+  optional string caller_session_id = 2 [(buf.validate.field).string.min_len = 1];
+  string prompt = 3 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Duration timeout = 4;
+  kent.api.session_launch.RunPromptOverrides overrides = 5;
+}
+
+message Success {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_name = 2;
+  google.protobuf.Duration duration = 3 [(buf.validate.field).required = true];
+  repeated string warnings = 4;
+}
+
+message Error {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message Result {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    Success success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    Error error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SessionStarted {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.run_prompt.session_started_id.uuid_v4"
+      message: "session_id must be canonical lowercase UUID v4 text"
+      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+}
+
+message AssistantMessage {
+  MessagePhase phase = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message SteeredMessage {
+  string content = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.run_prompt.steered_message_nonblank"
+      message: "content must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message ProgressFailure {
+  optional string error = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.run_prompt.progress_failure_nonblank"
+      message: "error must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message ProgressEvent {
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    SessionStarted session_started = 1;
+    AssistantMessage assistant_message = 2;
+    SteeredMessage steered_message = 3;
+    google.protobuf.Empty compaction_started = 4;
+    ProgressFailure compaction_failed = 5;
+    ProgressFailure run_logging_failed = 6;
+    ProgressFailure run_cleanup_failed = 7;
+  }
+}
+
+service RunService {
+  rpc Prompt(Request) returns (Result) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_PROGRESS
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_WORKSPACE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {package: "kent.api.run_prompt" service: "RunService" method: "Progress"}
+      legacy_wire_name: "run.prompt"
+    };
+  }
+  rpc Progress(ProgressEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "run.prompt.progress"
+    };
+  }
+}

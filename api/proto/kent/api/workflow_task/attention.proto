@@ -1,0 +1,928 @@
+syntax = "proto3";
+
+package kent.api.workflow_task;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/attention/attention.proto";
+import "kent/api/prompt/prompt.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/workflow_definition/workflow_definition.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/workflow_task;workflowtaskpb";
+
+enum AttentionItemKind {
+  ATTENTION_ITEM_KIND_UNSPECIFIED = 0;
+  ATTENTION_ITEM_KIND_QUESTION = 1;
+  ATTENTION_ITEM_KIND_APPROVAL = 2;
+  ATTENTION_ITEM_KIND_INTERRUPTED_CURRENT_NODE = 3;
+}
+
+enum AttentionQuestionKind {
+  ATTENTION_QUESTION_KIND_UNSPECIFIED = 0;
+  ATTENTION_QUESTION_KIND_ORDINARY = 1;
+  ATTENTION_QUESTION_KIND_APPROVAL = 2;
+}
+
+enum AttentionNotificationEventType {
+  ATTENTION_NOTIFICATION_EVENT_UNSPECIFIED = 0;
+  ATTENTION_NOTIFICATION_EVENT_PENDING = 1;
+  ATTENTION_NOTIFICATION_EVENT_RESOLVED = 2;
+  ATTENTION_NOTIFICATION_EVENT_SNAPSHOT_COMPLETE = 3;
+}
+
+enum AttentionNotificationSource {
+  ATTENTION_NOTIFICATION_SOURCE_UNSPECIFIED = 0;
+  ATTENTION_NOTIFICATION_SOURCE_LIVE = 1;
+  ATTENTION_NOTIFICATION_SOURCE_SNAPSHOT = 2;
+}
+
+enum AttentionNotificationKind {
+  ATTENTION_NOTIFICATION_KIND_UNSPECIFIED = 0;
+  ATTENTION_NOTIFICATION_KIND_QUESTION = 1;
+  ATTENTION_NOTIFICATION_KIND_APPROVAL = 2;
+  ATTENTION_NOTIFICATION_KIND_WORKFLOW_APPROVAL = 3;
+  ATTENTION_NOTIFICATION_KIND_INTERRUPTED_CURRENT_NODE = 4;
+}
+
+enum AttentionNotificationTargetKind {
+  ATTENTION_NOTIFICATION_TARGET_UNSPECIFIED = 0;
+  ATTENTION_NOTIFICATION_TARGET_WORKFLOW_TASK = 1;
+  ATTENTION_NOTIFICATION_TARGET_SESSION_PROMPT = 2;
+}
+
+enum AttentionNotificationFocusKind {
+  ATTENTION_NOTIFICATION_FOCUS_UNSPECIFIED = 0;
+  ATTENTION_NOTIFICATION_FOCUS_QUESTION = 1;
+  ATTENTION_NOTIFICATION_FOCUS_APPROVAL = 2;
+  ATTENTION_NOTIFICATION_FOCUS_INTERRUPTED_CURRENT_NODE = 3;
+}
+
+enum ExecutionTargetUnavailableCause {
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_UNSPECIFIED = 0;
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_INVALID_REVISION = 1;
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_NON_COMMIT = 2;
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_DEFAULT_BRANCH_MISSING = 3;
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_DEFAULT_BRANCH_AMBIGUOUS = 4;
+  EXECUTION_TARGET_UNAVAILABLE_CAUSE_GIT_FAILURE = 5;
+}
+
+enum AttentionSetupRecoveryCause {
+  ATTENTION_SETUP_RECOVERY_CAUSE_UNSPECIFIED = 0;
+  ATTENTION_SETUP_RECOVERY_CAUSE_PROCESS_EXIT = 1;
+  ATTENTION_SETUP_RECOVERY_CAUSE_TIMEOUT = 2;
+  ATTENTION_SETUP_RECOVERY_CAUSE_TARGET_PREPARATION = 3;
+  ATTENTION_SETUP_RECOVERY_CAUSE_OPERATIONAL = 4;
+}
+
+enum AttentionSetupRequirement {
+  ATTENTION_SETUP_REQUIREMENT_UNSPECIFIED = 0;
+  ATTENTION_SETUP_REQUIREMENT_REQUIRED = 1;
+  ATTENTION_SETUP_REQUIREMENT_ALREADY_COMPLETED = 2;
+}
+
+enum AttentionRequestValidationCode {
+  ATTENTION_REQUEST_VALIDATION_CODE_UNSPECIFIED = 0;
+  ATTENTION_REQUEST_VALIDATION_CODE_REQUIRED = 1;
+  ATTENTION_REQUEST_VALIDATION_CODE_INVALID_VALUE = 2;
+  ATTENTION_REQUEST_VALIDATION_CODE_INVALID_MODE = 3;
+}
+
+message AttentionCurrentNode {
+  string node_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_current_node_id_trimmed"
+      message: "node_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string transition_branch_key = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_current_node_branch_trimmed"
+      message: "transition_branch_key must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string session_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string effective_assignee = 4 [(buf.validate.field).string.min_len = 1];
+  optional string effective_thinking = 5 [(buf.validate.field).string.min_len = 1];
+}
+
+message OrdinaryQuestion {
+  repeated string suggestions = 1 [(buf.validate.field).repeated.items = {
+    string: {min_len: 1}
+    cel: {
+      id: "kent.workflow_task.attention_question_suggestion_nonblank"
+      message: "suggestions must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  }];
+  optional int32 recommended_option_index = 2 [(buf.validate.field).int32.gte = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.attention_question_recommendation"
+    message: "recommended_option_index must identify a suggestion"
+    expression: "!has(this.recommended_option_index) || this.recommended_option_index <= size(this.suggestions)"
+  };
+}
+
+message ApprovalQuestion {
+  repeated kent.api.prompt.ApprovalDecision approval_decisions = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {
+      enum: {
+        defined_only: true
+        not_in: [0]
+      }
+    }
+  }];
+}
+
+message AttentionQuestionPrompt {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_question_step_id_uuid_v4"
+      message: "step_id must be canonical lowercase UUID v4 text"
+      expression:
+        "size(this) == 36 && this == this.lowerAscii() && "
+        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string prompt_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_question_prompt_id_trimmed"
+      message: "prompt_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  AttentionQuestionKind kind = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  oneof prompt {
+    option (buf.validate.oneof).required = true;
+    OrdinaryQuestion ordinary = 5;
+    ApprovalQuestion approval = 6;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.attention_question_kind"
+    message: "question kind must match its prompt detail"
+    expression:
+      "(this.kind == 1 && has(this.ordinary)) || "
+      "(this.kind == 2 && has(this.approval))"
+  };
+}
+
+message ApprovalTarget {
+  string display_name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_approval_target_name_nonblank"
+      message: "display_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message OutputValue {
+  string name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_output_name_nonblank"
+      message: "output value names must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string value = 2;
+}
+
+message ApprovalSnapshot {
+  string source_node_display_name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_approval_source_nonblank"
+      message: "source_node_display_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  repeated ApprovalTarget targets = 2 [(buf.validate.field).repeated.items.required = true];
+  optional string commentary = 3;
+  repeated OutputValue output_values = 4 [(buf.validate.field).repeated.items.required = true];
+  int64 workflow_revision_seen = 5 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.attention_output_names_unique"
+    message: "output value names must be unique"
+    expression: "this.output_values.map(value, value.name).unique()"
+  };
+}
+
+message DetailField {
+  string name = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.interruption_detail_field_name_nonblank"
+      message: "interruption detail field names must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string value = 2;
+}
+
+message GenericInterruptionDetails {}
+
+message ConfiguredExecutionTargetUnavailableDetails {
+  kent.api.workflow_definition.ExecutionTargetMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string requested_ref = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.unavailable_requested_ref_nonblank"
+      message: "requested_ref must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  ExecutionTargetUnavailableCause cause = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.unavailable_execution_target"
+    message: "requested_ref is required only for custom-ref mode"
+    expression:
+      "(this.mode == 4 && has(this.requested_ref)) || "
+      "(this.mode != 4 && !has(this.requested_ref))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.unavailable_execution_target_concrete"
+    message: "configured unavailable execution target must be concrete"
+    expression: "this.mode in [1, 2, 3, 4]"
+  };
+}
+
+message SetupExecutionTarget {
+  kent.api.workflow_definition.ExecutionTargetMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string custom_ref = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.setup_custom_ref_nonblank"
+      message: "custom_ref must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.setup_execution_target"
+    message: "custom_ref is required only for custom-ref mode"
+    expression:
+      "(this.mode == 4 && has(this.custom_ref)) || "
+      "(this.mode != 4 && !has(this.custom_ref))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.setup_execution_target_concrete"
+    message: "setup recovery execution target must be concrete"
+    expression: "this.mode in [1, 2, 3, 4]"
+  };
+}
+
+message RetainedWorktree {
+  string worktree_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.retained_worktree_id_nonblank"
+      message: "worktree_id must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string root = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.retained_worktree_root_nonblank"
+      message: "root must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message SetupRecoveryDetails {
+  string setup_operation_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.setup_recovery_operation_id_uuid_v4"
+      message: "setup_operation_id must be canonical lowercase UUID v4 text"
+      expression:
+        "size(this) == 36 && this == this.lowerAscii() && "
+        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  AttentionSetupRecoveryCause cause = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string diagnostic = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.setup_recovery_diagnostic_nonblank"
+      message: "diagnostic must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string script_path = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.setup_recovery_script_path_nonblank"
+      message: "script_path must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  AttentionSetupRequirement setup_requirement = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  SetupExecutionTarget execution_target = 6 [(buf.validate.field).required = true];
+  optional RetainedWorktree retained_worktree = 7;
+  optional RetainedWorktree retained_previous_worktree = 8;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.setup_recovery_script_facts"
+    message: "setup script recovery requires script and retained-worktree facts; target preparation does not carry a script"
+    expression:
+      "(this.cause == 3 && !has(this.script_path)) || "
+      "(this.cause != 3 && has(this.script_path) && this.setup_requirement == 1 && has(this.retained_worktree))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.setup_recovery_completed_worktree"
+    message: "completed setup recovery requires a retained worktree"
+    expression: "this.setup_requirement != 2 || has(this.retained_worktree)"
+  };
+}
+
+message ConfiguredExecutionTargetSetupRecoveryDetails {
+  ConfiguredExecutionTargetUnavailableDetails configured_execution_target_unavailable = 1 [(buf.validate.field).required = true];
+  SetupRecoveryDetails setup_recovery = 2 [(buf.validate.field).required = true];
+}
+
+message InterruptedCurrentNodeDetails {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.interruption_detail_code_nonblank"
+      message: "interruption detail code must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  repeated DetailField fields = 2 [(buf.validate.field).repeated.items.required = true];
+  oneof detail {
+    option (buf.validate.oneof).required = true;
+    GenericInterruptionDetails generic = 3;
+    ConfiguredExecutionTargetUnavailableDetails configured_execution_target_unavailable = 4;
+    SetupRecoveryDetails setup_recovery = 5;
+    ConfiguredExecutionTargetSetupRecoveryDetails configured_execution_target_unavailable_with_setup_recovery = 6;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.interruption_detail_field_names_unique"
+    message: "interruption detail field names must be unique"
+    expression: "this.fields.map(field, field.name).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.setup_recovery_diagnostic_not_duplicated"
+    message: "setup recovery diagnostic must not be duplicated in interruption fields"
+    expression: "!has(this.setup_recovery) || !this.fields.exists(field, field.name == 'error')"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.combined_setup_recovery_diagnostic_not_duplicated"
+    message: "combined setup recovery diagnostic must not be duplicated in interruption fields"
+    expression:
+      "!has(this.configured_execution_target_unavailable_with_setup_recovery) || "
+      "!this.fields.exists(field, field.name == 'error')"
+  };
+}
+
+message QuestionAttention {
+  string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.question_attention_message_nonblank"
+      message: "message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  AttentionCurrentNode current_node = 2 [(buf.validate.field).required = true];
+  optional string session_name = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.question_attention_session_name_nonblank"
+      message: "session_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  AttentionQuestionPrompt question = 4 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.question_attention_current_node_session_absent"
+    message: "question attention current node must not carry a session"
+    expression: "!has(this.current_node.session_id)"
+  };
+}
+
+message ApprovalAttention {
+  optional string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.approval_attention_message_nonblank"
+      message: "message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string approval_id = 2 [(buf.validate.field).string.min_len = 1];
+  ApprovalSnapshot approval_snapshot = 3 [(buf.validate.field).required = true];
+}
+
+message InterruptedAttention {
+  optional string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.interrupted_attention_message_nonblank"
+      message: "message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  AttentionCurrentNode current_node = 2 [(buf.validate.field).required = true];
+  optional string session_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.interrupted_attention_session_id_nonblank"
+      message: "session_id must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional InterruptedCurrentNodeDetails details = 4;
+}
+
+message AttentionItem {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  AttentionItemKind kind = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string project_id = 3 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_workflow_id_uuid_v4"
+      message: "workflow_id must be canonical lowercase UUID v4 text"
+      expression:
+        "size(this) == 36 && this == this.lowerAscii() && "
+        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string task_id = 5 [(buf.validate.field).string.min_len = 1];
+  string task_short_id = 6 [(buf.validate.field).string.min_len = 1];
+  string task_title = 7 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp occurred_at = 8 [(buf.validate.field).required = true];
+  oneof detail {
+    option (buf.validate.oneof).required = true;
+    QuestionAttention question = 9;
+    ApprovalAttention approval = 10;
+    InterruptedAttention interrupted_current_node = 11;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.attention_item_kind"
+    message: "attention item kind must match its detail"
+    expression:
+      "(this.kind == 1 && has(this.question)) || "
+      "(this.kind == 2 && has(this.approval)) || "
+      "(this.kind == 3 && has(this.interrupted_current_node))"
+  };
+}
+
+message AttentionListRequest {
+  int32 page_size = 1 [(buf.validate.field).int32.gte = 0];
+  optional string page_token = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.attention_page_token_trimmed"
+      message: "page_token must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message AttentionRequestValidationDetails {
+  AttentionRequestValidationCode code = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string field = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message AttentionListSuccess {
+  repeated AttentionItem items = 1 [(buf.validate.field).repeated.items.required = true];
+  optional string next_page_token = 2 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp generated_at = 3 [(buf.validate.field).required = true];
+}
+
+message AttentionListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    AttentionRequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message AttentionListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    AttentionListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    AttentionListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message TaskAttentionListRequest {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message TaskAttentionListSuccess {
+  repeated AttentionItem items = 1 [(buf.validate.field).repeated.items.required = true];
+  google.protobuf.Timestamp generated_at = 2 [(buf.validate.field).required = true];
+}
+
+message TaskAttentionListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    AttentionRequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message TaskAttentionListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    TaskAttentionListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    TaskAttentionListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message AttentionNotificationID {
+  AttentionNotificationKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string uuid = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message WorkflowApprovalState {
+  string approval_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string message = 2;
+}
+
+message InterruptedCurrentNodeState {
+  optional string message = 1;
+  optional string reason = 2;
+  optional InterruptedCurrentNodeDetails details = 3;
+}
+
+message QuestionFocus {
+  repeated string ask_ids = 1 [(buf.validate.field).repeated = {
+    min_items: 1
+    items: {string: {min_len: 1}}
+  }];
+}
+
+message ApprovalFocus {
+  string approval_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message InterruptedCurrentNodeFocus {}
+
+message AttentionNotificationTaskFocus {
+  AttentionNotificationFocusKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  oneof focus {
+    option (buf.validate.oneof).required = true;
+    QuestionFocus question = 2;
+    ApprovalFocus approval = 3;
+    InterruptedCurrentNodeFocus interrupted_current_node = 4;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_focus_kind"
+    message: "focus kind must match its detail"
+    expression:
+      "(this.kind == 1 && has(this.question)) || "
+      "(this.kind == 2 && has(this.approval)) || "
+      "(this.kind == 3 && has(this.interrupted_current_node))"
+  };
+}
+
+message WorkflowTaskAttentionTarget {
+  optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.notification_workflow_id_uuid_v4"
+      message: "workflow_id must be canonical lowercase UUID v4 text"
+      expression:
+        "size(this) == 36 && this == this.lowerAscii() && "
+        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  string task_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string task_short_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string task_title = 5 [(buf.validate.field).string.min_len = 1];
+  optional string session_id = 6 [(buf.validate.field).string.min_len = 1];
+  optional string current_node_id = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.notification_current_node_id_nonblank"
+      message: "current_node_id must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string current_node_branch_key = 8 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.notification_current_node_branch_nonblank"
+      message: "current_node_branch_key must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  AttentionNotificationTaskFocus focus = 9 [(buf.validate.field).required = true];
+}
+
+message SessionPromptAttentionTarget {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message AttentionNotificationTarget {
+  AttentionNotificationTargetKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  oneof target {
+    option (buf.validate.oneof).required = true;
+    WorkflowTaskAttentionTarget workflow_task = 2;
+    SessionPromptAttentionTarget session_prompt = 3;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_target_kind"
+    message: "target kind must match its detail"
+    expression:
+      "(this.kind == 1 && has(this.workflow_task)) || "
+      "(this.kind == 2 && has(this.session_prompt))"
+  };
+}
+
+message AttentionNotification {
+  AttentionNotificationID id = 1 [(buf.validate.field).required = true];
+  AttentionNotificationKind kind = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp occurred_at = 3 [(buf.validate.field).required = true];
+  uint64 revision = 4 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  oneof state {
+    option (buf.validate.oneof).required = true;
+    kent.api.attention.QuestionState question = 5;
+    kent.api.attention.ApprovalState approval = 6;
+    WorkflowApprovalState workflow_approval = 7;
+    InterruptedCurrentNodeState interrupted_current_node = 8;
+  }
+  AttentionNotificationTarget target = 9 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_identity_kind"
+    message: "notification id kind must match notification kind"
+    expression: "this.id.kind == this.kind"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_state_kind"
+    message: "notification kind must match its state"
+    expression:
+      "(this.kind == 1 && has(this.question)) || "
+      "(this.kind == 2 && has(this.approval)) || "
+      "(this.kind == 3 && has(this.workflow_approval)) || "
+      "(this.kind == 4 && has(this.interrupted_current_node))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_question_state"
+    message: "question notification state must contain a consistent non-empty ask batch"
+    expression:
+      "!has(this.question) || "
+      "(size(this.question.prepared_ask_ids) > 0 && "
+      "this.question.prepared_ask_ids.all(id, id.trim() != '') && "
+      "this.question.materialized_ask_ids.all(id, id.trim() != '') && "
+      "this.question.current_unresolved_ask_ids.all(id, id.trim() != '') && "
+      "this.question.skipped_ask_ids.all(id, id.trim() != '') && "
+      "this.question.display_count > 0 && "
+      "this.question.materialized_count == size(this.question.materialized_ask_ids) && "
+      "this.question.materialized_ask_ids.all(id, id in this.question.prepared_ask_ids) && "
+      "this.question.current_unresolved_ask_ids.all(id, id in this.question.materialized_ask_ids) && "
+      "this.question.skipped_ask_ids.all(id, id in this.question.prepared_ask_ids) && "
+      "this.question.display_count == size(this.question.prepared_ask_ids) - size(this.question.skipped_ask_ids))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_approval_state"
+    message: "Session approval notifications require a non-blank message and a Session Prompt target"
+    expression:
+      "!has(this.approval) || "
+      "(this.approval.message.trim() != '' && has(this.target.session_prompt))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_workflow_approval_state"
+    message: "Workflow approval notifications require a matching Workflow Task approval focus"
+    expression:
+      "!has(this.workflow_approval) || "
+      "(has(this.target.workflow_task) && has(this.target.workflow_task.focus.approval) && "
+      "this.target.workflow_task.focus.approval.approval_id == this.workflow_approval.approval_id)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_interrupted_state"
+    message: "interrupted-current-node notifications require a Workflow Task current-node target and interrupted focus"
+    expression:
+      "!has(this.interrupted_current_node) || "
+      "(has(this.target.workflow_task) && has(this.target.workflow_task.current_node_id) && "
+      "has(this.target.workflow_task.focus.interrupted_current_node))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_question_focus"
+    message: "Workflow Task question focus must match prepared ask ids"
+    expression:
+      "!has(this.question) || !has(this.target.workflow_task) || "
+      "(has(this.target.workflow_task.focus.question) && "
+      "this.target.workflow_task.focus.question.ask_ids.all(id, id in this.question.prepared_ask_ids) && "
+      "this.question.prepared_ask_ids.all(id, id in this.target.workflow_task.focus.question.ask_ids))"
+  };
+}
+
+message ResolvedAttentionNotification {
+  AttentionNotificationID id = 1 [(buf.validate.field).required = true];
+  AttentionNotificationKind kind = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp occurred_at = 3 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.resolved_notification_kind"
+    message: "resolved notification id kind must match event kind"
+    expression: "this.id.kind == this.kind"
+  };
+}
+
+message AttentionSnapshotComplete {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message AttentionNotificationEvent {
+  uint64 sequence = 1 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  AttentionNotificationSource source = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  AttentionNotificationEventType type = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    AttentionNotification pending = 4;
+    ResolvedAttentionNotification resolved = 5;
+    AttentionSnapshotComplete snapshot_complete = 6;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_event_type"
+    message: "attention event type must match its payload"
+    expression:
+      "(this.type == 1 && has(this.pending)) || "
+      "(this.type == 2 && has(this.resolved)) || "
+      "(this.type == 3 && has(this.snapshot_complete))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.notification_snapshot_source"
+    message: "snapshot-complete events must have snapshot source"
+    expression: "!has(this.snapshot_complete) || this.source == 2"
+  };
+}
+
+message AttentionNotificationStartError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message AttentionNotificationStartResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    AttentionNotificationStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service AttentionReadService {
+  rpc List(AttentionListRequest) returns (AttentionListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.attention.list"
+    };
+  }
+  rpc ListTask(TaskAttentionListRequest) returns (TaskAttentionListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.task.attention.list"
+    };
+  }
+}
+
+service AttentionNotificationService {
+  rpc Subscribe(google.protobuf.Empty) returns (AttentionNotificationStartResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {package: "kent.api.workflow_task" service: "AttentionNotificationService" method: "Event"}
+      completion: {package: "kent.api.workflow_task" service: "AttentionNotificationService" method: "Complete"}
+      legacy_wire_name: "attention.notification.subscribe"
+    };
+  }
+  rpc Event(AttentionNotificationEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "attention.notification"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "attention.notification.complete"
+    };
+  }
+}

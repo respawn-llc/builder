@@ -1,0 +1,461 @@
+syntax = "proto3";
+
+package kent.api.onboarding;
+
+import "buf/validate/validate.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/server/server.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/onboarding;onboardingpb";
+
+enum Theme {
+  THEME_UNSPECIFIED = 0;
+  THEME_AUTO = 1;
+  THEME_LIGHT = 2;
+  THEME_DARK = 3;
+}
+
+enum ModelKind {
+  MODEL_KIND_UNSPECIFIED = 0;
+  MODEL_KIND_KNOWN = 1;
+  MODEL_KIND_CUSTOM = 2;
+}
+
+enum ContextWindowKind {
+  CONTEXT_WINDOW_KIND_UNSPECIFIED = 0;
+  CONTEXT_WINDOW_KIND_DEFAULT = 1;
+  CONTEXT_WINDOW_KIND_LARGE = 2;
+  CONTEXT_WINDOW_KIND_CUSTOM = 3;
+}
+
+enum ThinkingKind {
+  THINKING_KIND_UNSPECIFIED = 0;
+  THINKING_KIND_DEFAULT = 1;
+  THINKING_KIND_DISABLED = 2;
+  THINKING_KIND_LEVEL = 3;
+  THINKING_KIND_CUSTOM = 4;
+}
+
+enum Verbosity {
+  VERBOSITY_UNSPECIFIED = 0;
+  VERBOSITY_LOW = 1;
+  VERBOSITY_MEDIUM = 2;
+  VERBOSITY_HIGH = 3;
+}
+
+enum SupervisorFrequency {
+  SUPERVISOR_FREQUENCY_UNSPECIFIED = 0;
+  SUPERVISOR_FREQUENCY_OFF = 1;
+  SUPERVISOR_FREQUENCY_EDITS = 2;
+  SUPERVISOR_FREQUENCY_ALL = 3;
+}
+
+enum CompactionMode {
+  COMPACTION_MODE_UNSPECIFIED = 0;
+  COMPACTION_MODE_NATIVE = 1;
+  COMPACTION_MODE_LOCAL = 2;
+  COMPACTION_MODE_NONE = 3;
+}
+
+enum ImportMode {
+  IMPORT_MODE_UNSPECIFIED = 0;
+  IMPORT_MODE_NONE = 1;
+  IMPORT_MODE_SYMLINK_SOURCE = 2;
+}
+
+enum ImportKind {
+  IMPORT_KIND_UNSPECIFIED = 0;
+  IMPORT_KIND_SKILLS = 1;
+  IMPORT_KIND_COMMANDS = 2;
+}
+
+enum ImportUnavailableReason {
+  IMPORT_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  IMPORT_UNAVAILABLE_REASON_NOT_DISCOVERED = 1;
+  IMPORT_UNAVAILABLE_REASON_TARGET_EXISTS = 2;
+  IMPORT_UNAVAILABLE_REASON_UNSUPPORTED_PROVIDER = 3;
+}
+
+enum ImportOperation {
+  IMPORT_OPERATION_UNSPECIFIED = 0;
+  IMPORT_OPERATION_DISCOVER = 1;
+  IMPORT_OPERATION_PREPARE_TARGET = 2;
+  IMPORT_OPERATION_CREATE_SYMLINK = 3;
+}
+
+enum CancelPhase {
+  CANCEL_PHASE_UNSPECIFIED = 0;
+  CANCEL_PHASE_WAITING_FOR_LOCK = 1;
+  CANCEL_PHASE_VALIDATING = 2;
+  CANCEL_PHASE_DISCOVERING_IMPORTS = 3;
+  CANCEL_PHASE_IMPORTING = 4;
+}
+
+message ProviderChoice {
+  optional string provider_override = 1 [
+    (buf.validate.field).string = {in: ["openai", "anthropic"]},
+    (buf.validate.field).cel = {
+      id: "kent.onboarding.provider_override.trimmed"
+      message: "provider_override must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string openai_base_url = 2 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.provider_choice"
+    message: "provider choice requires provider_override or openai_base_url and only OpenAI may use openai_base_url"
+    expression:
+      "(has(this.provider_override) || has(this.openai_base_url)) && "
+      "(!has(this.openai_base_url) || !has(this.provider_override) || this.provider_override == 'openai')"
+  };
+}
+
+message ModelChoice {
+  ModelKind kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string model_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string alias = 3 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.model_choice"
+    message: "known models require model_id and custom models require alias"
+    expression:
+      "this.kind == 1 ? has(this.model_id) : "
+      "this.kind == 2 ? has(this.alias) : false"
+  };
+}
+
+message ContextWindowChoice {
+  ContextWindowKind kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional uint32 tokens = 2 [(buf.validate.field).uint32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.context_window_choice"
+    message: "custom context windows require tokens and standard choices do not"
+    expression: "this.kind == 3 ? has(this.tokens) : true"
+  };
+}
+
+message ThinkingChoice {
+  ThinkingKind kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string level = 2 [(buf.validate.field).string.min_len = 1];
+  optional string value = 3 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.thinking_choice"
+    message: "thinking choice payload must match its kind"
+    expression:
+      "this.kind == 3 ? has(this.level) : "
+      "this.kind == 4 ? has(this.value) : "
+      "this.kind in [1, 2]"
+  };
+}
+
+message SupervisorChoice {
+  SupervisorFrequency frequency = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  ModelChoice model = 2;
+  ThinkingChoice thinking = 3;
+}
+
+enum ToolID {
+  TOOL_ID_UNSPECIFIED = 0;
+  TOOL_ID_EXEC_COMMAND = 1;
+  TOOL_ID_WRITE_STDIN = 2;
+  TOOL_ID_VIEW_IMAGE = 3;
+  TOOL_ID_PATCH = 4;
+  TOOL_ID_EDIT = 5;
+  TOOL_ID_ASK_QUESTION = 6;
+  TOOL_ID_COMPLETE_NODE = 7;
+  TOOL_ID_TRIGGER_HANDOFF = 8;
+  TOOL_ID_WEB_SEARCH = 9;
+}
+
+message ToolOverride {
+  ToolID id = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  bool enabled = 2;
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.tool_override.ask_question"
+    message: "ask_question cannot be overridden"
+    expression: "this.id != 6"
+  };
+}
+
+message ImportSelection {
+  ImportMode mode = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string provider_uuid = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.onboarding.import.provider_uuid_v4"
+      message: "provider_uuid must be canonical lowercase UUID v4 text"
+      expression:
+        "size(this) == 36 && "
+        "this == this.lowerAscii() && "
+        "this.charAt(14) == '4' && "
+        "this.charAt(19) in ['8', '9', 'a', 'b']"
+    }
+  ];
+  optional string import_provider_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 4 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.import_selection"
+    message: "import selection payload must match its mode and identify one source"
+    expression:
+      "this.mode == 1 ? (!has(this.provider_uuid) && !has(this.import_provider_id) && !has(this.source_root_path)) : "
+      "this.mode == 2 ? "
+      "(has(this.provider_uuid) ? (!has(this.import_provider_id) && !has(this.source_root_path)) : "
+      "(has(this.import_provider_id) && has(this.source_root_path))) : false"
+  };
+}
+
+message FinalizeRequest {
+  optional Theme theme = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  ProviderChoice main_provider = 2;
+  ModelChoice model = 3;
+  ContextWindowChoice context_window = 4;
+  ThinkingChoice thinking = 5;
+  optional Verbosity verbosity = 6 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional uint32 model_timeout_seconds = 7 [(buf.validate.field).uint32.gt = 0];
+  optional bool ask_question = 8;
+  repeated ToolOverride tool_overrides = 9;
+  SupervisorChoice supervisor = 10;
+  optional CompactionMode compaction = 11 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  ImportSelection skills_import = 12;
+  ImportSelection commands_import = 13;
+  repeated string disabled_skill_names = 14 [(buf.validate.field).repeated.items.string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.onboarding.tool_overrides.unique"
+    message: "tool_overrides must not contain duplicate tool IDs"
+    expression: "this.tool_overrides.map(override, override.id).unique()"
+  };
+}
+
+message FinalizeSuccess {
+  bool completed = 1;
+  string settings_path = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message FieldError {
+  string field = 1 [(buf.validate.field).string.min_len = 1];
+  string code = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message InvalidRequestDetails {
+  repeated FieldError field_errors = 1 [(buf.validate.field).repeated.min_items = 1];
+}
+
+message ConfigAlreadyExistsDetails {
+  string settings_path = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ImportUnavailableDetails {
+  ImportKind import_kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  ImportMode mode = 2 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string provider_uuid = 3 [(buf.validate.field).string.uuid = true];
+  optional string import_provider_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 5 [(buf.validate.field).string.min_len = 1];
+  ImportUnavailableReason reason = 6 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message ImportFailedDetails {
+  optional ImportKind import_kind = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string provider_uuid = 2 [(buf.validate.field).string.uuid = true];
+  optional string import_provider_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional string source_root_path = 4 [(buf.validate.field).string.min_len = 1];
+  ImportOperation operation = 5 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  string cause = 6 [(buf.validate.field).string.min_len = 1];
+}
+
+message ConfigWriteFailedDetails {
+  string settings_path = 1 [(buf.validate.field).string.min_len = 1];
+  string operation = 2 [(buf.validate.field).string.min_len = 1];
+  string cause = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message CanceledDetails {
+  CancelPhase phase = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message RollbackPrimaryFailure {
+  oneof failure {
+    option (buf.validate.oneof).required = true;
+    InvalidRequestDetails invalid_request = 1;
+    ConfigAlreadyExistsDetails config_already_exists = 2;
+    ImportUnavailableDetails import_unavailable = 3;
+    ImportFailedDetails import_failed = 4;
+    ConfigWriteFailedDetails config_write_failed = 5;
+    CanceledDetails canceled = 6;
+    kent.api.shared.InternalFailureDetails internal_failure = 7;
+  }
+}
+
+message RollbackFailureFact {
+  string operation = 1 [(buf.validate.field).string.min_len = 1];
+  string cause = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message RollbackFailedDetails {
+  RollbackPrimaryFailure primary = 1 [(buf.validate.field).required = true];
+  RollbackFailureFact rollback = 2 [(buf.validate.field).required = true];
+}
+
+message FinalizeError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    InvalidRequestDetails invalid_request = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "invalid_request"
+      }
+    ];
+    ConfigAlreadyExistsDetails config_already_exists = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "config_already_exists"
+      }
+    ];
+    ImportUnavailableDetails import_unavailable = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "import_unavailable"
+      }
+    ];
+    ImportFailedDetails import_failed = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "import_failed"
+      }
+    ];
+    ConfigWriteFailedDetails config_write_failed = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "config_write_failed"
+      }
+    ];
+    RollbackFailedDetails rollback_failed = 7 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "rollback_failed"
+      }
+    ];
+    CanceledDetails canceled = 8 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "canceled"
+      }
+    ];
+    server.ServerNotReadyDetails server_not_ready = 9 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "server_not_ready"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 10 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message FinalizeResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    FinalizeSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    FinalizeError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service OnboardingService {
+  rpc Finalize(FinalizeRequest) returns (FinalizeResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "onboarding.finalize"
+    };
+  }
+}

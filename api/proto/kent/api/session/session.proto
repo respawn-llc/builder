@@ -1,0 +1,211 @@
+syntax = "proto3";
+
+package kent.api.session;
+
+import "buf/validate/validate.proto";
+import "kent/api/runtime/runtime.proto";
+import "kent/api/shared/foundation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/session;sessionpb";
+
+enum ExecutionFieldErrorCode {
+  EXECUTION_FIELD_ERROR_CODE_UNSPECIFIED = 0;
+  EXECUTION_FIELD_ERROR_CODE_SOURCE_FAILURE = 1;
+  EXECUTION_FIELD_ERROR_CODE_INVALID_CONFIGURATION = 2;
+}
+
+message ExecutionFieldError {
+  ExecutionFieldErrorCode code = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+enum ExecutionWorkspaceUnavailableReason {
+  EXECUTION_WORKSPACE_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  EXECUTION_WORKSPACE_UNAVAILABLE_REASON_NOT_CONFIGURED = 1;
+}
+
+enum ExecutionBranchUnavailableReason {
+  EXECUTION_BRANCH_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  EXECUTION_BRANCH_UNAVAILABLE_REASON_DETACHED_HEAD = 1;
+  EXECUTION_BRANCH_UNAVAILABLE_REASON_NOT_GIT_REPOSITORY = 2;
+}
+
+enum ExecutionAuthUnavailableReason {
+  EXECUTION_AUTH_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  EXECUTION_AUTH_UNAVAILABLE_REASON_NOT_APPLICABLE = 1;
+}
+
+enum ExecutionModelUnavailableReason {
+  EXECUTION_MODEL_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  EXECUTION_MODEL_UNAVAILABLE_REASON_NOT_CONFIGURED = 1;
+}
+
+enum ExecutionAuthMethod {
+  EXECUTION_AUTH_METHOD_UNSPECIFIED = 0;
+  EXECUTION_AUTH_METHOD_NONE = 1;
+  EXECUTION_AUTH_METHOD_API_KEY = 2;
+  EXECUTION_AUTH_METHOD_O_AUTH = 3;
+}
+
+message ExecutionWorkspace {
+  string path = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ExecutionBranch {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ExecutionAuth {
+  string provider = 1 [(buf.validate.field).string.min_len = 1];
+  ExecutionAuthMethod method = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ExecutionModel {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string provider = 2 [(buf.validate.field).string.min_len = 1];
+  bool locked = 3;
+}
+
+message ExecutionWorkspaceField {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    ExecutionWorkspace available = 1;
+    ExecutionWorkspaceUnavailableReason unavailable = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    ExecutionFieldError failed = 3;
+  }
+}
+
+message ExecutionBranchField {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    ExecutionBranch available = 1;
+    ExecutionBranchUnavailableReason unavailable = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    ExecutionFieldError failed = 3;
+  }
+}
+
+message ExecutionAuthField {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    ExecutionAuth available = 1;
+    ExecutionAuthUnavailableReason unavailable = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    ExecutionFieldError failed = 3;
+  }
+}
+
+message ExecutionModelField {
+  oneof result {
+    option (buf.validate.oneof).required = true;
+    ExecutionModel available = 1;
+    ExecutionModelUnavailableReason unavailable = 2 [(buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }];
+    ExecutionFieldError failed = 3;
+  }
+}
+
+message ExecutionEnvironment {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  ExecutionWorkspaceField workspace = 2 [(buf.validate.field).required = true];
+  ExecutionBranchField branch = 3 [(buf.validate.field).required = true];
+  ExecutionAuthField auth = 4 [(buf.validate.field).required = true];
+  ExecutionModelField model = 5 [(buf.validate.field).required = true];
+}
+
+message MainViewRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message MainViewSuccess {
+  kent.api.runtime.MainView main_view = 1 [(buf.validate.field).required = true];
+}
+
+message MainViewError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message MainViewResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    MainViewSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    MainViewError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ExecutionEnvironmentRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ExecutionEnvironmentSuccess {
+  ExecutionEnvironment environment = 1 [(buf.validate.field).required = true];
+}
+
+message ExecutionEnvironmentError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ExecutionEnvironmentResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ExecutionEnvironmentSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ExecutionEnvironmentError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service ReadService {
+  rpc GetMainView(MainViewRequest) returns (MainViewResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.getMainView"
+    };
+  }
+
+  rpc GetExecutionEnvironment(ExecutionEnvironmentRequest) returns (ExecutionEnvironmentResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.getExecutionEnvironment"
+    };
+  }
+}

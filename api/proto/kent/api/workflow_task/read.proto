@@ -1,0 +1,1152 @@
+syntax = "proto3";
+
+package kent.api.workflow_task;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/project/project.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/workflow_definition/workflow_definition.proto";
+import "kent/api/workflow_task/attention.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/workflow_task;workflowtaskpb";
+
+enum TaskStatusKind {
+  TASK_STATUS_KIND_UNSPECIFIED = 0;
+  TASK_STATUS_KIND_DONE = 1;
+  TASK_STATUS_KIND_WAITING_QUESTION = 2;
+  TASK_STATUS_KIND_WAITING_APPROVAL = 3;
+  TASK_STATUS_KIND_INTERRUPTED = 4;
+  TASK_STATUS_KIND_RUNNING = 5;
+  TASK_STATUS_KIND_QUEUED = 6;
+  TASK_STATUS_KIND_BACKLOG = 7;
+  TASK_STATUS_KIND_ACTIVE = 8;
+}
+
+enum TaskNativeState {
+  TASK_NATIVE_STATE_UNSPECIFIED = 0;
+  TASK_NATIVE_STATE_TERMINAL = 1;
+  TASK_NATIVE_STATE_WAITING_ASK = 2;
+  TASK_NATIVE_STATE_WAITING_APPROVAL = 3;
+  TASK_NATIVE_STATE_INTERRUPTED = 4;
+  TASK_NATIVE_STATE_RUNNING = 5;
+  TASK_NATIVE_STATE_QUEUED = 6;
+  TASK_NATIVE_STATE_ACTIVE = 7;
+}
+
+enum TaskAttentionKind {
+  TASK_ATTENTION_KIND_UNSPECIFIED = 0;
+  TASK_ATTENTION_KIND_QUESTION = 1;
+  TASK_ATTENTION_KIND_APPROVAL = 2;
+  TASK_ATTENTION_KIND_INTERRUPTED = 3;
+}
+
+enum ListSortField {
+  LIST_SORT_FIELD_UNSPECIFIED = 0;
+  LIST_SORT_FIELD_CREATED = 1;
+  LIST_SORT_FIELD_UPDATED = 2;
+  LIST_SORT_FIELD_STATUS = 3;
+  LIST_SORT_FIELD_COLUMN = 4;
+  LIST_SORT_FIELD_TITLE = 5;
+  LIST_SORT_FIELD_LABELS = 6;
+  LIST_SORT_FIELD_SHORT_ID = 7;
+}
+
+enum ListSortDirection {
+  LIST_SORT_DIRECTION_UNSPECIFIED = 0;
+  LIST_SORT_DIRECTION_ASC = 1;
+  LIST_SORT_DIRECTION_DESC = 2;
+}
+
+enum MatchingWorkflowCardinality {
+  MATCHING_WORKFLOW_CARDINALITY_UNSPECIFIED = 0;
+  MATCHING_WORKFLOW_CARDINALITY_NONE = 1;
+  MATCHING_WORKFLOW_CARDINALITY_ONE = 2;
+  MATCHING_WORKFLOW_CARDINALITY_MULTIPLE = 3;
+}
+
+enum ListScopeErrorReason {
+  LIST_SCOPE_ERROR_REASON_UNSPECIFIED = 0;
+  LIST_SCOPE_ERROR_REASON_NO_LINKED_WORKFLOWS = 1;
+  LIST_SCOPE_ERROR_REASON_WORKFLOW_NOT_LINKED = 2;
+  LIST_SCOPE_ERROR_REASON_WORKFLOW_REQUIRED_FOR_COLUMNS = 3;
+}
+
+enum SearchMode {
+  SEARCH_MODE_UNSPECIFIED = 0;
+  SEARCH_MODE_LITERAL = 1;
+  SEARCH_MODE_FTS5 = 2;
+}
+
+enum SearchSourceKind {
+  SEARCH_SOURCE_KIND_UNSPECIFIED = 0;
+  SEARCH_SOURCE_KIND_SHORT_ID = 1;
+  SEARCH_SOURCE_KIND_TITLE = 2;
+  SEARCH_SOURCE_KIND_BODY = 3;
+  SEARCH_SOURCE_KIND_COMMENT = 4;
+}
+
+enum NamedLabelFilterMode {
+  NAMED_LABEL_FILTER_MODE_UNSPECIFIED = 0;
+  NAMED_LABEL_FILTER_MODE_ANY = 1;
+  NAMED_LABEL_FILTER_MODE_ALL = 2;
+}
+
+enum ExecutionTargetProvenance {
+  EXECUTION_TARGET_PROVENANCE_UNSPECIFIED = 0;
+  EXECUTION_TARGET_PROVENANCE_RESOLVED = 1;
+  EXECUTION_TARGET_PROVENANCE_LEGACY_OBSERVED = 2;
+}
+
+enum DependencyDirection {
+  DEPENDENCY_DIRECTION_UNSPECIFIED = 0;
+  DEPENDENCY_DIRECTION_BLOCKED_BY = 1;
+  DEPENDENCY_DIRECTION_BLOCKS = 2;
+}
+
+enum DependencySatisfaction {
+  DEPENDENCY_SATISFACTION_UNSPECIFIED = 0;
+  DEPENDENCY_SATISFACTION_SATISFIED = 1;
+  DEPENDENCY_SATISFACTION_UNSATISFIED = 2;
+}
+
+message LabelFilter {
+  oneof filter {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty none = 1;
+    NamedLabelFilter named = 2;
+    google.protobuf.Empty unlabeled = 3;
+  }
+}
+
+message NamedLabelFilter {
+  NamedLabelFilterMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated string label_ids = 2 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+      items: {
+        string: {uuid: true}
+      }
+    }
+  ];
+  repeated string excluded_label_ids = 3 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+      items: {
+        string: {uuid: true}
+      }
+    }
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.named_label_filter"
+    message: "named label filter requires labels, has a combined limit, and cannot include and exclude the same label"
+    expression:
+      "size(this.label_ids) + size(this.excluded_label_ids) > 0 && "
+      "size(this.label_ids) + size(this.excluded_label_ids) <= 100 && "
+      "this.label_ids.all(id, !(id in this.excluded_label_ids))"
+  };
+}
+
+message ListSort {
+  ListSortField field = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ListSortDirection direction = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ListRequest {
+  optional string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.list_project_id_trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  repeated string column_keys = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated TaskStatusKind status_kinds = 4 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated TaskAttentionKind attention_kinds = 5 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  LabelFilter label_filter = 6 [(buf.validate.field).required = true];
+  optional bool dependency_filter = 7;
+  repeated ListSort sort = 8 [(buf.validate.field).repeated.max_items = 7];
+  optional int32 offset = 9 [(buf.validate.field).int32.gte = 0];
+  optional int32 limit = 10 [(buf.validate.field).int32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.list_project_required"
+    message: "project_id is required"
+    expression: "has(this.project_id)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.list_sort_unique"
+    message: "sort fields must be unique"
+    expression: "this.sort.map(selector, selector.field).unique()"
+  };
+}
+
+message ListScope {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message ListItem {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string short_id = 2 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  optional string workflow_name = 4 [(buf.validate.field).string.min_len = 1];
+  string title = 5 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp created_at = 6 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp updated_at = 7 [(buf.validate.field).required = true];
+  optional ColumnKeys column_keys = 8;
+  TaskStatus status = 9 [(buf.validate.field).required = true];
+  repeated string label_ids = 10 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {uuid: true}
+    }
+  }];
+}
+
+message ColumnKeys {
+  repeated string values = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message ListSuccess {
+  ListScope scope = 1 [(buf.validate.field).required = true];
+  MatchingWorkflowCardinality matching_workflow_cardinality = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional int32 next_offset = 3 [(buf.validate.field).int32.gt = 0];
+  google.protobuf.Timestamp generated_at = 4 [(buf.validate.field).required = true];
+  repeated ListItem tasks = 5;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.list_cardinality"
+    message: "list scope and matching workflow cardinality must agree"
+    expression:
+      "(this.matching_workflow_cardinality != 1 || size(this.tasks) == 0) && "
+      "(!has(this.scope.workflow_id) || this.matching_workflow_cardinality != 3)"
+  };
+}
+
+message SearchRequest {
+  SearchMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string query = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 4096
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_query_trimmed"
+      message: "query must be nonblank and trimmed"
+      expression: "this.trim() != '' && this == this.trim()"
+    }
+  ];
+  int32 context = 3 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 64
+  }];
+  bool case_sensitive = 4;
+  bool include_comments = 5;
+  repeated string project_ids = 6 [(buf.validate.field).repeated.items = {
+    string: {min_len: 1}
+    cel: {
+      id: "kent.workflow_task.search_project_id_trimmed"
+      message: "project_ids must contain trimmed values"
+      expression: "this == this.trim()"
+    }
+  }];
+  repeated TaskStatusKind status_kinds = 7 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  int32 page_size = 8 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 100
+  }];
+  optional int32 offset = 9 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_mode_case"
+    message: "case_sensitive requires literal mode"
+    expression: "!this.case_sensitive || this.mode == 1"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_project_ids_sorted_unique"
+    message: "project_ids must be sorted and unique"
+    expression: "this.project_ids == this.project_ids.sorted() && this.project_ids.unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_status_kinds_sorted_unique"
+    message: "status_kinds must be sorted and unique"
+    expression: "this.status_kinds == this.status_kinds.sorted() && this.status_kinds.unique()"
+  };
+}
+
+message SearchSource {
+  SearchSourceKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string comment_id = 2 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_source_comment"
+    message: "comment source requires comment_id and other sources forbid it"
+    expression: "(this.kind == 4) == has(this.comment_id)"
+  };
+}
+
+message SearchLiteralHit {
+  string before = 1;
+  string match = 2 [(buf.validate.field).string.min_len = 1];
+  string after = 3;
+  bool left_truncated = 4;
+  bool right_truncated = 5;
+}
+
+message SearchFts5Hit {
+  string snippet = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message SearchHit {
+  int32 ordinal = 1 [(buf.validate.field).int32.gt = 0];
+  SearchSource source = 2 [(buf.validate.field).required = true];
+  oneof match {
+    option (buf.validate.oneof).required = true;
+
+    SearchLiteralHit literal = 3;
+    SearchFts5Hit fts5 = 4;
+  }
+}
+
+message SearchGroup {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_project_id_trimmed"
+      message: "project_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  string project_key = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_project_key_trimmed"
+      message: "project_key must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  string task_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_task_id_trimmed"
+      message: "task_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  string short_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_short_id_trimmed"
+      message: "short_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  string workflow_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_workflow_id_trimmed"
+      message: "workflow_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  string title = 6 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.search_group_title_trimmed"
+      message: "title must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  TaskStatus status = 7 [(buf.validate.field).required = true];
+  int32 total_hit_count = 8 [(buf.validate.field).int32.gt = 0];
+  repeated SearchHit hits = 9 [(buf.validate.field).repeated.min_items = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_group_hit_count"
+    message: "total_hit_count must include every returned hit"
+    expression:
+      "this.total_hit_count >= size(this.hits) && "
+      "this.hits.all(hit, hit.ordinal <= this.total_hit_count) && "
+      "this.hits.map(hit, hit.ordinal).unique()"
+  };
+}
+
+message SearchSuccess {
+  SearchMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated SearchGroup groups = 2;
+  optional int32 next_offset = 3 [(buf.validate.field).int32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_groups_unique"
+    message: "search groups must contain unique task IDs"
+    expression: "this.groups.map(group, group.task_id).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.search_hit_modes"
+    message: "search hit payloads and sources must match the response mode"
+    expression:
+      "(this.mode == 1 && this.groups.all(group, group.hits.all(hit, has(hit.literal)))) || "
+      "(this.mode == 2 && this.groups.all(group, group.hits.all(hit, has(hit.fts5) && hit.source.kind != 1)))"
+  };
+}
+
+message BoardGetRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  LabelFilter label_filter = 3 [(buf.validate.field).required = true];
+  optional bool dependency_filter = 4;
+}
+
+message BoardNodeCardsListRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string node_id = 3 [(buf.validate.field).string.min_len = 1];
+  LabelFilter label_filter = 4 [(buf.validate.field).required = true];
+  optional bool dependency_filter = 5;
+  int32 page_size = 6 [(buf.validate.field).int32 = {
+    gte: 0
+    lte: 25
+  }];
+  optional ListSort sort = 7;
+  optional int32 offset = 8 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.board_card_sort"
+    message: "board card sort supports created, updated, labels, and short_id"
+    expression:
+      "!has(this.sort) || this.sort.field in [1, 2, 6, 7]"
+  };
+}
+
+message BoardProject {
+  string project_key = 1 [(buf.validate.field).string.min_len = 1];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  string default_workspace_id = 3 [(buf.validate.field).string.min_len = 1];
+  int32 attached_workspace_count = 4 [(buf.validate.field).int32.gte = 0];
+}
+
+message WorkflowPickerItem {
+  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  string description = 3;
+  int64 version = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  bool is_project_default = 5;
+  bool valid_for_task_creation = 6;
+  repeated kent.api.workflow_definition.WorkflowValidationError validation_errors = 7;
+}
+
+message BoardGroup {
+  string group_id = 1 [(buf.validate.field).string.uuid = true];
+  string key = 2 [(buf.validate.field).string.min_len = 1];
+  string display_name = 3 [(buf.validate.field).string.min_len = 1];
+  int32 sort_order = 4;
+  repeated string node_ids = 5 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message BoardNodeSummary {
+  string node_id = 1 [(buf.validate.field).string.min_len = 1];
+  string key = 2 [(buf.validate.field).string.min_len = 1];
+  kent.api.workflow_definition.NodeKind kind = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string display_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string assignee_role = 5 [(buf.validate.field).string.min_len = 1];
+  int32 sort_order = 6;
+  repeated kent.api.workflow_definition.OutputField output_fields = 7;
+}
+
+message BoardColumn {
+  BoardNodeSummary node = 1 [(buf.validate.field).required = true];
+  optional string group_id = 2 [(buf.validate.field).string.uuid = true];
+  int32 sort_order = 3;
+  bool is_backlog = 4;
+  bool is_done = 5;
+  int32 task_count = 6 [(buf.validate.field).int32.gte = 0];
+}
+
+message MarkdownPreview {
+  string markdown = 1;
+  bool truncated = 2;
+}
+
+message TaskStatus {
+  TaskStatusKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  TaskNativeState native_state = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  repeated string node_ids = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated TaskAttentionKind attention_types = 4 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.status_native_state"
+    message: "status kind and native state must match"
+    expression:
+      "(this.kind == 1 && this.native_state == 1) || "
+      "(this.kind == 2 && this.native_state == 2) || "
+      "(this.kind == 3 && this.native_state == 3) || "
+      "(this.kind == 4 && this.native_state == 4) || "
+      "(this.kind == 5 && this.native_state == 5) || "
+      "(this.kind == 6 && this.native_state == 6) || "
+      "(this.kind in [7, 8] && this.native_state == 7)"
+  };
+}
+
+message TaskActions {
+  bool can_start = 1;
+  bool can_interrupt = 2;
+  bool can_resume = 3;
+  bool can_delete = 4;
+}
+
+message DependencyProgress {
+  int32 satisfied_count = 1 [(buf.validate.field).int32.gte = 0];
+  int32 total_count = 2 [(buf.validate.field).int32.gt = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.dependency_progress"
+    message: "satisfied_count must not exceed total_count"
+    expression: "this.satisfied_count <= this.total_count"
+  };
+}
+
+message BoardTaskCard {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string short_id = 2 [(buf.validate.field).string.min_len = 1];
+  string title = 3 [(buf.validate.field).string.min_len = 1];
+  MarkdownPreview preview = 4 [(buf.validate.field).required = true];
+  string workflow_id = 5 [(buf.validate.field).string.uuid = true];
+  repeated string active_node_ids = 6 [(buf.validate.field).repeated.items.string.min_len = 1];
+  TaskSourceWorkspace source_workspace = 7 [(buf.validate.field).required = true];
+  TaskStatus status = 8 [(buf.validate.field).required = true];
+  TaskActions actions = 9 [(buf.validate.field).required = true];
+  repeated string label_ids = 10 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {uuid: true}
+    }
+  }];
+  optional DependencyProgress dependency_progress = 11;
+  google.protobuf.Timestamp updated_at = 12 [(buf.validate.field).required = true];
+}
+
+message Board {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  BoardProject project = 2 [(buf.validate.field).required = true];
+  optional WorkflowPickerItem selected_workflow = 3;
+  repeated WorkflowPickerItem workflows = 4;
+  repeated BoardGroup groups = 5;
+  repeated BoardColumn columns = 6;
+  google.protobuf.Timestamp generated_at = 7 [(buf.validate.field).required = true];
+}
+
+message BoardGetSuccess {
+  Board board = 1 [(buf.validate.field).required = true];
+}
+
+message BoardNodeCardsListSuccess {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string node_id = 3 [(buf.validate.field).string.min_len = 1];
+  repeated BoardTaskCard cards = 4;
+  optional int32 next_offset = 5 [(buf.validate.field).int32.gt = 0];
+  google.protobuf.Timestamp generated_at = 6 [(buf.validate.field).required = true];
+}
+
+message GetRequest {
+  optional string task_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.get_task_id_trimmed"
+      message: "task_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string project_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.get_project_id_trimmed"
+      message: "project_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string short_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.get_short_id_trimmed"
+      message: "short_id must be trimmed"
+      expression: "this == this.trim()"
+    }
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.get_selector"
+    message: "task_id or short_id is required and project_id requires short_id"
+    expression:
+      "has(this.task_id) || has(this.short_id)"
+  };
+}
+
+message TaskSummary {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  string short_id = 4 [(buf.validate.field).string.min_len = 1];
+  string title = 5 [(buf.validate.field).string.min_len = 1];
+  optional string body_preview = 6;
+  optional string source_workspace_id = 7 [(buf.validate.field).string.min_len = 1];
+  google.protobuf.Timestamp created_at = 8 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp updated_at = 9 [(buf.validate.field).required = true];
+  bool done = 10;
+  repeated string active_node_ids = 11 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message TaskWorkflowSummary {
+  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  int64 version = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message TaskSourceWorkspace {
+  string workspace_id = 1 [(buf.validate.field).string.min_len = 1];
+  string display_name = 2 [(buf.validate.field).string.min_len = 1];
+  string root_path = 3 [(buf.validate.field).string.min_len = 1];
+  kent.api.project.ProjectAvailability availability = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool is_primary = 5;
+  optional google.protobuf.Timestamp updated_at = 6;
+}
+
+message ExecutionTarget {
+  kent.api.workflow_definition.ExecutionTargetMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string requested_ref = 2 [(buf.validate.field).string.min_len = 1];
+  optional string resolved_ref = 3 [(buf.validate.field).string.min_len = 1];
+  optional string commit_oid = 4 [(buf.validate.field).string.min_len = 1];
+  ExecutionTargetProvenance provenance = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.execution_target"
+    message: "execution target facts must match mode and provenance"
+    expression:
+      "(this.mode == 1 && this.provenance == 1 && !has(this.requested_ref) && !has(this.resolved_ref) && !has(this.commit_oid)) || "
+      "(this.mode in [2, 3, 4] && has(this.requested_ref) && has(this.commit_oid))"
+  };
+}
+
+message LiveSession {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string session_name = 2 [(buf.validate.field).string.min_len = 1];
+  string node_display_name = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message CurrentScript {
+  AttentionCurrentNode current_node = 1 [(buf.validate.field).required = true];
+  string path = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message DependencyAvailable {
+  int32 remaining_capacity = 1 [(buf.validate.field).int32.gt = 0];
+}
+
+message DependencyAddAvailability {
+  oneof availability {
+    option (buf.validate.oneof).required = true;
+
+    DependencyAvailable available = 1;
+    google.protobuf.Empty limit_reached = 2;
+  }
+}
+
+message DependencyItem {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string short_id = 2 [(buf.validate.field).string.min_len = 1];
+  string title = 3 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 4 [(buf.validate.field).string.uuid = true];
+  TaskStatus status = 5 [(buf.validate.field).required = true];
+  optional DependencySatisfaction satisfaction = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message DependencyDirectionProjection {
+  DependencyDirection direction = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  int32 total_count = 2 [(buf.validate.field).int32.gte = 0];
+  optional int32 unsatisfied_count = 3 [(buf.validate.field).int32.gte = 0];
+  repeated DependencyItem items = 4;
+  DependencyAddAvailability add_availability = 5 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.dependency_direction_counts"
+    message: "direction counts and satisfaction presence must match"
+    expression:
+      "this.total_count == size(this.items) && "
+      "((this.direction == 1 && has(this.unsatisfied_count) && this.unsatisfied_count <= this.total_count && this.items.all(item, has(item.satisfaction))) || "
+      "(this.direction == 2 && !has(this.unsatisfied_count) && this.items.all(item, !has(item.satisfaction))))"
+  };
+}
+
+message TaskDependencies {
+  int32 blocker_count = 1 [(buf.validate.field).int32.gte = 0];
+  int32 unsatisfied_blocker_count = 2 [(buf.validate.field).int32.gte = 0];
+  int32 directly_blocked_task_count = 3 [(buf.validate.field).int32.gte = 0];
+  repeated DependencyDirectionProjection directions = 4 [(buf.validate.field).repeated = {
+    min_items: 2
+    max_items: 2
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.dependencies"
+    message: "dependency summary and directions must agree"
+    expression:
+      "this.unsatisfied_blocker_count <= this.blocker_count && "
+      "this.directions.map(direction, direction.direction).unique() && "
+      "this.directions.exists(direction, direction.direction == 1 && direction.total_count == this.blocker_count && direction.unsatisfied_count == this.unsatisfied_blocker_count) && "
+      "this.directions.exists(direction, direction.direction == 2 && direction.total_count == this.directly_blocked_task_count)"
+  };
+}
+
+message TaskDetail {
+  TaskSummary summary = 1 [(buf.validate.field).required = true];
+  BoardProject project = 2 [(buf.validate.field).required = true];
+  TaskWorkflowSummary workflow = 3 [(buf.validate.field).required = true];
+  string body = 4;
+  optional string source_url = 5 [(buf.validate.field).string.min_len = 1];
+  TaskSourceWorkspace source_workspace = 6 [(buf.validate.field).required = true];
+  optional ExecutionTarget execution_target = 7;
+  optional string worktree_path = 8 [(buf.validate.field).string.min_len = 1];
+  repeated AttentionCurrentNode current_nodes = 9;
+  repeated LiveSession live_sessions = 10;
+  repeated CurrentScript current_scripts = 11;
+  int32 retained_session_count = 12 [(buf.validate.field).int32.gte = 0];
+  TaskStatus status = 13 [(buf.validate.field).required = true];
+  TaskActions actions = 14 [(buf.validate.field).required = true];
+  repeated string label_ids = 15 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {uuid: true}
+    }
+  }];
+  int32 attention_count = 16 [(buf.validate.field).int32.gte = 0];
+  TaskDependencies dependencies = 17 [(buf.validate.field).required = true];
+}
+
+message GetSuccess {
+  TaskDetail task = 1 [(buf.validate.field).required = true];
+}
+
+message LabelsGetRequest {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message AssignedLabelIds {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string label_ids = 2 [(buf.validate.field).repeated = {
+    max_items: 100
+    unique: true
+    items: {
+      string: {uuid: true}
+    }
+  }];
+}
+
+message LabelsGetSuccess {
+  AssignedLabelIds assignment = 1 [(buf.validate.field).required = true];
+}
+
+message ListScopeErrorDetails {
+  ListScopeErrorReason reason = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.list_scope_error"
+    message: "workflow_not_linked requires workflow_id and other scope reasons forbid it"
+    expression: "(this.reason == 2) == has(this.workflow_id)"
+  };
+}
+
+message InvalidFilterDetails {
+  string field = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LabelNotFoundDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string label_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message WrongProjectDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string label_id = 2 [(buf.validate.field).string.uuid = true];
+}
+
+message NormalizedTooShortDetails {}
+
+message TaskNotFoundDetails {
+  optional string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional string short_id = 3 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.task_not_found_selector"
+    message: "task-not-found details require task_id or short_id"
+    expression: "has(this.task_id) || has(this.short_id)"
+  };
+}
+
+message ListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    ListScopeErrorDetails scope_error = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "scope_error"
+    }];
+    InvalidFilterDetails invalid_filter = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_filter"
+    }];
+    LabelNotFoundDetails label_not_found = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "label_not_found"
+    }];
+    WrongProjectDetails wrong_project = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "wrong_project"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 8 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message SearchError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    NormalizedTooShortDetails normalized_too_short = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "normalized_too_short"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GetError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    TaskNotFoundDetails task_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "task_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message BoardGetError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    InvalidFilterDetails invalid_filter = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_filter"
+    }];
+    LabelNotFoundDetails label_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "label_not_found"
+    }];
+    WrongProjectDetails wrong_project = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "wrong_project"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message BoardNodeCardsListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    InvalidFilterDetails invalid_filter = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_filter"
+    }];
+    LabelNotFoundDetails label_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "label_not_found"
+    }];
+    WrongProjectDetails wrong_project = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "wrong_project"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message LabelsGetError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.workflow_definition.RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    TaskNotFoundDetails task_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "task_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    ListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SearchResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SearchSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SearchError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GetResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    GetSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message BoardGetResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    BoardGetSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    BoardGetError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message BoardNodeCardsListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    BoardNodeCardsListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    BoardNodeCardsListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message LabelsGetResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    LabelsGetSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    LabelsGetError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service TaskReadService {
+  rpc List(ListRequest) returns (ListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.task.list"
+    };
+  }
+  rpc Search(SearchRequest) returns (SearchResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_DEDICATED
+      legacy_wire_name: "workflow.task.search"
+    };
+  }
+  rpc Get(GetRequest) returns (GetResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.task.get"
+    };
+  }
+}
+
+service BoardReadService {
+  rpc Get(BoardGetRequest) returns (BoardGetResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.board.get"
+    };
+  }
+  rpc ListNodeCards(BoardNodeCardsListRequest) returns (BoardNodeCardsListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.board.nodeCards.list"
+    };
+  }
+}
+
+service TaskLabelReadService {
+  rpc Get(LabelsGetRequest) returns (LabelsGetResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.task.labels.get"
+    };
+  }
+}
