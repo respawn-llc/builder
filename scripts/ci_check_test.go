@@ -91,13 +91,11 @@ func TestProtobufCICheckAcceptsStrictProtocolVersionIncreaseWithSchemaChange(t *
 
 func TestProtobufCICheckRequiresProtocolVersionEditWithTrackedSchemaChange(t *testing.T) {
 	fixture := newProtobufCIFixture(t)
-	const schemaPath = "api/proto/fixture/method_policy_fixture.proto"
-	schema := readFixtureFile(t, fixture.repositoryRoot, schemaPath)
 	writeFixtureFile(
 		t,
 		fixture.repositoryRoot,
-		schemaPath,
-		append(schema, []byte("\n// tracked schema change\n")...),
+		"api/proto/kent/api/fixture.proto",
+		[]byte("syntax = \"proto3\";\npackage kent.api.fixture;\n"),
 	)
 
 	if output, err := fixture.run(t); err == nil {
@@ -112,6 +110,22 @@ func TestProtobufCICheckRequiresProtocolVersionEditWithTrackedSchemaChange(t *te
 	)
 	if output, err := fixture.run(t); err != nil {
 		t.Fatalf("Protobuf CI check rejected tracked schema and protocol version edits: %v\n%s", err, output)
+	}
+}
+
+func TestProtobufCICheckAllowsFixtureSchemaChangeWithoutVersionEdit(t *testing.T) {
+	fixture := newProtobufCIFixture(t)
+	const schemaPath = "api/proto/fixture/method_policy_fixture.proto"
+	schema := readFixtureFile(t, fixture.repositoryRoot, schemaPath)
+	writeFixtureFile(
+		t,
+		fixture.repositoryRoot,
+		schemaPath,
+		append(schema, []byte("\n// tracked fixture-only change\n")...),
+	)
+
+	if output, err := fixture.run(t); err != nil {
+		t.Fatalf("Protobuf CI check rejected fixture-only schema change: %v\n%s", err, output)
 	}
 }
 
@@ -187,6 +201,7 @@ func (fixture protobufCIFixture) run(t *testing.T, extraEnvironment ...string) (
 	)
 	command.Dir = fixture.repositoryRoot
 	command.Env = append([]string(nil), fixture.environment...)
+	command.Env = append(command.Env, "KENT_PROTOBUF_OUTPUTS_READY=go")
 	command.Env = append(command.Env, "KENT_CI_BASE_REVISION="+fixture.baseRevision)
 	command.Env = append(command.Env, extraEnvironment...)
 	return command.CombinedOutput()

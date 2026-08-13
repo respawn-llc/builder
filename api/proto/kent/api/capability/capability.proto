@@ -8,9 +8,21 @@ import "kent/api/shared/foundation.proto";
 option go_package = "core/shared/protoapi/gen/kent/api/capability;capabilitypb";
 
 message GetFactsRequest {
-  optional string workspace_root = 1 [(buf.validate.field).string.min_len = 1];
+  optional string workspace_root = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.capability.workspace_root_nonblank"
+      message: "workspace_root must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
   repeated string explicit_llm_provider_ids = 2 [
-    (buf.validate.field).repeated.items.string.min_len = 1
+    (buf.validate.field).repeated.items.string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.capability.explicit_provider_ids_nonblank"
+      message: "explicit_llm_provider_ids must not contain blank values"
+      expression: "this.all(value, value.trim() != '')"
+    }
   ];
 }
 

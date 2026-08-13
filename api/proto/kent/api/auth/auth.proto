@@ -70,6 +70,18 @@ message CompleteBootstrapRequest {
       "this.mode == 4 ? "
       "(has(this.device_authorization_code) && has(this.device_code_verifier)) : false"
   };
+  option (buf.validate.message).cel = {
+    id: "kent.auth.bootstrap.credentials_nonblank"
+    message: "present bootstrap credentials must be non-blank"
+    expression:
+      "(!has(this.api_key) || this.api_key.trim() != '') && "
+      "(!has(this.callback_input) || this.callback_input.trim() != '') && "
+      "(!has(this.redirect_uri) || this.redirect_uri.trim() != '') && "
+      "(!has(this.oauth_state) || this.oauth_state.trim() != '') && "
+      "(!has(this.oauth_code_verifier) || this.oauth_code_verifier.trim() != '') && "
+      "(!has(this.device_authorization_code) || this.device_authorization_code.trim() != '') && "
+      "(!has(this.device_code_verifier) || this.device_code_verifier.trim() != '')"
+  };
 }
 
 message BootstrapCompletion {

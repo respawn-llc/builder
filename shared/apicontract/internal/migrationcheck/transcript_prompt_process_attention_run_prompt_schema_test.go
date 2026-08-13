@@ -6,9 +6,12 @@ import (
 
 	"core/shared/protoapi"
 	attentionpb "core/shared/protoapi/gen/kent/api/attention"
+	authpb "core/shared/protoapi/gen/kent/api/auth"
+	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
 	processpb "core/shared/protoapi/gen/kent/api/process"
 	promptpb "core/shared/protoapi/gen/kent/api/prompt"
 	runpromptpb "core/shared/protoapi/gen/kent/api/run_prompt"
+	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	transcriptpb "core/shared/protoapi/gen/kent/api/transcript"
@@ -144,6 +147,29 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	}
 	if err := protoapi.ValidateGeneratedMessage(runRequest); err == nil {
 		t.Fatal("accepted blank run prompt")
+	}
+	capabilityRequest := &capabilitypb.GetFactsRequest{
+		WorkspaceRoot:          stringPointer(" "),
+		ExplicitLlmProviderIds: []string{"openai"},
+	}
+	if err := protoapi.ValidateGeneratedMessage(capabilityRequest); err == nil {
+		t.Fatal("accepted blank capability workspace root")
+	}
+	capabilityRequest.WorkspaceRoot = nil
+	capabilityRequest.ExplicitLlmProviderIds = []string{" "}
+	if err := protoapi.ValidateGeneratedMessage(capabilityRequest); err == nil {
+		t.Fatal("accepted blank explicit capability provider ID")
+	}
+	authRequest := &authpb.CompleteBootstrapRequest{
+		Mode:   authpb.BootstrapMode_BOOTSTRAP_MODE_API_KEY,
+		ApiKey: stringPointer(" "),
+	}
+	if err := protoapi.ValidateGeneratedMessage(authRequest); err == nil {
+		t.Fatal("accepted blank bootstrap API key")
+	}
+	shellRequest := &runtimepb.ShellCommandRequest{SessionId: "session-1", Command: " "}
+	if err := protoapi.ValidateGeneratedMessage(shellRequest); err == nil {
+		t.Fatal("accepted blank shell command")
 	}
 
 	notice := &transcriptpb.NoticeRow{

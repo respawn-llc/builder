@@ -3,7 +3,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-readonly schema_path="api/proto"
+readonly schema_path="api/proto/kent/api"
 readonly version_path="shared/protocol/version.json"
 
 base_revision="${1:-${KENT_CI_BASE_REVISION:-}}"
