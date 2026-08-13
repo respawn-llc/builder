@@ -17,6 +17,7 @@ import (
 var errRawProcessServiceCalled = errors.New("raw Process service called")
 
 type processAuthorizationService struct {
+	listCalls             int
 	rawGetCalls           int
 	rawKillCalls          int
 	rawInlineCalls        int
@@ -31,6 +32,7 @@ type processAuthorizationService struct {
 }
 
 func (s *processAuthorizationService) ListProcesses(context.Context, serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
+	s.listCalls++
 	return serverapi.ProcessListResponse{}, nil
 }
 func (s *processAuthorizationService) GetProcess(context.Context, serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
@@ -161,6 +163,37 @@ func TestGatewayCarriesOneTypedProcessAuthorizationFactToAllProcessOwners(t *tes
 		if got != want {
 			t.Errorf("authorization fact %d = %+v, want %+v", index, got, want)
 		}
+	}
+}
+
+func TestGatewayRejectsProcessListForSessionOutsideActiveProject(t *testing.T) {
+	fixture := newRoutePolicyFixture(t)
+	service := &processAuthorizationService{}
+	gateway, err := NewGateway(
+		&processAuthorizationDependencies{Core: fixture.appCore, process: service},
+		protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+	)
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	response := gateway.dispatch(t.Context(), &connectionState{
+		handshakeDone:   true,
+		attachedProject: fixture.bindingA.ProjectID,
+	}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "list-foreign",
+		Method:  protocol.MethodProcessList,
+		Params: mustJSON(t, serverapi.ProcessListRequest{
+			OwnerSessionID: fixture.foreignSessionID,
+		}),
+	})
+
+	if response.Error == nil {
+		t.Fatal("foreign Process List unexpectedly succeeded")
+	}
+	if service.listCalls != 0 {
+		t.Fatalf("Process owner called %d times, want 0", service.listCalls)
 	}
 }
 

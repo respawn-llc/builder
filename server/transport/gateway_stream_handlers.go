@@ -111,13 +111,20 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
-	if executable, ok := inboundExecutableRoutes[req.Method]; ok && executable.executeSubscription != nil {
-		executable.executeSubscription(g, conn, ctx, state, route, req)
-		return
-	}
 	handler, ok := gatewaySubscriptionHandlers[req.Method]
 	if !ok {
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
+		return
+	}
+	switch req.Method {
+	case protocol.MethodAttentionNotificationSubscribe:
+		executeAttentionNotificationSubscription(g, conn, ctx, state, route, req)
+		return
+	case protocol.MethodProcessSubscribeOutput:
+		executeProcessOutputSubscription(g, conn, ctx, state, route, req)
+		return
+	case protocol.MethodPromptFollowUpWatch:
+		executePromptFollowUpSubscription(g, conn, ctx, state, route, req)
 		return
 	}
 	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {

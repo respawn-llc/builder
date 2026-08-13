@@ -336,7 +336,7 @@ func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {
 	invalidTheme := serverapi.OnboardingTheme("blue")
 	onboarding, err := decodeInboundRequest[serverapi.OnboardingFinalizeRequest](
 		gateway,
-		mustInboundRoute(protocol.MethodOnboardingFinalize, apicontract.KindUnary),
+		mustGatewayRoute(protocol.MethodOnboardingFinalize, apicontract.KindUnary),
 		requestDecoderOnboardingFinalize,
 		mustJSON(t, serverapi.OnboardingFinalizeRequest{Theme: &invalidTheme}),
 	)
@@ -358,7 +358,7 @@ func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {
 			decode: func() error {
 				request, err := decodeInboundRequest[serverapi.RunPromptRequest](
 					gateway,
-					mustInboundRoute(protocol.MethodRunPrompt, apicontract.KindProgress),
+					mustGatewayRoute(protocol.MethodRunPrompt, apicontract.KindProgress),
 					requestDecoderDefault,
 					[]byte(`{"client_request_id":"","intent":{"kind":"create_new","origin":{"kind":"independent"}},"prompt":"hello"}`),
 				)
@@ -374,7 +374,7 @@ func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {
 			decode: func() error {
 				request, err := decodeInboundRequest[serverapi.SessionPlanRequest](
 					gateway,
-					mustInboundRoute(protocol.MethodSessionPlan, apicontract.KindUnary),
+					mustGatewayRoute(protocol.MethodSessionPlan, apicontract.KindUnary),
 					requestDecoderDefault,
 					[]byte(`{"client_request_id":"","mode":"interactive","intent":{"kind":"create_new","origin":{"kind":"independent"}}}`),
 				)
@@ -390,7 +390,7 @@ func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {
 			decode: func() error {
 				request, err := decodeInboundRequest[protocol.AttachProjectRequest](
 					gateway,
-					mustInboundRoute(protocol.MethodAttachProject, apicontract.KindUnary),
+					mustGatewayRoute(protocol.MethodAttachProject, apicontract.KindUnary),
 					requestDecoderDefault,
 					[]byte(`{"project_id":"","workspace":null}`),
 				)
@@ -406,7 +406,7 @@ func TestCustomRouteDecodersDoNotApplyTopLevelSemantics(t *testing.T) {
 			decode: func() error {
 				request, err := decodeInboundRequest[serverapi.WorkspaceChatDraftRequest](
 					gateway,
-					mustInboundRoute(protocol.MethodSessionWorkspaceChatDraft, apicontract.KindUnary),
+					mustGatewayRoute(protocol.MethodSessionWorkspaceChatDraft, apicontract.KindUnary),
 					requestDecoderDefault,
 					[]byte(`{"operation":{"kind":"update_message"}}`),
 				)

@@ -133,6 +133,12 @@ var gatewaySubscriptionMethods = protocolSubscriptionMethodSet()
 
 type gatewayUnaryHandler func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response
 
+var gatewayUnaryHandlers = routeHandlersForKind(apicontract.KindUnary, gatewayUnaryHandlerEntries)
+
+var gatewayProgressHandlerEntries = map[string]gatewayProgressHandler{
+	protocol.MethodRunPrompt: (*Gateway).serveRunPrompt,
+}
+
 type gatewayProgressHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request) bool
 
 type gatewayRequestScheduleKind uint8
@@ -182,8 +188,7 @@ func RuntimeLiveControlRoutesExecutable() bool {
 		protocol.MethodRuntimeLiveWait,
 		protocol.MethodRuntimeLiveWatch,
 	} {
-		executable, ok := inboundExecutableRoutes[method]
-		if !ok || executable.executeUnary == nil {
+		if _, ok := gatewayUnaryHandlers[method]; !ok {
 			return false
 		}
 	}
@@ -214,7 +219,7 @@ type connectionState struct {
 
 type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.Context, state *connectionState, route apicontract.Route, req protocol.Request)
 
-var gatewaySubscriptionHandlers = map[string]gatewaySubscriptionHandler{
+var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
@@ -225,16 +230,31 @@ var gatewaySubscriptionHandlers = map[string]gatewaySubscriptionHandler{
 	protocol.MethodWorktreeSetupSubscribe:                (*Gateway).serveWorktreeSetupSubscription,
 }
 
+var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
+
+var gatewaySubscriptionHandlers = routeHandlersForKind(apicontract.KindSubscription, gatewaySubscriptionHandlerEntries)
+
+func routeHandlersForKind[T any](kind apicontract.Kind, entries map[string]T) map[string]T {
+	handlers := make(map[string]T)
+	for _, route := range apicontract.Routes() {
+		if route.Kind != kind {
+			continue
+		}
+		handler, ok := entries[route.Method]
+		if ok {
+			handlers[route.Method] = handler
+		}
+	}
+	return handlers
+}
+
 func gatewayProgressHandlerForMethod(method string) (gatewayProgressHandler, apicontract.Route, bool) {
 	route, ok := apicontract.RouteByMethod(strings.TrimSpace(method))
 	if !ok || route.Kind != apicontract.KindProgress {
 		return nil, apicontract.Route{}, false
 	}
-	executable, ok := inboundExecutableRoutes[route.Method]
-	if !ok || executable.executeProgress == nil {
-		return nil, apicontract.Route{}, false
-	}
-	return executable.executeProgress, route, true
+	handler, ok := gatewayProgressHandlers[route.Method]
+	return handler, route, ok
 }
 
 func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Gateway, error) {
@@ -469,22 +489,6 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok || route.Kind != apicontract.KindUnary {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	executable, ok := inboundExecutableRoutes[req.Method]
-	if !ok || executable.executeUnary == nil {
-		handler, registered := gatewayUnaryHandlerEntries[req.Method]
-		if !registered {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
-		}
-		if availability, available := g.deps.(GatewayDependencyAvailability); available {
-			if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-				return responseForError(req.ID, err)
-			}
-		}
-		if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
-			return responseForError(req.ID, err)
-		}
-		return handler(g, ctx, state, req)
-	}
 	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
 		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
 			return responseForError(req.ID, err)
@@ -493,7 +497,11 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)
 	}
-	return executable.executeUnary(g, ctx, state, req)
+	handler, ok := gatewayUnaryHandlers[req.Method]
+	if !ok {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
+	}
+	return handler(g, ctx, state, req)
 }
 
 func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
