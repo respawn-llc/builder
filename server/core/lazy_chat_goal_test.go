@@ -405,11 +405,11 @@ func (f *lazyGoalFixture) requireDraftAndTranscript(t *testing.T, wantRecords *i
 	if state.Message != f.draft.Message {
 		t.Fatalf("composer draft = %q, want %q", state.Message, f.draft.Message)
 	}
-	records := f.collectMessageRecords(t, record.SessionDir)
+	records, messages := f.collectMessageRecords(t, record.SessionDir)
 	if wantRecords != nil && len(records) != *wantRecords {
 		t.Fatalf("materialized transcript records = %d, want %d", len(records), *wantRecords)
 	}
-	for _, event := range records {
+	for _, event := range messages {
 		if event.Role == session.MessageRoleUser {
 			t.Fatalf("materialized transcript contains user message: %+v", event)
 		}
@@ -426,7 +426,7 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolvePersistedSession: %v", err)
 	}
-	records := f.collectMessageRecords(t, record.SessionDir)
+	_, records := f.collectMessageRecords(t, record.SessionDir)
 	goalNotices, userMessages := 0, 0
 	for _, event := range records {
 		message := event
@@ -442,7 +442,7 @@ func (f *lazyGoalFixture) requireGoalNoticeWithoutUserMessage(t *testing.T) {
 	}
 }
 
-func (f *lazyGoalFixture) collectMessageRecords(t *testing.T, sessionDir string) []session.MessageRecord {
+func (f *lazyGoalFixture) collectMessageRecords(t *testing.T, sessionDir string) ([]session.EventRecord, []session.MessageRecord) {
 	store, err := session.Open(sessionDir, f.appCore.MetadataStore().AuthoritativeSessionStoreOptions()...)
 	if err != nil {
 		t.Fatalf("open materialized Session: %v", err)
@@ -462,7 +462,7 @@ func (f *lazyGoalFixture) collectMessageRecords(t *testing.T, sessionDir string)
 			messages = append(messages, message)
 		}
 	}
-	return messages
+	return records, messages
 }
 
 func (f *lazyGoalFixture) requireOneSession(t *testing.T) {
