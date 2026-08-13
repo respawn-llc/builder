@@ -1,5 +1,4 @@
 import { isFieldSet } from "@bufbuild/protobuf";
-import { EmptySchema } from "@bufbuild/protobuf/wkt";
 import {
   CallSchema,
   Direction,
@@ -40,14 +39,6 @@ function validateEnvelopePayload(envelope: Envelope): void {
   const payload = frame.value.payload;
   if (payload === undefined || !isFieldSet(frame.value, payloadDescriptor)) {
     throw new Error(`${frame.case} payload is required`);
-  }
-  if (
-    payload.length === 0 &&
-    descriptor.typeName !== EmptySchema.typeName
-  ) {
-    throw new Error(
-      `zero-byte payload is invalid for ${descriptor.typeName} operation ${frame.value.operation}`,
-    );
   }
   decodeGeneratedMessage(descriptor, payload);
 }

@@ -52,12 +52,10 @@ run_desktop_build() {
 		echo "pnpm is required to build desktop assets. Install pnpm or omit the desktop target." >&2
 		exit 2
 	fi
-	./scripts/generate-protobuf.sh ensure ts
-
 	local log_file
 	log_file="$(mktemp -t kent-frontend-build.XXXXXX.log)"
 	if ./scripts/install-frontend-dependencies.sh >"$log_file" 2>&1 </dev/null &&
-		pnpm --dir apps build >>"$log_file" 2>&1 </dev/null; then
+		./scripts/generate-protobuf.sh run ts -- pnpm --dir apps build >>"$log_file" 2>&1 </dev/null; then
 		rm -f "$log_file"
 		return
 	fi
@@ -100,7 +98,6 @@ resolve_output_symlinks() {
 }
 
 run_server_build() {
-	./scripts/generate-protobuf.sh ensure go
 	if [ -z "$output" ]; then
 		output="./bin/kent"
 	fi
@@ -118,7 +115,7 @@ run_server_build() {
 		ldflags+=(-X "core/shared/config.Version=${version}")
 	fi
 
-	env CGO_ENABLED="${CGO_ENABLED:-0}" \
+	./scripts/generate-protobuf.sh run go -- env CGO_ENABLED="${CGO_ENABLED:-0}" \
 		go build \
 		-trimpath \
 		-buildvcs=false \

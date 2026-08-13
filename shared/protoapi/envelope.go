@@ -6,7 +6,6 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // MarshalEnvelope validates and serializes one inactive binary Server API
@@ -83,9 +82,6 @@ func validateEnvelopePayload(envelope *sharedpb.Envelope) error {
 	descriptor, err := envelopePayloadDescriptor(frameKind, operation)
 	if err != nil {
 		return fmt.Errorf("operation %q: %w", operationName, err)
-	}
-	if len(payload) == 0 && descriptor.FullName() != (&emptypb.Empty{}).ProtoReflect().Descriptor().FullName() {
-		return fmt.Errorf("zero-byte payload is invalid for %s operation %q", descriptor.FullName(), operationName)
 	}
 	message := dynamicpb.NewMessage(descriptor)
 	if err := DecodeGeneratedMessage(payload, message); err != nil {

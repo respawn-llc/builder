@@ -66,6 +66,25 @@ func NewManager(repositoryRoot string) *Manager {
 	return manager
 }
 
+func (m *Manager) WithOutputs(targets []Target, action func() error) error {
+	if err := m.Ensure(targets); err != nil {
+		return err
+	}
+	lockPath := filepath.Join(m.RepositoryRoot, ".generated", "protobuf", "generation.lock")
+	fileLock := flock.New(lockPath)
+	lockContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	locked, err := fileLock.TryRLockContext(lockContext, 50*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	if !locked {
+		return fmt.Errorf("timed out waiting for Protobuf generation read lock")
+	}
+	defer fileLock.Unlock()
+	return action()
+}
+
 func (m *Manager) Ensure(targets []Target) error {
 	return m.withLock(func() error {
 		for _, target := range targets {
@@ -345,30 +364,56 @@ func replaceDirectory(source, destination string) error {
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return err
 	}
-	backup := fmt.Sprintf("%s.previous-%d", destination, time.Now().UnixNano())
-	if err := os.RemoveAll(backup); err != nil {
-		return err
-	}
-	destinationExists := true
-	if err := os.Rename(destination, backup); errors.Is(err, os.ErrNotExist) {
-		destinationExists = false
+	if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
+		return os.Rename(source, destination)
 	} else if err != nil {
 		return err
 	}
-	if err := os.Rename(source, destination); err != nil {
-		if destinationExists {
-			_ = os.Rename(backup, destination)
-		}
+	sourceFiles, err := treeFiles(source)
+	if err != nil {
 		return err
 	}
-	if destinationExists {
-		if err := os.RemoveAll(backup); err != nil {
-			_ = os.RemoveAll(destination)
-			_ = os.Rename(backup, destination)
+	destinationFiles, err := treeFiles(destination)
+	if err != nil {
+		return err
+	}
+	for relative, sourcePath := range sourceFiles {
+		destinationPath := filepath.Join(destination, relative)
+		if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+			return err
+		}
+		if err := os.Rename(sourcePath, destinationPath); err != nil {
+			return err
+		}
+	}
+	for relative, destinationPath := range destinationFiles {
+		if _, retained := sourceFiles[relative]; retained {
+			continue
+		}
+		if err := os.Remove(destinationPath); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func treeFiles(root string) (map[string]string, error) {
+	files := make(map[string]string)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[relative] = path
+		return nil
+	})
+	return files, err
 }
 
 func fingerprintTree(root string) (string, error) {
@@ -437,4 +482,11 @@ func ResolveTargets(name string) ([]Target, error) {
 		return nil, fmt.Errorf("unknown Protobuf generation target %q", name)
 	}
 	return []Target{target}, nil
+}
+
+func OutputsReady(value string, targets []Target) bool {
+	if value == "all" {
+		return true
+	}
+	return len(targets) == 1 && targets[0].Name == value
 }

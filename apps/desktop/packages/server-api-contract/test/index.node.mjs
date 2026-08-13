@@ -814,7 +814,7 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
   }
 });
 
-test("binary envelopes allow present zero-byte Empty payloads only", () => {
+test("binary envelopes distinguish absent payloads from valid zero-byte payloads", () => {
   const emptyPayloadFrames = [
     {
       case: "call",
@@ -842,6 +842,20 @@ test("binary envelopes allow present zero-byte Empty payloads only", () => {
     },
   });
   assert.throws(() => marshalEnvelope(absentPayload));
+
+  const processList = create(EnvelopeSchema, {
+    frame: {
+      case: "call",
+      value: create(CallSchema, {
+        operation: "kent.api.process.view_service.list",
+        payload: new Uint8Array(),
+      }),
+    },
+  });
+  assert.doesNotThrow(() => marshalEnvelope(processList));
+  assert.doesNotThrow(() =>
+    unmarshalEnvelope(toBinary(EnvelopeSchema, processList)),
+  );
 
   const nonEmptyMessagePayload = create(EnvelopeSchema, {
     frame: {

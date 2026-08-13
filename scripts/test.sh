@@ -333,13 +333,11 @@ run_desktop_tests() {
     if [ ! -f apps/package.json ]; then
         return
     fi
-    ./scripts/generate-protobuf.sh ensure ts
     ./scripts/install-frontend-dependencies.sh
-    pnpm --dir apps test
+    ./scripts/generate-protobuf.sh run ts -- pnpm --dir apps test
 }
 
 run_server_tests() {
-    ./scripts/generate-protobuf.sh ensure go
     local pty_fixture_binary=""
     if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
         pty_fixture_build_dir="$(mktemp -d -t kent-pty-fixture.XXXXXX)"
@@ -358,7 +356,7 @@ run_server_tests() {
 
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        "${server_test_command[@]}"
+        ./scripts/generate-protobuf.sh run go -- "${server_test_command[@]}"
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
@@ -368,7 +366,7 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
+    python3 - "$timeout_seconds" ./scripts/generate-protobuf.sh run go -- "${server_test_command[@]}" <<'PY' &
 import json
 import os
 import selectors

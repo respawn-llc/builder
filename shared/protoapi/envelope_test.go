@@ -293,7 +293,7 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 	}
 }
 
-func TestEnvelopeAllowsPresentZeroByteEmptyPayloadAndRejectsOtherZeroBytePayloads(t *testing.T) {
+func TestEnvelopeDistinguishesAbsentPayloadFromValidZeroBytePayload(t *testing.T) {
 	emptyPayloadFrames := []struct {
 		name     string
 		envelope *sharedpb.Envelope
@@ -335,7 +335,21 @@ func TestEnvelopeAllowsPresentZeroByteEmptyPayloadAndRejectsOtherZeroBytePayload
 		}
 	})
 
-	t.Run("zero-byte non-Empty payload", func(t *testing.T) {
+	t.Run("zero-byte process list request", func(t *testing.T) {
+		envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+			Operation: "kent.api.process.view_service.list",
+			Payload:   []byte{},
+		}}}
+		encoded, err := protoapi.MarshalEnvelope(envelope)
+		if err != nil {
+			t.Fatalf("marshal zero-byte process list payload: %v", err)
+		}
+		if _, err := protoapi.UnmarshalEnvelope(encoded); err != nil {
+			t.Fatalf("unmarshal zero-byte process list payload: %v", err)
+		}
+	})
+
+	t.Run("invalid zero-byte notification payload", func(t *testing.T) {
 		envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
 			Operation: "kent.api.attention.session_service.event",
 			Payload:   []byte{},

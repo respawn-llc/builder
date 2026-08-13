@@ -116,6 +116,21 @@ func TestCleanRemovesGeneratedOutputAndManifest(t *testing.T) {
 	}
 }
 
+func TestOutputsReadyMatchesTheRequiredTarget(t *testing.T) {
+	if !OutputsReady("all", []Target{Targets["go"]}) {
+		t.Fatal("all outputs did not satisfy Go")
+	}
+	if !OutputsReady("go", []Target{Targets["go"]}) {
+		t.Fatal("Go outputs did not satisfy Go")
+	}
+	if OutputsReady("go", []Target{Targets["ts"]}) {
+		t.Fatal("Go outputs satisfied TypeScript")
+	}
+	if OutputsReady("go", []Target{Targets["go"], Targets["ts"]}) {
+		t.Fatal("Go outputs satisfied all targets")
+	}
+}
+
 func newFixtureManager(t *testing.T) (*Manager, Target, *atomic.Int32) {
 	t.Helper()
 	root := t.TempDir()

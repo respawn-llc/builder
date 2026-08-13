@@ -52,8 +52,7 @@ run_frontend_lint() {
 
 run_vet() {
 	echo "==> go vet"
-	./scripts/generate-protobuf.sh ensure go
-	go vet ./...
+	./scripts/generate-protobuf.sh run go -- go vet ./...
 }
 
 run_build() {
