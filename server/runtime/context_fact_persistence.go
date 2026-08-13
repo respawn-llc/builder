@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"core/server/session"
-	"core/shared/transcript"
 )
 
 func (e *Engine) persistManualCompactEligibilityBestEffort(stepID string, eligible bool) {
@@ -15,7 +14,7 @@ func (e *Engine) persistManualCompactEligibilityBestEffort(stepID string, eligib
 		e.reportContextFactPersistenceError(stepID, "manual Compact eligibility", err)
 		return
 	}
-	e.compactionRuntimeState().SetPresentedManualCompactEligibility(eligible)
+	e.setPresentedManualCompactEligibility(eligible)
 }
 
 func (e *Engine) persistCompletedCompactionFactsBestEffort(
@@ -31,7 +30,7 @@ func (e *Engine) persistCompletedCompactionFactsBestEffort(
 	}
 	count := completedCompactionCount
 	eligible := false
-	e.compactionRuntimeState().SetContextFacts(sessionContextFacts(count, eligible))
+	e.setContextFacts(sessionContextFacts(count, eligible))
 }
 
 func sessionContextFacts(count int, eligible bool) session.SessionContextFacts {
@@ -46,10 +45,10 @@ func (e *Engine) reportContextFactPersistenceError(stepID, field string, err err
 		return
 	}
 	diagnostic := fmt.Errorf("persist Session Context %s: %w", field, err)
-	if steerErr := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
-		Visibility: transcript.EntryVisibilityAuto,
-		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
-		Text:       diagnostic.Error(),
+	if steerErr := e.steer(stepID, steerEventIntent(Event{
+		Kind:   EventContextFactsPersistFailed,
+		StepID: stepID,
+		Error:  diagnostic.Error(),
 	})); steerErr != nil {
 		e.surfaceRunError(fmt.Errorf("%w; surface diagnostic: %v", diagnostic, steerErr))
 	}

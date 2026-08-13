@@ -771,7 +771,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 	assistantCommittedCoordinate := assistantCommitResult.coordinate
 	assistantProvenance := assistantCommitResult.provenance
 	if !acceptedCalls.hasCalls() {
-		e.compactionRuntimeState().SetManualCompactionEligible(true)
+		e.setManualCompactionEligible(true)
 		e.persistManualCompactEligibilityBestEffort(stepID, true)
 	}
 	return preparedCompletedResponse{
@@ -850,7 +850,7 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 }
 
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
-	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	s.engine.setManualCompactionEligible(true)
 	s.engine.persistManualCompactEligibilityBestEffort(stepID, true)
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }

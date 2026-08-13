@@ -131,8 +131,9 @@ type ContextUsage struct {
 }
 
 type Engine struct {
-	mu               sync.Mutex
-	workflowTerminal WorkflowTerminalState
+	mu                sync.Mutex
+	workflowTerminal  WorkflowTerminalState
+	contextSnapshotMu sync.RWMutex
 
 	lifecycleMu     sync.Mutex
 	lifecycleOnce   sync.Once
@@ -295,7 +296,7 @@ func New(
 		currentNodeExecution:        newCurrentNodeExecutionState(cfg.CurrentNodeExecution),
 		compactionPlanner:           newCompactionPlanner(),
 	}
-	eng.compactionRuntimeState().SetContextFacts(store.ContextFacts())
+	eng.setContextFacts(store.ContextFacts())
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)

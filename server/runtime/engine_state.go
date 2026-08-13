@@ -237,6 +237,8 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	if e == nil {
 		return chatcontext.ProjectionInput{}
 	}
+	e.contextSnapshotMu.RLock()
+	defer e.contextSnapshotMu.RUnlock()
 	e.mu.Lock()
 	policy := e.contextPolicy
 	autoCompactionEnabled := true
@@ -255,6 +257,48 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 		CompactionRunning:        compaction.compactionRunning,
 		ManualCompactEligible:    compaction.manualCompactEligible,
 	}
+}
+
+func (e *Engine) setCompactionActive(stepID, mode string, count int) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().SetActive(stepID, mode, count)
+}
+
+func (e *Engine) clearCompactionActive(stepID string) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().ClearActive(stepID)
+}
+
+func (e *Engine) setCompactionCount(count int) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().SetCount(count)
+}
+
+func (e *Engine) incrementCompactionCount() int {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	return e.compactionRuntimeState().IncrementCount()
+}
+
+func (e *Engine) setManualCompactionEligible(eligible bool) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().SetManualCompactionEligible(eligible)
+}
+
+func (e *Engine) setPresentedManualCompactEligibility(eligible bool) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().SetPresentedManualCompactEligibility(eligible)
+}
+
+func (e *Engine) setContextFacts(facts session.SessionContextFacts) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
+	e.compactionRuntimeState().SetContextFacts(facts)
 }
 
 func (e *Engine) AppendCommittedEntry(role, text string) error {
@@ -379,6 +423,8 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current := true
@@ -838,6 +884,8 @@ func (e *Engine) restorePersistedUsageState(state *session.UsageState) {
 }
 
 func (e *Engine) applyUsageTrackingState(usage llm.Usage, baselineEstimate, totalInputTokens, totalCachedInputTokens int) {
+	e.contextSnapshotMu.Lock()
+	defer e.contextSnapshotMu.Unlock()
 	if baselineEstimate < 0 {
 		baselineEstimate = 0
 	}

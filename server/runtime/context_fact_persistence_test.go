@@ -72,6 +72,7 @@ func newContextFactTestEngine(
 }
 
 func TestFailedAgentStepContextFactWriteDoesNotFailStepOrRetryLater(t *testing.T) {
+	var events []Event
 	writer := &failingContextFactWriter{
 		delegate:          runtimeTestSessionPersistence,
 		failuresRemaining: 1,
@@ -84,6 +85,9 @@ func TestFailedAgentStepContextFactWriteDoesNotFailStepOrRetryLater(t *testing.T
 		}}},
 		newTestToolRegistry(t),
 	)
+	engine.cfg.OnEvent = func(event Event) {
+		events = append(events, event)
+	}
 
 	if _, err := engine.SubmitUserMessage(context.Background(), "hello"); err != nil {
 		t.Fatalf("SubmitUserMessage: %v", err)
@@ -100,6 +104,14 @@ func TestFailedAgentStepContextFactWriteDoesNotFailStepOrRetryLater(t *testing.T
 	facts := store.ContextFacts()
 	if facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {
 		t.Fatalf("failed eligibility became present true: %+v", facts)
+	}
+	if !hasEventKind(events, EventContextFactsPersistFailed) {
+		t.Fatalf("events = %+v, want Context-fact persistence operational diagnostic", events)
+	}
+	for _, event := range events {
+		if event.Kind == EventLocalEntryAdded {
+			t.Fatalf("failed Context-fact write appended transcript row: %+v", event)
+		}
 	}
 }
 

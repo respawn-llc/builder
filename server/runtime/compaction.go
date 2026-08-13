@@ -402,6 +402,8 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 			return compactionResult{}, session.CommitReceipt{}, err
 		}
 	}
+	e.setCompactionActive(stepID, string(mode), e.compactionRuntimeState().Count()+1)
+	defer e.clearCompactionActive(stepID)
 	compactionFailure := func(result compactionResult, err error) error {
 		if accept != nil {
 			return err
@@ -475,7 +477,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		}
 		return compactionResult{}, replacementReceipt, compactionFailure(result, replacementErr)
 	}
-	e.compactionRuntimeState().SetManualCompactionEligible(false)
+	e.setManualCompactionEligible(false)
 	e.persistCompletedCompactionFactsBestEffort(stepID, e.compactionRuntimeState().Count())
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"sync"
 	"testing"
 
 	"core/server/llm"
@@ -52,4 +53,47 @@ func TestLiveChatContextSnapshotUsesRuntimeFactsBehindPersistencePresenceGates(t
 	if present.CompletedCompactionCount != 7 || !present.ManualCompactEligible {
 		t.Fatalf("present-gated live snapshot = %+v, want runtime count/eligibility", present)
 	}
+}
+
+func TestLiveChatContextSnapshotCannotMixUsageAndCompactionTransitions(t *testing.T) {
+	t.Parallel()
+
+	engine := mustNewTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		newTestToolRegistry(t),
+		Config{Model: "gpt-5", CompactionMode: string(config.CompactionModeLocal)},
+	)
+	presentCount := 0
+	presentEligibility := false
+	engine.compactionRuntimeState().SetContextFacts(session.SessionContextFacts{
+		CompletedCompactionCount: &presentCount,
+		ManualCompactEligible:    &presentEligibility,
+	})
+
+	const transitions = 500
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for value := 1; value <= transitions; value++ {
+			engine.contextSnapshotMu.Lock()
+			engine.usageTrackingState().Apply(llm.Usage{InputTokens: value}, 0, 0)
+			if value%2 == 1 {
+				engine.compactionRuntimeState().SetActive("compact-step", "manual", value)
+			} else {
+				engine.compactionRuntimeState().ClearActive("compact-step")
+			}
+			engine.contextSnapshotMu.Unlock()
+		}
+	}()
+
+	for range transitions {
+		snapshot := engine.LiveChatContextSnapshot()
+		if snapshot.CompactionRunning != (snapshot.UsedTokens%2 == 1) {
+			t.Fatalf("mixed live Context snapshot = %+v", snapshot)
+		}
+	}
+	wg.Wait()
 }

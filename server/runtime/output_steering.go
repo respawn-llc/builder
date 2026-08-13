@@ -903,10 +903,10 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 		switch evt.Kind {
 		case EventCompactionStarted:
 			if evt.Compaction != nil {
-				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
+				e.setCompactionActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
 			}
 		case EventCompactionCompleted, EventCompactionFailed:
-			e.compactionRuntimeState().ClearActive(evt.StepID)
+			e.clearCompactionActive(evt.StepID)
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
 			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
@@ -1081,7 +1081,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	// here rather than scanning individual items.
 	e.baseMetaInjected = len(preparedItems) > 0
 	if replacement.payload.CompactionNumber != nil {
-		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
+		e.setCompactionCount(*replacement.payload.CompactionNumber)
 	}
 	e.resetLocalDiagnostics()
 	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
