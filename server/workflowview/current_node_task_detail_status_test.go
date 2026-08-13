@@ -465,8 +465,19 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 	}); err != nil {
 		t.Fatalf("CreateTask second workflow: %v", err)
 	}
+	thirdWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, thirdWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow third workflow: %v", err)
+	}
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &thirdWorkflowID,
+		Title:      "Third workflow task",
+	}); err != nil {
+		t.Fatalf("CreateTask third workflow: %v", err)
+	}
 	multiple := list(nil, 20)
-	if len(multiple.Tasks) != 2 ||
+	if len(multiple.Tasks) != 3 ||
 		multiple.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
 		t.Fatalf("multiple-workflow project-wide page = %+v", multiple)
 	}
@@ -476,7 +487,7 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 		}
 	}
 
-	offset := 3
+	offset := 4
 	beyondEnd := list(&offset, 1)
 	if len(beyondEnd.Tasks) != 0 ||
 		beyondEnd.NextOffset != nil ||

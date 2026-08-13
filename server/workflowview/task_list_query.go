@@ -236,15 +236,16 @@ func workflowTaskAttentionKindsJSON(kinds []serverapi.WorkflowTaskAttentionKind)
 }
 
 func workflowTaskListMatchingWorkflowCardinality(count int) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {
+	if count < 0 {
+		return "", fmt.Errorf("workflow task list query returned invalid matching workflow count %d", count)
+	}
 	switch count {
 	case 0:
 		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityNone, nil
 	case 1:
 		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne, nil
-	case 2:
-		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple, nil
 	default:
-		return "", fmt.Errorf("workflow task list query returned invalid matching workflow count %d", count)
+		return serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple, nil
 	}
 }
 

@@ -1532,7 +1532,6 @@ matching_workflows AS (
           WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
-    LIMIT 2
 ),
 page_rows AS (
     SELECT rows.*
