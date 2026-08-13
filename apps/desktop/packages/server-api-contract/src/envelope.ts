@@ -2,9 +2,11 @@ import { isFieldSet } from "@bufbuild/protobuf";
 import { EmptySchema } from "@bufbuild/protobuf/wkt";
 import {
   CallSchema,
+  Direction,
   type Envelope,
   EnvelopeSchema,
   NotificationEventSchema,
+  OperationKind,
   ResultSchema,
 } from "./gen/kent/api/shared/foundation_pb.js";
 import {
@@ -33,9 +35,7 @@ function validateEnvelopePayload(envelope: Envelope): void {
   if (operation === undefined) {
     throw new Error(`envelope operation ${frame.value.operation} is unknown`);
   }
-  const descriptor = frame.case === "result"
-    ? operation.descriptor.output
-    : operation.descriptor.input;
+  const descriptor = envelopePayloadDescriptor(frame.case, operation);
   const payloadDescriptor = foundationPayloadField(frame.case);
   const payload = frame.value.payload;
   if (payload === undefined || !isFieldSet(frame.value, payloadDescriptor)) {
@@ -50,6 +50,57 @@ function validateEnvelopePayload(envelope: Envelope): void {
     );
   }
   decodeGeneratedMessage(descriptor, payload);
+}
+
+function envelopePayloadDescriptor(
+  frame: "call" | "result" | "notificationEvent",
+  operation: NonNullable<ReturnType<typeof operationByName>>,
+) {
+  switch (frame) {
+    case "call":
+      requireCallableOperation(frame, operation.options.kind);
+      if (operation.options.direction !== Direction.CLIENT_TO_SERVER) {
+        throw new Error(
+          `call has wrong sender direction ${String(operation.options.direction)}`,
+        );
+      }
+      return operation.descriptor.input;
+    case "result":
+      requireCallableOperation(frame, operation.options.kind);
+      if (operation.options.direction !== Direction.CLIENT_TO_SERVER) {
+        throw new Error(
+          `result has wrong operation direction ${String(operation.options.direction)}`,
+        );
+      }
+      return operation.descriptor.output;
+    case "notificationEvent":
+      if (operation.options.kind !== OperationKind.NOTIFICATION) {
+        throw new Error(
+          `notification/event cannot carry operation kind ${String(operation.options.kind)}`,
+        );
+      }
+      if (operation.options.direction !== Direction.SERVER_TO_CLIENT) {
+        throw new Error(
+          `notification/event has wrong sender direction ${String(operation.options.direction)}`,
+        );
+      }
+      return operation.descriptor.input;
+  }
+}
+
+function requireCallableOperation(
+  frame: "call" | "result",
+  kind: OperationKind,
+): void {
+  switch (kind) {
+    case OperationKind.UNARY:
+    case OperationKind.SUBSCRIPTION:
+    case OperationKind.PROGRESS:
+      return;
+    case OperationKind.UNSPECIFIED:
+    case OperationKind.NOTIFICATION:
+      throw new Error(`${frame} cannot carry operation kind ${String(kind)}`);
+  }
 }
 
 function foundationPayloadField(frame: "call" | "result" | "notificationEvent") {

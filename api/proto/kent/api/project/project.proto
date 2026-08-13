@@ -844,11 +844,32 @@ message GetProjectWorkspaceSuccess {
   };
 }
 
+message GetProjectWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    ProjectNotFoundDetails project_not_found = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "project_not_found"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
 message GetProjectWorkspaceResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
     GetProjectWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    ListProjectWorkspacesError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+    GetProjectWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
 

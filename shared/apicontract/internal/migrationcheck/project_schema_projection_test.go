@@ -1,6 +1,11 @@
 package migrationcheck
 
-import "testing"
+import (
+	"testing"
+
+	projectpb "core/shared/protoapi/gen/kent/api/project"
+	"google.golang.org/protobuf/reflect/protoreflect"
+)
 
 func TestProjectSchemaProjectionOmitsOnlyServerAuthoredBlockerWording(t *testing.T) {
 	fixture := projectSchemaProjectionFixture()
@@ -56,6 +61,25 @@ func TestProjectSchemaProjectionResolvesEveryLockedLegacyIdentity(t *testing.T) 
 		if _, exists := resolved[identity]; !exists {
 			t.Errorf("Project schema projection identity was not resolved from the execution target: %s", identity)
 		}
+	}
+}
+
+func TestProjectWorkspaceOperationsOwnDistinctErrorUnions(t *testing.T) {
+	for _, fixture := range []struct {
+		message protoreflect.MessageDescriptor
+		details []protoreflect.Name
+	}{
+		{(&projectpb.ListProjectWorkspacesError{}).ProtoReflect().Descriptor(), []protoreflect.Name{"project_not_found", "internal_failure"}},
+		{(&projectpb.GetProjectWorkspaceError{}).ProtoReflect().Descriptor(), []protoreflect.Name{"project_not_found", "internal_failure"}},
+	} {
+		if fixture.message.Fields().Get(0).Name() != "code" {
+			t.Errorf("%s first field is not code", fixture.message.FullName())
+		}
+		assertMessageOneofFields(t, fixture.message, "detail", fixture.details...)
+	}
+	if (&projectpb.ListProjectWorkspacesError{}).ProtoReflect().Descriptor().FullName() ==
+		(&projectpb.GetProjectWorkspaceError{}).ProtoReflect().Descriptor().FullName() {
+		t.Fatal("project workspace list and get operations share an error union")
 	}
 }
 

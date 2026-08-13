@@ -48,25 +48,11 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 			}}},
 		},
 		{
-			name: "call without correlation",
-			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "kent.api.process.output_service.event",
-				Payload:   outputChunkPayload,
-			}}},
-		},
-		{
 			name: "result with correlation",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
 				Operation:   "kent.api.server.server_service.get_readiness",
 				Correlation: &correlation,
 				Payload:     readinessResultPayload,
-			}}},
-		},
-		{
-			name: "result without correlation",
-			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation: "kent.api.process.output_service.event",
-				Payload:   []byte{},
 			}}},
 		},
 		{
@@ -107,6 +93,55 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 			}
 			if !bytes.Equal(reencoded, encoded) {
 				t.Fatalf("round-trip bytes = %v, want %v", reencoded, encoded)
+			}
+		})
+	}
+}
+
+func TestEnvelopeRejectsOperationFrameAndDirectionMismatches(t *testing.T) {
+	outputChunkPayload, err := proto.Marshal(&processpb.OutputChunk{
+		ProcessId:       "process-1",
+		NextOffsetBytes: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		envelope *sharedpb.Envelope
+	}{
+		{
+			name: "server notification as call",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
+				Operation: "kent.api.process.output_service.event",
+				Payload:   outputChunkPayload,
+			}}},
+		},
+		{
+			name: "server notification as result",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
+				Operation: "kent.api.process.output_service.event",
+				Payload:   []byte{},
+			}}},
+		},
+		{
+			name: "client call as notification",
+			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
+				Operation: "kent.api.server.server_service.get_readiness",
+				Payload:   []byte{},
+			}}},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := protoapi.MarshalEnvelope(test.envelope); err == nil {
+				t.Fatal("operation/frame mismatch unexpectedly marshaled")
+			}
+			raw, err := proto.Marshal(test.envelope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := protoapi.UnmarshalEnvelope(raw); err == nil {
+				t.Fatal("operation/frame mismatch unexpectedly unmarshaled")
 			}
 		})
 	}
@@ -263,20 +298,6 @@ func TestEnvelopeAllowsPresentZeroByteEmptyPayloadAndRejectsOtherZeroBytePayload
 		{
 			name: "call input",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "kent.api.server.server_service.get_readiness",
-				Payload:   []byte{},
-			}}},
-		},
-		{
-			name: "result output",
-			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation: "kent.api.process.output_service.event",
-				Payload:   []byte{},
-			}}},
-		},
-		{
-			name: "notification input",
-			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
 				Operation: "kent.api.server.server_service.get_readiness",
 				Payload:   []byte{},
 			}}},

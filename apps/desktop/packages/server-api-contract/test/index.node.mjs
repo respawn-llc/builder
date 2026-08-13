@@ -571,25 +571,11 @@ test("binary envelopes round-trip every frame variant", () => {
       }),
     },
     {
-      case: "call",
-      value: create(CallSchema, {
-        operation: "kent.api.process.output_service.event",
-        payload: outputChunkPayload,
-      }),
-    },
-    {
       case: "result",
       value: create(ResultSchema, {
         operation: "kent.api.server.server_service.get_readiness",
         correlation,
         payload: readinessResultPayload,
-      }),
-    },
-    {
-      case: "result",
-      value: create(ResultSchema, {
-        operation: "kent.api.process.output_service.event",
-        payload: new Uint8Array(),
       }),
     },
     {
@@ -619,6 +605,43 @@ test("binary envelopes round-trip every frame variant", () => {
     const encoded = marshalEnvelope(envelope);
     const decoded = unmarshalEnvelope(encoded);
     assert.deepEqual(toBinary(EnvelopeSchema, decoded), encoded);
+  }
+});
+
+test("binary envelopes reject operation frame and direction mismatches", () => {
+  const mismatches = [
+    {
+      case: "call",
+      value: create(CallSchema, {
+        operation: "kent.api.process.output_service.event",
+        payload: toBinary(
+          OutputChunkSchema,
+          create(OutputChunkSchema, {
+            processId: "process-1",
+            nextOffsetBytes: 1n,
+          }),
+        ),
+      }),
+    },
+    {
+      case: "result",
+      value: create(ResultSchema, {
+        operation: "kent.api.process.output_service.event",
+        payload: new Uint8Array(),
+      }),
+    },
+    {
+      case: "notificationEvent",
+      value: create(NotificationEventSchema, {
+        operation: "kent.api.server.server_service.get_readiness",
+        payload: new Uint8Array(),
+      }),
+    },
+  ];
+  for (const frame of mismatches) {
+    const envelope = create(EnvelopeSchema, { frame });
+    assert.throws(() => marshalEnvelope(envelope));
+    assert.throws(() => unmarshalEnvelope(toBinary(EnvelopeSchema, envelope)));
   }
 });
 
@@ -774,20 +797,6 @@ test("binary envelopes allow present zero-byte Empty payloads only", () => {
     {
       case: "call",
       value: create(CallSchema, {
-        operation: "kent.api.server.server_service.get_readiness",
-        payload: new Uint8Array(),
-      }),
-    },
-    {
-      case: "result",
-      value: create(ResultSchema, {
-        operation: "kent.api.process.output_service.event",
-        payload: new Uint8Array(),
-      }),
-    },
-    {
-      case: "notificationEvent",
-      value: create(NotificationEventSchema, {
         operation: "kent.api.server.server_service.get_readiness",
         payload: new Uint8Array(),
       }),
