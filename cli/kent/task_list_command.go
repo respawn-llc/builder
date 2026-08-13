@@ -203,36 +203,29 @@ func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.Wo
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	expectedScope := taskListExpectedScope{
-		ProjectID:     *request.ProjectID,
-		WorkflowID:    request.WorkflowID,
-		WorkflowOwner: taskListExpectedWorkflowFromRequest,
-	}
-	projection, err := taskListProjectionFromResponse(resp, expectedScope)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
 	if jsonOut {
-		return writeCommandJSON(stdout, stderr, projection.Output)
+		return writeCommandJSON(stdout, stderr, resp)
 	}
-	for _, row := range projection.Rows {
-		statusText, err := taskStatusText(row.Item.Status)
+	for _, task := range resp.Tasks {
+		statusText, err := taskStatusText(task.Status)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", row.Item.ShortID, row.Item.Title, statusText)
-		if row.ShowWorkflow {
-			fmt.Fprintf(stdout, "Workflow: %s\n", row.WorkflowName)
+		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", task.ShortID, task.Title, statusText)
+		if task.WorkflowName != nil {
+			fmt.Fprintf(stdout, "Workflow: %s\n", *task.WorkflowName)
 		}
-		if row.ShowColumns {
-			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))
+		if task.ColumnKeys != nil {
+			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*task.ColumnKeys))
 		}
-		if len(row.LabelNames) > 0 {
+		if progress := task.DependencyProgress; progress != nil && progress.SatisfiedCount < progress.TotalCount {
+			fmt.Fprintf(stdout, "Deps: %d/%d\n", progress.SatisfiedCount, progress.TotalCount)
+		}
+		if len(task.Labels) > 0 {
 			fmt.Fprint(stdout, "Labels:")
-			for _, name := range row.LabelNames {
-				fmt.Fprintf(stdout, " %q", name)
+			for _, label := range task.Labels {
+				fmt.Fprintf(stdout, " %q", label.Name)
 			}
 			fmt.Fprintln(stdout)
 		}

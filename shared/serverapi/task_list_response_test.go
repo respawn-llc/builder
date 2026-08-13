@@ -55,6 +55,9 @@ func TestWorkflowTaskListResponseValidatesIntrinsicScopeAndRows(t *testing.T) {
 		{name: "mismatched native state", mutate: func(response *WorkflowTaskListResponse) {
 			response.Tasks[0].Status.NativeState = WorkflowTaskNativeStateTerminal
 		}, wantFail: true},
+		{name: "zero total dependency progress", mutate: func(response *WorkflowTaskListResponse) {
+			response.Tasks[0].DependencyProgress = &WorkflowTaskDependencyProgress{}
+		}, wantFail: true},
 	}
 
 	for _, test := range tests {
