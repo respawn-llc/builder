@@ -64,9 +64,9 @@ func completeCurrentNodeJoinArrival(
 	}
 	if err := rejectLegacyCurrentFanoutJoinSource(
 		policy,
+		definition,
 		source.Reference,
 		workflow.NodeIDOf(joinNode),
-		edge.ID,
 		persistedArrivals,
 	); err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -261,17 +261,29 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 
 func rejectLegacyCurrentFanoutJoinSource(
 	policy invariant.Policy,
+	definition workflow.Definition,
 	source workflow.CurrentNodeReference,
 	targetNodeID workflow.NodeID,
-	edgeID workflow.EdgeID,
 	arrivals []currentFanoutJoinArrival,
 ) error {
+	resolution, resolved := workflow.ResolveFanoutJoin(definition, currentFanoutBranchKeys(arrivals))
+	if !resolved {
+		return currentFanoutJoinTopologyError(definition, source.TaskID)
+	}
 	for _, arrival := range arrivals {
 		if arrival.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
+			joinEdge, exists := resolution.BranchJoinEdges[arrival.BranchKey]
+			if !exists {
+				return errors.New("fan-out Join resolution has no Edge for legacy branch")
+			}
+			group, err := transitionGroupForEdge(definition, joinEdge)
+			if err != nil {
+				return err
+			}
 			branchKey := arrival.BranchKey
 			branchSource, err := workflow.NewCurrentNodeReference(
 				source.TaskID,
-				source.NodeID,
+				group.SourceNodeID,
 				&branchKey,
 			)
 			if err != nil {
@@ -282,7 +294,7 @@ func rejectLegacyCurrentFanoutJoinSource(
 				legacyContinuationSourceFallbackDetail{
 					Source:       branchSource,
 					TargetNodeID: targetNodeID,
-					EdgeID:       edgeID,
+					EdgeID:       joinEdge.ID,
 					Scope:        workflow.LegacyContinuationSourceFanoutBranch,
 				},
 			)

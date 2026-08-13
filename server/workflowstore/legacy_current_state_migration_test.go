@@ -601,8 +601,8 @@ INSERT INTO task_runs (
 	if err != nil {
 		t.Fatalf("ResolveCurrentNodeSessionBindingAuthority: %v", err)
 	}
-	if authority.Kind() != CurrentNodeSessionBindingAuthorityLegacyHistorical {
-		t.Fatalf("migrated startup authority = %q, want %q", authority.Kind(), CurrentNodeSessionBindingAuthorityLegacyHistorical)
+	if authority.Kind() != CurrentNodeSessionBindingAuthorityExactCurrent {
+		t.Fatalf("migrated startup authority = %q, want %q", authority.Kind(), CurrentNodeSessionBindingAuthorityExactCurrent)
 	}
 }
 

@@ -269,6 +269,87 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	}
 }
 
+func TestWorkflowLegacyProvenanceRepairMigrationUsesIncomingSourceForNewSessionScript(t *testing.T) {
+	t.Parallel()
+	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
+		{sessionID: "session-script-entry-source", associatedAtOffset: 1},
+	}, 2)
+	var enteredByEdgeID []byte
+	if err := fixture.db.QueryRow(`
+SELECT entered_by_edge_id
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(&enteredByEdgeID); err != nil {
+		t.Fatalf("read Script entering Edge: %v", err)
+	}
+	execSeed(t, fixture.db, "remove legacy Agent Current Node", `
+DELETE FROM task_current_nodes WHERE task_id = ?`, fixture.taskID)
+	execSeed(t, fixture.db, "remove legacy Agent target association", `
+DELETE FROM session_workflow_node_associations
+WHERE task_id = ? AND session_id = ? AND node_id = ?`,
+		fixture.taskID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+	)
+	execSeed(t, fixture.db, "mark target as new-session Script", `
+UPDATE workflow_nodes
+SET kind = 'script',
+    completion_mode = '',
+    script_path = 'scripts/test.sh'
+WHERE id = ?`, fixture.targetNodeID)
+	execSeed(t, fixture.db, "mark entering Edge new Session", `
+UPDATE workflow_edges
+SET context_mode = 'new_session',
+    context_source_kind = 'immediate_source'
+WHERE id = ?`, enteredByEdgeID)
+	execSeed(t, fixture.db, "restore legacy Script target association", `
+INSERT INTO session_workflow_node_associations (
+    task_id, session_id, node_id, transition_branch_key,
+    association_status, source_session_id, associated_at_unix_ms
+) VALUES (?, ?, ?, NULL, 'historical', NULL, ?)`,
+		fixture.taskID,
+		fixture.targetSessionID,
+		fixture.targetNodeID,
+		time.Now().UTC().UnixMilli(),
+	)
+	execSeed(t, fixture.db, "restore legacy Script Current Node", `
+INSERT INTO task_current_nodes (
+    task_id, node_id, transition_branch_key, current_input_values_json,
+    prior_node_values_json, session_id, scheduling_state, entered_by_edge_id,
+    effective_assignee, assignee_origin, continuation_source_kind,
+    continuation_source_session_id, legacy_materialized
+) VALUES (?, ?, NULL, '{}', '{"transition_parameters":{}}', NULL, 'ready', ?,
+          NULL, NULL, NULL, NULL, 1)`,
+		fixture.taskID,
+		fixture.targetNodeID,
+		enteredByEdgeID,
+	)
+
+	fixture.migrate(t)
+
+	var sourceKind, sourceSessionID string
+	var legacyMaterialized int64
+	if err := fixture.db.QueryRow(`
+SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
+FROM task_current_nodes
+WHERE task_id = ?`, fixture.taskID).Scan(
+		&sourceKind,
+		&sourceSessionID,
+		&legacyMaterialized,
+	); err != nil {
+		t.Fatalf("read repaired new-session Script Current Node: %v", err)
+	}
+	if sourceKind != "exact" ||
+		sourceSessionID != "session-script-entry-source" ||
+		legacyMaterialized != 0 {
+		t.Fatalf(
+			"new-session Script Current Node = kind %q Session %q legacy %d; want exact incoming source",
+			sourceKind,
+			sourceSessionID,
+			legacyMaterialized,
+		)
+	}
+}
+
 func TestWorkflowLegacyProvenanceRepairMigrationRepairsOnlyFanoutBranchesWithBranchLocalProof(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{

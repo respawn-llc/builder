@@ -31,6 +31,9 @@ JOIN workflow_transition_groups entering_transition
 JOIN workflow_nodes source_node
   ON source_node.id = entering_transition.source_node_id
  AND source_node.workflow_id = task.workflow_id
+JOIN workflow_nodes target_node
+  ON target_node.id = current_node.node_id
+ AND target_node.workflow_id = task.workflow_id
 JOIN session_workflow_node_associations source_association
   ON source_association.task_id = current_node.task_id
  AND source_association.node_id = source_node.id
@@ -46,7 +49,10 @@ LEFT JOIN session_workflow_node_associations target_association
         )
  )
 WHERE current_node.legacy_materialized = 1
-  AND entering_edge.context_mode != 'new_session'
+  AND (
+        entering_edge.context_mode != 'new_session'
+        OR target_node.kind != 'agent'
+  )
   AND (
         (
             current_node.transition_branch_key IS NULL

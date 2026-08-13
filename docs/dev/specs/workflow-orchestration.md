@@ -416,6 +416,7 @@
 - A uniquely repaired legacy Current Node, active Fan-Out branch, or pending Approval uses the repaired exact Context Source after upgrade.
 - If unresolved legacy state reaches `previous_target_or_new` and the target is an Agent Node, Kent starts a fresh target Session and reports a diagnostic.
 - If unresolved legacy state reaches strict `previous_target`, a non-Agent `previous_target_or_new` target, or a final Join, production reports a typed actionable error without changing Workflow state. Debug operation fails fast.
+- Kent removes this unresolved-legacy compatibility handling in v2.6.2.
 - If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
 - `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
 - Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
