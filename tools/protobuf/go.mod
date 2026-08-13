@@ -4,7 +4,12 @@ go 1.26.4
 
 tool github.com/bufbuild/buf/cmd/buf
 
-require google.golang.org/protobuf v1.36.11
+tool google.golang.org/protobuf/cmd/protoc-gen-go
+
+require (
+	github.com/gofrs/flock v0.13.0
+	google.golang.org/protobuf v1.36.11
+)
 
 require (
 	buf.build/gen/go/bufbuild/bufplugin/protocolbuffers/go v1.36.11-20260626152828-968bf0468096.1 // indirect
@@ -42,7 +47,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/google/cel-go v0.29.2 // indirect
 	github.com/google/go-containerregistry v0.21.7 // indirect
 	github.com/google/uuid v1.6.0 // indirect

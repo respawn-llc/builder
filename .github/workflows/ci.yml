@@ -252,14 +252,17 @@ jobs:
 
   gui:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6.0.9
@@ -274,23 +277,22 @@ jobs:
           cache-dependency-path: apps/pnpm-lock.yaml
 
       - name: Check GUI dependency policy
-        working-directory: apps
-        run: node scripts/check-dependency-policy.mjs
+        run: node apps/scripts/check-dependency-policy.mjs
 
       - name: Install GUI dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm --dir apps install --frozen-lockfile
 
       - name: Lint GUI
-        run: pnpm lint
+        run: pnpm --dir apps lint
 
       - name: Typecheck GUI
-        run: pnpm typecheck
+        run: pnpm --dir apps typecheck
 
       - name: Test GUI
-        run: pnpm test
+        run: pnpm --dir apps test
 
       - name: Build GUI web assets
-        run: pnpm build
+        run: pnpm --dir apps build
 
   gui-native:
     runs-on: macos-latest
@@ -299,6 +301,12 @@ jobs:
         uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.95.0
@@ -381,6 +389,12 @@ jobs:
         uses: actions/checkout@v7.0.0
         with:
           persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Install Linux bundling dependencies
         run: |

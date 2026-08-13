@@ -17,47 +17,10 @@ func TestProtobufCICheckRejectsInvalidSchema(t *testing.T) {
 	}
 }
 
-func TestProtobufCICheckRejectsGeneratedTreeDriftIndependently(t *testing.T) {
-	testCases := []struct {
-		name   string
-		mutate func(t *testing.T, repositoryRoot string)
-	}{
-		{
-			name: "stale content",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				writeFixtureFile(t, repositoryRoot, generatedGoRelativePath, []byte("stale\n"))
-			},
-		},
-		{
-			name: "extra generated file",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				writeFixtureFile(
-					t,
-					repositoryRoot,
-					"shared/protoapi/gen/extra.pb.go",
-					[]byte("extra\n"),
-				)
-			},
-		},
-		{
-			name: "deleted generated file",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				if err := os.Remove(filepath.Join(repositoryRoot, generatedTypeScriptRelativePath)); err != nil {
-					t.Fatalf("delete generated TypeScript fixture: %v", err)
-				}
-			},
-		},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newProtobufCIFixture(t)
-			testCase.mutate(t, fixture.repositoryRoot)
-
-			if output, err := fixture.run(t); err == nil {
-				t.Fatalf("Protobuf CI check accepted %s\n%s", testCase.name, output)
-			}
-		})
+func TestProtobufCICheckRejectsNondeterministicGeneration(t *testing.T) {
+	fixture := newProtobufCIFixture(t)
+	if output, err := fixture.run(t, "KENT_PROTOBUF_TEST_NONDETERMINISTIC=1"); err == nil {
+		t.Fatalf("Protobuf CI check accepted nondeterministic generation\n%s", output)
 	}
 }
 
@@ -162,8 +125,7 @@ func TestProtobufCICheckAllowsUnchangedSchemaWithoutVersionEdit(t *testing.T) {
 
 type protobufCIFixture struct {
 	repositoryRoot string
-	expectedRoot   string
-	fakeBinRoot    string
+	environment    []string
 	baseRevision   string
 }
 
@@ -173,8 +135,7 @@ func newProtobufCIFixture(t *testing.T) protobufCIFixture {
 	generationFixture := newProtobufGenerationFixture(t)
 	fixture := protobufCIFixture{
 		repositoryRoot: generationFixture.repositoryRoot,
-		expectedRoot:   generationFixture.expectedRoot,
-		fakeBinRoot:    generationFixture.fakeBinRoot,
+		environment:    generationFixture.environment,
 	}
 
 	sourceRoot := repositoryRoot(t)
@@ -225,14 +186,9 @@ func (fixture protobufCIFixture) run(t *testing.T, extraEnvironment ...string) (
 		"protobuf",
 	)
 	command.Dir = fixture.repositoryRoot
-	command.Env = append(
-		os.Environ(),
-		append([]string{
-			"PATH=" + fixture.fakeBinRoot + string(os.PathListSeparator) + os.Getenv("PATH"),
-			"KENT_CI_BASE_REVISION=" + fixture.baseRevision,
-			"KENT_PROTOBUF_TEST_EXPECTED_ROOT=" + fixture.expectedRoot,
-		}, extraEnvironment...)...,
-	)
+	command.Env = append([]string(nil), fixture.environment...)
+	command.Env = append(command.Env, "KENT_CI_BASE_REVISION="+fixture.baseRevision)
+	command.Env = append(command.Env, extraEnvironment...)
 	return command.CombinedOutput()
 }
 

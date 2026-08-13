@@ -333,11 +333,13 @@ run_desktop_tests() {
     if [ ! -f apps/package.json ]; then
         return
     fi
+    ./scripts/generate-protobuf.sh ensure ts
     ./scripts/install-frontend-dependencies.sh
     pnpm --dir apps test
 }
 
 run_server_tests() {
+    ./scripts/generate-protobuf.sh ensure go
     local pty_fixture_binary=""
     if [ "${#server_test_args[@]}" -eq 1 ] && [ "${server_test_args[0]}" = "./..." ]; then
         pty_fixture_build_dir="$(mktemp -d -t kent-pty-fixture.XXXXXX)"

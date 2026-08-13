@@ -6,6 +6,9 @@
 - The contract contains every supported operation, request, result, event, completion, validation rule, and client-visible error variant.
 - Clients generate platform-native contract code from the same Protobuf definitions.
 - Client and server applications compile generated contract code into their binaries or bundles. They do not load Protobuf definitions at runtime.
+- Generated contract code is a disposable build output and is not part of the source repository.
+- A build regenerates a platform's contract code only when its Protobuf definitions, generation configuration, generator implementation, or generated output has changed.
+- Concurrent builds must not observe partial generated contract output.
 - A Kotlin client generates from the same contract as Go and TypeScript clients.
 - The Server API uses generated Protobuf messages rather than JSON payloads.
 

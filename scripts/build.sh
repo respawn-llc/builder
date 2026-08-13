@@ -52,6 +52,7 @@ run_desktop_build() {
 		echo "pnpm is required to build desktop assets. Install pnpm or omit the desktop target." >&2
 		exit 2
 	fi
+	./scripts/generate-protobuf.sh ensure ts
 
 	local log_file
 	log_file="$(mktemp -t kent-frontend-build.XXXXXX.log)"
@@ -99,6 +100,7 @@ resolve_output_symlinks() {
 }
 
 run_server_build() {
+	./scripts/generate-protobuf.sh ensure go
 	if [ -z "$output" ]; then
 		output="./bin/kent"
 	fi

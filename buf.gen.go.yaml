@@ -1,0 +1,16 @@
+version: v2
+clean: true
+plugins:
+  - local:
+      - go
+      - tool
+      - protoc-gen-go
+    out: shared/protoapi/gen
+    opt:
+      - paths=source_relative
+  - local:
+      - go
+      - run
+      - ./protoc-gen-kent-go-registry
+    out: shared/protoapi/gen
+    strategy: all

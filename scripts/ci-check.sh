@@ -52,6 +52,7 @@ run_frontend_lint() {
 
 run_vet() {
 	echo "==> go vet"
+	./scripts/generate-protobuf.sh ensure go
 	go vet ./...
 }
 
@@ -85,8 +86,8 @@ run_protobuf() {
 		cd tools/protobuf
 		go tool buf lint "$repo_root" --config "$repo_root/buf.yaml"
 	)
-	echo "==> Protobuf generated-output freshness"
-	./scripts/generate-protobuf.sh check
+	echo "==> Protobuf deterministic generation"
+	./scripts/generate-protobuf.sh verify all
 	echo "==> Protobuf migration lint"
 	go run ./shared/apicontract/cmd/migrationlint
 	echo "==> Protobuf descriptor policy"

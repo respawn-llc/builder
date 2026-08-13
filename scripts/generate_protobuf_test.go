@@ -5,170 +5,174 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 )
 
-const (
-	generatedGoRelativePath         = "shared/protoapi/gen/example.pb.go"
-	generatedTypeScriptRelativePath = "apps/desktop/packages/server-api-contract/src/gen/example_pb.ts"
-)
+func TestProtobufEnsureIsLazyAndRepairsOutputDrift(t *testing.T) {
+	fixture := newProtobufGenerationFixture(t)
 
-func TestProtobufGeneratedOutputCheckRejectsRepositoryDrift(t *testing.T) {
-	testCases := []struct {
-		name   string
-		mutate func(t *testing.T, repositoryRoot string)
-	}{
-		{
-			name: "stale content",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				t.Helper()
-				writeFixtureFile(t, repositoryRoot, generatedGoRelativePath, []byte("stale generated Go content\n"))
-			},
-		},
-		{
-			name: "extra generated file",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				t.Helper()
-				writeFixtureFile(
-					t,
-					repositoryRoot,
-					"shared/protoapi/gen/unexpected.pb.go",
-					[]byte("unexpected generated file\n"),
-				)
-			},
-		},
-		{
-			name: "deleted generated file",
-			mutate: func(t *testing.T, repositoryRoot string) {
-				t.Helper()
-				if err := os.Remove(filepath.Join(repositoryRoot, generatedTypeScriptRelativePath)); err != nil {
-					t.Fatalf("delete generated TypeScript fixture: %v", err)
-				}
-			},
-		},
+	if output, err := fixture.run("ensure", "all"); err != nil {
+		t.Fatalf("first ensure: %v\n%s", err, output)
+	}
+	if output, err := fixture.run("ensure", "all"); err != nil {
+		t.Fatalf("second ensure: %v\n%s", err, output)
+	}
+	if got := fixture.generationCount(t, "go"); got != 1 {
+		t.Fatalf("unchanged Go generation count = %d, want 1", got)
+	}
+	if got := fixture.generationCount(t, "ts"); got != 1 {
+		t.Fatalf("unchanged TypeScript generation count = %d, want 1", got)
 	}
 
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			fixture := newProtobufGenerationFixture(t)
-			requireProtobufGeneratedOutputCheckPasses(t, fixture)
-
-			testCase.mutate(t, fixture.repositoryRoot)
-
-			if output, err := fixture.runCheck(); err == nil {
-				t.Fatalf("generated-output check accepted %s\n%s", testCase.name, output)
-			}
-		})
+	writeFixtureFile(
+		t,
+		fixture.repositoryRoot,
+		"shared/protoapi/gen/example.pb.go",
+		[]byte("manually edited\n"),
+	)
+	if output, err := fixture.run("ensure", "go"); err != nil {
+		t.Fatalf("repair output drift: %v\n%s", err, output)
+	}
+	if got := fixture.generationCount(t, "go"); got != 2 {
+		t.Fatalf("repaired Go generation count = %d, want 2", got)
 	}
 }
 
-func TestProtobufGenerationIsByteIdentical(t *testing.T) {
+func TestProtobufEnsureInvalidatesOnlyAffectedTarget(t *testing.T) {
 	fixture := newProtobufGenerationFixture(t)
+	if output, err := fixture.run("ensure", "all"); err != nil {
+		t.Fatalf("initial ensure: %v\n%s", err, output)
+	}
 
-	if output, err := fixture.run("generate"); err != nil {
-		t.Fatalf("first generation: %v\n%s", err, output)
+	writeFixtureFile(
+		t,
+		fixture.repositoryRoot,
+		"tools/protobuf/protoc-gen-kent-go-registry/main.go",
+		[]byte("changed generator\n"),
+	)
+	if output, err := fixture.run("ensure", "all"); err != nil {
+		t.Fatalf("ensure after Go generator change: %v\n%s", err, output)
 	}
-	firstGo := readFixtureFile(t, fixture.repositoryRoot, generatedGoRelativePath)
-	firstTypeScript := readFixtureFile(t, fixture.repositoryRoot, generatedTypeScriptRelativePath)
-
-	if output, err := fixture.run("generate"); err != nil {
-		t.Fatalf("second generation: %v\n%s", err, output)
+	if got := fixture.generationCount(t, "go"); got != 2 {
+		t.Fatalf("Go generation count = %d, want 2", got)
 	}
-	if got := readFixtureFile(t, fixture.repositoryRoot, generatedGoRelativePath); string(got) != string(firstGo) {
-		t.Fatal("two generations produced different Go bytes")
-	}
-	if got := readFixtureFile(t, fixture.repositoryRoot, generatedTypeScriptRelativePath); string(got) != string(firstTypeScript) {
-		t.Fatal("two generations produced different TypeScript bytes")
+	if got := fixture.generationCount(t, "ts"); got != 1 {
+		t.Fatalf("TypeScript generation count = %d, want 1", got)
 	}
 }
 
-func TestProtobufGenerationInterruptionRestoresBothOutputTrees(t *testing.T) {
+func TestProtobufEnsureSerializesConcurrentCalls(t *testing.T) {
 	fixture := newProtobufGenerationFixture(t)
-	originalGo := readFixtureFile(t, fixture.repositoryRoot, generatedGoRelativePath)
-	originalTypeScript := readFixtureFile(t, fixture.repositoryRoot, generatedTypeScriptRelativePath)
-	installInterruptingMv(t, fixture.fakeBinRoot)
+	var waitGroup sync.WaitGroup
+	errorsByCall := make(chan error, 2)
+	for range 2 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			_, err := fixture.run("ensure", "go")
+			errorsByCall <- err
+		}()
+	}
+	waitGroup.Wait()
+	close(errorsByCall)
+	for err := range errorsByCall {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := fixture.generationCount(t, "go"); got != 1 {
+		t.Fatalf("concurrent Go generation count = %d, want 1", got)
+	}
+}
 
-	if output, err := fixture.run("generate"); err == nil {
-		t.Fatalf("interrupted generation unexpectedly succeeded\n%s", output)
-	}
-	if got := readFixtureFile(t, fixture.repositoryRoot, generatedGoRelativePath); string(got) != string(originalGo) {
-		t.Fatal("interrupted generation did not restore the Go output tree")
-	}
-	if got := readFixtureFile(t, fixture.repositoryRoot, generatedTypeScriptRelativePath); string(got) != string(originalTypeScript) {
-		t.Fatal("interrupted generation did not restore the TypeScript output tree")
+func TestProtobufVerifyRejectsNondeterministicGeneration(t *testing.T) {
+	fixture := newProtobufGenerationFixture(t)
+	fixture.environment = append(fixture.environment, "KENT_PROTOBUF_TEST_NONDETERMINISTIC=1")
+	if output, err := fixture.run("verify", "go"); err == nil {
+		t.Fatalf("verify accepted nondeterministic generation\n%s", output)
 	}
 }
 
 type protobufGenerationFixture struct {
 	repositoryRoot string
-	expectedRoot   string
 	fakeBinRoot    string
+	stateRoot      string
+	environment    []string
 }
 
 func newProtobufGenerationFixture(t *testing.T) protobufGenerationFixture {
 	t.Helper()
-
 	sourceRoot := repositoryRoot(t)
 	fixtureRoot := t.TempDir()
 	fixture := protobufGenerationFixture{
 		repositoryRoot: filepath.Join(fixtureRoot, "repository"),
-		expectedRoot:   filepath.Join(fixtureRoot, "expected"),
 		fakeBinRoot:    filepath.Join(fixtureRoot, "bin"),
+		stateRoot:      filepath.Join(fixtureRoot, "state"),
 	}
-
-	if err := os.MkdirAll(filepath.Join(fixture.repositoryRoot, "scripts"), 0o755); err != nil {
-		t.Fatalf("create fixture scripts directory: %v", err)
+	for _, relativePath := range []string{
+		"api/proto",
+		"buf.yaml",
+		"buf.lock",
+		"buf.gen.go.yaml",
+		"buf.gen.ts.yaml",
+		"scripts/generate-protobuf.sh",
+		"tools/protobuf/cmd/protogen",
+		"tools/protobuf/internal/protogen",
+		"tools/protobuf/internal/registrygen",
+		"tools/protobuf/package.json",
+		"tools/protobuf/pnpm-lock.yaml",
+		"tools/protobuf/protoc-gen-kent-go-registry",
+		"tools/protobuf/protoc-gen-kent-ts-registry",
+		"tools/protobuf/go.mod",
+		"tools/protobuf/go.sum",
+	} {
+		copyFixturePath(t, sourceRoot, fixture.repositoryRoot, relativePath)
 	}
-	entrypoint, err := os.ReadFile(filepath.Join(sourceRoot, "scripts", "generate-protobuf.sh"))
-	if err != nil {
-		t.Fatalf("read Protobuf generation entry point: %v", err)
-	}
-	if err := os.WriteFile(
+	if err := os.Chmod(
 		filepath.Join(fixture.repositoryRoot, "scripts", "generate-protobuf.sh"),
-		entrypoint,
 		0o755,
 	); err != nil {
-		t.Fatalf("install Protobuf generation entry point in fixture: %v", err)
+		t.Fatal(err)
 	}
-	copyProtobufGenerationInputs(t, sourceRoot, fixture.repositoryRoot)
-
-	writeFixtureFile(t, fixture.expectedRoot, generatedGoRelativePath, []byte("generated Go content\n"))
-	writeFixtureFile(
-		t,
-		fixture.expectedRoot,
-		generatedTypeScriptRelativePath,
-		[]byte("generated TypeScript content\n"),
-	)
-	copyFixtureFile(t, fixture.expectedRoot, fixture.repositoryRoot, generatedGoRelativePath)
-	copyFixtureFile(t, fixture.expectedRoot, fixture.repositoryRoot, generatedTypeScriptRelativePath)
 	installFakeGo(t, fixture.fakeBinRoot)
-
+	fixture.environment = append(
+		environmentWithout("PATH", "KENT_PROTOBUF_REAL_GO", "KENT_PROTOBUF_TEST_STATE_ROOT"),
+		"PATH="+fixture.fakeBinRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"KENT_PROTOBUF_TEST_STATE_ROOT="+fixture.stateRoot,
+		"KENT_PROTOBUF_REAL_GO="+realGo(t),
+		"KENT_PROTOBUF_GO_COMMAND="+filepath.Join(fixture.fakeBinRoot, "go"),
+		"KENT_PROTOBUF_TS_GENERATOR="+filepath.Join(fixture.fakeBinRoot, "protoc-gen-es"),
+	)
 	return fixture
 }
 
-func (fixture protobufGenerationFixture) runCheck() ([]byte, error) {
-	return fixture.run("check")
-}
-
-func (fixture protobufGenerationFixture) run(mode string) ([]byte, error) {
+func (fixture protobufGenerationFixture) run(arguments ...string) ([]byte, error) {
 	command := exec.Command(
 		filepath.Join(fixture.repositoryRoot, "scripts", "generate-protobuf.sh"),
-		mode,
+		arguments...,
 	)
 	command.Dir = fixture.repositoryRoot
-	command.Env = append(
-		os.Environ(),
-		"PATH="+fixture.fakeBinRoot+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"KENT_PROTOBUF_TEST_EXPECTED_ROOT="+fixture.expectedRoot,
-		"KENT_PROTOBUF_TEST_MV_STATE="+filepath.Join(fixture.expectedRoot, "mv-state"),
-	)
+	command.Env = fixture.environment
 	return command.CombinedOutput()
 }
 
-func requireProtobufGeneratedOutputCheckPasses(t *testing.T, fixture protobufGenerationFixture) {
+func (fixture protobufGenerationFixture) generationCount(t *testing.T, target string) int {
 	t.Helper()
-	if output, err := fixture.runCheck(); err != nil {
-		t.Fatalf("check canonical generated-output fixture: %v\n%s", err, output)
+	content, err := os.ReadFile(filepath.Join(fixture.stateRoot, target+"-count"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	switch string(content) {
+	case "1\n":
+		return 1
+	case "2\n":
+		return 2
+	case "3\n":
+		return 3
+	default:
+		t.Fatalf("unexpected %s generation count %q", target, content)
+		return 0
 	}
 }
 
@@ -177,6 +181,12 @@ func installFakeGo(t *testing.T, binRoot string) {
 	const fakeGo = `#!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1:-}" == "run" && "${2:-}" == "./cmd/protogen" ]]; then
+	exec "$KENT_PROTOBUF_REAL_GO" "$@"
+fi
+if [[ "${1:-}" == "run" && "${2:-}" == "./shared/apicontract/cmd/migrationlint" ]]; then
+	exit 0
+fi
 if [[ "${1:-}" == "test" ]]; then
 	if [[ "${KENT_PROTOBUF_TEST_DESCRIPTOR_POLICY_FAILURE:-0}" == "1" ]]; then
 		echo "invalid descriptor metadata" >&2
@@ -184,36 +194,30 @@ if [[ "${1:-}" == "test" ]]; then
 	fi
 	exit 0
 fi
-
-if [[ "${1:-}" == "run" && "${2:-}" == "./shared/apicontract/cmd/migrationlint" ]]; then
-	exit 0
-fi
-
-if [[ "${1:-}" != "tool" || "${2:-}" != "buf" ]]; then
-	echo "fake go supports only: go test, go run migrationlint, or go tool buf" >&2
-	exit 2
-fi
-case "${3:-}" in
-lint)
+if [[ "${1:-}" == "tool" && "${2:-}" == "buf" && "${3:-}" == "lint" ]]; then
 	if [[ "${KENT_PROTOBUF_TEST_LINT_FAILURE:-0}" == "1" ]]; then
 		echo "invalid schema" >&2
 		exit 1
 	fi
 	exit 0
-	;;
-generate)
-	shift 3
-	;;
-*)
-	echo "fake go supports only: go tool buf lint or generate" >&2
+fi
+if [[ "${1:-}" != "tool" || "${2:-}" != "buf" || "${3:-}" != "generate" ]]; then
+	echo "unexpected fake go invocation: $*" >&2
 	exit 2
-	;;
-esac
+fi
 
+target=
 output=
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--output | -o)
+	--template)
+		case "${2:-}" in
+		*buf.gen.go.yaml) target=go ;;
+		*buf.gen.ts.yaml) target=ts ;;
+		esac
+		shift 2
+		;;
+	--output)
 		output="${2:-}"
 		shift 2
 		;;
@@ -222,124 +226,137 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
-
-if [[ -z "$output" ]]; then
-	echo "buf generate output directory is required" >&2
+if [[ -z "$target" || -z "$output" ]]; then
+	echo "missing target or output" >&2
 	exit 2
 fi
-
-mkdir -p "$output"
-cp -R "$KENT_PROTOBUF_TEST_EXPECTED_ROOT/." "$output/"
+mkdir -p "$KENT_PROTOBUF_TEST_STATE_ROOT"
+count_file="$KENT_PROTOBUF_TEST_STATE_ROOT/${target}-count"
+count=0
+if [[ -f "$count_file" ]]; then
+	read -r count < "$count_file"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$count_file"
+if [[ "${KENT_PROTOBUF_TEST_NONDETERMINISTIC:-0}" == "1" ]]; then
+	content="generated-$count"
+else
+	content="generated"
+fi
+case "$target" in
+go)
+	path="$output/shared/protoapi/gen/example.pb.go"
+	;;
+ts)
+	path="$output/apps/desktop/packages/server-api-contract/src/gen/example_pb.ts"
+	;;
+esac
+mkdir -p "$(dirname "$path")"
+printf '%s\n' "$content" > "$path"
 `
 	writeFixtureFile(t, binRoot, "go", []byte(fakeGo))
 	if err := os.Chmod(filepath.Join(binRoot, "go"), 0o755); err != nil {
-		t.Fatalf("make fake go executable: %v", err)
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, binRoot, "protoc-gen-es", []byte("#!/usr/bin/env bash\nexit 0\n"))
+	if err := os.Chmod(filepath.Join(binRoot, "protoc-gen-es"), 0o755); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func installInterruptingMv(t *testing.T, binRoot string) {
+func realGo(t *testing.T) string {
 	t.Helper()
-	const interruptingMv = `#!/usr/bin/env bash
-set -euo pipefail
-
-state_file="${KENT_PROTOBUF_TEST_MV_STATE:?}"
-call_count=0
-if [[ -f "$state_file" ]]; then
-	read -r call_count < "$state_file"
-fi
-call_count=$((call_count + 1))
-echo "$call_count" > "$state_file"
-
-if [[ "$call_count" -eq 4 ]]; then
-	kill -TERM "$PPID"
-	sleep 1
-	exit 143
-fi
-
-exec /bin/mv "$@"
-`
-	writeFixtureFile(t, binRoot, "mv", []byte(interruptingMv))
-	if err := os.Chmod(filepath.Join(binRoot, "mv"), 0o755); err != nil {
-		t.Fatalf("make interrupting mv executable: %v", err)
+	path, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
 	}
+	return path
 }
 
-func copyProtobufGenerationInputs(t *testing.T, sourceRoot string, destinationRoot string) {
-	t.Helper()
-	for _, relativePath := range []string{
-		"api/proto",
-		"buf.yaml",
-		"buf.gen.yaml",
-		"buf.lock",
-		"go.mod",
-		"tools/protobuf/go.mod",
-		"tools/protobuf/go.sum",
-	} {
-		sourcePath := filepath.Join(sourceRoot, relativePath)
-		info, err := os.Stat(sourcePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
+func environmentWithout(names ...string) []string {
+	excluded := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		excluded[name] = struct{}{}
+	}
+	result := make([]string, 0, len(os.Environ()))
+	for _, item := range os.Environ() {
+		name := item
+		for index, character := range item {
+			if character == '=' {
+				name = item[:index]
+				break
 			}
-			t.Fatalf("inspect Protobuf generation input %s: %v", relativePath, err)
 		}
-		if info.IsDir() {
-			copyFixtureDirectory(t, sourcePath, filepath.Join(destinationRoot, relativePath))
-			continue
+		if _, exists := excluded[name]; !exists {
+			result = append(result, item)
 		}
-		copyFixtureFile(t, sourceRoot, destinationRoot, relativePath)
 	}
+	return result
 }
 
-func copyFixtureDirectory(t *testing.T, sourceRoot string, destinationRoot string) {
+func copyFixturePath(t *testing.T, sourceRoot, destinationRoot, relativePath string) {
 	t.Helper()
-	if err := filepath.WalkDir(sourceRoot, func(sourcePath string, entry os.DirEntry, walkErr error) error {
+	sourcePath := filepath.Join(sourceRoot, relativePath)
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		content, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFixtureFile(t, destinationRoot, relativePath, content)
+		if info.Mode()&0o111 != 0 {
+			if err := os.Chmod(filepath.Join(destinationRoot, relativePath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return
+	}
+	if err := filepath.WalkDir(sourcePath, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-		relativePath, err := filepath.Rel(sourceRoot, sourcePath)
-		if err != nil {
-			return err
-		}
-		destinationPath := filepath.Join(destinationRoot, relativePath)
 		if entry.IsDir() {
-			return os.MkdirAll(destinationPath, 0o755)
+			return nil
 		}
-		content, err := os.ReadFile(sourcePath)
+		relative, err := filepath.Rel(sourceRoot, path)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(destinationPath, content, 0o644)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		writeFixtureFile(t, destinationRoot, relative, content)
+		return nil
 	}); err != nil {
-		t.Fatalf("copy Protobuf generation input directory %s: %v", sourceRoot, err)
+		t.Fatal(err)
 	}
 }
 
-func copyFixtureFile(t *testing.T, sourceRoot string, destinationRoot string, relativePath string) {
+func copyFixtureFile(t *testing.T, sourceRoot, destinationRoot, relativePath string) {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join(sourceRoot, relativePath))
-	if err != nil {
-		t.Fatalf("read fixture file %s: %v", relativePath, err)
-	}
-	writeFixtureFile(t, destinationRoot, relativePath, content)
+	copyFixturePath(t, sourceRoot, destinationRoot, relativePath)
 }
 
-func writeFixtureFile(t *testing.T, root string, relativePath string, content []byte) {
+func writeFixtureFile(t *testing.T, root, relativePath string, content []byte) {
 	t.Helper()
 	path := filepath.Join(root, relativePath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("create fixture directory for %s: %v", relativePath, err)
+		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("write fixture file %s: %v", relativePath, err)
+		t.Fatal(err)
 	}
 }
 
-func readFixtureFile(t *testing.T, root string, relativePath string) []byte {
+func readFixtureFile(t *testing.T, root, relativePath string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, relativePath))
 	if err != nil {
-		t.Fatalf("read fixture file %s: %v", relativePath, err)
+		t.Fatal(err)
 	}
 	return content
 }
@@ -352,7 +369,7 @@ func repositoryRoot(t *testing.T) string {
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(filename), ".."))
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
-		t.Fatalf("resolve repository root %s: %v", root, err)
+		t.Fatal(err)
 	}
 	return root
 }
