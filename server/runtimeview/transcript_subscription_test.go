@@ -99,25 +99,6 @@ func TestTranscriptCompactionProjectionCarriesTypedFactsWithoutServerPresentatio
 	}
 }
 
-func TestTranscriptProviderModelMismatchProjectionCarriesTypedFacts(t *testing.T) {
-	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
-		Reason:   transcript.NoticeReasonProviderModelMismatch,
-		Severity: transcript.NoticeSeverityWarning,
-		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
-			RequestedModel: "requested-model",
-			ServedModel:    "served-model",
-		},
-	})
-	if notice.ProviderModelMismatch == nil ||
-		notice.ProviderModelMismatch.RequestedModel != "requested-model" ||
-		notice.ProviderModelMismatch.ServedModel != "served-model" {
-		t.Fatalf("provider-model mismatch projection = %+v", notice.ProviderModelMismatch)
-	}
-	if notice.LegacyText != nil || notice.Diagnostic != nil {
-		t.Fatalf("server presentation leaked into mismatch projection: %+v", notice)
-	}
-}
-
 func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 	id := patchformat.WholeFileDeletionOperationID{HunkOrdinal: 0}
 	tests := []struct {

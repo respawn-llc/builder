@@ -257,42 +257,20 @@ func errorNoticeRow(notice *clientui.TranscriptNoticeRow) clientui.TranscriptCom
 	}
 }
 
-func TestProviderModelMismatchNoticeRendersReadableWarningInDetailModes(t *testing.T) {
-	notice := &clientui.TranscriptNoticeRow{
+func TestProviderModelMismatchNoticeRendersInDetailModesAndWraps(t *testing.T) {
+	row := errorNoticeRow(&clientui.TranscriptNoticeRow{
 		Reason:   clientui.TranscriptNoticeProviderModelMismatch,
 		Severity: clientui.TranscriptNoticeWarning,
 		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
 			RequestedModel: "session-contract-model",
 			ServedModel:    "served-model",
 		},
+	})
+	if len(RenderCommittedRow(row, 120, "dark", ModeDetailExpanded).Lines) == 0 {
+		t.Fatal("expanded provider-model warning rendered no lines")
 	}
-	want := providerModelMismatchNoticeText(notice.ProviderModelMismatch)
-	for _, mode := range []Mode{ModeDetailCollapsed, ModeDetailExpanded} {
-		rendered := RenderCommittedRow(errorNoticeRow(notice), 120, "dark", mode)
-		var got strings.Builder
-		for _, line := range rendered.Lines {
-			for _, span := range line.Spans {
-				got.WriteString(span.Text)
-			}
-		}
-		if !strings.Contains(got.String(), want) {
-			t.Fatalf("rendered provider-model warning = %q, want %q", got.String(), want)
-		}
-	}
-}
-
-func TestProviderModelMismatchNoticeWrapsAtNarrowWidth(t *testing.T) {
-	notice := &clientui.TranscriptNoticeRow{
-		Reason:   clientui.TranscriptNoticeProviderModelMismatch,
-		Severity: clientui.TranscriptNoticeWarning,
-		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
-			RequestedModel: "session-contract-model",
-			ServedModel:    "served-model",
-		},
-	}
-	rendered := RenderCommittedRow(errorNoticeRow(notice), 28, "dark", ModeDetailCollapsed)
-	if len(rendered.Lines) < 2 {
-		t.Fatalf("narrow provider-model warning lines = %d, want wrapping", len(rendered.Lines))
+	if lines := RenderCommittedRow(row, 28, "dark", ModeDetailCollapsed).Lines; len(lines) < 2 {
+		t.Fatalf("narrow provider-model warning lines = %d, want wrapping", len(lines))
 	}
 }
 

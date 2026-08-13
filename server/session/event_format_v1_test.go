@@ -555,15 +555,15 @@ func TestEventLogV1ProviderModelMismatchNoticeRoundTrip(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("create provider-model mismatch record: %v", err)
+		t.Fatal(err)
 	}
 	line, err := encodeEventRecordV1(record)
 	if err != nil {
-		t.Fatalf("encode provider-model mismatch record: %v", err)
+		t.Fatal(err)
 	}
 	decoded, err := decodeEventRecordV1(line)
 	if err != nil {
-		t.Fatalf("decode provider-model mismatch record: %v", err)
+		t.Fatal(err)
 	}
 	entry := mustEventRecordPayload(decoded).(LocalEntryRecord)
 	if entry.Text != nil || entry.ProviderModelMismatch == nil ||

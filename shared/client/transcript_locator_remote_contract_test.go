@@ -84,11 +84,10 @@ func TestRemoteTranscriptSubscriptionRejectsMalformedLocatorPayload(t *testing.T
 				Phase:  "final_answer",
 			},
 		}))
-		params := protocol.SessionTranscriptEventParams{Message: message}
 		if err := websocket.JSON.Send(ws, protocol.Request{
 			JSONRPC: protocol.JSONRPCVersion,
 			Method:  protocol.MethodSessionTranscriptEvent,
-			Params:  mustJSON(t, params),
+			Params:  mustJSON(t, protocol.SessionTranscriptEventParams{Message: message}),
 		}); err != nil {
 			t.Fatalf("send transcript event: %v", err)
 		}

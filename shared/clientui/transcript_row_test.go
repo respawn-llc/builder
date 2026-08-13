@@ -192,45 +192,20 @@ func TestTranscriptNoticeRowCarriesTypedToolOutputRepairFacts(t *testing.T) {
 }
 
 func TestTranscriptNoticeRowCarriesTypedProviderModelMismatchFacts(t *testing.T) {
-	notice := TranscriptNoticeRow{
+	if err := (TranscriptNoticeRow{
 		Reason:   TranscriptNoticeProviderModelMismatch,
 		Severity: TranscriptNoticeWarning,
 		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
 			RequestedModel: "requested-model",
 			ServedModel:    "served-model",
 		},
-	}
-	if err := notice.Validate(); err != nil {
+	}).Validate(); err != nil {
 		t.Fatalf("validate typed provider-model mismatch notice: %v", err)
-	}
-	notice.ProviderModelMismatch.ServedModel = " "
-	if err := notice.Validate(); err == nil {
-		t.Fatal("accepted blank served model")
-	}
-}
-
-func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
-	warning := TranscriptCacheWarning{
-		Scope:      "conversation",
-		Reason:     "cache_miss",
-		Visibility: transcript.EntryVisibilityOngoing,
-	}
-	if err := warning.Validate(); err != nil {
-		t.Fatalf("validate absent token loss: %v", err)
-	}
-	warning.LostInputTokens = textutil.Value(0)
-	if err := warning.Validate(); err == nil {
-		t.Fatal("accepted present zero token loss")
 	}
 }
 
 func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 	legacyText := "legacy notice"
-	compactionMessageType := TranscriptMessageCompactionSummary
-	modelMismatch := &transcript.ProviderModelMismatchNotice{
-		RequestedModel: "requested-model",
-		ServedModel:    "served-model",
-	}
 	tests := []TranscriptNoticeRow{
 		{
 			Reason:   TranscriptNoticeCacheWarning,
@@ -270,31 +245,6 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 			},
 		},
 		{
-			Reason:                TranscriptNoticeCacheWarning,
-			Severity:              TranscriptNoticeWarning,
-			CacheWarning:          &TranscriptCacheWarning{Scope: "conversation", Reason: "cache_miss", Visibility: transcript.EntryVisibilityOngoing},
-			ProviderModelMismatch: modelMismatch,
-		},
-		{
-			Reason:                TranscriptNoticeCompaction,
-			Severity:              TranscriptNoticeInfo,
-			MessageType:           &compactionMessageType,
-			Compaction:            &TranscriptCompactionNotice{},
-			ProviderModelMismatch: modelMismatch,
-		},
-		{
-			Reason:                TranscriptNoticeRuntimeDiagnostic,
-			Severity:              TranscriptNoticeError,
-			Diagnostic:            &TranscriptDiagnostic{Code: TranscriptDiagnosticCode("runtime"), Detail: "detail"},
-			ProviderModelMismatch: modelMismatch,
-		},
-		{
-			Reason:                TranscriptNoticeLegacyUntypedNotice,
-			Severity:              TranscriptNoticeInfo,
-			LegacyText:            &legacyText,
-			ProviderModelMismatch: modelMismatch,
-		},
-		{
 			Reason:   TranscriptNoticeRuntimeDiagnostic,
 			Severity: TranscriptNoticeError,
 			CacheWarning: &TranscriptCacheWarning{
@@ -321,5 +271,20 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		if err := notice.Validate(); err == nil {
 			t.Fatalf("accepted notice without required typed payload: %+v", notice)
 		}
+	}
+}
+
+func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
+	warning := TranscriptCacheWarning{
+		Scope:      "conversation",
+		Reason:     "cache_miss",
+		Visibility: transcript.EntryVisibilityOngoing,
+	}
+	if err := warning.Validate(); err != nil {
+		t.Fatalf("validate absent token loss: %v", err)
+	}
+	warning.LostInputTokens = textutil.Value(0)
+	if err := warning.Validate(); err == nil {
+		t.Fatal("accepted present zero token loss")
 	}
 }

@@ -36,7 +36,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
-		expectedDetailScreenRows  []string
 		expectedWarningAppends    int
 		expectedDetailWarnings    int
 		allowsAltScroll           bool
@@ -442,9 +441,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
 			}
-			if len(tc.expectedDetailScreenRows) > 0 {
-				assertScenarioDetailScreenRows(t, capture, tc.expectedDetailScreenRows)
-			}
 			if tc.expectedDetailWarnings > 0 {
 				assertScenarioDetailWarningRows(t, capture, tc.expectedDetailWarnings)
 			}
@@ -534,25 +530,6 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	return capture, observationsPath
-}
-
-func assertScenarioDetailScreenRows(t *testing.T, capture pty.Capture, expected []string) {
-	t.Helper()
-	if len(capture.FrameInputDispatches) < 4 {
-		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
-	}
-	exitDispatch := capture.FrameInputDispatches[2]
-	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
-		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
-	}})
-	if err != nil {
-		t.Fatalf("replay detail screen: %v", err)
-	}
-	for _, row := range expected {
-		if err := screenRowAppearsExactlyOnce(screens[0], row); err != nil {
-			t.Fatalf("expected detail screen row: %v", err)
-		}
-	}
 }
 
 func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected int) {

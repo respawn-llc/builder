@@ -32,24 +32,6 @@ func TestHasHTTPStatus(t *testing.T) {
 	}
 }
 
-func TestProviderAPIErrorDiagnosticsDoNotChangeClassification(t *testing.T) {
-	requestID := "request-1"
-	diagnostic := "token rejected"
-	err := &ProviderAPIError{
-		ProviderID:              "chatgpt-codex",
-		StatusCode:              401,
-		Code:                    UnifiedErrorCodeAuthentication,
-		ProviderRequestID:       &requestID,
-		AuthorizationDiagnostic: &diagnostic,
-	}
-	if !IsAuthenticationError(err) {
-		t.Fatal("diagnostic authentication error lost authentication classification")
-	}
-	if !IsNonRetriableModelError(err) {
-		t.Fatal("diagnostic authentication error changed retry classification")
-	}
-}
-
 func TestUserFacingAuthenticationErrorIncludesProviderDiagnosticsWhenPresent(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -63,13 +45,17 @@ func TestUserFacingAuthenticationErrorIncludesProviderDiagnosticsWhenPresent(t *
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := UserFacingError(&ProviderAPIError{
+			providerErr := &ProviderAPIError{
 				ProviderID:              "chatgpt-codex",
 				StatusCode:              401,
 				Code:                    UnifiedErrorCodeAuthentication,
 				ProviderRequestID:       test.requestID,
 				AuthorizationDiagnostic: test.diagnostic,
-			})
+			}
+			if !IsAuthenticationError(providerErr) || !IsNonRetriableModelError(providerErr) {
+				t.Fatal("provider diagnostics changed authentication or retry classification")
+			}
+			got := UserFacingError(providerErr)
 			base := authenticationFailedWarning("chatgpt-codex", 401)
 			if !strings.HasPrefix(got, base) {
 				t.Fatalf("user-facing error = %q, want actionable authentication prefix %q", got, base)
