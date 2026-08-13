@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -799,9 +800,9 @@ func TestResponsesStubServesCompactInputTokenAndModelMetadataTransportRoutes(t *
 	}
 	t.Cleanup(compact.Close)
 	compactTransport := llm.NewHTTPTransport(oauthStaticTransportAuth{})
-	compactTransport.BaseURL = compact.URL()
+	compactTransport.BaseURL = "https://chatgpt.com/backend-api/codex"
 	compactTransport.BaseURLExplicit = true
-	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	compactTransport.Client = newCanonicalOAuthStubClient(t, compact)
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:      "gpt-5",
 		InputItems: llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}}),
@@ -860,6 +861,28 @@ func newStubTransport(stub *blackbox.ResponsesStub) *llm.HTTPTransport {
 	transport.BaseURL = stub.URL()
 	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	return transport
+}
+
+func newCanonicalOAuthStubClient(t *testing.T, stub *blackbox.ResponsesStub) *http.Client {
+	t.Helper()
+	target, err := url.Parse(stub.URL())
+	if err != nil {
+		t.Fatalf("parse Responses stub URL: %v", err)
+	}
+	return &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		cloned := request.Clone(request.Context())
+		cloned.URL.Scheme = target.Scheme
+		cloned.URL.Host = target.Host
+		cloned.URL.Path = target.Path + strings.TrimPrefix(request.URL.Path, "/backend-api/codex")
+		cloned.Host = target.Host
+		return (&http.Transport{Proxy: nil}).RoundTrip(cloned)
+	})}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 type unknownLengthReader struct {
