@@ -1215,7 +1215,10 @@ func TestInProcessRunPromptClientUsesSelectedSessionContinuationContext(t *testi
 	if got := store.Meta().Continuation; got == nil || got.OpenAIBaseURL == nil || *got.OpenAIBaseURL != server.URL {
 		t.Fatalf("expected persisted continuation preserved, got %+v", got)
 	}
-	replayed, err := client.RunPrompt(context.Background(), request, nil)
+	replayRequest := request
+	replayRequest.ClientRequestID = "continuation-direct-1"
+	replayRequest.Prompt = "hello"
+	replayed, err := client.RunPrompt(context.Background(), replayRequest, nil)
 	if err != nil {
 		t.Fatalf("replayed RunPrompt: %v", err)
 	}
