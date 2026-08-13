@@ -1193,6 +1193,44 @@ func TestGenerateStream_PrefersPhaseResolvedAssistantTextOverRawDeltaConcatenati
 	}
 }
 
+func TestGenerateStream_EmitsCommentaryThenFinalDeltasWithTheirOutputItemPhases(t *testing.T) {
+	transport := newOpenAIStreamTestTransport(t,
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":0,"delta":"Checking sources."}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking sources."}]}}`,
+		`{"type":"response.output_item.added","output_index":1,"item":{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer","content":[]}}`,
+		`{"type":"response.output_text.delta","output_index":1,"delta":"Final answer."}`,
+		`{"type":"response.output_item.done","output_index":1,"item":{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Final answer."}]}}`,
+		`{"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":4,"total_tokens":6},"output":[{"id":"msg_commentary","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Checking sources."}]},{"id":"msg_final","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Final answer."}]}]}}`,
+		`[DONE]`,
+	)
+
+	var deltas []AssistantDelta
+	resp, err := transport.GenerateStreamWithEvents(
+		context.Background(),
+		OpenAIRequest{SessionID: textutil.Value("test-session"), ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"},
+		StreamCallbacks{OnAssistantDelta: func(delta AssistantDelta) {
+			deltas = append(deltas, delta)
+		}},
+	)
+	if err != nil {
+		t.Fatalf("GenerateStream failed: %v", err)
+	}
+	if len(deltas) != 2 ||
+		deltas[0].Text != "Checking sources." ||
+		deltas[0].Phase != MessagePhaseCommentary ||
+		deltas[1].Text != "Final answer." ||
+		deltas[1].Phase != MessagePhaseFinal {
+		t.Fatalf("assistant deltas = %+v, want commentary then final output-item phases", deltas)
+	}
+	if optionalStringValue(resp.AssistantText) != "Final answer." {
+		t.Fatalf("assistant text = %q, want final output item", optionalStringValue(resp.AssistantText))
+	}
+	if !resp.ProviderPhase.Is(MessagePhaseFinal) {
+		t.Fatalf("provider phase = %#v, want %q", resp.ProviderPhase, MessagePhaseFinal)
+	}
+}
+
 func TestGenerateStream_RepairsMissingAssistantOutputItemAtNonZeroOutputIndex(t *testing.T) {
 	transport := newOpenAIStreamTestTransport(t,
 		`{"type":"response.output_item.done","output_index":2,"item":{"id":"msg_2","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}}`,
