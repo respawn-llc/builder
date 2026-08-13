@@ -47,13 +47,12 @@ message ProviderFact {
   string role = 2 [(buf.validate.field).string.min_len = 1];
   bool supports_responses_api = 3;
   bool supports_native_compaction = 4;
-  bool supports_input_token_count = 5;
-  bool supports_prompt_cache_key = 6;
-  bool supports_native_web_search = 7;
-  bool supports_reasoning_encryption = 8;
-  bool supports_server_side_context_edit = 9;
-  bool is_openai_first_party = 10;
-  bool supports_provider_verbosity = 11;
+  bool supports_prompt_cache_key = 5;
+  bool supports_native_web_search = 6;
+  bool supports_reasoning_encryption = 7;
+  bool supports_server_side_context_edit = 8;
+  bool is_openai_first_party = 9;
+  bool supports_provider_verbosity = 10;
 }
 
 message ProviderFacts {

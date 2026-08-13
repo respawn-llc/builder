@@ -5,6 +5,7 @@ package kent.api.session_launch;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
+import "kent/api/runtime/runtime.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
@@ -465,6 +466,10 @@ message WorkspaceChatDraftRequest {
 
 message WorkspaceChatDraftSuccess {
   string message = 1;
+  kent.api.runtime.GoalAvailability goal_availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
 message WorkspaceChatDraftError {

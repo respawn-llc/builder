@@ -39,15 +39,17 @@ func actualTargetWireExceptions() []WireException {
 		wireException[serverapi.ProjectBinding]("kent.api.project.ProjectMutationBinding", WireExceptionFieldReshape),
 		wireException[serverapi.ProjectDefaultWorkspaceSetRequest]("kent.api.project.SetDefaultWorkspaceRequest", WireExceptionFieldReshape),
 		wireException[serverapi.ProjectHomeSummary]("kent.api.project.ProjectHomeSummary", WireExceptionFieldReshape),
-		wireException[serverapi.ProjectWorkspaceSummary]("kent.api.project.ProjectWorkspaceCatalogSummary", WireExceptionFieldReshape),
 		wireException[serverapi.ProjectWorkspaceSummary]("kent.api.workflow_task.TaskSourceWorkspace", WireExceptionFieldReshape),
 		wireException[serverapi.ProjectHomeListResponse]("kent.api.project.ProjectHomeListSuccess", WireExceptionFieldReshape),
+		wireException[serverapi.ProjectWorkspaceGetRequest]("kent.api.project.GetProjectWorkspaceRequest", WireExceptionOneofReshape),
 		wireException[serverapi.ProjectWorkspaceUnlinkRequest]("kent.api.project.UnlinkWorkspaceRequest", WireExceptionFieldReshape),
 		wireException[protocol.PromptFollowUpEventParams]("kent.api.prompt.FollowUpEvent", WireExceptionFieldReshape),
 		wireException[serverapi.RunPromptProgress]("kent.api.run_prompt.ProgressEvent", WireExceptionOneofReshape),
 		wireException[serverapi.RunPromptResponse]("kent.api.run_prompt.Success", WireExceptionFieldReshape),
 		wireException[serverapi.RuntimeLiveWaitResponse]("kent.api.runtime.LiveWaitSuccess", WireExceptionOneofReshape),
 		wireException[serverapi.RuntimeLiveWatchOutcome]("kent.api.prompt.LiveWatchOutcome", WireExceptionOneofReshape),
+		wireException[serverapi.RuntimeGoalShowResponse]("kent.api.runtime.GoalShowSuccess", WireExceptionFieldReshape),
+		wireException[clientui.RuntimeGoal]("kent.api.runtime.GoalView", WireExceptionFieldReshape),
 		wireException[runtimeinput.Input]("kent.api.runtime.UserTurnInput", WireExceptionFieldReshape),
 		wireException[serverapi.RuntimeSubmitUserTurnResponse]("kent.api.runtime.SubmitUserTurnSuccess", WireExceptionOneofReshape),
 		wireException[serverapi.ServerReadinessResponse]("kent.api.server.GetReadinessSuccess", WireExceptionFieldReshape),
@@ -133,7 +135,10 @@ func actualTargetScalarMappings() []WireScalarMapping {
 		scalarMapping("kent.api.project.ProjectDeleteBlocker", "count", protoreflect.Int32Kind),
 		scalarMapping("kent.api.project.ProjectHomeListRequest", "page_size", protoreflect.Int32Kind),
 		scalarMapping("kent.api.project.ProjectSummary", "session_count", protoreflect.Int32Kind),
-		scalarMapping("kent.api.project.ProjectWorkspacePageRequest", "page_size", protoreflect.Int32Kind),
+		scalarMapping("kent.api.project.ProjectWorkspaceListRequest", "limit", protoreflect.Int32Kind),
+		scalarMapping("kent.api.project.ProjectWorkspaceListRequest", "offset", protoreflect.Int32Kind),
+		scalarMapping("kent.api.project.ListProjectWorkspacesSuccess", "next_offset", protoreflect.Int32Kind),
+		scalarMapping("kent.api.project.ListProjectWorkspacesSuccess", "offset", protoreflect.Int32Kind),
 		scalarMapping("kent.api.project.ProjectWorkspaceSummary", "session_count", protoreflect.Int32Kind),
 		scalarMapping("kent.api.project.SessionPageRequest", "limit", protoreflect.Int32Kind),
 		scalarMapping("kent.api.project.SessionPageRequest", "offset", protoreflect.Int32Kind),
@@ -197,12 +202,9 @@ func actualTargetPresenceMappings() []WirePresenceMapping {
 	result = append(result, presenceMappingsAs[serverapi.OnboardingSupervisorChoice](false, "kent.api.onboarding.SupervisorChoice", "model", "thinking")...)
 	result = append(result, presenceMappings[serverapi.OnboardingThinkingChoice]("kent.api.onboarding.ThinkingChoice", "level", "value")...)
 	result = append(result, presenceMappings[serverapi.ProjectCreateRequest]("kent.api.project.CreateProjectRequest", "project_key")...)
-	result = append(result, presenceMappings[serverapi.ProjectEditGetRequest]("kent.api.project.ProjectWorkspacePageRequest", "page_size", "page_token")...)
-	result = append(result, presenceMappings[serverapi.ProjectEditGetResponse]("kent.api.project.GetProjectEditSuccess", "next_page_token")...)
 	result = append(result, presenceMappings[serverapi.ProjectHomeListRequest]("kent.api.project.ProjectHomeListRequest", "page_size", "page_token")...)
 	result = append(result, presenceMappings[serverapi.ProjectUpdateRequest]("kent.api.project.UpdateProjectRequest", "project_key")...)
-	result = append(result, presenceMappings[serverapi.ProjectWorkspaceListRequest]("kent.api.project.ProjectWorkspacePageRequest", "page_size", "page_token")...)
-	result = append(result, presenceMappings[serverapi.ProjectWorkspaceListResponse]("kent.api.project.ListProjectWorkspacesSuccess", "next_page_token")...)
+	result = append(result, presenceMappings[serverapi.ProjectWorkspaceListResponse]("kent.api.project.ListProjectWorkspacesSuccess", "next_offset")...)
 	result = append(result, presenceMappings[serverapi.ProjectWorkspaceUnlinkBlocker]("kent.api.project.WorkspaceUnlinkBlocker", "count")...)
 	result = append(result, presenceMappings[serverapi.RuntimeAppendCommittedEntryRequest]("kent.api.transcript.AppendCommittedEntryRequest", "notice_id", "visibility")...)
 	result = append(result, presenceMappings[serverapi.RuntimeGoalSetRequest]("kent.api.runtime.GoalSetRequest", "run_id", "step_id")...)

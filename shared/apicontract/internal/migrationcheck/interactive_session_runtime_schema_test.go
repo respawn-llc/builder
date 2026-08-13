@@ -136,7 +136,7 @@ func TestInteractiveSessionRuntimeLegacyFieldCoverageAndReshapesAreExact(t *test
 		{(&runtimepb.ActiveStep{}).ProtoReflect().Descriptor(), []protoreflect.Name{"run_id", "step_id", "active_kind"}},
 		{(&runtimepb.Activity{}).ProtoReflect().Descriptor(), []protoreflect.Name{"state", "active_step", "queue_accepting", "diagnostic_recovery"}},
 		{(&runtimepb.ContextUsage{}).ProtoReflect().Descriptor(), []protoreflect.Name{"used_tokens", "window_tokens", "cache_hit_percent"}},
-		{(&runtimepb.GoalView{}).ProtoReflect().Descriptor(), []protoreflect.Name{"id", "objective", "status", "suspended"}},
+		{(&runtimepb.GoalView{}).ProtoReflect().Descriptor(), []protoreflect.Name{"id", "objective", "status", "created_at", "updated_at", "availability", "suspended"}},
 		{(&runtimepb.WorkflowSessionStatus{}).ProtoReflect().Descriptor(), []protoreflect.Name{"task_id", "workflow_id"}},
 		{(&runtimepb.Status{}).ProtoReflect().Descriptor(), []protoreflect.Name{
 			"reviewer_frequency", "reviewer_enabled", "auto_compaction_enabled", "questions_enabled",
@@ -187,7 +187,8 @@ func TestInteractiveSessionRuntimeLegacyFieldCoverageAndReshapesAreExact(t *test
 		{(&runtimepb.GoalMutationRequest{}).ProtoReflect().Descriptor(), []protoreflect.Name{"session_id", "actor", "run_id", "step_id"}},
 		{(&runtimepb.GoalSetRequest{}).ProtoReflect().Descriptor(), []protoreflect.Name{"session_id", "objective", "actor", "run_id", "step_id"}},
 		{(&runtimepb.GoalClearRequest{}).ProtoReflect().Descriptor(), []protoreflect.Name{"session_id", "actor"}},
-		{(&runtimepb.GoalSuccess{}).ProtoReflect().Descriptor(), []protoreflect.Name{"goal"}},
+		{(&runtimepb.GoalShowSuccess{}).ProtoReflect().Descriptor(), []protoreflect.Name{"goal", "availability"}},
+		{(&runtimepb.GoalMutationSuccess{}).ProtoReflect().Descriptor(), []protoreflect.Name{"goal", "pending", "availability"}},
 	} {
 		assertExactFields(t, fixture.message, fixture.fields...)
 	}

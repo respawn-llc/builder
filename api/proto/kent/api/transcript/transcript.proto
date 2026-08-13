@@ -190,12 +190,20 @@ message UserRow {
   string text = 2 [(buf.validate.field).string.min_len = 1];
   optional string condensed_text = 3 [(buf.validate.field).string.min_len = 1];
   optional string rollback_target_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional int64 committed_at_unix_ms = 5 [(buf.validate.field).int64 = {
+    gte: -8640000000000000
+    lte: 8640000000000000
+  }];
 }
 
 message AssistantRow {
   string step_id = 1 [(buf.validate.field).string.uuid = true];
   optional string stream_id = 2 [(buf.validate.field).string.uuid = true];
   AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
+  optional int64 committed_at_unix_ms = 4 [(buf.validate.field).int64 = {
+    gte: -8640000000000000
+    lte: 8640000000000000
+  }];
 }
 
 message ToolRow {
@@ -448,8 +456,24 @@ message ContextUsage {
   optional int32 cache_hit_percent = 3 [(buf.validate.field).int32 = {gte: 0 lte: 100}];
 }
 
+message GoalView {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  kent.api.runtime.GoalStatus status = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+  bool suspended = 6;
+}
+
 message GoalStatus {
-  optional kent.api.runtime.GoalView goal = 1;
+  optional GoalView goal = 1;
+  optional kent.api.runtime.GoalAvailability availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
 message BackgroundActivity {

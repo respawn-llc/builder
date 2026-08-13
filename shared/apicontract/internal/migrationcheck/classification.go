@@ -28,6 +28,7 @@ const (
 	ScalarOpenValidatedString ScalarClassificationKind = "open_validated_string"
 	ScalarIdentifier          ScalarClassificationKind = "identifier"
 	ScalarClosedStringEnum    ScalarClassificationKind = "closed_string_enum"
+	ScalarBoundedInteger      ScalarClassificationKind = "bounded_integer"
 	ScalarProtobufDuration    ScalarClassificationKind = "protobuf_duration"
 )
 
@@ -237,9 +238,11 @@ func CheckDeclarationClassifications(report DeclarationReport, classification De
 	}
 	for identity := range validatorsByIdentity {
 		if _, exists := classifiedValidators[identity]; !exists {
+			discovered := validatorsByIdentity[identity]
 			issues = append(issues, ClassificationIssue{
 				Code:     IssueUnclassifiedValidator,
 				Identity: identity,
+				Detail:   "discovered fingerprint " + discovered.Fingerprint,
 			})
 		}
 	}
@@ -262,7 +265,7 @@ func checkScalarClassification(
 	issues *[]ClassificationIssue,
 ) {
 	switch classification.Kind {
-	case ScalarOpenValidatedString, ScalarIdentifier, ScalarProtobufDuration:
+	case ScalarOpenValidatedString, ScalarIdentifier, ScalarBoundedInteger, ScalarProtobufDuration:
 		if len(classification.EnumMembers) != 0 {
 			*issues = append(*issues, ClassificationIssue{
 				Code:     IssueInvalidScalarClassification,
@@ -351,6 +354,11 @@ func checkValidatorClassification(
 		*issues = append(*issues, ClassificationIssue{
 			Code:     IssueValidatorFingerprintMismatch,
 			Identity: discovered.Identity,
+			Detail: fmt.Sprintf(
+				"discovered %s, classified %s",
+				discovered.Fingerprint,
+				classification.Fingerprint,
+			),
 		})
 	}
 	switch classification.Kind {

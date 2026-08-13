@@ -235,6 +235,7 @@ func completedSchemaSliceRoutes() []apicontract.Route {
 		protocol.MethodProjectUpdate,
 		protocol.MethodProjectSetDefaultWorkspace,
 		protocol.MethodProjectWorkspaceList,
+		protocol.MethodProjectWorkspaceGet,
 		protocol.MethodProjectUnlinkWorkspace,
 		protocol.MethodProjectDelete,
 		protocol.MethodProjectAttachWorkspace,

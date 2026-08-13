@@ -23,6 +23,12 @@ enum GoalStatus {
   RUNTIME_GOAL_STATUS_COMPLETE = 3;
 }
 
+enum GoalAvailability {
+  GOAL_AVAILABILITY_UNSPECIFIED = 0;
+  GOAL_AVAILABILITY_AVAILABLE = 1;
+  GOAL_AVAILABILITY_AGENT_CAPABILITY_MISSING = 2;
+}
+
 enum ActivityState {
   RUNTIME_ACTIVITY_STATE_UNSPECIFIED = 0;
   RUNTIME_ACTIVITY_UNAVAILABLE = 1;
@@ -120,7 +126,13 @@ message GoalView {
     defined_only: true
     not_in: [0]
   }];
-  bool suspended = 4;
+  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+  optional GoalAvailability availability = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool suspended = 7;
 
   option (buf.validate.message).cel = {
     id: "kent.runtime.goal_suspension"
@@ -448,9 +460,20 @@ message DiscardQueuedUserMessageSuccess {
 message Goal {
   string id = 1 [(buf.validate.field).string.min_len = 1];
   string objective = 2 [(buf.validate.field).string.min_len = 1];
-  string status = 3 [(buf.validate.field).string.min_len = 1];
+  GoalStatus status = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
   google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
   google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+}
+
+message GoalPreview {
+  string objective = 1 [(buf.validate.field).string.min_len = 1];
+  GoalStatus status = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
 message GoalShowRequest {
@@ -498,8 +521,27 @@ message GoalClearRequest {
   ];
 }
 
-message GoalSuccess {
+message GoalShowSuccess {
   optional Goal goal = 1;
+  GoalAvailability availability = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message GoalMutationSuccess {
+  optional Goal goal = 1;
+  optional GoalPreview pending = 2;
+  optional GoalAvailability availability = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.runtime.goal_mutation_result"
+    message: "goal mutation success cannot contain both a goal and pending preview"
+    expression: "!(has(this.goal) && has(this.pending))"
+  };
 }
 
 message StandardError {
@@ -769,7 +811,7 @@ message DiscardQueuedUserMessageResult {
 message GoalShowResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
-    GoalSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GoalShowSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
     GoalShowError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
@@ -777,7 +819,7 @@ message GoalShowResult {
 message GoalMutationResult {
   oneof outcome {
     option (buf.validate.oneof).required = true;
-    GoalSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GoalMutationSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
     GoalMutationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
   }
 }
