@@ -57,7 +57,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		handle.RequestStop()
 	}
 	var interrupted []workflow.CurrentNodeReference
-	persistenceErr := c.mutations.Run(cleanupCtx, state.taskID, func(ctx context.Context) error {
+	persistenceErr := c.runInternalTaskMutation(cleanupCtx, state.taskID, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
 		var err error
 		interrupted, err = interruptCurrentNodeReferences(
@@ -89,7 +89,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
-	verifyErr := c.mutations.Run(cleanupCtx, state.taskID, func(context.Context) error {
+	verifyErr := c.runInternalTaskMutation(cleanupCtx, state.taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, handle := range state.waitHandles {

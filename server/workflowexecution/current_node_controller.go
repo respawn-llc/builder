@@ -164,10 +164,7 @@ type CurrentNodeController struct {
 	workerDiagnostics     error
 	lastAutomaticTask     *workflow.TaskID
 	taskExecutionReads    atomic.Pointer[workflowTaskControllerReadSnapshot]
-	lifecycleMu           sync.Mutex
-	lifecycleCond         *sync.Cond
-	lifecycleClosing      bool
-	lifecycleActive       int
+	lifecycleBarrier      sync.RWMutex
 	closeMu               sync.Mutex
 }
 
@@ -228,7 +225,6 @@ func NewCurrentNodeController(
 		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		quiescence:        map[workflow.TaskID]bool{},
 	})
-	controller.lifecycleCond = sync.NewCond(&controller.lifecycleMu)
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
 	return controller, nil
@@ -933,16 +929,7 @@ func (c *CurrentNodeController) Close() error {
 	}
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
-	c.lifecycleMu.Lock()
-	if c.lifecycleClosing {
-		c.lifecycleMu.Unlock()
-		return nil
-	}
-	c.lifecycleClosing = true
-	for c.lifecycleActive != 0 {
-		c.lifecycleCondLocked().Wait()
-	}
-	c.lifecycleMu.Unlock()
+	c.lifecycleBarrier.Lock()
 
 	var (
 		queuedPreparations  []*taskPreparationBatch
@@ -951,6 +938,11 @@ func (c *CurrentNodeController) Close() error {
 		liveScopes          []runtimeids.ExecutionScopeID
 	)
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		c.lifecycleBarrier.Unlock()
+		return nil
+	}
 	c.closed = true
 	queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
 	c.preparationQueue = nil
@@ -976,6 +968,7 @@ func (c *CurrentNodeController) Close() error {
 		batch.cancel(preparationShutdownCause())
 	}
 	c.mu.Unlock()
+	c.lifecycleBarrier.Unlock()
 
 	c.workerCancel()
 	for _, gate := range gates {
@@ -1013,36 +1006,44 @@ func (c *CurrentNodeController) runTaskMutation(
 	taskID workflow.TaskID,
 	operation func(context.Context) error,
 ) error {
+	return c.runControllerTaskMutation(ctx, taskID, false, operation)
+}
+
+func (c *CurrentNodeController) runInternalTaskMutation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	operation func(context.Context) error,
+) error {
+	return c.runControllerTaskMutation(ctx, taskID, true, operation)
+}
+
+func (c *CurrentNodeController) runControllerTaskMutation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	allowClosed bool,
+	operation func(context.Context) error,
+) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")
 	}
-	c.lifecycleMu.Lock()
-	if c.lifecycleClosing {
-		c.lifecycleMu.Unlock()
+	active, _ := ctx.Value(currentNodeLifecycleContextKey{}).(*CurrentNodeController)
+	if active == c {
+		return c.mutations.Run(ctx, taskID, operation)
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed && !allowClosed {
 		return errors.New("current node workflow controller is closed")
 	}
-	c.lifecycleActive++
-	c.lifecycleMu.Unlock()
-	defer func() {
-		c.lifecycleMu.Lock()
-		c.lifecycleActive--
-		if c.lifecycleActive < 0 {
-			panic("current node workflow lifecycle operation count became negative")
-		}
-		if c.lifecycleActive == 0 {
-			c.lifecycleCondLocked().Broadcast()
-		}
-		c.lifecycleMu.Unlock()
-	}()
-	return c.mutations.Run(ctx, taskID, operation)
+	return c.mutations.Run(ctx, taskID, func(ctx context.Context) error {
+		return operation(context.WithValue(ctx, currentNodeLifecycleContextKey{}, c))
+	})
 }
 
-func (c *CurrentNodeController) lifecycleCondLocked() *sync.Cond {
-	if c.lifecycleCond == nil {
-		c.lifecycleCond = sync.NewCond(&c.lifecycleMu)
-	}
-	return c.lifecycleCond
-}
+type currentNodeLifecycleContextKey struct{}
 
 func runCurrentNodeTaskMutation[T any](
 	ctx context.Context,

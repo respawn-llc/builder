@@ -55,11 +55,6 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 			quiescence:        map[workflow.TaskID]bool{},
 		}
-		if previous := c.taskExecutionReads.Load(); previous != nil {
-			for taskID, quiescent := range previous.quiescence {
-				snapshot.quiescence[taskID] = quiescent
-			}
-		}
 		if c.agentCapacityActive >= c.agentConcurrency {
 			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 				if entry.start.policy != currentNodeAdmissionAutomaticAgent {
