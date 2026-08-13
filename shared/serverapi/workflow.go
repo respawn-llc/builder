@@ -1281,11 +1281,7 @@ type WorkflowTaskListResponse struct {
 }
 
 type WorkflowProjectTaskGroupCountsRequest struct {
-	ProjectID        string                      `json:"project_id"`
-	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
-	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
-	LabelFilter      WorkflowTaskLabelFilter     `json:"label_filter"`
-	DependencyFilter *bool                       `json:"dependency_filter,omitempty"`
+	ProjectID string `json:"project_id"`
 }
 
 type WorkflowProjectTaskGroupCounts struct {
@@ -2567,34 +2563,10 @@ func (r WorkflowTaskListResponse) Validate() error {
 }
 
 func (r WorkflowProjectTaskGroupCountsRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	if err := r.LabelFilter.Validate(); err != nil {
-		return err
-	}
-	for index, status := range r.StatusKinds {
-		if _, valid := status.NativeState(); !valid {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
-		}
-	}
-	for index, attention := range r.AttentionKinds {
-		switch attention {
-		case WorkflowTaskAttentionKindQuestion, WorkflowTaskAttentionKindApproval, WorkflowTaskAttentionKindInterrupted:
-		default:
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("attention_kinds[%d]", index), "attention kind is invalid")
-		}
-	}
-	return nil
+	return validateRequired("project_id", r.ProjectID)
 }
 
 func (r WorkflowProjectTaskGroupCountsRequest) ValidateRPC() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	if err := r.LabelFilter.ValidateRPC(); err != nil {
-		return err
-	}
 	return r.Validate()
 }
 

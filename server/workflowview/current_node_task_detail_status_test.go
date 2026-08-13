@@ -552,8 +552,7 @@ func TestProjectTaskGroupCountsObserveLiveStatusesAcrossLinkedWorkflows(t *testi
 	fixture.quiescence.blocked[active.task.ID] = true
 
 	counts, err := fixture.tasks.CountGroups(fixture.ctx, serverapi.WorkflowProjectTaskGroupCountsRequest{
-		ProjectID:   fixture.binding.ProjectID,
-		LabelFilter: serverapi.WorkflowTaskLabelFilterNone(),
+		ProjectID: fixture.binding.ProjectID,
 	})
 	if err != nil {
 		t.Fatalf("CountGroups: %v", err)

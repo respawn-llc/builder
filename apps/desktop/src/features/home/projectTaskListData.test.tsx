@@ -38,7 +38,7 @@ const state: TestState = {
   countRequests: 0,
   getCounts: async () => countsResponse(2),
   handlers: [],
-  listPage: async (input) => pageResponse(input.group ?? "active", input.offset ?? 0),
+  listPage: async (input) => pageResponse(taskGroupForInput(input), input.offset ?? 0),
   listRequests: [],
   subscriptionCloses: 0,
 };
@@ -82,7 +82,7 @@ describe("Project Task-list data ownership", () => {
     state.countRequests = 0;
     state.getCounts = async () => countsResponse(2);
     state.handlers.length = 0;
-    state.listPage = async (input) => pageResponse(input.group ?? "active", input.offset ?? 0);
+    state.listPage = async (input) => pageResponse(taskGroupForInput(input), input.offset ?? 0);
     state.listRequests.length = 0;
     state.subscriptionCloses = 0;
   });
@@ -200,7 +200,9 @@ describe("Project Task-list data ownership", () => {
     };
     state.listPage = async (input) => {
       pageCall += 1;
-      return pageCall === 1 ? pageResponse(input.group ?? "active", input.offset ?? 0) : pendingPage.promise;
+      return pageCall === 1
+        ? pageResponse(taskGroupForInput(input), input.offset ?? 0)
+        : pendingPage.promise;
     };
     const harness = createHarness();
     const { result } = renderHook(
@@ -240,7 +242,7 @@ describe("Project Task-list data ownership", () => {
   it("keeps the prior bounded window when a direct replacement anchor fails", async () => {
     state.listPage = async (input) => {
       if (input.offset === 0) {
-        return pageResponse(input.group ?? "active", 0);
+        return pageResponse(taskGroupForInput(input), 0);
       }
       throw new Error("final page failed");
     };
@@ -276,7 +278,7 @@ describe("Project Task-list data ownership", () => {
     let fail = false;
     state.listPage = async (input) => {
       if (fail) throw new Error("reopen failed");
-      return pageResponse(input.group ?? "active", input.offset ?? 0);
+      return pageResponse(taskGroupForInput(input), input.offset ?? 0);
     };
     const harness = createHarness();
     const { result, rerender } = renderHook(
@@ -341,7 +343,7 @@ describe("Project Task-list data ownership", () => {
     state.listPage = async (input) => {
       pageCall += 1;
       if (pageCall === 1) {
-        return pageResponse(input.group ?? "active", input.offset ?? 0);
+        return pageResponse(taskGroupForInput(input), input.offset ?? 0);
       }
       throw new Error("next page failed");
     };
@@ -373,7 +375,7 @@ describe("Project Task-list data ownership", () => {
     state.listPage = async (input) => {
       pageCall += 1;
       if (pageCall === 1) {
-        return pageResponse(input.group ?? "active", input.offset ?? 50);
+        return pageResponse(taskGroupForInput(input), input.offset ?? 50);
       }
       throw new Error("previous page failed");
     };
@@ -521,6 +523,17 @@ function countsResponse(active: number): ProjectTaskGroupCounts {
     counts: { active, backlog: 1, done: 0 },
     generatedAt: 1,
   };
+}
+
+function taskGroupForInput(input: TaskListInput): TaskGroup {
+  switch (input.statusKinds?.[0]) {
+    case "backlog":
+      return "backlog";
+    case "done":
+      return "done";
+    default:
+      return "active";
+  }
 }
 
 function pageResponse(group: TaskGroup, offset: number): TaskListPage {

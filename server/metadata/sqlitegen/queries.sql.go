@@ -890,15 +890,7 @@ WITH
 args AS (
     SELECT
         CAST(?1 AS TEXT) AS project_id,
-        CAST(?2 AS INTEGER) AS status_filter_set,
-        CAST(?3 AS TEXT) AS status_kinds_json,
-        CAST(?4 AS INTEGER) AS attention_filter_set,
-        CAST(?5 AS TEXT) AS attention_kinds_json,
-        CAST(?6 AS TEXT) AS label_filter_kind,
-        CAST(?7 AS TEXT) AS label_filter_mode,
-        CAST(?8 AS TEXT) AS label_ids_json,
-        CAST(?9 AS INTEGER) AS dependency_filter,
-        CAST(?10 AS TEXT) AS live_task_states_json
+        CAST(?2 AS TEXT) AS live_task_states_json
 ),
 live_task_states AS (
     SELECT
@@ -964,91 +956,6 @@ eligible_rows AS (
     JOIN effective_status status ON status.task_id = t.id
     WHERE pwl.project_id = args.project_id
       AND t.project_workflow_link_id = pwl.id
-      AND (
-          args.status_filter_set = 0
-          OR status.kind IN (SELECT value FROM json_each(args.status_kinds_json))
-      )
-      AND (
-          args.attention_filter_set = 0
-          OR EXISTS (
-              SELECT 1
-              FROM json_each(args.attention_kinds_json) filter_attention
-              JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
-          )
-      )
-      AND (
-          args.label_filter_kind = 'none'
-          OR (
-              args.label_filter_kind = 'named'
-              AND args.label_filter_mode = 'any'
-              AND (
-                  EXISTS (
-                      SELECT 1
-                      FROM json_each(args.label_ids_json) selected_label
-                      JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                        ON assignment.label_id = selected_label.value
-                      WHERE assignment.task_id = t.id
-                  )
-                  OR EXISTS (
-                      SELECT 1
-                      FROM json_each(?11) excluded_label
-                      WHERE NOT EXISTS (
-                          SELECT 1
-                          FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                          WHERE assignment.label_id = excluded_label.value
-                            AND assignment.task_id = t.id
-                      )
-                  )
-              )
-          )
-          OR (
-              args.label_filter_kind = 'named'
-              AND args.label_filter_mode = 'all'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(args.label_ids_json) selected_label
-                  WHERE NOT EXISTS (
-                      SELECT 1
-                      FROM task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                      WHERE assignment.label_id = selected_label.value
-                        AND assignment.task_id = t.id
-                  )
-              )
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM json_each(?11) excluded_label
-                  JOIN task_label_assignments assignment INDEXED BY task_label_assignments_label_task_idx
-                    ON assignment.label_id = excluded_label.value
-                  WHERE assignment.task_id = t.id
-              )
-          )
-          OR (
-              args.label_filter_kind = 'unlabeled'
-              AND NOT EXISTS (
-                  SELECT 1
-                  FROM task_label_assignments assignment
-                  WHERE assignment.task_id = t.id
-              )
-          )
-      )
-      AND
-          (
-              args.dependency_filter IS NULL
-              OR CAST(args.dependency_filter AS INTEGER) = (
-                  NOT EXISTS (
-                      SELECT 1
-                      FROM task_dependencies dependency INDEXED BY task_dependencies_reverse_idx
-                      WHERE dependency.blocked_task_id = t.id
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM workflow_task_status_records status
-                            WHERE status.task_id = dependency.blocker_task_id
-                              AND status.is_done != 0
-                        )
-                  )
-              )
-          )
-
 )
 SELECT
     CAST(COUNT(*) FILTER (WHERE kind IN ('waiting_question', 'waiting_approval', 'interrupted', 'running', 'queued', 'active')) AS INTEGER) AS active_count,
@@ -1058,17 +965,8 @@ FROM eligible_rows
 `
 
 type CountProjectTaskGroupsParams struct {
-	ProjectID            string
-	StatusFilterSet      int64
-	StatusKindsJson      string
-	AttentionFilterSet   int64
-	AttentionKindsJson   string
-	LabelFilterKind      string
-	LabelFilterMode      sql.NullString
-	LabelIdsJson         string
-	DependencyFilter     sql.NullInt64
-	LiveTaskStatesJson   string
-	ExcludedLabelIdsJson interface{}
+	ProjectID          string
+	LiveTaskStatesJson string
 }
 
 type CountProjectTaskGroupsRow struct {
@@ -1078,21 +976,9 @@ type CountProjectTaskGroupsRow struct {
 }
 
 func (q *Queries) CountProjectTaskGroups(ctx context.Context, arg CountProjectTaskGroupsParams) (CountProjectTaskGroupsRow, error) {
-	row := q.db.QueryRowContext(ctx, countProjectTaskGroups,
-		arg.ProjectID,
-		arg.StatusFilterSet,
-		arg.StatusKindsJson,
-		arg.AttentionFilterSet,
-		arg.AttentionKindsJson,
-		arg.LabelFilterKind,
-		arg.LabelFilterMode,
-		arg.LabelIdsJson,
-		arg.DependencyFilter,
-		arg.LiveTaskStatesJson,
-		arg.ExcludedLabelIdsJson,
-	)
+	row := q.db.QueryRowContext(ctx, countProjectTaskGroups, arg.ProjectID, arg.LiveTaskStatesJson)
 	var i CountProjectTaskGroupsRow
-	err := recordQueryError(ctx, row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount), countProjectTaskGroups, 11)
+	err := recordQueryError(ctx, row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount), countProjectTaskGroups, 2)
 
 	return i, err
 }

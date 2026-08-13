@@ -147,7 +147,6 @@ function useProjectTaskGroupCounts(projectID: string, enabled: boolean) {
     queryFn: async (): Promise<ProjectTaskGroupCounts> =>
       api.getProjectTaskGroupCounts({
         projectID,
-        labelFilter: noTaskLabelFilter,
       }),
     enabled: enabled && projectID.length > 0,
     placeholderData: (previous) => previous,

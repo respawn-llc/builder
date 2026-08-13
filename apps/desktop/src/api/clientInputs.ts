@@ -51,9 +51,6 @@ export type TaskListInput = Readonly<{
 
 export type ProjectTaskGroupCountsInput = Readonly<{
   projectID: string;
-  statusKinds?: readonly TaskStatusKind[] | undefined;
-  attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
-  labelFilter: TaskLabelFilter;
 }>;
 
 export type BoardNodeCardsInput = Readonly<{

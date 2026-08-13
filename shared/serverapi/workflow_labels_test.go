@@ -214,14 +214,14 @@ func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) 
 
 func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {
 	requestType := reflect.TypeOf(WorkflowProjectTaskGroupCountsRequest{})
-	for _, field := range []string{"Offset", "Limit", "WorkflowID", "Group"} {
-		if _, exists := requestType.FieldByName(field); exists {
-			t.Fatalf("group-count request unexpectedly exposes %s", field)
-		}
+	if requestType.NumField() != 1 {
+		t.Fatalf("group-count request fields = %d, want only ProjectID", requestType.NumField())
+	}
+	if field := requestType.Field(0); field.Name != "ProjectID" {
+		t.Fatalf("group-count request field = %s, want ProjectID", field.Name)
 	}
 	request := WorkflowProjectTaskGroupCountsRequest{
-		ProjectID:   "project-1",
-		LabelFilter: WorkflowTaskLabelFilterNone(),
+		ProjectID: "project-1",
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)

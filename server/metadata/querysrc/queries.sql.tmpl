@@ -1594,14 +1594,6 @@ WITH
 args AS (
     SELECT
         CAST(sqlc.arg(project_id) AS TEXT) AS project_id,
-        CAST(sqlc.arg(status_filter_set) AS INTEGER) AS status_filter_set,
-        CAST(sqlc.arg(status_kinds_json) AS TEXT) AS status_kinds_json,
-        CAST(sqlc.arg(attention_filter_set) AS INTEGER) AS attention_filter_set,
-        CAST(sqlc.arg(attention_kinds_json) AS TEXT) AS attention_kinds_json,
-        CAST(sqlc.arg(label_filter_kind) AS TEXT) AS label_filter_kind,
-        CAST(sqlc.narg(label_filter_mode) AS TEXT) AS label_filter_mode,
-        CAST(sqlc.arg(label_ids_json) AS TEXT) AS label_ids_json,
-        CAST(sqlc.narg(dependency_filter) AS INTEGER) AS dependency_filter,
         CAST(sqlc.arg(live_task_states_json) AS TEXT) AS live_task_states_json
 ),
 {{taskStatusProjection "" "(SELECT live_task_states_json FROM args)" ","}}
@@ -1613,23 +1605,6 @@ eligible_rows AS (
     JOIN effective_status status ON status.task_id = t.id
     WHERE pwl.project_id = args.project_id
       AND t.project_workflow_link_id = pwl.id
-      AND (
-          args.status_filter_set = 0
-          OR status.kind IN (SELECT value FROM json_each(args.status_kinds_json))
-      )
-      AND (
-          args.attention_filter_set = 0
-          OR EXISTS (
-              SELECT 1
-              FROM json_each(args.attention_kinds_json) filter_attention
-              JOIN json_each(status.attention_types_json) task_attention ON task_attention.value = filter_attention.value
-          )
-      )
-      AND (
-{{taskLabelFilter "          " "t.id" "args.label_filter_kind" "args.label_filter_mode" "args.label_ids_json" "sqlc.arg(excluded_label_ids_json)"}}
-      )
-      AND
-{{taskDependencyFilter "          " "t.id" "args.dependency_filter"}}
 )
 SELECT
 {{- range $group := .TaskGroups}}

@@ -174,38 +174,13 @@ func (l *TaskList) CountGroups(ctx context.Context, req serverapi.WorkflowProjec
 	if _, err := l.metadata.GetProjectOverview(ctx, req.ProjectID); err != nil {
 		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
 	}
-	labelFilter, err := resolveWorkflowTaskLabelFilter(ctx, l.queries, req.ProjectID, req.LabelFilter)
-	if err != nil {
-		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
-	}
-	labelFilterArgs, err := labelFilter.queryArgs()
-	if err != nil {
-		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
-	}
-	statusKindsJSON, err := workflowTaskStatusKindsJSON(req.StatusKinds)
-	if err != nil {
-		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
-	}
-	attentionKindsJSON, err := workflowTaskAttentionKindsJSON(req.AttentionKinds)
-	if err != nil {
-		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
-	}
 	observation, err := l.projection.Observe(nil)
 	if err != nil {
 		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
 	}
 	counts, err := l.queries.CountProjectTaskGroups(ctx, sqlitegen.CountProjectTaskGroupsParams{
-		ProjectID:            req.ProjectID,
-		StatusFilterSet:      boolInt64(len(req.StatusKinds) > 0),
-		StatusKindsJson:      statusKindsJSON,
-		AttentionFilterSet:   boolInt64(len(req.AttentionKinds) > 0),
-		AttentionKindsJson:   attentionKindsJSON,
-		LabelFilterKind:      labelFilterArgs.kind,
-		LabelFilterMode:      labelFilterArgs.mode,
-		LabelIdsJson:         labelFilterArgs.labelIDsJSON,
-		ExcludedLabelIdsJson: labelFilterArgs.excludedLabelIDsJSON,
-		DependencyFilter:     workflowTaskDependencyFilterQueryArg(req.DependencyFilter),
-		LiveTaskStatesJson:   observation.LiveTaskStatesJSON,
+		ProjectID:          req.ProjectID,
+		LiveTaskStatesJson: observation.LiveTaskStatesJSON,
 	})
 	if err != nil {
 		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err

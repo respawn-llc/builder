@@ -201,9 +201,6 @@ export async function getProjectTaskGroupCounts(
     projectTaskGroupCountsSchema,
     await transport.call("workflow.task.groupCounts", {
       project_id: input.projectID,
-      status_kinds: input.statusKinds ?? [],
-      attention_kinds: input.attentionKinds ?? [],
-      label_filter: taskLabelFilterPayload(input.labelFilter),
     }),
   );
 }

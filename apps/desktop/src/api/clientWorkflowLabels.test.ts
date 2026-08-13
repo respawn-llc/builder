@@ -24,7 +24,6 @@ describe("ApiClient workflow labels", () => {
     await expect(
       client.getProjectTaskGroupCounts({
         projectID: "project-1",
-        labelFilter: { kind: "none" },
       }),
     ).resolves.toEqual({
       projectID: "project-1",
@@ -36,9 +35,6 @@ describe("ApiClient workflow labels", () => {
         method: "workflow.task.groupCounts",
         params: {
           project_id: "project-1",
-          status_kinds: [],
-          attention_kinds: [],
-          label_filter: { kind: "none" },
         },
       },
     ]);
