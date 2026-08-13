@@ -144,8 +144,10 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			workflowName = *task.WorkflowName
 		}
 		labelIDs := make([]string, 0, len(task.Labels))
+		labelNames := make([]string, 0, len(task.Labels))
 		for _, label := range task.Labels {
 			labelIDs = append(labelIDs, label.ID)
+			labelNames = append(labelNames, label.Name)
 		}
 		item := taskListItem{
 			ShortID:         task.ShortID,
@@ -162,6 +164,7 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		rows = append(rows, taskListRenderItem{
 			Item:         item,
 			WorkflowName: workflowName,
+			LabelNames:   labelNames,
 			ShowWorkflow: showWorkflow,
 			ShowColumns:  showColumns,
 		})

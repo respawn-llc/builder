@@ -223,7 +223,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		ProjectID:     "project-1",
 		WorkflowOwner: taskListExpectedWorkflowFromRequest,
 	}
-	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, true); code != 0 || stderr.Len() != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var output struct {
@@ -239,7 +239,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, false); code != 0 ||
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 ||
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -259,7 +259,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 	}
 }
 
-func TestTaskListProjectionPreservesCLIShapeFromEnrichedRows(t *testing.T) {
+func TestTaskListResponsePreservesCLIShapeFromEnrichedRows(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
 	workflowName := "Delivery"
 	response := serverapi.WorkflowTaskListResponse{
@@ -276,7 +276,7 @@ func TestTaskListProjectionPreservesCLIShapeFromEnrichedRows(t *testing.T) {
 				NativeState: serverapi.WorkflowTaskNativeStateActive,
 			},
 			Labels: []serverapi.WorkflowProjectLabel{
-				{ID: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf", Name: "Priority"},
+				{ID: "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf", Name: `Needs "review"`},
 				{ID: "2d40537d-307f-4351-b659-363538189fac", Name: "Urgent"},
 			},
 			DependencyProgress: &serverapi.WorkflowTaskDependencyProgress{SatisfiedCount: 1, TotalCount: 2},
@@ -319,15 +319,58 @@ func TestTaskListProjectionPreservesCLIShapeFromEnrichedRows(t *testing.T) {
 	}
 
 	response.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple
-	projection, err = taskListProjectionFromResponse(response, taskListExpectedScope{
+	expected := taskListExpectedScope{
 		ProjectID:     "project-1",
 		WorkflowOwner: taskListExpectedWorkflowFromRequest,
-	})
-	if err != nil {
-		t.Fatalf("multiple-workflow projection: %v", err)
 	}
-	if !projection.Rows[0].ShowWorkflow || projection.Rows[0].WorkflowName != workflowName {
-		t.Fatalf("multiple-workflow human row = %+v, want Workflow name", projection.Rows[0])
+	var stdout, stderr bytes.Buffer
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 {
+		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); got != "KNT-1: Ship list.\nStatus: backlog\nWorkflow: Delivery\nLabels: \"Needs \\\"review\\\"\" \"Urgent\"\n" {
+		t.Fatalf("human output = %q", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 {
+		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var projectWide taskListOutput
+	if err := json.Unmarshal(stdout.Bytes(), &projectWide); err != nil {
+		t.Fatalf("decode Project-wide JSON: %v", err)
+	}
+	if projectWide.Tasks[0].WorkflowID != workflowID {
+		t.Fatalf("Project-wide workflow_id = %q, want %q", projectWide.Tasks[0].WorkflowID, workflowID)
+	}
+	if projectWide.Tasks[0].ColumnKeys != nil {
+		t.Fatalf("Project-wide column_keys = %v, want omitted", projectWide.Tasks[0].ColumnKeys)
+	}
+
+	columns := []string{"todo", "review"}
+	response.Scope.WorkflowID = &workflowID
+	response.MatchingWorkflowCardinality = serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne
+	response.Tasks[0].ColumnKeys = &columns
+	expected.WorkflowID = &workflowID
+	stdout.Reset()
+	stderr.Reset()
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 {
+		t.Fatalf("narrowed human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); got != "KNT-1: Ship list.\nStatus: backlog\nColumns: todo, review\nLabels: \"Needs \\\"review\\\"\" \"Urgent\"\n" {
+		t.Fatalf("narrowed human output = %q", got)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 {
+		t.Fatalf("narrowed JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	var narrowed taskListOutput
+	if err := json.Unmarshal(stdout.Bytes(), &narrowed); err != nil {
+		t.Fatalf("decode narrowed JSON: %v", err)
+	}
+	if narrowed.Tasks[0].ColumnKeys == nil || !slices.Equal(*narrowed.Tasks[0].ColumnKeys, columns) {
+		t.Fatalf("narrowed column_keys = %v, want %v", narrowed.Tasks[0].ColumnKeys, columns)
 	}
 }
 
