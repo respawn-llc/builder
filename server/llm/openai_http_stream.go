@@ -394,7 +394,7 @@ func optionalStringsDiffer(left *string, right *string) bool {
 	return *left != *right
 }
 
-func assistantResponseTextExtendsStream(streamed string, candidate string) bool {
+func AssistantResponseTextExtendsStream(streamed string, candidate string) bool {
 	if candidate == "" {
 		return false
 	}
@@ -405,7 +405,7 @@ func assistantResponseTextExtendsStream(streamed string, candidate string) bool 
 }
 
 func completedAssistantTextReconcilesStream(streamed string, completed string) bool {
-	return assistantResponseTextExtendsStream(streamed, completed) ||
+	return AssistantResponseTextExtendsStream(streamed, completed) ||
 		(streamed != "" &&
 			completed != "" &&
 			(strings.TrimRightFunc(streamed, unicode.IsSpace) == completed ||

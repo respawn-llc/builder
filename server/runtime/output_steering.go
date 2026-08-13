@@ -701,7 +701,7 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 			if commit.message.Content != nil {
 				finalText = *commit.message.Content
 			}
-			if streamed != "" && !strings.HasPrefix(finalText, streamed) {
+			if streamed != "" && !llm.AssistantResponseTextExtendsStream(streamed, finalText) {
 				outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
 				commit.result.resolution = outcome
 				if resolveErr != nil {
