@@ -16,7 +16,6 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	sessionruntime "core/server/sessionruntime"
-	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/serverapi"
@@ -306,36 +305,6 @@ func TestServiceRetargetSessionWorkspaceDelegatesAndMapsBinding(t *testing.T) {
 	}
 	if !resp.WorkspaceBindingCreated {
 		t.Fatal("WorkspaceBindingCreated = false, want true")
-	}
-}
-
-func TestServiceRetargetSessionWorkspaceValidatedCarriesAttachedProjectConstraint(t *testing.T) {
-	retargeter := &sessionLifecycleRetargeterStub{err: &metadata.AttachedProjectMismatchError{
-		SessionID:         "session-1",
-		SourceProjectID:   "project-source",
-		AttachedProjectID: "project-attached",
-	}}
-	service := NewGlobalSessionLifecycleService(t.TempDir(), nil, nil).WithWorkspaceRetargeter(retargeter)
-	request := serverapi.SessionRetargetWorkspaceRequest{
-		ClientRequestID: "req-1",
-		SessionID:       "session-1",
-		WorkspaceRoot:   t.TempDir(),
-	}
-	constraint := apicontract.PresentAttachedProjectConstraint("project-attached")
-
-	_, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest]) (serverapi.SessionRetargetWorkspaceResponse, error) {
-			return service.RetargetSessionWorkspaceValidated(context.Background(), validated, constraint)
-		},
-	)
-	if err == nil || err.Error() != `session "session-1" not available` {
-		t.Fatalf("RetargetSessionWorkspaceValidated error = %v, want existing public rejection", err)
-	}
-	gotProjectID, present := retargeter.req.AttachedProjectConstraint.ProjectID()
-	if !present || gotProjectID != "project-attached" {
-		t.Fatalf("retarget attached-Project constraint = %q/%t", gotProjectID, present)
 	}
 }
 

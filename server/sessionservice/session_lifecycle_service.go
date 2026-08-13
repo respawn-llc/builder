@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 
 	"core/server/auth"
@@ -12,8 +11,6 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/shared/apicontract"
-	servicecontract "core/shared/apicontract"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -95,22 +92,14 @@ func (s *SessionLifecycleService) WithNavigationTargetResolver(resolver sessionN
 }
 
 func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionInitialInputRequest]) (serverapi.SessionInitialInputResponse, error) {
-		return s.getInitialInput(ctx, validated.Value(), optionalValidatedSessionID(validated, req.SessionID))
-	})
-}
-
-func (s *SessionLifecycleService) GetInitialInputValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionInitialInputRequest], authorization servicecontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionInitialInputResponse, error) {
-	sessionID, _ := authorization.Authorization()
-	return s.getInitialInput(ctx, req.Value(), optionalSessionID(sessionID.SessionID))
-}
-
-func (s *SessionLifecycleService) getInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest, sessionID *runtimeids.SessionID) (serverapi.SessionInitialInputResponse, error) {
-	if sessionID == nil {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionInitialInputResponse{}, err
+	}
+	if strings.TrimSpace(req.SessionID) == "" {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
 	var resp serverapi.SessionInitialInputResponse
-	err := s.withStore(ctx, *sessionID, func(_ context.Context, store *session.Store) error {
+	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
 		if req.OverrideStoredDraft {
 			resp.Input = req.TransitionInput
 			return nil
@@ -127,19 +116,12 @@ func (s *SessionLifecycleService) getInitialInput(ctx context.Context, req serve
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPersistInputDraftRequest]) (serverapi.SessionPersistInputDraftResponse, error) {
-		return s.persistInputDraft(ctx, validated.Value(), validated.SessionID(req.SessionID))
-	})
-}
-
-func (s *SessionLifecycleService) PersistInputDraftValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionPersistInputDraftRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionPersistInputDraftResponse, error) {
-	return s.persistInputDraft(ctx, req.Value(), authorization.SessionID)
-}
-
-func (s *SessionLifecycleService) persistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest, sessionID runtimeids.SessionID) (serverapi.SessionPersistInputDraftResponse, error) {
-	memoReq := sessionDraftMemoRequest{SessionID: sessionID.String(), Input: req.Input}
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionPersistInputDraftResponse{}, err
+	}
+	memoReq := sessionDraftMemoRequest{SessionID: strings.TrimSpace(req.SessionID), Input: req.Input}
 	return s.drafts.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionDraftMemoRequest, func(runCtx context.Context) (serverapi.SessionPersistInputDraftResponse, error) {
-		err := s.withStore(runCtx, sessionID, func(_ context.Context, store *session.Store) error {
+		err := s.withStore(runCtx, req.SessionID, func(_ context.Context, store *session.Store) error {
 			return persistSessionInputDraft(store, req.Input)
 		})
 		return serverapi.SessionPersistInputDraftResponse{}, err
@@ -147,35 +129,18 @@ func (s *SessionLifecycleService) persistInputDraft(ctx context.Context, req ser
 }
 
 func (s *SessionLifecycleService) RetargetSessionWorkspace(ctx context.Context, req serverapi.SessionRetargetWorkspaceRequest) (serverapi.SessionRetargetWorkspaceResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest]) (serverapi.SessionRetargetWorkspaceResponse, error) {
-			return s.RetargetSessionWorkspaceValidated(ctx, validated, apicontract.AbsentAttachedProjectConstraint())
-		},
-	)
-}
-
-func (s *SessionLifecycleService) RetargetSessionWorkspaceValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest],
-	constraint apicontract.AttachedProjectConstraint,
-) (serverapi.SessionRetargetWorkspaceResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionRetargetWorkspaceResponse{}, err
+	}
 	if s == nil || s.retargeter == nil {
 		return serverapi.SessionRetargetWorkspaceResponse{}, errSessionWorkspaceRetargeterRequired
 	}
-	req := validated.Value()
 	result, err := s.retargeter.RetargetWorkspace(ctx, metadata.SessionWorkspaceRetargetRequest{
-		SessionID:                 req.SessionID,
-		WorkspaceRoot:             req.WorkspaceRoot,
-		ProjectID:                 req.ProjectID,
-		AttachedProjectConstraint: constraint,
+		SessionID:     req.SessionID,
+		WorkspaceRoot: req.WorkspaceRoot,
+		ProjectID:     req.ProjectID,
 	})
 	if err != nil {
-		var mismatch *metadata.AttachedProjectMismatchError
-		if errors.As(err, &mismatch) {
-			return serverapi.SessionRetargetWorkspaceResponse{}, fmt.Errorf("session %q not available", mismatch.SessionID)
-		}
 		return serverapi.SessionRetargetWorkspaceResponse{}, err
 	}
 	binding := result.Binding
@@ -191,27 +156,15 @@ func (s *SessionLifecycleService) RetargetSessionWorkspaceValidated(
 }
 
 func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionResolveTransitionRequest]) (serverapi.SessionResolveTransitionResponse, error) {
-		return s.resolveTransition(ctx, validated.Value(), optionalValidatedSessionID(validated, req.SessionID))
-	})
-}
-
-func (s *SessionLifecycleService) ResolveTransitionValidated(ctx context.Context, req servicecontract.Validated[serverapi.SessionResolveTransitionRequest], authorization servicecontract.OptionalAuthorizedSessionInActiveProject) (serverapi.SessionResolveTransitionResponse, error) {
-	sessionAuthorization, _ := authorization.Authorization()
-	return s.resolveTransition(ctx, req.Value(), optionalSessionID(sessionAuthorization.SessionID))
-}
-
-func (s *SessionLifecycleService) resolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest, sessionID *runtimeids.SessionID) (serverapi.SessionResolveTransitionResponse, error) {
-	rawSessionID := ""
-	if sessionID != nil {
-		rawSessionID = sessionID.String()
+	if err := req.Validate(); err != nil {
+		return serverapi.SessionResolveTransitionResponse{}, err
 	}
 	memoReq := sessionTransitionMemoRequest{
-		SessionID:  rawSessionID,
+		SessionID:  strings.TrimSpace(req.SessionID),
 		Transition: req.Transition,
 	}
 	return s.transitions.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameSessionTransitionMemoRequest, func(context.Context) (serverapi.SessionResolveTransitionResponse, error) {
-		return s.resolveTransitionOnce(ctx, req, sessionID)
+		return s.resolveTransitionOnce(ctx, req)
 	})
 }
 
@@ -230,16 +183,21 @@ func sameSessionDraftMemoRequest(a sessionDraftMemoRequest, b sessionDraftMemoRe
 	return a.SessionID == b.SessionID && a.Input == b.Input
 }
 
-func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest, sessionID *runtimeids.SessionID) (serverapi.SessionResolveTransitionResponse, error) {
+func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error) {
 	if req.Transition.Action == serverapi.SessionTransitionActionLogout {
 		if s.authManager == nil {
 			return serverapi.SessionResolveTransitionResponse{}, errors.New("auth manager is required for logout")
 		}
-		if sessionID == nil {
+		currentID := strings.TrimSpace(req.SessionID)
+		if currentID == "" {
 			return serverapi.SelectSessionDirective(serverapi.SessionAuthPreparationReauthenticate), nil
 		}
+		sessionID, err := runtimeids.ParseSessionID(currentID)
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
 		return serverapi.LaunchSessionDirective(
-			serverapi.OpenExistingSessionLaunchIntent(*sessionID),
+			serverapi.OpenExistingSessionLaunchIntent(sessionID),
 			serverapi.NewSessionLaunchPreparation(
 				nil,
 				serverapi.RestoreStoredDraftSessionDraftDisposition(),
@@ -249,11 +207,8 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 	}
 	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback ||
 		req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
-		if sessionID == nil {
-			return serverapi.SessionResolveTransitionResponse{}, errors.New("session_id is required")
-		}
 		var resolved serverapi.SessionResolveTransitionResponse
-		err := s.withStore(ctx, *sessionID, func(runCtx context.Context, store *session.Store) error {
+		err := s.withStore(ctx, req.SessionID, func(runCtx context.Context, store *session.Store) error {
 			var err error
 			resolved, err = s.resolveStoreTransition(runCtx, req, store)
 			return err
@@ -391,38 +346,24 @@ func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Contex
 
 func (s *SessionLifecycleService) withStore(
 	ctx context.Context,
-	id runtimeids.SessionID,
+	sessionID string,
 	callback func(context.Context, *session.Store) error,
 ) error {
 	if s == nil || s.authority == nil {
 		return errors.New("session runtime authority is required")
 	}
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	var descriptor session.SessionDescriptor
 	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
-		descriptor, err := session.NewScopedOpenSessionDescriptor(id, containerDir)
-		if err != nil {
-			return err
-		}
-		return s.authority.WithSessionStore(ctx, descriptor, callback)
+		descriptor, err = session.NewScopedOpenSessionDescriptor(id, containerDir)
 	} else {
-		descriptor, err := session.NewOpenSessionDescriptor(id)
-		if err != nil {
-			return err
-		}
-		return s.authority.WithSessionStore(ctx, descriptor, callback)
+		descriptor, err = session.NewOpenSessionDescriptor(id)
 	}
-}
-
-func optionalValidatedSessionID[T any](validated servicecontract.Validated[T], raw string) *runtimeids.SessionID {
-	if strings.TrimSpace(raw) == "" {
-		return nil
+	if err != nil {
+		return err
 	}
-	id := validated.SessionID(raw)
-	return &id
-}
-
-func optionalSessionID(id runtimeids.SessionID) *runtimeids.SessionID {
-	if id.IsZero() {
-		return nil
-	}
-	return &id
+	return s.authority.WithSessionStore(ctx, descriptor, callback)
 }
