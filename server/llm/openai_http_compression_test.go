@@ -96,7 +96,7 @@ func TestGenerateOpenAIAPIKeyLeavesLargeResponsesBodyUncompressed(t *testing.T) 
 	}
 }
 
-func TestGenerateExplicitOAuthEndpointLeavesResponsesBodyUncompressed(t *testing.T) {
+func TestGenerateExplicitLocalOAuthCompatibleEndpointLeavesResponsesBodyUncompressed(t *testing.T) {
 	var requestEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestEncoding = r.Header.Get("Content-Encoding")
@@ -107,7 +107,7 @@ func TestGenerateExplicitOAuthEndpointLeavesResponsesBodyUncompressed(t *testing
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
-	transport.BaseURL = server.URL + "/explicit"
+	transport.BaseURL = "http://127.0.0.1:11434/v1"
 	transport.BaseURLExplicit = true
 	if _, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
@@ -117,7 +117,7 @@ func TestGenerateExplicitOAuthEndpointLeavesResponsesBodyUncompressed(t *testing
 		t.Fatalf("Generate: %v", err)
 	}
 	if requestEncoding != "" {
-		t.Fatalf("Content-Encoding = %q, want absent for explicit OAuth endpoint", requestEncoding)
+		t.Fatalf("Content-Encoding = %q, want absent for explicit local OpenAI-compatible endpoint", requestEncoding)
 	}
 }
 
