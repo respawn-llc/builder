@@ -42,7 +42,7 @@ import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
-export { projectTaskGroupCountsSchema, taskListPageSchema } from "./projectTasks";
+export { projectTaskGroupCountsSchema, taskListPageSchemaForRequest } from "./projectTasks";
 export {
   taskDependenciesSchema,
   taskDependencyAddResponseSchema,
@@ -181,14 +181,20 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
-type TaskMoveMutationResult = Readonly<{ currentNodes: readonly TaskCurrentNode[];
-  retainedPreviousWorktree: RetainedPreviousWorktree | null }>;
+type TaskMoveMutationResult = Readonly<{
+  currentNodes: readonly TaskCurrentNode[];
+  retainedPreviousWorktree: RetainedPreviousWorktree | null;
+}>;
 const taskMoveResultSchema: z.ZodType<TaskMoveMutationResult> = z
-  .object({ current_nodes: z.array(currentNodeSchema).min(1),
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() })
+  .object({
+    current_nodes: z.array(currentNodeSchema).min(1),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+  })
   .strict()
-  .transform((value) => ({ currentNodes: value.current_nodes,
-    retainedPreviousWorktree: value.retained_previous_worktree }));
+  .transform((value) => ({
+    currentNodes: value.current_nodes,
+    retainedPreviousWorktree: value.retained_previous_worktree,
+  }));
 
 const taskMoveNoOpResponseSchema = z
   .object({ outcome: z.literal("no_op"), no_op: taskMoveResultSchema })
@@ -196,8 +202,10 @@ const taskMoveNoOpResponseSchema = z
   .transform((value) => ({ outcome: value.outcome, noOp: value.no_op }));
 
 const taskMovePreviewNoOpResponseSchema = z
-  .object({ outcome: z.literal("no_op"), no_op:
-    z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict() })
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
   .strict()
   .transform((value) => ({ outcome: value.outcome, noOp: { currentNodes: value.no_op.current_nodes } }));
 

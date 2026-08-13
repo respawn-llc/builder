@@ -267,6 +267,29 @@ export const taskStatusSchema: z.ZodType<TaskStatus> = z
     attentionTypes: value.attention_types,
   }));
 
+const nativeStateByTaskStatusKind = {
+  done: "terminal",
+  waiting_question: "waiting_ask",
+  waiting_approval: "waiting_approval",
+  interrupted: "interrupted",
+  running: "running",
+  queued: "queued",
+  backlog: "active",
+  active: "active",
+} as const satisfies Readonly<Record<TaskStatusKind, string>>;
+
+export const coherentTaskStatusSchema: z.ZodType<TaskStatus> = taskStatusSchema.superRefine(
+  (value, context) => {
+    if (value.nativeState !== nativeStateByTaskStatusKind[value.kind]) {
+      context.addIssue({
+        code: "custom",
+        message: "native state does not match kind",
+        path: ["nativeState"],
+      });
+    }
+  },
+);
+
 export const taskActionsSchema: z.ZodType<TaskActions> = z
   .object({
     can_start: z.boolean(),

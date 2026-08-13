@@ -2,11 +2,11 @@ import {
   activityPageSchema,
   boardNodeCardsPageSchema,
   pendingAskListSchema,
-  taskListPageSchema,
   taskMovePreviewResponseSchema,
   workflowBoardSchema,
 } from "./workflowBoard";
 import { boardColumnSchema } from "./common";
+import { taskListPageSchemaForRequest } from "./projectTasks";
 
 const workspace = {
   workspace_id: "workspace-default",
@@ -79,7 +79,9 @@ describe("workflow board schemas", () => {
       generated_at_unix_ms: 1,
       tasks: [],
     };
-    expect(() => taskListPageSchema.parse({ ...input, group: "future" })).toThrow();
+    expect(() =>
+      taskListPageSchemaForRequest("project-1", undefined).parse({ ...input, group: "future" }),
+    ).toThrow();
   });
 
   it("preserves explicit nullable Node Group membership", () => {

@@ -499,4 +499,146 @@ describe("ApiClient workflow labels", () => {
       }),
     ).rejects.toBeInstanceOf(ContractError);
   });
+
+  it.each([
+    {
+      name: "another Project",
+      input: { projectID: "project-1", labelFilter: { kind: "none" } as const },
+      scope: { project_id: "project-2" },
+    },
+    {
+      name: "another Workflow",
+      input: {
+        projectID: "project-1",
+        workflowID: smallID,
+        labelFilter: { kind: "none" } as const,
+      },
+      scope: { project_id: "project-1", workflow_id: urgentID },
+    },
+    {
+      name: "a Workflow scope for a Project-wide request",
+      input: { projectID: "project-1", labelFilter: { kind: "none" } as const },
+      scope: { project_id: "project-1", workflow_id: smallID },
+    },
+  ])("rejects a Task-list response scoped to $name", async ({ input, scope }) => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.list",
+          result: {
+            scope,
+            matching_workflow_cardinality: "one",
+            next_offset: null,
+            generated_at_unix_ms: 7,
+            tasks: [],
+          },
+        },
+      ]),
+    );
+
+    await expect(client.listTasks(input)).rejects.toBeInstanceOf(ContractError);
+  });
+
+  it.each([
+    {
+      name: "none with Tasks",
+      cardinality: "none",
+      tasks: [taskListRow(smallID)],
+    },
+    {
+      name: "one with mixed Workflow IDs",
+      cardinality: "one",
+      tasks: [taskListRow(smallID), taskListRow(urgentID)],
+    },
+    {
+      name: "multiple for a Workflow-narrowed request",
+      cardinality: "multiple",
+      tasks: [taskListRow(smallID)],
+      workflowID: smallID,
+    },
+    {
+      name: "a Task outside the narrowed Workflow",
+      cardinality: "one",
+      tasks: [taskListRow(urgentID)],
+      workflowID: smallID,
+    },
+  ] as const)("rejects a Task-list response with $name", async ({ cardinality, tasks, workflowID }) => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.list",
+          result: {
+            scope: {
+              project_id: "project-1",
+              ...(workflowID === undefined ? {} : { workflow_id: workflowID }),
+            },
+            matching_workflow_cardinality: cardinality,
+            next_offset: null,
+            generated_at_unix_ms: 7,
+            tasks,
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        ...(workflowID === undefined ? {} : { workflowID }),
+        labelFilter: { kind: "none" },
+      }),
+    ).rejects.toBeInstanceOf(ContractError);
+  });
+
+  it("rejects a Task-list status whose native state does not match its kind", async () => {
+    const client = new ApiClient(
+      new FakeRpcTransport([
+        {
+          method: "workflow.task.list",
+          result: {
+            scope: { project_id: "project-1" },
+            matching_workflow_cardinality: "one",
+            next_offset: null,
+            generated_at_unix_ms: 7,
+            tasks: [
+              {
+                ...taskListRow(smallID),
+                status: {
+                  kind: "done",
+                  native_state: "active",
+                  node_ids: [],
+                  attention_types: [],
+                },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    await expect(
+      client.listTasks({
+        projectID: "project-1",
+        labelFilter: { kind: "none" },
+      }),
+    ).rejects.toBeInstanceOf(ContractError);
+  });
 });
+
+function taskListRow(workflowID: string) {
+  return {
+    task_id: `task-${workflowID}`,
+    short_id: "PROJ-1",
+    workflow_id: workflowID,
+    title: "Ship validation",
+    created_at_unix_ms: 1,
+    updated_at_unix_ms: 2,
+    status: {
+      kind: "active",
+      native_state: "active",
+      node_ids: [],
+      attention_types: [],
+    },
+    labels: [],
+  };
+}

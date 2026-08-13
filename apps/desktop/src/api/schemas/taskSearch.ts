@@ -1,6 +1,5 @@
 import { z } from "zod";
 
-import type { TaskStatusKind } from "../models";
 import type {
   TaskSearchFTS5Hit,
   TaskSearchGroup,
@@ -8,33 +7,12 @@ import type {
   TaskSearchResponse,
   TaskSearchSource,
 } from "../taskSearch";
-import { taskStatusSchema } from "./common";
+import { coherentTaskStatusSchema } from "./common";
 
 const exactNonBlankString = z
   .string()
   .min(1)
   .refine((value) => value.trim() === value);
-
-const nativeStateByKind = {
-  done: "terminal",
-  waiting_question: "waiting_ask",
-  waiting_approval: "waiting_approval",
-  interrupted: "interrupted",
-  running: "running",
-  queued: "queued",
-  backlog: "active",
-  active: "active",
-} as const satisfies Readonly<Record<TaskStatusKind, string>>;
-
-const taskSearchStatusSchema = taskStatusSchema.superRefine((value, context) => {
-  if (value.nativeState !== nativeStateByKind[value.kind]) {
-    context.addIssue({
-      code: "custom",
-      message: "native state does not match kind",
-      path: ["nativeState"],
-    });
-  }
-});
 
 const titleOrBodySourceSchema = z
   .object({ kind: z.enum(["title", "body"]) })
@@ -57,11 +35,7 @@ const commentSourceSchema = z
     commentID: value.comment_id,
   }));
 
-const literalSourceSchema = z.union([
-  shortIDSourceSchema,
-  titleOrBodySourceSchema,
-  commentSourceSchema,
-]);
+const literalSourceSchema = z.union([shortIDSourceSchema, titleOrBodySourceSchema, commentSourceSchema]);
 const fts5SourceSchema = z.union([titleOrBodySourceSchema, commentSourceSchema]);
 
 const literalHitSchema: z.ZodType<TaskSearchLiteralHit> = z
@@ -110,7 +84,7 @@ function groupSchema(
       short_id: exactNonBlankString,
       workflow_id: exactNonBlankString,
       title: exactNonBlankString,
-      status: taskSearchStatusSchema,
+      status: coherentTaskStatusSchema,
       total_hit_count: z.number().int().positive(),
       hits: z.array(hitSchema).min(1),
     })
