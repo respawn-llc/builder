@@ -63,14 +63,21 @@ message SessionLaunchIntent {
 }
 
 message RunPromptOverrides {
-  optional string agent_role = 1 [(buf.validate.field).string.min_len = 1];
-  string model = 2;
-  string provider_override = 3;
-  string thinking_level = 4;
-  string theme = 5;
-  int32 model_timeout_seconds = 6;
-  string tools = 7;
-  string openai_base_url = 8;
+  optional string agent_role = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.run_prompt_agent_role_nonblank"
+      message: "agent_role must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string model = 2 [(buf.validate.field).string.min_len = 1];
+  optional string provider_override = 3 [(buf.validate.field).string.min_len = 1];
+  optional string thinking_level = 4 [(buf.validate.field).string.min_len = 1];
+  optional string theme = 5 [(buf.validate.field).string.min_len = 1];
+  optional int32 model_timeout_seconds = 6 [(buf.validate.field).int32.gte = 1];
+  optional string tools = 7 [(buf.validate.field).string.min_len = 1];
+  optional string openai_base_url = 8 [(buf.validate.field).string.min_len = 1];
 }
 
 enum ModelVerbosity {

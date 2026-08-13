@@ -19,7 +19,10 @@ import (
 	"github.com/gofrs/flock"
 )
 
-const fingerprintVersion = "kent-protobuf-generation-v1"
+const (
+	fingerprintVersion             = "kent-protobuf-generation-v1"
+	typeScriptGeneratorFingerprint = "ts-generator"
+)
 
 type Target struct {
 	Name       string
@@ -260,11 +263,21 @@ func (m *Manager) ensureTypeScriptGenerator() error {
 	if executable := os.Getenv("KENT_PROTOBUF_TS_GENERATOR"); executable != "" {
 		return ensureExecutable(executable)
 	}
-	executable := filepath.Join(m.RepositoryRoot, "tools", "protobuf", "node_modules", ".bin", "protoc-gen-es")
-	if _, err := os.Stat(executable); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
+	inputFingerprint, err := hashInputs(m.RepositoryRoot,
+		"tools/protobuf/package.json",
+		"tools/protobuf/pnpm-lock.yaml",
+	)
+	if err != nil {
 		return err
+	}
+	metadataPath := filepath.Join(m.RepositoryRoot, ".generated", "protobuf", typeScriptGeneratorFingerprint)
+	executable := filepath.Join(m.RepositoryRoot, "tools", "protobuf", "node_modules", ".bin", "protoc-gen-es")
+	installedFingerprint, readErr := os.ReadFile(metadataPath)
+	if readErr == nil && strings.TrimSpace(string(installedFingerprint)) == inputFingerprint {
+		return ensureExecutable(executable)
+	}
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
 	}
 	command := exec.Command("pnpm", "install", "--frozen-lockfile")
 	command.Dir = filepath.Join(m.RepositoryRoot, "tools", "protobuf")
@@ -273,7 +286,13 @@ func (m *Manager) ensureTypeScriptGenerator() error {
 	if err := command.Run(); err != nil {
 		return fmt.Errorf("install TypeScript Protobuf generator: %w", err)
 	}
-	return nil
+	if err := ensureExecutable(executable); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(metadataPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(metadataPath, []byte(inputFingerprint+"\n"), 0o644)
 }
 
 func ensureExecutable(path string) error {
@@ -298,10 +317,15 @@ func (m *Manager) inputFingerprint(target Target) (string, error) {
 		"tools/protobuf/internal/registrygen",
 	}
 	inputs = append(inputs, target.Inputs...)
+	return hashInputs(m.RepositoryRoot, inputs...)
+}
+
+func hashInputs(repositoryRoot string, inputs ...string) (string, error) {
 	hasher := sha256.New()
-	_, _ = io.WriteString(hasher, fingerprintVersion+"\x00"+target.Name+"\x00")
+	_, _ = io.WriteString(hasher, fingerprintVersion+"\x00")
 	for _, input := range inputs {
-		if err := hashPath(hasher, m.RepositoryRoot, input); err != nil {
+		_, _ = io.WriteString(hasher, input+"\x00")
+		if err := hashPath(hasher, repositoryRoot, input); err != nil {
 			return "", err
 		}
 	}

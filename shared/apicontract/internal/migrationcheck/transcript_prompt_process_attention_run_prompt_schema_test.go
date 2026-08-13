@@ -9,6 +9,7 @@ import (
 	processpb "core/shared/protoapi/gen/kent/api/process"
 	promptpb "core/shared/protoapi/gen/kent/api/prompt"
 	runpromptpb "core/shared/protoapi/gen/kent/api/run_prompt"
+	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	transcriptpb "core/shared/protoapi/gen/kent/api/transcript"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
@@ -154,6 +155,25 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	providerMismatch.ProviderModelMismatch = nil
 	if err := protoapi.ValidateGeneratedMessage(providerMismatch); err == nil {
 		t.Fatal("accepted provider-model mismatch reason without mismatch facts")
+	}
+
+	latestAnswer := &transcriptpb.LatestFinalAnswerSuccess{Answer: stringPointer(" ")}
+	if err := protoapi.ValidateGeneratedMessage(latestAnswer); err == nil {
+		t.Fatal("accepted blank present latest final answer")
+	}
+
+	overrides := &sessionlaunchpb.RunPromptOverrides{AgentRole: stringPointer(" ")}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted blank present agent role override")
+	}
+	overrides = &sessionlaunchpb.RunPromptOverrides{Model: stringPointer("")}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted empty present model override")
+	}
+	zeroTimeout := int32(0)
+	overrides = &sessionlaunchpb.RunPromptOverrides{ModelTimeoutSeconds: &zeroTimeout}
+	if err := protoapi.ValidateGeneratedMessage(overrides); err == nil {
+		t.Fatal("accepted zero present model timeout override")
 	}
 
 	background := &transcriptpb.BackgroundActivity{
@@ -435,6 +455,10 @@ func TestNewSliceClosedScalarCoverageIsExact(t *testing.T) {
 		transcriptpb.NoticeSeverity_NOTICE_SEVERITY_UNSPECIFIED.Descriptor(): {
 			"NOTICE_SEVERITY_UNSPECIFIED", "NOTICE_SEVERITY_INFO",
 			"NOTICE_SEVERITY_WARNING", "NOTICE_SEVERITY_ERROR",
+		},
+		sharedpb.TranscriptCloseReason_TRANSCRIPT_CLOSE_REASON_UNSPECIFIED.Descriptor(): {
+			"TRANSCRIPT_CLOSE_REASON_UNSPECIFIED", "TRANSCRIPT_CLOSE_REASON_SUBSCRIBER_OVERFLOW",
+			"TRANSCRIPT_CLOSE_REASON_CONTRACT_VIOLATION",
 		},
 		runpromptpb.MessagePhase_MESSAGE_PHASE_UNSPECIFIED.Descriptor(): {
 			"MESSAGE_PHASE_UNSPECIFIED", "MESSAGE_PHASE_COMMENTARY", "MESSAGE_PHASE_FINAL",

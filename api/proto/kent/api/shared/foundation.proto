@@ -22,10 +22,19 @@ message InternalFailureDetails {
   optional string cause = 2 [(buf.validate.field).string.min_len = 1];
 }
 
+enum TranscriptCloseReason {
+  TRANSCRIPT_CLOSE_REASON_UNSPECIFIED = 0;
+  TRANSCRIPT_CLOSE_REASON_SUBSCRIBER_OVERFLOW = 1;
+  TRANSCRIPT_CLOSE_REASON_CONTRACT_VIOLATION = 2;
+}
+
 message StreamCompletion {
   optional int32 code = 1;
   optional string message = 2;
-  optional string transcript_close_reason = 3;
+  optional TranscriptCloseReason transcript_close_reason = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
 }
 
 message Envelope {

@@ -2,6 +2,7 @@ package scripts
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ func TestGoAndTypeScriptReportTheSameDescriptorSet(t *testing.T) {
 
 	build := exec.Command("pnpm", "build")
 	build.Dir = packageRoot
+	build.Env = append(os.Environ(), "KENT_PROTOBUF_OUTPUTS_READY=ts")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build TypeScript contract package: %v\n%s", err, output)
 	}

@@ -729,7 +729,16 @@ message Page {
 
 message PageSuccess { Page transcript = 1 [(buf.validate.field).required = true]; }
 message LatestFinalAnswerRequest { string session_id = 1 [(buf.validate.field).string.min_len = 1]; }
-message LatestFinalAnswerSuccess { optional string answer = 1; }
+message LatestFinalAnswerSuccess {
+  optional string answer = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.latest_final_answer_nonblank"
+      message: "answer must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
 message SubscribeRequest { string session_id = 1 [(buf.validate.field).string.min_len = 1]; }
 message AppendCommittedEntryRequest {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
