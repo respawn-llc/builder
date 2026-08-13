@@ -691,11 +691,7 @@ func newMetadataTestStoreWithoutBinding(t *testing.T) (*Store, config.App) {
 func newMetadataTestStoreForWorkspace(t *testing.T, workspace string) (*Store, config.App) {
 	t.Helper()
 	cfg := loadMetadataTestConfig(t, workspace, filepath.Join(t.TempDir(), "persistence"))
-	store, err := Open(cfg.PersistenceRoot)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, cfg.PersistenceRoot)
 	return store, cfg
 }
 

@@ -847,7 +847,7 @@ func newProjectViewMetadataService(t testing.TB, store *metadata.Store) *Service
 	if err != nil {
 		t.Fatalf("workflowstore.New: %v", err)
 	}
-	return svc.WithWorkflowExecution(workflowexecution.NewMutationPermit(), projectViewQuiescentExecution{}, workflowStore)
+	return svc.WithWorkflowExecution(workflowexecution.NewTaskMutationCoordinator(), projectViewQuiescentExecution{}, workflowStore)
 }
 
 type projectViewQuiescentExecution struct {

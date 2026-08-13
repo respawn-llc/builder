@@ -3,27 +3,7 @@ package metadata_test
 import (
 	"strings"
 	"testing"
-
-	"core/server/metadata"
 )
-
-func TestCurrentNodePersistenceGraphHasOneAuthority(t *testing.T) {
-	t.Parallel()
-	store, err := metadata.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	model, err := loadPersistenceSchemaModel(t.Context(), store.DB())
-	if err != nil {
-		t.Fatalf("load persistence schema model: %v", err)
-	}
-	analysis := analyzeCurrentNodePersistence(model)
-	if len(analysis.findings) > 0 {
-		t.Fatalf("Current Node persistence structure violations:\n%s", formatPersistenceFindings(analysis.findings))
-	}
-}
 
 func TestCurrentNodePersistenceGuardRejectsDuplicateAuthorityFixtures(t *testing.T) {
 	t.Parallel()

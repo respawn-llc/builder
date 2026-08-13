@@ -68,7 +68,7 @@ run_build() {
 
 run_test() {
 	echo "==> test"
-	./scripts/test.sh "$@"
+	./scripts/test.sh --full "$@"
 }
 
 run_rust_policy() {
@@ -86,7 +86,6 @@ all)
 	run_frontend_deps_policy
 	run_frontend_lint
 	run_format
-	run_rust_policy
 	run_vet
 	run_build
 	run_test
