@@ -339,12 +339,13 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 	attentionSubscription := executables[protocol.MethodAttentionNotificationSubscribe]
 	attentionSubscription.executeSubscription = executeAttentionNotificationSubscription
 	executables[protocol.MethodAttentionNotificationSubscribe] = attentionSubscription
-	executables[protocol.MethodWorktreeWorkspaceList] = inboundUnary[serverapi.WorktreeWorkspaceListRequest, apicontract.AuthorizedProjectWorkspaceBinding](
+	executables[protocol.MethodWorktreeWorkspaceList] = inboundTrustedUnary[serverapi.WorktreeWorkspaceListRequest, apicontract.AuthorizedProjectWorkspaceBinding, serverapi.WorktreeWorkspaceListResponse](
 		protocol.MethodWorktreeWorkspaceList,
 		apicontract.SemanticValidationRequired,
 		requestDecoderDefault,
 		nil,
 		authorizeProjectWorkspaceBinding,
+		handleWorktreeWorkspaceList,
 	)
 	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, noAuthorizationFacts, serverapi.SessionRuntimeActivateResponse](
 		protocol.MethodSessionRuntimeActivate,
@@ -363,6 +364,20 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		handleSessionRuntimeRelease,
 	)
 	return executables
+}
+
+func handleWorktreeWorkspaceList(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.WorktreeWorkspaceListRequest],
+	binding apicontract.AuthorizedProjectWorkspaceBinding,
+) (serverapi.WorktreeWorkspaceListResponse, error) {
+	trusted, ok := g.deps.WorktreeClient().(apicontract.WorktreeTrustedService)
+	if !ok {
+		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree service does not implement trusted Workspace list")
+	}
+	return trusted.ListWorkspaceWorktreesValidated(ctx, request, binding)
 }
 
 func prepareSessionRuntimeActivate(source serverapi.SessionRuntimeActivateRequest, state *connectionState) serverapi.SessionRuntimeActivateRequest {

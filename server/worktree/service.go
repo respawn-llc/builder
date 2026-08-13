@@ -20,6 +20,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/apicontract"
 	"core/shared/boundedio"
 	"core/shared/clientui"
 	"core/shared/config"
@@ -1687,19 +1688,35 @@ func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListR
 }
 
 func (s *Service) ListWorkspaceWorktrees(ctx context.Context, req serverapi.WorktreeWorkspaceListRequest) (serverapi.WorktreeWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, err
-	}
-	if s == nil || s.metadata == nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("worktree service metadata store is required")
-	}
-	binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, strings.TrimSpace(req.WorkspaceID))
-	if err != nil {
-		return serverapi.WorktreeWorkspaceListResponse{}, err
-	}
-	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(req.ProjectID) {
-		return serverapi.WorktreeWorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeWorkspaceListRequest]) (serverapi.WorktreeWorkspaceListResponse, error) {
+			if s == nil || s.metadata == nil {
+				return serverapi.WorktreeWorkspaceListResponse{}, errors.New("worktree service metadata store is required")
+			}
+			request := validated.Value()
+			binding, err := s.metadata.LookupWorkspaceBindingByID(ctx, request.WorkspaceID)
+			if err != nil {
+				return serverapi.WorktreeWorkspaceListResponse{}, err
+			}
+			if binding.ProjectID != request.ProjectID {
+				return serverapi.WorktreeWorkspaceListResponse{}, serverapi.ErrWorkspaceNotRegistered
+			}
+			return s.ListWorkspaceWorktreesValidated(ctx, validated, apicontract.AuthorizedProjectWorkspaceBinding{
+				ProjectID:     binding.ProjectID,
+				WorkspaceID:   binding.WorkspaceID,
+				CanonicalRoot: binding.CanonicalRoot,
+			})
+		},
+	)
+}
+
+func (s *Service) ListWorkspaceWorktreesValidated(
+	ctx context.Context,
+	_ apicontract.Validated[serverapi.WorktreeWorkspaceListRequest],
+	binding apicontract.AuthorizedProjectWorkspaceBinding,
+) (serverapi.WorktreeWorkspaceListResponse, error) {
 	topology, err := s.projectTopology(ctx, binding.WorkspaceID, binding.CanonicalRoot)
 	if err != nil {
 		return serverapi.WorktreeWorkspaceListResponse{}, err
