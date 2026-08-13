@@ -155,6 +155,20 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 		t.Fatal("accepted backgrounded activity with terminal kill fact")
 	}
 
+	processList := &processpb.ListRequest{}
+	if err := protoapi.ValidateGeneratedMessage(processList); err != nil {
+		t.Fatalf("process list without filters: %v", err)
+	}
+	processList.OwnerSessionId = stringPointer("")
+	if err := protoapi.ValidateGeneratedMessage(processList); err == nil {
+		t.Fatal("accepted present empty process owner Session filter")
+	}
+	processList.OwnerSessionId = nil
+	processList.OwnerRunId = stringPointer("")
+	if err := protoapi.ValidateGeneratedMessage(processList); err == nil {
+		t.Fatal("accepted present empty process owner Run filter")
+	}
+
 	liveRun := &transcriptpb.LiveRunFinished{
 		Status:     transcriptpb.LiveRunStatus_LIVE_RUN_STATUS_COMPLETED,
 		ResultKind: transcriptpb.LiveRunResultKind_LIVE_RUN_RESULT_KIND_NO_FINAL_ANSWER,

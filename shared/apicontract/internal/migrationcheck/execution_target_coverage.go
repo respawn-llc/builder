@@ -186,6 +186,7 @@ func actualTargetScalarMappings() []WireScalarMapping {
 
 func actualTargetPresenceMappings() []WirePresenceMapping {
 	var result []WirePresenceMapping
+	result = append(result, presenceMappings[serverapi.ProcessListRequest]("kent.api.process.ListRequest", "owner_session_id", "owner_run_id")...)
 	result = append(result, presenceMappings[protocol.StreamCompleteParams]("kent.api.shared.StreamCompletion", "code", "message", "transcript_close_reason")...)
 	result = append(result, presenceMappings[protocol.ServerIdentity]("kent.api.connection.ServerIdentity", "persistence_root_id")...)
 	result = append(result, presenceMappings[serverapi.AuthBootstrapOAuthConfig]("kent.api.auth.BootstrapOAuthConfig", "client_id", "issuer")...)

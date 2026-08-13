@@ -44,8 +44,8 @@ message BackgroundProcess {
 }
 
 message ListRequest {
-  string owner_session_id = 1;
-  string owner_run_id = 2;
+  optional string owner_session_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string owner_run_id = 2 [(buf.validate.field).string.min_len = 1];
 }
 
 message ListSuccess {
