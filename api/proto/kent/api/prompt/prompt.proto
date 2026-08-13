@@ -80,7 +80,14 @@ message ApprovalOption {
     defined_only: true
     not_in: [0]
   }];
-  string label = 2 [(buf.validate.field).string.min_len = 1];
+  string label = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.prompt.approval_option_label_nonblank"
+      message: "label must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message Approval {

@@ -53,7 +53,14 @@ message ListSuccess {
 }
 
 message GetRequest {
-  string process_id = 1 [(buf.validate.field).string.min_len = 1];
+  string process_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.process.get_process_id_nonblank"
+      message: "process_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message GetSuccess {
@@ -61,11 +68,25 @@ message GetSuccess {
 }
 
 message KillRequest {
-  string process_id = 1 [(buf.validate.field).string.min_len = 1];
+  string process_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.process.kill_process_id_nonblank"
+      message: "process_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message InlineOutputRequest {
-  string process_id = 1 [(buf.validate.field).string.min_len = 1];
+  string process_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.process.inline_output_process_id_nonblank"
+      message: "process_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   int32 max_chars = 2;
 }
 

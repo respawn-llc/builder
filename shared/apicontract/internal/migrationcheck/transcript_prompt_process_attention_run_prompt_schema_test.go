@@ -17,6 +17,7 @@ import (
 	transcriptpb "core/shared/protoapi/gen/kent/api/transcript"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
 	"core/shared/protocol"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -64,6 +65,24 @@ func TestTranscriptPromptProcessAttentionAndRunPromptRoutesAreDescriptorOwned(t 
 
 func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	validUUID := "123e4567-e89b-42d3-a456-426614174000"
+	for name, request := range map[string]proto.Message{
+		"get":           &processpb.GetRequest{ProcessId: " "},
+		"kill":          &processpb.KillRequest{ProcessId: " "},
+		"inline output": &processpb.InlineOutputRequest{ProcessId: " "},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(request); err == nil {
+			t.Fatalf("%s accepted a blank process ID", name)
+		}
+	}
+
+	approvalOption := &promptpb.ApprovalOption{
+		Decision: promptpb.ApprovalDecision_APPROVAL_DECISION_ALLOW_ONCE,
+		Label:    " ",
+	}
+	if err := protoapi.ValidateGeneratedMessage(approvalOption); err == nil {
+		t.Fatal("accepted a blank approval option label")
+	}
+
 	validQuestion := &promptpb.Question{
 		PromptId:               "prompt-1",
 		SessionId:              "session-1",
