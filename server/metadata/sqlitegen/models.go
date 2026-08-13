@@ -161,7 +161,6 @@ type Session struct {
 	Category             sql.NullString
 	CreatedAtUnixMs      int64
 	UpdatedAtUnixMs      int64
-	LastSequence         int64
 	ModelRequestCount    int64
 	LaunchVisible        int64
 	CwdRelpath           string

@@ -122,6 +122,114 @@ func TestAllMetadataMigrationsMatchLatestInMemorySchema(t *testing.T) {
 	}
 }
 
+func TestDropSessionLastSequenceMigrationPreservesSessionRows(t *testing.T) {
+	db := openEmptyMetadataTestDatabase(t)
+	t.Cleanup(func() { _ = db.Close() })
+	provider, err := newMetadataMigrationProvider(db)
+	if err != nil {
+		t.Fatalf("create metadata migration provider: %v", err)
+	}
+	if _, err := provider.UpTo(t.Context(), 85); err != nil {
+		t.Fatalf("migrate metadata schema to version 85: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO projects (
+			id,
+			display_name,
+			created_at_unix_ms,
+			updated_at_unix_ms,
+			metadata_json,
+			project_key,
+			next_task_seq,
+			default_project_workflow_link_id,
+			primary_workspace_id
+		) VALUES ('project-last-sequence', 'Project', 1, 1, '{}', 'SEQ', 1, NULL, '')
+	`); err != nil {
+		t.Fatalf("seed Project: %v", err)
+	}
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO sessions (
+			id,
+			project_id,
+			artifact_relpath,
+			name,
+			first_prompt_preview,
+			input_draft,
+			category,
+			created_at_unix_ms,
+			updated_at_unix_ms,
+			last_sequence,
+			model_request_count,
+			launch_visible,
+			cwd_relpath,
+			continuation_json,
+			locked_json,
+			usage_state_json,
+			metadata_json
+		) VALUES (
+			'session-last-sequence',
+			'project-last-sequence',
+			'projects/project-last-sequence/sessions/session-last-sequence',
+			'Session',
+			'preserved preview',
+			'',
+			'main',
+			1,
+			2,
+			42,
+			3,
+			1,
+			'.',
+			'{}',
+			'{}',
+			'{}',
+			'{}'
+		)
+	`); err != nil {
+		t.Fatalf("seed Session: %v", err)
+	}
+	if _, err := provider.Up(t.Context()); err != nil {
+		t.Fatalf("apply Session sequence-authority migration: %v", err)
+	}
+	var (
+		sessionID          string
+		firstPromptPreview string
+	)
+	if err := db.QueryRowContext(
+		t.Context(),
+		`SELECT id, first_prompt_preview FROM sessions WHERE id = 'session-last-sequence'`,
+	).Scan(&sessionID, &firstPromptPreview); err != nil {
+		t.Fatalf("read migrated Session: %v", err)
+	}
+	if sessionID != "session-last-sequence" || firstPromptPreview != "preserved preview" {
+		t.Fatalf("migrated Session = %q/%q", sessionID, firstPromptPreview)
+	}
+	rows, err := db.QueryContext(t.Context(), `PRAGMA table_info(sessions)`)
+	if err != nil {
+		t.Fatalf("inspect migrated Session schema: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid        int
+			name       string
+			columnType string
+			notNull    int
+			defaultSQL sql.NullString
+			primaryKey int
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultSQL, &primaryKey); err != nil {
+			t.Fatalf("scan Session column: %v", err)
+		}
+		if name == "last_sequence" {
+			t.Fatal("last_sequence remains in migrated Session schema")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate Session columns: %v", err)
+	}
+}
+
 func TestMetadataTestsDoNotOpenFileBackedDatabases(t *testing.T) {
 	_, sourcePath, _, ok := runtime.Caller(0)
 	if !ok {

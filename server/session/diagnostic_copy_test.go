@@ -67,7 +67,7 @@ func TestDiagnosticSessionCopyLeavesSourceUntouched(t *testing.T) {
 	if err := copyStore.SetInputDraft("inspection draft"); err != nil {
 		t.Fatalf("mutate diagnostic metadata: %v", err)
 	}
-	if got := copyStore.Meta(); got.LastSequence != beforeRecord.Meta.LastSequence+1 || got.InputDraft != "inspection draft" {
+	if got := copyStore.Meta(); got.InputDraft != "inspection draft" {
 		t.Fatalf("diagnostic Session copy meta = %+v, want isolated event and metadata mutations", got)
 	}
 
@@ -79,7 +79,7 @@ func TestDiagnosticSessionCopyLeavesSourceUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve persisted Session after inspection: %v", err)
 	}
-	if afterRecord.Meta.LastSequence != beforeRecord.Meta.LastSequence || afterRecord.Meta.InputDraft != beforeRecord.Meta.InputDraft {
+	if afterRecord.Meta.InputDraft != beforeRecord.Meta.InputDraft {
 		t.Fatalf("diagnostic copy changed source metadata: before=%+v after=%+v", beforeRecord.Meta, afterRecord.Meta)
 	}
 	if err := inspection.Close(); err != nil {

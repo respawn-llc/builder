@@ -170,7 +170,6 @@ func InitializeChatDraft(store *Store, state ChatDraftState) error {
 		store.meta.InputDraft != "" ||
 		store.meta.Continuation != nil ||
 		store.meta.ChatSettings != nil ||
-		store.meta.LastSequence != 0 ||
 		store.meta.ConversationEstablished ||
 		store.meta.ModelRequestCount != 0 ||
 		store.meta.Locked != nil {

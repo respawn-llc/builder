@@ -134,9 +134,6 @@ func TestConcurrentOpenWaitsForActiveAppendPersistenceLock(t *testing.T) {
 	if opened.err != nil {
 		t.Fatalf("concurrent open: %v", opened.err)
 	}
-	if got := opened.store.Meta().LastSequence; got != 1 {
-		t.Fatalf("concurrently opened metadata sequence = %d, want 1", got)
-	}
 	recovered, err := collectEvents(opened.store)
 	if err != nil {
 		t.Fatalf("collect recovered events: %v", err)

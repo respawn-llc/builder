@@ -423,9 +423,6 @@ func TestEventLogMaterializationRequiresPersistenceObserverWithoutCreatingArtifa
 	if _, err := store.MaterializeEventLog(); err == nil {
 		t.Fatal("MaterializeEventLog succeeded without durable session metadata")
 	}
-	if storeTestMeta(store).LastSequence != 0 {
-		t.Fatalf("last sequence = %d, want unchanged", storeTestMeta(store).LastSequence)
-	}
 	if _, err := os.Stat(store.Dir()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("session artifact created without persistence observer: %v", err)
 	}

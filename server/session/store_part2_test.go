@@ -284,7 +284,6 @@ func TestEventUseRejectsMissingEventsFileWithoutMutation(t *testing.T) {
 		WorkspaceContainer: "workspace-x",
 		CreatedAt:          time.Now().UTC(),
 		UpdatedAt:          time.Now().UTC(),
-		LastSequence:       3,
 	}
 	observer := &recordingPersistenceObserver{}
 
@@ -414,7 +413,7 @@ func TestAppendEventRepairsTruncatedTailBeforeAppend(t *testing.T) {
 	}
 }
 
-func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
+func TestEventUseDerivesSequenceFromEventLog(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
 	if _, _, err := log.AppendRecord(stringPointer("s1"), sessionTestMessage(MessageRoleUser, "u1")); err != nil {
@@ -425,7 +424,6 @@ func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	}
 
 	meta := store.metaSnapshot().meta
-	meta.LastSequence = 0
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 		meta.SessionID: {
 			SessionDir: store.Dir(),
@@ -440,9 +438,6 @@ func TestEventUseReconcilesMetaLastSequenceFromEventLog(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if got := storeTestMeta(reopened).LastSequence; got != 0 {
-		t.Fatalf("metadata-only open changed last sequence to %d", got)
 	}
 	reopenedLog, err := reopened.MaterializeEventLog()
 	if err != nil {

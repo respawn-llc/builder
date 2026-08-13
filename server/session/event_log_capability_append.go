@@ -294,7 +294,6 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 
 	postMeta := cloneMeta(s.meta)
-	postMeta.LastSequence = records[len(records)-1].Seq()
 	postMeta.UpdatedAt = appendNow
 	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
 	if err != nil {

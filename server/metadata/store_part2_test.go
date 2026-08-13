@@ -35,7 +35,6 @@ func TestResolvePersistedSessionRejectsEscapingArtifactRelpath(t *testing.T) {
 		ParentAgentSessionID: sql.NullString{},
 		CreatedAtUnixMs:      now,
 		UpdatedAtUnixMs:      now,
-		LastSequence:         0,
 		ModelRequestCount:    0,
 		LaunchVisible:        0,
 		CwdRelpath:           ".",

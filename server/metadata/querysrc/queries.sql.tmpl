@@ -1969,7 +1969,6 @@ INSERT INTO sessions (
     category,
     created_at_unix_ms,
     updated_at_unix_ms,
-    last_sequence,
     model_request_count,
     launch_visible,
     cwd_relpath,
@@ -1991,7 +1990,6 @@ INSERT INTO sessions (
     sqlc.narg(category),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms),
-    sqlc.arg(last_sequence),
     sqlc.arg(model_request_count),
     sqlc.arg(launch_visible),
     sqlc.arg(cwd_relpath),
@@ -2008,7 +2006,6 @@ ON CONFLICT(id) DO UPDATE SET
     parent_agent_session_id = excluded.parent_agent_session_id,
     category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
-    last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
@@ -2288,7 +2285,6 @@ SELECT
     s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
-    s.last_sequence,
     s.model_request_count,
     s.continuation_json,
     s.locked_json,

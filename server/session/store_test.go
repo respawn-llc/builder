@@ -632,7 +632,7 @@ func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T)
 	}
 }
 
-func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing.T) {
+func TestMaterializeEventLogDerivesLastSequenceFromTail(t *testing.T) {
 	store := newSessionTestStore(t)
 	for i := 0; i < 3; i++ {
 		appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleAssistant, "reply"))
@@ -640,7 +640,6 @@ func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing
 	trueLastSeq := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, store))
 
 	meta := storeTestMeta(store)
-	meta.LastSequence = 0
 	persistence := &testSessionMetadata{records: map[string]PersistedSessionRecord{
 		meta.SessionID: {
 			SessionDir: store.Dir(),
@@ -655,9 +654,6 @@ func TestMaterializeEventLogRecoversLastSequenceFromTailWhenMetaStale(t *testing
 	)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if got := storeTestMeta(opened).LastSequence; got != 0 {
-		t.Fatalf("metadata-only last sequence = %d, want stale authoritative value 0", got)
 	}
 	mustMaterializeSessionTestEventLog(t, opened)
 	if got := mustMaterializedRevision(mustMaterializeSessionTestEventLog(t, opened)); got != trueLastSeq {
@@ -700,7 +696,7 @@ func TestAppendTypedBatchReportsUncommittedEventLogFailure(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("built events = %+v, want the attempted event", events)
 	}
-	if meta := storeTestMeta(store); meta.LastSequence != 0 || meta.FirstPromptPreview != "" {
+	if meta := storeTestMeta(store); meta.FirstPromptPreview != "" {
 		t.Fatalf("metadata mutated after uncommitted append: %+v", meta)
 	}
 }
@@ -736,7 +732,7 @@ func TestAppendTypedBatchReportsCommittedObserverFailure(t *testing.T) {
 	if len(events) != 1 || events[0].Seq() != 1 {
 		t.Fatalf("committed events = %+v, want one sequence-1 event", events)
 	}
-	if meta := storeTestMeta(store); meta.LastSequence != 1 || meta.FirstPromptPreview != "committed despite observer failure" {
+	if meta := storeTestMeta(store); meta.FirstPromptPreview != "committed despite observer failure" {
 		t.Fatalf("metadata after committed observer failure = %+v", meta)
 	}
 }

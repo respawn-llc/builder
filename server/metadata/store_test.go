@@ -581,8 +581,8 @@ func TestUnlinkProjectWorkspacePreservesTerminalHistoryWithoutWorktreeDependency
 	execSeed(t, store.db, "terminal source task", `INSERT INTO tasks (id, project_workflow_link_id, workflow_revision_seen, task_seq, short_id, title, body, source_workspace_id, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('task-terminal-workspace', 'link-1', 1, 1, 'BLD-1', 'Terminal', '', ?, ?, ?, json_object('source_workspace_snapshot', json_object('workspace_id', ?, 'display_name', ?, 'root_path', ?)))`, attached.WorkspaceID, now, now, attached.WorkspaceID, attached.WorkspaceName, attached.CanonicalRoot)
 	insertTaskCurrentNode(t, store.db, "task-terminal-workspace", "node-done", nil)
-	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, last_sequence, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
-VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 0, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
+	execSeed(t, store.db, "historical workspace session", `INSERT INTO sessions (id, project_id, workspace_id, artifact_relpath, name, first_prompt_preview, input_draft, previous_session_id, parent_agent_session_id, created_at_unix_ms, updated_at_unix_ms, model_request_count, launch_visible, cwd_relpath, continuation_json, locked_json, usage_state_json, metadata_json)
+VALUES ('session-terminal-workspace', ?, ?, ?, 'Historical', '', '', NULL, NULL, ?, ?, 1, 1, '.', '{}', '{}', '{}', json_object('workspace_root', ?, 'workspace_container', ?))`, binding.ProjectID, attached.WorkspaceID, filepath.ToSlash(filepath.Join("projects", binding.ProjectID, "sessions", "session-terminal-workspace")), now, now, attached.CanonicalRoot, "sessions")
 
 	blockers, err := store.UnlinkProjectWorkspace(ctx, binding.ProjectID, attached.WorkspaceID)
 	if err != nil {
@@ -1213,7 +1213,7 @@ func TestResolvePersistedSessionRoundTripsRequiredStructuredMetadata(t *testing.
 	}
 }
 
-func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
+func TestMissingEventLogFailsAtEventUseWithoutMutation(t *testing.T) {
 	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
 	sess := createMetadataTestSession(t, store, cfg, binding)
@@ -1223,45 +1223,22 @@ func TestMissingEventLogRepairOccursAtEventUse(t *testing.T) {
 		t.Fatalf("remove events artifact: %v", err)
 	}
 
-	repaired, err := session.OpenByID(
+	opened, err := session.OpenByID(
 		cfg.PersistenceRoot,
 		sess.Meta().SessionID,
 		store.AuthoritativeSessionStoreOptions()...,
 	)
 	if err != nil {
-		t.Fatalf("session.OpenByID repair: %v", err)
+		t.Fatalf("session.OpenByID: %v", err)
 	}
 	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("metadata-only open repaired missing event log: %v", err)
 	}
-	repairedEventLog, err := repaired.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize missing event log: %v", err)
+	if _, err := opened.MaterializeEventLog(); err == nil {
+		t.Fatal("materialize missing event log unexpectedly succeeded")
 	}
-	if mustEventLogRevision(repairedEventLog) != 0 {
-		t.Fatalf("repaired event-log revision = %d, want fresh empty conversation", mustEventLogRevision(repairedEventLog))
-	}
-	if mustEventLogFreshness(repairedEventLog) != session.ConversationFreshnessFresh {
-		t.Fatalf("repaired freshness = %q, want fresh", mustEventLogFreshness(repairedEventLog))
-	}
-
-	reopened, err := session.OpenByID(
-		cfg.PersistenceRoot,
-		sess.Meta().SessionID,
-		store.AuthoritativeSessionStoreOptions()...,
-	)
-	if err != nil {
-		t.Fatalf("session.OpenByID reopen: %v", err)
-	}
-	reopenedEventLog, err := reopened.MaterializeEventLog()
-	if err != nil {
-		t.Fatalf("materialize reopened event log: %v", err)
-	}
-	if mustEventLogRevision(reopenedEventLog) != 0 {
-		t.Fatalf("reopened event-log revision = %d, want fresh empty conversation", mustEventLogRevision(reopenedEventLog))
-	}
-	if mustEventLogFreshness(reopenedEventLog) != session.ConversationFreshnessFresh {
-		t.Fatalf("reopened freshness = %q, want fresh", mustEventLogFreshness(reopenedEventLog))
+	if _, err := os.Stat(eventsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("event use mutated missing event log: %v", err)
 	}
 }
 

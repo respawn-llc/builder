@@ -2150,7 +2150,6 @@ SELECT
     s.category,
     s.created_at_unix_ms,
     s.updated_at_unix_ms,
-    s.last_sequence,
     s.model_request_count,
     s.continuation_json,
     s.locked_json,
@@ -2174,7 +2173,6 @@ type GetSessionRecordByIDRow struct {
 	Category             sql.NullString
 	CreatedAtUnixMs      int64
 	UpdatedAtUnixMs      int64
-	LastSequence         int64
 	ModelRequestCount    int64
 	ContinuationJson     string
 	LockedJson           string
@@ -2197,7 +2195,6 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.Category,
 		&i.CreatedAtUnixMs,
 		&i.UpdatedAtUnixMs,
-		&i.LastSequence,
 		&i.ModelRequestCount,
 		&i.ContinuationJson,
 		&i.LockedJson,
@@ -9817,7 +9814,6 @@ INSERT INTO sessions (
     category,
     created_at_unix_ms,
     updated_at_unix_ms,
-    last_sequence,
     model_request_count,
     launch_visible,
     cwd_relpath,
@@ -9845,8 +9841,7 @@ INSERT INTO sessions (
     ?17,
     ?18,
     ?19,
-    ?20,
-    ?21
+    ?20
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -9856,7 +9851,6 @@ ON CONFLICT(id) DO UPDATE SET
     parent_agent_session_id = excluded.parent_agent_session_id,
     category = excluded.category,
     updated_at_unix_ms = MAX(sessions.updated_at_unix_ms, excluded.updated_at_unix_ms),
-    last_sequence = excluded.last_sequence,
     model_request_count = excluded.model_request_count,
     launch_visible = CASE
         WHEN sessions.launch_visible <> 0 OR excluded.launch_visible <> 0 THEN 1
@@ -9882,7 +9876,6 @@ type UpsertSessionParams struct {
 	Category             sql.NullString
 	CreatedAtUnixMs      int64
 	UpdatedAtUnixMs      int64
-	LastSequence         int64
 	ModelRequestCount    int64
 	LaunchVisible        int64
 	CwdRelpath           string
@@ -9907,7 +9900,6 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.Category,
 		arg.CreatedAtUnixMs,
 		arg.UpdatedAtUnixMs,
-		arg.LastSequence,
 		arg.ModelRequestCount,
 		arg.LaunchVisible,
 		arg.CwdRelpath,
@@ -9916,7 +9908,7 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.UsageStateJson,
 		arg.MetadataJson,
 	)
-	err = recordQueryError(ctx, err, upsertSession, 21)
+	err = recordQueryError(ctx, err, upsertSession, 20)
 
 	return err
 }

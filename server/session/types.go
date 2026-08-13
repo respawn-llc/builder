@@ -203,7 +203,6 @@ type Meta struct {
 	ChatSettings                    *ChatSettingsOverrides           `json:"chat_settings,omitempty"`
 	CreatedAt                       time.Time                        `json:"created_at"`
 	UpdatedAt                       time.Time                        `json:"updated_at"`
-	LastSequence                    int64                            `json:"last_sequence"`
 	ConversationEstablished         bool                             `json:"conversation_established,omitempty"`
 	ModelRequestCount               int64                            `json:"model_request_count"`
 	PromptCacheLineageGeneration    int                              `json:"prompt_cache_lineage_generation,omitempty"`
