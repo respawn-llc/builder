@@ -301,14 +301,13 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	permit := workflowexecution.NewMutationPermit()
+	permit := workflowexecution.NewTaskMutationCoordinator()
 	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
 		t.Fatalf("new Task dependency counter: %v", err)
 	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority: fixture.authority,
-		MutationPermit:   permit,
 		TaskDependencies: dependencyCounter,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
@@ -438,14 +437,13 @@ func (f *currentNodeRunnerFixture) restartRuntime(t *testing.T) {
 		ResourceLifecycle: f.runtimes,
 		StepLifecycle:     currentNodeRunnerStepLifecycle{runtimes: f.runtimes},
 	})
-	permit := workflowexecution.NewMutationPermit()
+	permit := workflowexecution.NewTaskMutationCoordinator()
 	dependencyCounter, err := workflowview.NewTaskDependencyCounter(f.metadata)
 	if err != nil {
 		t.Fatalf("new restarted Task dependency counter: %v", err)
 	}
 	f.starter, err = NewStarter(f.cfg, f.metadata, f.store, nil, nil, StarterOptions{
 		RuntimeAuthority: f.authority,
-		MutationPermit:   permit,
 		TaskDependencies: dependencyCounter,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			f.mu.Lock()

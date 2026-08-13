@@ -182,7 +182,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 
 	var lease sessionruntime.WorkflowExecutionLease
 retryAdmission:
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.mutations.Run(ctx, reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -279,7 +279,7 @@ retryAdmission:
 			admitted: true,
 		}
 	}
-	if err := c.permit.Run(ctx, func(context.Context) error {
+	if err := c.mutations.Run(ctx, reference.TaskID, func(context.Context) error {
 		handle, ok := c.authority.ExecutionByScope(lease.ScopeID())
 		if !ok {
 			return errors.New("current node runner returned without its exact live scope")
@@ -854,7 +854,7 @@ func (c *CurrentNodeController) replaceTransferredUserInterruption(
 	defer cancel()
 	var committed bool
 	var diagnostic error
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		committed, diagnostic = classifyCurrentNodeInterruption(
 			c.store.ReplaceUserInterruptionWithAssignmentFailure(ctx, start.reference, detail),
 		)
@@ -1101,7 +1101,7 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailure(
 		detail = preparationErr.InterruptionDetail()
 	}
 	var committed bool
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		var diagnostic error
 		committed, diagnostic = classifyCurrentNodeInterruption(interrupt(
 			ctx,

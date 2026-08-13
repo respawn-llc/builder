@@ -26,13 +26,24 @@ const (
 
 func main() {
 	workers := flag.Int("workers", min(runtime.NumCPU(), 18), "maximum concurrent package test processes")
-	packagesPattern := flag.String("packages", "./...", "Go package pattern to test")
+	fresh := flag.Bool("fresh", false, "disable Go test-result caching")
+	packagesPattern := flag.String("packages", "", "Go package pattern to test (deprecated; use positional patterns)")
 	flag.Parse()
 	if *workers <= 0 {
 		fatalf("--workers must be positive")
 	}
 
-	packages, err := listPackages(*packagesPattern)
+	patterns := flag.Args()
+	if *packagesPattern != "" {
+		if len(patterns) > 0 {
+			fatalf("--packages cannot be combined with positional package patterns")
+		}
+		patterns = []string{*packagesPattern}
+	}
+	if len(patterns) == 0 {
+		patterns = []string{"./..."}
+	}
+	packages, err := listPackages(patterns)
 	if err != nil {
 		fatalf("list Go packages: %v", err)
 	}
@@ -40,13 +51,14 @@ func main() {
 	if err != nil {
 		fatalf("plan Go test shards: %v", err)
 	}
-	if err := runJobs(jobs, *workers); err != nil {
+	if err := runJobs(jobs, *workers, *fresh); err != nil {
 		fatalf("run Go test shards: %v", err)
 	}
 }
 
-func listPackages(pattern string) ([]goPackage, error) {
-	command := exec.Command("go", "list", "-json", pattern)
+func listPackages(patterns []string) ([]goPackage, error) {
+	arguments := append([]string{"list", "-json"}, patterns...)
+	command := exec.Command("go", arguments...)
 	var output bytes.Buffer
 	command.Stdout = &output
 	command.Stderr = os.Stderr

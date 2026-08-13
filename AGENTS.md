@@ -56,8 +56,8 @@ These should guide default architectural choices in addition to user preferences
 ## Tooling
 Prefer using scripts provided in `./scripts/` over raw commands like `cargo build`, `go test`, unless you need something specific.
 
-- build.sh - Prefer to build executables. Pass 0 or more args: `tui`, `server`, `desktop` to pick what to build. 0 args builds all. e.g. `./scripts/build.sh tui desktop`. Before handing off the task, build relevant targets **once** to verify correctness.
-- test.sh - runs test suites. pass 0 or more of: `tui`, `server`, `desktop` to specify the target to run tests for; any other argument is forwarded to `go test` (packages, `-run`, ...) and implies the server target. Don't ask for confirmation to run/write tests and run checks, do it proactively **ONCE before final handoff** to not block the development pipeline for hours by rerunning the same test suite after every change.
+- build.sh - Prefer to build executables. Bare `./scripts/build.sh` builds the Go server/CLI only. Pass `desktop` for frontend assets. Frozen Rust remains explicit-only via `tui`. Before handing off the task, build relevant targets **once** to verify correctness.
+- test.sh - runs affected cached tests by default. Use `./scripts/test.sh` during implementation; it selects changed Go packages plus reverse dependencies and affected desktop tests. Pass `server`, `desktop`, explicit Go packages, or `-run` for narrower checks. Use `./scripts/test.sh --full` **once before final handoff** for fresh repository-wide server and desktop verification. `--full` disables Go's test-result cache; never use it as an inner-loop command or rerun it after unchanged results. Rust is frozen and remains explicit-only via `./scripts/test.sh tui`.
 - dump-metadata-schema.sh - prints executable DDL for the latest effective metadata schema from an isolated migrated SQLite database.
 - ci-check.sh - run CI-like extensive check setup needed to open PRs.
 - install.sh/install.ps1 - production, user-facing installer scripts of the product. Not for development.
