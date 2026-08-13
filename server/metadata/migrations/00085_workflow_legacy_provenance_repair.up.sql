@@ -18,9 +18,6 @@ SELECT
     current_node.transition_branch_key,
     current_node.session_id
 FROM task_current_nodes current_node
-JOIN workflow_edges entering_edge
-  ON entering_edge.id = current_node.entered_by_edge_id
- AND entering_edge.target_node_id = current_node.node_id
 JOIN workflow_nodes current_node_definition
   ON current_node_definition.id = current_node.node_id
 JOIN sessions current_session
@@ -28,7 +25,17 @@ JOIN sessions current_session
  AND current_session.task_id = current_node.task_id
 WHERE current_node.legacy_materialized = 1
   AND current_node_definition.kind = 'agent'
-  AND entering_edge.context_mode = 'new_session';
+  AND current_node.entered_by_edge_id IS NULL;
+
+UPDATE task_current_nodes
+SET
+    continuation_source_kind = NULL,
+    continuation_source_session_id = NULL,
+    legacy_materialized = 1
+WHERE continuation_source_kind = 'deferred_self'
+  AND continuation_source_session_id IS NULL
+  AND legacy_materialized = 0
+  AND entered_by_edge_id IS NOT NULL;
 
 UPDATE task_current_nodes
 SET

@@ -232,7 +232,7 @@ WHERE task_id = ?`, fixture.taskID).Scan(&legacyMaterialized); err != nil {
 	}
 }
 
-func TestWorkflowLegacyProvenanceRepairMigrationUsesBoundAgentSessionForNewSessionEntry(t *testing.T) {
+func TestWorkflowLegacyProvenanceRepairMigrationDoesNotInferBoundAgentSourceFromEditableMode(t *testing.T) {
 	t.Parallel()
 	fixture := seedWorkflowLegacyProvenanceRepairFixture(t, []legacyProvenanceSource{
 		{sessionID: "session-new-entry-source", associatedAtOffset: 1},
@@ -249,7 +249,7 @@ WHERE id = (
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	var legacyMaterialized int64
 	if err := fixture.db.QueryRow(`
 SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
@@ -261,15 +261,12 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	); err != nil {
 		t.Fatalf("read repaired new-session Current Node: %v", err)
 	}
-	if sourceKind != "exact" ||
-		sourceSessionID != fixture.targetSessionID ||
-		legacyMaterialized != 0 {
+	if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 		t.Fatalf(
-			"new-session Current Node = kind %q Session %q legacy %d; want exact self Session %q",
+			"new-session Current Node = kind %v Session %v legacy %d; want unresolved source",
 			sourceKind,
 			sourceSessionID,
 			legacyMaterialized,
-			fixture.targetSessionID,
 		)
 	}
 }
@@ -565,10 +562,9 @@ ORDER BY transition_branch_key`, fixture.taskID)
 				)
 			}
 		case "branch-c":
-			if !sourceKind.Valid || sourceKind.String != "deferred_self" ||
-				sourceSessionID.Valid || legacyMaterialized != 0 {
+			if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 				t.Fatalf(
-					"deferred-self Fan-Out branch %q = kind %v Session %v legacy %d; want deferred self",
+					"graph-derived Fan-Out branch %q = kind %v Session %v legacy %d; want unresolved legacy",
 					branchKey,
 					sourceKind,
 					sourceSessionID,
