@@ -133,6 +133,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	if _, exists := capturedBody["service_tier"]; exists {
 		t.Fatalf("standard service_tier = %#v, want omitted", capturedBody["service_tier"])
 	}
+	assertCanonicalGenerationMetadata(t, capturedBody)
 	request.FastMode = true
 	if _, err = transport.Generate(context.Background(), request); err != nil {
 		t.Fatalf("fast generate: %v", err)
@@ -155,9 +156,24 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	if got := capturedBody["service_tier"]; got != "priority" {
 		t.Fatalf("service_tier = %#v, want priority", got)
 	}
-	clientMetadata, ok := capturedBody["client_metadata"].(map[string]any)
+	assertCanonicalGenerationMetadata(t, capturedBody)
+}
+
+func assertCanonicalGenerationMetadata(t *testing.T, body map[string]any) {
+	t.Helper()
+	metadata := requireCodexTurnMetadata(t, body)
+	if metadata["session_id"] != "session-1" || metadata["thread_id"] != "session-1" ||
+		metadata["turn_id"] != "run-1" || metadata["window_id"] != "session-1:2" ||
+		metadata["request_kind"] != "turn" {
+		t.Fatalf("turn metadata = %#v, want canonical identity", metadata)
+	}
+}
+
+func requireCodexTurnMetadata(t *testing.T, body map[string]any) map[string]any {
+	t.Helper()
+	clientMetadata, ok := body["client_metadata"].(map[string]any)
 	if !ok {
-		t.Fatalf("client_metadata = %#v, want object", capturedBody["client_metadata"])
+		t.Fatalf("client_metadata = %#v, want object", body["client_metadata"])
 	}
 	rawMetadata, ok := clientMetadata["x-codex-turn-metadata"].(string)
 	if !ok {
@@ -167,11 +183,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAuthAndRoutingTiers(t *testing.
 	if err := json.Unmarshal([]byte(rawMetadata), &metadata); err != nil {
 		t.Fatalf("decode turn metadata: %v", err)
 	}
-	if metadata["session_id"] != "session-1" || metadata["thread_id"] != "session-1" ||
-		metadata["turn_id"] != "run-1" || metadata["window_id"] != "session-1:2" ||
-		metadata["request_kind"] != "turn" {
-		t.Fatalf("turn metadata = %#v, want canonical identity", metadata)
-	}
+	return metadata
 }
 
 func TestNonOAuthDispatchOmitsCodexOnlyContract(t *testing.T) {

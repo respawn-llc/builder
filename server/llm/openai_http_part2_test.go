@@ -519,18 +519,7 @@ func TestOAuthCompactRequestTargetsStreamingResponsesWithFinalTrigger(t *testing
 	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol" {
 		t.Fatalf("routing hint = %q, want model=gpt-5.6-sol", got)
 	}
-	clientMetadata, ok := captured["client_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("client_metadata = %#v, want object", captured["client_metadata"])
-	}
-	rawMetadata, ok := clientMetadata["x-codex-turn-metadata"].(string)
-	if !ok {
-		t.Fatalf("turn metadata = %#v, want JSON string", clientMetadata["x-codex-turn-metadata"])
-	}
-	var metadata map[string]any
-	if err := json.Unmarshal([]byte(rawMetadata), &metadata); err != nil {
-		t.Fatalf("decode turn metadata: %v", err)
-	}
+	metadata := requireCodexTurnMetadata(t, captured)
 	if metadata["request_kind"] != "compaction" {
 		t.Fatalf("request_kind = %#v, want compaction", metadata["request_kind"])
 	}
@@ -600,6 +589,9 @@ func TestOAuthCompactRequestProjectsEffectiveServiceTier(t *testing.T) {
 				}
 			} else if !exists || gotServiceTier != test.wantServiceTier {
 				t.Fatalf("service_tier = %#v, want %#v", gotServiceTier, test.wantServiceTier)
+			}
+			if got := requireCodexTurnMetadata(t, captured)["request_kind"]; got != "compaction" {
+				t.Fatalf("request_kind = %#v, want compaction", got)
 			}
 		})
 	}
