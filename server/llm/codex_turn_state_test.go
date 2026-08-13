@@ -124,20 +124,25 @@ func TestDecodeCodexTurnStateMetadataOrderedContainerContract(t *testing.T) {
 	}
 }
 
-func TestGenerateObservesAllHTTPHeaderValuesBeforeReturning(t *testing.T) {
+func TestProviderErrorObservesAllHTTPHeaderValuesBeforeReturningUnchanged(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Add(codexTurnStateHeader, "")
 		w.Header().Add(codexTurnStateHeader, "accepted")
 		w.Header().Add(codexTurnStateHeader, "accepted")
 		w.Header().Add(codexTurnStateHeader, "conflict")
-		writeCompletedResponseJSON(w)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":{"message":"provider unavailable","type":"server_error"}}`))
 	}))
 	t.Cleanup(server.Close)
 	dispatch := newTestCodexDispatch(t)
 	transport := newOAuthTestTransport(server, server.Client())
 
-	if _, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch)); err != nil {
-		t.Fatalf("Generate: %v", err)
+	_, err := transport.Generate(context.Background(), testCodexOpenAIRequest(dispatch))
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) || providerErr.StatusCode != http.StatusServiceUnavailable ||
+		providerErr.ProviderType != "server_error" || providerErr.Message != "provider unavailable" {
+		t.Fatalf("error = %+v, want unchanged provider unavailable error", err)
 	}
 	if got, ok := dispatch.currentTurnState(); !ok || got != "accepted" {
 		t.Fatalf("turn state = (%q, %v), want accepted", got, ok)

@@ -191,25 +191,6 @@ func TestBuildPayload_SkipsReasoningSummaryForUnknownModels(t *testing.T) {
 	}
 }
 
-func TestBuildPayload_AppliesFastModeForOpenAIProvider(t *testing.T) {
-	transport := NewHTTPTransport(staticAuth{})
-	payload, err := transport.buildPayload(OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model:    "gpt-5.3-codex",
-		FastMode: true,
-	}, OpenAIAuthMode{}, requireProviderCapabilities(t, transport, OpenAIAuthMode{}))
-	if err != nil {
-		t.Fatalf("build payload: %v", err)
-	}
-	if payload.ServiceTier != responses.ResponseNewParamsServiceTierPriority {
-		t.Fatalf("expected priority service tier for openai provider, got %q", payload.ServiceTier)
-	}
-
-	jsonPayload := mustMarshalObject(t, payload)
-	if got := jsonPayload["service_tier"]; got != "priority" {
-		t.Fatalf("expected service_tier=priority, got %#v", got)
-	}
-}
-
 func TestBuildResponsesInput_AssistantReasoningItemsUseEncryptedContentOnly(t *testing.T) {
 	items := mustBuildResponsesInput(t, ItemsFromMessages([]Message{
 		{

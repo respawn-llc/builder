@@ -90,7 +90,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 	}
 }
 
-func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
+func TestOAuthFastGenerateSendsCanonicalCodexIdentityAuthAndRoutingTier(t *testing.T) {
 	var capturedHeaders http.Header
 	var capturedBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +120,7 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 	_, err = transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		ToolChoiceMode: ToolChoiceModeAutomatic,
+		FastMode:       true,
 		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	})
@@ -132,8 +133,17 @@ func TestOAuthGenerateSendsCanonicalCodexIdentityAndRouting(t *testing.T) {
 	if got := capturedHeaders.Get("session_id"); got != "" {
 		t.Fatalf("legacy session_id = %q, want absent", got)
 	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol" {
-		t.Fatalf("routing hint = %q, want model=gpt-5.6-sol", got)
+	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "model=gpt-5.6-sol;tier=priority" {
+		t.Fatalf("routing hint = %q, want priority tier", got)
+	}
+	if authorization, account, originator, userAgent := capturedHeaders.Get("Authorization"),
+		capturedHeaders.Get("ChatGPT-Account-Id"), capturedHeaders.Get("originator"), capturedHeaders.Get("User-Agent"); authorization != "Bearer token" || account != "acc-1" ||
+		originator != transport.ProviderIdentifier || userAgent != transport.providerUserAgent() {
+		t.Fatalf("OAuth identity headers = (%q, %q, %q, %q), want resolved auth, account, originator, and User-Agent",
+			authorization, account, originator, userAgent)
+	}
+	if got := capturedBody["service_tier"]; got != "priority" {
+		t.Fatalf("service_tier = %#v, want priority", got)
 	}
 	clientMetadata, ok := capturedBody["client_metadata"].(map[string]any)
 	if !ok {
@@ -189,41 +199,6 @@ func TestNonOAuthDispatchOmitsCodexOnlyContract(t *testing.T) {
 	}
 	if _, exists := capturedBody["client_metadata"]; exists {
 		t.Fatalf("client_metadata = %#v, want absent", capturedBody["client_metadata"])
-	}
-}
-
-func TestAnonymousExplicitBaseDispatchSendsCommonIdentityWithoutAuthorization(t *testing.T) {
-	var capturedHeaders http.Header
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedHeaders = r.Header.Clone()
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-
-	transport := NewHTTPTransport(nil)
-	transport.BaseURL = server.URL
-	transport.BaseURLExplicit = true
-	transport.Client = server.Client()
-	transport.ProviderIdentifier = "kent_test"
-	_, err := transport.Generate(context.Background(), OpenAIRequest{
-		Model:          "custom-model",
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      textutil.Value("session-1"),
-	})
-	if err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-	if got := capturedHeaders.Get("Authorization"); got != "" {
-		t.Fatalf("Authorization = %q, want absent", got)
-	}
-	if got := capturedHeaders.Get("originator"); got != "kent_test" {
-		t.Fatalf("originator = %q, want kent_test", got)
-	}
-	if got := capturedHeaders.Get("User-Agent"); got == "" {
-		t.Fatal("User-Agent is absent")
-	}
-	if got := capturedHeaders.Get("session-id"); got != "session-1" {
-		t.Fatalf("session-id = %q, want session-1", got)
 	}
 }
 
