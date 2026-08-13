@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"core/server/metadata"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -104,10 +105,34 @@ func topologyIsCurrent(entry serverapi.WorktreeTopologyEntry, target clientui.Se
 }
 
 func (s *Service) ResolveWorktreeSelector(ctx context.Context, req serverapi.WorktreeSelectorPreviewRequest) (serverapi.WorktreeSelectorPreviewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeSelectorPreviewResponse{}, err
-	}
-	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeSelectorPreviewRequest]) (serverapi.WorktreeSelectorPreviewResponse, error) {
+			request := validated.Value()
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
+			if err != nil {
+				return serverapi.WorktreeSelectorPreviewResponse{}, err
+			}
+			return s.resolveWorktreeSelectorPreview(ctx, request.Selector, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) ResolveWorktreeSelectorValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeSelectorPreviewRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	return s.resolveWorktreeSelectorPreview(ctx, req.Value().Selector, sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) resolveWorktreeSelectorPreview(
+	ctx context.Context,
+	selector string,
+	workspaceCtx sessionWorkspaceContext,
+) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, selector)
 	if err != nil {
 		return serverapi.WorktreeSelectorPreviewResponse{}, err
 	}
@@ -124,11 +149,7 @@ type worktreeSelectorResolution struct {
 	target  clientui.SessionExecutionTarget
 }
 
-func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string, selector string) (worktreeSelectorResolution, error) {
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
-	if err != nil {
-		return worktreeSelectorResolution{}, err
-	}
+func (s *Service) resolveWorktreeSelector(ctx context.Context, workspaceCtx sessionWorkspaceContext, selector string) (worktreeSelectorResolution, error) {
 	entries, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
 		return worktreeSelectorResolution{}, err
@@ -141,10 +162,34 @@ func (s *Service) resolveWorktreeSelector(ctx context.Context, sessionID string,
 }
 
 func (s *Service) PreviewWorktreeDelete(ctx context.Context, req serverapi.WorktreeDeletePreviewRequest) (serverapi.WorktreeDeletePreviewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeDeletePreviewResponse{}, err
-	}
-	resolution, err := s.resolveWorktreeSelector(ctx, req.SessionID, req.Selector)
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeDeletePreviewRequest]) (serverapi.WorktreeDeletePreviewResponse, error) {
+			request := validated.Value()
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
+			if err != nil {
+				return serverapi.WorktreeDeletePreviewResponse{}, err
+			}
+			return s.previewWorktreeDelete(ctx, request.Selector, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) PreviewWorktreeDeleteValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeDeletePreviewRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeDeletePreviewResponse, error) {
+	return s.previewWorktreeDelete(ctx, req.Value().Selector, sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) previewWorktreeDelete(
+	ctx context.Context,
+	selector string,
+	workspaceCtx sessionWorkspaceContext,
+) (serverapi.WorktreeDeletePreviewResponse, error) {
+	resolution, err := s.resolveWorktreeSelector(ctx, workspaceCtx, selector)
 	if err != nil {
 		return serverapi.WorktreeDeletePreviewResponse{}, err
 	}

@@ -49,7 +49,11 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	env := newServiceTestEnv(t)
 	otherSession := createServiceTestSession(t, env.store, env.cfg, env.binding)
 
-	firstRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
+	firstInitial, err := env.service.resolveSessionWorkspaceContext(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("resolve first mutation context: %v", err)
+	}
+	firstRelease, _, err := env.service.beginWorkspaceMutation(env.ctx, firstInitial)
 	if err != nil {
 		t.Fatalf("beginMutation first: %v", err)
 	}
@@ -66,7 +70,12 @@ func TestBeginMutationSerializesMutationsByWorkspace(t *testing.T) {
 	}
 	resultCh := make(chan mutationResult, 1)
 	go func() {
-		release, _, err := env.service.beginWorkspaceMutation(env.ctx, otherSession.Meta().SessionID)
+		initial, err := env.service.resolveSessionWorkspaceContext(env.ctx, otherSession.Meta().SessionID)
+		if err != nil {
+			resultCh <- mutationResult{err: err}
+			return
+		}
+		release, _, err := env.service.beginWorkspaceMutation(env.ctx, initial)
 		resultCh <- mutationResult{release: release, err: err}
 	}()
 
@@ -127,8 +136,12 @@ func TestBeginMutationReacquiresWorkspaceLaneWhenSessionWorkspaceChanges(t *test
 		err          error
 	}
 	firstCh := make(chan mutationResult, 1)
+	firstInitial, err := env.service.resolveSessionWorkspaceContext(env.ctx, env.session.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("resolve first mutation context: %v", err)
+	}
 	go func() {
-		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, env.session.Meta().SessionID)
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, firstInitial)
 		firstCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 
@@ -155,7 +168,12 @@ func TestBeginMutationReacquiresWorkspaceLaneWhenSessionWorkspaceChanges(t *test
 
 	secondCh := make(chan mutationResult, 1)
 	go func() {
-		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, secondSession.Meta().SessionID)
+		initial, err := env.service.resolveSessionWorkspaceContext(env.ctx, secondSession.Meta().SessionID)
+		if err != nil {
+			secondCh <- mutationResult{err: err}
+			return
+		}
+		release, workspaceCtx, err := env.service.beginWorkspaceMutation(env.ctx, initial)
 		secondCh <- mutationResult{release: release, workspaceCtx: workspaceCtx, err: err}
 	}()
 	select {

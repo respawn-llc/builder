@@ -13,6 +13,7 @@ import (
 
 type authorizedWorkspaceWorktreeService struct {
 	apicontract.WorktreeService
+	apicontract.WorktreeTrustedService
 	rawCalls     int
 	trustedCalls int
 	request      serverapi.WorktreeWorkspaceListRequest

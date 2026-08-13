@@ -13,15 +13,40 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeDeleteRequest]) (serverapi.WorktreeDeleteResult, error) {
+			request := validated.Value()
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
+			if err != nil {
+				return serverapi.WorktreeDeleteResult{}, err
+			}
+			return s.deleteWorktree(ctx, request, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) DeleteWorktreeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeDeleteRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeDeleteResult, error) {
+	return s.deleteWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) deleteWorktree(
+	ctx context.Context,
+	req serverapi.WorktreeDeleteRequest,
+	initialWorkspaceCtx sessionWorkspaceContext,
+) (serverapi.WorktreeDeleteResult, error) {
 	transitionRequest := worktreeTransitionRequest{
 		operationID: req.OperationID,
 		sessionID:   strings.TrimSpace(req.SessionID),
@@ -36,37 +61,27 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			Scheduled: &ack,
 		}, nil
 	}
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
+	topology, err := s.projectTopology(ctx, initialWorkspaceCtx.workspaceID, initialWorkspaceCtx.workspaceRoot)
 	if err != nil {
-		return serverapi.WorktreeDeleteResult{}, err
-	}
-	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
-	if err != nil {
-		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
 	match, err := resolveTopologySelector(topology, req.Selector)
 	if err != nil {
-		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
 	if _, err := match.entry.DeletionSelector(); err != nil {
-		release()
 		return serverapi.WorktreeDeleteResult{}, err
 	}
-	if topologyIsCurrent(match.entry, workspaceCtx.target) {
+	if topologyIsCurrent(match.entry, initialWorkspaceCtx.target) {
 		if err := s.ensureDeleteFolderRemovalAuthorized(ctx, match.entry, req.ForceFolderRemoval); err != nil {
-			release()
 			return serverapi.WorktreeDeleteResult{}, err
 		}
 		deleteTarget, err := scheduledKentWorktreeTargetFromEntry(match.entry)
 		if err != nil {
-			release()
 			return serverapi.WorktreeDeleteResult{}, err
 		}
-		release()
 		ack, err := s.scheduleWorktreeTransition(ctx, transitionRequest, func(runCtx context.Context, _ transitionAuthority, sync transitionTargetSync) error {
-			_, err := s.executeScheduledDelete(runCtx, req, deleteTarget, sync)
+			_, err := s.executeScheduledDelete(runCtx, req, initialWorkspaceCtx, deleteTarget, sync)
 			return err
 		}, req.WorktreeTransitionHeader.Origin)
 		if err != nil {
@@ -77,7 +92,20 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 			Scheduled: &ack,
 		}, nil
 	}
+
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, initialWorkspaceCtx)
+	if err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
 	defer release()
+	topology, err = s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
+	if err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
+	match, err = resolveTopologySelector(topology, req.Selector)
+	if err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
 	completed, err := s.executeDeleteLocked(ctx, workspaceCtx, match.entry, req, nil)
 	if err != nil {
 		return serverapi.WorktreeDeleteResult{}, err
@@ -91,10 +119,11 @@ func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDele
 func (s *Service) executeScheduledDelete(
 	ctx context.Context,
 	req serverapi.WorktreeDeleteRequest,
+	initialWorkspaceCtx sessionWorkspaceContext,
 	deleteTarget scheduledWorktreeTarget,
 	sync transitionTargetSync,
 ) (serverapi.WorktreeDeleteCompletedResult, error) {
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, initialWorkspaceCtx)
 	if err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}

@@ -482,6 +482,57 @@ func TestDeleteWorktreeScheduledCurrentTargetForceDeletesBranch(t *testing.T) {
 	assertServiceTestSessionTarget(t, env, "", env.workspaceRoot)
 }
 
+func TestDeleteWorktreeCurrentTargetAcquiresOnlyScheduledMutationLease(t *testing.T) {
+	env := newServiceTestEnv(t)
+	target := mustCreateWorktree(t, env, "feature/delete-single-scheduled-lease")
+	updateServiceTestSessionTarget(
+		t,
+		env,
+		env.session.Meta().SessionID,
+		env.binding.WorkspaceID,
+		target.WorktreeID,
+		".",
+	)
+
+	heldLease, err := env.service.acquireWorkspaceMutationLease(env.ctx, env.binding.WorkspaceID)
+	if err != nil {
+		t.Fatalf("acquire held mutation lease: %v", err)
+	}
+	released := false
+	defer func() {
+		if !released {
+			heldLease.Release()
+		}
+	}()
+
+	resultCh := make(chan deleteActivityResult, 1)
+	go func() {
+		result, deleteErr := env.service.DeleteWorktree(
+			env.ctx,
+			worktreeDeleteRequest(env, target.WorktreeID),
+		)
+		resultCh <- deleteActivityResult{result: result, err: deleteErr}
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil ||
+			result.result.Kind != serverapi.WorktreeDeleteResultKindScheduled ||
+			result.result.Scheduled == nil {
+			t.Fatalf("DeleteWorktree = %+v, %v; want scheduled acknowledgement", result.result, result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("current-target delete waited for a pre-scheduling mutation lease")
+	}
+
+	heldLease.Release()
+	released = true
+	outcome := waitForDeleteActivityTransitionOutcome(t, env.publisher)
+	if outcome.State != clientui.WorktreeTransitionCompleted {
+		t.Fatalf("scheduled delete outcome = %+v, want completed", outcome)
+	}
+}
+
 func TestScheduledDeleteRechecksDirtyStateAndPublishesTypedPrecondition(t *testing.T) {
 	tests := []struct {
 		name              string

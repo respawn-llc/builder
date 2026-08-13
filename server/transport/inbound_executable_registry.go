@@ -633,15 +633,15 @@ func registerActiveProjectSessionRoutes(executables map[string]inboundExecutable
 		handleSessionResolveTransition,
 	))
 
-	registerRequiredSessionUnary(protocol.MethodWorktreeStatus, activeProjectSessionUnary[serverapi.WorktreeStatusRequest](protocol.MethodWorktreeStatus, func(req serverapi.WorktreeStatusRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeList, activeProjectSessionUnary[serverapi.WorktreeListRequest](protocol.MethodWorktreeList, func(req serverapi.WorktreeListRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeSelectorResolve, activeProjectSessionUnary[serverapi.WorktreeSelectorPreviewRequest](protocol.MethodWorktreeSelectorResolve, func(req serverapi.WorktreeSelectorPreviewRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeDeletePreview, activeProjectSessionUnary[serverapi.WorktreeDeletePreviewRequest](protocol.MethodWorktreeDeletePreview, func(req serverapi.WorktreeDeletePreviewRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeCreateTargetResolve, activeProjectSessionUnary[serverapi.WorktreeCreateTargetResolveRequest](protocol.MethodWorktreeCreateTargetResolve, func(req serverapi.WorktreeCreateTargetResolveRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeCreate, activeProjectSessionUnary[serverapi.WorktreeCreateRequest](protocol.MethodWorktreeCreate, func(req serverapi.WorktreeCreateRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeEnter, activeProjectSessionUnary[serverapi.WorktreeEnterRequest](protocol.MethodWorktreeEnter, func(req serverapi.WorktreeEnterRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeLeave, activeProjectSessionUnary[serverapi.WorktreeLeaveRequest](protocol.MethodWorktreeLeave, func(req serverapi.WorktreeLeaveRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodWorktreeDelete, activeProjectSessionUnary[serverapi.WorktreeDeleteRequest](protocol.MethodWorktreeDelete, func(req serverapi.WorktreeDeleteRequest) string { return req.SessionID }))
+	executables[protocol.MethodWorktreeStatus] = trustedWorktreeSessionUnary(protocol.MethodWorktreeStatus, func(req serverapi.WorktreeStatusRequest) string { return req.SessionID }, handleWorktreeStatus)
+	executables[protocol.MethodWorktreeList] = trustedWorktreeSessionUnary(protocol.MethodWorktreeList, func(req serverapi.WorktreeListRequest) string { return req.SessionID }, handleWorktreeList)
+	executables[protocol.MethodWorktreeSelectorResolve] = trustedWorktreeSessionUnary(protocol.MethodWorktreeSelectorResolve, func(req serverapi.WorktreeSelectorPreviewRequest) string { return req.SessionID }, handleWorktreeSelectorResolve)
+	executables[protocol.MethodWorktreeDeletePreview] = trustedWorktreeSessionUnary(protocol.MethodWorktreeDeletePreview, func(req serverapi.WorktreeDeletePreviewRequest) string { return req.SessionID }, handleWorktreeDeletePreview)
+	executables[protocol.MethodWorktreeCreateTargetResolve] = trustedWorktreeSessionUnary(protocol.MethodWorktreeCreateTargetResolve, func(req serverapi.WorktreeCreateTargetResolveRequest) string { return req.SessionID }, handleWorktreeCreateTargetResolve)
+	executables[protocol.MethodWorktreeCreate] = trustedWorktreeSessionUnary(protocol.MethodWorktreeCreate, func(req serverapi.WorktreeCreateRequest) string { return req.SessionID }, handleWorktreeCreate)
+	executables[protocol.MethodWorktreeEnter] = trustedWorktreeSessionUnary(protocol.MethodWorktreeEnter, func(req serverapi.WorktreeEnterRequest) string { return req.SessionID }, handleWorktreeEnter)
+	executables[protocol.MethodWorktreeLeave] = trustedWorktreeSessionUnary(protocol.MethodWorktreeLeave, func(req serverapi.WorktreeLeaveRequest) string { return req.SessionID }, handleWorktreeLeave)
+	executables[protocol.MethodWorktreeDelete] = trustedWorktreeSessionUnary(protocol.MethodWorktreeDelete, func(req serverapi.WorktreeDeleteRequest) string { return req.SessionID }, handleWorktreeDelete)
 
 	registerRequiredSessionUnary(protocol.MethodRuntimeSetSessionName, activeProjectSessionUnary[serverapi.RuntimeSetSessionNameRequest](protocol.MethodRuntimeSetSessionName, func(req serverapi.RuntimeSetSessionNameRequest) string { return req.SessionID }))
 	registerRequiredSessionUnary(protocol.MethodRuntimeSetThinkingLevel, activeProjectSessionUnary[serverapi.RuntimeSetThinkingLevelRequest](protocol.MethodRuntimeSetThinkingLevel, func(req serverapi.RuntimeSetThinkingLevelRequest) string { return req.SessionID }))
@@ -680,6 +680,21 @@ func activeProjectSessionUnary[Req any](method string, sessionID func(Req) strin
 		requestDecoderDefault,
 		nil,
 		authorizeSessionActiveProject(sessionID),
+	)
+}
+
+func trustedWorktreeSessionUnary[Req any, Resp any](
+	method string,
+	sessionID func(Req) string,
+	handle func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req], apicontract.AuthorizedSessionInActiveProject) (Resp, error),
+) inboundExecutableRoute {
+	return inboundTrustedUnary(
+		method,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(sessionID),
+		handle,
 	)
 }
 
@@ -817,6 +832,86 @@ func handleWorktreeWorkspaceList(
 		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree service does not implement trusted Workspace list")
 	}
 	return trusted.ListWorkspaceWorktreesValidated(ctx, request, binding)
+}
+
+func trustedWorktreeService(g *Gateway) (apicontract.WorktreeTrustedService, error) {
+	trusted, ok := g.deps.WorktreeClient().(apicontract.WorktreeTrustedService)
+	if !ok {
+		return nil, errors.New("Worktree trusted service is required")
+	}
+	return trusted, nil
+}
+
+func handleWorktreeStatus(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeStatusRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeStatusResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeStatusResponse{}, err
+	}
+	return trusted.GetWorktreeStatusValidated(ctx, request, authorization)
+}
+
+func handleWorktreeList(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeListRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeListResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeListResponse{}, err
+	}
+	return trusted.ListWorktreesValidated(ctx, request, authorization)
+}
+
+func handleWorktreeSelectorResolve(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeSelectorPreviewRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeSelectorPreviewResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeSelectorPreviewResponse{}, err
+	}
+	return trusted.ResolveWorktreeSelectorValidated(ctx, request, authorization)
+}
+
+func handleWorktreeDeletePreview(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeDeletePreviewRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeDeletePreviewResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeDeletePreviewResponse{}, err
+	}
+	return trusted.PreviewWorktreeDeleteValidated(ctx, request, authorization)
+}
+
+func handleWorktreeCreateTargetResolve(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeCreateTargetResolveResponse{}, err
+	}
+	return trusted.ResolveWorktreeCreateTargetValidated(ctx, request, authorization)
+}
+
+func handleWorktreeCreate(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeCreateRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateResponse, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeCreateResponse{}, err
+	}
+	return trusted.CreateWorktreeValidated(ctx, request, authorization)
+}
+
+func handleWorktreeEnter(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeEnterRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	return trusted.EnterWorktreeValidated(ctx, request, authorization)
+}
+
+func handleWorktreeLeave(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeLeaveRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	return trusted.LeaveWorktreeValidated(ctx, request, authorization)
+}
+
+func handleWorktreeDelete(ctx context.Context, g *Gateway, _ *connectionState, request apicontract.Validated[serverapi.WorktreeDeleteRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.WorktreeDeleteResult, error) {
+	trusted, err := trustedWorktreeService(g)
+	if err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
+	return trusted.DeleteWorktreeValidated(ctx, request, authorization)
 }
 
 func handleSessionWorkspaceRetarget(

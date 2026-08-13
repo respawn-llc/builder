@@ -1669,13 +1669,28 @@ func (s *Service) taskSourceWorkspace(ctx context.Context, projectID string, sou
 }
 
 func (s *Service) ListWorktrees(ctx context.Context, req serverapi.WorktreeListRequest) (serverapi.WorktreeListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.WorktreeListResponse{}, err
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeListRequest]) (serverapi.WorktreeListResponse, error) {
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, validated.Value().SessionID)
+			if err != nil {
+				return serverapi.WorktreeListResponse{}, err
+			}
+			return s.listWorktrees(ctx, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) ListWorktreesValidated(
+	ctx context.Context,
+	_ apicontract.Validated[serverapi.WorktreeListRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeListResponse, error) {
+	return s.listWorktrees(ctx, sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) listWorktrees(ctx context.Context, workspaceCtx sessionWorkspaceContext) (serverapi.WorktreeListResponse, error) {
 	topology, err := s.projectTopology(ctx, workspaceCtx.workspaceID, workspaceCtx.workspaceRoot)
 	if err != nil {
 		return serverapi.WorktreeListResponse{}, err
@@ -1732,13 +1747,33 @@ func (s *Service) ListWorkspaceWorktreesValidated(
 }
 
 func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi.WorktreeCreateTargetResolveRequest) (serverapi.WorktreeCreateTargetResolveResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, err
-	}
-	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
-	if err != nil {
-		return serverapi.WorktreeCreateTargetResolveResponse{}, err
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest]) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+			request := validated.Value()
+			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
+			if err != nil {
+				return serverapi.WorktreeCreateTargetResolveResponse{}, err
+			}
+			return s.resolveWorktreeCreateTarget(ctx, request, workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) ResolveWorktreeCreateTargetValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeCreateTargetResolveRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeCreateTargetResolveResponse, error) {
+	return s.resolveWorktreeCreateTarget(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) resolveWorktreeCreateTarget(
+	ctx context.Context,
+	req serverapi.WorktreeCreateTargetResolveRequest,
+	workspaceCtx sessionWorkspaceContext,
+) (serverapi.WorktreeCreateTargetResolveResponse, error) {
 	resolution, err := s.git.ResolveCreateTarget(ctx, workspaceCtx.workspaceRoot, req.Target)
 	if err != nil {
 		return serverapi.WorktreeCreateTargetResolveResponse{}, err
@@ -1751,6 +1786,32 @@ func (s *Service) ResolveWorktreeCreateTarget(ctx context.Context, req serverapi
 }
 
 func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCreateRequest) (resp serverapi.WorktreeCreateResponse, err error) {
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.WorktreeCreateRequest]) (serverapi.WorktreeCreateResponse, error) {
+			workspaceCtx, resolveErr := s.resolveSessionWorkspaceContext(ctx, validated.Value().SessionID)
+			if resolveErr != nil {
+				return serverapi.WorktreeCreateResponse{}, resolveErr
+			}
+			return s.createWorktree(ctx, validated.Value(), workspaceCtx)
+		},
+	)
+}
+
+func (s *Service) CreateWorktreeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorktreeCreateRequest],
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.WorktreeCreateResponse, error) {
+	return s.createWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+}
+
+func (s *Service) createWorktree(
+	ctx context.Context,
+	req serverapi.WorktreeCreateRequest,
+	initialWorkspaceCtx sessionWorkspaceContext,
+) (resp serverapi.WorktreeCreateResponse, err error) {
 	defer func() {
 		if err == nil {
 			return
@@ -1772,14 +1833,11 @@ func (s *Service) CreateWorktree(ctx context.Context, req serverapi.WorktreeCrea
 		}
 		err = serverapi.NewWorktreeCreateError(serverapi.WorktreeCreateErrorOwnerForm, err.Error(), err)
 	}()
-	if err := req.Validate(); err != nil {
-		return serverapi.WorktreeCreateResponse{}, err
-	}
 	createSpec, err := normalizeCreateSpec(CreateSpec{BaseRef: req.BaseRef, CreateBranch: req.CreateBranch, BranchName: req.BranchName})
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
-	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, req.SessionID)
+	release, workspaceCtx, err := s.beginWorkspaceMutation(ctx, initialWorkspaceCtx)
 	if err != nil {
 		return serverapi.WorktreeCreateResponse{}, err
 	}
@@ -2092,20 +2150,17 @@ func (s *Service) deleteWorktreeRecordForCleanup(ctx context.Context, workspaceI
 	return errors.Join(collected...)
 }
 
-func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) (func(), sessionWorkspaceContext, error) {
+func (s *Service) beginWorkspaceMutation(ctx context.Context, initial sessionWorkspaceContext) (func(), sessionWorkspaceContext, error) {
 	if s == nil || s.metadata == nil {
 		return nil, sessionWorkspaceContext{}, errors.New("worktree service metadata store is required")
 	}
+	workspaceCtx := initial
 	for {
-		workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
-		if err != nil {
-			return nil, sessionWorkspaceContext{}, err
-		}
 		workspaceLease, err := s.acquireWorkspaceMutationLease(ctx, workspaceCtx.workspaceID)
 		if err != nil {
 			return nil, sessionWorkspaceContext{}, err
 		}
-		lockedWorkspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, sessionID)
+		lockedWorkspaceCtx, err := s.recheckSessionExecutionTargetAfterWorkspaceLease(ctx, workspaceCtx.sessionID)
 		if err != nil {
 			workspaceLease.Release()
 			return nil, sessionWorkspaceContext{}, err
@@ -2114,7 +2169,15 @@ func (s *Service) beginWorkspaceMutation(ctx context.Context, sessionID string) 
 			return workspaceLease.Release, lockedWorkspaceCtx, nil
 		}
 		workspaceLease.Release()
+		workspaceCtx = lockedWorkspaceCtx
 	}
+}
+
+func (s *Service) recheckSessionExecutionTargetAfterWorkspaceLease(
+	ctx context.Context,
+	sessionID string,
+) (sessionWorkspaceContext, error) {
+	return s.resolveSessionWorkspaceContext(ctx, sessionID)
 }
 
 func (s *Service) acquireWorkspaceMutationLease(ctx context.Context, workspaceID string) (*requestmemo.MutationLaneLease[string], error) {
@@ -2157,6 +2220,18 @@ func (s *Service) resolveSessionWorkspaceContext(ctx context.Context, sessionID 
 		workspaceRoot: strings.TrimSpace(target.WorkspaceRoot),
 		sessionID:     strings.TrimSpace(sessionID),
 	}, nil
+}
+
+func sessionWorkspaceContextFromAuthorization(
+	authorization apicontract.AuthorizedSessionInActiveProject,
+) sessionWorkspaceContext {
+	return sessionWorkspaceContext{
+		target:        authorization.ExecutionTarget,
+		projectID:     authorization.OwningProjectID,
+		workspaceID:   strings.TrimSpace(authorization.ExecutionTarget.WorkspaceID),
+		workspaceRoot: strings.TrimSpace(authorization.ExecutionTarget.WorkspaceRoot),
+		sessionID:     authorization.SessionID.String(),
+	}
 }
 
 func (s *Service) backgroundProcessBlockers(worktreeRoot string) []string {
