@@ -23,8 +23,9 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("repaired")},
-			Usage:     llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+			Assistant:   llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("repaired")},
+			Usage:       llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+			ServedModel: textutil.Value("served-model"),
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
@@ -52,6 +53,7 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	}
 	var completion *storedToolCompletion
 	var warning *storedLocalEntry
+	modelMismatchWarnings := 0
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ToolCompletionRecord:
@@ -70,6 +72,9 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 			if got.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 				warning = &got
 			}
+			if got.ProviderModelMismatch != nil {
+				modelMismatchWarnings++
+			}
 		}
 	}
 	if completion == nil || !completion.IsError {
@@ -84,6 +89,13 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 		warning.ToolOutputRepair.Count != 1 ||
 		warning.Text != "" {
 		t.Fatalf("operator repair warning facts = %+v", warning)
+	}
+	if modelMismatchWarnings != 1 {
+		t.Fatalf("provider-model mismatch warnings = %d, want only the accepted repaired attempt", modelMismatchWarnings)
+	}
+	if usage := store.Meta().UsageState; usage == nil ||
+		usage.EstimatedProviderTokens != estimateItemsTokens(client.calls[1].Items) {
+		t.Fatalf("usage state = %+v, want baseline from exact successful repaired request", usage)
 	}
 }
 

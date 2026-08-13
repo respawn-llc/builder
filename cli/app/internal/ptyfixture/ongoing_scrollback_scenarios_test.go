@@ -13,6 +13,9 @@ import (
 	"core/cli/tui/transcriptrender"
 	"core/internal/testharness/pty"
 	"core/internal/testharness/pty/appfixture"
+	"core/shared/clientui"
+	"core/shared/theme"
+	"core/shared/transcript"
 )
 
 func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
@@ -20,7 +23,8 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 	defer cancel()
 
 	bin := buildPTYFixtureBinary(t, buildCtx)
-	scenarioSlots := make(chan struct{}, 4)
+	scenarioSlots := make(chan struct{}, 1)
+	modelMismatchCompletionDrain := time.Second
 
 	for _, tc := range []struct {
 		name                      string
@@ -35,8 +39,12 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 		expectedAnyAppends        []string
 		forbiddenAnyAppends       []string
 		expectedScreenRows        []string
+		expectedWarningAppends    int
+		expectedDetailWarnings    int
+		assertDetailWarnings      bool
 		allowsAltScroll           bool
 		allowsFullScreen          bool
+		completionInFrameSequence bool
 		completionDrain           *time.Duration
 	}{
 		{
@@ -107,6 +115,52 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				Dimensions:      pty.MustDimensions(18, 72),
 				CompletionBytes: []byte{0x03, 0x03},
 			}},
+		},
+		{
+			name: "provider_model_mismatch_hidden_from_normal_ongoing",
+			env:  []string{"KENT_DEBUG=0"},
+			script: map[string]any{
+				"prompt":       "normal model mismatch",
+				"served_model": "served-model",
+				"final":        "normal mismatch answer",
+			},
+			frameInputs: []pty.FrameInputSequence{{
+				Phase: pty.PhaseScenarioComplete,
+				Inputs: []pty.FrameInput{
+					{
+						Readiness:  pty.ReadinessRendererFrame,
+						AfterPhase: phasePointer(pty.PhaseScenarioFinalApplied),
+						Bytes:      []byte(detailFrameShiftTab),
+					},
+					{
+						Readiness:  pty.ReadinessRendererFrame,
+						AfterPhase: phasePointer(pty.PhaseDetailInitialPageApplied),
+						Bytes:      []byte(detailFrameUp),
+					},
+					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte(detailFrameTab)},
+					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
+				},
+			}},
+			expectedAppends:           []string{transcriptrender.AssistantSymbol + " normal mismatch answer"},
+			expectedDetailWarnings:    1,
+			assertDetailWarnings:      true,
+			allowsAltScroll:           true,
+			allowsFullScreen:          true,
+			completionInFrameSequence: true,
+		},
+		{
+			name: "provider_model_mismatch_visible_in_debug_ongoing",
+			env:  []string{"KENT_DEBUG=1"},
+			script: map[string]any{
+				"prompt":       "debug model mismatch",
+				"served_model": "served-model",
+				"final":        "debug mismatch answer",
+			},
+			expectedAppends: []string{
+				transcriptrender.AssistantSymbol + " debug mismatch answer",
+			},
+			expectedWarningAppends: 1,
+			completionDrain:        &modelMismatchCompletionDrain,
 		},
 		{
 			name: "parallel_tools_order_and_long_output",
@@ -194,6 +248,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:     []string{"❮ question lifecycle complete"},
 			forbiddenAnyAppends: []string{"? PTY_LIVE_QUESTION", "? tool call"},
+			completionDrain:     &modelMismatchCompletionDrain,
 		},
 		{
 			name: "live_background_shell_completion_style",
@@ -266,6 +321,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}},
 			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
 			expectedScreenRows: []string{"$ sleep 3; echo $((42424241+1))"},
+			completionDrain:    &modelMismatchCompletionDrain,
 		},
 		{
 			name: "live_failed_tools_retain_input",
@@ -324,6 +380,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				tc.env,
 				ptyFixtureInputPlan{
 					scheduled: tc.inputs, frameSequences: tc.frameInputs, frameResizes: tc.frameResizes,
+					completionInFrameSequence: tc.completionInFrameSequence,
 				},
 				tc.resizes,
 				tc.completionDrain,
@@ -378,6 +435,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("expected full-window append: %v", err)
 				}
 			}
+			if got := countProviderModelMismatchAppendRows(allAppends); got != tc.expectedWarningAppends {
+				t.Fatalf("provider-model mismatch append count = %d, want %d", got, tc.expectedWarningAppends)
+			}
 			for _, content := range tc.forbiddenAnyAppends {
 				if err := contentNotAppended(allAppends, content); err != nil {
 					t.Fatalf("forbidden full-window append: %v", err)
@@ -390,6 +450,9 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			}
 			if analysis.Screen.IsBlank() {
 				t.Fatal("ongoing TUI screen is blank after scenario")
+			}
+			if tc.assertDetailWarnings {
+				assertScenarioDetailWarningRows(t, capture, tc.expectedDetailWarnings)
 			}
 		})
 	}
@@ -412,9 +475,10 @@ func toolSeed(name string, callID string, input map[string]any, condensed string
 }
 
 type ptyFixtureInputPlan struct {
-	scheduled      []pty.InputEvent
-	frameSequences []pty.FrameInputSequence
-	frameResizes   []pty.FrameResizeEvent
+	scheduled                 []pty.InputEvent
+	frameSequences            []pty.FrameInputSequence
+	frameResizes              []pty.FrameResizeEvent
+	completionInFrameSequence bool
 }
 
 func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin string, name string, script map[string]any, env []string, inputPlan ptyFixtureInputPlan, resizes []pty.DriverResizeEvent, configuredCompletionDrain *time.Duration) (pty.Capture, string) {
@@ -455,7 +519,7 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 			Bytes: input.Bytes,
 		})
 	}
-	if len(inputPlan.frameResizes) == 0 {
+	if !inputPlan.completionInFrameSequence && len(inputPlan.frameResizes) == 0 {
 		phaseInputs = append(phaseInputs, pty.PhaseInputEvent{
 			Phase: completionPhase,
 			After: completionDrain,
@@ -477,6 +541,27 @@ func runPTYFixtureScenarioWithInputPlan(t *testing.T, ctx context.Context, bin s
 		t.Fatalf("run fixture: %v raw=%q", err, string(capture.Raw))
 	}
 	return capture, observationsPath
+}
+
+func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected int) {
+	t.Helper()
+	if len(capture.FrameInputDispatches) < 4 {
+		t.Fatalf("detail frame input dispatches = %d, want at least 4", len(capture.FrameInputDispatches))
+	}
+	exitDispatch := capture.FrameInputDispatches[2]
+	screens, err := pty.ReplayCheckpointScreens(capture, []pty.ReplayCheckpoint{{
+		ByteOffset: exitDispatch.ReadyBoundaryEndByteOffset,
+	}})
+	if err != nil {
+		t.Fatalf("replay detail screen: %v", err)
+	}
+	if got := countProviderModelMismatchScreenRows(screens[0]); got != expected {
+		t.Fatalf("detail warning row count = %d, want %d", got, expected)
+	}
+}
+
+func phasePointer(phase pty.PhaseKind) *pty.PhaseKind {
+	return &phase
 }
 
 func scenarioOperationWindow(analysis pty.Analysis) (pty.OperationWindow, error) {
@@ -644,6 +729,54 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 	return nil
 }
 
+func countProviderModelMismatchAppendRows(appends []logicalAppendRow) int {
+	warningColor := transcriptrender.ColorForRole(transcriptrender.ColorRoleWarning, "dark")
+	expectedText := providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
+	count := 0
+	for _, row := range appends {
+		if row.text() != expectedText {
+			continue
+		}
+		for _, segment := range row.segments {
+			write := segment.Operation.Write
+			if write != nil && colorMatches(write.Foreground, warningColor) {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+func countProviderModelMismatchScreenRows(screen pty.ScreenSnapshot) int {
+	expectedText := " " + providerModelMismatchRenderedText(transcriptrender.ModeOngoingStable)
+	count := 0
+	for _, row := range screen.Cells {
+		var text strings.Builder
+		for _, cell := range row {
+			text.WriteString(cell.Content)
+		}
+		if strings.TrimRight(text.String(), " ") == expectedText {
+			count++
+		}
+	}
+	return count
+}
+
+func providerModelMismatchRenderedText(mode transcriptrender.Mode) string {
+	return transcriptrender.RenderCommittedRow(clientui.TranscriptCommittedRow{
+		Visibility: transcript.EntryVisibilityOngoing, Integrity: transcript.RowIntegrityValid, Kind: clientui.TranscriptRowNotice,
+		Notice: &clientui.TranscriptNoticeRow{Reason: clientui.TranscriptNoticeProviderModelMismatch, Severity: clientui.TranscriptNoticeWarning,
+			ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{RequestedModel: "gpt-5", ServedModel: "served-model"}},
+	}, 80, "dark", mode).Lines[0].Plain()
+}
+
+func colorMatches(actual string, expected theme.Color) bool {
+	return strings.EqualFold(actual, expected.ANSI) ||
+		strings.EqualFold(actual, expected.ANSI256) ||
+		strings.EqualFold(actual, expected.TrueColor)
+}
+
 func contentAppendedAtLeastOnce(appends []logicalAppendRow, content string) error {
 	for _, row := range appends {
 		if row.text() == content {
@@ -690,6 +823,19 @@ func screenRowAppearsExactlyOnce(screen pty.ScreenSnapshot, expected string) err
 		return fmt.Errorf("screen row count for %q = %d, want exactly 1; complete_rows=%q", expected, count, rows)
 	}
 	return nil
+}
+
+func countScreenRowsWithCell(screen pty.ScreenSnapshot, expected string) int {
+	count := 0
+	for _, row := range screen.Cells {
+		for _, cell := range row {
+			if cell.Content == expected {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }
 
 func firstOperationAtOrAfterByte(operations []pty.Operation, offset int64) int {

@@ -21,6 +21,7 @@ type responseStreamAccumulator struct {
 	toolCalls                *toolCallAccumulator
 	reasoning                *reasoningAccumulator
 	passthrough              *passthroughOutputAccumulator
+	standardServedModel      *string
 	completed                *responses.Response
 	responseError            *responseStreamError
 }
@@ -55,6 +56,9 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		return
 	}
 	switch evt.Type {
+	case "response.created":
+		created := evt.AsResponseCreated()
+		observeStandardServedModel(&a.standardServedModel, string(created.Response.Model))
 	case "response.output_text.delta":
 		if evt.Delta == "" {
 			return
@@ -138,6 +142,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 			return
 		}
 		completed := completedEvent.Response
+		observeStandardServedModel(&a.standardServedModel, string(completed.Model))
 		a.completed = &completed
 	case "response.failed":
 		failed := evt.AsResponseFailed()
@@ -363,6 +368,7 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	return OpenAIResponse{
 		AssistantText:  finalText,
 		ProviderPhase:  finalProviderPhase,
+		ServedModel:    textutil.Pointer(a.standardServedModel),
 		ToolCalls:      finalCalls,
 		Reasoning:      finalReasoning,
 		ReasoningItems: finalReasoningItems,

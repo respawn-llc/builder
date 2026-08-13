@@ -191,18 +191,16 @@ func TestTranscriptNoticeRowCarriesTypedToolOutputRepairFacts(t *testing.T) {
 	}
 }
 
-func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
-	warning := TranscriptCacheWarning{
-		Scope:      "conversation",
-		Reason:     "cache_miss",
-		Visibility: transcript.EntryVisibilityOngoing,
-	}
-	if err := warning.Validate(); err != nil {
-		t.Fatalf("validate absent token loss: %v", err)
-	}
-	warning.LostInputTokens = textutil.Value(0)
-	if err := warning.Validate(); err == nil {
-		t.Fatal("accepted present zero token loss")
+func TestTranscriptNoticeRowCarriesTypedProviderModelMismatchFacts(t *testing.T) {
+	if err := (TranscriptNoticeRow{
+		Reason:   TranscriptNoticeProviderModelMismatch,
+		Severity: TranscriptNoticeWarning,
+		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
+			RequestedModel: "requested-model",
+			ServedModel:    "served-model",
+		},
+	}).Validate(); err != nil {
+		t.Fatalf("validate typed provider-model mismatch notice: %v", err)
 	}
 }
 
@@ -223,6 +221,10 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		},
 		{
 			Reason:   TranscriptNoticeToolOutputRepair,
+			Severity: TranscriptNoticeWarning,
+		},
+		{
+			Reason:   TranscriptNoticeProviderModelMismatch,
 			Severity: TranscriptNoticeWarning,
 		},
 		{
@@ -269,5 +271,20 @@ func TestTranscriptNoticeRowRejectsReasonPayloadMismatch(t *testing.T) {
 		if err := notice.Validate(); err == nil {
 			t.Fatalf("accepted notice without required typed payload: %+v", notice)
 		}
+	}
+}
+
+func TestTranscriptCacheWarningAcceptsAbsentLossAndRejectsPresentZero(t *testing.T) {
+	warning := TranscriptCacheWarning{
+		Scope:      "conversation",
+		Reason:     "cache_miss",
+		Visibility: transcript.EntryVisibilityOngoing,
+	}
+	if err := warning.Validate(); err != nil {
+		t.Fatalf("validate absent token loss: %v", err)
+	}
+	warning.LostInputTokens = textutil.Value(0)
+	if err := warning.Validate(); err == nil {
+		t.Fatal("accepted present zero token loss")
 	}
 }

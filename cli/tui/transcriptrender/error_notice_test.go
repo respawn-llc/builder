@@ -257,6 +257,23 @@ func errorNoticeRow(notice *clientui.TranscriptNoticeRow) clientui.TranscriptCom
 	}
 }
 
+func TestProviderModelMismatchNoticeRendersInDetailModesAndWraps(t *testing.T) {
+	row := errorNoticeRow(&clientui.TranscriptNoticeRow{
+		Reason:   clientui.TranscriptNoticeProviderModelMismatch,
+		Severity: clientui.TranscriptNoticeWarning,
+		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{
+			RequestedModel: "session-contract-model",
+			ServedModel:    "served-model",
+		},
+	})
+	if len(RenderCommittedRow(row, 120, "dark", ModeDetailExpanded).Lines) == 0 {
+		t.Fatal("expanded provider-model warning rendered no lines")
+	}
+	if lines := RenderCommittedRow(row, 28, "dark", ModeDetailCollapsed).Lines; len(lines) < 2 {
+		t.Fatalf("narrow provider-model warning lines = %d, want wrapping", len(lines))
+	}
+}
+
 func allTranscriptModes() []Mode {
 	return []Mode{
 		ModeOngoing,

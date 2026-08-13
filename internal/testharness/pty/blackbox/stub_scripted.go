@@ -122,7 +122,11 @@ func (s *ResponsesStub) serveScripted(
 			s.writeResponseOutputItem(writer, index, item)
 		}
 	}
-	if !s.writeResponseCompleted(writer, llmRequest.Model, output, outcome.Response.Usage) || !s.writeResponseDone(writer) {
+	servedModel := llmRequest.Model
+	if outcome.Response.ServedModel != nil && strings.TrimSpace(*outcome.Response.ServedModel) != "" {
+		servedModel = strings.TrimSpace(*outcome.Response.ServedModel)
+	}
+	if !s.writeResponseCompleted(writer, servedModel, output, outcome.Response.Usage) || !s.writeResponseDone(writer) {
 		return outcome.Admission, errors.New("write scripted Responses stream")
 	}
 	return outcome.Admission, nil
