@@ -9,7 +9,6 @@ import (
 
 	"core/server/attentionnotify"
 	askquestion "core/server/tools"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -25,13 +24,10 @@ func (r *RuntimeRegistry) WithAttentionNotifications(broker *attentionnotify.Bro
 	return r
 }
 
-func (r *RuntimeRegistry) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
-		return r.SubscribeAttentionNotificationsValidated(ctx, validated)
-	})
-}
-
-func (r *RuntimeRegistry) SubscribeAttentionNotificationsValidated(_ context.Context, _ apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+func (r *RuntimeRegistry) SubscribeAttentionNotifications(_ context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
@@ -122,7 +118,7 @@ func (r *RuntimeRegistry) enqueueTaskQuestionBatchSnapshot(sub serverapi.Attenti
 	req := items[0].Request
 	materializedAskIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		materializedAskIDs = append(materializedAskIDs, string(item.PromptID))
+		materializedAskIDs = append(materializedAskIDs, item.Request.ID)
 	}
 	return r.questionBatches.EnqueueSnapshot(subscription, attentionnotify.QuestionBatch{
 		StepID:         questionBatchStepID(*req.QuestionBatch),
@@ -252,7 +248,7 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 	notification := clientui.AttentionNotification{
 		ID: clientui.AttentionNotificationID{
 			Kind: kind,
-			UUID: string(snapshot.PromptID),
+			UUID: strings.TrimSpace(snapshot.Request.ID),
 		},
 		Kind:       kind,
 		OccurredAt: snapshot.CreatedAt,
@@ -265,9 +261,9 @@ func attentionPendingEventFromPrompt(sessionID string, snapshot PendingPromptSna
 		}
 	} else {
 		notification.Question = &clientui.AttentionNotificationQuestionState{
-			PreparedAskIDs:          []string{string(snapshot.PromptID)},
-			MaterializedAskIDs:      []string{string(snapshot.PromptID)},
-			CurrentUnresolvedAskIDs: []string{string(snapshot.PromptID)},
+			PreparedAskIDs:          []string{snapshot.Request.ID},
+			MaterializedAskIDs:      []string{snapshot.Request.ID},
+			CurrentUnresolvedAskIDs: []string{snapshot.Request.ID},
 			Preview:                 strings.TrimSpace(snapshot.Request.Question),
 			DisplayCount:            1,
 			MaterializedCount:       1,
