@@ -221,10 +221,10 @@ func newCheckpointPTYFixtureRuntime(
 	) func(context.Context) error {
 		state = newPTYCheckpointScenarioState(targetFinalAssistantOrdinal)
 		return func(context.Context) error {
-			state.markScenarioComplete()
 			if err := terminal.writer.Emit(checkpoint.KindScenarioComplete, nil); err != nil {
 				return err
 			}
+			state.markScenarioComplete()
 			return nil
 		}
 	})
