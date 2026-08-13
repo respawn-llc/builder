@@ -76,10 +76,7 @@ func (s *Service) SubmitUserTurnValidated(ctx context.Context, validated service
 	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
-	if err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, err
-	}
+	clientRequestID := validated.RuntimeClientRequestID(req.ClientRequestID)
 	memoReq := userTurnMemoRequest(req)
 	return memoizedRuntimeCommand(ctx, clientRequestID.String(), memoReq, s.userTurns, sameSessionUserTurnMemoRequest, func(ctx context.Context) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
 		projection, err := s.resolveUserTurnInput(ctx, req.SessionID, req.Input)

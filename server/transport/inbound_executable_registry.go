@@ -1209,7 +1209,7 @@ func handleRuntimeLiveSteer(
 	if !ok {
 		return serverapi.RuntimeLiveSteerResponse{}, errors.New("Runtime Live Control trusted service is required")
 	}
-	return trusted.LiveSteerValidated(ctx, request)
+	return trusted.LiveSteerValidated(ctx, request, runtimeLiveSteerRequestIdentity(request))
 }
 
 func runtimeLiveControlTrustedService(g *Gateway) (apicontract.RuntimeLiveControlTrustedService, error) {
@@ -1231,7 +1231,7 @@ func handleRuntimeLiveStop(
 	if err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
-	return trusted.LiveStopValidated(ctx, request)
+	return trusted.LiveStopValidated(ctx, request, apicontract.RuntimeLiveRequestIdentity{SessionID: request.SessionID(request.Value().SessionID)})
 }
 
 func handleRuntimeLiveWait(
@@ -1245,7 +1245,7 @@ func handleRuntimeLiveWait(
 	if !ok {
 		return serverapi.RuntimeLiveWaitResponse{}, errors.New("Runtime Live Control trusted service is required")
 	}
-	return trusted.LiveWaitValidated(ctx, request)
+	return trusted.LiveWaitValidated(ctx, request, apicontract.RuntimeLiveRequestIdentity{SessionID: request.SessionID(request.Value().SessionID)})
 }
 
 func handleRuntimeLiveWatch(
@@ -1259,7 +1259,20 @@ func handleRuntimeLiveWatch(
 	if err != nil {
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
-	return trusted.LiveWatchValidated(ctx, request)
+	return trusted.LiveWatchValidated(ctx, request, apicontract.RuntimeLiveRequestIdentity{SessionID: request.SessionID(request.Value().SessionID)})
+}
+
+func runtimeLiveSteerRequestIdentity(request apicontract.Validated[serverapi.RuntimeLiveSteerRequest]) apicontract.RuntimeLiveRequestIdentity {
+	req := request.Value()
+	identity := apicontract.RuntimeLiveRequestIdentity{
+		SessionID:       request.SessionID(req.SessionID),
+		ClientRequestID: request.RuntimeClientRequestID(req.ClientRequestID),
+	}
+	if req.CallerSessionID != nil {
+		callerID := request.SessionID(*req.CallerSessionID)
+		identity.CallerSessionID = &callerID
+	}
+	return identity
 }
 
 func runtimeGoalTrustedService(g *Gateway) (apicontract.RuntimeGoalTrustedService, error) {

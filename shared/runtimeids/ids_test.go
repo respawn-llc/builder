@@ -107,6 +107,35 @@ func TestSessionIDTracksCanonicalUUIDv4WithoutRejectingLegacyIDs(t *testing.T) {
 	}
 }
 
+func TestParseRuntimeClientRequestIDOwnsUUIDV4Grammar(t *testing.T) {
+	for _, raw := range []string{
+		"8b0364cc-5c6c-412e-a4e8-31380661d1e1",
+		" 8b0364cc-5c6c-412e-a4e8-31380661d1e1 ",
+	} {
+		t.Run("accepts_"+raw, func(t *testing.T) {
+			id, err := ParseRuntimeClientRequestID(raw)
+			if err != nil {
+				t.Fatalf("ParseRuntimeClientRequestID(%q): %v", raw, err)
+			}
+			if got := id.String(); got != "8b0364cc-5c6c-412e-a4e8-31380661d1e1" {
+				t.Fatalf("ParseRuntimeClientRequestID(%q) = %q", raw, got)
+			}
+		})
+	}
+	for _, raw := range []string{
+		"",
+		"request-1",
+		"018f3f8c-5b1a-7b72-8cb9-01af2c01a7e8",
+		"00000000-0000-4000-0000-000000000000",
+	} {
+		t.Run("rejects_"+raw, func(t *testing.T) {
+			if _, err := ParseRuntimeClientRequestID(raw); err == nil {
+				t.Fatalf("ParseRuntimeClientRequestID(%q) succeeded", raw)
+			}
+		})
+	}
+}
+
 func TestRuntimeUUIDIDsRoundTripAsJSONString(t *testing.T) {
 	runID, err := ParseRunID("11111111-1111-4111-8111-111111111111")
 	if err != nil {

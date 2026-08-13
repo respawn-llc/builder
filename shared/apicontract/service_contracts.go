@@ -247,10 +247,10 @@ type RuntimeLiveControlService interface {
 }
 
 type RuntimeLiveControlTrustedService interface {
-	LiveSteerValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error)
-	LiveStopValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveStopRequest]) (serverapi.RuntimeLiveStopResponse, error)
-	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error)
-	LiveWatchValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWatchRequest]) (serverapi.RuntimeLiveWatchResponse, error)
+	LiveSteerValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveSteerRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveSteerResponse, error)
+	LiveStopValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveStopRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveStopResponse, error)
+	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWaitResponse, error)
+	LiveWatchValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWatchRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWatchResponse, error)
 }
 
 type RuntimeLiveControlGatewayService interface {

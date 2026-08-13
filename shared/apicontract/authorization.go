@@ -65,6 +65,12 @@ type AuthorizedSessionInActiveProject struct {
 	ExecutionTarget clientui.SessionExecutionTarget
 }
 
+type RuntimeLiveRequestIdentity struct {
+	SessionID       runtimeids.SessionID
+	ClientRequestID runtimeids.RuntimeClientRequestID
+	CallerSessionID *runtimeids.SessionID
+}
+
 type optionalAuthorizedSessionKind uint8
 
 const (

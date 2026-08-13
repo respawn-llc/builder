@@ -39,6 +39,7 @@ func (*runtimeLiveAuthorityRoutingService) LiveWatch(context.Context, serverapi.
 func (*runtimeLiveAuthorityRoutingService) LiveStopValidated(
 	context.Context,
 	apicontract.Validated[serverapi.RuntimeLiveStopRequest],
+	apicontract.RuntimeLiveRequestIdentity,
 ) (serverapi.RuntimeLiveStopResponse, error) {
 	return serverapi.RuntimeLiveStopResponse{}, nil
 }
@@ -46,6 +47,7 @@ func (*runtimeLiveAuthorityRoutingService) LiveStopValidated(
 func (*runtimeLiveAuthorityRoutingService) LiveWatchValidated(
 	context.Context,
 	apicontract.Validated[serverapi.RuntimeLiveWatchRequest],
+	apicontract.RuntimeLiveRequestIdentity,
 ) (serverapi.RuntimeLiveWatchResponse, error) {
 	return serverapi.RuntimeLiveWatchResponse{}, nil
 }
@@ -53,6 +55,7 @@ func (*runtimeLiveAuthorityRoutingService) LiveWatchValidated(
 func (s *runtimeLiveAuthorityRoutingService) LiveSteerValidated(
 	_ context.Context,
 	_ apicontract.Validated[serverapi.RuntimeLiveSteerRequest],
+	_ apicontract.RuntimeLiveRequestIdentity,
 ) (serverapi.RuntimeLiveSteerResponse, error) {
 	s.steerCalls++
 	return serverapi.RuntimeLiveSteerResponse{}, serverapi.ErrRuntimeUnavailable
@@ -61,6 +64,7 @@ func (s *runtimeLiveAuthorityRoutingService) LiveSteerValidated(
 func (s *runtimeLiveAuthorityRoutingService) LiveWaitValidated(
 	_ context.Context,
 	_ apicontract.Validated[serverapi.RuntimeLiveWaitRequest],
+	_ apicontract.RuntimeLiveRequestIdentity,
 ) (serverapi.RuntimeLiveWaitResponse, error) {
 	s.waitCalls++
 	return serverapi.RuntimeLiveWaitResponse{}, serverapi.ErrRuntimeNoActiveRun

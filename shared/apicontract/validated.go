@@ -3,6 +3,9 @@ package apicontract
 import (
 	"errors"
 	"fmt"
+	"strings"
+
+	"core/shared/runtimeids"
 )
 
 type ValidationPolicy uint8
@@ -26,6 +29,22 @@ type Validated[T any] struct {
 
 func (v Validated[T]) Value() T {
 	return v.value
+}
+
+func (v Validated[T]) SessionID(raw string) runtimeids.SessionID {
+	id, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Session ID %q: %v", raw, err))
+	}
+	return id
+}
+
+func (v Validated[T]) RuntimeClientRequestID(raw string) runtimeids.RuntimeClientRequestID {
+	id, err := runtimeids.ParseRuntimeClientRequestID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Runtime Client Request ID %q: %v", raw, err))
+	}
+	return id
 }
 
 func WithValidated[T any, R any](

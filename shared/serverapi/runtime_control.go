@@ -291,10 +291,17 @@ func validateUUIDV4Field(name string, value string) error {
 }
 
 func validateRuntimeLiveControlRequest(clientRequestID string, sessionID string) error {
-	if err := validateUUIDV4Field("client_request_id", clientRequestID); err != nil {
+	if _, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID); err != nil {
 		return err
 	}
-	return validateUUIDV4Field("session_id", sessionID)
+	parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
+	if err != nil {
+		return err
+	}
+	if !parsed.IsCanonicalUUIDv4() {
+		return errors.New("session_id must be a canonical UUIDv4")
+	}
+	return nil
 }
 
 func validateGoalActor(actor string) error {
@@ -310,7 +317,15 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 	if err := validateClientRequestID(clientRequestID); err != nil {
 		return err
 	}
-	return validateRequiredSessionID(sessionID)
+	return validateScopedSessionID(sessionID)
+}
+
+func validateTypedRuntimeControlRequest(clientRequestID string, sessionID string) error {
+	if err := validateRuntimeControlRequest(clientRequestID, sessionID); err != nil {
+		return err
+	}
+	_, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
+	return err
 }
 
 func (r RuntimeSetSessionNameRequest) Validate() error {
@@ -343,10 +358,10 @@ func (r RuntimeAppendCommittedEntryRequest) Validate() error {
 	return nil
 }
 func (r RuntimeShouldCompactBeforeUserMessageRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	return validateScopedSessionID(r.SessionID)
 }
 func (r RuntimeSubmitUserTurnRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
+	if err := validateTypedRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
 		return err
 	}
 	return r.Input.Validate()
@@ -459,7 +474,7 @@ func (r RuntimeRecordPromptHistoryRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	return validateScopedSessionID(r.SessionID)
 }
 func (r RuntimeGoalSetRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
