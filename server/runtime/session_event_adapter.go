@@ -257,15 +257,16 @@ func sessionLocalEntryRecordFromRuntime(
 		return session.LocalEntryRecord{}, err
 	}
 	record := session.LocalEntryRecord{
-		Visibility:       visibility,
-		Role:             entry.Role,
-		Text:             textutil.OptionalExactString(entry.Text),
-		DurationMs:       textutil.Pointer(entry.DurationMs),
-		CondensedText:    textutil.Pointer(entry.CondensedText),
-		DiagnosticKey:    textutil.Pointer(entry.DiagnosticKey),
-		NoticeID:         textutil.Pointer(entry.NoticeID),
-		AfterToolCallID:  textutil.Pointer(entry.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+		Visibility:            visibility,
+		Role:                  entry.Role,
+		Text:                  textutil.OptionalExactString(entry.Text),
+		DurationMs:            textutil.Pointer(entry.DurationMs),
+		CondensedText:         textutil.Pointer(entry.CondensedText),
+		DiagnosticKey:         textutil.Pointer(entry.DiagnosticKey),
+		NoticeID:              textutil.Pointer(entry.NoticeID),
+		AfterToolCallID:       textutil.Pointer(entry.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
 	normalized, err := session.NewEventRecord(1, nil, record)
 	if err != nil {
@@ -325,15 +326,16 @@ func storedLocalEntryFromSessionRecord(
 	}
 	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
-		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
-		Role:             record.Role,
-		Text:             text,
-		DurationMs:       textutil.Pointer(record.DurationMs),
-		CondensedText:    textutil.Pointer(record.CondensedText),
-		DiagnosticKey:    textutil.Pointer(record.DiagnosticKey),
-		NoticeID:         textutil.Pointer(record.NoticeID),
-		AfterToolCallID:  textutil.Pointer(record.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(record.ToolOutputRepair),
+		Visibility:            runtimeEntryVisibilityFromSession(record.Visibility),
+		Role:                  record.Role,
+		Text:                  text,
+		DurationMs:            textutil.Pointer(record.DurationMs),
+		CondensedText:         textutil.Pointer(record.CondensedText),
+		DiagnosticKey:         textutil.Pointer(record.DiagnosticKey),
+		NoticeID:              textutil.Pointer(record.NoticeID),
+		AfterToolCallID:       textutil.Pointer(record.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(record.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(record.ProviderModelMismatch),
 	}, nil
 }
 

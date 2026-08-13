@@ -123,6 +123,7 @@
 - `background_notice`: `OC`
 - `custom_tool_call_output`: follows the tool call/result row it belongs to.
 - `handoff_future_message`: `D`
+- Provider-model mismatch warnings are `D` by default and `O` when debug mode is enabled.
 - Compaction-Preserved User Message: `D`.
 - `headless_mode`: `D`
 - `headless_mode_exit`: `D`
@@ -172,6 +173,7 @@
 - `subagents` developer-context rows use the faint foreground system-notice style.
 - Reviewer feedback rows use success text. Reviewer error rows use error text.
 - Cache warnings and non-interrupting warnings use warning text. Compaction reminders use warning text in ongoing and collapsed Detail, and normal notice text when expanded.
+- A provider-model mismatch warning reads `The provider served the request with <served model> instead of <Session Contract model>` in collapsed presentation.
 - Error rows use the Error color for both symbol and text, including interruption rows. Error rows may retain faintness when their presentation requires it.
 - One shared transcript renderer selects the complete content and layout for every error-severity notice from its typed reason.
 - A runtime-diagnostic error uses its complete diagnostic detail. A legacy-untyped error uses its complete legacy text when present.

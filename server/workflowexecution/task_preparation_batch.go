@@ -157,7 +157,7 @@ func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(batch *taskPr
 		commitErr              error
 		canceled               bool
 	)
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.mutations.Run(cleanupCtx, batch.taskID, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
 			c.mu.Lock()
 			if c.runningTaskPreparationLocked(batch.taskID) == batch {
@@ -250,7 +250,7 @@ func (c *CurrentNodeController) finishFailedTaskPreparationBatch(batch *taskPrep
 		interruptionDiagnostic error
 		canceled               bool
 	)
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.mutations.Run(cleanupCtx, batch.taskID, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
 			c.mu.Lock()
 			if c.runningTaskPreparationLocked(batch.taskID) == batch {
@@ -367,7 +367,7 @@ func (c *CurrentNodeController) publishFailedTaskPreparationBatch(
 func (c *CurrentNodeController) finishCanceledTaskPreparationBatch(batch *taskPreparationBatch) {
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	retireErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+	retireErr := c.mutations.Run(cleanupCtx, batch.taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.runningTaskPreparationLocked(batch.taskID) != batch {

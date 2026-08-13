@@ -79,7 +79,7 @@ func TestApproveWorkflowTaskStartupFailureProjectsInterruptedResumeAcrossRestart
 			service.store,
 			initialBranchControllerRunner{},
 			runtimeAuthority,
-			service.mutationPermit,
+			service.taskMutations,
 			workflowexecution.CurrentNodeControllerConfig{
 				AgentConcurrency:  1,
 				AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},
@@ -219,7 +219,7 @@ WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 		service.store,
 		runner,
 		authority,
-		workflowexecution.NewMutationPermit(),
+		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},

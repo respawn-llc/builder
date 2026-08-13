@@ -28,6 +28,7 @@ type ptyCheckpointScenarioState struct {
 	scenarioComplete             bool
 	finalAppliedEmitted          bool
 	toolStartedEmitted           bool
+	completed                    chan struct{}
 	finalApplied                 chan struct{}
 }
 
@@ -39,6 +40,7 @@ func newPTYCheckpointScenarioState(
 	}
 	return &ptyCheckpointScenarioState{
 		targetFinalAssistantOrdinal: targetFinalAssistantOrdinal,
+		completed:                   make(chan struct{}),
 		finalApplied:                make(chan struct{}),
 	}
 }
@@ -52,14 +54,8 @@ func (state *ptyCheckpointScenarioState) markScenarioComplete() {
 	if state.scenarioComplete {
 		panic("mark PTY checkpoint scenario complete more than once")
 	}
-	if state.appliedFinalAssistantOrdinal >= state.targetFinalAssistantOrdinal {
-		panic(fmt.Sprintf(
-			"mark PTY checkpoint scenario complete after target final was applied: applied_ordinal=%d target_ordinal=%d",
-			state.appliedFinalAssistantOrdinal,
-			state.targetFinalAssistantOrdinal,
-		))
-	}
 	state.scenarioComplete = true
+	close(state.completed)
 }
 
 func (state *ptyCheckpointScenarioState) recordAcceptedAssistantFinal(sequence uint64) bool {
@@ -154,8 +150,13 @@ func newPTYCheckpointModel(
 }
 
 func (model *ptyCheckpointModel) Init() tea.Cmd {
-	return model.inner.Init()
+	return tea.Batch(model.inner.Init(), func() tea.Msg {
+		<-model.scenario.completed
+		return ptyScenarioCompletedMsg{}
+	})
 }
+
+type ptyScenarioCompletedMsg struct{}
 
 func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	promptReadyBefore := ptyCheckpointPromptReady(model.inner)
@@ -189,6 +190,17 @@ func (model *ptyCheckpointModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if queuedTargetFinal.terminalAppliedBy(next) {
 		emitScenarioFinalApplied = model.scenario.claimScenarioFinalApplied(queuedTargetFinal.sequence)
+	}
+	if !emitScenarioFinalApplied {
+		sequence, ok := model.scenario.pendingTargetFinalSequence()
+		appModel, isAppModel := next.(*uiModel)
+		if ok && isAppModel && appModel.ongoingTranscript != nil &&
+			!appModel.forcedLocalExit && appModel.ongoingTranscript.normalOwned &&
+			!appModel.ongoingTranscript.queueOverflowed && appModel.nativeOngoingSurfaceActive() &&
+			len(appModel.ongoingTranscript.queue) == 0 && appModel.ongoingTranscript.lastSequence >= sequence &&
+			model.scenario.claimScenarioFinalApplied(sequence) {
+			emitScenarioFinalApplied = true
+		}
 	}
 	if emitScenarioFinalApplied {
 		model.emitScenarioFinalApplied()

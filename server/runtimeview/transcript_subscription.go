@@ -846,6 +846,9 @@ func transcriptNoticeFromFact(stepID string, fact *runtime.TranscriptNoticeRowFa
 	if fact.ToolOutputRepair != nil {
 		notice.ToolOutputRepair = textutil.Pointer(fact.ToolOutputRepair)
 	}
+	if fact.ProviderModelMismatch != nil {
+		notice.ProviderModelMismatch = textutil.Pointer(fact.ProviderModelMismatch)
+	}
 	diagnosticCode := strings.TrimSpace(fact.DiagnosticCode)
 	diagnosticDetail := fact.DiagnosticDetail
 	if diagnosticCode != "" || strings.TrimSpace(diagnosticDetail) != "" {

@@ -60,7 +60,6 @@ type Starter struct {
 	runtimeAuthority     *sessionruntime.Authority
 	storeOptions         []session.StoreOption
 	runtimeClientFactory runtimewire.RuntimeClientFactory
-	mutationPermit       *workflowexecution.MutationPermit
 	taskAwarenessSource  workflowruntime.TaskAwarenessSource
 	closed               atomic.Bool
 }
@@ -68,7 +67,6 @@ type Starter struct {
 type StarterOptions struct {
 	RuntimeClientFactory runtimewire.RuntimeClientFactory
 	RuntimeAuthority     *sessionruntime.Authority
-	MutationPermit       *workflowexecution.MutationPermit
 	TaskDependencies     TaskDependencyCounter
 }
 
@@ -76,7 +74,7 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 	if strings.TrimSpace(cfg.PersistenceRoot) == "" {
 		return nil, errors.New("workflow runtime persistence root is required")
 	}
-	if metadataStore == nil || store == nil || opts.RuntimeAuthority == nil || opts.MutationPermit == nil || opts.TaskDependencies == nil {
+	if metadataStore == nil || store == nil || opts.RuntimeAuthority == nil || opts.TaskDependencies == nil {
 		return nil, errors.New("workflow runtime dependencies are required")
 	}
 	taskAwarenessSource, err := NewTaskAwarenessSource(store, opts.TaskDependencies)
@@ -92,7 +90,6 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		runtimeAuthority:     opts.RuntimeAuthority,
 		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
 		runtimeClientFactory: opts.RuntimeClientFactory,
-		mutationPermit:       opts.MutationPermit,
 		taskAwarenessSource:  taskAwarenessSource,
 	}, nil
 }
@@ -795,7 +792,7 @@ func (s *Starter) applyCurrentNodeSessionExecutionTarget(ctx context.Context, in
 	if root.Managed != nil {
 		update.Worktree = &metadata.SessionExecutionTargetUpdateWorktree{ID: root.Managed.WorktreeID}
 	}
-	return s.mutationPermit.Run(ctx, func(ctx context.Context) error { return s.metadata.UpdateSessionExecutionTarget(ctx, update) })
+	return s.metadata.UpdateSessionExecutionTarget(ctx, update)
 }
 
 func (s *Starter) currentNodeManagedWorktreePathContext(plan launch.SessionPlan, root workflowstore.ExecutionRoot) (*askquestion.ManagedWorktreePathContext, error) {

@@ -486,7 +486,7 @@ func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.Current
 }
 
 // ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
-// immediately follows it with AdmitCurrentNode under the same mutation permit;
+// immediately follows it with AdmitCurrentNode under the same Task mutation owner;
 // it is deliberately not an automatic recovery path.
 func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
 	if err := reference.Validate(); err != nil {
