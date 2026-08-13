@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -828,6 +829,114 @@ func TestServiceWorkflowTaskDeleteWaitsForSameTaskMutation(t *testing.T) {
 
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
 		t.Fatal("deleted workflow task remains readable after Task ownership release")
+	}
+}
+
+func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	started, err := service.store.StartTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	projector := workflowview.NewTaskProjector()
+	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("NewTaskDependencyCounter: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	service.readModels.TaskDetail, err = workflowview.NewTaskDetail(metadataStore, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	ref := sessionruntime.WorkflowExecutionRef{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  workflowID,
+		CurrentNode: started.Mutation.Created[0].Reference,
+	}
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  sessionruntime.ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = handle.Stop(context.Background())
+	})
+	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID}); err != nil {
+		t.Fatalf("prime Task read snapshot: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	selectionDone := make(chan error, 1)
+	go func() {
+		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(sessionruntime.WorkflowInterruptSelection) error {
+			close(entered)
+			<-release
+			return errors.New("release lifecycle selection without applying it")
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Runtime lifecycle selection did not acquire ownership")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+		readDone <- readErr
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("GetWorkflowTask while Runtime lifecycle ownership held: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetWorkflowTask waited for Runtime lifecycle ownership")
+	}
+	close(release)
+	if err := <-selectionDone; err == nil {
+		t.Fatal("Runtime lifecycle selection unexpectedly committed")
 	}
 }
 
