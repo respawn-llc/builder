@@ -907,16 +907,6 @@ func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, pro
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
-	workspace, err := q.GetWorkspaceByID(ctx, trimmedWorkspaceID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-		}
-		return serverapi.ProjectHomeSummary{}, err
-	}
-	if strings.TrimSpace(workspace.ProjectID) != trimmedProjectID {
-		return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
-	}
 	currentWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, trimmedProjectID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -938,7 +928,7 @@ func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, pro
 			return serverapi.ProjectHomeSummary{}, fmt.Errorf("set project primary workspace: %w", err)
 		}
 		if updatedProject == 0 {
-			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, trimmedProjectID)
+			return serverapi.ProjectHomeSummary{}, fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
 		}
 	}
 	rows, err := q.ListProjectHomeSummaries(ctx, sqlitegen.ListProjectHomeSummariesParams{
@@ -1244,20 +1234,6 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 		}
 		return s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot)
 	}
-	if existing, err := q.GetWorkspaceBindingByProjectAndCanonicalRoot(ctx, sqlitegen.GetWorkspaceBindingByProjectAndCanonicalRootParams{
-		ProjectID:         oldWorkspace.ProjectID,
-		CanonicalRootPath: newCanonicalRoot,
-	}); err == nil {
-		if existing.WorkspaceID == oldWorkspace.ID {
-			if err := tx.Commit(); err != nil {
-				return Binding{}, fmt.Errorf("commit workspace rebind noop tx: %w", err)
-			}
-			return s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot)
-		}
-		return Binding{}, fmt.Errorf("workspace %q: %w", newCanonicalRoot, ErrWorkspaceAlreadyBound)
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return Binding{}, fmt.Errorf("get new workspace binding: %w", err)
-	}
 	worktrees, err := q.ListWorktreesByWorkspaceID(ctx, oldWorkspace.ID)
 	if err != nil {
 		return Binding{}, fmt.Errorf("list workspace worktrees: %w", err)
@@ -1478,11 +1454,23 @@ func rebindDescendantPath(oldRoot string, newRoot string, descendant string) (st
 }
 
 func IsSQLiteUniqueConstraint(err error) bool {
+	return isSQLiteConstraint(err, sqlite3.SQLITE_CONSTRAINT_UNIQUE)
+}
+
+func IsSQLiteForeignKeyConstraint(err error) bool {
+	return isSQLiteConstraint(err, sqlite3.SQLITE_CONSTRAINT_FOREIGNKEY)
+}
+
+func IsSQLiteTriggerConstraint(err error) bool {
+	return isSQLiteConstraint(err, sqlite3.SQLITE_CONSTRAINT_TRIGGER)
+}
+
+func isSQLiteConstraint(err error, code int) bool {
 	var sqliteErr *sqlitedriver.Error
 	if !errors.As(err, &sqliteErr) {
 		return false
 	}
-	return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+	return sqliteErr.Code() == code
 }
 
 func (s *Store) BackfillProjectKeys(ctx context.Context) error {
@@ -1753,6 +1741,9 @@ func insertWorkspaceBindingWithQueries(ctx context.Context, q *sqlitegen.Queries
 		UpdatedAtUnixMs:   insert.UpdatedAt.UnixMilli(),
 	})
 	if err != nil {
+		if IsSQLiteForeignKeyConstraint(err) {
+			return false, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, insert.ProjectID)
+		}
 		return false, fmt.Errorf("insert workspace binding: %w", err)
 	}
 	if rows == 0 {

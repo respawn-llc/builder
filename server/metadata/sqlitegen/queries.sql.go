@@ -885,26 +885,6 @@ func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Contex
 	return ref_count, err
 }
 
-const countProjectWorkflowLinksByIDAndProject = `-- name: CountProjectWorkflowLinksByIDAndProject :one
-SELECT CAST(COUNT(*) AS INTEGER) AS link_count
-FROM project_workflow_links
-WHERE id = ?1
-  AND project_id = ?2
-`
-
-type CountProjectWorkflowLinksByIDAndProjectParams struct {
-	ProjectWorkflowLinkID string
-	ProjectID             string
-}
-
-func (q *Queries) CountProjectWorkflowLinksByIDAndProject(ctx context.Context, arg CountProjectWorkflowLinksByIDAndProjectParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countProjectWorkflowLinksByIDAndProject, arg.ProjectWorkflowLinkID, arg.ProjectID)
-	var link_count int64
-	err := recordQueryError(ctx, row.Scan(&link_count), countProjectWorkflowLinksByIDAndProject, 2)
-
-	return link_count, err
-}
-
 const countProjectWorkspaces = `-- name: CountProjectWorkspaces :one
 SELECT CAST(COUNT(*) AS INTEGER) AS workspace_count
 FROM workspaces
@@ -1930,7 +1910,7 @@ func (q *Queries) GetProjectDeleteBlockerCounts(ctx context.Context, deleteProje
 const getProjectDisplayName = `-- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects
-WHERE id = ?1
+WHERE projects.id = ?1
 LIMIT 1
 `
 
@@ -1948,7 +1928,7 @@ SELECT
     display_name,
     project_key
 FROM projects
-WHERE id = ?1
+WHERE projects.id = ?1
 LIMIT 1
 `
 
@@ -3274,7 +3254,7 @@ func (q *Queries) InsertProjectLabel(ctx context.Context, arg InsertProjectLabel
 	return i, err
 }
 
-const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :exec
+const insertProjectWorkflowLink = `-- name: InsertProjectWorkflowLink :execrows
 INSERT INTO project_workflow_links (
     id,
     project_id,
@@ -3288,6 +3268,7 @@ INSERT INTO project_workflow_links (
     ?4,
     ?5
 )
+ON CONFLICT(project_id, workflow_id) DO NOTHING
 `
 
 type InsertProjectWorkflowLinkParams struct {
@@ -3298,8 +3279,8 @@ type InsertProjectWorkflowLinkParams struct {
 	UpdatedAtUnixMs int64
 }
 
-func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProjectWorkflowLinkParams) error {
-	_, err := q.db.ExecContext(ctx, insertProjectWorkflowLink,
+func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProjectWorkflowLinkParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertProjectWorkflowLink,
 		arg.ID,
 		arg.ProjectID,
 		arg.WorkflowID,
@@ -3308,7 +3289,10 @@ func (q *Queries) InsertProjectWorkflowLink(ctx context.Context, arg InsertProje
 	)
 	err = recordQueryError(ctx, err, insertProjectWorkflowLink, 5)
 
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertSessionPromptHistoryEntry = `-- name: InsertSessionPromptHistoryEntry :execrows
@@ -9151,6 +9135,40 @@ func (q *Queries) SetProjectDefaultWorkflowLink(ctx context.Context, arg SetProj
 	return result.RowsAffected()
 }
 
+const setProjectDefaultWorkflowLinkByWorkflow = `-- name: SetProjectDefaultWorkflowLinkByWorkflow :execrows
+UPDATE projects
+SET
+    default_project_workflow_link_id = (
+        SELECT project_workflow_links.id
+        FROM project_workflow_links
+        WHERE project_workflow_links.project_id = projects.id
+          AND project_workflow_links.workflow_id = ?1
+    ),
+    updated_at_unix_ms = ?2
+WHERE projects.id = ?3
+  AND EXISTS (
+      SELECT 1
+      FROM project_workflow_links
+      WHERE project_workflow_links.project_id = projects.id
+        AND project_workflow_links.workflow_id = ?1
+  )
+`
+
+type SetProjectDefaultWorkflowLinkByWorkflowParams struct {
+	WorkflowID      runtimeids.WorkflowID
+	UpdatedAtUnixMs int64
+	ProjectID       string
+}
+
+func (q *Queries) SetProjectDefaultWorkflowLinkByWorkflow(ctx context.Context, arg SetProjectDefaultWorkflowLinkByWorkflowParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setProjectDefaultWorkflowLinkByWorkflow, arg.WorkflowID, arg.UpdatedAtUnixMs, arg.ProjectID)
+	err = recordQueryError(ctx, err, setProjectDefaultWorkflowLinkByWorkflow, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setProjectDisplayName = `-- name: SetProjectDisplayName :execrows
 UPDATE projects
 SET
@@ -9221,7 +9239,13 @@ UPDATE projects
 SET
     primary_workspace_id = ?1,
     updated_at_unix_ms = ?2
-WHERE id = ?3
+WHERE projects.id = ?3
+  AND EXISTS (
+      SELECT 1
+      FROM workspaces
+      WHERE workspaces.id = ?1
+        AND workspaces.project_id = projects.id
+  )
 `
 
 type SetProjectPrimaryWorkspaceParams struct {

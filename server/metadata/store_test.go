@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	sqlitedriver "modernc.org/sqlite"
 )
 
 func appendMetadataMessage(t *testing.T, store *session.Store, stepID string, role session.MessageRole, content string) session.EventRecord {
@@ -731,6 +733,63 @@ func TestProjectWorkspaceMutationsDoNotRequireWorkflowEvents(t *testing.T) {
 	}
 	if tableExists(t, store.db, "workflow_events") {
 		t.Fatal("workflow_events should not exist; project mutations must not depend on persisted invalidation rows")
+	}
+}
+
+func TestSetProjectDefaultWorkspaceTranslatesSQLiteRelationFailures(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store, _, binding := newMetadataTestStore(t)
+	other, err := store.CreateProjectForWorkspace(ctx, t.TempDir(), "Other Project")
+	if err != nil {
+		t.Fatalf("CreateProjectForWorkspace: %v", err)
+	}
+
+	for name, testCase := range map[string]struct {
+		projectID   string
+		workspaceID string
+		want        error
+	}{
+		"missing workspace": {
+			projectID:   binding.ProjectID,
+			workspaceID: "workspace-missing",
+			want:        serverapi.ErrWorkspaceNotRegistered,
+		},
+		"workspace belongs to another project": {
+			projectID:   binding.ProjectID,
+			workspaceID: other.WorkspaceID,
+			want:        serverapi.ErrWorkspaceNotRegistered,
+		},
+		"missing project": {
+			projectID:   "project-missing",
+			workspaceID: binding.WorkspaceID,
+			want:        serverapi.ErrProjectNotFound,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := store.SetProjectDefaultWorkspace(ctx, testCase.projectID, testCase.workspaceID)
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("SetProjectDefaultWorkspace error = %v, want %v", err, testCase.want)
+			}
+			var sqliteErr *sqlitedriver.Error
+			if errors.As(err, &sqliteErr) {
+				t.Fatalf("SetProjectDefaultWorkspace exposed SQLite error: %v", err)
+			}
+		})
+	}
+}
+
+func TestAttachWorkspaceTranslatesMissingProjectRelation(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newMetadataTestStore(t)
+
+	_, err := store.AttachWorkspaceToProject(t.Context(), "project-missing", t.TempDir())
+	if !errors.Is(err, serverapi.ErrProjectNotFound) {
+		t.Fatalf("AttachWorkspaceToProject error = %v, want ErrProjectNotFound", err)
+	}
+	var sqliteErr *sqlitedriver.Error
+	if errors.As(err, &sqliteErr) {
+		t.Fatalf("AttachWorkspaceToProject exposed SQLite error: %v", err)
 	}
 }
 

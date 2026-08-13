@@ -326,13 +326,6 @@ func attachWorkspaceToProjectWithQueries(ctx context.Context, q *sqlitegen.Queri
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Binding{}, false, err
 	}
-	project, err := q.GetProjectKeyState(ctx, projectID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return Binding{}, false, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
-		}
-		return Binding{}, false, fmt.Errorf("get project: %w", err)
-	}
 	workspaceCount, err := q.CountProjectWorkspaces(ctx, projectID)
 	if err != nil {
 		return Binding{}, false, fmt.Errorf("count project workspaces: %w", err)
@@ -349,13 +342,16 @@ func attachWorkspaceToProjectWithQueries(ctx context.Context, q *sqlitegen.Queri
 		return Binding{}, false, err
 	}
 	if !inserted {
-		return Binding{}, false, fmt.Errorf("workspace %q could not be attached to project %q", canonicalRoot, projectID)
+		binding, err := lookupProjectWorkspaceBindingWithQueries(ctx, q, projectID, canonicalRoot)
+		if err != nil {
+			return Binding{}, false, fmt.Errorf("lookup existing workspace binding: %w", err)
+		}
+		return binding, false, nil
 	}
 	binding, err = lookupProjectWorkspaceBindingWithQueries(ctx, q, projectID, canonicalRoot)
 	if err != nil {
 		return Binding{}, false, fmt.Errorf("lookup attached workspace binding: %w", err)
 	}
-	binding.ProjectKey = project.ProjectKey
 	return binding, true, nil
 }
 

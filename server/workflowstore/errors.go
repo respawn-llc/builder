@@ -96,7 +96,10 @@ var (
 
 	// ErrReplacementDefaultInvalid is returned when an unlink replacement-default
 	// link is missing or self-referential.
-	ErrReplacementDefaultInvalid = errors.New("replacement default workflow link is invalid")
+	ErrReplacementDefaultInvalid   = errors.New("replacement default workflow link is invalid")
+	ErrWorkflowNotFound            = errors.New("workflow not found")
+	ErrProjectWorkflowLinkNotFound = errors.New("project workflow link not found")
+	ErrProjectWorkflowLinkInvalid  = errors.New("project workflow link relation is invalid")
 
 	// ErrNodeHasTaskHistory and ErrEdgeHasTaskHistory guard physical deletion of
 	// graph elements that are still referenced by task history.

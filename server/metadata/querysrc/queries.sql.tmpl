@@ -140,7 +140,7 @@ SELECT
     display_name,
     project_key
 FROM projects
-WHERE id = sqlc.arg(project_id)
+WHERE projects.id = sqlc.arg(project_id)
 LIMIT 1;
 
 -- name: GetProjectKeyState :one
@@ -685,7 +685,7 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
--- name: InsertProjectWorkflowLink :exec
+-- name: InsertProjectWorkflowLink :execrows
 INSERT INTO project_workflow_links (
     id,
     project_id,
@@ -698,7 +698,8 @@ INSERT INTO project_workflow_links (
     sqlc.arg(workflow_id),
     sqlc.arg(created_at_unix_ms),
     sqlc.arg(updated_at_unix_ms)
-);
+)
+ON CONFLICT(project_id, workflow_id) DO NOTHING;
 
 -- name: GetProjectWorkflowLink :one
 SELECT
@@ -822,11 +823,23 @@ SET
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
 WHERE id = sqlc.arg(project_id);
 
--- name: CountProjectWorkflowLinksByIDAndProject :one
-SELECT CAST(COUNT(*) AS INTEGER) AS link_count
-FROM project_workflow_links
-WHERE id = sqlc.arg(project_workflow_link_id)
-  AND project_id = sqlc.arg(project_id);
+-- name: SetProjectDefaultWorkflowLinkByWorkflow :execrows
+UPDATE projects
+SET
+    default_project_workflow_link_id = (
+        SELECT project_workflow_links.id
+        FROM project_workflow_links
+        WHERE project_workflow_links.project_id = projects.id
+          AND project_workflow_links.workflow_id = sqlc.arg(workflow_id)
+    ),
+    updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
+WHERE projects.id = sqlc.arg(project_id)
+  AND EXISTS (
+      SELECT 1
+      FROM project_workflow_links
+      WHERE project_workflow_links.project_id = projects.id
+        AND project_workflow_links.workflow_id = sqlc.arg(workflow_id)
+  );
 
 -- name: DeleteProjectWorkflowLinkUnlessDefaultNeedsReplacement :execrows
 DELETE FROM project_workflow_links
@@ -2026,7 +2039,7 @@ WHERE id = sqlc.arg(session_id)
 -- name: GetProjectDisplayName :one
 SELECT display_name
 FROM projects
-WHERE id = sqlc.arg(project_id)
+WHERE projects.id = sqlc.arg(project_id)
 LIMIT 1;
 
 -- name: SetProjectDisplayName :execrows
@@ -2052,7 +2065,13 @@ UPDATE projects
 SET
     primary_workspace_id = sqlc.arg(workspace_id),
     updated_at_unix_ms = sqlc.arg(updated_at_unix_ms)
-WHERE id = sqlc.arg(project_id);
+WHERE projects.id = sqlc.arg(project_id)
+  AND EXISTS (
+      SELECT 1
+      FROM workspaces
+      WHERE workspaces.id = sqlc.arg(workspace_id)
+        AND workspaces.project_id = projects.id
+  );
 
 -- name: ListProjects :many
 SELECT
