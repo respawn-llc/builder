@@ -71,15 +71,11 @@ func testSubscriptionNextError(t *testing.T, nextErr error, wantErr error) {
 	}
 }
 
-func testSubscribeTimeFailure(t *testing.T, nextSnapshot shelltool.Snapshot, wantErr error) {
+func testSubscribeTimeFailure(t *testing.T, wantErr error) {
 	t.Helper()
-	nextSnapshot.ID = "proc-1"
 	svc := NewProcessOutputService(
 		&stubSubscriber{err: errors.New("subscribe failed")},
-		&stubProcessSource{snapshots: []shelltool.Snapshot{
-			{ID: "proc-1", OutputAvailable: true, OutputRetainedFromBytes: 0, OutputRetainedToBytes: 10},
-			nextSnapshot,
-		}},
+		&stubProcessSource{snapshots: []shelltool.Snapshot{{ID: "proc-1", OutputAvailable: true, OutputRetainedFromBytes: 0, OutputRetainedToBytes: 10}}},
 	)
 	if _, err := svc.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: "proc-1", OffsetBytes: 10}); !errors.Is(err, wantErr) {
 		t.Fatalf("SubscribeProcessOutput error = %v, want %v", err, wantErr)
@@ -139,22 +135,6 @@ func TestServicePassesThroughSubscriptionContextCanceled(t *testing.T) {
 	testSubscriptionNextError(t, context.Canceled, context.Canceled)
 }
 
-func TestServiceNormalizesSubscribeTimeGapFailure(t *testing.T) {
-	testSubscribeTimeFailure(t, shelltool.Snapshot{
-		OutputAvailable:         true,
-		OutputRetainedFromBytes: 20,
-		OutputRetainedToBytes:   30,
-	}, serverapi.ErrStreamGap)
-}
-
-func TestServiceNormalizesSubscribeTimeUnavailableFailure(t *testing.T) {
-	testSubscribeTimeFailure(t, shelltool.Snapshot{OutputAvailable: false}, serverapi.ErrStreamUnavailable)
-}
-
 func TestServiceNormalizesSubscribeTimeGenericFailure(t *testing.T) {
-	testSubscribeTimeFailure(t, shelltool.Snapshot{
-		OutputAvailable:         true,
-		OutputRetainedFromBytes: 0,
-		OutputRetainedToBytes:   10,
-	}, serverapi.ErrStreamFailed)
+	testSubscribeTimeFailure(t, serverapi.ErrStreamFailed)
 }

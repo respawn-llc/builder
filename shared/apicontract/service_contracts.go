@@ -53,13 +53,27 @@ type ProcessControlService interface {
 	GetInlineOutput(ctx context.Context, req serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error)
 }
 
+type ProcessControlTrustedService interface {
+	KillProcessValidated(ctx context.Context, req Validated[serverapi.ProcessKillRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessKillResponse, error)
+	GetInlineOutputValidated(ctx context.Context, req Validated[serverapi.ProcessInlineOutputRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessInlineOutputResponse, error)
+}
+
 type ProcessOutputService interface {
 	SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error)
+}
+
+type ProcessOutputTrustedService interface {
+	SubscribeProcessOutputValidated(ctx context.Context, req Validated[serverapi.ProcessOutputSubscribeRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessOutputSubscription, error)
 }
 
 type ProcessViewService interface {
 	ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error)
 	GetProcess(ctx context.Context, req serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error)
+}
+
+type ProcessViewTrustedService interface {
+	ResolveProcessAuthorization(ctx context.Context, processID string) (ProcessAuthorizationCandidate, error)
+	GetProcessValidated(ctx context.Context, req Validated[serverapi.ProcessGetRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessGetResponse, error)
 }
 
 type ProjectViewService interface {

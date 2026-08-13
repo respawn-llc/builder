@@ -66,6 +66,48 @@ func TestServiceListProcessesIncludesRunOwnership(t *testing.T) {
 	}
 }
 
+func TestResolveProcessAuthorizationSnapshotsAndProjectsOnce(t *testing.T) {
+	source := &countingProcessSource{snapshot: shelltool.Snapshot{
+		ID:             "proc-1",
+		OwnerSessionID: "session-1",
+		OwnerRunID:     "run-1",
+		Command:        "sleep 1",
+	}}
+	service := NewProcessViewService(source)
+
+	candidate, err := service.ResolveProcessAuthorization(t.Context(), "proc-1")
+	if err != nil {
+		t.Fatalf("ResolveProcessAuthorization: %v", err)
+	}
+	if source.snapshotCalls != 1 {
+		t.Fatalf("Snapshot calls = %d, want 1", source.snapshotCalls)
+	}
+	if candidate.ProcessID != "proc-1" || candidate.OwnerSessionID != "session-1" {
+		t.Fatalf("candidate identity = %+v", candidate)
+	}
+	if candidate.Process.ID != "proc-1" || candidate.Process.OwnerRunID != "run-1" || candidate.Process.Command != "sleep 1" {
+		t.Fatalf("candidate projection = %+v", candidate.Process)
+	}
+}
+
+type countingProcessSource struct {
+	snapshot      shelltool.Snapshot
+	snapshotCalls int
+}
+
+func (s *countingProcessSource) List() []shelltool.Snapshot { return nil }
+func (s *countingProcessSource) Snapshot(id string) (shelltool.Snapshot, error) {
+	s.snapshotCalls++
+	if id != s.snapshot.ID {
+		return shelltool.Snapshot{}, errors.New("unexpected Process ID")
+	}
+	return s.snapshot, nil
+}
+func (s *countingProcessSource) Kill(string) error { return nil }
+func (s *countingProcessSource) InlineOutput(string, int) (string, string, error) {
+	return "", "", nil
+}
+
 type processViewFixture struct {
 	manager *shelltool.Manager
 	tool    tools.Handler

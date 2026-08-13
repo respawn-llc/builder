@@ -460,7 +460,7 @@ func isRouteMethod(signature *types.Signature) bool {
 		return false
 	}
 	for index := 1; index < signature.Params().Len(); index++ {
-		if !isServiceContractParameterType(signature.Params().At(index).Type()) {
+		if !isServiceContractValueType(signature.Params().At(index).Type()) {
 			return false
 		}
 	}
@@ -468,15 +468,18 @@ func isRouteMethod(signature *types.Signature) bool {
 	case 1:
 		return isErrorType(signature.Results().At(0).Type())
 	case 2:
-		return isServerAPIType(signature.Results().At(0).Type()) && isErrorType(signature.Results().At(1).Type())
+		return isServiceContractValueType(signature.Results().At(0).Type()) && isErrorType(signature.Results().At(1).Type())
 	default:
 		return false
 	}
 }
 
-func isServiceContractParameterType(typ types.Type) bool {
+func isServiceContractValueType(typ types.Type) bool {
 	if isServerAPIType(typ) {
 		return true
+	}
+	if basic, ok := types.Unalias(typ).(*types.Basic); ok {
+		return basic.Kind() == types.String
 	}
 	typ = types.Unalias(typ)
 	named, ok := typ.(*types.Named)
@@ -485,7 +488,8 @@ func isServiceContractParameterType(typ types.Type) bool {
 		return false
 	}
 	return named.Obj().Name() == "Validated" ||
-		strings.HasPrefix(named.Obj().Name(), "Authorized")
+		strings.HasPrefix(named.Obj().Name(), "Authorized") ||
+		strings.HasSuffix(named.Obj().Name(), "Candidate")
 }
 
 func isServerAPIType(typ types.Type) bool {

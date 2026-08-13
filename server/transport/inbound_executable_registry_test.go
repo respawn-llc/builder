@@ -106,6 +106,21 @@ func TestInboundExecutableRegistryDeclaresValidationAndTypedAuthorization(t *tes
 	if worktree.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
 		t.Fatal("worktree Workspace list registered with zero authorization facts")
 	}
+
+	for _, method := range []string{
+		protocol.MethodProcessGet,
+		protocol.MethodProcessKill,
+		protocol.MethodProcessInlineOutput,
+		protocol.MethodProcessSubscribeOutput,
+	} {
+		process := inboundExecutableRoutes[method]
+		if process.authorizationType != reflect.TypeOf(apicontract.AuthorizedProcessInActiveProject{}) {
+			t.Errorf("%s authorization type = %v, want AuthorizedProcessInActiveProject", method, process.authorizationType)
+		}
+		if process.authorizationType == reflect.TypeOf(noAuthorizationFacts{}) {
+			t.Errorf("%s registered with zero authorization facts", method)
+		}
+	}
 }
 
 func TestInboundExecutableRegistryUsesPreparedCustomDecoders(t *testing.T) {

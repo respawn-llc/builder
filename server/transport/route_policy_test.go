@@ -216,7 +216,7 @@ func TestRoutePolicyAuthorizesRuntimeLiveControlsWithoutActiveProject(t *testing
 	}
 }
 
-func TestRoutePolicyAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
+func TestTypedProcessAuthorizerAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
 	fixture := newRoutePolicyFixture(t)
 	fixture.appCore.Background().SetMinimumExecToBgTime(time.Millisecond)
 	ctx := context.Background()
@@ -250,19 +250,30 @@ func TestRoutePolicyAuthorizesProcessScopesWithoutWebSocket(t *testing.T) {
 		t.Fatalf("start ownerless process: %v", err)
 	}
 
-	executor := newRoutePolicyExecutor(fixture.gateway)
 	state := &connectionState{attachedProject: fixture.bindingA.ProjectID}
-	processRoute := routeForTest(t, protocol.MethodProcessGet)
-	if err := executor.authorizeScope(ctx, state, processRoute, serverapi.ProcessGetRequest{ProcessID: own.SessionID}); err != nil {
+	authorize := authorizeProcessActiveProject(func(request serverapi.ProcessGetRequest) string { return request.ProcessID })
+	authorizeRequest := func(processID string) error {
+		_, err := rpccontract.WithValidated(
+			serverapi.ProcessGetRequest{ProcessID: processID},
+			rpccontract.SemanticValidationRequired,
+			func(validated rpccontract.Validated[serverapi.ProcessGetRequest]) (struct{}, error) {
+				_, err := authorize(ctx, fixture.gateway, state, validated)
+				return struct{}{}, err
+			},
+		)
+		return err
+	}
+	if err := authorizeRequest(own.SessionID); err != nil {
 		t.Fatalf("own process: %v", err)
 	}
-	if err := executor.authorizeScope(ctx, state, processRoute, serverapi.ProcessGetRequest{ProcessID: foreign.SessionID}); err == nil {
+	if err := authorizeRequest(foreign.SessionID); err == nil {
 		t.Fatal("foreign process unexpectedly allowed")
 	}
-	if err := executor.authorizeScope(ctx, state, processRoute, serverapi.ProcessGetRequest{ProcessID: ownerless.SessionID}); err == nil {
+	if err := authorizeRequest(ownerless.SessionID); err == nil {
 		t.Fatal("ownerless process unexpectedly allowed")
 	}
 
+	executor := newRoutePolicyExecutor(fixture.gateway)
 	listRoute := routeForTest(t, protocol.MethodProcessList)
 	if err := executor.authorizeScope(ctx, state, listRoute, serverapi.ProcessListRequest{}); err != nil {
 		t.Fatalf("process list without owner: %v", err)

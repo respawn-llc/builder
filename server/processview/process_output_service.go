@@ -29,9 +29,18 @@ func NewProcessOutputService(subscriber ProcessOutputSubscriber, processes Proce
 }
 
 func (s *ProcessOutputService) SubscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProcessOutputSubscribeRequest]) (serverapi.ProcessOutputSubscription, error) {
+		return s.subscribeProcessOutput(ctx, validated.Value())
+	})
+}
+
+func (s *ProcessOutputService) SubscribeProcessOutputValidated(ctx context.Context, req servicecontract.Validated[serverapi.ProcessOutputSubscribeRequest], authorization servicecontract.AuthorizedProcessInActiveProject) (serverapi.ProcessOutputSubscription, error) {
+	request := req.Value()
+	request.ProcessID = authorization.ProcessID
+	return s.subscribeProcessOutput(ctx, request)
+}
+
+func (s *ProcessOutputService) subscribeProcessOutput(ctx context.Context, req serverapi.ProcessOutputSubscribeRequest) (serverapi.ProcessOutputSubscription, error) {
 	if s == nil || s.subscriber == nil || s.processes == nil {
 		return nil, errors.New("process output subscriber is required")
 	}
@@ -54,22 +63,7 @@ func (s *ProcessOutputService) SubscribeProcessOutput(ctx context.Context, req s
 	}
 	sub, err := s.subscriber.SubscribeOutput(ctx, req.ProcessID, req.OffsetBytes)
 	if err != nil {
-		latest, snapErr := s.processes.Snapshot(req.ProcessID)
-		switch {
-		case snapErr != nil || !latest.OutputAvailable:
-			return nil, fmt.Errorf("process output stream for %q is unavailable: %w", req.ProcessID, serverapi.ErrProcessOutputUnavailable)
-		case req.OffsetBytes < latest.OutputRetainedFromBytes || req.OffsetBytes > latest.OutputRetainedToBytes:
-			return nil, fmt.Errorf(
-				"process output offset %d is outside retained range [%d,%d] for %q: %w",
-				req.OffsetBytes,
-				latest.OutputRetainedFromBytes,
-				latest.OutputRetainedToBytes,
-				req.ProcessID,
-				serverapi.ErrProcessOutputGap,
-			)
-		default:
-			return nil, fmt.Errorf("process output stream for %q failed: %w", req.ProcessID, serverapi.ErrStreamFailed)
-		}
+		return nil, fmt.Errorf("process output stream for %q failed: %w", req.ProcessID, serverapi.ErrStreamFailed)
 	}
 	return &processOutputSubscription{inner: sub}, nil
 }

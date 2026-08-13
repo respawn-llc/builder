@@ -231,8 +231,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeRuntimeLiveSessionOptional:
 		return nil
 	case rpccontract.ScopeProcessActiveProject:
-		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
-		return err
+		panic(fmt.Sprintf("scope %q for route %q must execute through its typed Process authorizer", route.Scope, route.Method))
 	case rpccontract.ScopeProcessListActiveProject:
 		if strings.TrimSpace(scopeParams.ownerSessionID) != "" {
 			return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.ownerSessionID)
@@ -491,24 +490,6 @@ func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *co
 		return nil
 	}
 	return g.deps.SessionBelongsToProject(ctx, sessionID, projectID)
-}
-
-func (g *Gateway) processInActiveProject(ctx context.Context, state *connectionState, processID string) (serverapi.ProcessGetResponse, error) {
-	resp, err := g.deps.ProcessViewClient().GetProcess(ctx, serverapi.ProcessGetRequest{ProcessID: processID})
-	if err != nil {
-		return serverapi.ProcessGetResponse{}, err
-	}
-	if resp.Process == nil {
-		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
-	}
-	ownerSessionID := strings.TrimSpace(resp.Process.OwnerSessionID)
-	if ownerSessionID == "" {
-		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
-	}
-	if err := g.requireSessionInActiveProject(ctx, state, ownerSessionID); err != nil {
-		return serverapi.ProcessGetResponse{}, err
-	}
-	return resp, nil
 }
 
 func (g *Gateway) filterProcessesForActiveProject(ctx context.Context, state *connectionState, processes []clientui.BackgroundProcess) ([]clientui.BackgroundProcess, error) {

@@ -260,6 +260,32 @@ func authorizeProjectWorkspaceBinding(
 	}, nil
 }
 
+func authorizeProcessActiveProject[Req any](
+	processID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, apicontract.Validated[Req]) (apicontract.AuthorizedProcessInActiveProject, error) {
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated apicontract.Validated[Req]) (apicontract.AuthorizedProcessInActiveProject, error) {
+		resolver, ok := g.deps.ProcessViewClient().(apicontract.ProcessViewTrustedService)
+		if !ok {
+			return apicontract.AuthorizedProcessInActiveProject{}, errors.New("Process View trusted service is required")
+		}
+		candidate, err := resolver.ResolveProcessAuthorization(ctx, processID(validated.Value()))
+		if err != nil {
+			return apicontract.AuthorizedProcessInActiveProject{}, err
+		}
+		if strings.TrimSpace(candidate.OwnerSessionID) == "" {
+			return apicontract.AuthorizedProcessInActiveProject{}, fmt.Errorf("process %q not available", candidate.ProcessID)
+		}
+		if err := g.requireSessionInActiveProject(ctx, state, candidate.OwnerSessionID); err != nil {
+			return apicontract.AuthorizedProcessInActiveProject{}, err
+		}
+		return apicontract.AuthorizedProcessInActiveProject{
+			ProcessID:      candidate.ProcessID,
+			OwnerSessionID: candidate.OwnerSessionID,
+			Process:        candidate.Process,
+		}, nil
+	}
+}
+
 func executeLegacyUnary[Req any, Authz any](
 	g *Gateway,
 	ctx context.Context,
@@ -347,6 +373,40 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		authorizeProjectWorkspaceBinding,
 		handleWorktreeWorkspaceList,
 	)
+	executables[protocol.MethodProcessGet] = inboundTrustedUnary[serverapi.ProcessGetRequest, apicontract.AuthorizedProcessInActiveProject, serverapi.ProcessGetResponse](
+		protocol.MethodProcessGet,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeProcessActiveProject(func(req serverapi.ProcessGetRequest) string { return req.ProcessID }),
+		handleProcessGet,
+	)
+	executables[protocol.MethodProcessKill] = inboundTrustedUnary[serverapi.ProcessKillRequest, apicontract.AuthorizedProcessInActiveProject, serverapi.ProcessKillResponse](
+		protocol.MethodProcessKill,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeProcessActiveProject(func(req serverapi.ProcessKillRequest) string { return req.ProcessID }),
+		handleProcessKill,
+	)
+	executables[protocol.MethodProcessInlineOutput] = inboundTrustedUnary[serverapi.ProcessInlineOutputRequest, apicontract.AuthorizedProcessInActiveProject, serverapi.ProcessInlineOutputResponse](
+		protocol.MethodProcessInlineOutput,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeProcessActiveProject(func(req serverapi.ProcessInlineOutputRequest) string { return req.ProcessID }),
+		handleProcessInlineOutput,
+	)
+	executables[protocol.MethodProcessSubscribeOutput] = inboundSubscription[serverapi.ProcessOutputSubscribeRequest, apicontract.AuthorizedProcessInActiveProject](
+		protocol.MethodProcessSubscribeOutput,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeProcessActiveProject(func(req serverapi.ProcessOutputSubscribeRequest) string { return req.ProcessID }),
+	)
+	processOutput := executables[protocol.MethodProcessSubscribeOutput]
+	processOutput.executeSubscription = executeProcessOutputSubscription
+	executables[protocol.MethodProcessSubscribeOutput] = processOutput
 	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, noAuthorizationFacts, serverapi.SessionRuntimeActivateResponse](
 		protocol.MethodSessionRuntimeActivate,
 		apicontract.SemanticValidationRequired,
@@ -378,6 +438,48 @@ func handleWorktreeWorkspaceList(
 		return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree service does not implement trusted Workspace list")
 	}
 	return trusted.ListWorkspaceWorktreesValidated(ctx, request, binding)
+}
+
+func handleProcessGet(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.ProcessGetRequest],
+	authorization apicontract.AuthorizedProcessInActiveProject,
+) (serverapi.ProcessGetResponse, error) {
+	trusted, ok := g.deps.ProcessViewClient().(apicontract.ProcessViewTrustedService)
+	if !ok {
+		return serverapi.ProcessGetResponse{}, errors.New("Process View trusted service is required")
+	}
+	return trusted.GetProcessValidated(ctx, request, authorization)
+}
+
+func handleProcessKill(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.ProcessKillRequest],
+	authorization apicontract.AuthorizedProcessInActiveProject,
+) (serverapi.ProcessKillResponse, error) {
+	trusted, ok := g.deps.ProcessControlClient().(apicontract.ProcessControlTrustedService)
+	if !ok {
+		return serverapi.ProcessKillResponse{}, errors.New("Process Control trusted service is required")
+	}
+	return trusted.KillProcessValidated(ctx, request, authorization)
+}
+
+func handleProcessInlineOutput(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.ProcessInlineOutputRequest],
+	authorization apicontract.AuthorizedProcessInActiveProject,
+) (serverapi.ProcessInlineOutputResponse, error) {
+	trusted, ok := g.deps.ProcessControlClient().(apicontract.ProcessControlTrustedService)
+	if !ok {
+		return serverapi.ProcessInlineOutputResponse{}, errors.New("Process Control trusted service is required")
+	}
+	return trusted.GetInlineOutputValidated(ctx, request, authorization)
 }
 
 func prepareSessionRuntimeActivate(source serverapi.SessionRuntimeActivateRequest, state *connectionState) serverapi.SessionRuntimeActivateRequest {
