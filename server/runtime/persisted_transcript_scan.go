@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	goruntime "runtime"
 	"strings"
 
@@ -153,7 +154,7 @@ func formatPersistedToolCall(call llm.ToolCall) ChatEntry {
 		Visibility: transcript.EntryVisibilityOngoingCollapsed,
 		Role:       "tool_call",
 		Text:       text,
-		ToolCallID: strings.TrimSpace(call.ID),
+		ToolCallID: call.ID,
 		ToolCall:   meta,
 	}
 }
@@ -161,6 +162,14 @@ func formatPersistedToolCall(call llm.ToolCall) ChatEntry {
 func persistedTranscriptToolCallMeta(call llm.ToolCall) *transcript.ToolCallMeta {
 	if meta, ok := transcript.DecodeToolCallMeta(call.Presentation); ok {
 		return meta
+	}
+	if len(call.Presentation) > 0 {
+		panic(fmt.Sprintf(
+			"decoded session tool call has invalid presentation: call_id=%q tool=%q presentation=%s",
+			call.ID,
+			call.Name,
+			call.Presentation,
+		))
 	}
 	input := call.Input
 	if call.Custom && call.CustomInput != nil &&

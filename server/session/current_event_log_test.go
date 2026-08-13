@@ -436,6 +436,10 @@ func TestCurrentEventLogRejectsCompleteInvalidFinalRecordWithoutMutation(t *test
 			line: []byte(`{"seq":1,"kind":"message","payload":{"role":"invalid","content":"hello"}}`),
 		},
 		{
+			name: "invalid message tool presentation",
+			line: []byte(`{"seq":1,"kind":"message","payload":{"role":"assistant","tool_calls":[{"call_id":"call-1","name":"exec_command","kind":"function","presentation":{},"input":{"cmd":"pwd"}}]}}`),
+		},
+		{
 			name: "invalid tool completion presentation",
 			line: []byte(`{"seq":1,"kind":"tool_completed","payload":{"call_id":"call-1","name":"exec_command","output_kind":"function","is_error":false,"output":"done","presentation":{}}}`),
 		},

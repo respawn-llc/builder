@@ -252,6 +252,9 @@ func normalizeMessageToolCallRecord(call MessageToolCallRecord) (MessageToolCall
 		if err := validateJSONValue("presentation", call.Presentation); err != nil {
 			return MessageToolCallRecord{}, err
 		}
+		if _, ok := transcript.DecodeToolCallMeta(call.Presentation); !ok {
+			return MessageToolCallRecord{}, fmt.Errorf("presentation is invalid")
+		}
 		call.Presentation = append(json.RawMessage(nil), call.Presentation...)
 	}
 	return call, nil

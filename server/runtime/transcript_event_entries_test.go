@@ -39,24 +39,19 @@ func TestTranscriptEntriesFromEventBuildsToolCallFallbackWithoutPresentation(t *
 	}
 }
 
-func TestNormalizeToolCallForTranscriptRepairsMalformedPresentation(t *testing.T) {
+func TestNormalizeToolCallForTranscriptRejectsMalformedPresentation(t *testing.T) {
 	t.Parallel()
-	normalized := normalizeToolCallForTranscript(llm.ToolCall{
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected malformed authoritative tool presentation to fail fast")
+		}
+	}()
+	_ = normalizeToolCallForTranscript(llm.ToolCall{
 		ID:           "call-1",
 		Name:         string(toolspec.ToolExecCommand),
 		Presentation: json.RawMessage(`{"broken":`),
 		Input:        json.RawMessage(`{"command":"pwd"}`),
 	}, "/tmp")
-	meta := decodeToolCallMeta(normalized)
-	if meta == nil {
-		t.Fatal("expected rebuilt tool presentation metadata")
-	}
-	if !meta.IsShell {
-		t.Fatalf("expected rebuilt shell metadata, got %+v", meta)
-	}
-	if meta.Command != "pwd" {
-		t.Fatalf("rebuilt command = %q, want pwd", meta.Command)
-	}
 }
 
 func TestTranscriptEntriesFromEventEmitsVisibleToolCompletionEntriesForOrdinaryAndTriggerHandoffTools(t *testing.T) {
@@ -132,6 +127,32 @@ func TestCustomToolCallOutputProjectsAsRegularToolResultEntry(t *testing.T) {
 	if msg.ToolCallID == nil || entry.ToolCallID != *msg.ToolCallID {
 		t.Fatalf("custom tool output call id = %q, want %v", entry.ToolCallID, msg.ToolCallID)
 	}
+}
+
+func TestToolResultProjectionNeverReclassifiesMissingIdentityAsNotice(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected missing tool result identity to fail fast")
+		}
+	}()
+	_ = transcriptToolRowFactFromResult(tools.Result{
+		Name:   toolspec.ToolExecCommand,
+		Output: json.RawMessage(`{"output":"done"}`),
+	})
+}
+
+func TestCommittedToolEntryNeverReclassifiesMissingIdentityAsNotice(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected missing committed tool identity to fail fast")
+		}
+	}()
+	_, _ = transcriptCommittedRowFactFromChatEntryUnlocated(ChatEntry{
+		Role: "tool_result_ok",
+		Text: "done",
+	})
 }
 
 func TestTranscriptEntriesFromEventOmitsPrePersistCompactionStatusRows(t *testing.T) {

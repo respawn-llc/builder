@@ -456,13 +456,12 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 	case "tool_call":
 		return TranscriptCommittedRowFact{}, false
 	case "tool_result_ok", "tool_result_error":
-		if strings.TrimSpace(entry.ToolCallID) == "" {
-			return transcriptNoticeRowFactFromChatEntry(entry)
+		if entry.ToolCallID == "" {
+			panic("committed transcript tool result is missing its call identity")
 		}
 		integrity := transcriptToolEntryIntegrity(entry)
-		toolName := "tool"
-		if entry.ToolCall != nil && strings.TrimSpace(entry.ToolCall.ToolName) != "" {
-			toolName = strings.TrimSpace(entry.ToolCall.ToolName)
+		if entry.ToolCall == nil || entry.ToolCall.ToolName == "" {
+			panic("committed transcript tool result is missing its tool identity")
 		}
 		return TranscriptCommittedRowFact{
 			StepID:     entry.StepID,
@@ -470,8 +469,8 @@ func transcriptCommittedRowFactFromChatEntryUnlocated(entry ChatEntry) (Transcri
 			Visibility: transcriptVisibilityForIntegrity(resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoingCollapsed), integrity),
 			Integrity:  integrity,
 			Tool: &TranscriptToolRowFact{
-				ToolCallID:    strings.TrimSpace(entry.ToolCallID),
-				ToolName:      toolName,
+				ToolCallID:    entry.ToolCallID,
+				ToolName:      entry.ToolCall.ToolName,
 				Text:          entry.Text,
 				IsError:       role == "tool_result_error",
 				ResultSummary: strings.TrimSpace(entry.ToolResultSummary),
@@ -732,16 +731,17 @@ func localEntryNoticeFact(entry ChatEntry) TranscriptCommittedRowFact {
 }
 
 func transcriptToolRowFactFromResult(result tools.Result) TranscriptCommittedRowFact {
-	if strings.TrimSpace(result.CallID) == "" {
-		entry := toolResultChatEntry(result)
-		fact, _ := transcriptNoticeRowFactFromChatEntry(entry)
-		return fact
+	if result.CallID == "" {
+		panic("runtime tool result is missing its call identity")
+	}
+	if result.Name == "" {
+		panic("runtime tool result is missing its tool identity")
 	}
 	resultSummary, _ := textutil.OptionalTrimmed(result.Summary)
 	condensedText, _ := textutil.OptionalTrimmed(result.CondensedText)
 	return TranscriptCommittedRowFact{Kind: TranscriptCommittedRowFactTool, Visibility: transcript.EntryVisibilityOngoingCollapsed, Tool: &TranscriptToolRowFact{
-		ToolCallID:    strings.TrimSpace(result.CallID),
-		ToolName:      strings.TrimSpace(string(result.Name)),
+		ToolCallID:    result.CallID,
+		ToolName:      string(result.Name),
 		Text:          tools.FormatToolResultByName(string(result.Name), result.Output, result.IsError),
 		IsError:       result.IsError,
 		ResultSummary: resultSummary,
