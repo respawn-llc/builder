@@ -344,6 +344,9 @@ func TestObserveWorkflowTaskExecutionsDoesNotWaitForControllerLifecycleLock(t *t
 	taskID := workflow.TaskID("task-status-stale-read")
 
 	controller.mu.Lock()
+	var unlockOnce sync.Once
+	unlock := func() { unlockOnce.Do(controller.mu.Unlock) }
+	defer unlock()
 	readDone := make(chan error, 1)
 	go func() {
 		observation, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
@@ -360,7 +363,7 @@ func TestObserveWorkflowTaskExecutionsDoesNotWaitForControllerLifecycleLock(t *t
 	case <-time.After(time.Second):
 		t.Fatal("Task status observation waited for Controller lifecycle lock")
 	}
-	controller.mu.Unlock()
+	unlock()
 }
 
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
