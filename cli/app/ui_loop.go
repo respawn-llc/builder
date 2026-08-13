@@ -17,11 +17,12 @@ import (
 )
 
 type uiProgramComposition struct {
-	model   *uiModel
-	options []tea.ProgramOption
-	logger  uiLogger
-	output  io.Writer
-	close   func()
+	model    *uiModel
+	options  []tea.ProgramOption
+	logger   uiLogger
+	output   io.Writer
+	terminal *uiTerminalOutput
+	close    func()
 }
 
 type uiLoopRequest struct {
@@ -49,15 +50,18 @@ func runUILoop(request uiLoopRequest) (tea.Model, error) {
 	return runUIProgram(composition, composition.model)
 }
 
-func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (tea.Model, error) {
+func runUIProgram(composition *uiProgramComposition, initialModel tea.Model) (finalModel tea.Model, runErr error) {
 	if composition == nil {
 		return nil, errors.New("UI program composition is required")
 	}
 	if initialModel == nil {
 		return nil, errors.New("UI program model is required")
 	}
-	defer composition.close()
-	finalModel, runErr := tea.NewProgram(initialModel, composition.options...).Run()
+	defer func() {
+		composition.close()
+		runErr = terminalOutputRunError(composition.terminal, runErr)
+	}()
+	finalModel, runErr = tea.NewProgram(initialModel, composition.options...).Run()
 	if runErr != nil {
 		if composition.logger != nil {
 			composition.logger.Logf("app.exit err=%q", runErr.Error())
@@ -82,6 +86,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 	// Preserve terminal-file identity (Fd/Read/Close) so Bubble Tea can detect
 	// the real terminal and emit WindowSizeMsg.
 	terminalOutput := newUITerminalOutputFile(output)
+	request.wiring.bindTerminalOutput(terminalOutput.uiTerminalOutput)
 	terminalCapabilities := currentTerminalCapabilities()
 	ongoingSurface := ongoing.NewSurfaceWithOptions(
 		terminalOutput,
@@ -148,6 +153,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		WithUISessionID(sessionID),
 		WithUIStatusConfig(request.statusConfig),
 		WithUITerminalCursorState(terminalCursor),
+		WithUITerminalOutput(terminalOutput.uiTerminalOutput),
 		WithUIRendererOutputGateState(rendererOutputGate),
 		WithUIOngoingSurface(ongoingSurface),
 		WithUIOngoingTranscriptEvents(request.wiring.eventDispatcher.transcriptEvents),
@@ -188,10 +194,11 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		model.applyAdmittedTranscriptMessageState,
 	)
 	return &uiProgramComposition{
-		model:   model,
-		options: options,
-		logger:  uiLogger,
-		output:  output,
+		model:    model,
+		options:  options,
+		logger:   uiLogger,
+		output:   terminalOutput,
+		terminal: terminalOutput.uiTerminalOutput,
 		close: func() {
 			model.Close()
 			if tuiLogger != nil {

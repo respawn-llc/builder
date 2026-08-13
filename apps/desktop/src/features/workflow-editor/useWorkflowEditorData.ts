@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { errorMessage } from "@/api";
 import { type WorkflowProjectEvent } from "@/api";
 import { queryKeys } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
@@ -77,8 +78,14 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
         onComplete() {
           return;
         },
-        onError() {
-          void refresh(false);
+        onError(error) {
+          push({
+            body: errorMessage(error),
+            durationMs: Infinity,
+            id: "workflow-editor-workflow-subscription-failed",
+            tone: "danger",
+            title: t("workflowEditor.subscriptionFailed"),
+          });
         },
       }),
     ];
@@ -96,8 +103,14 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
           onComplete() {
             return;
           },
-          onError() {
-            void refresh(false);
+          onError(error) {
+            push({
+              body: errorMessage(error),
+              durationMs: Infinity,
+              id: "workflow-editor-project-subscription-failed",
+              tone: "danger",
+              title: t("workflowEditor.subscriptionFailed"),
+            });
           },
         }),
       );

@@ -1,6 +1,13 @@
 import { z } from "zod";
 
-import { ProtocolMismatchError, RpcError, ServerRootMismatchError, TransportError } from "./errors";
+import {
+  ConnectionLossError,
+  ContractError,
+  ProtocolMismatchError,
+  RpcError,
+  ServerRootMismatchError,
+  TransportError,
+} from "./errors";
 import { jsonValueSchema, type JsonValue } from "./json";
 import type { RpcEventHandler } from "./transport";
 
@@ -27,6 +34,12 @@ const notificationSchema = z.object({
   method: z.string(),
   params: z.unknown().optional(),
 });
+const subscriptionCompleteParamsSchema = z
+  .object({
+    code: z.number().int().optional(),
+    message: z.string().optional(),
+  })
+  .strict();
 const textFrameSchema = z.string();
 
 export async function openSocket(
@@ -41,7 +54,7 @@ export async function openSocket(
     }
     const socket = new WebSocket(endpoint);
     const timeout = setTimeout(() => {
-      fail(new TransportError(`Connection to ${endpoint} timed out.`));
+      fail(new ConnectionLossError(`Connection to ${endpoint} timed out.`));
     }, timeoutMilliseconds);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -60,10 +73,10 @@ export async function openSocket(
       resolve(socket);
     };
     const error = () => {
-      fail(new TransportError(`Unable to connect to ${endpoint}.`));
+      fail(new ConnectionLossError(`Unable to connect to ${endpoint}.`));
     };
     const close = () => {
-      fail(new TransportError(`Connection to ${endpoint} closed before opening.`));
+      fail(new ConnectionLossError(`Connection to ${endpoint} closed before opening.`));
     };
     const abort = () => {
       fail(new TransportError(`Connection to ${endpoint} was canceled.`));
@@ -177,10 +190,10 @@ export async function sendSocketRequest(
       resolve(response.data.result);
     };
     const close = () => {
-      fail(new TransportError(`${method} request closed before response.`));
+      fail(new ConnectionLossError(`${method} request closed before response.`));
     };
     const error = () => {
-      fail(new TransportError(`${method} request failed before response.`));
+      fail(new ConnectionLossError(`${method} request failed before response.`));
     };
     const abort = () => {
       fail(new TransportError(`${method} request was canceled.`));
@@ -224,11 +237,11 @@ export async function waitForSubscriptionEnd(socket: WebSocket, signal: AbortSig
         resolve();
         return;
       }
-      reject(new TransportError("Subscription socket closed."));
+      reject(new ConnectionLossError("Subscription socket closed."));
     };
     const error = () => {
       cleanup();
-      reject(new TransportError("Subscription socket failed."));
+      reject(new ConnectionLossError("Subscription socket failed."));
     };
     const abort = () => {
       cleanup();
@@ -260,7 +273,9 @@ export async function delay(milliseconds: number, signal: AbortSignal): Promise<
 }
 
 export type SubscriptionMessageResult = Readonly<
-  { kind: "active" } | { kind: "complete"; code: number; message: string }
+  | { kind: "active" }
+  | { kind: "complete"; code: number; message: string }
+  | { kind: "terminal_failure"; error: Error }
 >;
 
 export function subscriptionCompleteMethod(subscriptionMethod: string): string | null {
@@ -285,22 +300,60 @@ export function handleSubscriptionMessage(
 ): SubscriptionMessageResult {
   const textFrame = textFrameSchema.safeParse(event.data);
   if (!textFrame.success) {
-    return { kind: "active" };
+    return {
+      kind: "terminal_failure",
+      error: new ContractError("Subscription received an unsupported WebSocket frame."),
+    };
   }
-  const parsed = parseFrame(textFrame.data);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(textFrame.data);
+  } catch {
+    return {
+      kind: "terminal_failure",
+      error: new ContractError("Subscription received malformed JSON."),
+    };
+  }
   const notification = notificationSchema.safeParse(parsed);
   if (!notification.success) {
-    return { kind: "active" };
+    if (responseSchema.safeParse(parsed).success) {
+      return { kind: "active" };
+    }
+    return {
+      kind: "terminal_failure",
+      error: new ContractError("Subscription received a frame outside the JSON-RPC contract."),
+    };
   }
   if (completeMethod !== null && notification.data.method === completeMethod) {
-    const complete = z
-      .object({ code: z.number().optional(), message: z.string().optional() })
-      .safeParse(notification.data.params);
-    const code = complete.success ? (complete.data.code ?? 0) : 0;
-    const message = complete.success ? (complete.data.message ?? "") : "";
-    handler.onComplete(code, message);
+    const complete = subscriptionCompleteParamsSchema.safeParse(notification.data.params ?? {});
+    if (!complete.success) {
+      return {
+        kind: "terminal_failure",
+        error: new ContractError("Subscription completion did not match the JSON-RPC contract."),
+      };
+    }
+    const code = complete.data.code ?? 0;
+    const message = complete.data.message ?? "";
+    try {
+      handler.onComplete(code, message);
+    } catch (error) {
+      return {
+        kind: "terminal_failure",
+        error: error instanceof Error ? error : new ContractError("Subscription completion handler failed."),
+      };
+    }
     return { kind: "complete", code, message };
   }
-  handler.onEvent(notification.data.method, notification.data.params);
+  try {
+    const handlerError = handler.onEvent(notification.data.method, notification.data.params);
+    if (handlerError instanceof Error) {
+      return { kind: "terminal_failure", error: handlerError };
+    }
+  } catch (error) {
+    return {
+      kind: "terminal_failure",
+      error: error instanceof Error ? error : new ContractError("Subscription event handler failed."),
+    };
+  }
   return { kind: "active" };
 }

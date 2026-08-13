@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   infiniteQueryOptions,
   keepPreviousData,
@@ -59,6 +59,7 @@ export function useGlobalAttentionEvents() {
   const connection = useConnectionSnapshot();
   const queryClient = useQueryClient();
   const [openGeneration, setOpenGeneration] = useState<number | null>(null);
+  const openedOnceRef = useRef(false);
 
   useEffect(() => {
     if (connection.phase !== "connected") {
@@ -66,7 +67,6 @@ export function useGlobalAttentionEvents() {
     }
     const subscriptionGeneration = connection.generation;
     let refreshFrame: number | null = null;
-    let subscriptionLifecycle: GlobalAttentionSubscriptionLifecycle = "initial";
     const refreshAttention = () => {
       if (refreshFrame !== null) {
         return;
@@ -94,11 +94,11 @@ export function useGlobalAttentionEvents() {
     };
     const subscription = api.subscribeProject("", {
       onOpen() {
-        const shouldReconcile = subscriptionLifecycle !== "initial";
-        subscriptionLifecycle = "open";
         setOpenGeneration(subscriptionGeneration);
-        if (shouldReconcile) {
+        if (openedOnceRef.current) {
           refreshAttention();
+        } else {
+          openedOnceRef.current = true;
         }
       },
       onEvent(event) {
@@ -111,13 +111,12 @@ export function useGlobalAttentionEvents() {
         return;
       },
       onError(error) {
-        if (error instanceof ContractError) {
-          refreshAttention();
-          logSubscriptionWarning("Global attention event payload failed.", error);
-          return;
-        }
-        subscriptionLifecycle = "recovery-pending";
-        logSubscriptionWarning("Global attention subscription failed.", error);
+        logSubscriptionWarning(
+          error instanceof ContractError
+            ? "Global attention event payload failed."
+            : "Global attention subscription failed.",
+          error,
+        );
       },
     });
     return () => {
@@ -129,8 +128,6 @@ export function useGlobalAttentionEvents() {
   }, [api, connection.generation, connection.phase, logger, queryClient]);
   return connection.phase === "connected" && openGeneration === connection.generation;
 }
-
-type GlobalAttentionSubscriptionLifecycle = "initial" | "open" | "recovery-pending";
 
 export function useProjectCreationEvents(onCreated: (binding: NativeProjectBinding) => void) {
   const { logger, nativeBridge } = useAppServices();

@@ -270,9 +270,9 @@ func (m *uiModel) recordPromptHistory(text string) tea.Cmd {
 	}
 }
 
-func ringBellCmd() tea.Cmd {
+func ringBellCmd(output *uiTerminalOutput) tea.Cmd {
 	return func() tea.Msg {
-		if err := writeTerminalSequence(terminalBell); err != nil {
+		if err := writeTerminalSequence(output, terminalBell); err != nil {
 			return terminalSequenceWriteErrMsg{err: err}
 		}
 		return nil

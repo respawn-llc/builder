@@ -2,9 +2,11 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"io/fs"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,114 @@ import (
 
 	xansi "github.com/charmbracelet/x/ansi"
 )
+
+type terminalOutputWriteResult struct {
+	n   int
+	err error
+}
+
+type terminalOutputScriptWriter struct {
+	results  []terminalOutputWriteResult
+	writes   int
+	payloads [][]byte
+}
+
+func (w *terminalOutputScriptWriter) Write(payload []byte) (int, error) {
+	w.writes++
+	w.payloads = append(w.payloads, append([]byte(nil), payload...))
+	if len(w.results) == 0 {
+		return len(payload), nil
+	}
+	result := w.results[0]
+	w.results = w.results[1:]
+	return result.n, result.err
+}
+
+func TestTerminalOutputRestoreBypassesLatchWithoutRetryingPayload(t *testing.T) {
+	expected := errors.New("terminal unavailable")
+	out := &terminalOutputScriptWriter{
+		results: []terminalOutputWriteResult{
+			{err: expected},
+			{n: len("\x1b[?1007l" + xansi.ResetModeAltScreenSaveCursor + xansi.ShowCursor)},
+		},
+	}
+	terminal := newUITerminalOutput(out)
+	if _, err := terminal.Write([]byte("frame")); !errors.Is(err, expected) {
+		t.Fatalf("write error = %v, want %v", err, expected)
+	}
+
+	terminal.Restore()
+
+	if out.writes != 2 {
+		t.Fatalf("underlying writes = %d, want failed payload plus one restoration", out.writes)
+	}
+	if got := string(out.payloads[1]); got != "\x1b[?1007l"+xansi.ResetModeAltScreenSaveCursor+xansi.ShowCursor {
+		t.Fatalf("restoration = %q", got)
+	}
+	for _, payload := range out.payloads[1:] {
+		if string(payload) == "frame" {
+			t.Fatal("terminal output retried failed stdout payload")
+		}
+	}
+}
+
+func TestTerminalOutputRunErrorPrefersLatchedTerminalFailure(t *testing.T) {
+	terminalFailure := errors.New("terminal unavailable")
+	loopFailure := errors.New("renderer stopped")
+	out := &terminalOutputScriptWriter{
+		results: []terminalOutputWriteResult{
+			{err: terminalFailure},
+			{n: len("\x1b[?1007l" + xansi.ResetModeAltScreenSaveCursor + xansi.ShowCursor)},
+		},
+	}
+	output := newUITerminalOutput(out)
+	if _, err := output.Write([]byte("frame")); !errors.Is(err, terminalFailure) {
+		t.Fatalf("write error = %v, want %v", err, terminalFailure)
+	}
+
+	err := terminalOutputRunError(output, loopFailure)
+
+	if !errors.Is(err, terminalFailure) {
+		t.Fatalf("run error = %v, want terminal failure", err)
+	}
+	if errors.Is(err, loopFailure) {
+		t.Fatalf("run error retained secondary loop failure: %v", err)
+	}
+}
+
+func TestTerminalOutputLatchesFirstWriteError(t *testing.T) {
+	expected := errors.New("terminal unavailable")
+	out := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{err: expected}}}
+	terminal := newUITerminalOutput(out)
+
+	if _, err := terminal.Write([]byte("first")); !errors.Is(err, expected) {
+		t.Fatalf("first write error = %v, want %v", err, expected)
+	}
+	if _, err := terminal.Write([]byte("second")); !errors.Is(err, expected) {
+		t.Fatalf("second write error = %v, want latched %v", err, expected)
+	}
+	if out.writes != 1 {
+		t.Fatalf("underlying writes = %d, want 1", out.writes)
+	}
+	if err := terminal.Err(); !errors.Is(err, expected) {
+		t.Fatalf("latched error = %v, want %v", err, expected)
+	}
+}
+
+func TestTerminalOutputLatchesShortWrite(t *testing.T) {
+	out := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{n: 2}}}
+	terminal := newUITerminalOutput(out)
+
+	if n, err := terminal.Write([]byte("frame")); n != 2 || !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("first write = %d, %v, want 2, %v", n, err, io.ErrShortWrite)
+	}
+	if _, err := terminal.Write([]byte("retry")); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("second write error = %v, want latched short write", err)
+	}
+	if out.writes != 1 {
+		t.Fatalf("underlying writes = %d, want no stdout retry", out.writes)
+	}
+}
 
 func TestTerminalOutputSharesRendererAndNativeWriteOrdering(t *testing.T) {
 	var out bytes.Buffer

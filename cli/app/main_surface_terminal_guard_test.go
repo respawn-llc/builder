@@ -23,6 +23,21 @@ func TestMainSurfaceTerminalWritesStayBehindApprovedInterfaces(t *testing.T) {
 	t.Fatalf("main-surface terminal writes must go through approved terminal notification paths:\n%s", strings.Join(violations, "\n"))
 }
 
+func TestMainSurfaceTerminalWriteGuardAllowsOnlyTerminalOutputBoundary(t *testing.T) {
+	if !mainSurfaceGuardAllowsTerminalWrite(mainSurfaceGuardFunctionContext{
+		receiver: "uiTerminalOutput",
+		name:     "Write",
+	}) {
+		t.Fatal("uiTerminalOutput.Write must own physical terminal writes")
+	}
+	if mainSurfaceGuardAllowsTerminalWrite(mainSurfaceGuardFunctionContext{
+		receiver: "otherTerminalWriter",
+		name:     "Write",
+	}) {
+		t.Fatal("guard allowed a physical write outside uiTerminalOutput")
+	}
+}
+
 func loadMainSurfaceGuardPackages(t *testing.T, repoRoot string) []*packages.Package {
 	t.Helper()
 
@@ -113,6 +128,9 @@ type mainSurfaceGuardFunctionContext struct {
 }
 
 func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext) bool {
+	if context.receiver == "uiTerminalOutput" && (context.name == "Write" || context.name == "write" || context.name == "Restore") {
+		return true
+	}
 	if context.receiver == "uiTerminalCursorWriter" && context.name == "Write" {
 		return true
 	}
@@ -122,14 +140,7 @@ func mainSurfaceGuardAllowsTerminalWrite(context mainSurfaceGuardFunctionContext
 			return true
 		}
 	}
-	switch context.receiver {
-	case "belTerminalNotifier":
-		return context.name == "Bell" || context.name == "Notify"
-	case "osc9TerminalNotifier":
-		return context.name == "Bell" || context.name == "Notify"
-	default:
-		return false
-	}
+	return false
 }
 
 func mainSurfaceTerminalWriteViolationReason(call *ast.CallExpr, context mainSurfaceGuardFunctionContext, info *types.Info) (string, bool) {
@@ -199,7 +210,7 @@ func isLegacyTerminalCursorWriterCall(call *ast.CallExpr, context mainSurfaceGua
 		return selectorName(call.Fun) == "Write" || selectorName(call.Fun) == "WriteString"
 	}
 	switch context.name {
-	case "writeTerminalCursorBytes", "writeTerminalCursorString", "writeTerminalSequence":
+	case "writeTerminalCursorBytes", "writeTerminalCursorString":
 		name := selectorName(call.Fun)
 		return name == "Write" || name == "WriteString"
 	default:

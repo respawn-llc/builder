@@ -349,6 +349,20 @@ export class TransportError extends Error {
   }
 }
 
+export class ConnectionLossError extends TransportError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConnectionLossError";
+  }
+}
+
+export class SubscriptionDiscontinuityError extends TransportError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SubscriptionDiscontinuityError";
+  }
+}
+
 export type ContractIssueDiagnostic = Readonly<{
   code: string;
   path: readonly string[];

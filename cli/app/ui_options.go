@@ -56,6 +56,12 @@ func WithUITerminalCursorState(state *uiTerminalCursorState) UIOption {
 	}
 }
 
+func WithUITerminalOutput(output *uiTerminalOutput) UIOption {
+	return func(m *uiModelConstruction) {
+		m.terminalOutput = output
+	}
+}
+
 func WithUIRendererOutputGateState(state *uiRendererOutputGateState) UIOption {
 	return func(m *uiModelConstruction) {
 		m.rendererOutputGate = state

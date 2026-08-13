@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -73,5 +74,36 @@ func TestRunUIProgramSurfacesForcedExitStatusAfterLoopRestoration(t *testing.T) 
 	}
 	if got := strings.TrimSpace(output.String()); got != final.transientStatus {
 		t.Fatalf("post-loop fatal status length = %d, want %d", len(got), len(final.transientStatus))
+	}
+}
+
+func TestRunUIProgramPropagatesLatchedTerminalFailureWithoutStdoutRetry(t *testing.T) {
+	expected := errors.New("terminal unavailable")
+	raw := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{err: expected}}}
+	terminal := newUITerminalOutput(raw)
+	if _, err := terminal.Write([]byte("frame")); !errors.Is(err, expected) {
+		t.Fatalf("prime terminal failure: %v", err)
+	}
+	composition := &uiProgramComposition{
+		options: []tea.ProgramOption{
+			tea.WithInput(nil),
+			tea.WithOutput(io.Discard),
+			tea.WithoutRenderer(),
+		},
+		output:   terminal,
+		terminal: terminal,
+		close:    func() {},
+	}
+
+	_, err := runUIProgram(composition, uiProgramFinalModelHarness{final: newProjectedStaticUIModel()})
+
+	if !errors.Is(err, expected) {
+		t.Fatalf("run error = %v, want %v", err, expected)
+	}
+	if raw.writes != 2 {
+		t.Fatalf("underlying stdout writes = %d, want failed payload plus one restoration", raw.writes)
+	}
+	if got := string(raw.payloads[1]); got != "\x1b[?1007l\x1b[?1049l\x1b[?25h" {
+		t.Fatalf("restoration = %q", got)
 	}
 }

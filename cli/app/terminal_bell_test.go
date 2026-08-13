@@ -2,6 +2,8 @@ package app
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +81,20 @@ func TestOSC9NotifierEncodesFormattedMessageVerbatim(t *testing.T) {
 	want := osc9Prefix + formatted + terminalBell + terminalBell
 	if got := out.String(); got != want {
 		t.Fatalf("OSC 9 output = %q, want opaque formatted payload %q", got, want)
+	}
+}
+
+func TestTerminalNotifierUsesBoundSharedTerminalOutput(t *testing.T) {
+	expected := errors.New("terminal unavailable")
+	raw := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{err: expected}}}
+	output := newUITerminalOutput(raw)
+	hooks := newBellHooks(newBELTerminalNotifier(io.Discard), nil)
+
+	hooks.setOutput(output)
+	hooks.notifier.Bell()
+
+	if !errors.Is(output.Err(), expected) {
+		t.Fatalf("terminal output error = %v, want %v", output.Err(), expected)
 	}
 }
 

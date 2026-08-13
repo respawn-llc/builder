@@ -107,9 +107,6 @@ func (m *uiModel) loadDetailTranscriptPageWithOptionsCmd(
 			Cursor:      request.Cursor,
 			NewerCursor: request.NewerCursor,
 		})
-		if err == nil {
-			err = validateDetailTranscriptPageResponse(sessionID, resp.Transcript)
-		}
 		if deadline != nil && errors.Is(err, context.DeadlineExceeded) {
 			err = fmt.Errorf("%w: %w", errRollbackNavigationTimedOut, err)
 		}

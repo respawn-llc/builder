@@ -157,17 +157,13 @@ export function workflowProjectEventRpcHandler(
     onError: handler.onError,
     onEvent(method, params) {
       if (method !== expectedMethod) {
-        handler.onError(
-          new ContractError(
-            `workflow subscription expected event method ${expectedMethod} but received ${method}.`,
-          ),
+        return new ContractError(
+          `workflow subscription expected event method ${expectedMethod} but received ${method}.`,
         );
-        return;
       }
       const parsed = workflowProjectEventParamsSchema.safeParse(params);
       if (!parsed.success) {
-        handler.onError(new ContractError(`${expectedMethod} payload did not match GUI contract.`));
-        return;
+        return new ContractError(`${expectedMethod} payload did not match GUI contract.`);
       }
       handler.onEvent(parsed.data.event);
     },

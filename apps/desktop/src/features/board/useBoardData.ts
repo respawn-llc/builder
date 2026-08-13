@@ -177,13 +177,10 @@ export function useProjectBoardSubscription(
         }
       },
       onComplete() {
-        void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
+        return;
       },
       onError(error) {
         consumeBackgroundError(error);
-        void labelEffects.refreshAfterSubscriptionBoundary().catch(consumeBackgroundError);
-        void refreshSubscriptionBoundary().catch(consumeBackgroundError);
       },
     });
     return () => {

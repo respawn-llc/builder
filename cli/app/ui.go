@@ -40,15 +40,6 @@ func NewProjectedUIModel(runtimeClient clientui.RuntimeClient, opts ...UIOption)
 			enqueueRuntimeConnectionStateChange(runtimeConnectionEvents, err)
 		})
 	}
-	if configurable, ok := m.engine.(interface {
-		SetRuntimeReconnectWarningObserver(func(string, clientui.EntryVisibility))
-	}); ok {
-		runtimeReconnectWarning := make(chan runtimeReconnectWarningMsg, 1)
-		m.runtimeReconnectWarning = runtimeReconnectWarning
-		configurable.SetRuntimeReconnectWarningObserver(func(text string, visibility clientui.EntryVisibility) {
-			enqueueRuntimeReconnectWarning(runtimeReconnectWarning, text, visibility)
-		})
-	}
 	mainView := m.runtimeMainView()
 	m.applyRuntimeMainViewState(mainView)
 	if !m.hasRuntimeClient() {
@@ -102,9 +93,6 @@ func (m *uiModel) Init() tea.Cmd {
 	}
 	if m.runtimeConnectionEvents != nil {
 		cmds = append(cmds, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
-	}
-	if m.runtimeReconnectWarning != nil {
-		cmds = append(cmds, waitRuntimeReconnectWarning(m.runtimeReconnectWarning))
 	}
 	cmds = append([]tea.Cmd{tea.ClearScreen}, cmds...)
 	if startupSubmitCmd := m.startupSubmitCmd(); startupSubmitCmd != nil {

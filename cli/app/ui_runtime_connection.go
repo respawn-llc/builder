@@ -1,8 +1,6 @@
 package app
 
 import (
-	"strings"
-
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
 )
@@ -42,13 +40,6 @@ func enqueueRuntimeConnectionStateChange(ch chan runtimeConnectionStateChangedMs
 		return
 	}
 	coalesceLatest(ch, runtimeConnectionStateChangedMsg{err: err})
-}
-
-func enqueueRuntimeReconnectWarning(ch chan runtimeReconnectWarningMsg, text string, visibility clientui.EntryVisibility) {
-	if ch == nil || strings.TrimSpace(text) == "" {
-		return
-	}
-	coalesceLatest(ch, runtimeReconnectWarningMsg{text: strings.TrimSpace(text), visibility: visibility})
 }
 
 func coalesceLatest[T any](ch chan T, msg T) {

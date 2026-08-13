@@ -1,5 +1,9 @@
 import { ConnectionStore } from "./connectionStore";
-import { TransportError } from "./errors";
+import {
+  ConnectionLossError,
+  SubscriptionDiscontinuityError,
+  TransportError,
+} from "./errors";
 import type { JsonValue } from "./json";
 import { z } from "zod";
 import {
@@ -30,6 +34,7 @@ const socketOpenTimeoutMs = 10_000;
 const rpcRequestTimeoutMs = 30_000;
 const subscriptionReconnectBaseMs = 500;
 const subscriptionReconnectMaxMs = 5_000;
+const streamGapErrorCode = -32_010;
 const textFrameSchema = z.string();
 
 type PendingRequest = Readonly<{
@@ -266,7 +271,11 @@ class JsonRpcWebSocketTransport implements RpcTransport {
         if (abortSignalWasRequested(signal)) {
           return;
         }
-        handler.onError(error instanceof Error ? error : new TransportError("Subscription failed."));
+        const failure = error instanceof Error ? error : new TransportError("Subscription failed.");
+        handler.onError(failure);
+        if (!subscriptionCanReopen(failure)) {
+          return;
+        }
         await delay(Math.min(subscriptionReconnectBaseMs * 2 ** attempt, subscriptionReconnectMaxMs), signal);
         attempt += 1;
       }
@@ -300,8 +309,15 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       if (result.kind === "complete") {
         terminalCompleteRef.current = { code: result.code, message: result.message };
         socket.close();
+        return;
+      }
+      if (result.kind === "terminal_failure") {
+        terminalCompleteRef.current = null;
+        terminalFailureRef.current = result.error;
+        socket.close();
       }
     };
+    const terminalFailureRef: { current: Error | null } = { current: null };
     try {
       // The handshake must stay inside this scope: a rejected handshake (e.g. a
       // server reporting a different persistence root) would otherwise leave the
@@ -313,8 +329,14 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       });
       handler.onOpen?.();
       await waitForSubscriptionEnd(socket, signal);
+      if (terminalFailureRef.current !== null) {
+        throw terminalFailureRef.current;
+      }
       this.#throwNonZeroComplete(method, terminalCompleteRef.current);
     } catch (error) {
+      if (terminalFailureRef.current !== null) {
+        throw terminalFailureRef.current;
+      }
       if (terminalCompleteRef.current?.code === 0) {
         return;
       }
@@ -331,12 +353,21 @@ class JsonRpcWebSocketTransport implements RpcTransport {
       return;
     }
     const suffix = complete.message.length === 0 ? "" : `: ${complete.message}`;
-    throw new TransportError(
-      `${method} subscription completed with code ${complete.code.toString()}${suffix}`,
-    );
+    const message = `${method} subscription completed with code ${complete.code.toString()}${suffix}`;
+    if (complete.code === streamGapErrorCode) {
+      throw new SubscriptionDiscontinuityError(message);
+    }
+    throw new TransportError(message);
   }
 }
 
 function abortSignalWasRequested(signal: AbortSignal): boolean {
   return signal.aborted;
+}
+
+function subscriptionCanReopen(error: Error): boolean {
+  if (error instanceof ConnectionLossError) {
+    return true;
+  }
+  return error instanceof SubscriptionDiscontinuityError;
 }

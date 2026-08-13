@@ -1,5 +1,11 @@
 import { createJsonRpcTransport } from "./jsonRpc";
-import { ProtocolMismatchError, RpcError, ServerRootMismatchError, decodeWorkflowLabelError } from "./errors";
+import {
+  ContractError,
+  ProtocolMismatchError,
+  RpcError,
+  ServerRootMismatchError,
+  decodeWorkflowLabelError,
+} from "./errors";
 import { protocolVersionMismatchErrorCode, subscriptionCompleteMethod } from "./jsonRpcSocket";
 import { z } from "zod";
 
@@ -423,9 +429,126 @@ describe("JsonRpcWebSocketTransport", () => {
     });
     expect(socket.sent).toHaveLength(1);
     expect(frame(socket, 0)).toMatchObject({ method: "protocol.handshake" });
-    // A rejected handshake must close the socket; otherwise the reconnect loop
-    // leaks a socket connected to the wrong server on every backoff.
     expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(sockets).toHaveLength(1);
+    subscription.close();
+  });
+
+  it("does not reopen a subscription after server identity mismatch", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc", "expected-root");
+    const errors: Error[] = [];
+    const subscription = transport.subscribe(
+      "workflow.subscribeProject",
+      { project_id: "project-1" },
+      {
+        onEvent() {
+          return;
+        },
+        onComplete() {
+          return;
+        },
+        onError(error) {
+          errors.push(error);
+        },
+      },
+    );
+    const socket = sockets[0] ?? failTest("subscription socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ackHandshakeRoot(socket, 0, "other-root");
+    await vi.waitFor(() => {
+      expect(errors[0]).toBeInstanceOf(ServerRootMismatchError);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    expect(errors).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+    subscription.close();
+  });
+
+  it("does not reopen a subscription after a malformed frame", async () => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const errors: Error[] = [];
+    const subscription = transport.subscribe(
+      "workflow.subscribeProject",
+      { project_id: "project-1" },
+      {
+        onEvent() {
+          return;
+        },
+        onComplete() {
+          return;
+        },
+        onError(error) {
+          errors.push(error);
+        },
+      },
+    );
+    const socket = sockets[0] ?? failTest("subscription socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    ack(socket, 1);
+    await flushPromises();
+    socket.receive("{");
+    await vi.waitFor(() => {
+      expect(errors[0]).toBeInstanceOf(ContractError);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    expect(errors).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
+    subscription.close();
+  });
+
+  it.each([
+    ["invalid notification envelope", JSON.stringify({ jsonrpc: "1.0", method: "workflow.project" })],
+    [
+      "malformed completion params",
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "workflow.project.complete",
+        params: { code: "0" },
+      }),
+    ],
+  ])("reports %s once and does not reopen", async (_case, frameData) => {
+    const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
+    const errors: Error[] = [];
+    const subscription = transport.subscribe(
+      "workflow.subscribeProject",
+      { project_id: "project-1" },
+      {
+        onEvent() {
+          return;
+        },
+        onComplete() {
+          return;
+        },
+        onError(error) {
+          errors.push(error);
+        },
+      },
+    );
+    const socket = sockets[0] ?? failTest("subscription socket missing");
+
+    socket.open();
+    await waitForSent(socket, 1);
+    ack(socket, 0);
+    await waitForSent(socket, 2);
+    ack(socket, 1);
+    await flushPromises();
+    socket.receive(frameData);
+    await vi.waitFor(() => {
+      expect(errors[0]).toBeInstanceOf(ContractError);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+
+    expect(errors).toHaveLength(1);
+    expect(sockets).toHaveLength(1);
     subscription.close();
   });
 
@@ -471,7 +594,7 @@ describe("JsonRpcWebSocketTransport", () => {
     subscription.close();
   });
 
-  it("reopens subscription socket after server complete notification", async () => {
+  it("reopens subscription socket after an approved stream discontinuity", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const completions: number[] = [];
     const errors: Error[] = [];
@@ -503,7 +626,7 @@ describe("JsonRpcWebSocketTransport", () => {
       JSON.stringify({
         jsonrpc: "2.0",
         method: "workflow.project.complete",
-        params: { code: 409, message: "stream gap" },
+        params: { code: -32010, message: "stream gap" },
       }),
     );
 
@@ -517,12 +640,12 @@ describe("JsonRpcWebSocketTransport", () => {
     await waitForSent(secondSocket, 2);
 
     expect(frame(secondSocket, 1)).toMatchObject({ method: "workflow.subscribeProject" });
-    expect(completions).toEqual([409]);
+    expect(completions).toEqual([-32010]);
     expect(errors).toHaveLength(1);
     subscription.close();
   });
 
-  it("reopens attention notification subscriptions after non-zero complete frames", async () => {
+  it("does not reopen subscriptions after a nonrecoverable complete frame", async () => {
     const transport = createJsonRpcTransport("ws://127.0.0.1:53082/rpc");
     const completions: number[] = [];
     const errors: Error[] = [];
@@ -554,21 +677,14 @@ describe("JsonRpcWebSocketTransport", () => {
       JSON.stringify({
         jsonrpc: "2.0",
         method: "attention.notification.complete",
-        params: { code: 409, message: "stream gap" },
+        params: { code: -32012, message: "stream failed" },
       }),
     );
 
-    await vi.waitFor(() => {
-      expect(sockets.length).toBeGreaterThanOrEqual(2);
-    });
-    const secondSocket = sockets[1] ?? failTest("attention resubscription socket missing");
-    secondSocket.open();
-    await waitForSent(secondSocket, 1);
-    ack(secondSocket, 0);
-    await waitForSent(secondSocket, 2);
-
-    expect(frame(secondSocket, 1)).toMatchObject({ method: "attention.notification.subscribe" });
-    expect(completions).toEqual([409]);
+    await flushPromises();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(sockets).toHaveLength(1);
+    expect(completions).toEqual([-32012]);
     expect(errors).toHaveLength(1);
     subscription.close();
   });

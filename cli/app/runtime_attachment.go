@@ -101,9 +101,6 @@ func prepareSharedRuntimeWiring(
 	reactivator *runtimeReactivator,
 ) (*runtimeWiring, func(), error) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
-	if reactivator != nil {
-		runtimeClient.SetRuntimeReactivator(reactivator)
-	}
 	terminalFocus := newTerminalFocusState()
 	initialLifecycleContext := lifecyclecontract.Context{}
 	if len(plan.ClientLifecycleCommand) > 0 {
@@ -131,7 +128,7 @@ func prepareSharedRuntimeWiring(
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
 	requestTranscriptOpen := transcriptStream.RequestRehydration
-	notificationHooks := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, os.Stdout, os.LookupEnv), func() string {
+	notificationHooks := newBellHooks(newTerminalNotifier(plan.ActiveSettings.NotificationMethod, io.Discard, os.LookupEnv), func() string {
 		if runtimeClient != nil {
 			if sessionName := strings.TrimSpace(runtimeClient.MainView().Session.SessionName); sessionName != "" {
 				return sessionName

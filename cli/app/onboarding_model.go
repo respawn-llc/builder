@@ -39,6 +39,7 @@ type onboardingModel struct {
 	inputMask        rune
 	inputPlaceholder string
 	terminalCursor   *uiTerminalCursorState
+	terminalOutput   *uiTerminalOutput
 	currentScreen    onboardingScreen
 	stepIndex        int
 	cursor           int
@@ -153,6 +154,12 @@ func (m *onboardingModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.result = typed.result
+		return m, tea.Quit
+	case terminalSequenceWriteErrMsg:
+		if typed.err == nil {
+			return m, nil
+		}
+		m.terminalErr = fmt.Errorf("terminal output failed: %w", typed.err)
 		return m, tea.Quit
 	case onboardingSpinnerTickMsg:
 		m.spinnerFrame = m.spinnerClock.Frame(typed.at, len(pendingToolSpinner.Frames), spinnerTickInterval)
@@ -433,7 +440,7 @@ func (m *onboardingModel) syncScreen(resetViewport bool) {
 func (m *onboardingModel) moveCursor(delta int) tea.Cmd {
 	limit := len(m.currentScreen.Options)
 	if limit == 0 {
-		return onboardingBellCmd()
+		return m.onboardingBellCmd()
 	}
 	previous := m.cursor
 	m.cursor += delta
@@ -445,7 +452,7 @@ func (m *onboardingModel) moveCursor(delta int) tea.Cmd {
 	}
 	m.ensureCursorVisible()
 	if previous == m.cursor {
-		return onboardingBellCmd()
+		return m.onboardingBellCmd()
 	}
 	m.applyActiveThemeStyles()
 	return nil
@@ -466,14 +473,14 @@ func (m *onboardingModel) scrollContent(delta int) tea.Cmd {
 		m.offset = maxOffset
 	}
 	if previous == m.offset {
-		return onboardingBellCmd()
+		return m.onboardingBellCmd()
 	}
 	return nil
 }
 
 func (m *onboardingModel) goBack() (tea.Model, tea.Cmd) {
 	if m.stepIndex <= 0 {
-		return m, onboardingBellCmd()
+		return m, m.onboardingBellCmd()
 	}
 	m.stepIndex--
 	m.syncScreen(true)
@@ -482,7 +489,7 @@ func (m *onboardingModel) goBack() (tea.Model, tea.Cmd) {
 
 func (m *onboardingModel) toggleCurrentSelection() tea.Cmd {
 	if m.cursor < 0 || m.cursor >= len(m.currentScreen.Options) {
-		return onboardingBellCmd()
+		return m.onboardingBellCmd()
 	}
 	id := m.currentScreen.Options[m.cursor].ID
 	if id == onboardingToggleAllOptionID {
@@ -495,7 +502,7 @@ func (m *onboardingModel) toggleCurrentSelection() tea.Cmd {
 
 func (m *onboardingModel) toggleAllSelections() tea.Cmd {
 	if !screenHasToggleAllOption(m.currentScreen) {
-		return onboardingBellCmd()
+		return m.onboardingBellCmd()
 	}
 	setEnabled := !allSelectableOptionsEnabled(m.currentScreen.Options, m.selection)
 	for _, option := range m.currentScreen.Options {
@@ -580,9 +587,11 @@ func allSelectableOptionsEnabled(options []onboardingOption, selection map[strin
 	return hasSelectable
 }
 
-func onboardingBellCmd() tea.Cmd {
+func (m *onboardingModel) onboardingBellCmd() tea.Cmd {
 	return func() tea.Msg {
-		fmt.Print("\a")
+		if err := writeTerminalSequence(m.terminalOutput, terminalBell); err != nil {
+			return terminalSequenceWriteErrMsg{err: err}
+		}
 		return nil
 	}
 }

@@ -30,12 +30,12 @@ type terminalNotifier interface {
 
 type belTerminalNotifier struct {
 	mu  sync.Mutex
-	out io.Writer
+	out *uiTerminalOutput
 }
 
 type osc9TerminalNotifier struct {
 	mu  sync.Mutex
-	out io.Writer
+	out *uiTerminalOutput
 }
 
 type observedNotificationTurn struct {
@@ -58,14 +58,21 @@ func newBELTerminalNotifier(out io.Writer) *belTerminalNotifier {
 	if out == nil {
 		out = io.Discard
 	}
-	return &belTerminalNotifier{out: out}
+	return &belTerminalNotifier{out: terminalNotifierOutput(out)}
 }
 
 func newOSC9TerminalNotifier(out io.Writer) *osc9TerminalNotifier {
 	if out == nil {
 		out = io.Discard
 	}
-	return &osc9TerminalNotifier{out: out}
+	return &osc9TerminalNotifier{out: terminalNotifierOutput(out)}
+}
+
+func terminalNotifierOutput(out io.Writer) *uiTerminalOutput {
+	if output, ok := out.(*uiTerminalOutput); ok {
+		return output
+	}
+	return newUITerminalOutput(out)
 }
 
 func newTerminalNotifier(method string, out io.Writer, lookup func(string) (string, bool)) terminalNotifier {
@@ -115,13 +122,22 @@ func (r *belTerminalNotifier) Notify(_ string) {
 	r.Bell()
 }
 
+func (r *belTerminalNotifier) setOutput(out *uiTerminalOutput) {
+	if r == nil || out == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.out = out
+}
+
 func (r *belTerminalNotifier) Bell() {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, _ = io.WriteString(r.out, terminalBell)
+	_, _ = r.out.Write([]byte(terminalBell))
 }
 
 func (r *osc9TerminalNotifier) Notify(message string) {
@@ -132,7 +148,7 @@ func (r *osc9TerminalNotifier) Notify(message string) {
 	defer r.mu.Unlock()
 	// The first BEL terminates the OSC 9 sequence. Emit a second BEL so asks and
 	// turn-complete notifications still produce an audible bell on OSC-capable terminals.
-	_, _ = io.WriteString(r.out, osc9Prefix+message+terminalBell+terminalBell)
+	_, _ = r.out.Write([]byte(osc9Prefix + message + terminalBell + terminalBell))
 }
 
 func (r *osc9TerminalNotifier) Bell() {
@@ -141,7 +157,27 @@ func (r *osc9TerminalNotifier) Bell() {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, _ = io.WriteString(r.out, terminalBell)
+	_, _ = r.out.Write([]byte(terminalBell))
+}
+
+func (r *osc9TerminalNotifier) setOutput(out *uiTerminalOutput) {
+	if r == nil || out == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.out = out
+}
+
+func (h *bellHooks) setOutput(out *uiTerminalOutput) {
+	if h == nil || out == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if notifier, ok := h.notifier.(interface{ setOutput(*uiTerminalOutput) }); ok {
+		notifier.setOutput(out)
+	}
 }
 
 type bellHooks struct {

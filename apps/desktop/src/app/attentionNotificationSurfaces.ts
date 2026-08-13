@@ -16,11 +16,17 @@ import { errorMessage, isTaskMissingError } from "@/api";
 import type { AppServices } from "@/app-facade";
 import type { TaskDetailInitialFocus } from "@/app-facade";
 import type { StatusController } from "@/app-facade";
-import { recoverOrThrowDebugFailure } from "./debugFailure";
 
 export type SurfaceRecord = Readonly<{
   notification: AttentionNotification;
-  state: "activating" | "activation_failed" | "dismissed" | "native" | "surfacing" | "toast";
+  state:
+    | "activating"
+    | "activation_failed"
+    | "dismissed"
+    | "native"
+    | "native_delivery_failed"
+    | "surfacing"
+    | "toast";
 }>;
 
 export function advancesAttentionNotificationRevision(
@@ -292,17 +298,25 @@ async function handleNativeDeliveryError({
   if (latest?.state !== "surfacing") {
     return;
   }
-  await recoverOrThrowDebugFailure({
-    context: {
-      notificationID: id,
-    },
-    error,
-    logger,
-    message: "Native attention notification delivery failed.",
-    recover() {
-      surfaced.set(id, { notification: latest.notification, state: "dismissed" });
-    },
+  await logger.append("warn", "Native attention notification delivery failed.", {
+    error: errorMessage(error),
+    notificationID: id,
   });
+  if (appDebugModeEnabled()) {
+    throw error instanceof Error ? error : new Error("Native attention notification delivery failed.");
+  }
+  surfaced.set(id, { notification: latest.notification, state: "native_delivery_failed" });
+}
+
+function appDebugModeEnabled(): boolean {
+  const configured = import.meta.env.KENT_DEBUG;
+  if (configured === true || configured === "true" || configured === "1") {
+    return true;
+  }
+  return (
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("debug") === "true"
+  );
 }
 
 function attentionTargetIsActive(

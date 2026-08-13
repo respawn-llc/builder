@@ -15,10 +15,6 @@ func (m *uiModel) reduceRuntimeMessage(msg tea.Msg) uiFeatureUpdateResult {
 		m.observeRuntimeRequestResult(msg.err)
 		m.layout().syncViewport()
 		return handledUIFeatureUpdate(m, waitRuntimeConnectionStateChange(m.runtimeConnectionEvents))
-	case runtimeReconnectWarningMsg:
-		cmd := m.sendTransientStatusWithNoticeID(msg.text, uiStatusNoticeWarning, transientStatusDuration, uiStatusNoticeReplace, "")
-		m.layout().syncViewport()
-		return handledUIFeatureUpdate(m, m.batchWithNativeOngoingRepaint(sequenceCmds(cmd, waitRuntimeReconnectWarning(m.runtimeReconnectWarning))))
 	case runtimeMainViewRefreshedMsg:
 		cmd := m.handleRuntimeMainViewRefreshed(msg)
 		m.layout().syncViewport()

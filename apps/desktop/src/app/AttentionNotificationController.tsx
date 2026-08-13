@@ -305,6 +305,9 @@ function OwnedAttentionNotificationController() {
 
   useEffect(() => {
     let subscription: ApiSubscription | null = api.subscribeAttentionNotifications({
+      onOpen() {
+        reconcileSurfacedNotifications();
+      },
       onEvent(event) {
         if (event.type === "pending") {
           void handlePending(event.pending);
@@ -323,7 +326,6 @@ function OwnedAttentionNotificationController() {
         void logger.append("warn", "Attention notification stream failed.", {
           error: errorMessage(error),
         });
-        reconcileSurfacedNotifications();
       },
     });
     return () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -273,8 +274,10 @@ func (m *workspaceChangePromptModel) promptLines() []askPromptLine {
 
 func runWorkspaceChangePrompt(selectedRoot string, currentRoot string, theme string) (workspaceChangePromptResult, error) {
 	model := newWorkspaceChangePromptModel(selectedRoot, currentRoot, theme)
-	program := tea.NewProgram(model, tea.WithAltScreen())
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(output))
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return workspaceChangePromptResult{}, err
 	}

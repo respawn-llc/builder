@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"core/shared/runtimeids"
@@ -562,11 +563,19 @@ func runSessionPicker(ctx context.Context, loader sessionPageLoader, theme strin
 		Header: header,
 	})
 	defer lifecycle.Close()
-	terminal := sessionPickerTerminal{state: sessionPickerTerminalInactive}
+	output := newUITerminalOutputFile(os.Stdout)
+	terminal := sessionPickerTerminal{
+		state:  sessionPickerTerminalInactive,
+		output: output.uiTerminalOutput,
+	}
 	if err := terminal.Enter(); err != nil {
 		return nil, err
 	}
-	finalModel, runErr := tea.NewProgram(lifecycle, tea.WithContext(ctx)).Run()
+	finalModel, runErr := tea.NewProgram(
+		lifecycle,
+		tea.WithContext(ctx),
+		tea.WithOutput(output),
+	).Run()
 	closeErr := terminal.Close()
 	if runErr != nil && closeErr != nil {
 		return nil, errors.Join(runErr, closeErr)
@@ -610,18 +619,20 @@ func (e sessionPickerTerminalError) Unwrap() error {
 }
 
 type sessionPickerTerminal struct {
-	state sessionPickerTerminalState
+	state  sessionPickerTerminalState
+	output *uiTerminalOutput
 }
 
 func (t *sessionPickerTerminal) Enter() error {
 	if t == nil || t.state != sessionPickerTerminalInactive {
 		return errors.New("session picker terminal must be inactive before entry")
 	}
-	if err := writeTerminalSequence("\x1b[?1049h"); err != nil {
+	if err := writeTerminalSequence(t.output, "\x1b[?1049h"); err != nil {
+		t.output.Restore()
 		return sessionPickerTerminalError{Operation: "enter alt-screen", Err: err}
 	}
 	t.state = sessionPickerTerminalAltScreen
-	if err := writeTerminalSequence("\x1b[?1007h"); err != nil {
+	if err := writeTerminalSequence(t.output, "\x1b[?1007h"); err != nil {
 		cleanupErr := t.Close()
 		if cleanupErr != nil {
 			return errors.Join(sessionPickerTerminalError{Operation: "enable alternate scroll", Err: err}, cleanupErr)
@@ -639,12 +650,12 @@ func (t *sessionPickerTerminal) Close() error {
 	var cleanupErr error
 	switch t.state {
 	case sessionPickerTerminalAlternateScroll:
-		if err := writeTerminalSequence("\x1b[?1007l"); err != nil {
+		if err := writeTerminalSequence(t.output, "\x1b[?1007l"); err != nil {
 			cleanupErr = sessionPickerTerminalError{Operation: "disable alternate scroll", Err: err}
 		}
 		fallthrough
 	case sessionPickerTerminalAltScreen:
-		if err := writeTerminalSequence("\x1b[?1049l"); err != nil {
+		if err := writeTerminalSequence(t.output, "\x1b[?1049l"); err != nil {
 			exitErr := sessionPickerTerminalError{Operation: "exit alt-screen", Err: err}
 			if cleanupErr != nil {
 				cleanupErr = errors.Join(cleanupErr, exitErr)
@@ -657,5 +668,8 @@ func (t *sessionPickerTerminal) Close() error {
 		panic(fmt.Sprintf("unknown session picker terminal state %d", t.state))
 	}
 	t.state = sessionPickerTerminalCleaned
+	if cleanupErr != nil {
+		t.output.Restore()
+	}
 	return cleanupErr
 }

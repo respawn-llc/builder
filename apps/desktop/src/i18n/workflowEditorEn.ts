@@ -251,4 +251,5 @@ export const workflowEditorEnglish = {
   none: "None",
   emptyGroup: "Empty group",
   updated: "Workflow updated",
+  subscriptionFailed: "Workflow updates stopped",
 } as const;

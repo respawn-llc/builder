@@ -143,6 +143,37 @@ describe("Workflow Editor event effects", () => {
     expect(shouldRefreshWorkflowEditor(event, "project-1", "workflow-1")).toBe(true);
     expect(shouldNotifyWorkflowEditorRefresh(event, "project-1", "workflow-1")).toBe(false);
   });
+
+  it("surfaces terminal subscription failure without refreshing editor state", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidation = vi.spyOn(queryClient, "invalidateQueries");
+    const view = renderHook(() => useWorkflowEditorData("project-1", "workflow-1"), {
+      wrapper: queryWrapper(queryClient),
+    });
+    await waitFor(() => {
+      expect(fixture.workflowHandler).not.toBeNull();
+      expect(fixture.projectHandler).not.toBeNull();
+    });
+    invalidation.mockClear();
+
+    act(() => {
+      fixture.workflowHandler?.onError(new Error("stream contract failed"));
+    });
+
+    expect(invalidation).not.toHaveBeenCalled();
+    expect(fixture.push).toHaveBeenCalledWith({
+      body: "stream contract failed",
+      durationMs: Infinity,
+      id: "workflow-editor-workflow-subscription-failed",
+      tone: "danger",
+      title: "workflowEditor.subscriptionFailed",
+    });
+
+    view.unmount();
+    queryClient.clear();
+  });
 });
 
 function queryWrapper(queryClient: QueryClient) {

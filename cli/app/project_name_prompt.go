@@ -113,8 +113,10 @@ func runProjectNamePrompt(defaultName string, theme string) (string, error) {
 	model := newProjectNamePromptModel(defaultName, theme)
 	terminalCursor := newUITerminalCursorState()
 	model.terminalCursor = terminalCursor
-	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(newUITerminalCursorWriter(os.Stdout, terminalCursor)))
+	output := newUITerminalOutputFile(os.Stdout)
+	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithOutput(newUITerminalCursorWriter(output, terminalCursor)))
 	finalModel, err := program.Run()
+	err = terminalOutputRunError(output.uiTerminalOutput, err)
 	if err != nil {
 		return "", err
 	}
