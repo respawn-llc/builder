@@ -95,7 +95,6 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	page, err := l.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:          projectID,
 		narrowed:           narrowedQuery,
-		group:              req.Group,
 		statusKinds:        req.StatusKinds,
 		attentionKinds:     req.AttentionKinds,
 		labelFilter:        labelFilter,

@@ -12,6 +12,7 @@ import {
   boardNodeCardsPageSize,
   noTaskLabelFilter,
   type ProjectTaskGroupCounts,
+  type TaskStatusKind,
   type TaskListItem,
   type TaskListPage,
   type WorkflowProjectEvent,
@@ -25,6 +26,21 @@ import {
 
 export const projectTaskGroups = ["active", "backlog", "done"] as const;
 export type ProjectTaskGroup = (typeof projectTaskGroups)[number];
+
+export const projectTaskGroupStatusKinds: Readonly<
+  Record<ProjectTaskGroup, readonly TaskStatusKind[]>
+> = {
+  active: [
+    "waiting_question",
+    "waiting_approval",
+    "interrupted",
+    "running",
+    "queued",
+    "active",
+  ],
+  backlog: ["backlog"],
+  done: ["done"],
+};
 
 export const projectTaskGroupPageSize = boardNodeCardsPageSize;
 export const projectTaskGroupRetainedPages = 3;
@@ -158,7 +174,7 @@ function useProjectTaskGroupData(
     queryFn: async ({ pageParam }) =>
       api.listTasks({
         projectID,
-        group,
+        statusKinds: projectTaskGroupStatusKinds[group],
         labelFilter: noTaskLabelFilter,
         sort: updatedDescending,
         offset: pageParam,

@@ -167,48 +167,10 @@ func TestWorkflowTaskListRequestRejectsZeroWorkflowID(t *testing.T) {
 	}
 }
 
-func TestWorkflowTaskListRequestRoundTripsAndValidatesGroup(t *testing.T) {
+func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) {
 	projectID := "project-1"
-	for _, group := range []WorkflowTaskGroup{
-		WorkflowTaskGroupActive,
-		WorkflowTaskGroupBacklog,
-		WorkflowTaskGroupDone,
-	} {
-		request := WorkflowTaskListRequest{
-			ProjectID:   &projectID,
-			Group:       &group,
-			LabelFilter: WorkflowTaskLabelFilterNone(),
-		}
-		data, err := json.Marshal(request)
-		if err != nil {
-			t.Fatalf("marshal group %q: %v", group, err)
-		}
-		var decoded WorkflowTaskListRequest
-		if err := json.Unmarshal(data, &decoded); err != nil {
-			t.Fatalf("unmarshal group %q: %v", group, err)
-		}
-		if decoded.Group == nil || *decoded.Group != group {
-			t.Fatalf("decoded group = %v, want %q", decoded.Group, group)
-		}
-		if err := decoded.Validate(); err != nil {
-			t.Fatalf("Validate group %q: %v", group, err)
-		}
-	}
-
-	invalid := WorkflowTaskGroup("future")
-	request := WorkflowTaskListRequest{
-		ProjectID:   &projectID,
-		Group:       &invalid,
-		LabelFilter: WorkflowTaskLabelFilterNone(),
-	}
-	if !hasWorkflowRequestError(request.Validate(), "group", WorkflowRequestErrorInvalidValue) {
-		t.Fatalf("Validate error = %v, want group invalid value", request.Validate())
-	}
-}
-
-func TestWorkflowTaskGroupStatusKindsAreExactAndExhaustive(t *testing.T) {
-	tests := map[WorkflowTaskGroup][]WorkflowTaskStatusKind{
-		WorkflowTaskGroupActive: {
+	for _, statusKinds := range [][]WorkflowTaskStatusKind{
+		{
 			WorkflowTaskStatusKindWaitingQuestion,
 			WorkflowTaskStatusKindWaitingApproval,
 			WorkflowTaskStatusKindInterrupted,
@@ -216,20 +178,37 @@ func TestWorkflowTaskGroupStatusKindsAreExactAndExhaustive(t *testing.T) {
 			WorkflowTaskStatusKindQueued,
 			WorkflowTaskStatusKindActive,
 		},
-		WorkflowTaskGroupBacklog: {WorkflowTaskStatusKindBacklog},
-		WorkflowTaskGroupDone:    {WorkflowTaskStatusKindDone},
-	}
-	for group, want := range tests {
-		got, valid := WorkflowTaskGroupStatusKinds(group)
-		if !valid {
-			t.Fatalf("WorkflowTaskGroupStatusKinds(%q) is invalid", group)
+		{WorkflowTaskStatusKindBacklog},
+		{WorkflowTaskStatusKindDone},
+	} {
+		request := WorkflowTaskListRequest{
+			ProjectID:   &projectID,
+			StatusKinds: statusKinds,
+			LabelFilter: WorkflowTaskLabelFilterNone(),
 		}
-		if !slices.Equal(got, want) {
-			t.Fatalf("WorkflowTaskGroupStatusKinds(%q) = %v, want %v", group, got, want)
+		data, err := json.Marshal(request)
+		if err != nil {
+			t.Fatalf("marshal status kinds %v: %v", statusKinds, err)
+		}
+		var decoded WorkflowTaskListRequest
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal status kinds %v: %v", statusKinds, err)
+		}
+		if !slices.Equal(decoded.StatusKinds, statusKinds) {
+			t.Fatalf("decoded status kinds = %v, want %v", decoded.StatusKinds, statusKinds)
+		}
+		if err := decoded.Validate(); err != nil {
+			t.Fatalf("Validate status kinds %v: %v", statusKinds, err)
 		}
 	}
-	if kinds, valid := WorkflowTaskGroupStatusKinds(WorkflowTaskGroup("future")); valid || kinds != nil {
-		t.Fatalf("invalid group kinds = %v, valid = %t", kinds, valid)
+
+	request := WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		StatusKinds: []WorkflowTaskStatusKind{"future"},
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if !hasWorkflowRequestError(request.Validate(), "status_kinds[0]", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("Validate error = %v, want status kind invalid value", request.Validate())
 	}
 }
 

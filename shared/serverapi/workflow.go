@@ -1246,38 +1246,9 @@ type WorkflowTaskListSort struct {
 	Direction WorkflowTaskListSortDirection `json:"direction"`
 }
 
-type WorkflowTaskGroup string
-
-const (
-	WorkflowTaskGroupActive  WorkflowTaskGroup = "active"
-	WorkflowTaskGroupBacklog WorkflowTaskGroup = "backlog"
-	WorkflowTaskGroupDone    WorkflowTaskGroup = "done"
-)
-
-func WorkflowTaskGroupStatusKinds(group WorkflowTaskGroup) ([]WorkflowTaskStatusKind, bool) {
-	switch group {
-	case WorkflowTaskGroupActive:
-		return []WorkflowTaskStatusKind{
-			WorkflowTaskStatusKindWaitingQuestion,
-			WorkflowTaskStatusKindWaitingApproval,
-			WorkflowTaskStatusKindInterrupted,
-			WorkflowTaskStatusKindRunning,
-			WorkflowTaskStatusKindQueued,
-			WorkflowTaskStatusKindActive,
-		}, true
-	case WorkflowTaskGroupBacklog:
-		return []WorkflowTaskStatusKind{WorkflowTaskStatusKindBacklog}, true
-	case WorkflowTaskGroupDone:
-		return []WorkflowTaskStatusKind{WorkflowTaskStatusKindDone}, true
-	default:
-		return nil, false
-	}
-}
-
 type WorkflowTaskListRequest struct {
 	ProjectID        *string                     `json:"project_id,omitempty"`
 	WorkflowID       *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
-	Group            *WorkflowTaskGroup          `json:"group,omitempty"`
 	ColumnKeys       []string                    `json:"column_keys,omitempty"`
 	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
 	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
@@ -3284,11 +3255,6 @@ func (r WorkflowTaskListRequest) validateBeforeLabelFilter() error {
 	}
 	if err := validateOptionalWorkflowID(r.WorkflowID); err != nil {
 		return err
-	}
-	if r.Group != nil {
-		if _, valid := WorkflowTaskGroupStatusKinds(*r.Group); !valid {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "group", "group must be active, backlog, or done")
-		}
 	}
 	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
 		return err

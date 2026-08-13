@@ -180,7 +180,6 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
         project_id: input.projectID,
         workflow_id:
           input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
-        group: input.group,
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],

@@ -44,11 +44,12 @@ func TestProjectTaskListGroupPagesProjectCanonicalRowDataInServerOrder(t *testin
 	}
 
 	projectID := fixture.binding.ProjectID
-	group := serverapi.WorkflowTaskGroupBacklog
 	limit := 1
 	request := serverapi.WorkflowTaskListRequest{
 		ProjectID: &projectID,
-		Group:     &group,
+		StatusKinds: []serverapi.WorkflowTaskStatusKind{
+			serverapi.WorkflowTaskStatusKindBacklog,
+		},
 		LabelFilter: serverapi.WorkflowTaskLabelFilter{
 			Kind: serverapi.WorkflowTaskLabelFilterKindNamed,
 			Named: &serverapi.WorkflowTaskNamedLabelFilter{

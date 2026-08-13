@@ -124,24 +124,28 @@ type taskGroupSQLTemplateData struct {
 }
 
 func taskGroupTemplateData() []taskGroupSQLTemplateData {
-	groups := []serverapi.WorkflowTaskGroup{
-		serverapi.WorkflowTaskGroupActive,
-		serverapi.WorkflowTaskGroupBacklog,
-		serverapi.WorkflowTaskGroupDone,
+	groups := []taskGroupSQLTemplateData{
+		{
+			Name: "active",
+			StatusKinds: []string{
+				string(serverapi.WorkflowTaskStatusKindWaitingQuestion),
+				string(serverapi.WorkflowTaskStatusKindWaitingApproval),
+				string(serverapi.WorkflowTaskStatusKindInterrupted),
+				string(serverapi.WorkflowTaskStatusKindRunning),
+				string(serverapi.WorkflowTaskStatusKindQueued),
+				string(serverapi.WorkflowTaskStatusKindActive),
+			},
+		},
+		{
+			Name:        "backlog",
+			StatusKinds: []string{string(serverapi.WorkflowTaskStatusKindBacklog)},
+		},
+		{
+			Name:        "done",
+			StatusKinds: []string{string(serverapi.WorkflowTaskStatusKindDone)},
+		},
 	}
-	result := make([]taskGroupSQLTemplateData, 0, len(groups))
-	for _, group := range groups {
-		kinds, valid := serverapi.WorkflowTaskGroupStatusKinds(group)
-		if !valid {
-			panic(fmt.Sprintf("workflow task group %q has no status mapping", group))
-		}
-		values := make([]string, 0, len(kinds))
-		for _, kind := range kinds {
-			values = append(values, string(kind))
-		}
-		result = append(result, taskGroupSQLTemplateData{Name: string(group), StatusKinds: values})
-	}
-	return result
+	return groups
 }
 
 func taskListSortSlots() []taskListSortSlotTemplateData {

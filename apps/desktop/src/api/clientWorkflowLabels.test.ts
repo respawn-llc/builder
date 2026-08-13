@@ -432,7 +432,7 @@ describe("ApiClient workflow labels", () => {
       client.listTasks({
         projectID: "project-1",
         workflowID: "11111111-1111-4111-8111-111111111111",
-        group: "active",
+        statusKinds: ["waiting_question", "active"],
         labelFilter: {
           kind: "named",
           mode: "any",
@@ -461,9 +461,8 @@ describe("ApiClient workflow labels", () => {
         params: {
           project_id: "project-1",
           workflow_id: "11111111-1111-4111-8111-111111111111",
-          group: "active",
           column_keys: [],
-          status_kinds: [],
+          status_kinds: ["waiting_question", "active"],
           attention_kinds: [],
           label_filter: {
             kind: "named",

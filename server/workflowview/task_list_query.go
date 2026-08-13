@@ -35,7 +35,6 @@ func workflowTaskListSortUsesColumn(sortSelectors []serverapi.WorkflowTaskListSo
 type workflowTaskListQueryRequest struct {
 	projectID          string
 	narrowed           *workflowTaskListNarrowedQueryFacts
-	group              *serverapi.WorkflowTaskGroup
 	statusKinds        []serverapi.WorkflowTaskStatusKind
 	attentionKinds     []serverapi.WorkflowTaskAttentionKind
 	labelFilter        workflowTaskLabelFilterFacts
@@ -87,9 +86,8 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
 	}
-	effectiveStatusKinds := mergeWorkflowTaskListStatusKinds(req.statusKinds, req.group)
-	statusKinds := make([]string, 0, len(effectiveStatusKinds))
-	for _, kind := range effectiveStatusKinds {
+	statusKinds := make([]string, 0, len(req.statusKinds))
+	for _, kind := range req.statusKinds {
 		statusKinds = append(statusKinds, string(kind))
 	}
 	statusKindsJSON, err := json.Marshal(statusKinds)
@@ -213,14 +211,6 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	return result, nil
 }
 
-func workflowTaskGroupStatusKinds(group *serverapi.WorkflowTaskGroup) []serverapi.WorkflowTaskStatusKind {
-	if group == nil {
-		return nil
-	}
-	kinds, _ := serverapi.WorkflowTaskGroupStatusKinds(*group)
-	return kinds
-}
-
 func workflowTaskStatusKindsJSON(kinds []serverapi.WorkflowTaskStatusKind) (string, error) {
 	values := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
@@ -243,30 +233,6 @@ func workflowTaskAttentionKindsJSON(kinds []serverapi.WorkflowTaskAttentionKind)
 		return "", err
 	}
 	return string(encoded), nil
-}
-
-func mergeWorkflowTaskListStatusKinds(
-	explicit []serverapi.WorkflowTaskStatusKind,
-	group *serverapi.WorkflowTaskGroup,
-) []serverapi.WorkflowTaskStatusKind {
-	groupKinds := workflowTaskGroupStatusKinds(group)
-	if len(groupKinds) == 0 {
-		return append([]serverapi.WorkflowTaskStatusKind(nil), explicit...)
-	}
-	if len(explicit) == 0 {
-		return groupKinds
-	}
-	allowed := make(map[serverapi.WorkflowTaskStatusKind]bool, len(groupKinds))
-	for _, kind := range groupKinds {
-		allowed[kind] = true
-	}
-	merged := make([]serverapi.WorkflowTaskStatusKind, 0, len(explicit))
-	for _, kind := range explicit {
-		if allowed[kind] {
-			merged = append(merged, kind)
-		}
-	}
-	return merged
 }
 
 func workflowTaskListMatchingWorkflowCardinality(count int) (serverapi.WorkflowTaskListMatchingWorkflowCardinality, error) {

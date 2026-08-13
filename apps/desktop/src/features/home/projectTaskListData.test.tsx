@@ -18,11 +18,12 @@ import { queryKeys } from "@/app-facade";
 import {
   projectTaskFinalPageAnchor,
   projectTaskGroupPageSize,
+  projectTaskGroupStatusKinds,
   useProjectTaskListData,
   useProjectTaskListEvents,
 } from "./projectTaskListData";
 
-type TaskGroup = NonNullable<TaskListInput["group"]>;
+type TaskGroup = "active" | "backlog" | "done";
 
 interface TestState {
   countRequests: number;
@@ -116,7 +117,10 @@ describe("Project Task-list data ownership", () => {
     await waitFor(() => {
       expect(state.listRequests).toHaveLength(2);
     });
-    expect(state.listRequests.map((request) => request.group)).toEqual(["active", "backlog"]);
+    expect(state.listRequests.map((request) => request.statusKinds)).toEqual([
+      projectTaskGroupStatusKinds.active,
+      projectTaskGroupStatusKinds.backlog,
+    ]);
     await waitFor(() => {
       expect(
         harness.queryClient.getQueriesData({
@@ -158,10 +162,17 @@ describe("Project Task-list data ownership", () => {
 
     await waitFor(() => {
       expect(state.listRequests[0]).toMatchObject({
-        group: "active",
         limit: projectTaskGroupPageSize,
         offset: 100,
         projectID: "project-1",
+        statusKinds: [
+          "waiting_question",
+          "waiting_approval",
+          "interrupted",
+          "running",
+          "queued",
+          "active",
+        ],
         sort: [{ field: "updated", direction: "desc" }],
       });
     });

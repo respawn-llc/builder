@@ -40,7 +40,6 @@ export type TaskMutationInput =
 export type TaskListInput = Readonly<{
   projectID: string;
   workflowID?: string | undefined;
-  group?: "active" | "backlog" | "done" | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
   attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
