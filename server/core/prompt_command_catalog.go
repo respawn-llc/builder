@@ -21,8 +21,6 @@ type promptCommandCatalogService struct {
 	catalog promptcommands.Service
 }
 
-var _ apicontract.PromptCommandCatalogTrustedService = promptCommandCatalogService{}
-
 func (s promptCommandCatalogService) GetPromptCommandCatalog(
 	ctx context.Context,
 	req serverapi.PromptCommandCatalogRequest,
@@ -59,8 +57,6 @@ type promptCommandSessionCatalogService struct {
 	sessionID string
 }
 
-var _ apicontract.PromptCommandCatalogTrustedService = promptCommandSessionCatalogService{}
-
 func (s promptCommandSessionCatalogService) GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
 	return apicontract.WithValidated(
 		req,
@@ -86,7 +82,7 @@ func (s promptCommandSessionCatalogService) GetPromptCommandCatalogValidated(
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, err
 	}
-	return catalog.(apicontract.PromptCommandCatalogTrustedService).GetPromptCommandCatalogValidated(ctx, validated)
+	return catalog.GetPromptCommandCatalog(ctx, validated.Value())
 }
 
 type promptCommandEffectiveWorkspaceResolver struct {

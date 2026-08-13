@@ -297,4 +297,3 @@ func runtimeUnavailableErr(sessionID string) error {
 }
 
 var _ servicecontract.SessionRuntimeService = (*API)(nil)
-var _ servicecontract.SessionRuntimeTrustedService = (*API)(nil)

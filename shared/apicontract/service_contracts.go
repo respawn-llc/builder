@@ -13,16 +13,8 @@ type ApprovalViewService interface {
 	ListPendingApprovalsBySession(ctx context.Context, req serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error)
 }
 
-type ApprovalViewTrustedService interface {
-	ListPendingApprovalsBySessionValidated(ctx context.Context, req Validated[serverapi.ApprovalListPendingBySessionRequest]) (serverapi.ApprovalListPendingBySessionResponse, error)
-}
-
 type AskViewService interface {
 	ListPendingAsksBySession(ctx context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error)
-}
-
-type AskViewTrustedService interface {
-	ListPendingAsksBySessionValidated(ctx context.Context, req Validated[serverapi.AskListPendingBySessionRequest]) (serverapi.AskListPendingBySessionResponse, error)
 }
 
 type AuthBootstrapService interface {
@@ -31,42 +23,20 @@ type AuthBootstrapService interface {
 	AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error)
 }
 
-type AuthBootstrapTrustedService interface {
-	GetAuthBootstrapStatusValidated(ctx context.Context, req Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error)
-	CompleteAuthBootstrapValidated(ctx context.Context, req Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error)
-	AcknowledgeNoAuthValidated(ctx context.Context, req Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error)
-}
-
 type AuthStatusService interface {
 	GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error)
-}
-
-type AuthStatusTrustedService interface {
-	GetAuthStatusValidated(ctx context.Context, req Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error)
 }
 
 type CapabilityFactsService interface {
 	GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
 }
 
-type CapabilityFactsTrustedService interface {
-	GetCapabilityFactsValidated(ctx context.Context, req Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error)
-}
-
 type PromptCommandCatalogService interface {
 	GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error)
 }
 
-type PromptCommandCatalogTrustedService interface {
-	GetPromptCommandCatalogValidated(ctx context.Context, req Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error)
-}
-
 type OnboardingFinalizeService interface {
 	FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
-}
-
-type OnboardingFinalizeTrustedService interface {
-	FinalizeOnboardingValidated(ctx context.Context, req Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error)
 }
 
 type ProcessControlService interface {
@@ -74,19 +44,9 @@ type ProcessControlService interface {
 	GetInlineOutput(ctx context.Context, req serverapi.ProcessInlineOutputRequest) (serverapi.ProcessInlineOutputResponse, error)
 }
 
-type ProcessControlTrustedService interface {
-	KillProcessValidated(ctx context.Context, req Validated[serverapi.ProcessKillRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessKillResponse, error)
-	GetInlineOutputValidated(ctx context.Context, req Validated[serverapi.ProcessInlineOutputRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessInlineOutputResponse, error)
-}
-
 type ProcessViewService interface {
 	ListProcesses(ctx context.Context, req serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error)
 	GetProcess(ctx context.Context, req serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error)
-}
-
-type ProcessViewTrustedService interface {
-	ResolveProcessAuthorization(ctx context.Context, processID string) (ProcessAuthorizationCandidate, error)
-	GetProcessValidated(ctx context.Context, req Validated[serverapi.ProcessGetRequest], authorization AuthorizedProcessInActiveProject) (serverapi.ProcessGetResponse, error)
 }
 
 type ProjectViewService interface {
@@ -108,32 +68,9 @@ type ProjectViewService interface {
 	ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error)
 }
 
-type ProjectViewTrustedService interface {
-	ListProjectsValidated(ctx context.Context, req Validated[serverapi.ProjectListRequest]) (serverapi.ProjectListResponse, error)
-	ListProjectHomeValidated(ctx context.Context, req Validated[serverapi.ProjectHomeListRequest]) (serverapi.ProjectHomeListResponse, error)
-	ResolveProjectPathValidated(ctx context.Context, req Validated[serverapi.ProjectResolvePathRequest]) (serverapi.ProjectResolvePathResponse, error)
-	PlanWorkspaceBindingValidated(ctx context.Context, req Validated[serverapi.ProjectBindingPlanRequest]) (serverapi.ProjectBindingPlanResponse, error)
-	CreateProjectValidated(ctx context.Context, req Validated[serverapi.ProjectCreateRequest]) (serverapi.ProjectCreateResponse, error)
-	GetProjectEditValidated(ctx context.Context, req Validated[serverapi.ProjectEditGetRequest]) (serverapi.ProjectEditGetResponse, error)
-	UpdateProjectValidated(ctx context.Context, req Validated[serverapi.ProjectUpdateRequest]) (serverapi.ProjectUpdateResponse, error)
-	SetDefaultWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectDefaultWorkspaceSetRequest]) (serverapi.ProjectDefaultWorkspaceSetResponse, error)
-	ListProjectWorkspacesValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceListRequest]) (serverapi.ProjectWorkspaceListResponse, error)
-	GetProjectWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceGetRequest]) (serverapi.ProjectWorkspaceGetResponse, error)
-	UnlinkWorkspaceFromProjectValidated(ctx context.Context, req Validated[serverapi.ProjectWorkspaceUnlinkRequest]) (serverapi.ProjectWorkspaceUnlinkResponse, error)
-	DeleteProjectValidated(ctx context.Context, req Validated[serverapi.ProjectDeleteRequest]) (serverapi.ProjectDeleteResponse, error)
-	AttachWorkspaceToProjectValidated(ctx context.Context, req Validated[serverapi.ProjectAttachWorkspaceRequest]) (serverapi.ProjectAttachWorkspaceResponse, error)
-	RebindWorkspaceValidated(ctx context.Context, req Validated[serverapi.ProjectRebindWorkspaceRequest]) (serverapi.ProjectRebindWorkspaceResponse, error)
-	GetProjectOverviewValidated(ctx context.Context, req Validated[serverapi.ProjectGetOverviewRequest]) (serverapi.ProjectGetOverviewResponse, error)
-	ListSessionPageValidated(ctx context.Context, req Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error)
-}
-
 type AttentionNotificationService interface {
 	SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
 	SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error)
-}
-
-type AttentionNotificationTrustedService interface {
-	SubscribeAttentionNotificationsValidated(ctx context.Context, req Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error)
 }
 
 type PromptControlService interface {
@@ -141,27 +78,13 @@ type PromptControlService interface {
 	SubscribeFollowUp(ctx context.Context, req serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error)
 }
 
-type PromptControlTrustedService interface {
-	AnswerPromptBatchValidated(ctx context.Context, req Validated[serverapi.PromptAnswerBatchRequest]) (serverapi.PromptAnswerBatchResponse, error)
-	SubscribeFollowUpValidated(ctx context.Context, req Validated[serverapi.PromptFollowUpWatchRequest]) (serverapi.PromptFollowUpSubscription, error)
-}
-
 type RunPromptService interface {
 	RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
-}
-
-type RunPromptTrustedService interface {
-	RunPromptValidated(ctx context.Context, req Validated[serverapi.RunPromptRequest], progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error)
 }
 
 type ServerStatusService interface {
 	GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error)
 	GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error)
-}
-
-type ServerStatusTrustedService interface {
-	GetServerReadinessValidated(ctx context.Context, req Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error)
-	GetUpdateStatusValidated(ctx context.Context, req Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error)
 }
 
 type RuntimeControlService interface {
@@ -187,44 +110,11 @@ type RuntimeControlService interface {
 	ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error)
 }
 
-type RuntimeGoalTrustedService interface {
-	ShowGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalShowRequest]) (serverapi.RuntimeGoalShowResponse, error)
-	SetGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalSetRequest]) (serverapi.RuntimeGoalMutationResponse, error)
-	PauseGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
-	ResumeGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
-	CompleteGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest]) (serverapi.RuntimeGoalMutationResponse, error)
-	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error)
-}
-
-type RuntimeControlTrustedService interface {
-	SetSessionNameValidated(ctx context.Context, req Validated[serverapi.RuntimeSetSessionNameRequest], authorization AuthorizedSessionInActiveProject) error
-	SetThinkingLevelValidated(ctx context.Context, req Validated[serverapi.RuntimeSetThinkingLevelRequest], authorization AuthorizedSessionInActiveProject) error
-	SetFastModeEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetFastModeEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetFastModeEnabledResponse, error)
-	SetReviewerEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetReviewerEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetReviewerEnabledResponse, error)
-	SetAutoCompactionEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetAutoCompactionEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error)
-	SetQuestionsEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetQuestionsEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetQuestionsEnabledResponse, error)
-	AppendCommittedEntryValidated(ctx context.Context, req Validated[serverapi.RuntimeAppendCommittedEntryRequest], authorization AuthorizedSessionInActiveProject) error
-	ShouldCompactBeforeUserMessageValidated(ctx context.Context, req Validated[serverapi.RuntimeShouldCompactBeforeUserMessageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error)
-	SubmitUserTurnValidated(ctx context.Context, req Validated[serverapi.RuntimeSubmitUserTurnRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSubmitUserTurnResponse, error)
-	SubmitUserShellCommandValidated(ctx context.Context, req Validated[serverapi.RuntimeSubmitUserShellCommandRequest], authorization AuthorizedSessionInActiveProject) error
-	CompactContextValidated(ctx context.Context, req Validated[serverapi.RuntimeCompactContextRequest], authorization AuthorizedSessionInActiveProject) error
-	InterruptValidated(ctx context.Context, req Validated[serverapi.RuntimeInterruptRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeInterruptResponse, error)
-	DiscardQueuedUserMessageValidated(ctx context.Context, req Validated[serverapi.RuntimeDiscardQueuedUserMessageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error)
-	RecordPromptHistoryValidated(ctx context.Context, req Validated[serverapi.RuntimeRecordPromptHistoryRequest], authorization AuthorizedSessionInActiveProject) error
-}
-
 type RuntimeLiveControlService interface {
 	LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error)
 	LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error)
 	LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error)
 	LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error)
-}
-
-type RuntimeLiveControlTrustedService interface {
-	LiveSteerValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveSteerRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveSteerResponse, error)
-	LiveStopValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveStopRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveStopResponse, error)
-	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWaitResponse, error)
-	LiveWatchValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWatchRequest], identity RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWatchResponse, error)
 }
 
 type SessionTranscriptService interface {
@@ -237,12 +127,6 @@ type SessionLaunchService interface {
 	MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
 }
 
-type SessionLaunchTrustedService interface {
-	PlanSessionValidated(ctx context.Context, req Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error)
-	WorkspaceChatDraftValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error)
-	MaterializeWorkspaceChatValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error)
-}
-
 type SessionLifecycleService interface {
 	GetInitialInput(ctx context.Context, req serverapi.SessionInitialInputRequest) (serverapi.SessionInitialInputResponse, error)
 	PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error)
@@ -250,25 +134,9 @@ type SessionLifecycleService interface {
 	ResolveTransition(ctx context.Context, req serverapi.SessionResolveTransitionRequest) (serverapi.SessionResolveTransitionResponse, error)
 }
 
-type SessionLifecycleTrustedService interface {
-	GetInitialInputValidated(ctx context.Context, req Validated[serverapi.SessionInitialInputRequest], authorization OptionalAuthorizedSessionInActiveProject) (serverapi.SessionInitialInputResponse, error)
-	PersistInputDraftValidated(ctx context.Context, req Validated[serverapi.SessionPersistInputDraftRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionPersistInputDraftResponse, error)
-	RetargetSessionWorkspaceValidated(
-		ctx context.Context,
-		req Validated[serverapi.SessionRetargetWorkspaceRequest],
-		constraint AttachedProjectConstraint,
-	) (serverapi.SessionRetargetWorkspaceResponse, error)
-	ResolveTransitionValidated(ctx context.Context, req Validated[serverapi.SessionResolveTransitionRequest], authorization OptionalAuthorizedSessionInActiveProject) (serverapi.SessionResolveTransitionResponse, error)
-}
-
 type SessionRuntimeService interface {
 	ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error)
 	ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error)
-}
-
-type SessionRuntimeTrustedService interface {
-	ActivateSessionRuntimeValidated(ctx context.Context, req Validated[serverapi.SessionRuntimeActivateRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error)
-	ReleaseSessionRuntimeValidated(ctx context.Context, req Validated[serverapi.SessionRuntimeReleaseRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error)
 }
 
 type SessionViewService interface {
@@ -276,13 +144,6 @@ type SessionViewService interface {
 	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
 	GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 	GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error)
-}
-
-type SessionViewTrustedService interface {
-	GetSessionMainViewValidated(ctx context.Context, req Validated[serverapi.SessionMainViewRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionMainViewResponse, error)
-	GetSessionTranscriptPageValidated(ctx context.Context, req Validated[serverapi.SessionTranscriptPageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionTranscriptPageResponse, error)
-	GetLatestCommittedAssistantFinalAnswerValidated(ctx context.Context, req Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
-	GetSessionExecutionEnvironmentValidated(ctx context.Context, req Validated[serverapi.SessionExecutionEnvironmentRequest], authorization AuthorizedSessionInActiveProject) (serverapi.SessionExecutionEnvironmentResponse, error)
 }
 
 type WorktreeService interface {
@@ -297,23 +158,6 @@ type WorktreeService interface {
 	LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error)
 	DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error)
 	SubscribeWorktreeSetup(ctx context.Context, req serverapi.WorktreeSetupSubscribeRequest) (serverapi.WorktreeSetupSubscription, error)
-}
-
-type WorktreeTrustedService interface {
-	GetWorktreeStatusValidated(ctx context.Context, req Validated[serverapi.WorktreeStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeStatusResponse, error)
-	ListWorktreesValidated(ctx context.Context, req Validated[serverapi.WorktreeListRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeListResponse, error)
-	ListWorkspaceWorktreesValidated(
-		ctx context.Context,
-		req Validated[serverapi.WorktreeWorkspaceListRequest],
-		binding AuthorizedProjectWorkspaceBinding,
-	) (serverapi.WorktreeWorkspaceListResponse, error)
-	ResolveWorktreeSelectorValidated(ctx context.Context, req Validated[serverapi.WorktreeSelectorPreviewRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeSelectorPreviewResponse, error)
-	PreviewWorktreeDeleteValidated(ctx context.Context, req Validated[serverapi.WorktreeDeletePreviewRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeDeletePreviewResponse, error)
-	ResolveWorktreeCreateTargetValidated(ctx context.Context, req Validated[serverapi.WorktreeCreateTargetResolveRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateTargetResolveResponse, error)
-	CreateWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeCreateRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeCreateResponse, error)
-	EnterWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeEnterRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error)
-	LeaveWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeLeaveRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeScheduledAcknowledgement, error)
-	DeleteWorktreeValidated(ctx context.Context, req Validated[serverapi.WorktreeDeleteRequest], authorization AuthorizedSessionInActiveProject) (serverapi.WorktreeDeleteResult, error)
 }
 
 type WorkflowService interface {
@@ -370,54 +214,4 @@ type WorkflowService interface {
 	ListWorkflowBoardNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
 	GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
 	ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error)
-}
-
-type WorkflowTrustedService interface {
-	CreateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowCreateRequest]) (serverapi.WorkflowCreateResponse, error)
-	CreateAndLinkWorkflowToProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowCreateAndLinkProjectRequest]) (serverapi.WorkflowCreateAndLinkProjectResponse, error)
-	UpdateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowUpdateRequest]) (serverapi.WorkflowGetResponse, error)
-	ListWorkflowsValidated(ctx context.Context, req Validated[serverapi.WorkflowListRequest]) (serverapi.WorkflowListResponse, error)
-	GetWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowGetRequest]) (serverapi.WorkflowGetResponse, error)
-	LinkWorkflowToProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowLinkProjectRequest]) (serverapi.WorkflowLinkProjectResponse, error)
-	ListProjectWorkflowLinksValidated(ctx context.Context, req Validated[serverapi.WorkflowListProjectLinksRequest]) (serverapi.WorkflowListProjectLinksResponse, error)
-	SetDefaultProjectWorkflowLinkValidated(ctx context.Context, req Validated[serverapi.WorkflowSetDefaultProjectLinkRequest]) (serverapi.WorkflowSetDefaultProjectLinkResponse, error)
-	UnlinkWorkflowFromProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowUnlinkProjectRequest]) (serverapi.WorkflowUnlinkProjectResponse, error)
-	PreviewWorkflowDeleteValidated(ctx context.Context, req Validated[serverapi.WorkflowDeletePreviewRequest]) (serverapi.WorkflowDeletePreviewResponse, error)
-	DeleteWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowDeleteRequest]) (serverapi.WorkflowDeleteResponse, error)
-	ValidateWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowValidateRequest]) (serverapi.WorkflowValidateResponse, error)
-	ValidateWorkflowScriptPathValidated(ctx context.Context, req Validated[serverapi.WorkflowScriptPathValidateRequest]) (serverapi.WorkflowValidateResponse, error)
-	ValidateWorkflowGraphDraftValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphValidateDraftRequest]) (serverapi.WorkflowGraphValidateDraftResponse, error)
-	DeriveWorkflowGraphWiringValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphDeriveWiringRequest]) (serverapi.WorkflowGraphDeriveWiringResponse, error)
-	PreviewWorkflowGraphSaveValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphSavePreviewRequest]) (serverapi.WorkflowGraphSavePreviewResponse, error)
-	SaveWorkflowGraphValidated(ctx context.Context, req Validated[serverapi.WorkflowGraphSaveRequest]) (serverapi.WorkflowGraphSaveResponse, error)
-	CreateWorkflowProjectLabelValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelCreateRequest]) (serverapi.WorkflowProjectLabelCreateResponse, error)
-	RenameWorkflowProjectLabelValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelRenameRequest]) (serverapi.WorkflowProjectLabelRenameResponse, error)
-	DeleteWorkflowProjectLabelValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelDeleteRequest]) (serverapi.WorkflowProjectLabelDeleteResponse, error)
-	CreateWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskCreateRequest]) (serverapi.WorkflowTaskCreateResponse, error)
-	AddWorkflowTaskDependencyValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskDependencyAddRequest]) (serverapi.WorkflowTaskDependencyAddResponse, error)
-	RemoveWorkflowTaskDependencyValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskDependencyRemoveRequest]) (serverapi.WorkflowTaskDependencyRemoveResponse, error)
-	UpdateWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskUpdateRequest]) (serverapi.WorkflowTaskUpdateResponse, error)
-	StartWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskStartRequest]) (serverapi.WorkflowTaskStartResponse, error)
-	InterruptWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskInterruptRequest]) (serverapi.WorkflowTaskInterruptResponse, error)
-	ResumeWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskResumeRequest]) (serverapi.WorkflowTaskResumeResponse, error)
-	ApproveWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskApproveRequest]) (serverapi.WorkflowTaskApproveResponse, error)
-	PreviewWorkflowTaskMoveValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskMovePreviewRequest]) (serverapi.WorkflowTaskMovePreviewResponse, error)
-	MoveWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskMoveRequest]) (serverapi.WorkflowTaskMoveResponse, error)
-	CompleteWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskCompleteRequest]) (serverapi.WorkflowTaskCompleteResponse, error)
-	DeleteWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskDeleteRequest]) error
-	ObserveWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskObservationRequest]) (serverapi.WorkflowTaskObservationResponse, error)
-	ListWorkflowProjectLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error)
-	ReorderWorkflowProjectLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error)
-	GetWorkflowTaskLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error)
-	UpdateWorkflowTaskLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error)
-	ListWorkflowAttentionValidated(ctx context.Context, req Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error)
-	ListWorkflowTaskAttentionValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error)
-	ListWorkflowTaskCommentsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskCommentListResponse, error)
-	ListWorkflowTaskActivityValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error)
-	ListWorkflowTaskSessionsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error)
-	ListWorkflowTasksValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error)
-	SearchWorkflowTasksValidated(ctx context.Context, req Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error)
-	GetWorkflowBoardValidated(ctx context.Context, req Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoardResponse, error)
-	ListWorkflowBoardNodeCardsValidated(ctx context.Context, req Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error)
-	GetWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskGetRequest]) (serverapi.WorkflowTaskGetResponse, error)
 }

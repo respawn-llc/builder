@@ -430,11 +430,7 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx conte
 		value.SessionID = req.SessionID
 		return serverapi.SessionRuntimeActivateResponse{Attachment: value}, nil
 	}
-	trusted, ok := c.SessionRuntimeService.(apicontract.SessionRuntimeTrustedService)
-	if !ok {
-		return serverapi.SessionRuntimeActivateResponse{}, errors.New("test Session Runtime trusted service is required")
-	}
-	return trusted.ActivateSessionRuntimeValidated(ctx, validated, authorization)
+	return c.SessionRuntimeService.ActivateSessionRuntime(ctx, req)
 }
 
 func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
@@ -457,11 +453,7 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx contex
 	if c.releaseResponse != nil {
 		return *c.releaseResponse, nil
 	}
-	trusted, ok := c.SessionRuntimeService.(apicontract.SessionRuntimeTrustedService)
-	if !ok {
-		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("test Session Runtime trusted service is required")
-	}
-	return trusted.ReleaseSessionRuntimeValidated(ctx, validated, authorization)
+	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
 }
 
 type gatewayRuntimeClientOverride struct {

@@ -204,4 +204,3 @@ func appendPromptAnswerBatchResult(
 }
 
 var _ servicecontract.PromptControlService = (*PromptControlService)(nil)
-var _ servicecontract.PromptControlTrustedService = (*PromptControlService)(nil)

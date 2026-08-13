@@ -189,4 +189,3 @@ func (s *BootstrapService) bootstrapResponseFromState(state auth.State) serverap
 }
 
 var _ servicecontract.AuthBootstrapService = (*BootstrapService)(nil)
-var _ servicecontract.AuthBootstrapTrustedService = (*BootstrapService)(nil)

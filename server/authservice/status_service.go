@@ -323,4 +323,3 @@ func authStatusFailure(err error) serverapi.AuthStatusFailure {
 }
 
 var _ servicecontract.AuthStatusService = (*StatusService)(nil)
-var _ servicecontract.AuthStatusTrustedService = (*StatusService)(nil)

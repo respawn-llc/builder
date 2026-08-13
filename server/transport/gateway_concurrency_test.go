@@ -32,7 +32,6 @@ import (
 
 type gatewayConcurrencyWorkflowService struct {
 	apicontract.WorkflowService
-	apicontract.WorkflowTrustedService
 	getWorkflowTask      func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
 	completeWorkflowTask func(context.Context, serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error)
 	startWorkflowTask    func(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error)
@@ -49,13 +48,6 @@ func (s *gatewayConcurrencyWorkflowService) StartWorkflowTask(
 	return s.startWorkflowTask(ctx, req)
 }
 
-func (s *gatewayConcurrencyWorkflowService) StartWorkflowTaskValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorkflowTaskStartRequest],
-) (serverapi.WorkflowTaskStartResponse, error) {
-	return s.StartWorkflowTask(ctx, req.Value())
-}
-
 func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTask(
 	ctx context.Context,
 	req serverapi.WorkflowTaskResumeRequest,
@@ -66,25 +58,11 @@ func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTask(
 	return s.resumeWorkflowTask(ctx, req)
 }
 
-func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTaskValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorkflowTaskResumeRequest],
-) (serverapi.WorkflowTaskResumeResponse, error) {
-	return s.ResumeWorkflowTask(ctx, req.Value())
-}
-
 func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
 	ctx context.Context,
 	req serverapi.WorkflowTaskGetRequest,
 ) (serverapi.WorkflowTaskGetResponse, error) {
 	return s.getWorkflowTask(ctx, req)
-}
-
-func (s *gatewayConcurrencyWorkflowService) GetWorkflowTaskValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
-) (serverapi.WorkflowTaskGetResponse, error) {
-	return s.GetWorkflowTask(ctx, req.Value())
 }
 
 func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTask(
@@ -95,13 +73,6 @@ func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTask(
 		return s.WorkflowService.CompleteWorkflowTask(ctx, req)
 	}
 	return s.completeWorkflowTask(ctx, req)
-}
-
-func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTaskValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorkflowTaskCompleteRequest],
-) (serverapi.WorkflowTaskCompleteResponse, error) {
-	return s.CompleteWorkflowTask(ctx, req.Value())
 }
 
 type gatewayConcurrencyDependencies struct {
@@ -228,7 +199,6 @@ type gatewayCloseTracker struct {
 
 type gatewayCloseWorkflowService struct {
 	apicontract.WorkflowService
-	apicontract.WorkflowTrustedService
 	tracker *gatewayCloseTracker
 }
 
@@ -244,13 +214,6 @@ func (s *gatewayCloseWorkflowService) GetWorkflowTask(ctx context.Context, _ ser
 	return serverapi.WorkflowTaskGetResponse{}, ctx.Err()
 }
 
-func (s *gatewayCloseWorkflowService) GetWorkflowTaskValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
-) (serverapi.WorkflowTaskGetResponse, error) {
-	return s.GetWorkflowTask(ctx, req.Value())
-}
-
 type gatewayCloseRuntimeService struct {
 	apicontract.SessionRuntimeService
 	tracker        *gatewayCloseTracker
@@ -263,17 +226,6 @@ type gatewayCloseRelease struct {
 }
 
 func (s *gatewayCloseRuntimeService) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
-		return s.ActivateSessionRuntimeValidated(ctx, validated, apicontract.AuthorizedSessionInActiveProject{})
-	})
-}
-
-func (s *gatewayCloseRuntimeService) ActivateSessionRuntimeValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest],
-	_ apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.SessionRuntimeActivateResponse, error) {
-	req := validated.Value()
 	s.tracker.active.Add(1)
 	s.tracker.entered <- struct{}{}
 	defer func() {
@@ -289,16 +241,6 @@ func (s *gatewayCloseRuntimeService) ActivateSessionRuntimeValidated(
 }
 
 func (s *gatewayCloseRuntimeService) ReleaseSessionRuntime(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-	s.releaseStarted <- gatewayCloseRelease{request: req, active: s.tracker.active.Load()}
-	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
-}
-
-func (s *gatewayCloseRuntimeService) ReleaseSessionRuntimeValidated(
-	_ context.Context,
-	validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest],
-	_ apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.SessionRuntimeReleaseResponse, error) {
-	req := validated.Value()
 	s.releaseStarted <- gatewayCloseRelease{request: req, active: s.tracker.active.Load()}
 	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
 }
@@ -328,8 +270,7 @@ func TestGatewayConcurrentUnaryResponsesAreCorrelated(t *testing.T) {
 		releaseBlockedOnce.Do(func() { close(releaseBlocked) })
 	}
 	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService:        appCore.WorkflowClient(),
-		WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+		WorkflowService: appCore.WorkflowClient(),
 		getWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
 			if req.TaskID == "task-1" {
 				close(blockedEntered)
@@ -398,8 +339,7 @@ func TestGatewayOrdinaryHandlerPanicClosesOnlyItsConnection(t *testing.T) {
 
 	panicEntered := make(chan struct{})
 	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService:        appCore.WorkflowClient(),
-		WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+		WorkflowService: appCore.WorkflowClient(),
 		getWorkflowTask: func(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
 			if req.TaskID == "panic" {
 				close(panicEntered)
@@ -447,8 +387,7 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 
 	panicCause := errors.New("gateway debug test panic")
 	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService:        appCore.WorkflowClient(),
-		WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+		WorkflowService: appCore.WorkflowClient(),
 		getWorkflowTask: func(_ context.Context, _ serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
 			panic(panicCause)
 		},
@@ -537,8 +476,7 @@ func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 			t.Fatalf("NewCurrentNodeController: %v", err)
 		}
 		workflowClient := &gatewayConcurrencyWorkflowService{
-			WorkflowService:        appCore.WorkflowClient(),
-			WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+			WorkflowService: appCore.WorkflowClient(),
 			completeWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
 				_, completeErr := controller.CompleteIdleCurrentNode(
 					ctx,
@@ -652,8 +590,7 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 			defer func() { _ = authority.Close(context.Background()) }()
 
 			workflowClient := &gatewayConcurrencyWorkflowService{
-				WorkflowService:        appCore.WorkflowClient(),
-				WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+				WorkflowService: appCore.WorkflowClient(),
 				startWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
 					started, startErr := controller.StartTask(
 						ctx,
@@ -850,8 +787,7 @@ func TestGatewayAdmissionCapsOrdinaryUnaryRequests(t *testing.T) {
 	var capacityReleased atomic.Bool
 	var calls atomic.Int32
 	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService:        appCore.WorkflowClient(),
-		WorkflowTrustedService: appCore.WorkflowClient().(apicontract.WorkflowTrustedService),
+		WorkflowService: appCore.WorkflowClient(),
 		getWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
 			calls.Add(1)
 			if req.TaskID == "task-"+stringID(17) && !capacityReleased.Load() {

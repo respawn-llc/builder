@@ -442,5 +442,3 @@ func sourceKindPtr(value *onboardingimports.SourceKind) *string {
 func ptr[T any](value T) *T {
 	return &value
 }
-
-var _ apicontract.CapabilityFactsTrustedService = (*Service)(nil)

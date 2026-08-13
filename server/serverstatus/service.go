@@ -91,7 +91,6 @@ func (s *ServerStatusService) GetUpdateStatusValidated(ctx context.Context, _ se
 }
 
 var _ servicecontract.ServerStatusService = (*ServerStatusService)(nil)
-var _ servicecontract.ServerStatusTrustedService = (*ServerStatusService)(nil)
 
 func subagentRoleSummaries(settings config.Settings) []serverapi.SubagentRoleSummary {
 	names := append([]string{workflow.DefaultAgentRole}, config.AvailableSubagentRoleNames(settings, false)...)
