@@ -11,7 +11,7 @@ import (
 type NodeID string
 type TransitionGroupID string
 type EdgeID string
-type TaskID string
+type TaskID = runtimeids.TaskID
 type TransitionID string
 type ModelKey string
 

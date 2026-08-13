@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/shared/labelcontract"
 	"core/shared/runtimeids"
 	"core/shared/workflowcontract"
 )
@@ -46,6 +47,54 @@ func (v Validated[T]) RuntimeClientRequestID(raw string) runtimeids.RuntimeClien
 		panic(fmt.Sprintf("validated request contains invalid Runtime Client Request ID %q: %v", raw, err))
 	}
 	return id
+}
+
+func (v Validated[T]) TaskID(raw string) runtimeids.TaskID {
+	id, err := runtimeids.ParseTaskID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Task ID %q: %v", raw, err))
+	}
+	return id
+}
+
+func (v Validated[T]) LabelID(raw string) runtimeids.LabelID {
+	id, err := runtimeids.ParseLabelID(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Label ID %q: %v", raw, err))
+	}
+	return id
+}
+
+func (v Validated[T]) LabelIDs(raw []string) []runtimeids.LabelID {
+	ids := make([]runtimeids.LabelID, 0, len(raw))
+	for _, value := range raw {
+		ids = append(ids, v.LabelID(value))
+	}
+	return ids
+}
+
+func (v Validated[T]) LabelName(raw string) labelcontract.Name {
+	name, err := labelcontract.PrepareName(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Label name %q: %v", raw, err))
+	}
+	return name
+}
+
+func (v Validated[T]) TaskTitle(raw string) workflowcontract.TaskTitle {
+	title, err := workflowcontract.NewTaskTitle(raw)
+	if err != nil {
+		panic(fmt.Sprintf("validated request contains invalid Task title %q: %v", raw, err))
+	}
+	return title
+}
+
+func (v Validated[T]) OptionalTaskTitle(raw *string) *workflowcontract.TaskTitle {
+	if raw == nil {
+		return nil
+	}
+	title := v.TaskTitle(*raw)
+	return &title
 }
 
 func (v Validated[T]) WorkflowName(raw string) string {

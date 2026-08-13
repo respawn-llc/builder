@@ -24,7 +24,7 @@ func TestParseTaskIDAcceptsCanonicalAndLegacyPersistentIDs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseTaskID(%q): %v", raw, err)
 			}
-			if got != raw {
+			if got.String() != raw {
 				t.Fatalf("ParseTaskID(%q) = %q", raw, got)
 			}
 		})
@@ -38,6 +38,25 @@ func TestParseTaskIDRejectsMissingIdentifier(t *testing.T) {
 				t.Fatalf("ParseTaskID(%q) succeeded", raw)
 			}
 		})
+	}
+}
+
+func TestLabelIDOwnsCanonicalUUIDV4Grammar(t *testing.T) {
+	const raw = "9e7bab10-773a-4a16-9d4f-4e7bd2321327"
+	id, err := ParseLabelID(raw)
+	if err != nil {
+		t.Fatalf("ParseLabelID: %v", err)
+	}
+	if id.String() != raw {
+		t.Fatalf("LabelID.String() = %q, want %q", id.String(), raw)
+	}
+	if generated := NewLabelID(); generated.String() == "" {
+		t.Fatal("NewLabelID returned an empty identity")
+	}
+	for _, invalid := range []string{"", " " + raw, "9E7BAB10-773A-4A16-9D4F-4E7BD2321327", "9e7bab10-773a-1a16-9d4f-4e7bd2321327"} {
+		if _, err := ParseLabelID(invalid); err == nil {
+			t.Fatalf("ParseLabelID(%q) succeeded", invalid)
+		}
 	}
 }
 

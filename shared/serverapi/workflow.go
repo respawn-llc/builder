@@ -2438,8 +2438,11 @@ func validateWorkflowGraphEntityIDs(graph WorkflowGraphDraft) error {
 }
 
 func (r WorkflowTaskCreateRequest) Validate() error {
-	if err := validateRequiredFields(requiredField("project_id", r.ProjectID), requiredField("title", r.Title)); err != nil {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
+	}
+	if _, err := workflowcontract.NewTaskTitle(r.Title); err != nil {
+		return workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
 	}
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
 		return err
@@ -2456,11 +2459,13 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 }
 
 func (r WorkflowTaskUpdateRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
+	if err := validateTaskID("task_id", r.TaskID); err != nil {
 		return err
 	}
 	if r.Title != nil {
-		return validateRequired("title", *r.Title)
+		if _, err := workflowcontract.NewTaskTitle(*r.Title); err != nil {
+			return workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
+		}
 	}
 	return nil
 }
@@ -3350,6 +3355,16 @@ func validateOptionalWorkflowID(value *runtimeids.WorkflowID) error {
 func validateRequired(name string, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return workflowRequestError(WorkflowRequestErrorRequired, name, name+" is required")
+	}
+	return nil
+}
+
+func validateTaskID(field string, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return workflowRequestError(WorkflowRequestErrorRequired, field, field+" is required")
+	}
+	if _, err := runtimeids.ParseTaskID(value); err != nil {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, err.Error())
 	}
 	return nil
 }

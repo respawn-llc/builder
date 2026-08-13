@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"core/server/workflow"
+	workflowlabel "core/server/workflow/label"
 )
 
 func TestCreateTaskWithDependencyIntentCommitsNewBlockerAndRelationshipTogether(t *testing.T) {
@@ -83,7 +84,7 @@ func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t 
 			WorkflowID: &workflowID,
 			Title:      "Cross-project",
 			Body:       "Body",
-			LabelIDs:   []string{label.ID.String()},
+			LabelIDs:   []workflowlabel.ID{label.ID},
 			DependencyIntent: &workflow.TaskDependencyCreateIntent{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocker,
@@ -116,7 +117,7 @@ func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t 
 			WorkflowID: &workflowID,
 			Title:      "New blocker rejected",
 			Body:       "Body",
-			LabelIDs:   []string{label.ID.String()},
+			LabelIDs:   []workflowlabel.ID{label.ID},
 			DependencyIntent: &workflow.TaskDependencyCreateIntent{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocker,
@@ -149,7 +150,7 @@ func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t 
 			WorkflowID: &workflowID,
 			Title:      "New blocked rejected",
 			Body:       "Body",
-			LabelIDs:   []string{label.ID.String()},
+			LabelIDs:   []workflowlabel.ID{label.ID},
 			DependencyIntent: &workflow.TaskDependencyCreateIntent{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocked,

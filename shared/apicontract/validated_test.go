@@ -5,6 +5,8 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+
+	"core/shared/runtimeids"
 )
 
 type dualValidatorRequest struct {
@@ -84,5 +86,35 @@ func TestWithValidatedRequiresExplicitPolicyWithoutSemanticValidator(t *testing.
 	}
 	if got != 42 {
 		t.Fatalf("consumer value = %d, want 42", got)
+	}
+}
+
+func TestValidatedExtractsTrustedTaskAndLabelValues(t *testing.T) {
+	const (
+		taskID  = "task-1"
+		labelID = "9e7bab10-773a-4a16-9d4f-4e7bd2321327"
+	)
+	validated := Validated[struct{}]{}
+	if got := validated.TaskID(taskID); got.String() != taskID {
+		t.Fatalf("TaskID = %q, want %q", got.String(), taskID)
+	}
+	if got := validated.LabelID(labelID); got.String() != labelID {
+		t.Fatalf("LabelID = %q, want %q", got.String(), labelID)
+	}
+	if got := validated.LabelIDs([]string{labelID}); !reflect.DeepEqual(got, []runtimeids.LabelID{validated.LabelID(labelID)}) {
+		t.Fatalf("LabelIDs = %+v", got)
+	}
+	if got := validated.LabelName("  Café  ").String(); got != "Café" {
+		t.Fatalf("LabelName = %q, want Café", got)
+	}
+	if got := validated.TaskTitle("  Ship it  ").String(); got != "Ship it" {
+		t.Fatalf("TaskTitle = %q, want Ship it", got)
+	}
+	title := "  Update it  "
+	if got := validated.OptionalTaskTitle(&title); got == nil || got.String() != "Update it" {
+		t.Fatalf("OptionalTaskTitle = %v, want Update it", got)
+	}
+	if got := validated.OptionalTaskTitle(nil); got != nil {
+		t.Fatalf("OptionalTaskTitle(nil) = %v, want nil", got)
 	}
 }

@@ -755,11 +755,11 @@ func (s *Service) CreateWorkflowTaskValidated(ctx context.Context, validated api
 	taskRequest := workflowstore.CreateTaskRequest{
 		ProjectID:         req.ProjectID,
 		WorkflowID:        workflowID,
-		Title:             req.Title,
+		Title:             validated.TaskTitle(req.Title).String(),
 		Body:              req.Body,
 		SourceURL:         req.SourceURL,
 		SourceWorkspaceID: req.SourceWorkspaceID,
-		LabelIDs:          req.LabelIDs,
+		LabelIDs:          validated.LabelIDs(req.LabelIDs),
 	}
 	if req.DependencyIntent != nil {
 		intent := workflow.TaskDependencyCreateIntent{
@@ -933,7 +933,17 @@ func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.Workflow
 
 func (s *Service) UpdateWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskUpdateRequest]) (serverapi.WorkflowTaskUpdateResponse, error) {
 	req := validated.Value()
-	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{TaskID: workflow.TaskID(req.TaskID), Title: req.Title, Body: req.Body, SourceWorkspaceID: req.SourceWorkspaceID})
+	var title *string
+	if prepared := validated.OptionalTaskTitle(req.Title); prepared != nil {
+		value := prepared.String()
+		title = &value
+	}
+	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{
+		TaskID:            validated.TaskID(req.TaskID),
+		Title:             title,
+		Body:              req.Body,
+		SourceWorkspaceID: req.SourceWorkspaceID,
+	})
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}

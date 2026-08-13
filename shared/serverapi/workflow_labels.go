@@ -284,7 +284,7 @@ func (r WorkflowProjectLabel) Validate() error {
 	if err := validateLabelID("id", r.ID); err != nil {
 		return err
 	}
-	return validateRequired("name", r.Name)
+	return validateLabelName(r.Name)
 }
 
 func (r WorkflowProjectLabelCatalog) Validate() error {
@@ -299,10 +299,10 @@ func (r WorkflowProjectLabelCatalogResponse) Validate() error {
 }
 
 func (r WorkflowProjectLabelCreateRequest) Validate() error {
-	return validateRequiredFields(
-		requiredField("project_id", r.ProjectID),
-		requiredField("name", r.Name),
-	)
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	return validateLabelName(r.Name)
 }
 
 func (r WorkflowProjectLabelCreateRequest) ValidateRPC() error {
@@ -312,8 +312,10 @@ func (r WorkflowProjectLabelCreateRequest) ValidateRPC() error {
 func (r WorkflowProjectLabelRenameRequest) Validate() error {
 	if err := validateRequiredFields(
 		requiredField("project_id", r.ProjectID),
-		requiredField("name", r.Name),
 	); err != nil {
+		return err
+	}
+	if err := validateLabelName(r.Name); err != nil {
 		return err
 	}
 	return validateLabelID("label_id", r.LabelID)
@@ -363,11 +365,11 @@ func (r WorkflowProjectLabelReorderResponse) Validate() error {
 }
 
 func (r WorkflowTaskLabelsGetRequest) Validate() error {
-	return validateRequired("task_id", r.TaskID)
+	return validateTaskID("task_id", r.TaskID)
 }
 
 func (r WorkflowTaskAssignedLabelIDs) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
+	if err := validateTaskID("task_id", r.TaskID); err != nil {
 		return err
 	}
 	return validateLabelIDs("label_ids", r.LabelIDs)
@@ -378,7 +380,7 @@ func (r WorkflowTaskLabelsGetResponse) Validate() error {
 }
 
 func (r WorkflowTaskLabelsUpdateRequest) Validate() error {
-	if err := validateRequired("task_id", r.TaskID); err != nil {
+	if err := validateTaskID("task_id", r.TaskID); err != nil {
 		return err
 	}
 	added, err := validateUniqueLabelIDs("add_label_ids", r.AddLabelIDs)
@@ -525,8 +527,19 @@ func prefixWorkflowLabelValidationField(field string, index int, err error) erro
 }
 
 func validateLabelID(field string, id string) error {
-	if _, err := runtimeids.ParseCanonicalUUIDv4(id, "label ID"); err != nil {
+	if _, err := runtimeids.ParseLabelID(id); err != nil {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, field, err.Error())
+	}
+	return nil
+}
+
+func validateLabelName(name string) error {
+	if _, err := labelcontract.PrepareName(name); err != nil {
+		var nameErr *labelcontract.NameError
+		if errors.As(err, &nameErr) && nameErr.Reason == labelcontract.NameErrorRequired {
+			return workflowRequestError(WorkflowRequestErrorRequired, "name", err.Error())
+		}
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "name", err.Error())
 	}
 	return nil
 }

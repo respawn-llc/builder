@@ -35,7 +35,7 @@ func classifyWorkflowTaskSelector(ref string) (workflowTaskSelector, error) {
 		return workflowTaskSelector{}, errors.New("task id is required")
 	}
 	if taskID, err := runtimeids.ParseTaskID(trimmed); err == nil {
-		return workflowTaskSelector{kind: workflowTaskSelectorTaskID, value: taskID}, nil
+		return workflowTaskSelector{kind: workflowTaskSelectorTaskID, value: taskID.String()}, nil
 	}
 	return workflowTaskSelector{kind: workflowTaskSelectorShortID, value: trimmed}, nil
 }

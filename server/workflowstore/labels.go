@@ -29,8 +29,8 @@ type ProjectLabelReorderResult struct {
 
 type TaskLabelUpdateRequest struct {
 	TaskID         workflow.TaskID
-	AddLabelIDs    []string
-	RemoveLabelIDs []string
+	AddLabelIDs    []label.ID
+	RemoveLabelIDs []label.ID
 }
 
 type TaskLabelScope struct {
@@ -40,10 +40,7 @@ type TaskLabelScope struct {
 
 func (s *Store) CreateProjectLabel(ctx context.Context, projectID string, rawName string) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
-	name, err := label.PrepareName(rawName)
-	if err != nil {
-		return ProjectLabelRecord{}, err
-	}
+	name := label.Name(rawName)
 	id := label.NewID()
 	now := s.now().UnixMilli()
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
@@ -112,10 +109,7 @@ func (s *Store) ListProjectLabels(ctx context.Context, projectID string) ([]Proj
 
 func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id label.ID, rawName string) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
-	name, err := label.PrepareName(rawName)
-	if err != nil {
-		return ProjectLabelRecord{}, err
-	}
+	name := label.Name(rawName)
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
 		row, err := q.RenameProjectLabel(ctx, sqlitegen.RenameProjectLabelParams{
 			Name:            name.String(),
@@ -329,10 +323,6 @@ func (s *Store) GetTaskLabelScope(ctx context.Context, taskID workflow.TaskID) (
 }
 
 func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest) ([]label.ID, error) {
-	addIDs, removeIDs, err := prepareTaskLabelUpdate(req)
-	if err != nil {
-		return nil, err
-	}
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) ([]label.ID, error) {
 		taskProjectID, err := q.AcquireTaskLabelWriteLock(ctx, string(req.TaskID))
 		if err != nil {
@@ -341,13 +331,13 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 			}
 			return nil, err
 		}
-		referenced := make([]label.ID, 0, len(addIDs)+len(removeIDs))
-		referenced = append(referenced, addIDs...)
-		referenced = append(referenced, removeIDs...)
+		referenced := make([]label.ID, 0, len(req.AddLabelIDs)+len(req.RemoveLabelIDs))
+		referenced = append(referenced, req.AddLabelIDs...)
+		referenced = append(referenced, req.RemoveLabelIDs...)
 		if err := validateTaskLabelReferences(ctx, q, req.TaskID, taskProjectID, referenced); err != nil {
 			return nil, err
 		}
-		for _, id := range addIDs {
+		for _, id := range req.AddLabelIDs {
 			if err := q.InsertTaskLabelAssignment(ctx, sqlitegen.InsertTaskLabelAssignmentParams{
 				TaskID:  string(req.TaskID),
 				LabelID: id.String(),
@@ -355,7 +345,7 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 				return nil, err
 			}
 		}
-		for _, id := range removeIDs {
+		for _, id := range req.RemoveLabelIDs {
 			if _, err := q.DeleteTaskLabelAssignment(ctx, sqlitegen.DeleteTaskLabelAssignmentParams{
 				TaskID:  string(req.TaskID),
 				LabelID: id.String(),
@@ -365,87 +355,6 @@ func (s *Store) UpdateTaskLabels(ctx context.Context, req TaskLabelUpdateRequest
 		}
 		return listTaskLabelIDs(ctx, q, req.TaskID)
 	})
-}
-
-func prepareTaskLabelUpdate(req TaskLabelUpdateRequest) ([]label.ID, []label.ID, error) {
-	if strings.TrimSpace(string(req.TaskID)) == "" {
-		return nil, nil, errors.New("task id is required")
-	}
-	if len(req.AddLabelIDs) > label.MaxProjectLabels {
-		limit := label.MaxProjectLabels
-		return nil, nil, TaskLabelMutationError{
-			Reason: TaskLabelMutationTooManyAdd,
-			Field:  "add_label_ids",
-			Limit:  &limit,
-		}
-	}
-	if len(req.RemoveLabelIDs) > label.MaxProjectLabels {
-		limit := label.MaxProjectLabels
-		return nil, nil, TaskLabelMutationError{
-			Reason: TaskLabelMutationTooManyRemove,
-			Field:  "remove_label_ids",
-			Limit:  &limit,
-		}
-	}
-	addIDs, addSet, err := parseUniqueLabelIDs(
-		req.AddLabelIDs,
-		"add_label_ids",
-		TaskLabelMutationDuplicateAdd,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	removeIDs, _, err := parseUniqueLabelIDs(
-		req.RemoveLabelIDs,
-		"remove_label_ids",
-		TaskLabelMutationDuplicateRemove,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, id := range removeIDs {
-		if addSet[id.String()] {
-			labelID := id.String()
-			return nil, nil, TaskLabelMutationError{
-				Reason:  TaskLabelMutationOverlap,
-				LabelID: &labelID,
-			}
-		}
-	}
-	return addIDs, removeIDs, nil
-}
-
-func parseUniqueLabelIDs(
-	rawIDs []string,
-	field string,
-	duplicateReason TaskLabelMutationErrorReason,
-) ([]label.ID, map[string]bool, error) {
-	parsed := make([]label.ID, 0, len(rawIDs))
-	seen := make(map[string]bool, len(rawIDs))
-	for _, raw := range rawIDs {
-		id, err := label.ParseID(raw)
-		if err != nil {
-			labelID := raw
-			return nil, nil, TaskLabelMutationError{
-				Reason:  TaskLabelMutationInvalidID,
-				Field:   field,
-				LabelID: &labelID,
-				Cause:   err,
-			}
-		}
-		canonical := id.String()
-		if seen[canonical] {
-			labelID := canonical
-			return nil, nil, TaskLabelMutationError{
-				Reason:  duplicateReason,
-				Field:   field,
-				LabelID: &labelID,
-			}
-		}
-		seen[canonical] = true
-		parsed = append(parsed, id)
-	}
-	return parsed, seen, nil
 }
 
 func taskProjectForLabels(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) (string, error) {

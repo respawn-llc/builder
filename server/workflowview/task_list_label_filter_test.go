@@ -3,6 +3,7 @@ package workflowview
 import (
 	"testing"
 
+	"core/server/workflow/label"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -47,7 +48,7 @@ func TestCurrentNodeTaskListDependencyFilterRunsBeforeSortAndPagination(t *testi
 	if err != nil {
 		t.Fatalf("CreateProjectLabel: %v", err)
 	}
-	started := func(title string, labelIDs ...string) startedCurrentNodeViewTask {
+	started := func(title string, labelIDs ...label.ID) startedCurrentNodeViewTask {
 		t.Helper()
 		taskRecord, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  fixture.binding.ProjectID,
@@ -60,9 +61,9 @@ func TestCurrentNodeTaskListDependencyFilterRunsBeforeSortAndPagination(t *testi
 		}
 		return fixture.startExistingTask(t, taskRecord)
 	}
-	alphaFirst := started("Alpha first", alpha.ID.String())
-	alphaSecond := started("Alpha second", alpha.ID.String())
-	alphaBlocked := started("Alpha blocked", alpha.ID.String())
+	alphaFirst := started("Alpha first", alpha.ID)
+	alphaSecond := started("Alpha second", alpha.ID)
+	alphaBlocked := started("Alpha blocked", alpha.ID)
 	betaUnblocked := started("Beta unblocked")
 	for _, task := range []startedCurrentNodeViewTask{alphaFirst, alphaSecond, alphaBlocked, betaUnblocked} {
 		fixture.setTaskUpdatedAt(t, task.task.ID, 1_000)

@@ -3,6 +3,7 @@ package workflowview
 import (
 	"testing"
 
+	"core/server/workflow/label"
 	"core/server/workflowstore"
 	"core/shared/serverapi"
 )
@@ -30,7 +31,7 @@ func newCurrentNodeLabelFilterFixture(t *testing.T) currentNodeLabelFilterFixtur
 	if err != nil {
 		t.Fatalf("CreateProjectLabel gamma: %v", err)
 	}
-	startTask := func(title string, labelIDs ...string) string {
+	startTask := func(title string, labelIDs ...label.ID) string {
 		t.Helper()
 		workflowID := current.workflowID
 		task, createErr := current.store.CreateTask(current.ctx, workflowstore.CreateTaskRequest{
@@ -53,10 +54,10 @@ func newCurrentNodeLabelFilterFixture(t *testing.T) currentNodeLabelFilterFixtur
 		beta:                   beta.ID.String(),
 		gamma:                  gamma.ID.String(),
 		taskIDs: map[string]string{
-			"alpha":     startTask("alpha", alpha.ID.String()),
-			"beta":      startTask("beta", beta.ID.String()),
-			"both":      startTask("both", alpha.ID.String(), beta.ID.String()),
-			"gamma":     startTask("gamma", gamma.ID.String()),
+			"alpha":     startTask("alpha", alpha.ID),
+			"beta":      startTask("beta", beta.ID),
+			"both":      startTask("both", alpha.ID, beta.ID),
+			"gamma":     startTask("gamma", gamma.ID),
 			"unlabeled": startTask("unlabeled"),
 		},
 	}
@@ -155,7 +156,7 @@ func TestCurrentNodeBoardDependencyFilterCountsAndCombinesWithLabels(t *testing.
 	if err != nil {
 		t.Fatalf("CreateProjectLabel: %v", err)
 	}
-	started := func(title string, labelIDs ...string) workflowstore.TaskRecord {
+	started := func(title string, labelIDs ...label.ID) workflowstore.TaskRecord {
 		t.Helper()
 		task, createErr := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
 			ProjectID:  fixture.binding.ProjectID,
@@ -171,9 +172,9 @@ func TestCurrentNodeBoardDependencyFilterCountsAndCombinesWithLabels(t *testing.
 		}
 		return task
 	}
-	noDependencies := started("No dependencies", alpha.ID.String())
-	satisfied := started("Satisfied", alpha.ID.String())
-	unsatisfied := started("Unsatisfied", alpha.ID.String())
+	noDependencies := started("No dependencies", alpha.ID)
+	satisfied := started("Satisfied", alpha.ID)
+	unsatisfied := started("Unsatisfied", alpha.ID)
 	otherLabel := started("Other label")
 	satisfiedBlocker := createViewTask(t, fixture, "Satisfied blocker")
 	unsatisfiedBlocker := createViewTask(t, fixture, "Unsatisfied blocker")

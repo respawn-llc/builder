@@ -37,7 +37,7 @@ type CreateTaskRequest struct {
 	Body              string
 	SourceURL         string
 	SourceWorkspaceID string
-	LabelIDs          []string
+	LabelIDs          []label.ID
 	DependencyIntent  *workflow.TaskDependencyCreateIntent
 }
 
@@ -171,15 +171,11 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
-	labelIDs, _, err := parseUniqueLabelIDs(req.LabelIDs, "label_ids", TaskLabelMutationDuplicateAdd)
-	if err != nil {
-		return TaskRecord{}, err
-	}
 	prepared := preparedTaskCreate{
-		projectID: projectID, workflowID: workflowID, title: strings.TrimSpace(req.Title),
+		projectID: projectID, workflowID: workflowID, title: req.Title,
 		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
-		labelIDs: labelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
+		labelIDs: req.LabelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -292,7 +288,7 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	}
 	title, body := task.Title, task.Body
 	if req.Title != nil {
-		title = strings.TrimSpace(*req.Title)
+		title = *req.Title
 	}
 	if req.Body != nil {
 		body = strings.TrimSpace(*req.Body)
