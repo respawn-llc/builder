@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"core/server/auth"
 	"core/server/session"
@@ -57,6 +58,7 @@ type Authority struct {
 	executionFinalized ExecutionFinalized
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
+	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
@@ -75,6 +77,9 @@ func NewAuthority(options AuthorityOptions) *Authority {
 	if authority.options.background != nil {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
 	}
+	authority.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{
+		executions: map[workflow.TaskID]TaskExecutionSnapshot{},
+	})
 	return authority
 }
 

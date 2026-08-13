@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"core/server/session"
 	"core/server/sessionruntime"
@@ -162,6 +163,7 @@ type CurrentNodeController struct {
 	workerErr             error
 	workerDiagnostics     error
 	lastAutomaticTask     *workflow.TaskID
+	taskExecutionReads    atomic.Pointer[workflowTaskControllerReadSnapshot]
 }
 
 func NewCurrentNodeController(
@@ -217,6 +219,10 @@ func NewCurrentNodeController(
 		admissionWorkers:      make(map[workflow.CurrentNodeReferenceKey]currentNodeQueuedStart),
 		interrupts:            newCurrentNodeInterruptState(),
 	}
+	controller.taskExecutionReads.Store(&workflowTaskControllerReadSnapshot{
+		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
+		quiescence:        map[workflow.TaskID]bool{},
+	})
 	controller.workerWG.Add(1)
 	go controller.runAdmissions()
 	return controller, nil
