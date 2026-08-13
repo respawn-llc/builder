@@ -2,43 +2,46 @@ package migrationcheck
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"core/shared/protoapi"
 )
 
 type exceptionalFingerprintFixture struct {
 	Value string
 }
 
-func TestExceptionalWireFingerprintUsesImmutableReviewedBaseline(t *testing.T) {
-	reviewed := []WireException{{
-		LegacyType:            reflect.TypeFor[exceptionalFingerprintFixture](),
-		Message:               "kent.api.fixture.Exceptional",
-		LegacyFingerprint:     "reviewed-legacy",
-		DescriptorFingerprint: "reviewed-descriptor",
-	}}
-	const reviewedFingerprint = "cc6bb7759d885a4f05720ddb7e6e8a48da3ad15668edbc804149baca5dea0aa6"
-
-	issues := make([]CoverageIssue, 0)
-	checkAggregateFingerprint(
-		"exceptional wire coverage",
-		reviewedFingerprint,
-		fingerprintWireExceptions(reviewed),
-		&issues,
-	)
-	if len(issues) != 0 {
-		t.Fatalf("reviewed exceptional fingerprint issues = %+v", issues)
+func TestExceptionalWireFingerprintComparesLiveShapeToImmutableSignoff(t *testing.T) {
+	legacyType := reflect.TypeFor[exceptionalFingerprintFixture]()
+	operation, exists, err := protoapi.OperationByName("kent.api.server.server_service.get_readiness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("server readiness operation not found")
+	}
+	liveMessage := operation.Descriptor.Output()
+	signoff := WireException{
+		LegacyType:            legacyType,
+		Message:               liveMessage.FullName(),
+		LegacyFingerprint:     fingerprintExceptionalLegacyType(legacyType),
+		DescriptorFingerprint: fingerprintExceptionalDescriptor(liveMessage),
+	}
+	if err := checkWireExceptionFingerprint(legacyType, liveMessage, signoff); err != nil {
+		t.Fatalf("reviewed signoff rejected: %v", err)
 	}
 
-	mutated := append([]WireException(nil), reviewed...)
-	mutated[0].DescriptorFingerprint = "changed-descriptor"
-	issues = issues[:0]
-	checkAggregateFingerprint(
-		"exceptional wire coverage",
-		reviewedFingerprint,
-		fingerprintWireExceptions(mutated),
-		&issues,
-	)
-	if len(issues) != 1 {
-		t.Fatalf("mutated exceptional fingerprint issues = %+v, want one", issues)
+	signoff.DescriptorFingerprint = "reviewed-descriptor"
+	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
+	if err == nil || !strings.Contains(err.Error(), "descriptor focused fixture changed") {
+		t.Fatalf("descriptor mutation error = %v", err)
+	}
+
+	signoff.DescriptorFingerprint = fingerprintExceptionalDescriptor(liveMessage)
+	signoff.LegacyFingerprint = "reviewed-legacy"
+	err = checkWireExceptionFingerprint(legacyType, liveMessage, signoff)
+	if err == nil || !strings.Contains(err.Error(), "legacy focused fixture changed") {
+		t.Fatalf("legacy mutation error = %v", err)
 	}
 }

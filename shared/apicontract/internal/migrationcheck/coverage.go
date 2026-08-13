@@ -17,7 +17,6 @@ import (
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
 )
 
 type FocusedProjectionFixtureName string
@@ -699,46 +698,6 @@ func checkWireExceptionFingerprint(
 		)
 	}
 	return nil
-}
-
-func LiveWireExceptionFingerprints(
-	exceptions []WireException,
-	operations []protoapi.Operation,
-) []WireException {
-	descriptors := make(map[protoreflect.FullName]protoreflect.MessageDescriptor)
-	var collectMessages func(protoreflect.MessageDescriptors)
-	collectMessages = func(messages protoreflect.MessageDescriptors) {
-		for index := 0; index < messages.Len(); index++ {
-			message := messages.Get(index)
-			descriptors[message.FullName()] = message
-			collectMessages(message.Messages())
-		}
-	}
-	files := make(map[protoreflect.FileDescriptor]struct{})
-	for _, operation := range operations {
-		file := operation.Descriptor.ParentFile()
-		if _, seen := files[file]; seen {
-			continue
-		}
-		files[file] = struct{}{}
-		collectMessages(file.Messages())
-	}
-	result := append([]WireException(nil), exceptions...)
-	for index := range result {
-		legacyType := dereferenceType(result[index].LegacyType)
-		message := descriptors[result[index].Message]
-		if message == nil {
-			if descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(result[index].Message); err == nil {
-				message, _ = descriptor.(protoreflect.MessageDescriptor)
-			}
-		}
-		if legacyType == nil || message == nil {
-			continue
-		}
-		result[index].LegacyFingerprint = fingerprintExceptionalLegacyType(legacyType)
-		result[index].DescriptorFingerprint = fingerprintExceptionalDescriptor(message)
-	}
-	return result
 }
 
 func fingerprintExceptionalLegacyType(legacyType reflect.Type) string {
