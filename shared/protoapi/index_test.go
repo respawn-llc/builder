@@ -12,6 +12,7 @@ import (
 	fixturepb "core/shared/protoapi/gen/fixture"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protoapi/gen/testregistry"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 )
@@ -227,9 +228,9 @@ func TestOperationPolicyRejectsInvalidOptions(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			options := base
-			test.mutate(&options)
-			err := protoapi.ValidateKentMethodOptions(&options)
+			options := proto.Clone(&base).(*sharedpb.KentMethodOptions)
+			test.mutate(options)
+			err := protoapi.ValidateKentMethodOptions(options)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error = %v, want diagnostic containing %q", err, test.want)
 			}
