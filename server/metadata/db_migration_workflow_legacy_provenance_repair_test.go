@@ -52,6 +52,10 @@ INSERT INTO workflow_edges (
 		groupID,
 		targetNodeID,
 	)
+	execSeed(t, db, "use direct immediate Context Source", `
+UPDATE workflow_edges
+SET context_source_kind = 'immediate_source'
+WHERE id = ?`, edgeID)
 	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "V25-1", now, now)
 	for _, session := range []struct {
 		id           string
@@ -326,7 +330,7 @@ INSERT INTO task_current_nodes (
 
 	fixture.migrate(t)
 
-	var sourceKind, sourceSessionID string
+	var sourceKind, sourceSessionID sql.NullString
 	var legacyMaterialized int64
 	if err := fixture.db.QueryRow(`
 SELECT continuation_source_kind, continuation_source_session_id, legacy_materialized
@@ -338,11 +342,9 @@ WHERE task_id = ?`, fixture.taskID).Scan(
 	); err != nil {
 		t.Fatalf("read repaired new-session Script Current Node: %v", err)
 	}
-	if sourceKind != "exact" ||
-		sourceSessionID != "session-script-entry-source" ||
-		legacyMaterialized != 0 {
+	if sourceKind.Valid || sourceSessionID.Valid || legacyMaterialized != 1 {
 		t.Fatalf(
-			"new-session Script Current Node = kind %q Session %q legacy %d; want exact incoming source",
+			"new-session Script Current Node = kind %v Session %v legacy %d; want unresolved propagated source",
 			sourceKind,
 			sourceSessionID,
 			legacyMaterialized,
@@ -901,6 +903,10 @@ INSERT INTO workflow_edges (
 		groupID,
 		targetNodeID,
 	)
+	execSeed(t, db, "use direct immediate Context Source", `
+UPDATE workflow_edges
+SET context_source_kind = 'immediate_source'
+WHERE id = ?`, edgeID)
 	execSeed(t, db, "Task", workflowSeedTaskSQL, taskID, "link-1", 1, "REPAIR-1", now, now)
 	for _, source := range sources {
 		seedLegacyWorkflowSession(t, db, projectID, "workspace-"+source.sessionID, source.sessionID, now)

@@ -57,10 +57,8 @@ LEFT JOIN session_workflow_node_associations target_association
         )
  )
 WHERE current_node.legacy_materialized = 1
-  AND (
-        entering_edge.context_mode != 'new_session'
-        OR target_node.kind != 'agent'
-  )
+  AND entering_edge.context_source_kind IN ('immediate_source', 'selected_node')
+  AND entering_edge.context_mode != 'new_session'
   AND (
         (
             current_node.transition_branch_key IS NULL
@@ -382,10 +380,62 @@ WHERE json_extract(branch.context_source_resolution_json, '$.active_source.kind'
   AND COALESCE(
       json_extract(
           branch.effective_edge_configuration_json,
+          '$.context_mode'
+      ),
+      'continue_session'
+  ) != 'new_session'
+  AND COALESCE(
+      json_extract(
+          branch.effective_edge_configuration_json,
           '$.context_source.kind'
       ),
       'immediate_source'
   ) = 'immediate_source';
+
+INSERT INTO workflow_legacy_approval_source_winners (
+    approval_id,
+    transition_branch_key,
+    source_session_id
+)
+SELECT
+    approval.id,
+    branch.transition_branch_key,
+    source_current_node.continuation_source_session_id
+FROM task_pending_approvals approval
+JOIN task_pending_approval_branches branch
+  ON branch.approval_id = approval.id
+JOIN task_records task
+  ON task.id = approval.source_task_id
+JOIN workflow_nodes target_node
+  ON target_node.workflow_id = task.workflow_id
+ AND target_node.id = kent_graph_entity_id_blob_v1(
+     json_extract(branch.target_snapshot_json, '$.node_id')
+ )
+JOIN task_current_nodes source_current_node
+  ON source_current_node.task_id = approval.source_task_id
+ AND source_current_node.node_id = approval.source_node_id
+ AND (
+       source_current_node.transition_branch_key = approval.source_transition_branch_key
+       OR (
+           source_current_node.transition_branch_key IS NULL
+           AND approval.source_transition_branch_key IS NULL
+       )
+ )
+WHERE json_extract(branch.context_source_resolution_json, '$.active_source.kind') = 'legacy'
+  AND json_extract(
+      branch.effective_edge_configuration_json,
+      '$.context_mode'
+  ) = 'new_session'
+  AND target_node.kind IN ('script', 'join')
+  AND source_current_node.continuation_source_kind = 'exact'
+  AND source_current_node.continuation_source_session_id IS NOT NULL
+  AND source_current_node.legacy_materialized = 0
+  AND NOT EXISTS (
+      SELECT 1
+      FROM workflow_legacy_approval_source_winners existing
+      WHERE existing.approval_id = approval.id
+        AND existing.transition_branch_key = branch.transition_branch_key
+  );
 
 INSERT INTO workflow_legacy_approval_source_winners (
     approval_id,
