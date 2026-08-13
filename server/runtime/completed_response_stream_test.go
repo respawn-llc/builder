@@ -188,6 +188,95 @@ func TestCompletedResponseUnphasedDeltaJoinsFinalStream(t *testing.T) {
 	}
 }
 
+func TestCompletedResponseUnphasedDeltaPreservesCommentaryBoundary(t *testing.T) {
+	t.Parallel()
+	step := scriptedllm.FinalAnswer("completed")
+	step.StreamDeltas = []llm.AssistantDelta{
+		{Text: "checking", Phase: llm.MessagePhaseCommentary},
+		{Text: " sources"},
+		{Text: "completed", Phase: llm.MessagePhaseFinal},
+	}
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	var commentary, unphased, reset, finalDelta, finalAssistant *Event
+	commentaryIndex, unphasedIndex, resetIndex, finalDeltaIndex, finalAssistantIndex := -1, -1, -1, -1, -1
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			switch event.AssistantDelta {
+			case "checking":
+				commentary, commentaryIndex = event, index
+			case " sources":
+				unphased, unphasedIndex = event, index
+			case "completed":
+				finalDelta, finalDeltaIndex = event, index
+			}
+		case EventAssistantDeltaReset:
+			if event.AssistantStreamAbortReason == string(AssistantStreamAbortSuperseded) {
+				reset, resetIndex = event, index
+			}
+		case EventAssistantMessage:
+			finalAssistant, finalAssistantIndex = event, index
+		}
+	}
+	if commentary == nil || unphased == nil || reset == nil || finalDelta == nil || finalAssistant == nil ||
+		commentary.AssistantTranscriptStreamID == nil ||
+		unphased.AssistantTranscriptStreamID == nil ||
+		reset.AssistantTranscriptStreamID == nil ||
+		finalDelta.AssistantTranscriptStreamID == nil ||
+		finalAssistant.AssistantTranscriptStreamID == nil {
+		t.Fatalf(
+			"unphased commentary transition = commentary:%+v unphased:%+v reset:%+v final_delta:%+v final:%+v",
+			commentary,
+			unphased,
+			reset,
+			finalDelta,
+			finalAssistant,
+		)
+	}
+	if *commentary.AssistantTranscriptStreamID != *unphased.AssistantTranscriptStreamID ||
+		*commentary.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID ||
+		*commentary.AssistantTranscriptStreamID == *finalDelta.AssistantTranscriptStreamID ||
+		*finalDelta.AssistantTranscriptStreamID != *finalAssistant.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"unphased commentary stream IDs = commentary:%s unphased:%s reset:%s final_delta:%s final:%s",
+			*commentary.AssistantTranscriptStreamID,
+			*unphased.AssistantTranscriptStreamID,
+			*reset.AssistantTranscriptStreamID,
+			*finalDelta.AssistantTranscriptStreamID,
+			*finalAssistant.AssistantTranscriptStreamID,
+		)
+	}
+	if commentaryIndex >= unphasedIndex ||
+		unphasedIndex >= resetIndex ||
+		resetIndex >= finalDeltaIndex ||
+		finalDeltaIndex >= finalAssistantIndex {
+		t.Fatalf(
+			"unphased commentary order = commentary:%d unphased:%d reset:%d final_delta:%d final:%d events:%+v",
+			commentaryIndex,
+			unphasedIndex,
+			resetIndex,
+			finalDeltaIndex,
+			finalAssistantIndex,
+			events,
+		)
+	}
+}
+
 func TestCompletedResponseWithoutActiveStreamPublishesNoStreamTerminal(t *testing.T) {
 	t.Parallel()
 	var events []Event

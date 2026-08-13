@@ -411,7 +411,9 @@ func (s *chatStore) appendStreamingDelta(stepID string, baseRevision int64, base
 		s.streaming = &assistantStreamingState{metadata: nextMetadata, transcriptStreamID: &streamID}
 	}
 	s.streaming.text += delta
-	s.streaming.phase = phase
+	if phase != "" {
+		s.streaming.phase = phase
+	}
 	return assistantStreamingAppend{
 		metadata:           cloneAssistantStreamMetadata(s.streaming.metadata),
 		transcriptStreamID: cloneTranscriptStreamID(s.streaming.transcriptStreamID),
