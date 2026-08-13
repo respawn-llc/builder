@@ -697,7 +697,7 @@ func roleSymbolText(role StyleRole, meta toolMeta) string {
 	case StyleRoleNoticeReviewer:
 		symbol = reviewerFeedbackGlyph
 	case StyleRoleWarning:
-		symbol = "⚠"
+		symbol = WarningSymbol
 	case StyleRoleError, StyleRoleToolError:
 		symbol = reviewerErrorGlyph
 	}

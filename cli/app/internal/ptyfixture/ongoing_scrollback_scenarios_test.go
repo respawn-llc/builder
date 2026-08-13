@@ -137,7 +137,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					{Readiness: pty.ReadinessNormalBufferRestored, Bytes: []byte{0x03, 0x03}},
 				},
 			}},
-			expectedAppends:           []string{"❮ normal mismatch answer"},
+			expectedAppends:           []string{transcriptrender.AssistantSymbol + " normal mismatch answer"},
 			expectedDetailWarnings:    1,
 			allowsAltScroll:           true,
 			allowsFullScreen:          true,
@@ -152,7 +152,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 				"final":        "debug mismatch answer",
 			},
 			expectedAppends: []string{
-				"❮ debug mismatch answer",
+				transcriptrender.AssistantSymbol + " debug mismatch answer",
 			},
 			expectedWarningAppends: 1,
 			completionDrain:        &modelMismatchCompletionDrain,
@@ -430,7 +430,7 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 					t.Fatalf("expected full-window append: %v", err)
 				}
 			}
-			if got := countAppendRowsWithRune(allAppends, '⚠'); got != tc.expectedWarningAppends {
+			if got := countAppendRowsWithSymbol(allAppends, transcriptrender.WarningSymbol); got != tc.expectedWarningAppends {
 				t.Fatalf("warning append count = %d, want %d", got, tc.expectedWarningAppends)
 			}
 			for _, content := range tc.forbiddenAnyAppends {
@@ -550,7 +550,7 @@ func assertScenarioDetailWarningRows(t *testing.T, capture pty.Capture, expected
 	if err != nil {
 		t.Fatalf("replay detail screen: %v", err)
 	}
-	if got := countScreenRowsWithCell(screens[0], "⚠"); got != expected {
+	if got := countScreenRowsWithCell(screens[0], transcriptrender.WarningSymbol); got != expected {
 		t.Fatalf("detail warning row count = %d, want %d", got, expected)
 	}
 }
@@ -724,11 +724,15 @@ func contentAppendedExactlyOnce(appends []logicalAppendRow, content string) erro
 	return nil
 }
 
-func countAppendRowsWithRune(appends []logicalAppendRow, expected rune) int {
+func countAppendRowsWithSymbol(appends []logicalAppendRow, expected string) int {
+	expectedRunes := []rune(expected)
+	if len(expectedRunes) != 1 {
+		panic(fmt.Sprintf("append-row symbol must be one rune: %q", expected))
+	}
 	count := 0
 	for _, row := range appends {
 		for _, value := range []rune(row.text()) {
-			if value == expected {
+			if value == expectedRunes[0] {
 				count++
 				break
 			}

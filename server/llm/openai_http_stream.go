@@ -21,7 +21,7 @@ type responseStreamAccumulator struct {
 	toolCalls                *toolCallAccumulator
 	reasoning                *reasoningAccumulator
 	passthrough              *passthroughOutputAccumulator
-	standardServedModel      *string
+	metadata                 responseStreamMetadata
 	completed                *responses.Response
 	responseError            *responseStreamError
 }
@@ -58,7 +58,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 	switch evt.Type {
 	case "response.created":
 		created := evt.AsResponseCreated()
-		a.observeStandardServedModel(string(created.Response.Model))
+		a.metadata.ObserveStandardModel(string(created.Response.Model))
 	case "response.output_text.delta":
 		if evt.Delta == "" {
 			return
@@ -142,7 +142,7 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 			return
 		}
 		completed := completedEvent.Response
-		a.observeStandardServedModel(string(completed.Model))
+		a.metadata.ObserveStandardModel(string(completed.Model))
 		a.completed = &completed
 	case "response.failed":
 		failed := evt.AsResponseFailed()
@@ -162,15 +162,6 @@ func (a *responseStreamAccumulator) Consume(evt responses.ResponseStreamEventUni
 		a.responseError = &responseStreamError{Raw: raw}
 	case "error":
 		a.responseError = &responseStreamError{Raw: evt.RawJSON()}
-	}
-}
-
-func (a *responseStreamAccumulator) observeStandardServedModel(model string) {
-	if a == nil || a.standardServedModel != nil {
-		return
-	}
-	if model = strings.TrimSpace(model); model != "" {
-		a.standardServedModel = textutil.Value(model)
 	}
 }
 
@@ -377,7 +368,7 @@ func (a *responseStreamAccumulator) Response() (OpenAIResponse, error) {
 	return OpenAIResponse{
 		AssistantText:  finalText,
 		ProviderPhase:  finalProviderPhase,
-		ServedModel:    textutil.Pointer(a.standardServedModel),
+		ServedModel:    textutil.Pointer(a.metadata.standardServedModel),
 		ToolCalls:      finalCalls,
 		Reasoning:      finalReasoning,
 		ReasoningItems: finalReasoningItems,
