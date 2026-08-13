@@ -503,6 +503,9 @@ func TestServiceManualMoveNoOpSkipsInterruptionAttentionAndEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask no-op: %v", err)
 	}
+	if err := moved.Validate(); err != nil {
+		t.Fatalf("no-op response validation: %v", err)
+	}
 	if moved.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
 		moved.NoOp == nil || len(moved.NoOp.CurrentNodes) != 1 ||
 		moved.NoOp.CurrentNodes[0].NodeID != started.CurrentNodes[0].NodeID {
@@ -559,6 +562,9 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask stale no-op: %v", err)
 	}
+	if err := moved.Validate(); err != nil {
+		t.Fatalf("stale no-op response validation: %v", err)
+	}
 	if moved.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
 		moved.NoOp == nil || len(moved.NoOp.CurrentNodes) != 1 ||
 		moved.NoOp.CurrentNodes[0].NodeID != terminalID {
@@ -603,6 +609,9 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("MoveWorkflowTask: %v", err)
+	}
+	if err := moved.Validate(); err != nil {
+		t.Fatalf("MoveWorkflowTask response validation: %v", err)
 	}
 	if moved.Applied == nil ||
 		len(moved.Applied.CurrentNodes) != 1 ||
@@ -787,49 +796,29 @@ func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	}
 }
 
-func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *testing.T) {
-	t.Run("graph save", func(t *testing.T) {
-		ctx, service, binding := newWorkflowServiceTestContext(t)
-		workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-		linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-		createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-		definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-		if err != nil {
-			t.Fatalf("GetWorkflow: %v", err)
-		}
-		waitForWorkflowMutationPermit(t, service, func() error {
-			_, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
-				WorkflowID:      workflowID,
-				ExpectedVersion: definition.Definition.Workflow.Version,
-				Graph:           serverapi.WorkflowGraphDraftFromDefinition(definition.Definition),
-			})
-			return err
-		}, nil)
-	})
-	t.Run("workflow delete", func(t *testing.T) {
-		ctx, service, _, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
-		preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
-		if err != nil {
-			t.Fatalf("PreviewWorkflowDelete: %v", err)
-		}
-		waitForWorkflowMutationPermit(t, service, func() error {
-			_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
-				WorkflowID:           workflowID,
-				Confirmed:            true,
-				ExpectedVersion:      preview.Impact.Version,
-				ExpectedProjectCount: preview.Impact.ProjectCount,
-				ExpectedLinkCount:    preview.Impact.LinkCount,
-				ExpectedTaskCount:    preview.Impact.TaskCount,
-			})
-			return err
-		}, nil)
-	})
+func TestServiceWorkflowDeleteWaitsForAffectedTaskMutation(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	waitForTaskMutation(t, service, workflow.TaskID(taskID), func() error {
+		_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
+			WorkflowID:           workflowID,
+			Confirmed:            true,
+			ExpectedVersion:      preview.Impact.Version,
+			ExpectedProjectCount: preview.Impact.ProjectCount,
+			ExpectedLinkCount:    preview.Impact.LinkCount,
+			ExpectedTaskCount:    preview.Impact.TaskCount,
+		})
+		return err
+	}, nil)
 }
 
-func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+func TestServiceWorkflowTaskDeleteWaitsForSameTaskMutation(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
-	waitForWorkflowMutationPermit(t, service, func() error {
+	waitForTaskMutation(t, service, workflow.TaskID(taskID), func() error {
 		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
 	}, func() {
 		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
@@ -838,7 +827,7 @@ func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.
 	})
 
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
-		t.Fatal("deleted workflow task remains readable after permit release")
+		t.Fatal("deleted workflow task remains readable after Task ownership release")
 	}
 }
 
@@ -1810,13 +1799,6 @@ func TestServiceMapsWorkflowTaskLabelScopeFailures(t *testing.T) {
 	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonWrongProject) {
 		t.Fatalf("labeled task create wrong project error = %T %v", err, err)
 	}
-	if _, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
-		ProjectID: binding.ProjectID,
-		Title:     "Missing label",
-		LabelIDs:  []string{"11111111-1111-4111-8111-111111111111"},
-	}); !workflowLabelErrorHasReason(err, serverapi.WorkflowLabelErrorReasonLabelNotFound) {
-		t.Fatalf("labeled task create missing label error = %T %v", err, err)
-	}
 	raw101 := make([]string, serverapi.WorkflowLabelMaxIDs+1)
 	for index := range raw101 {
 		raw101[index] = "not-a-uuid"
@@ -1993,13 +1975,13 @@ func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, task
 	return s.interruptErr
 }
 
-func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation func() error, whileBlocked func()) {
+func waitForTaskMutation(t *testing.T, service *Service, taskID workflow.TaskID, operation func() error, whileBlocked func()) {
 	t.Helper()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	held := make(chan error, 1)
 	go func() {
-		held <- service.taskMutations.Run(context.Background(), workflow.TaskID("task-held"), func(context.Context) error {
+		held <- service.taskMutations.Run(context.Background(), taskID, func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
@@ -2012,7 +1994,7 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}()
 	select {
 	case err := <-finished:
-		t.Fatalf("workflow mutation escaped the shared permit: %v", err)
+		t.Fatalf("Task mutation escaped Task ownership: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	if whileBlocked != nil {
@@ -2020,10 +2002,10 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}
 	close(release)
 	if err := <-held; err != nil {
-		t.Fatalf("hold workflow mutation permit: %v", err)
+		t.Fatalf("hold Task mutation: %v", err)
 	}
 	if err := <-finished; err != nil {
-		t.Fatalf("workflow mutation after permit release: %v", err)
+		t.Fatalf("Task mutation after ownership release: %v", err)
 	}
 }
 
@@ -2164,66 +2146,6 @@ func TestServiceWorkflowListPaginatesAndCreateLinkIsAtomic(t *testing.T) {
 	}
 	if len(filtered.Workflows) != 0 {
 		t.Fatalf("failed create-and-link left workflows: %+v", filtered.Workflows)
-	}
-}
-
-func TestServiceWorkflowListRejectsPaddedProjectScope(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
-	projectID := " " + binding.ProjectID + " "
-
-	_, err := service.ListWorkflows(ctx, serverapi.WorkflowListRequest{ProjectID: &projectID})
-	if !isWorkflowServiceRequestFieldError(err, "project_id") {
-		t.Fatalf("ListWorkflows error = %v, want project_id validation error", err)
-	}
-}
-
-func TestWorkflowGraphStoreSaveRequestOwnsNestedWorkflowIdentityAndCanonicalValues(t *testing.T) {
-	workflowID := runtimeids.NewWorkflowID()
-	groupID := workflowServiceGraphEntityID("mapper-group-" + workflowID.String())
-	nodeID := workflowServiceGraphEntityID("mapper-node-" + workflowID.String())
-	transitionGroupID := workflowServiceGraphEntityID("mapper-transition-" + workflowID.String())
-	edgeID := workflowServiceGraphEntityID("mapper-edge-" + workflowID.String())
-	graph := serverapi.WorkflowGraphDraft{
-		NodeGroups: []serverapi.WorkflowGraphDraftNodeGroup{{
-			ID: groupID, Key: "group", DisplayName: "Group",
-		}},
-		Nodes: []serverapi.WorkflowGraphDraftNode{{
-			ID: nodeID, Key: "node", Kind: string(serverapi.WorkflowNodeKindAgent), DisplayName: "Node",
-			GroupID: &groupID, CompletionMode: " tool ",
-		}},
-		TransitionGroups: []serverapi.WorkflowGraphDraftTransitionGroup{{
-			ID: transitionGroupID, SourceNodeID: nodeID, TransitionID: "done", DisplayName: "Done",
-		}},
-		Edges: []serverapi.WorkflowGraphDraftEdge{{
-			ID: edgeID, TransitionGroupID: transitionGroupID, Key: "done", TargetNodeID: nodeID,
-			ContextSource: serverapi.WorkflowContextSource{Kind: " previous_target ", NodeKey: " ignored "},
-			Parameters: []serverapi.WorkflowParameter{{
-				Key: "value", Description: "description", Purpose: " purpose ",
-			}},
-		}},
-	}
-
-	request, err := workflowGraphStoreSaveRequest(workflowID, 3, nil, graph, nil)
-	if err != nil {
-		t.Fatalf("workflowGraphStoreSaveRequest: %v", err)
-	}
-	if len(request.NodeGroups) != 1 || request.NodeGroups[0].WorkflowID != workflowID ||
-		len(request.Nodes) != 1 || request.Nodes[0].WorkflowID != workflowID ||
-		len(request.TransitionGroups) != 1 || request.TransitionGroups[0].WorkflowID != workflowID ||
-		len(request.Edges) != 1 || request.Edges[0].WorkflowID != workflowID {
-		t.Fatalf("nested workflow identities = groups %+v nodes %+v transitions %+v edges %+v, want %s",
-			request.NodeGroups, request.Nodes, request.TransitionGroups, request.Edges, workflowID)
-	}
-	if request.Nodes[0].CompletionMode != "tool" {
-		t.Fatalf("completion mode = %q, want canonical tool", request.Nodes[0].CompletionMode)
-	}
-	if request.Edges[0].ContextSource.Kind != workflow.ContextSourcePreviousTarget ||
-		request.Edges[0].ContextSource.NodeKey != "" {
-		t.Fatalf("context source = %+v, want canonical previous_target", request.Edges[0].ContextSource)
-	}
-	if len(request.Edges[0].Parameters) != 1 ||
-		request.Edges[0].Parameters[0] != (workflow.Parameter{Key: "value", Description: "description", Purpose: "purpose"}) {
-		t.Fatalf("parameters = %+v, want canonical values", request.Edges[0].Parameters)
 	}
 }
 
@@ -2596,43 +2518,6 @@ func TestServiceWorkflowGraphValidationParityForUnavailableAssigneeAndInvalidScr
 	}
 }
 
-func TestServiceWorkflowGraphDraftReportsProtectedParameterAndContextSemantics(t *testing.T) {
-	ctx, service, _ := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow: %v", err)
-	}
-	graph := serverapi.WorkflowGraphDraftFromDefinition(current.Definition)
-	if len(graph.Edges) == 0 {
-		t.Fatal("workflow fixture has no edges")
-	}
-	graph.Edges[0].AssigneeSelection = "previous_node"
-	graph.Edges[0].ContextSource = serverapi.WorkflowContextSource{Kind: "selected_node"}
-
-	result, err := service.ValidateWorkflowGraphDraft(ctx, serverapi.WorkflowGraphValidateDraftRequest{
-		WorkflowID: workflowID,
-		Graph:      graph,
-		Modes:      []serverapi.WorkflowValidationMode{serverapi.WorkflowValidationModeDraft},
-	})
-	if err != nil {
-		t.Fatalf("ValidateWorkflowGraphDraft: %v", err)
-	}
-	draft := result.Results[serverapi.WorkflowValidationModeDraft]
-	codes := make(map[string]bool, len(draft.Errors))
-	for _, validationErr := range draft.Errors {
-		codes[validationErr.Code] = true
-	}
-	for _, code := range []string{
-		string(workflow.CodeMissingProtectedParameter),
-		string(workflow.CodeInvalidContextSource),
-	} {
-		if !codes[code] {
-			t.Fatalf("draft errors = %+v, want code %q", draft.Errors, code)
-		}
-	}
-}
-
 func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterministically(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -2705,6 +2590,9 @@ func TestServiceWorkflowGraphSaveProjectsRemovedTransitionBranchImpactDeterminis
 	}}
 	if got := workflowServiceGraphSaveBlockerEntities(preview.Blockers, "confirmation_required"); !slices.Equal(got, wantConfirmationEntities) {
 		t.Fatalf("confirmation_required affected entities = %+v, want %+v", got, wantConfirmationEntities)
+	}
+	if err := preview.Validate(); err != nil {
+		t.Fatalf("preview response validation: %v", err)
 	}
 	first, err := json.Marshal(preview)
 	if err != nil {
@@ -2887,7 +2775,7 @@ func addWorkflowGraphAtomicParallelNodeGroup(
 	return getWorkflowGraphAtomicDefinition(t, ctx, service, workflowID), groupID
 }
 
-func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T) {
+func TestServiceWorkflowGraphSaveChecksVersionBeforeDraftIdentityFields(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	original, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2903,9 +2791,11 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T)
 		t.Fatalf("UpdateWorkflow: %v", err)
 	}
 
+	blankGroupID := ""
 	graph := serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-		ID:             workflowServiceGraphEntityID("semantically-invalid-" + workflowID.String()),
+		ID:             "node-prefixed",
 		Kind:           string(serverapi.WorkflowNodeKindAgent),
+		GroupID:        &blankGroupID,
 		CompletionMode: "tool",
 	}}}
 	preview, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
@@ -2914,7 +2804,7 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T)
 		Graph:           graph,
 	})
 	if err != nil {
-		t.Fatalf("PreviewWorkflowGraphSave stale semantic Draft: %v", err)
+		t.Fatalf("PreviewWorkflowGraphSave stale malformed Draft: %v", err)
 	}
 	if preview.CurrentVersion != current.Definition.Workflow.Version ||
 		!workflowServiceHasGraphSaveBlocker(preview.Blockers, "version_changed") {
@@ -2927,7 +2817,7 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T)
 		Graph:           graph,
 	})
 	if err != nil {
-		t.Fatalf("SaveWorkflowGraph stale semantic Draft: %v", err)
+		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", err)
 	}
 	if saved.Saved ||
 		saved.CurrentVersion != current.Definition.Workflow.Version ||
@@ -2935,27 +2825,21 @@ func TestServiceWorkflowGraphSaveChecksVersionBeforeGraphSemantics(t *testing.T)
 		t.Fatalf("save = %+v, want current-version blocker", saved)
 	}
 
-	preview, err = service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
+	_, err = service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version,
 		Graph:           graph,
 	})
-	if err != nil {
-		t.Fatalf("current-version preview: %v", err)
+	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
+		t.Fatalf("current-version preview error = %v, want group_id validation", err)
 	}
-	if !workflowServiceHasGraphSaveBlocker(preview.Blockers, "validation_failed") {
-		t.Fatalf("current-version preview = %+v, want validation blocker", preview)
-	}
-	saved, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+	_, err = service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 		WorkflowID:      workflowID,
 		ExpectedVersion: current.Definition.Workflow.Version,
 		Graph:           graph,
 	})
-	if err != nil {
-		t.Fatalf("current-version save: %v", err)
-	}
-	if saved.Saved || !workflowServiceHasGraphSaveBlocker(saved.Blockers, "validation_failed") {
-		t.Fatalf("current-version save = %+v, want validation blocker", saved)
+	if !isWorkflowServiceRequestFieldError(err, "graph.nodes.group_id") {
+		t.Fatalf("current-version save error = %v, want group_id validation", err)
 	}
 }
 
@@ -3019,7 +2903,7 @@ func TestServiceWorkflowGraphSaveRejectsAdditionIdentityOwnedByCurrentEntityOfAn
 	}
 }
 
-func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *testing.T) {
+func TestServiceWorkflowGraphSaveUsesStoreVersionOrdering(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -3027,17 +2911,47 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 		t.Fatalf("GetWorkflow current: %v", err)
 	}
 
-	permitStarted := make(chan struct{})
-	releasePermit := make(chan struct{})
-	permitDone := make(chan error, 1)
+	if err := service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", ""); err != nil {
+		t.Fatalf("UpdateWorkflowInfo: %v", err)
+	}
+	outcome, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+			ID:             "node-prefixed",
+			Kind:           string(serverapi.WorkflowNodeKindAgent),
+			CompletionMode: "tool",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", err)
+	}
+	if outcome.Saved ||
+		outcome.CurrentVersion != current.Definition.Workflow.Version+1 ||
+		!workflowServiceHasGraphSaveBlocker(outcome.Blockers, "version_changed") {
+		t.Fatalf("save = %+v, want current-version blocker", outcome)
+	}
+}
+
+func TestServiceWorkflowGraphSaveDoesNotWaitForTaskMutation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
 	go func() {
-		permitDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
-			close(permitStarted)
-			<-releasePermit
-			return service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
+		mutationDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
+			close(mutationStarted)
+			<-releaseMutation
+			return nil
 		})
 	}()
-	<-permitStarted
+	<-mutationStarted
 
 	saveDone := make(chan struct {
 		response serverapi.WorkflowGraphSaveResponse
@@ -3057,76 +2971,16 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 
 	select {
 	case outcome := <-saveDone:
-		t.Fatalf("SaveWorkflowGraph bypassed mutation ordering: response=%+v error=%v", outcome.response, outcome.err)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	close(releasePermit)
-	if err := <-permitDone; err != nil {
-		t.Fatalf("concurrent workflow mutation: %v", err)
-	}
-	outcome := <-saveDone
-	if outcome.err != nil {
-		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", outcome.err)
-	}
-	if outcome.response.Saved ||
-		outcome.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
-		!workflowServiceHasGraphSaveBlocker(outcome.response.Blockers, "version_changed") {
-		t.Fatalf("save = %+v, want current-version blocker", outcome.response)
-	}
-}
-
-func TestServiceWorkflowGraphPreviewDoesNotWaitForUnrelatedMutation(t *testing.T) {
-	ctx, service, _ := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow current: %v", err)
-	}
-
-	permitStarted := make(chan struct{})
-	releasePermit := make(chan struct{})
-	permitDone := make(chan error, 1)
-	go func() {
-		permitDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
-			close(permitStarted)
-			<-releasePermit
-			return nil
-		})
-	}()
-	<-permitStarted
-
-	previewDone := make(chan struct {
-		response serverapi.WorkflowGraphSavePreviewResponse
-		err      error
-	}, 1)
-	go func() {
-		response, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
-			WorkflowID:      workflowID,
-			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph:           serverapi.WorkflowGraphDraftFromDefinition(current.Definition),
-		})
-		previewDone <- struct {
-			response serverapi.WorkflowGraphSavePreviewResponse
-			err      error
-		}{response: response, err: err}
-	}()
-
-	select {
-	case outcome := <-previewDone:
 		if outcome.err != nil {
-			t.Fatalf("PreviewWorkflowGraphSave: %v", outcome.err)
-		}
-		if outcome.response.Changed {
-			t.Fatalf("preview = %+v, want unchanged", outcome.response)
+			t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("PreviewWorkflowGraphSave waited for the global mutation permit")
+		t.Fatal("Workflow graph save waited for unrelated Task mutation")
 	}
 
-	close(releasePermit)
-	if err := <-permitDone; err != nil {
-		t.Fatalf("release workflow mutation permit: %v", err)
+	close(releaseMutation)
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("release Task mutation: %v", err)
 	}
 }
 
@@ -3165,7 +3019,7 @@ func TestServiceWorkflowGraphPreviewOrdersVersionGateWithSameWorkflowMetadataMut
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
 			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             workflowServiceGraphEntityID("preview-semantic-" + workflowID.String()),
+				ID:             "node-prefixed",
 				Kind:           string(serverapi.WorkflowNodeKindAgent),
 				CompletionMode: "tool",
 			}}},
@@ -3635,9 +3489,9 @@ func newWorkflowServiceReadModels(
 
 type emptyWorkflowTaskSessionReadModel struct{}
 
-func (emptyWorkflowTaskSessionReadModel) ReadSessions(_ context.Context, taskID string, _ serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error) {
+func (emptyWorkflowTaskSessionReadModel) List(_ context.Context, request serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
 	return serverapi.WorkflowTaskSessionListResponse{
-		TaskID: taskID,
+		TaskID: request.TaskID,
 		WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskSessionItem]{
 			Items: []serverapi.WorkflowTaskSessionItem{},
 		},

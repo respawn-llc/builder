@@ -3,22 +3,19 @@ package workflowsvc
 import (
 	"context"
 	"errors"
+	"fmt"
 
+	"core/server/workflow"
 	"core/server/workflow/label"
 	"core/server/workflowstore"
-	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
 func (s *Service) CreateWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelCreateRequest) (serverapi.WorkflowProjectLabelCreateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelCreateRequest]) (serverapi.WorkflowProjectLabelCreateResponse, error) {
-		return s.CreateWorkflowProjectLabelValidated(ctx, validated)
-	})
-}
-
-func (s *Service) CreateWorkflowProjectLabelValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelCreateRequest]) (serverapi.WorkflowProjectLabelCreateResponse, error) {
-	req := validated.Value()
-	record, err := s.store.CreateProjectLabel(ctx, req.ProjectID, validated.LabelName(req.Name).String())
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectLabelCreateResponse{}, err
+	}
+	record, err := s.store.CreateProjectLabel(ctx, req.ProjectID, req.Name)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelCreateResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			projectID: &req.ProjectID,
@@ -30,13 +27,9 @@ func (s *Service) CreateWorkflowProjectLabelValidated(ctx context.Context, valid
 }
 
 func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelCatalogRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-		return s.ListWorkflowProjectLabelsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowProjectLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowProjectLabelCatalogResponse{}, err
+	}
 	records, err := s.store.ListProjectLabels(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelCatalogResponse{}, workflowLabelError(err, workflowLabelErrorScope{
@@ -56,14 +49,14 @@ func (s *Service) ListWorkflowProjectLabelsValidated(ctx context.Context, valida
 }
 
 func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelRenameRequest]) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-		return s.RenameWorkflowProjectLabelValidated(ctx, validated)
-	})
-}
-
-func (s *Service) RenameWorkflowProjectLabelValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelRenameRequest]) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-	req := validated.Value()
-	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, validated.LabelID(req.LabelID), validated.LabelName(req.Name).String())
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectLabelRenameResponse{}, err
+	}
+	id, err := label.ParseID(req.LabelID)
+	if err != nil {
+		return serverapi.WorkflowProjectLabelRenameResponse{}, err
+	}
+	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, id, req.Name)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			projectID: &req.ProjectID,
@@ -75,14 +68,14 @@ func (s *Service) RenameWorkflowProjectLabelValidated(ctx context.Context, valid
 }
 
 func (s *Service) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelDeleteRequest) (serverapi.WorkflowProjectLabelDeleteResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelDeleteRequest]) (serverapi.WorkflowProjectLabelDeleteResponse, error) {
-		return s.DeleteWorkflowProjectLabelValidated(ctx, validated)
-	})
-}
-
-func (s *Service) DeleteWorkflowProjectLabelValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelDeleteRequest]) (serverapi.WorkflowProjectLabelDeleteResponse, error) {
-	req := validated.Value()
-	record, err := s.store.DeleteProjectLabel(ctx, req.ProjectID, validated.LabelID(req.LabelID))
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectLabelDeleteResponse{}, err
+	}
+	id, err := label.ParseID(req.LabelID)
+	if err != nil {
+		return serverapi.WorkflowProjectLabelDeleteResponse{}, err
+	}
+	record, err := s.store.DeleteProjectLabel(ctx, req.ProjectID, id)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelDeleteResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			projectID: &req.ProjectID,
@@ -94,14 +87,17 @@ func (s *Service) DeleteWorkflowProjectLabelValidated(ctx context.Context, valid
 }
 
 func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelReorderResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error) {
-		return s.ReorderWorkflowProjectLabelsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ReorderWorkflowProjectLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error) {
-	req := validated.Value()
-	orderedIDs := validated.LabelIDs(req.LabelIDs)
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowProjectLabelReorderResponse{}, err
+	}
+	orderedIDs := make([]label.ID, 0, len(req.LabelIDs))
+	for _, rawID := range req.LabelIDs {
+		id, err := label.ParseID(rawID)
+		if err != nil {
+			return serverapi.WorkflowProjectLabelReorderResponse{}, err
+		}
+		orderedIDs = append(orderedIDs, id)
+	}
 	result, err := s.store.ReorderProjectLabels(ctx, req.ProjectID, orderedIDs)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelReorderResponse{}, workflowLabelError(err, workflowLabelErrorScope{
@@ -131,15 +127,10 @@ func (s *Service) ReorderWorkflowProjectLabelsValidated(ctx context.Context, val
 }
 
 func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsGetRequest) (serverapi.WorkflowTaskLabelsGetResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error) {
-		return s.GetWorkflowTaskLabelsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) GetWorkflowTaskLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error) {
-	req := validated.Value()
-	taskID := validated.TaskID(req.TaskID)
-	ids, err := s.store.GetTaskLabelIDs(ctx, taskID)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskLabelsGetResponse{}, err
+	}
+	ids, err := s.store.GetTaskLabelIDs(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsGetResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			taskID: &req.TaskID,
@@ -154,24 +145,19 @@ func (s *Service) GetWorkflowTaskLabelsValidated(ctx context.Context, validated 
 }
 
 func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsUpdateRequest) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
-		return s.UpdateWorkflowTaskLabelsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) UpdateWorkflowTaskLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
-	req := validated.Value()
-	taskID := validated.TaskID(req.TaskID)
-	scope, err := s.store.GetTaskLabelScope(ctx, taskID)
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowTaskLabelsUpdateResponse{}, err
+	}
+	scope, err := s.store.GetTaskLabelScope(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsUpdateResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			taskID: &req.TaskID,
 		})
 	}
 	ids, err := s.store.UpdateTaskLabels(ctx, workflowstore.TaskLabelUpdateRequest{
-		TaskID:         taskID,
-		AddLabelIDs:    validated.LabelIDs(req.AddLabelIDs),
-		RemoveLabelIDs: validated.LabelIDs(req.RemoveLabelIDs),
+		TaskID:         workflow.TaskID(req.TaskID),
+		AddLabelIDs:    parseLabelIDs(req.AddLabelIDs),
+		RemoveLabelIDs: parseLabelIDs(req.RemoveLabelIDs),
 	})
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsUpdateResponse{}, workflowLabelError(err, workflowLabelErrorScope{
@@ -186,6 +172,18 @@ func (s *Service) UpdateWorkflowTaskLabelsValidated(ctx context.Context, validat
 	}
 	s.publishProjectWorkflowEvent(ctx, scope.ProjectID, scope.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionLabelsChanged, req.TaskID)
 	return response, nil
+}
+
+func parseLabelIDs(values []string) []label.ID {
+	ids := make([]label.ID, len(values))
+	for i, value := range values {
+		id, err := label.ParseID(value)
+		if err != nil {
+			panic(fmt.Sprintf("validated request contains invalid Label ID %q: %v", value, err))
+		}
+		ids[i] = id
+	}
+	return ids
 }
 
 func workflowProjectLabel(record workflowstore.ProjectLabelRecord) serverapi.WorkflowProjectLabel {

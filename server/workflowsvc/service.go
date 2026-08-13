@@ -16,7 +16,6 @@ import (
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/server/worktree"
-	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/textutil"
@@ -250,15 +249,10 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 }
 
 func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowCreateRequest]) (serverapi.WorkflowCreateResponse, error) {
-		return s.CreateWorkflowValidated(ctx, validated)
-	})
-}
-
-func (s *Service) CreateWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowCreateRequest]) (serverapi.WorkflowCreateResponse, error) {
-	req := validated.Value()
-	req.Description = strings.TrimSpace(req.Description)
-	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: validated.WorkflowName(req.Name), Description: req.Description})
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowCreateResponse{}, err
+	}
+	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: req.Name, Description: req.Description})
 	if err != nil {
 		return serverapi.WorkflowCreateResponse{}, err
 	}
@@ -266,17 +260,11 @@ func (s *Service) CreateWorkflowValidated(ctx context.Context, validated apicont
 }
 
 func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-	return apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowCreateAndLinkProjectRequest]) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-		return s.CreateAndLinkWorkflowToProjectValidated(ctx, validated)
-	})
-}
-
-func (s *Service) CreateAndLinkWorkflowToProjectValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowCreateAndLinkProjectRequest]) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-	request := validated.Value()
-	request.Description = strings.TrimSpace(request.Description)
-	request.ProjectID = strings.TrimSpace(request.ProjectID)
+	if err := request.Validate(); err != nil {
+		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
+	}
 	created, link, err := s.store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
-		Name:          validated.WorkflowName(request.Name),
+		Name:          request.Name,
 		Description:   request.Description,
 		ProjectID:     request.ProjectID,
 		DefaultPolicy: workflowStoreDefaultPolicy(request.DefaultPolicy),
@@ -334,36 +322,29 @@ func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID run
 }
 
 func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpdateRequest) (serverapi.WorkflowGetResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowUpdateRequest]) (serverapi.WorkflowGetResponse, error) {
-		return s.UpdateWorkflowValidated(ctx, validated)
-	})
-}
-
-func (s *Service) UpdateWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowUpdateRequest]) (serverapi.WorkflowGetResponse, error) {
-	req := validated.Value()
-	req.Description = strings.TrimSpace(req.Description)
-	name := validated.WorkflowName(req.Name)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowGetResponse{}, err
+	}
 	if _, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (struct{}, error) {
 		_, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, name, req.Description)
+			return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
 		})
 		return struct{}{}, err
 	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionUpdated, req.WorkflowID.String())
-	return s.getWorkflow(ctx, req.WorkflowID)
+	return s.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: req.WorkflowID})
 }
 
 func (s *Service) ListWorkflows(ctx context.Context, req serverapi.WorkflowListRequest) (serverapi.WorkflowListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowListRequest]) (serverapi.WorkflowListResponse, error) {
-		return s.ListWorkflowsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowListRequest]) (serverapi.WorkflowListResponse, error) {
-	req := validated.Value()
-	window := workflowOffsetWindow(req.Offset, req.Limit)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowListResponse{}, err
+	}
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.WorkflowListResponse{}, err
+	}
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID
@@ -386,17 +367,10 @@ func (s *Service) ListWorkflowsValidated(ctx context.Context, validated apicontr
 }
 
 func (s *Service) GetWorkflow(ctx context.Context, req serverapi.WorkflowGetRequest) (serverapi.WorkflowGetResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowGetRequest]) (serverapi.WorkflowGetResponse, error) {
-		return s.GetWorkflowValidated(ctx, validated)
-	})
-}
-
-func (s *Service) GetWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowGetRequest]) (serverapi.WorkflowGetResponse, error) {
-	return s.getWorkflow(ctx, validated.Value().WorkflowID)
-}
-
-func (s *Service) getWorkflow(ctx context.Context, workflowID runtimeids.WorkflowID) (serverapi.WorkflowGetResponse, error) {
-	def, _, err := s.readModels.Definitions.GetDefinition(ctx, workflowID)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowGetResponse{}, err
+	}
+	def, _, err := s.readModels.Definitions.GetDefinition(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
@@ -404,14 +378,9 @@ func (s *Service) getWorkflow(ctx context.Context, workflowID runtimeids.Workflo
 }
 
 func (s *Service) LinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowLinkProjectRequest) (serverapi.WorkflowLinkProjectResponse, error) {
-	return apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowLinkProjectRequest]) (serverapi.WorkflowLinkProjectResponse, error) {
-		return s.LinkWorkflowToProjectValidated(ctx, validated)
-	})
-}
-
-func (s *Service) LinkWorkflowToProjectValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowLinkProjectRequest]) (serverapi.WorkflowLinkProjectResponse, error) {
-	request := validated.Value()
-	request.ProjectID = strings.TrimSpace(request.ProjectID)
+	if err := request.Validate(); err != nil {
+		return serverapi.WorkflowLinkProjectResponse{}, err
+	}
 	link, err := s.store.LinkWorkflowWithDefaultPolicy(ctx, request.ProjectID, request.WorkflowID, workflowStoreDefaultPolicy(request.DefaultPolicy))
 	if err != nil {
 		return serverapi.WorkflowLinkProjectResponse{}, err
@@ -421,13 +390,9 @@ func (s *Service) LinkWorkflowToProjectValidated(ctx context.Context, validated 
 }
 
 func (s *Service) ListProjectWorkflowLinks(ctx context.Context, req serverapi.WorkflowListProjectLinksRequest) (serverapi.WorkflowListProjectLinksResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowListProjectLinksRequest]) (serverapi.WorkflowListProjectLinksResponse, error) {
-		return s.ListProjectWorkflowLinksValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListProjectWorkflowLinksValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowListProjectLinksRequest]) (serverapi.WorkflowListProjectLinksResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowListProjectLinksResponse{}, err
+	}
 	links, err := s.store.ListProjectWorkflowLinks(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowListProjectLinksResponse{}, err
@@ -440,13 +405,9 @@ func (s *Service) ListProjectWorkflowLinksValidated(ctx context.Context, validat
 }
 
 func (s *Service) SetDefaultProjectWorkflowLink(ctx context.Context, req serverapi.WorkflowSetDefaultProjectLinkRequest) (serverapi.WorkflowSetDefaultProjectLinkResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowSetDefaultProjectLinkRequest]) (serverapi.WorkflowSetDefaultProjectLinkResponse, error) {
-		return s.SetDefaultProjectWorkflowLinkValidated(ctx, validated)
-	})
-}
-
-func (s *Service) SetDefaultProjectWorkflowLinkValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowSetDefaultProjectLinkRequest]) (serverapi.WorkflowSetDefaultProjectLinkResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowSetDefaultProjectLinkResponse{}, err
+	}
 	link, err := s.store.SetDefaultProjectWorkflowLink(ctx, req.ProjectID, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowSetDefaultProjectLinkResponse{}, err
@@ -456,13 +417,9 @@ func (s *Service) SetDefaultProjectWorkflowLinkValidated(ctx context.Context, va
 }
 
 func (s *Service) UnlinkWorkflowFromProject(ctx context.Context, req serverapi.WorkflowUnlinkProjectRequest) (serverapi.WorkflowUnlinkProjectResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowUnlinkProjectRequest]) (serverapi.WorkflowUnlinkProjectResponse, error) {
-		return s.UnlinkWorkflowFromProjectValidated(ctx, validated)
-	})
-}
-
-func (s *Service) UnlinkWorkflowFromProjectValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowUnlinkProjectRequest]) (serverapi.WorkflowUnlinkProjectResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowUnlinkProjectResponse{}, err
+	}
 	result, err := s.store.UnlinkProjectWorkflow(ctx, req.LinkID, req.ReplacementDefaultLinkID)
 	resp := workflowUnlinkProjectResponse(result)
 	if err != nil {
@@ -475,13 +432,9 @@ func (s *Service) UnlinkWorkflowFromProjectValidated(ctx context.Context, valida
 }
 
 func (s *Service) PreviewWorkflowDelete(ctx context.Context, req serverapi.WorkflowDeletePreviewRequest) (serverapi.WorkflowDeletePreviewResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowDeletePreviewRequest]) (serverapi.WorkflowDeletePreviewResponse, error) {
-		return s.PreviewWorkflowDeleteValidated(ctx, validated)
-	})
-}
-
-func (s *Service) PreviewWorkflowDeleteValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowDeletePreviewRequest]) (serverapi.WorkflowDeletePreviewResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowDeletePreviewResponse{}, err
+	}
 	impact, err := s.store.PreviewWorkflowDelete(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowDeletePreviewResponse{}, err
@@ -490,13 +443,6 @@ func (s *Service) PreviewWorkflowDeleteValidated(ctx context.Context, validated 
 }
 
 func (s *Service) DeleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowDeleteRequest]) (serverapi.WorkflowDeleteResponse, error) {
-		return s.DeleteWorkflowValidated(ctx, validated)
-	})
-}
-
-func (s *Service) DeleteWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowDeleteRequest]) (serverapi.WorkflowDeleteResponse, error) {
-	req := validated.Value()
 	taskIDs, err := s.store.ListWorkflowTaskIDs(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
@@ -538,6 +484,9 @@ func runWorkflowGraphMutation[T any](ctx context.Context, service *Service, work
 }
 
 func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDeleteRequest) (serverapi.WorkflowDeleteResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowDeleteResponse{}, err
+	}
 	links, err := s.store.ListWorkflowProjectLinks(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowDeleteResponse{}, err
@@ -573,13 +522,9 @@ func (s *Service) deleteWorkflow(ctx context.Context, req serverapi.WorkflowDele
 }
 
 func (s *Service) ValidateWorkflow(ctx context.Context, req serverapi.WorkflowValidateRequest) (serverapi.WorkflowValidateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowValidateRequest]) (serverapi.WorkflowValidateResponse, error) {
-		return s.ValidateWorkflowValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ValidateWorkflowValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowValidateRequest]) (serverapi.WorkflowValidateResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
 	def, _, err := s.store.GetDefinition(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowValidateResponse{}, err
@@ -594,13 +539,9 @@ func (s *Service) ValidateWorkflowValidated(ctx context.Context, validated apico
 }
 
 func (s *Service) ValidateWorkflowScriptPath(ctx context.Context, req serverapi.WorkflowScriptPathValidateRequest) (serverapi.WorkflowValidateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowScriptPathValidateRequest]) (serverapi.WorkflowValidateResponse, error) {
-		return s.ValidateWorkflowScriptPathValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ValidateWorkflowScriptPathValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowScriptPathValidateRequest]) (serverapi.WorkflowValidateResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowValidateResponse{}, err
+	}
 	def, _, err := s.store.GetDefinition(ctx, req.WorkflowID)
 	if err != nil {
 		return serverapi.WorkflowValidateResponse{}, err
@@ -617,13 +558,9 @@ func (s *Service) ValidateWorkflowScriptPathValidated(ctx context.Context, valid
 }
 
 func (s *Service) ValidateWorkflowGraphDraft(ctx context.Context, req serverapi.WorkflowGraphValidateDraftRequest) (serverapi.WorkflowGraphValidateDraftResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowGraphValidateDraftRequest]) (serverapi.WorkflowGraphValidateDraftResponse, error) {
-		return s.ValidateWorkflowGraphDraftValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ValidateWorkflowGraphDraftValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowGraphValidateDraftRequest]) (serverapi.WorkflowGraphValidateDraftResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowGraphValidateDraftResponse{}, err
+	}
 	def, err := s.workflowGraphDraftDefinition(ctx, req.WorkflowID, req.Metadata, req.Graph)
 	if err != nil {
 		return serverapi.WorkflowGraphValidateDraftResponse{}, err
@@ -635,13 +572,9 @@ func (s *Service) ValidateWorkflowGraphDraftValidated(ctx context.Context, valid
 }
 
 func (s *Service) DeriveWorkflowGraphWiring(ctx context.Context, req serverapi.WorkflowGraphDeriveWiringRequest) (serverapi.WorkflowGraphDeriveWiringResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowGraphDeriveWiringRequest]) (serverapi.WorkflowGraphDeriveWiringResponse, error) {
-		return s.DeriveWorkflowGraphWiringValidated(ctx, validated)
-	})
-}
-
-func (s *Service) DeriveWorkflowGraphWiringValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowGraphDeriveWiringRequest]) (serverapi.WorkflowGraphDeriveWiringResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowGraphDeriveWiringResponse{}, err
+	}
 	def, err := s.workflowGraphDraftDefinition(ctx, req.WorkflowID, nil, req.Graph)
 	if err != nil {
 		return serverapi.WorkflowGraphDeriveWiringResponse{}, err
@@ -652,13 +585,9 @@ func (s *Service) DeriveWorkflowGraphWiringValidated(ctx context.Context, valida
 }
 
 func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.WorkflowGraphSavePreviewRequest) (serverapi.WorkflowGraphSavePreviewResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowGraphSavePreviewRequest]) (serverapi.WorkflowGraphSavePreviewResponse, error) {
-		return s.PreviewWorkflowGraphSaveValidated(ctx, validated)
-	})
-}
-
-func (s *Service) PreviewWorkflowGraphSaveValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowGraphSavePreviewRequest]) (serverapi.WorkflowGraphSavePreviewResponse, error) {
-	req := validated.Value()
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
 	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
 		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
 		if err != nil {
@@ -666,6 +595,9 @@ func (s *Service) PreviewWorkflowGraphSaveValidated(ctx context.Context, validat
 		}
 		if currentVersion != req.ExpectedVersion {
 			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+		}
+		if err := req.Validate(); err != nil {
+			return workflowstore.WorkflowGraphSaveResult{}, err
 		}
 		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
 		if err != nil {
@@ -676,17 +608,17 @@ func (s *Service) PreviewWorkflowGraphSaveValidated(ctx context.Context, validat
 	if err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
 	}
-	return workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result)), nil
+	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, fmt.Errorf("project workflow graph save preview response: %w", err)
+	}
+	return resp, nil
 }
 
 func (s *Service) SaveWorkflowGraph(ctx context.Context, req serverapi.WorkflowGraphSaveRequest) (serverapi.WorkflowGraphSaveResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowGraphSaveRequest]) (serverapi.WorkflowGraphSaveResponse, error) {
-		return s.SaveWorkflowGraphValidated(ctx, validated)
-	})
-}
-
-func (s *Service) SaveWorkflowGraphValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowGraphSaveRequest]) (serverapi.WorkflowGraphSaveResponse, error) {
-	req := validated.Value()
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, err
+	}
 	result, err := runWorkflowGraphMutation(ctx, s, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
 		return s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
 			currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
@@ -695,6 +627,9 @@ func (s *Service) SaveWorkflowGraphValidated(ctx context.Context, validated apic
 			}
 			if currentVersion != req.ExpectedVersion {
 				return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
+			}
+			if err := req.Validate(); err != nil {
+				return workflowstore.WorkflowGraphSaveResult{}, err
 			}
 			storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, req.Confirmation)
 			if err != nil {
@@ -714,6 +649,9 @@ func (s *Service) SaveWorkflowGraphValidated(ctx context.Context, validated apic
 		if result.Changed {
 			s.publishLinkedWorkflowEvent(ctx, req.WorkflowID, serverapi.WorkflowProjectEventResourceWorkflow, serverapi.WorkflowProjectEventActionGraphSaved, req.WorkflowID.String())
 		}
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkflowGraphSaveResponse{}, fmt.Errorf("project workflow graph save response: %w", err)
 	}
 	return resp, nil
 }
@@ -739,13 +677,9 @@ func workflowGraphSaveError(err error) error {
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskCreateRequest]) (serverapi.WorkflowTaskCreateResponse, error) {
-		return s.CreateWorkflowTaskValidated(ctx, validated)
-	})
-}
-
-func (s *Service) CreateWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskCreateRequest]) (serverapi.WorkflowTaskCreateResponse, error) {
-	req := validated.Value()
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowTaskCreateResponse{}, err
+	}
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
 		workflowID = req.WorkflowID
@@ -753,11 +687,11 @@ func (s *Service) CreateWorkflowTaskValidated(ctx context.Context, validated api
 	taskRequest := workflowstore.CreateTaskRequest{
 		ProjectID:         req.ProjectID,
 		WorkflowID:        workflowID,
-		Title:             validated.TaskTitle(req.Title).String(),
+		Title:             req.Title,
 		Body:              req.Body,
 		SourceURL:         req.SourceURL,
 		SourceWorkspaceID: req.SourceWorkspaceID,
-		LabelIDs:          validated.LabelIDs(req.LabelIDs),
+		LabelIDs:          parseLabelIDs(req.LabelIDs),
 	}
 	if req.DependencyIntent != nil {
 		intent := workflow.TaskDependencyCreateIntent{
@@ -792,13 +726,9 @@ func (s *Service) CreateWorkflowTaskValidated(ctx context.Context, validated api
 }
 
 func (s *Service) AddWorkflowTaskDependency(ctx context.Context, req serverapi.WorkflowTaskDependencyAddRequest) (serverapi.WorkflowTaskDependencyAddResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskDependencyAddRequest]) (serverapi.WorkflowTaskDependencyAddResponse, error) {
-		return s.AddWorkflowTaskDependencyValidated(ctx, validated)
-	})
-}
-
-func (s *Service) AddWorkflowTaskDependencyValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskDependencyAddRequest]) (serverapi.WorkflowTaskDependencyAddResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskDependencyAddResponse{}, err
+	}
 	result, err := s.store.AddTaskDependency(ctx, workflowstore.TaskDependencyAddRequest{
 		BlockerTaskID: workflow.TaskID(req.BlockerTaskID),
 		BlockedTaskID: workflow.TaskID(req.BlockedTaskID),
@@ -819,13 +749,9 @@ func (s *Service) AddWorkflowTaskDependencyValidated(ctx context.Context, valida
 }
 
 func (s *Service) RemoveWorkflowTaskDependency(ctx context.Context, req serverapi.WorkflowTaskDependencyRemoveRequest) (serverapi.WorkflowTaskDependencyRemoveResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskDependencyRemoveRequest]) (serverapi.WorkflowTaskDependencyRemoveResponse, error) {
-		return s.RemoveWorkflowTaskDependencyValidated(ctx, validated)
-	})
-}
-
-func (s *Service) RemoveWorkflowTaskDependencyValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskDependencyRemoveRequest]) (serverapi.WorkflowTaskDependencyRemoveResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskDependencyRemoveResponse{}, err
+	}
 	result, err := s.store.RemoveTaskDependency(ctx, workflowstore.TaskDependencyRemoveRequest{
 		BlockerTaskID: workflow.TaskID(req.BlockerTaskID),
 		BlockedTaskID: workflow.TaskID(req.BlockedTaskID),
@@ -924,24 +850,10 @@ func workflowTaskStartError(err error) error {
 }
 
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskUpdateRequest]) (serverapi.WorkflowTaskUpdateResponse, error) {
-		return s.UpdateWorkflowTaskValidated(ctx, validated)
-	})
-}
-
-func (s *Service) UpdateWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskUpdateRequest]) (serverapi.WorkflowTaskUpdateResponse, error) {
-	req := validated.Value()
-	var title *string
-	if prepared := validated.OptionalTaskTitle(req.Title); prepared != nil {
-		value := prepared.String()
-		title = &value
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
-	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{
-		TaskID:            validated.TaskID(req.TaskID),
-		Title:             title,
-		Body:              req.Body,
-		SourceWorkspaceID: req.SourceWorkspaceID,
-	})
+	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{TaskID: workflow.TaskID(req.TaskID), Title: req.Title, Body: req.Body, SourceWorkspaceID: req.SourceWorkspaceID})
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
@@ -954,13 +866,13 @@ func (s *Service) UpdateWorkflowTaskValidated(ctx context.Context, validated api
 }
 
 func (s *Service) StartWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskStartRequest]) (serverapi.WorkflowTaskStartResponse, error) {
-		return s.StartWorkflowTaskValidated(ctx, validated)
-	})
+	return s.startWorkflowTask(ctx, req)
 }
 
-func (s *Service) StartWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskStartRequest]) (serverapi.WorkflowTaskStartResponse, error) {
-	req := validated.Value()
+func (s *Service) startWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskStartResponse{}, err
+	}
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskStartResponse{}, err
 	}
@@ -1546,13 +1458,9 @@ func workflowLockedExecutionTargetError(err error) error {
 }
 
 func (s *Service) InterruptWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskInterruptRequest) (serverapi.WorkflowTaskInterruptResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskInterruptRequest]) (serverapi.WorkflowTaskInterruptResponse, error) {
-		return s.InterruptWorkflowTaskValidated(ctx, validated)
-	})
-}
-
-func (s *Service) InterruptWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskInterruptRequest]) (serverapi.WorkflowTaskInterruptResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskInterruptResponse{}, err
+	}
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskInterruptResponse{}, err
 	}
@@ -1574,13 +1482,13 @@ func (s *Service) InterruptWorkflowTaskValidated(ctx context.Context, validated 
 }
 
 func (s *Service) ResumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskResumeRequest]) (serverapi.WorkflowTaskResumeResponse, error) {
-		return s.ResumeWorkflowTaskValidated(ctx, validated)
-	})
+	return s.resumeWorkflowTask(ctx, req)
 }
 
-func (s *Service) ResumeWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskResumeRequest]) (serverapi.WorkflowTaskResumeResponse, error) {
-	req := validated.Value()
+func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskResumeResponse{}, err
+	}
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskResumeResponse{}, err
 	}
@@ -1722,13 +1630,13 @@ func (s *Service) ResumeWorkflowTaskValidated(ctx context.Context, validated api
 }
 
 func (s *Service) ApproveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskApproveRequest]) (serverapi.WorkflowTaskApproveResponse, error) {
-		return s.ApproveWorkflowTaskValidated(ctx, validated)
-	})
+	return s.approveWorkflowTask(ctx, req)
 }
 
-func (s *Service) ApproveWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskApproveRequest]) (serverapi.WorkflowTaskApproveResponse, error) {
-	req := validated.Value()
+func (s *Service) approveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskApproveRequest) (serverapi.WorkflowTaskApproveResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskApproveResponse{}, err
+	}
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskApproveResponse{}, errors.New("current node workflow execution is required")
 	}
@@ -1764,19 +1672,13 @@ func (s *Service) ApproveWorkflowTaskValidated(ctx context.Context, validated ap
 }
 
 func (s *Service) MoveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskMoveRequest]) (serverapi.WorkflowTaskMoveResponse, error) {
-		return s.MoveWorkflowTaskValidated(ctx, validated)
-	})
+	return s.moveWorkflowTask(ctx, req)
 }
 
 func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.WorkflowTaskMovePreviewRequest) (serverapi.WorkflowTaskMovePreviewResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskMovePreviewRequest]) (serverapi.WorkflowTaskMovePreviewResponse, error) {
-		return s.PreviewWorkflowTaskMoveValidated(ctx, validated)
-	})
-}
-
-func (s *Service) PreviewWorkflowTaskMoveValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskMovePreviewRequest]) (serverapi.WorkflowTaskMovePreviewResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskMovePreviewResponse{}, err
+	}
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskMovePreviewResponse{}, errors.New("current node workflow execution is required")
 	}
@@ -1864,8 +1766,10 @@ func (s *Service) PreviewWorkflowTaskMoveValidated(ctx context.Context, validate
 	}
 }
 
-func (s *Service) MoveWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskMoveRequest]) (serverapi.WorkflowTaskMoveResponse, error) {
-	req := validated.Value()
+func (s *Service) moveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskMoveRequest) (serverapi.WorkflowTaskMoveResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskMoveResponse{}, err
+	}
 	if err := s.authorizeWorkflowTaskMutation(ctx, workflow.TaskID(req.TaskID), req.InvokingSessionID); err != nil {
 		return serverapi.WorkflowTaskMoveResponse{}, err
 	}
@@ -2056,13 +1960,13 @@ func (s *Service) authorizeWorkflowTaskMutation(
 }
 
 func (s *Service) CompleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskCompleteRequest]) (serverapi.WorkflowTaskCompleteResponse, error) {
-		return s.CompleteWorkflowTaskValidated(ctx, validated)
-	})
+	return s.completeWorkflowTask(ctx, req)
 }
 
-func (s *Service) CompleteWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskCompleteRequest]) (serverapi.WorkflowTaskCompleteResponse, error) {
-	req := validated.Value()
+func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskCompleteResponse{}, err
+	}
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node workflow execution is required")
 	}
@@ -2129,14 +2033,9 @@ func (s *Service) CompleteWorkflowTaskValidated(ctx context.Context, validated a
 }
 
 func (s *Service) DeleteWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskDeleteRequest) error {
-	_, err := apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskDeleteRequest]) (struct{}, error) {
-		return struct{}{}, s.DeleteWorkflowTaskValidated(ctx, validated)
-	})
-	return err
-}
-
-func (s *Service) DeleteWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskDeleteRequest]) error {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return err
+	}
 	if s.taskWorktreeCleanup != nil {
 		if err := s.taskWorktreeCleanup.EnsureTaskWorktreeDeletable(ctx, req.TaskID); err != nil {
 			return err
@@ -2183,23 +2082,31 @@ func workflowAttentionContext(ctx context.Context) (context.Context, context.Can
 }
 
 func (s *Service) ListWorkflowAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error) {
-		return s.ListWorkflowAttentionValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowAttentionValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error) {
-	return s.readModels.Attention.ReadAttention(ctx, validated.Value())
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	response, err := s.readModels.Attention.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error) {
-		return s.ListWorkflowTaskAttentionValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowTaskAttentionValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return s.readModels.Attention.ListTaskByID(ctx, validated.Value().TaskID)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	response, err := s.readModels.Attention.ListTask(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentAddRequest) (serverapi.WorkflowTaskCommentAddResponse, error) {
@@ -2217,14 +2124,13 @@ func (s *Service) AddWorkflowTaskComment(ctx context.Context, req serverapi.Work
 }
 
 func (s *Service) ListWorkflowTaskComments(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskCommentListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskCommentListResponse, error) {
-		return s.ListWorkflowTaskCommentsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowTaskCommentsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskCommentListResponse, error) {
-	req := validated.Value()
-	window := workflowOffsetWindow(req.Offset, req.Limit)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskCommentListResponse{}, err
+	}
+	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.WorkflowTaskCommentListResponse{}, err
+	}
 	totalCount, err := s.store.CountTaskComments(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskCommentListResponse{}, err
@@ -2274,57 +2180,49 @@ func (s *Service) DeleteWorkflowTaskComment(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error) {
-		return s.ListWorkflowTaskActivityValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowTaskActivityValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error) {
-	req := validated.Value()
-	return s.readModels.Activity.ReadActivity(ctx, req.TaskID, workflowOffsetWindow(req.Offset, req.Limit))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	response, err := s.readModels.Activity.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
+		return serverapi.WorkflowTaskActivityListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error) {
-		return s.ListWorkflowTaskSessionsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowTaskSessionsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error) {
-	req := validated.Value()
-	return s.readModels.TaskSessions.ReadSessions(ctx, req.TaskID, workflowOffsetWindow(req.Offset, req.Limit))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	response, err := s.readModels.TaskSessions.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error) {
-		return s.ListWorkflowTasksValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowTasksValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error) {
-	req := validated.Value()
-	return s.readModels.TaskList.ReadTasks(ctx, req, workflowOffsetWindow(req.Offset, req.Limit))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskListResponse{}, err
+	}
+	return s.readModels.TaskList.List(ctx, req)
 }
 
 func (s *Service) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error) {
-		return s.SearchWorkflowTasksValidated(ctx, validated)
-	})
-}
-
-func (s *Service) SearchWorkflowTasksValidated(ctx context.Context, validated apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error) {
-	return s.readModels.TaskSearch.ReadSearch(ctx, validated.Value())
+	if err := req.Validate(); err != nil {
+		return serverapi.TaskSearchResponse{}, err
+	}
+	return s.readModels.TaskSearch.Search(ctx, req)
 }
 
 func (s *Service) GetWorkflowBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoardResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoardResponse, error) {
-		return s.GetWorkflowBoardValidated(ctx, validated)
-	})
-}
-
-func (s *Service) GetWorkflowBoardValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoardResponse, error) {
-	req := validated.Value()
-	board, err := s.readModels.Board.ReadBoard(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowBoardResponse{}, err
+	}
+	board, err := s.readModels.Board.Get(ctx, req)
 	if err != nil {
 		return serverapi.WorkflowBoardResponse{}, err
 	}
@@ -2332,14 +2230,10 @@ func (s *Service) GetWorkflowBoardValidated(ctx context.Context, validated apico
 }
 
 func (s *Service) ListWorkflowBoardNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-		return s.ListWorkflowBoardNodeCardsValidated(ctx, validated)
-	})
-}
-
-func (s *Service) ListWorkflowBoardNodeCardsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-	req := validated.Value()
-	return s.readModels.Board.ReadNodeCards(ctx, req)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	return s.readModels.Board.ListNodeCards(ctx, req)
 }
 
 func (s *Service) SubscribeWorkflowProject(ctx context.Context, req serverapi.WorkflowProjectSubscribeRequest) (serverapi.WorkflowProjectSubscription, error) {
@@ -2360,20 +2254,16 @@ func (s *Service) SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowS
 }
 
 func (s *Service) GetWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskGetRequest]) (serverapi.WorkflowTaskGetResponse, error) {
-		return s.GetWorkflowTaskValidated(ctx, validated)
-	})
-}
-
-func (s *Service) GetWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskGetRequest]) (serverapi.WorkflowTaskGetResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskGetResponse{}, err
+	}
 	var (
 		detail serverapi.WorkflowTaskDetail
 		err    error
 	)
-	if req.TaskID != "" {
+	if strings.TrimSpace(req.TaskID) != "" {
 		detail, err = s.readModels.TaskDetail.GetTask(ctx, req.TaskID)
-	} else if req.ProjectID != "" {
+	} else if strings.TrimSpace(req.ProjectID) != "" {
 		detail, err = s.readModels.TaskDetail.GetTaskByProjectShortID(ctx, req.ProjectID, req.ShortID)
 	} else {
 		detail, err = s.readModels.TaskDetail.GetTaskByShortID(ctx, req.ShortID)
@@ -2385,19 +2275,6 @@ func (s *Service) GetWorkflowTaskValidated(ctx context.Context, validated apicon
 		return serverapi.WorkflowTaskGetResponse{}, err
 	}
 	return serverapi.WorkflowTaskGetResponse{Task: detail}, nil
-}
-
-func workflowOffsetWindow(offset *int, limit *int) serverapi.WorkflowOffsetWindow {
-	window := serverapi.WorkflowOffsetWindow{
-		Limit: serverapi.OffsetPaginationMaxLimit,
-	}
-	if offset != nil {
-		window.Offset = *offset
-	}
-	if limit != nil {
-		window.Limit = *limit
-	}
-	return window
 }
 
 func workflowRecord(row workflowstore.WorkflowRecord) serverapi.WorkflowRecord {
@@ -2553,7 +2430,7 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{
 				SubagentRole:   node.SubagentRole,
-				CompletionMode: strings.TrimSpace(node.CompletionMode),
+				CompletionMode: node.CompletionMode,
 				ScriptPath: func() workflow.OptionalScriptPath {
 					if scriptPath, ok := workflow.PresentScriptPath(optionalStringValue(node.ScriptPath)); ok {
 						return scriptPath
@@ -2750,11 +2627,7 @@ func joinInputProviders(in []serverapi.WorkflowJoinInputProvider) []workflow.Joi
 func domainParameters(in []serverapi.WorkflowParameter) []workflow.Parameter {
 	out := make([]workflow.Parameter, 0, len(in))
 	for _, parameter := range in {
-		out = append(out, workflow.Parameter{
-			Key:         parameter.Key,
-			Description: parameter.Description,
-			Purpose:     workflow.ParameterPurpose(parameter.Purpose),
-		}.Canonical())
+		out = append(out, workflow.Parameter{Key: parameter.Key, Description: parameter.Description, Purpose: workflow.ParameterPurpose(parameter.Purpose)})
 	}
 	return out
 }

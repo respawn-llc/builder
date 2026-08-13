@@ -15,16 +15,16 @@ type WorkflowDefinitionReadModel interface {
 }
 
 type WorkflowBoardReadModel interface {
-	ReadBoard(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error)
-	ReadNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
+	Get(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error)
+	ListNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
 }
 
 type WorkflowTaskListReadModel interface {
-	ReadTasks(context.Context, serverapi.WorkflowTaskListRequest, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskListResponse, error)
+	List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
 }
 
 type WorkflowTaskSearchReadModel interface {
-	ReadSearch(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
+	Search(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
 }
 
 type WorkflowTaskDetailReadModel interface {
@@ -41,16 +41,16 @@ type WorkflowTaskDependencyReadModel interface {
 }
 
 type WorkflowActivityReadModel interface {
-	ReadActivity(context.Context, string, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskActivityListResponse, error)
+	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
 }
 
 type WorkflowTaskSessionReadModel interface {
-	ReadSessions(context.Context, string, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error)
+	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error)
 }
 
 type WorkflowAttentionReadModel interface {
-	ReadAttention(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
-	ListTaskByID(context.Context, string) (serverapi.WorkflowTaskAttentionListResponse, error)
+	List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
+	ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error)
 }
 
 type ReadModels struct {
