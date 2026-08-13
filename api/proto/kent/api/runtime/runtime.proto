@@ -5,6 +5,7 @@ package kent.api.runtime;
 import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
+import "kent/api/prompt_command/validation.proto";
 import "kent/api/shared/foundation.proto";
 import "kent/api/worktree/worktree.proto";
 
@@ -248,14 +249,23 @@ message ShouldCompactSuccess {
 }
 
 message PromptCommandInput {
-  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 1 [
+    (buf.validate.field).string.(kent.api.prompt_command.canonical_name) = true
+  ];
   string arguments = 2;
 }
 
 message UserTurnInput {
   oneof input {
     option (buf.validate.oneof).required = true;
-    string text = 1 [(buf.validate.field).string.min_len = 1];
+    string text = 1 [
+      (buf.validate.field).string.min_len = 1,
+      (buf.validate.field).cel = {
+        id: "kent.runtime.user_turn_text_nonblank"
+        message: "text must not be blank"
+        expression: "this.trim() != ''"
+      }
+    ];
     PromptCommandInput prompt_command = 2;
   }
 }
@@ -289,7 +299,14 @@ message SubmitUserTurnNoFinal {
 }
 
 message SubmitUserTurnAssistantFinal {
-  string message = 1 [(buf.validate.field).string.min_len = 1];
+  string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.assistant_final_message_nonblank"
+      message: "message must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool compacted = 2;
 }
 
@@ -507,8 +524,22 @@ message DiscardQueuedUserMessageSuccess {
 }
 
 message Goal {
-  string id = 1 [(buf.validate.field).string.min_len = 1];
-  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  string id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_id_nonblank"
+      message: "id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string objective = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_objective_nonblank"
+      message: "objective must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   GoalStatus status = 3 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]

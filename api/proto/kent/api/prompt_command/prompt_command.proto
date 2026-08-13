@@ -3,6 +3,7 @@ syntax = "proto3";
 package kent.api.prompt_command;
 
 import "buf/validate/validate.proto";
+import "kent/api/prompt_command/validation.proto";
 import "kent/api/shared/foundation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/prompt_command;promptcommandpb";
@@ -19,25 +20,7 @@ message GetCatalogRequest {
 }
 
 message CatalogEntry {
-  string name = 1 [
-    (buf.validate.field).string = {
-      min_len: 8
-      prefix: "prompt:"
-    },
-    (buf.validate.field).cel = {
-      id: "kent.prompt_command.name.canonical"
-      message: "name must be canonical prompt command text"
-      expression:
-        "this == this.trim() && this == this.lowerAscii() && "
-        "size(this) > 7 && "
-        "this.substring(7).split('').all(character, "
-        "(character >= 'a' && character <= 'z') || "
-        "(character >= '0' && character <= '9') || character == '_') && "
-        "!this.substring(7).startsWith('_') && "
-        "!this.endsWith('_') && "
-        "!this.contains('__')"
-    }
-  ];
+  string name = 1 [(buf.validate.field).string.(canonical_name) = true];
   string preview = 2 [
     (buf.validate.field).string = {
       min_len: 1
@@ -65,69 +48,15 @@ message Catalog {
 }
 
 message CatalogReadDetails {
-  optional string command = 1 [
-    (buf.validate.field).string = {
-      min_len: 8
-      prefix: "prompt:"
-    },
-    (buf.validate.field).cel = {
-      id: "kent.prompt_command.catalog_read.command.canonical"
-      message: "command must be canonical prompt command text"
-      expression:
-        "this == this.trim() && this == this.lowerAscii() && "
-        "size(this) > 7 && "
-        "this.substring(7).split('').all(character, "
-        "(character >= 'a' && character <= 'z') || "
-        "(character >= '0' && character <= '9') || character == '_') && "
-        "!this.substring(7).startsWith('_') && "
-        "!this.endsWith('_') && "
-        "!this.contains('__')"
-    }
-  ];
+  optional string command = 1 [(buf.validate.field).string.(canonical_name) = true];
 }
 
 message CommandNotFoundDetails {
-  string command = 1 [
-    (buf.validate.field).string = {
-      min_len: 8
-      prefix: "prompt:"
-    },
-    (buf.validate.field).cel = {
-      id: "kent.prompt_command.not_found.command.canonical"
-      message: "command must be canonical prompt command text"
-      expression:
-        "this == this.trim() && this == this.lowerAscii() && "
-        "size(this) > 7 && "
-        "this.substring(7).split('').all(character, "
-        "(character >= 'a' && character <= 'z') || "
-        "(character >= '0' && character <= '9') || character == '_') && "
-        "!this.substring(7).startsWith('_') && "
-        "!this.endsWith('_') && "
-        "!this.contains('__')"
-    }
-  ];
+  string command = 1 [(buf.validate.field).string.(canonical_name) = true];
 }
 
 message CommandReadDetails {
-  string command = 1 [
-    (buf.validate.field).string = {
-      min_len: 8
-      prefix: "prompt:"
-    },
-    (buf.validate.field).cel = {
-      id: "kent.prompt_command.read.command.canonical"
-      message: "command must be canonical prompt command text"
-      expression:
-        "this == this.trim() && this == this.lowerAscii() && "
-        "size(this) > 7 && "
-        "this.substring(7).split('').all(character, "
-        "(character >= 'a' && character <= 'z') || "
-        "(character >= '0' && character <= '9') || character == '_') && "
-        "!this.substring(7).startsWith('_') && "
-        "!this.endsWith('_') && "
-        "!this.contains('__')"
-    }
-  ];
+  string command = 1 [(buf.validate.field).string.(canonical_name) = true];
 }
 
 message GetCatalogError {

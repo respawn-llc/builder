@@ -74,9 +74,32 @@ message SessionPersistInputDraftResult {
 }
 
 message SessionRetargetWorkspaceRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workspace_root = 2 [(buf.validate.field).string.min_len = 1];
-  optional string project_id = 3 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.retarget_session_id_scoped"
+      message: "session_id must be a single session ID"
+      expression:
+        "this.trim() != '' && this.trim() != '.' && this.trim() != '..' && "
+        "!this.trim().contains('/') && !this.trim().contains('\\\\')"
+    }
+  ];
+  string workspace_root = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.retarget_workspace_root_nonblank"
+      message: "workspace_root must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string project_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.retarget_project_id_nonblank"
+      message: "project_id must not be blank when provided"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message SessionRetargetWorkspaceSuccess {

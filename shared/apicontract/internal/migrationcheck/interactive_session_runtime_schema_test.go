@@ -195,6 +195,39 @@ func TestInteractiveSessionRuntimeLegacyFieldCoverageAndReshapesAreExact(t *test
 
 func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 	validID := "123e4567-e89b-42d3-a456-426614174000"
+	for name, message := range map[string]proto.Message{
+		"noncanonical prompt command": &runtimepb.PromptCommandInput{Name: "bogus"},
+		"blank user turn text": &runtimepb.UserTurnInput{
+			Input: &runtimepb.UserTurnInput_Text{Text: " "},
+		},
+		"blank assistant final": &runtimepb.SubmitUserTurnAssistantFinal{Message: " "},
+		"blank goal ID": &runtimepb.Goal{
+			Id:        " ",
+			Objective: "objective",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+		},
+		"blank goal objective": &runtimepb.Goal{
+			Id:        "goal",
+			Objective: " ",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+
+	for name, request := range map[string]*sessionlaunchpb.SessionRetargetWorkspaceRequest{
+		"traversal session ID": {SessionId: "../x", WorkspaceRoot: "/workspace"},
+		"separator session ID": {SessionId: `a\b`, WorkspaceRoot: "/workspace"},
+		"blank workspace root": {SessionId: "session", WorkspaceRoot: " "},
+		"blank project ID":     {SessionId: "session", WorkspaceRoot: "/workspace", ProjectId: stringPointer(" ")},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(request); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+
 	validActivity := &runtimepb.Activity{
 		State: runtimepb.ActivityState_RUNTIME_ACTIVITY_RUNNING,
 		ActiveStep: &runtimepb.ActiveStep{
