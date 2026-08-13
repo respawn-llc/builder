@@ -234,6 +234,27 @@ func publishPersistenceRootEnv(flagValue string) error {
 }
 
 func runSubcommand(args []string) int {
+	if len(args) > 0 && args[0] == "questions" {
+		fs := newCommandFlagSet(config.Command+" run questions", os.Stderr, questionListUsage)
+		maxHandoffs := fs.Int("max-handoffs", 25, "maximum history windows, including the current unfinished window")
+		jsonMode := fs.Bool("json", false, "stream structured JSON output")
+		if ok, exitCode := parseCommandFlags(fs, args[1:]); !ok {
+			return exitCode
+		}
+		if len(fs.Args()) != 1 {
+			fmt.Fprintln(os.Stderr, "run questions requires one positional Session ID")
+			return 2
+		}
+		translated := []string{
+			"--session", fs.Args()[0],
+			"--max-handoffs", strconv.Itoa(*maxHandoffs),
+		}
+		if *jsonMode {
+			translated = append(translated, "--json")
+		}
+		return questionCommand{openRemote: openQuestionCommandRemote}.
+			listSubcommand(translated, os.Stdout, os.Stderr)
+	}
 	if len(args) > 0 && args[0] == "wait" {
 		return runLiveWaitSubcommand(args[1:])
 	}

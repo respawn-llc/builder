@@ -222,6 +222,10 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 		return size == events.EndOffset, nil
 	}
 	hash := sha256.New()
+	header, _, err := readCurrentEventLogHeader(fp)
+	if err != nil {
+		return false, err
+	}
 	decoder := json.NewDecoder(io.TeeReader(
 		io.NewSectionReader(fp, events.StartOffset, events.EndOffset-events.StartOffset),
 		hash,
@@ -238,7 +242,7 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 		if err != nil {
 			return false, fmt.Errorf("parse committed event suffix: %w", err)
 		}
-		event, err := decodeEventRecordV1(encoded)
+		event, err := decodeEventRecordForVersion(header.Version, encoded)
 		if err != nil {
 			return false, fmt.Errorf("parse committed typed event suffix: %w", err)
 		}

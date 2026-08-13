@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessionenv"
 	"core/shared/textutil"
 )
 
@@ -39,6 +41,10 @@ type questionCommandRemote interface {
 	AnswerPromptBatch(context.Context, serverapi.PromptAnswerBatchRequest) (serverapi.PromptAnswerBatchResponse, error)
 	SubscribeFollowUp(context.Context, serverapi.PromptFollowUpWatchRequest) (serverapi.PromptFollowUpSubscription, error)
 	Close() error
+}
+
+type questionHistoryRemote interface {
+	SubscribeQuestionHistory(context.Context, serverapi.QuestionHistorySubscribeRequest) (serverapi.QuestionHistorySubscription, error)
 }
 
 type questionCommandRemoteOpener func(
@@ -89,12 +95,227 @@ func (c questionCommand) run(args []string, stdout io.Writer, stderr io.Writer) 
 		switch args[0] {
 		case "answer":
 			return c.answerSubcommand(args[1:], stdout, stderr)
+		case "list", "history":
+			return c.listSubcommand(args[1:], stdout, stderr)
 		case "--help", "-h":
 			questionUsage.write(newCommandFlagSet(config.Command+" question", stderr, questionUsage))
 			return 0
 		}
 	}
 	return c.showSubcommand(args, stdout, stderr)
+}
+
+func (c questionCommand) listSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := newCommandFlagSet(config.Command+" questions list", stderr, questionListUsage)
+	var sessionFlag *string
+	registerOptionalStringFlag(fs, "session", "Session whose answered Questions to list", &sessionFlag)
+	maxHandoffs := fs.Int("max-handoffs", 25, "maximum history windows, including the current unfinished window")
+	jsonMode := fs.Bool("json", false, "stream structured JSON output")
+	if ok, exitCode := parseCommandFlags(fs, args); !ok {
+		return exitCode
+	}
+	if len(fs.Args()) != 0 {
+		fmt.Fprintln(stderr, "questions list does not accept positional arguments")
+		return 2
+	}
+	if *maxHandoffs < 1 {
+		fmt.Fprintln(stderr, "--max-handoffs must be at least 1")
+		return 2
+	}
+	rawSessionID := ""
+	if sessionFlag != nil {
+		rawSessionID = *sessionFlag
+	} else if current, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
+		rawSessionID = current
+	}
+	if strings.TrimSpace(rawSessionID) == "" {
+		fmt.Fprintln(stderr, "Session ID is required")
+		return 2
+	}
+	sessionID, err := parseCLILiveSessionID(rawSessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	return c.withRemote(stderr, sessionID, func(remote questionCommandRemote) int {
+		historyRemote, ok := remote.(questionHistoryRemote)
+		if !ok {
+			fmt.Fprintln(stderr, "Question-history remote is unavailable")
+			return 1
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		sub, err := historyRemote.SubscribeQuestionHistory(ctx, serverapi.QuestionHistorySubscribeRequest{
+			SessionID: sessionID.String(), MaxHandoffs: *maxHandoffs,
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		defer sub.Close()
+		if *jsonMode {
+			return streamQuestionHistoryJSON(ctx, sub, stdout, stderr)
+		}
+		return streamQuestionHistoryHuman(ctx, sub, stdout, stderr)
+	})
+}
+
+func streamQuestionHistoryHuman(
+	ctx context.Context,
+	sub serverapi.QuestionHistorySubscription,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	wroteBlock := false
+	questions := 0
+	writeBlock := func(write func()) {
+		if wroteBlock {
+			fmt.Fprintln(stdout)
+		}
+		write()
+		wroteBlock = true
+	}
+	for {
+		event, err := sub.Next(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0
+			}
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(stderr, "Interrupted")
+				return 130
+			}
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		switch event.Kind {
+		case serverapi.QuestionHistoryEventStarted:
+			if event.LargeHistory != nil && *event.LargeHistory {
+				writeBlock(func() {
+					fmt.Fprintln(stdout, "[Session history is large, this command may take a while to finish]")
+				})
+			}
+		case serverapi.QuestionHistoryEventQuestion:
+			if event.Question == nil {
+				fmt.Fprintln(stderr, "Question-history question event is missing its Question")
+				return 1
+			}
+			questions++
+			writeBlock(func() { writeQuestionHistoryHumanItem(stdout, *event.Question) })
+		case serverapi.QuestionHistoryEventCompleted:
+			if questions == 0 {
+				writeBlock(func() { fmt.Fprintln(stdout, "No answered questions found") })
+			}
+			if event.HistoryOmitted != nil && *event.HistoryOmitted {
+				writeBlock(func() {
+					fmt.Fprintln(stdout, "[Older Question history omitted; increase --max-handoffs to include more]")
+				})
+			}
+		default:
+			fmt.Fprintln(stderr, "Question-history stream returned an unknown event")
+			return 1
+		}
+	}
+}
+
+func writeQuestionHistoryHumanItem(stdout io.Writer, question serverapi.QuestionHistoryQuestion) {
+	fmt.Fprintln(stdout, question.Question)
+	if question.SelectedOptionNumber != nil {
+		fmt.Fprintf(stdout, "Answer: %d. %s\n", *question.SelectedOptionNumber, question.Answer)
+	} else {
+		fmt.Fprintf(stdout, "Answer: %s\n", question.Answer)
+	}
+	if question.Commentary != nil {
+		fmt.Fprintf(stdout, "Commentary: %s\n", *question.Commentary)
+	}
+	if question.At != nil {
+		at := time.UnixMilli(question.At.UnixMs()).Local()
+		fmt.Fprintf(stdout, "At: %s\n", at.Format("2006-01-02 15:04:05"))
+	}
+}
+
+func streamQuestionHistoryJSON(
+	ctx context.Context,
+	sub serverapi.QuestionHistorySubscription,
+	stdout io.Writer,
+	stderr io.Writer,
+) int {
+	if _, err := io.WriteString(stdout, `{"questions":[`); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	first := true
+	var historyOmitted *bool
+	for {
+		event, err := sub.Next(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if historyOmitted == nil {
+					fmt.Fprintln(stderr, "Question-history stream ended without completion metadata")
+					return 1
+				}
+				_, err = fmt.Fprintf(stdout, `],"history_omitted":%t}`+"\n", *historyOmitted)
+				if err != nil {
+					fmt.Fprintln(stderr, err)
+					return 1
+				}
+				return 0
+			}
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(stderr, "Interrupted")
+				return 130
+			}
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		switch event.Kind {
+		case serverapi.QuestionHistoryEventStarted:
+		case serverapi.QuestionHistoryEventQuestion:
+			if event.Question == nil {
+				fmt.Fprintln(stderr, "Question-history question event is missing its Question")
+				return 1
+			}
+			if !first {
+				if _, err := io.WriteString(stdout, ","); err != nil {
+					fmt.Fprintln(stderr, err)
+					return 1
+				}
+			}
+			projected := questionHistoryJSONRecord{
+				Question:             event.Question.Question,
+				Answer:               event.Question.Answer,
+				SelectedOptionNumber: event.Question.SelectedOptionNumber,
+				Commentary:           event.Question.Commentary,
+			}
+			if event.Question.At != nil {
+				at := time.UnixMilli(event.Question.At.UnixMs()).UTC()
+				projected.At = &at
+			}
+			encoded, err := json.Marshal(projected)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			if _, err := stdout.Write(encoded); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			first = false
+		case serverapi.QuestionHistoryEventCompleted:
+			historyOmitted = event.HistoryOmitted
+		default:
+			fmt.Fprintln(stderr, "Question-history stream returned an unknown event")
+			return 1
+		}
+	}
+}
+
+type questionHistoryJSONRecord struct {
+	Question             string     `json:"question"`
+	Answer               string     `json:"answer"`
+	SelectedOptionNumber *int       `json:"selected_option_number"`
+	Commentary           *string    `json:"commentary"`
+	At                   *time.Time `json:"at"`
 }
 
 func (c questionCommand) showSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {

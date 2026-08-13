@@ -16,6 +16,7 @@ import (
 const (
 	EventLogContract  = "kent.session.events"
 	EventLogVersionV1 = 1
+	EventLogVersionV2 = 2
 	CacheDigestV1     = 1
 )
 
@@ -25,9 +26,13 @@ type EventLogHeader struct {
 }
 
 func encodeEventLogHeaderV1() ([]byte, error) {
+	return encodeEventLogHeader(EventLogVersionV1)
+}
+
+func encodeEventLogHeader(version int) ([]byte, error) {
 	line, err := json.Marshal(EventLogHeader{
 		Contract: EventLogContract,
-		Version:  EventLogVersionV1,
+		Version:  version,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal event log header: %w", err)
@@ -46,7 +51,7 @@ func decodeEventLogHeader(line []byte) (EventLogHeader, error) {
 	if header.Contract != EventLogContract {
 		return EventLogHeader{}, fmt.Errorf("unsupported event log contract %q", header.Contract)
 	}
-	if header.Version != EventLogVersionV1 {
+	if header.Version != EventLogVersionV1 && header.Version != EventLogVersionV2 {
 		return EventLogHeader{}, fmt.Errorf("unsupported event log version %d", header.Version)
 	}
 	return header, nil
@@ -624,6 +629,169 @@ func decodeEventRecordV1(line []byte) (EventRecord, error) {
 		payload,
 		envelope.CommittedAtUnixMs,
 	)
+}
+
+func encodeEventRecordV2(record EventRecord) ([]byte, error) {
+	if err := validateEventRecordV2(record); err != nil {
+		return nil, err
+	}
+	return encodeEventRecord(record, false)
+}
+
+func decodeEventRecordV2(line []byte) (EventRecord, error) {
+	var envelope eventRecordV1Envelope
+	if err := json.Unmarshal(line, &envelope); err != nil {
+		return EventRecord{}, fmt.Errorf("decode event record: %w", err)
+	}
+	payload, err := decodeEventRecordPayloadV2(
+		envelope.Kind,
+		func(target any) error {
+			return json.Unmarshal(envelope.Payload, target)
+		},
+	)
+	if err != nil {
+		return EventRecord{}, err
+	}
+	record, err := newEventRecord(
+		envelope.Seq,
+		envelope.StepID,
+		payload,
+		envelope.CommittedAtUnixMs,
+	)
+	if err != nil {
+		return EventRecord{}, err
+	}
+	if err := validateEventRecordV2(record); err != nil {
+		return EventRecord{}, fmt.Errorf(
+			"event sequence %d kind %q: %w",
+			record.Seq(),
+			envelope.Kind,
+			err,
+		)
+	}
+	return record, nil
+}
+
+func validateEventRecordV2(record EventRecord) error {
+	payload, err := record.Payload()
+	if err != nil {
+		return err
+	}
+	completion, ok := payload.(ToolCompletionRecord)
+	if !ok {
+		return nil
+	}
+	isQuestion := completion.Name == askQuestionToolName
+	successfulQuestion := isQuestion && !completion.IsError
+	switch {
+	case successfulQuestion && completion.QuestionAnswer == nil:
+		return errors.New("successful ask_question completion requires typed Question-answer facts")
+	case successfulQuestion && record.CommittedAtUnixMs() == nil:
+		return errors.New("successful ask_question completion requires a committed timestamp")
+	case completion.QuestionAnswer != nil && !successfulQuestion:
+		return errors.New("typed Question-answer facts require a successful ask_question completion")
+	default:
+		return nil
+	}
+}
+
+func encodeEventRecord(record EventRecord, v1 bool) ([]byte, error) {
+	if v1 {
+		return encodeEventRecordV1(record)
+	}
+	normalized, err := newEventRecord(
+		record.seq,
+		record.stepID,
+		record.payload,
+		record.committedAtUnixMs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	var payload []byte
+	switch typed := normalized.payload.(type) {
+	case ToolCompletionRecord:
+		payload, err = encodeToolCompletionRecordV2(typed)
+	case HistoryReplacementRecord:
+		payload, err = encodeHistoryReplacementRecordV1(typed)
+	default:
+		payload, err = json.Marshal(normalized.payload)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s payload: %w", normalized.payload.eventKind(), err)
+	}
+	var buffer bytes.Buffer
+	buffer.WriteByte('{')
+	if err := writeMarshaledJSONField(&buffer, "seq", normalized.seq, false); err != nil {
+		return nil, err
+	}
+	if err := writeMarshaledJSONField(&buffer, "kind", normalized.payload.eventKind(), true); err != nil {
+		return nil, err
+	}
+	if normalized.stepID != nil {
+		if err := writeMarshaledJSONField(&buffer, "step_id", normalized.stepID, true); err != nil {
+			return nil, err
+		}
+	}
+	if normalized.committedAtUnixMs != nil {
+		if err := writeMarshaledJSONField(&buffer, "committed_at_unix_ms", normalized.committedAtUnixMs, true); err != nil {
+			return nil, err
+		}
+	}
+	if err := writeJSONField(&buffer, "payload", payload, true); err != nil {
+		return nil, err
+	}
+	buffer.WriteByte('}')
+	return buffer.Bytes(), nil
+}
+
+func encodeToolCompletionRecordV2(record ToolCompletionRecord) ([]byte, error) {
+	payload, err := encodeToolCompletionRecordV1(record)
+	if err != nil || record.QuestionAnswer == nil {
+		return payload, err
+	}
+	answer, err := json.Marshal(record.QuestionAnswer)
+	if err != nil {
+		return nil, err
+	}
+	payload = payload[:len(payload)-1]
+	payload = append(payload, []byte(`,"question_answer":`)...)
+	payload = append(payload, answer...)
+	payload = append(payload, '}')
+	return payload, nil
+}
+
+func decodeEventRecordPayloadV2(
+	kind EventKind,
+	decode func(any) error,
+) (EventRecordPayload, error) {
+	if kind != EventKindToolCompletion {
+		return decodeEventRecordPayloadV1(kind, decode)
+	}
+	var wire struct {
+		CallID         string                       `json:"call_id"`
+		Name           string                       `json:"name"`
+		OutputKind     ToolOutputKind               `json:"output_kind"`
+		IsError        *bool                        `json:"is_error"`
+		Output         json.RawMessage              `json:"output"`
+		Summary        *string                      `json:"summary,omitempty"`
+		CondensedText  *string                      `json:"condensed_text,omitempty"`
+		Presentation   json.RawMessage              `json:"presentation,omitempty"`
+		ProviderItems  []ToolCompletionProviderItem `json:"provider_items,omitempty"`
+		QuestionAnswer *QuestionAnswerRecord        `json:"question_answer,omitempty"`
+	}
+	if err := decode(&wire); err != nil {
+		return nil, fmt.Errorf("decode %s payload: %w", kind, err)
+	}
+	if wire.IsError == nil {
+		return nil, fmt.Errorf("decode %s payload: is_error is required", kind)
+	}
+	return ToolCompletionRecord{
+		CallID: wire.CallID, Name: wire.Name, OutputKind: wire.OutputKind,
+		IsError: *wire.IsError, Output: wire.Output, Summary: wire.Summary,
+		CondensedText: wire.CondensedText, Presentation: wire.Presentation,
+		ProviderItems: wire.ProviderItems, QuestionAnswer: wire.QuestionAnswer,
+	}, nil
 }
 
 func decodeEventRecordPayloadV1(

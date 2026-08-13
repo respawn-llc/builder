@@ -42,15 +42,21 @@ type ToolCompletionProviderItem struct {
 }
 
 type ToolCompletionRecord struct {
-	CallID        string                       `json:"call_id"`
-	Name          string                       `json:"name"`
-	OutputKind    ToolOutputKind               `json:"output_kind"`
-	IsError       bool                         `json:"is_error"`
-	Output        json.RawMessage              `json:"output"`
-	Summary       *string                      `json:"summary,omitempty"`
-	CondensedText *string                      `json:"condensed_text,omitempty"`
-	Presentation  json.RawMessage              `json:"presentation,omitempty"`
-	ProviderItems []ToolCompletionProviderItem `json:"provider_items,omitempty"`
+	CallID         string                       `json:"call_id"`
+	Name           string                       `json:"name"`
+	OutputKind     ToolOutputKind               `json:"output_kind"`
+	IsError        bool                         `json:"is_error"`
+	Output         json.RawMessage              `json:"output"`
+	Summary        *string                      `json:"summary,omitempty"`
+	CondensedText  *string                      `json:"condensed_text,omitempty"`
+	Presentation   json.RawMessage              `json:"presentation,omitempty"`
+	ProviderItems  []ToolCompletionProviderItem `json:"provider_items,omitempty"`
+	QuestionAnswer *QuestionAnswerRecord        `json:"question_answer,omitempty"`
+}
+
+type QuestionAnswerRecord struct {
+	SelectedOptionNumber *int    `json:"selected_option_number,omitempty"`
+	Freeform             *string `json:"freeform,omitempty"`
 }
 
 type toolCompletionRecordV1Wire struct {
@@ -123,6 +129,27 @@ func normalizeToolCompletionRecord(record ToolCompletionRecord) (ToolCompletionR
 			}
 			record.ProviderItems[index] = item
 		}
+	}
+	if record.QuestionAnswer != nil {
+		answer := *record.QuestionAnswer
+		if answer.SelectedOptionNumber != nil {
+			selected := *answer.SelectedOptionNumber
+			answer.SelectedOptionNumber = &selected
+		}
+		if answer.Freeform != nil {
+			freeform := strings.TrimSpace(*answer.Freeform)
+			if freeform == "" {
+				return ToolCompletionRecord{}, fmt.Errorf("Question answer freeform is blank")
+			}
+			answer.Freeform = &freeform
+		}
+		if answer.SelectedOptionNumber == nil && answer.Freeform == nil {
+			return ToolCompletionRecord{}, fmt.Errorf("Question answer requires a selected option or freeform text")
+		}
+		if answer.SelectedOptionNumber != nil && *answer.SelectedOptionNumber <= 0 {
+			return ToolCompletionRecord{}, fmt.Errorf("Question answer selected option must be positive")
+		}
+		record.QuestionAnswer = &answer
 	}
 	return record, nil
 }

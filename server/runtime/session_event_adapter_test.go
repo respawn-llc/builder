@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"reflect"
@@ -189,6 +190,119 @@ func TestSessionToolCompletionRecordAdapterRoundTrip(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("tool-completion adapter accepted a present blank summary")
+	}
+}
+
+func TestSessionQuestionCompletionAdapterCarriesTypedAnswer(t *testing.T) {
+	t.Parallel()
+	t.Run("runtime to Session", func(t *testing.T) {
+		broker := tools.NewAskQuestionBroker()
+		broker.SetAskHandler(func(
+			_ context.Context,
+			_ tools.AskQuestionRequest,
+		) (tools.AskQuestionResolution, error) {
+			return tools.AskQuestionAnswer{
+				SelectedOptionNumber: textutil.Value(2),
+				Freeform:             textutil.Value("keep the split"),
+			}, nil
+		})
+		result, err := tools.NewAskQuestionTool(broker, nil).Call(
+			context.Background(),
+			tools.Call{
+				ID:   "call-question",
+				Name: toolspec.ToolAskQuestion,
+				Input: json.RawMessage(
+					`{"question":"Which option?","suggestions":["first","second"],"recommended_option_index":2}`,
+				),
+			},
+		)
+		if err != nil {
+			t.Fatalf("execute typed Question: %v", err)
+		}
+		result.Presentation = questionCompletionPresentation()
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			t.Fatalf("encode runtime Question result: %v", err)
+		}
+		assertQuestionAnswerJSONField(t, resultJSON, "runtime Result")
+
+		providerItems := llm.PrepareOpenAIInputItems([]llm.ResponseItem{{
+			Type:   llm.ResponseItemTypeFunctionCallOutput,
+			CallID: textutil.Value(result.CallID),
+			Name:   textutil.Value(string(result.Name)),
+			Output: result.Output,
+		}})
+		record, err := sessionToolCompletionRecordFromRuntime(result, providerItems)
+		if err != nil {
+			t.Fatalf("adapt typed Question completion: %v", err)
+		}
+		roundTrippedRecord, err := json.Marshal(record)
+		if err != nil {
+			t.Fatalf("encode typed Session Question completion: %v", err)
+		}
+		assertQuestionAnswerJSONField(t, roundTrippedRecord, "Session completion")
+	})
+
+	t.Run("Session to runtime", func(t *testing.T) {
+		var record session.ToolCompletionRecord
+		if err := json.Unmarshal([]byte(`{
+			"call_id":"call-question",
+			"name":"ask_question",
+			"output_kind":"function",
+			"is_error":false,
+			"output":"User selected option 2. User also said: keep the split",
+			"question_answer":{
+				"selected_option_number":2,
+				"freeform":"keep the split"
+			}
+		}`), &record); err != nil {
+			t.Fatalf("decode typed Session Question completion: %v", err)
+		}
+		record.Presentation = transcript.EncodeToolCallMeta(*questionCompletionPresentation())
+		restored, err := storedToolCompletionFromSessionRecord(record)
+		if err != nil {
+			t.Fatalf("restore typed Question completion: %v", err)
+		}
+		roundTrippedStored, err := json.Marshal(restored)
+		if err != nil {
+			t.Fatalf("encode restored Question completion: %v", err)
+		}
+		assertQuestionAnswerJSONField(t, roundTrippedStored, "restored runtime completion")
+	})
+}
+
+func questionCompletionPresentation() *transcript.ToolCallMeta {
+	return &transcript.ToolCallMeta{
+		ToolName:               string(toolspec.ToolAskQuestion),
+		Presentation:           transcript.ToolPresentationAskQuestion,
+		Question:               "Which option?",
+		Suggestions:            []string{"first", "second"},
+		RecommendedOptionIndex: 2,
+	}
+}
+
+func assertQuestionAnswerJSONField(t *testing.T, raw []byte, owner string) {
+	t.Helper()
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("decode %s JSON: %v", owner, err)
+	}
+	answerRaw := object["question_answer"]
+	if len(answerRaw) == 0 {
+		t.Fatalf("%s lost typed Question-answer facts", owner)
+	}
+	var answer struct {
+		SelectedOptionNumber *int    `json:"selected_option_number"`
+		Freeform             *string `json:"freeform"`
+	}
+	if err := json.Unmarshal(answerRaw, &answer); err != nil {
+		t.Fatalf("decode %s typed Question answer: %v", owner, err)
+	}
+	if answer.SelectedOptionNumber == nil ||
+		*answer.SelectedOptionNumber != 2 ||
+		answer.Freeform == nil ||
+		*answer.Freeform != "keep the split" {
+		t.Fatalf("%s typed Question answer = %#v", owner, answer)
 	}
 }
 

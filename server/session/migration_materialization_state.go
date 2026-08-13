@@ -162,6 +162,10 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 	s.mu.Unlock()
 
 	workspace := eventLogMigrationWorkspacePath(sessionDir)
+	if err := recoverStagedCurrentEventLog(eventsPath, workspace); err != nil {
+		s.clearEventLogMaterialization()
+		return eventLogPreparationResult{}, false, err
+	}
 	if err := cleanupEventLogMigrationWorkspace(workspace); err != nil {
 		s.clearEventLogMaterialization()
 		return eventLogPreparationResult{}, false, err
@@ -187,9 +191,14 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 
 	switch classification {
 	case eventLogSourceMissing, eventLogSourceEmpty:
+		version := s.eventLogCreationVersion
+		if version == 0 {
+			version = EventLogVersionV2
+		}
 		if err := installHeaderOnlyCurrentEventLog(
 			eventsPath,
 			workspace,
+			version,
 			func() {
 				// Rename is the migration commit point. This transition must
 				// precede workspace cleanup and directory sync.
@@ -281,7 +290,7 @@ func (s *Store) eventLogPreparationResultLocked() eventLogPreparationResult {
 	result := eventLogPreparationResult{
 		State:            snapshot.state,
 		Source:           snapshot.source,
-		SupportedVersion: EventLogVersionV1,
+		SupportedVersion: EventLogVersionV2,
 	}
 	if snapshot.foundVersion != nil {
 		version := *snapshot.foundVersion
@@ -448,9 +457,10 @@ func validateOwnedEventLogMigrationWorkspaceEntry(entry os.DirEntry) error {
 func installHeaderOnlyCurrentEventLog(
 	eventsPath string,
 	workspace string,
+	version int,
 	onCommitted func(),
 ) error {
-	header, err := encodeEventLogHeaderV1()
+	header, err := encodeEventLogHeader(version)
 	if err != nil {
 		return err
 	}
@@ -460,6 +470,37 @@ func installHeaderOnlyCurrentEventLog(
 		}
 		return nil
 	})
+}
+
+func recoverStagedCurrentEventLog(eventsPath, workspace string) error {
+	entries, err := readOwnedEventLogMigrationWorkspace(workspace)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	staged := false
+	for _, entry := range entries {
+		if entry.Name() == eventLogMigrationStagedLogFile {
+			staged = true
+			break
+		}
+	}
+	if !staged {
+		return nil
+	}
+	stagePath := filepath.Join(workspace, eventLogMigrationStagedLogFile)
+	if _, err := openCurrentEventLog(stagePath, currentEventLogReadOnly); err != nil {
+		return fmt.Errorf("validate staged event log: %w", err)
+	}
+	if err := atomicallyReplaceEventLog(stagePath, eventsPath); err != nil {
+		return err
+	}
+	if err := syncSessionDirectory(filepath.Dir(eventsPath)); err != nil {
+		return err
+	}
+	return removeOwnedEventLogMigrationWorkspace(workspace)
 }
 
 func installCurrentEventLog(
@@ -621,16 +662,16 @@ func classifyEventLogHeader(
 				Reason: malformedEventLogHeaderUnexpectedContract,
 			}
 	}
-	if version > EventLogVersionV1 {
+	if version > EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
 				source:       eventLogSourceNewer,
 				foundVersion: &version,
 			}, UnsupportedEventLogVersionError{
 				FoundVersion:     version,
-				SupportedVersion: EventLogVersionV1,
+				SupportedVersion: EventLogVersionV2,
 			}
 	}
-	if version != EventLogVersionV1 {
+	if version != EventLogVersionV1 && version != EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
 				source:       eventLogSourceMalformed,
 				foundVersion: &version,

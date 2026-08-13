@@ -8,6 +8,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 const (
@@ -167,6 +168,9 @@ const (
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
+	MethodSessionQuestionHistorySubscribe               = "session.questionHistory.subscribe"
+	MethodSessionQuestionHistoryEvent                   = "session.questionHistory.event"
+	MethodSessionQuestionHistoryComplete                = "session.questionHistory.complete"
 )
 
 type HandshakeRequest struct {
@@ -800,6 +804,25 @@ type SubscribeResponse struct {
 
 type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
+}
+
+type SessionQuestionHistoryEventParams struct {
+	Event SessionQuestionHistoryEvent `json:"event"`
+}
+
+type SessionQuestionHistoryEvent struct {
+	Kind           string                          `json:"kind"`
+	LargeHistory   *bool                           `json:"large_history,omitempty"`
+	Question       *SessionQuestionHistoryQuestion `json:"question,omitempty"`
+	HistoryOmitted *bool                           `json:"history_omitted,omitempty"`
+}
+
+type SessionQuestionHistoryQuestion struct {
+	Question             string                        `json:"question"`
+	Answer               string                        `json:"answer"`
+	SelectedOptionNumber *int                          `json:"selected_option_number"`
+	Commentary           *string                       `json:"commentary"`
+	At                   *transcript.CommittedAtUnixMs `json:"at"`
 }
 
 type AttentionNotificationEventParams struct {
