@@ -171,12 +171,12 @@ function useProjectTaskGroupData(
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     maxPages: projectTaskGroupRetainedPages,
     gcTime: 0,
-    placeholderData: (previous) => previous,
   });
   const retainedData = useRetainedQueryData(
     { group, projectID },
     enabled ? query.data : undefined,
     projectTaskGroupScopesEqual,
+    enabled,
   );
   useEffect(() => {
     if (enabled) {

@@ -32,6 +32,11 @@ import {
   type ProjectTaskGroup,
   type ProjectTaskGroupData,
 } from "./projectTaskListData";
+import {
+  firstExpandedProjectTaskGroup,
+  projectTaskTopNavigationRequiresRequest,
+  topNavigationScrollRequest,
+} from "./projectTaskListNavigation";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { projectTaskColumnCount } from "./ProjectTaskRow";
@@ -59,6 +64,9 @@ export function ProjectTasksSurface({
   >(null);
   const [pendingTaskReveal, setPendingTaskReveal] = useState<
     Readonly<{ key: string; taskID: string }> | null
+  >(null);
+  const [topNavigationRequest, setTopNavigationRequest] = useState<
+    Readonly<{ group: ProjectTaskGroup; key: string }> | null
   >(null);
   const scrollRequestSequence = useRef(0);
   const nextScrollRequestKey = useCallback((prefix: string) => {
@@ -217,15 +225,23 @@ export function ProjectTasksSurface({
     disclosure,
     request: finalNavigationRequest,
   });
+  const topNavigationRequiresRequest = projectTaskTopNavigationRequiresRequest(
+    counts,
+    disclosure,
+    anchors,
+  );
   const scrollRequest = preferredScrollRequest(
+    topNavigationScrollRequest(topNavigationRequest, data),
     finalNavigation.scrollRequest,
     createdTaskScrollRequest(pendingTaskReveal, presentation.entries),
   );
   const onScrollRequestApplied = scrollRequestAppliedHandler({
     finalNavigationRequest,
     pendingTaskReveal,
+    topNavigationRequest,
     setFinalNavigationRequest,
     setPendingTaskReveal,
+    setTopNavigationRequest,
   });
   return (
     <ProjectTasksContent
@@ -236,6 +252,7 @@ export function ProjectTasksSurface({
       finalEntryRequestKey={finalNavigation.requestKey}
       finalNavigationInFlight={finalNavigation.inFlight}
       finalNavigationRequiresRequest={finalNavigation.requiresRequest}
+      topNavigationRequiresRequest={topNavigationRequiresRequest}
       onLinkWorkflow={openLinkWorkflow}
       onNewTask={openNewTask}
       onRequestFinalEntry={() => {
@@ -244,6 +261,21 @@ export function ProjectTasksSurface({
       }}
       onRequestTop={() => {
         setFinalNavigationRequest(null);
+        setPendingTaskReveal(null);
+        const group = firstExpandedProjectTaskGroup(counts, disclosure);
+        const currentAnchors = viewMemory.read().anchors;
+        if (group === null || currentAnchors[group] === 0) {
+          setTopNavigationRequest(null);
+          return false;
+        }
+        const nextAnchors = { ...currentAnchors, [group]: 0 };
+        viewMemory.setAnchors(nextAnchors);
+        setAnchors(nextAnchors);
+        setTopNavigationRequest({
+          group,
+          key: nextScrollRequestKey(`top-${group}`),
+        });
+        return true;
       }}
       onScrollRequestApplied={onScrollRequestApplied}
       onScrollElementChange={onScrollElementChange}
@@ -394,6 +426,10 @@ function createdTaskScrollRequest(
 }
 
 function preferredScrollRequest(
+  topRequest:
+    | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | Readonly<{ key: string; target: "top" }>
+    | undefined,
   finalRequest:
     | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
     | undefined,
@@ -401,19 +437,23 @@ function preferredScrollRequest(
     | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
     | undefined,
 ) {
-  return finalRequest ?? createdTaskRequest;
+  return topRequest ?? finalRequest ?? createdTaskRequest;
 }
 
 function scrollRequestAppliedHandler({
   finalNavigationRequest,
   pendingTaskReveal,
+  topNavigationRequest,
   setFinalNavigationRequest,
   setPendingTaskReveal,
+  setTopNavigationRequest,
 }: Readonly<{
   finalNavigationRequest: Readonly<{ group: ProjectTaskGroup; key: string; offset: number }> | null;
   pendingTaskReveal: Readonly<{ key: string; taskID: string }> | null;
+  topNavigationRequest: Readonly<{ group: ProjectTaskGroup; key: string }> | null;
   setFinalNavigationRequest: (request: null) => void;
   setPendingTaskReveal: (request: null) => void;
+  setTopNavigationRequest: (request: null) => void;
 }>): (key: string) => void {
   return (key) => {
     if (finalNavigationRequest?.key === key) {
@@ -421,6 +461,9 @@ function scrollRequestAppliedHandler({
     }
     if (pendingTaskReveal?.key === key) {
       setPendingTaskReveal(null);
+    }
+    if (topNavigationRequest?.key === key) {
+      setTopNavigationRequest(null);
     }
   };
 }
@@ -433,6 +476,7 @@ function ProjectTasksContent({
   finalEntryRequestKey,
   finalNavigationInFlight,
   finalNavigationRequiresRequest,
+  topNavigationRequiresRequest,
   onLinkWorkflow,
   onNewTask,
   onRequestFinalEntry,
@@ -452,15 +496,17 @@ function ProjectTasksContent({
   finalEntryRequestKey: string | null;
   finalNavigationInFlight: boolean;
   finalNavigationRequiresRequest: boolean;
+  topNavigationRequiresRequest: boolean;
   onLinkWorkflow: () => void;
   onNewTask: () => void;
   onRequestFinalEntry: () => void;
-  onRequestTop: () => void;
+  onRequestTop: () => boolean;
   onScrollRequestApplied: (key: string) => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
   scrollRequest:
     | Readonly<{ align: "end"; entryKey: string; key: string; target: "entry" }>
+    | Readonly<{ key: string; target: "top" }>
     | undefined;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
@@ -516,6 +562,7 @@ function ProjectTasksContent({
             onRequestTop,
             requestKey: finalEntryRequestKey,
             requiresFinalEntryRequest: finalNavigationRequiresRequest,
+            requiresTopEntryRequest: topNavigationRequiresRequest,
             upLabel: t("home.prototype.jumpToTop"),
           }}
           canApplyPixelOffset={entries.some((entry) => entry.kind === "task")}

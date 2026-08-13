@@ -468,7 +468,7 @@ describe("ProjectTasksSurface", () => {
     expect(refetch).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects duplicate Down and lets a newer Up cancel the pending final scroll", () => {
+  it("rejects duplicate Down and makes newer Up restore the real top window", () => {
     fixture.counts = { active: 0, backlog: 0, done: 84 };
     fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
     const memory = createProjectTasksViewMemory();
@@ -487,14 +487,23 @@ describe("ProjectTasksSurface", () => {
     expect(memory.read().anchors.done).toBe(75);
 
     fireEvent.click(screen.getByRole("button", { name: "Jump to top" }));
+    expect(memory.read().anchors.done).toBe(0);
     fixture.scrollRequests = [];
+    fixture.doneDataOverrides = { isFetching: true, isPlaceholderData: true };
+    view.rerender(withQueryClient(surface(memory)));
+    expect(
+      fixture.scrollRequests.filter((request) => request?.target === "top"),
+    ).toEqual([]);
+
     fixture.doneDataOverrides = {};
     view.rerender(withQueryClient(surface(memory)));
-
-    expect(screen.getByRole("row", { name: "KNT-84 Final done task" })).toBeInTheDocument();
+    expect(screen.getByRole("row", { name: "KNT-4 Done task" })).toBeInTheDocument();
     expect(
       fixture.scrollRequests.filter((request) => request?.target === "entry"),
     ).toEqual([]);
+    expect(
+      fixture.scrollRequests.filter((request) => request?.target === "top"),
+    ).toHaveLength(1);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {

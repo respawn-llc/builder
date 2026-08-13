@@ -96,9 +96,10 @@ export type VirtualizedGroupedGridProps = Readonly<{
         downLabel: string;
         finalEntryKey: string;
         onRequestFinalEntry?: (() => void) | undefined;
-        onRequestTop?: (() => void) | undefined;
+        onRequestTop?: (() => boolean) | undefined;
         requestKey?: string | null | undefined;
         requiresFinalEntryRequest?: boolean | undefined;
+        requiresTopEntryRequest?: boolean | undefined;
         upDisabled?: boolean | undefined;
         downDisabled?: boolean | undefined;
       }>
@@ -185,7 +186,10 @@ export function VirtualizedGroupedGrid({
       {navigation === undefined || !scrollMetrics.overflows ? null : (
         <div className="absolute right-[var(--space-3)] bottom-[var(--space-3)] z-[2] flex flex-col">
           <IconTooltipButton
-            disabled={navigation.upDisabled === true || scrollMetrics.atTop}
+            disabled={
+              navigation.upDisabled === true ||
+              (scrollMetrics.atTop && navigation.requiresTopEntryRequest !== true)
+            }
             label={navigation.upLabel}
             onClick={requestTop}
             size="icon-sm"
@@ -244,8 +248,10 @@ function useGroupedGridNavigation(
     return sequenceRef.current;
   };
   const requestTop = () => {
-    navigation?.onRequestTop?.();
-    setScrollCommand({ key: `top-${nextSequence().toString()}`, target: "top" });
+    const deferred = navigation?.onRequestTop?.() ?? false;
+    if (!deferred) {
+      setScrollCommand({ key: `top-${nextSequence().toString()}`, target: "top" });
+    }
   };
   const requestFinalEntry = () => {
     const request = requestedFinalEntryAction({

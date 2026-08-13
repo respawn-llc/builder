@@ -261,6 +261,49 @@ describe("Project Task-list data ownership", () => {
     expect(result.current.active.isPlaceholderData).toBe(true);
   });
 
+  it("clears retained rows on collapse so reopen failure is an initial error", async () => {
+    let fail = false;
+    state.listPage = async (input) => {
+      if (fail) throw new Error("reopen failed");
+      return pageResponse(input.group ?? "active", input.offset ?? 0);
+    };
+    const harness = createHarness();
+    const { result, rerender } = renderHook(
+      ({ expanded }) =>
+        useProjectTaskListData({
+          projectID: "project-1",
+          gateReady: true,
+          expanded: { active: expanded, backlog: false, done: false },
+          anchors: { active: 0, backlog: 0, done: 0 },
+        }),
+      {
+        initialProps: { expanded: true },
+        wrapper: ({ children }) => harness.render(children),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.active.tasks).toHaveLength(1);
+    });
+
+    rerender({ expanded: false });
+    expect(result.current.active.tasks).toEqual([]);
+    await waitFor(() => {
+      expect(
+        harness.queryClient.getQueryData(
+          queryKeys.projectTaskGroup("project-1", "active", 0),
+        ),
+      ).toBeUndefined();
+    });
+    fail = true;
+    rerender({ expanded: true });
+    await waitFor(() => {
+      expect(result.current.active.isError).toBe(true);
+    });
+
+    expect(result.current.active.tasks).toEqual([]);
+    expect(result.current.active.isPlaceholderData).toBe(false);
+  });
+
   it("distinguishes a first-page failure from a retained next-edge failure", async () => {
     state.listPage = async () => {
       throw new Error("first page failed");
