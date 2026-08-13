@@ -6,13 +6,13 @@ import (
 )
 
 func pastReasoningBeforeLatestKentInstructionBoundary(items []llm.ResponseItem) []llm.ResponseItem {
-	latestBoundary := -1
+	latestBoundary, present := 0, false
 	for index := range items {
 		if isKentInstructionBoundary(items[index]) {
-			latestBoundary = index
+			latestBoundary, present = index, true
 		}
 	}
-	if latestBoundary < 0 {
+	if !present {
 		return nil
 	}
 	selected := make([]llm.ResponseItem, 0)
