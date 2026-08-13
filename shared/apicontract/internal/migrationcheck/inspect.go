@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"core/shared/apicontract"
+	"core/shared/clientui"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -78,6 +79,11 @@ type WireFieldObjectKey struct {
 func InspectExecutionTarget() (Report, error) {
 	routes := apicontract.Routes()
 	reachable := collectReachableTypes(routes)
+	for reflectedType := range collectReachableTypesFromRoots(
+		reflect.TypeFor[clientui.TranscriptOperationalDiagnostic](),
+	) {
+		reachable[reflectedType] = struct{}{}
+	}
 	packagePaths := make([]string, 0)
 	seenPackagePaths := make(map[string]struct{})
 	for reflectedType := range reachable {

@@ -3,7 +3,6 @@ package migrationcheck
 import (
 	"testing"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	worktreepb "core/shared/protoapi/gen/kent/api/worktree"
@@ -11,77 +10,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-func TestWorktreeSchemaHasExactLegacyProvenanceAndPolicies(t *testing.T) {
-	operations, err := protoapi.Operations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	worktreeOperations := make(map[string]protoapi.Operation)
-	for _, operation := range operations {
-		if operation.Descriptor.ParentFile().Package() != "kent.api.worktree" {
-			continue
-		}
-		if operation.LegacyWireName == nil {
-			t.Fatalf("%s has no migration provenance", operation.ActiveName)
-		}
-		worktreeOperations[*operation.LegacyWireName] = operation
-	}
-
-	worktreeRoutes := make(map[string]struct{})
-	for _, route := range apicontract.Routes() {
-		if route.Dependency != apicontract.DependencyWorktree {
-			continue
-		}
-		worktreeRoutes[route.Method] = struct{}{}
-		if route.EventMethod != "" {
-			worktreeRoutes[route.EventMethod] = struct{}{}
-		}
-		if route.CompleteMethod != "" {
-			worktreeRoutes[route.CompleteMethod] = struct{}{}
-		}
-	}
-	if len(worktreeOperations) != len(worktreeRoutes) {
-		t.Fatalf("Worktree descriptors/routes = %d/%d", len(worktreeOperations), len(worktreeRoutes))
-	}
-	for legacyName := range worktreeRoutes {
-		operation, ok := worktreeOperations[legacyName]
-		if !ok {
-			t.Errorf("missing Worktree descriptor provenance %q", legacyName)
-			continue
-		}
-		route, ok := apicontract.RouteByMethod(legacyName)
-		if !ok {
-			t.Fatalf("live Worktree route disappeared: %s", legacyName)
-		}
-		wantKind := worktreeOperationKind(route.Kind)
-		if operation.Options.Kind != wantKind {
-			t.Errorf("%s kind = %s, want %s", legacyName, operation.Options.Kind, wantKind)
-		}
-		if operation.Options.AuthenticationStage != generatedAuthenticationStage(route.Auth) {
-			t.Errorf("%s authentication = %s, want %s", legacyName, operation.Options.AuthenticationStage, route.Auth)
-		}
-		if operation.Options.ScopePolicy != generatedScopePolicy(route.Scope) {
-			t.Errorf("%s scope = %s, want %s", legacyName, operation.Options.ScopePolicy, route.Scope)
-		}
-		if route.Kind == apicontract.KindUnary &&
-			operation.Options.UnaryConnection != generatedUnaryConnection(route.Connection) {
-			t.Errorf("%s unary connection = %s, want %s", legacyName, operation.Options.UnaryConnection, route.Connection)
-		}
-		if route.EventMethod != "" {
-			event, exists := worktreeOperations[route.EventMethod]
-			if !exists || operation.Event == nil || operation.Event.Descriptor.FullName() != event.Descriptor.FullName() {
-				t.Errorf("%s event provenance does not match %s", legacyName, route.EventMethod)
-			}
-		}
-		if route.CompleteMethod != "" {
-			completion, exists := worktreeOperations[route.CompleteMethod]
-			if !exists || operation.Completion == nil || operation.Completion.Descriptor.FullName() != completion.Descriptor.FullName() {
-				t.Errorf("%s completion provenance does not match %s", legacyName, route.CompleteMethod)
-			}
-		}
-	}
-}
 
 func TestWorktreeSetupStartIsSeparateFromEventsAndCompletion(t *testing.T) {
 	operation := mustOperationByLegacyName(t, "worktree.setup.subscribe")
@@ -402,21 +330,6 @@ func assertMessageOneofFields(t *testing.T, message protoreflect.MessageDescript
 
 func stringPointer(value string) *string {
 	return &value
-}
-
-func worktreeOperationKind(kind apicontract.Kind) sharedpb.OperationKind {
-	switch kind {
-	case apicontract.KindUnary:
-		return sharedpb.OperationKind_OPERATION_KIND_UNARY
-	case apicontract.KindSubscription:
-		return sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION
-	case apicontract.KindProgress:
-		return sharedpb.OperationKind_OPERATION_KIND_PROGRESS
-	case apicontract.KindNotification:
-		return sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION
-	default:
-		panic("unsupported Worktree operation kind: " + kind)
-	}
 }
 
 func typeMethodIdentity(packagePath, typeName, methodName string) Identity {

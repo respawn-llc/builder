@@ -35,7 +35,6 @@ import {
 } from "../dist/index.js";
 import {
   schema_kent_api_attention_attention as attention,
-  schema_kent_api_process_process as process,
   schema_kent_api_prompt_prompt as prompt,
   schema_kent_api_run_prompt_run_prompt as runPrompt,
   schema_kent_api_shared_foundation as foundation,
@@ -85,16 +84,19 @@ const {
 } = schemaConventionsFixture;
 const { QuestionSchema } = prompt;
 const {
+  OperationalDiagnosticCode,
+  OperationalDiagnosticSchema,
   QueuedMessageStateSchema,
   QueuedMessageStatus,
 } = transcript;
-const { OutputChunkSchema } = process;
 const {
   GetReadinessResultSchema,
   GetReadinessSuccessSchema,
   ReadinessSchema,
 } = server;
 const {
+  NotificationEventSchema: AttentionNotificationEventSchema,
+  SnapshotCompleteSchema: AttentionSnapshotCompleteSchema,
   Kind: AttentionKind,
   NotificationIDSchema: AttentionNotificationIDSchema,
   NotificationSchema: AttentionNotificationSchema,
@@ -112,7 +114,6 @@ const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 test("new schema slice executes generated validation in TypeScript", () => {
   assert.equal(prompt.QuestionSchema, QuestionSchema);
   assert.equal(transcript.QueuedMessageStateSchema, QueuedMessageStateSchema);
-  assert.equal(process.OutputChunkSchema, OutputChunkSchema);
   assert.equal(attention.NotificationSchema, AttentionNotificationSchema);
   assert.equal(runPrompt.ProgressEventSchema, ProgressEventSchema);
   const timestamp = create(TimestampSchema, { seconds: 1700000000n });
@@ -147,11 +148,26 @@ test("new schema slice executes generated validation in TypeScript", () => {
     status: QueuedMessageStatus.ACCEPTED,
   })));
 
-  assert.throws(() => validateGeneratedMessage(OutputChunkSchema, create(OutputChunkSchema, {
-    processId: "process-1",
-    offsetBytes: 4n,
-    nextOffsetBytes: 3n,
-  })));
+  validateGeneratedMessage(OperationalDiagnosticSchema, create(OperationalDiagnosticSchema, {
+    code: OperationalDiagnosticCode.SLEEP_GUARD_FAILED,
+    detail: "sleep prevention failed",
+  }));
+  validateGeneratedMessage(OperationalDiagnosticSchema, create(OperationalDiagnosticSchema, {
+    code: OperationalDiagnosticCode.PROVIDER_TURN_STATE_INVALID,
+  }));
+  assert.throws(() => validateGeneratedMessage(
+    OperationalDiagnosticSchema,
+    create(OperationalDiagnosticSchema, {
+      code: OperationalDiagnosticCode.SLEEP_GUARD_FAILED,
+    }),
+  ));
+  assert.throws(() => validateGeneratedMessage(
+    OperationalDiagnosticSchema,
+    create(OperationalDiagnosticSchema, {
+      code: OperationalDiagnosticCode.PROVIDER_TURN_STATE_INVALID,
+      detail: "unexpected detail",
+    }),
+  ));
 
   assert.throws(() => validateGeneratedMessage(AttentionNotificationSchema, create(AttentionNotificationSchema, {
     id: create(AttentionNotificationIDSchema, {
@@ -553,12 +569,14 @@ test("binary envelopes round-trip every frame variant", () => {
       },
     }),
   );
-  const outputChunkPayload = toBinary(
-    OutputChunkSchema,
-    create(OutputChunkSchema, {
-      processId: "process-1",
-      offsetBytes: 0n,
-      nextOffsetBytes: 1n,
+  const notificationPayload = toBinary(
+    AttentionNotificationEventSchema,
+    create(AttentionNotificationEventSchema, {
+      sequence: 1n,
+      payload: {
+        case: "snapshotComplete",
+        value: create(AttentionSnapshotCompleteSchema, { sessionId: "session-1" }),
+      },
     }),
   );
   const frames = [
@@ -581,8 +599,8 @@ test("binary envelopes round-trip every frame variant", () => {
     {
       case: "notificationEvent",
       value: create(NotificationEventSchema, {
-        operation: "kent.api.process.output_service.event",
-        payload: outputChunkPayload,
+        operation: "kent.api.attention.session_service.event",
+        payload: notificationPayload,
       }),
     },
     {
@@ -609,24 +627,28 @@ test("binary envelopes round-trip every frame variant", () => {
 });
 
 test("binary envelopes reject operation frame and direction mismatches", () => {
+  const notificationPayload = toBinary(
+    AttentionNotificationEventSchema,
+    create(AttentionNotificationEventSchema, {
+      sequence: 1n,
+      payload: {
+        case: "snapshotComplete",
+        value: create(AttentionSnapshotCompleteSchema, { sessionId: "session-1" }),
+      },
+    }),
+  );
   const mismatches = [
     {
       case: "call",
       value: create(CallSchema, {
-        operation: "kent.api.process.output_service.event",
-        payload: toBinary(
-          OutputChunkSchema,
-          create(OutputChunkSchema, {
-            processId: "process-1",
-            nextOffsetBytes: 1n,
-          }),
-        ),
+        operation: "kent.api.attention.session_service.event",
+        payload: notificationPayload,
       }),
     },
     {
       case: "result",
       value: create(ResultSchema, {
-        operation: "kent.api.process.output_service.event",
+        operation: "kent.api.attention.session_service.event",
         payload: new Uint8Array(),
       }),
     },
@@ -684,7 +706,7 @@ test("binary envelopes reject malformed variants", () => {
       frame: {
         case: "notificationEvent",
         value: create(NotificationEventSchema, {
-          operation: "kent.api.process.output_service.event",
+          operation: "kent.api.attention.session_service.event",
         }),
       },
     }),
@@ -765,7 +787,7 @@ test("binary envelope decoding rejects semantically malformed wire bytes", () =>
       frame: {
         case: "notificationEvent",
         value: create(NotificationEventSchema, {
-          operation: "kent.api.process.output_service.event",
+          operation: "kent.api.attention.session_service.event",
         }),
       },
     }),
@@ -825,7 +847,7 @@ test("binary envelopes allow present zero-byte Empty payloads only", () => {
     frame: {
       case: "notificationEvent",
       value: create(NotificationEventSchema, {
-        operation: "kent.api.process.output_service.event",
+        operation: "kent.api.attention.session_service.event",
         payload: new Uint8Array(),
       }),
     },

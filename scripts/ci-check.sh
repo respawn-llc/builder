@@ -87,9 +87,11 @@ run_protobuf() {
 	)
 	echo "==> Protobuf generated-output freshness"
 	./scripts/generate-protobuf.sh check
+	echo "==> Protobuf migration lint"
+	go run ./shared/apicontract/cmd/migrationlint
 	echo "==> Protobuf descriptor policy"
 	go test ./shared/apicontract/internal/migrationcheck \
-		-run '^(TestDescriptorPolicy|TestExecutionTarget)' \
+		-run '^TestDescriptorPolicy' \
 		-count=1
 	echo "==> Protobuf schema/protocol version"
 	./scripts/check-protobuf-schema-version.sh

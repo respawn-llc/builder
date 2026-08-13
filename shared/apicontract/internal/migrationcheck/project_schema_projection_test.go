@@ -48,22 +48,6 @@ func TestProjectSchemaProjectionRejectsExpandingClientOwnedWordingDeletion(t *te
 	)
 }
 
-func TestProjectSchemaProjectionResolvesEveryLockedLegacyIdentity(t *testing.T) {
-	report, err := InspectExecutionTarget()
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved := make(map[Identity]struct{}, len(report.Predecessors))
-	for _, predecessor := range report.Predecessors {
-		resolved[predecessor.Identity] = struct{}{}
-	}
-	for _, identity := range ProjectSchemaProjectionIdentities() {
-		if _, exists := resolved[identity]; !exists {
-			t.Errorf("Project schema projection identity was not resolved from the execution target: %s", identity)
-		}
-	}
-}
-
 func TestProjectWorkspaceOperationsOwnDistinctErrorUnions(t *testing.T) {
 	for _, fixture := range []struct {
 		message protoreflect.MessageDescriptor

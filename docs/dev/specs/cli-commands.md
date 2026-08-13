@@ -22,7 +22,7 @@
 - Task state may change before deletion is processed; the server's deletion blockers remain authoritative.
 - If confirmation is absent after the conditional human-only check permits the caller, the command makes no deletion request and reports exactly `Project deletion was not confirmed. Rerun with --confirm to delete project <project-id>.`
 - Successful plain output is exactly `Deleted project <project-id>. Workspace files were not deleted.`
-- Blocked plain output preserves every server blocker in server order with its code, message, and positive count when present. The CLI adds no blocker guidance.
+- Blocked plain output preserves every blocker in server order with its stable code and positive count when present. The CLI derives human-readable wording from the code and typed details and adds no blocker guidance.
 - A successful deletion exits with status 0.
 - Missing confirmation, conditional human-only denial, blocked deletion, Project lookup failure, and other operational failures exit with status 1.
 - Usage errors exit with status 2.
@@ -31,7 +31,7 @@
 - Failed JSON uses `status: "error"` and includes an `error` object with `code` and `message`.
 - Every failed JSON result after valid argument parsing includes the canonical requested Project ID as `error.project_id`.
 - A blocked JSON result includes every server blocker in server order at `error.blockers`.
-- Each JSON blocker preserves the server's `code` and `message`. It includes `count` only when the count is positive.
+- Each JSON blocker includes the stable `code`, client-derived `message`, and `count` only when the count is positive.
 - Non-blocked JSON errors omit `blockers`.
 - Stable Project deletion error codes are `confirmation_required`, `human_only_unfinished_work`, `project_not_found`, `project_delete_blocked`, and `request_failed`.
 
@@ -47,7 +47,7 @@
 - Paths refer to the Kent server's filesystem.
 - Detach applies immediately without a prompt or confirmation flag.
 - Successful plain output is the detached workspace ID followed by a newline.
-- Blocked plain output reports only the first blocker in Kent's response order, including its code, count when present, explanation, and next-step guidance.
+- Blocked plain output reports only the first blocker in Kent's response order, including its code, count when present, and client-derived explanation and next-step guidance.
 - Blocked plain output exits with status 1 and changes nothing.
 - Plain operational failures write no successful result and exit with status 1.
 - Usage errors exit with status 2.
@@ -56,7 +56,7 @@
 - Failed JSON uses `status: "error"` and includes an `error` object with `code` and `message`.
 - A failed JSON result includes `project_id` and `workspace_id` together only after the workspace relationship has resolved.
 - A blocked JSON result includes a non-empty `blockers` array containing every bounded blocker.
-- Each blocker includes `code`, `message`, and `guidance`. It includes `count` only when the count is positive.
+- Each blocker includes the stable `code`, client-derived `message`, and client-derived `guidance`. It includes `count` only when the count is positive.
 - A retryable concurrent conflict includes `retryable: true`.
 - `result`, `error`, Project/workspace IDs, `blockers`, `count`, and `retryable` are omitted when absent. They are never represented by `null`, `false`, zero, or an empty collection.
 - Stable detach error codes are `project_not_found`, `workspace_not_attached`, `workspace_detach_blocked`, `workspace_detach_conflict`, and `request_failed`.
@@ -88,7 +88,7 @@
 - `executable_current_nodes` directs the operator to stop execution and move, complete, or delete affected Tasks until no executable Current Node uses the workspace, then retry detach.
 - `managed_owned_worktrees` directs the operator to delete dependent worktrees or their owning quiescent Tasks, then retry detach.
 - `missing_history_snapshot` directs the operator to re-save an editable Task's source workspace. If the affected Task history cannot be edited, the operator keeps the binding and reports the blocker because detach is unsafe.
-- For an unknown blocker code, Kent preserves the server message, directs the operator to resolve that code and retry, and tells the operator to update the CLI and server together when the CLI does not recognize the code. Kent never invents a command for an unknown blocker.
+- For an unknown blocker code, Kent uses generic client-owned wording, preserves available typed details, directs the operator to resolve that code and retry, and tells the operator to update the CLI and server together when the CLI does not recognize the code. Kent never depends on server-authored wording or invents a command for an unknown blocker.
 
 ### Project attachment and Session location
 

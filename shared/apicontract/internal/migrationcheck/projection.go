@@ -218,7 +218,6 @@ var capabilityFlagFieldNames = []string{
 	"RuntimeControl",
 	"RuntimeLiveControl",
 	"PromptControl",
-	"ProcessOutput",
 	"AttentionNotifications",
 	"OnboardingFinalize",
 	"PromptCommands",

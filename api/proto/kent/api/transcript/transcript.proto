@@ -116,6 +116,7 @@ enum OperationalDiagnosticCode {
   OPERATIONAL_DIAGNOSTIC_CODE_SLEEP_GUARD_FAILED = 1;
   OPERATIONAL_DIAGNOSTIC_CODE_PROMPT_HISTORY_PERSIST_FAILED = 2;
   OPERATIONAL_DIAGNOSTIC_CODE_IN_FLIGHT_CLEAR_FAILED = 3;
+  OPERATIONAL_DIAGNOSTIC_CODE_PROVIDER_TURN_STATE_INVALID = 4;
 }
 
 enum LiveRunStatus {
@@ -532,7 +533,14 @@ message WorktreeTransitionOutcome {
 message OperationalDiagnostic {
   OperationalDiagnosticCode code = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional string step_id = 2 [(buf.validate.field).string.uuid = true];
-  string detail = 3 [(buf.validate.field).string.min_len = 1];
+  string detail = 3;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.operational_diagnostic_detail"
+    message: "diagnostic detail must match the diagnostic code"
+    expression:
+      "(this.code == 4 && this.detail == '') || "
+      "(this.code != 4 && this.detail.trim() != '')"
+  };
 }
 
 message LiveRunFinished {

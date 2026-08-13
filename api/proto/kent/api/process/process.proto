@@ -118,39 +118,6 @@ message InlineOutputResult {
   }
 }
 
-message OutputSubscribeRequest {
-  string process_id = 1 [(buf.validate.field).string.min_len = 1];
-  int64 offset_bytes = 2 [(buf.validate.field).int64 = {
-    gte: 0
-    lte: 9007199254740991
-  }];
-}
-
-message OutputStartResult {
-  oneof outcome {
-    option (buf.validate.oneof).required = true;
-    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
-    OperationError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
-  }
-}
-
-message OutputChunk {
-  string process_id = 1 [(buf.validate.field).string.min_len = 1];
-  int64 offset_bytes = 2 [(buf.validate.field).int64 = {
-    gte: 0
-    lte: 9007199254740991
-  }];
-  int64 next_offset_bytes = 3 [(buf.validate.field).int64 = {
-    gte: 0
-    lte: 9007199254740991
-  }];
-  option (buf.validate.message).cel = {
-    id: "kent.process.output_chunk_range"
-    message: "next_offset_bytes must not precede offset_bytes"
-    expression: "this.next_offset_bytes >= this.offset_bytes"
-  };
-}
-
 service ViewService {
   rpc List(ListRequest) returns (ListResult) {
     option (kent.api.shared.kent_method) = {
@@ -181,32 +148,6 @@ service ControlService {
       kind: OPERATION_KIND_UNARY authentication_stage: AUTHENTICATION_STAGE_SERVER
       scope_policy: SCOPE_POLICY_PROCESS_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
       unary_connection: UNARY_CONNECTION_MULTIPLEXED legacy_wire_name: "process.inlineOutput"
-    };
-  }
-}
-
-service OutputService {
-  rpc Subscribe(OutputSubscribeRequest) returns (OutputStartResult) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_SUBSCRIPTION authentication_stage: AUTHENTICATION_STAGE_SERVER
-      scope_policy: SCOPE_POLICY_PROCESS_ACTIVE_PROJECT direction: DIRECTION_CLIENT_TO_SERVER
-      event: {package: "kent.api.process" service: "OutputService" method: "Event"}
-      completion: {package: "kent.api.process" service: "OutputService" method: "Complete"}
-      legacy_wire_name: "process.subscribeOutput"
-    };
-  }
-  rpc Event(OutputChunk) returns (google.protobuf.Empty) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_NOTIFICATION authentication_stage: AUTHENTICATION_STAGE_NONE
-      scope_policy: SCOPE_POLICY_NOTIFICATION direction: DIRECTION_SERVER_TO_CLIENT
-      legacy_wire_name: "process.output"
-    };
-  }
-  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
-    option (kent.api.shared.kent_method) = {
-      kind: OPERATION_KIND_NOTIFICATION authentication_stage: AUTHENTICATION_STAGE_NONE
-      scope_policy: SCOPE_POLICY_NOTIFICATION direction: DIRECTION_SERVER_TO_CLIENT
-      legacy_wire_name: "process.output.complete"
     };
   }
 }

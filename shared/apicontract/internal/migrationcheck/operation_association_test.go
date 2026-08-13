@@ -5,9 +5,6 @@ import (
 	"testing"
 
 	"core/shared/apicontract"
-	"core/shared/protoapi"
-	sharedpb "core/shared/protoapi/gen/kent/api/shared"
-	"core/shared/protocol"
 )
 
 type descriptorFixture []OperationDescriptor
@@ -26,7 +23,7 @@ func TestOperationAssociationJoinsSpecifiedLegacyFixturesExactly(t *testing.T) {
 }
 
 func TestOperationAssociationRequiresExactLegacyWireName(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("workflow", "WorkflowService", "Create", "workflow.Create", apicontract.KindUnary),
 	}
@@ -67,7 +64,7 @@ func TestOperationAssociationReferencesExactDeclarationDespiteNormalizedCollisio
 }
 
 func TestOperationAssociationRequiresExactKind(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("workflow", "WorkflowService", "Create", "workflow.create", apicontract.KindProgress),
 	}
@@ -76,7 +73,7 @@ func TestOperationAssociationRequiresExactKind(t *testing.T) {
 }
 
 func TestOperationAssociationReportsMissingAndDuplicateIndependently(t *testing.T) {
-	workflowCreate := mustLiveRoute(t, "workflow.create")
+	workflowCreate := syntheticRoute("workflow.create", apicontract.KindUnary)
 	routes := []apicontract.Route{workflowCreate}
 
 	assertAssociationIssue(t, routes, descriptorFixture{}, nil, IssueMissingLegacyDescriptor)
@@ -121,8 +118,8 @@ func TestOperationAssociationRejectsDescriptorWithoutProvenanceOrRoute(t *testin
 
 func TestOperationAssociationRejectsDuplicateStrictActiveNames(t *testing.T) {
 	routes := []apicontract.Route{
-		mustLiveRoute(t, "workflow.create"),
-		mustLiveRoute(t, "session.materializeWorkspaceChat"),
+		syntheticRoute("workflow.create", apicontract.KindUnary),
+		syntheticRoute("session.materializeWorkspaceChat", apicontract.KindUnary),
 	}
 	descriptors := descriptorFixture{
 		descriptor("workflow", "WorkflowService", "Create", "workflow.create", apicontract.KindUnary),
@@ -133,7 +130,7 @@ func TestOperationAssociationRejectsDuplicateStrictActiveNames(t *testing.T) {
 }
 
 func TestOperationAssociationDoesNotAcceptUnapprovedAliases(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("workflow", "WorkflowService", "Create", "workflow.create", apicontract.KindUnary),
 	}
@@ -148,7 +145,7 @@ func TestOperationAssociationDoesNotAcceptUnapprovedAliases(t *testing.T) {
 }
 
 func TestOperationAssociationRejectsInvalidFirstPackageCharacter(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("Workflow", "WorkflowService", "Create", "workflow.create", apicontract.KindUnary),
 	}
@@ -157,7 +154,7 @@ func TestOperationAssociationRejectsInvalidFirstPackageCharacter(t *testing.T) {
 }
 
 func TestOperationAssociationRejectsInvalidSubsequentPackageCharacter(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("workflow-api", "WorkflowService", "Create", "workflow.create", apicontract.KindUnary),
 	}
@@ -166,7 +163,7 @@ func TestOperationAssociationRejectsInvalidSubsequentPackageCharacter(t *testing
 }
 
 func TestOperationAssociationRejectsUnexpectedEventAndCompletion(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	event := ref("worktree", "SetupService", "Event")
 	completion := ref("worktree", "SetupService", "Complete")
 	workflowCreate := descriptor(
@@ -180,8 +177,8 @@ func TestOperationAssociationRejectsUnexpectedEventAndCompletion(t *testing.T) {
 	workflowCreate.Completion = &completion
 	descriptors := descriptorFixture{
 		workflowCreate,
-		descriptor("worktree", "SetupService", "Event", protocol.MethodWorktreeSetupEvent, apicontract.KindNotification),
-		descriptor("worktree", "SetupService", "Complete", protocol.MethodWorktreeSetupComplete, apicontract.KindNotification),
+		descriptor("worktree", "SetupService", "Event", "worktree.setup.event", apicontract.KindNotification),
+		descriptor("worktree", "SetupService", "Complete", "worktree.setup.complete", apicontract.KindNotification),
 	}
 
 	assertAssociationIssue(t, routes, descriptors, nil, IssueUnexpectedEventAssociation)
@@ -189,192 +186,19 @@ func TestOperationAssociationRejectsUnexpectedEventAndCompletion(t *testing.T) {
 }
 
 func TestPascalCaseStateMachineRejectsMalformedDescriptorIdentifiers(t *testing.T) {
-	routes := []apicontract.Route{mustLiveRoute(t, "workflow.create")}
+	routes := []apicontract.Route{syntheticRoute("workflow.create", apicontract.KindUnary)}
 	descriptors := descriptorFixture{
 		descriptor("workflow", "workflowService", "Create", "workflow.create", apicontract.KindUnary),
 	}
 	assertAssociationIssue(t, routes, descriptors, nil, IssueInvalidPascalCaseIdentifier)
 }
 
-func TestLiveOperationDescriptorsCoverLegacyRoutes(t *testing.T) {
-	operations, descriptors, err := completedSchemaSliceDescriptors()
-	if err != nil {
-		t.Fatal(err)
-	}
-	routes := routesForDescriptorProvenance(descriptors)
-	if err := CheckOperationAssociations(
-		routes,
-		descriptors,
-		nil,
-	); err != nil {
-		t.Fatal(err)
-	}
-	assertCompletedSchemaSliceMetadata(t, routes, operations)
-}
-
-func completedSchemaSliceRoutes() []apicontract.Route {
-	names := []string{
-		protocol.MethodHandshake,
-		protocol.MethodServerReadinessGet,
-		protocol.MethodServerUpdateStatusGet,
-		protocol.MethodAuthGetBootstrapStatus,
-		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodAuthGetStatus,
-		protocol.MethodCapabilityFactsGet,
-		protocol.MethodPromptCommandCatalogGet,
-		protocol.MethodOnboardingFinalize,
-		protocol.MethodAttachProject,
-		protocol.MethodAttachSession,
-		protocol.MethodProjectList,
-		protocol.MethodProjectHomeList,
-		protocol.MethodProjectResolvePath,
-		protocol.MethodProjectPlanWorkspaceBinding,
-		protocol.MethodProjectCreate,
-		protocol.MethodProjectEditGet,
-		protocol.MethodProjectUpdate,
-		protocol.MethodProjectSetDefaultWorkspace,
-		protocol.MethodProjectWorkspaceList,
-		protocol.MethodProjectWorkspaceGet,
-		protocol.MethodProjectUnlinkWorkspace,
-		protocol.MethodProjectDelete,
-		protocol.MethodProjectAttachWorkspace,
-		protocol.MethodProjectRebindWorkspace,
-		protocol.MethodProjectGetOverview,
-		protocol.MethodSessionPage,
-		protocol.MethodSessionPlan,
-		protocol.MethodSessionWorkspaceChatDraft,
-		protocol.MethodSessionWorkspaceChatMaterialize,
-		protocol.MethodSessionGetInitialInput,
-		protocol.MethodSessionPersistInputDraft,
-		protocol.MethodSessionRetargetWorkspace,
-		protocol.MethodSessionResolveTransition,
-		protocol.MethodSessionRuntimeActivate,
-		protocol.MethodSessionRuntimeRelease,
-	}
-	routes := make([]apicontract.Route, 0, len(names))
-	for _, name := range names {
-		route, exists := apicontract.RouteByMethod(name)
-		if !exists {
-			panic("completed schema slice route missing: " + name)
-		}
-		routes = append(routes, route)
-	}
-	return routes
-}
-
-func completedSchemaSliceDescriptors() ([]protoapi.Operation, descriptorFixture, error) {
-	routeNames := make(map[string]struct{})
-	for _, route := range completedSchemaSliceRoutes() {
-		routeNames[route.Method] = struct{}{}
-	}
-	operations, err := protoapi.Operations()
-	if err != nil {
-		return nil, nil, err
-	}
-	var matchedOperations []protoapi.Operation
-	descriptors := make(descriptorFixture, 0, len(routeNames))
-	for _, operation := range operations {
-		if operation.LegacyWireName == nil {
-			continue
-		}
-		_, priorCompletedSlice := routeNames[*operation.LegacyWireName]
-		worktreeSlice := operation.Descriptor.ParentFile().Package() == "kent.api.worktree"
-		if !priorCompletedSlice && !worktreeSlice {
-			continue
-		}
-		kind, err := legacyOperationKind(operation.Options.Kind)
-		if err != nil {
-			return nil, nil, err
-		}
-		matchedOperations = append(matchedOperations, operation)
-		method := operation.Descriptor
-		descriptors = append(descriptors, OperationDescriptor{
-			Package:        string(method.ParentFile().Package()),
-			Service:        string(method.Parent().Name()),
-			Method:         string(method.Name()),
-			LegacyWireName: operation.LegacyWireName,
-			Kind:           kind,
-			Event:          operationAssociationRef(operation.Event),
-			Completion:     operationAssociationRef(operation.Completion),
-		})
-	}
-	return matchedOperations, descriptors, nil
-}
-
-func routesForDescriptorProvenance(descriptors descriptorFixture) []apicontract.Route {
-	byMethod := make(map[string]apicontract.Route)
-	for _, route := range apicontract.Routes() {
-		byMethod[route.Method] = route
-	}
-	routes := make([]apicontract.Route, 0, len(descriptors))
-	for _, descriptor := range descriptors {
-		if descriptor.LegacyWireName == nil {
-			panic("completed schema descriptor has no legacy provenance")
-		}
-		route, exists := byMethod[*descriptor.LegacyWireName]
-		if !exists {
-			panic("completed schema descriptor provenance has no live route: " + *descriptor.LegacyWireName)
-		}
-		routes = append(routes, route)
-	}
-	return routes
-}
-
-func assertCompletedSchemaSliceMetadata(t *testing.T, routes []apicontract.Route, operations []protoapi.Operation) {
-	t.Helper()
-	byLegacyName := make(map[string]protoapi.Operation, len(operations))
-	for _, operation := range operations {
-		if operation.LegacyWireName == nil {
-			t.Fatalf("%s has no legacy wire name", operation.ActiveName)
-		}
-		byLegacyName[*operation.LegacyWireName] = operation
-	}
-	for _, route := range routes {
-		operation, exists := byLegacyName[route.Method]
-		if !exists {
-			t.Fatalf("%s has no generated operation", route.Method)
-		}
-		options := operation.Options
-		if got := options.AuthenticationStage; got != generatedAuthenticationStage(route.Auth) {
-			t.Errorf("%s authentication = %v, want %v", route.Method, got, route.Auth)
-		}
-		if got := options.ScopePolicy; got != generatedScopePolicy(route.Scope) {
-			t.Errorf("%s scope = %v, want %v", route.Method, got, route.Scope)
-		}
-		wantDirection := sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER
-		if route.Kind == apicontract.KindNotification {
-			wantDirection = sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT
-		}
-		if options.Direction != wantDirection {
-			t.Errorf("%s direction = %v, want %v", route.Method, options.Direction, wantDirection)
-		}
-		if route.Kind == apicontract.KindUnary {
-			if got := options.UnaryConnection; got != generatedUnaryConnection(route.Connection) {
-				t.Errorf("%s unary connection = %v, want %v", route.Method, got, route.Connection)
-			}
-		} else if options.UnaryConnection != sharedpb.UnaryConnection_UNARY_CONNECTION_UNSPECIFIED {
-			t.Errorf("%s non-unary connection = %v", route.Method, options.UnaryConnection)
-		}
-		switch route.Kind {
-		case apicontract.KindSubscription:
-			if operation.Event == nil || operation.Completion == nil {
-				t.Errorf("%s subscription associations = event:%v completion:%v", route.Method, operation.Event, operation.Completion)
-			}
-		default:
-			if operation.Event != nil || operation.Completion != nil {
-				t.Errorf("%s unexpectedly declares event/completion metadata", route.Method)
-			}
-		}
-	}
-}
-
 func specifiedLegacyRoutes(t *testing.T) []apicontract.Route {
 	t.Helper()
 	routes := []apicontract.Route{
-		mustLiveRoute(t, "workflow.create"),
-		mustLiveRoute(t, "session.materializeWorkspaceChat"),
-		mustLiveRoute(t, "worktree.create_target.resolve"),
+		syntheticRoute("workflow.create", apicontract.KindUnary),
+		syntheticRoute("session.materializeWorkspaceChat", apicontract.KindUnary),
+		syntheticRoute("worktree.create_target.resolve", apicontract.KindUnary),
 	}
 	routes = append(routes, worktreeSetupRoutes(t)...)
 	return routes
@@ -391,9 +215,14 @@ func specifiedDescriptors() descriptorFixture {
 func worktreeSetupRoutes(t *testing.T) []apicontract.Route {
 	t.Helper()
 	return []apicontract.Route{
-		mustLiveRoute(t, protocol.MethodWorktreeSetupSubscribe),
-		mustLiveRoute(t, protocol.MethodWorktreeSetupEvent),
-		mustLiveRoute(t, protocol.MethodWorktreeSetupComplete),
+		{
+			Method:         "worktree.setup.subscribe",
+			Kind:           apicontract.KindSubscription,
+			EventMethod:    "worktree.setup.event",
+			CompleteMethod: "worktree.setup.complete",
+		},
+		syntheticRoute("worktree.setup.event", apicontract.KindNotification),
+		syntheticRoute("worktree.setup.complete", apicontract.KindNotification),
 	}
 }
 
@@ -404,15 +233,15 @@ func specifiedWorktreeSetupDescriptors() descriptorFixture {
 		"worktree",
 		"SetupService",
 		"Subscribe",
-		protocol.MethodWorktreeSetupSubscribe,
+		"worktree.setup.subscribe",
 		apicontract.KindSubscription,
 	)
 	subscribe.Event = &event
 	subscribe.Completion = &completion
 	return descriptorFixture{
 		subscribe,
-		descriptor("worktree", "SetupService", "Event", protocol.MethodWorktreeSetupEvent, apicontract.KindNotification),
-		descriptor("worktree", "SetupService", "Complete", protocol.MethodWorktreeSetupComplete, apicontract.KindNotification),
+		descriptor("worktree", "SetupService", "Event", "worktree.setup.event", apicontract.KindNotification),
+		descriptor("worktree", "SetupService", "Complete", "worktree.setup.complete", apicontract.KindNotification),
 	}
 }
 
@@ -440,13 +269,8 @@ func ref(packageName string, service string, method string) OperationReference {
 	return OperationReference{Package: packageName, Service: service, Method: method}
 }
 
-func mustLiveRoute(t *testing.T, method string) apicontract.Route {
-	t.Helper()
-	route, exists := apicontract.RouteByMethod(method)
-	if !exists {
-		t.Fatalf("live route %q not found", method)
-	}
-	return route
+func syntheticRoute(method string, kind apicontract.Kind) apicontract.Route {
+	return apicontract.Route{Method: method, Kind: kind}
 }
 
 func assertAssociationIssue(

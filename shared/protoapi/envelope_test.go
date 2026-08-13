@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"core/shared/protoapi"
-	processpb "core/shared/protoapi/gen/kent/api/process"
+	attentionpb "core/shared/protoapi/gen/kent/api/attention"
 	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"google.golang.org/protobuf/proto"
@@ -27,10 +27,11 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal result payload: %v", err)
 	}
-	outputChunkPayload, err := proto.Marshal(&processpb.OutputChunk{
-		ProcessId:       "process-1",
-		OffsetBytes:     0,
-		NextOffsetBytes: 1,
+	notificationPayload, err := proto.Marshal(&attentionpb.NotificationEvent{
+		Sequence: 1,
+		Payload: &attentionpb.NotificationEvent_SnapshotComplete{
+			SnapshotComplete: &attentionpb.SnapshotComplete{SessionId: "session-1"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("marshal event payload: %v", err)
@@ -58,8 +59,8 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 		{
 			name: "notification or event",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "kent.api.process.output_service.event",
-				Payload:   outputChunkPayload,
+				Operation: "kent.api.attention.session_service.event",
+				Payload:   notificationPayload,
 			}}},
 		},
 		{
@@ -99,9 +100,11 @@ func TestEnvelopeRoundTripsEveryVariant(t *testing.T) {
 }
 
 func TestEnvelopeRejectsOperationFrameAndDirectionMismatches(t *testing.T) {
-	outputChunkPayload, err := proto.Marshal(&processpb.OutputChunk{
-		ProcessId:       "process-1",
-		NextOffsetBytes: 1,
+	notificationPayload, err := proto.Marshal(&attentionpb.NotificationEvent{
+		Sequence: 1,
+		Payload: &attentionpb.NotificationEvent_SnapshotComplete{
+			SnapshotComplete: &attentionpb.SnapshotComplete{SessionId: "session-1"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -113,14 +116,14 @@ func TestEnvelopeRejectsOperationFrameAndDirectionMismatches(t *testing.T) {
 		{
 			name: "server notification as call",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Call{Call: &sharedpb.Call{
-				Operation: "kent.api.process.output_service.event",
-				Payload:   outputChunkPayload,
+				Operation: "kent.api.attention.session_service.event",
+				Payload:   notificationPayload,
 			}}},
 		},
 		{
 			name: "server notification as result",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_Result{Result: &sharedpb.Result{
-				Operation: "kent.api.process.output_service.event",
+				Operation: "kent.api.attention.session_service.event",
 				Payload:   []byte{},
 			}}},
 		},
@@ -184,7 +187,7 @@ func TestEnvelopeRejectsMalformedVariants(t *testing.T) {
 		{
 			name: "notification missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "kent.api.process.output_service.event",
+				Operation: "kent.api.attention.session_service.event",
 			}}},
 		},
 		{
@@ -259,7 +262,7 @@ func TestEnvelopeRejectsSemanticallyMalformedWireBytes(t *testing.T) {
 		{
 			name: "notification missing payload",
 			envelope: &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-				Operation: "kent.api.process.output_service.event",
+				Operation: "kent.api.attention.session_service.event",
 			}}},
 		},
 		{
@@ -334,7 +337,7 @@ func TestEnvelopeAllowsPresentZeroByteEmptyPayloadAndRejectsOtherZeroBytePayload
 
 	t.Run("zero-byte non-Empty payload", func(t *testing.T) {
 		envelope := &sharedpb.Envelope{Frame: &sharedpb.Envelope_NotificationEvent{NotificationEvent: &sharedpb.NotificationEvent{
-			Operation: "kent.api.process.output_service.event",
+			Operation: "kent.api.attention.session_service.event",
 			Payload:   []byte{},
 		}}}
 		if _, err := protoapi.MarshalEnvelope(envelope); err == nil {

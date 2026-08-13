@@ -4,7 +4,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	attentionpb "core/shared/protoapi/gen/kent/api/attention"
 	processpb "core/shared/protoapi/gen/kent/api/process"
@@ -43,9 +42,6 @@ func TestTranscriptPromptProcessAttentionAndRunPromptRoutesAreDescriptorOwned(t 
 			protocol.MethodProcessGet,
 			protocol.MethodProcessKill,
 			protocol.MethodProcessInlineOutput,
-			protocol.MethodProcessSubscribeOutput,
-			protocol.MethodProcessOutputEvent,
-			protocol.MethodProcessOutputComplete,
 		},
 		"kent.api.attention": {
 			protocol.MethodAttentionSessionNotificationSubscribe,
@@ -101,15 +97,6 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	}
 	if err := protoapi.ValidateGeneratedMessage(message); err == nil {
 		t.Fatal("accepted live transcript event at hydration sequence")
-	}
-
-	processChunk := &processpb.OutputChunk{
-		ProcessId:       "process-1",
-		OffsetBytes:     4,
-		NextOffsetBytes: 3,
-	}
-	if err := protoapi.ValidateGeneratedMessage(processChunk); err == nil {
-		t.Fatal("accepted descending process output cursor")
 	}
 
 	attention := &attentionpb.Notification{
@@ -178,6 +165,33 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(liveRun); err == nil {
 		t.Fatal("accepted completed live run with failure")
 	}
+
+	for _, diagnostic := range []*transcriptpb.OperationalDiagnostic{
+		{
+			Code:   transcriptpb.OperationalDiagnosticCode_OPERATIONAL_DIAGNOSTIC_CODE_SLEEP_GUARD_FAILED,
+			Detail: "sleep prevention failed",
+		},
+		{
+			Code: transcriptpb.OperationalDiagnosticCode_OPERATIONAL_DIAGNOSTIC_CODE_PROVIDER_TURN_STATE_INVALID,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(diagnostic); err != nil {
+			t.Errorf("valid operational diagnostic rejected: %v", err)
+		}
+	}
+	for _, diagnostic := range []*transcriptpb.OperationalDiagnostic{
+		{
+			Code: transcriptpb.OperationalDiagnosticCode_OPERATIONAL_DIAGNOSTIC_CODE_SLEEP_GUARD_FAILED,
+		},
+		{
+			Code:   transcriptpb.OperationalDiagnosticCode_OPERATIONAL_DIAGNOSTIC_CODE_PROVIDER_TURN_STATE_INVALID,
+			Detail: "unexpected detail",
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(diagnostic); err == nil {
+			t.Errorf("invalid operational diagnostic accepted: %+v", diagnostic)
+		}
+	}
 }
 
 func TestWorkflowOwnedAttentionRoutesAndVariantsAreOwnedByWorkflowTaskSlice(t *testing.T) {
@@ -186,9 +200,6 @@ func TestWorkflowOwnedAttentionRoutesAndVariantsAreOwnedByWorkflowTaskSlice(t *t
 		protocol.MethodAttentionNotificationEvent,
 		protocol.MethodAttentionNotificationComplete,
 	} {
-		if _, exists := apicontract.RouteByMethod(legacyName); !exists {
-			t.Fatalf("workflow attention route disappeared: %s", legacyName)
-		}
 		if operation := operationByLegacyName(t, legacyName); operation == nil {
 			t.Errorf("workflow-owned attention route %s is missing from the Workflow Task slice", legacyName)
 		}
@@ -215,8 +226,6 @@ func TestNewSliceRetainsDomainIdentityAndTypedUnions(t *testing.T) {
 	assertMessageOneofFields(t, (&runpromptpb.ProgressEvent{}).ProtoReflect().Descriptor(), "payload",
 		"session_started", "assistant_message", "steered_message", "compaction_started",
 		"compaction_failed", "run_logging_failed", "run_cleanup_failed")
-	assertExactFields(t, (&processpb.OutputChunk{}).ProtoReflect().Descriptor(),
-		"process_id", "offset_bytes", "next_offset_bytes")
 }
 
 func TestKENT345ProjectedRequestIdentityDoesNotReturnInNewSlice(t *testing.T) {
@@ -273,7 +282,6 @@ func TestNewSliceReviewedValidatorSignoffsRemainMessageLocal(t *testing.T) {
 		typeMethodIdentity("core/shared/serverapi", "ProcessGetRequest", "Validate"):                                 {},
 		typeMethodIdentity("core/shared/serverapi", "ProcessInlineOutputRequest", "Validate"):                        {},
 		typeMethodIdentity("core/shared/serverapi", "ProcessKillRequest", "Validate"):                                {},
-		typeMethodIdentity("core/shared/serverapi", "ProcessOutputSubscribeRequest", "Validate"):                     {},
 		typeMethodIdentity("core/shared/serverapi", "PromptAnswerBatchEntry", "Validate"):                            {},
 		typeMethodIdentity("core/shared/serverapi", "PromptAnswerBatchRequest", "Validate"):                          {},
 		typeMethodIdentity("core/shared/serverapi", "PromptAnswerBatchResponse", "Validate"):                         {},
@@ -380,6 +388,7 @@ func TestNewSliceClosedScalarCoverageIsExact(t *testing.T) {
 			"OPERATIONAL_DIAGNOSTIC_CODE_UNSPECIFIED", "OPERATIONAL_DIAGNOSTIC_CODE_SLEEP_GUARD_FAILED",
 			"OPERATIONAL_DIAGNOSTIC_CODE_PROMPT_HISTORY_PERSIST_FAILED",
 			"OPERATIONAL_DIAGNOSTIC_CODE_IN_FLIGHT_CLEAR_FAILED",
+			"OPERATIONAL_DIAGNOSTIC_CODE_PROVIDER_TURN_STATE_INVALID",
 		},
 		transcriptpb.LiveRunStatus_LIVE_RUN_STATUS_UNSPECIFIED.Descriptor(): {
 			"LIVE_RUN_STATUS_UNSPECIFIED", "LIVE_RUN_STATUS_COMPLETED",

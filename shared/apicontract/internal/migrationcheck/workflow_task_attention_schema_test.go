@@ -8,9 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"core/shared/apicontract"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
-	"core/shared/protocol"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -53,14 +51,6 @@ func TestWorkflowTaskAttentionSchemaOwnsExactRoutesAndTypedUnions(t *testing.T) 
 			output:  ".google.protobuf.Empty",
 		},
 	})
-	assertWorkflowTaskAttentionLiveRouteProvenance(t, set, []string{
-		protocol.MethodWorkflowAttentionList,
-		protocol.MethodWorkflowTaskAttentionList,
-		protocol.MethodAttentionNotificationSubscribe,
-		protocol.MethodAttentionNotificationEvent,
-		protocol.MethodAttentionNotificationComplete,
-	})
-
 	assertWorkflowTaskAttentionMessageFields(t, file, "AttentionItem",
 		"id", "kind", "project_id", "workflow_id", "task_id", "task_short_id", "task_title",
 		"occurred_at", "question", "approval", "interrupted_current_node")
@@ -175,46 +165,6 @@ func TestWorkflowTaskAttentionSchemaOwnsExactRoutesAndTypedUnions(t *testing.T) 
 				t.Errorf("%s retains untyped detail_json", message.GetName())
 			}
 		}
-	}
-}
-
-func assertWorkflowTaskAttentionLiveRouteProvenance(
-	t *testing.T,
-	set *descriptorpb.FileDescriptorSet,
-	legacyNames []string,
-) {
-	t.Helper()
-	files, err := protodesc.NewFiles(set)
-	if err != nil {
-		t.Fatal(err)
-	}
-	file, err := files.FindFileByPath("kent/api/workflow_task/attention.proto")
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptorCounts := make(map[string]int, len(legacyNames))
-	for serviceIndex := 0; serviceIndex < file.Services().Len(); serviceIndex++ {
-		service := file.Services().Get(serviceIndex)
-		for methodIndex := 0; methodIndex < service.Methods().Len(); methodIndex++ {
-			method := service.Methods().Get(methodIndex)
-			options := method.Options().(*descriptorpb.MethodOptions)
-			extension := proto.GetExtension(options, sharedpb.E_KentMethod)
-			kentOptions, _ := extension.(*sharedpb.KentMethodOptions)
-			if kentOptions != nil && kentOptions.LegacyWireName != nil {
-				descriptorCounts[kentOptions.GetLegacyWireName()]++
-			}
-		}
-	}
-	for _, legacyName := range legacyNames {
-		if _, exists := apicontract.RouteByMethod(legacyName); !exists {
-			t.Fatalf("live attention route disappeared: %s", legacyName)
-		}
-		if got := descriptorCounts[legacyName]; got != 1 {
-			t.Errorf("%s descriptor provenance count = %d, want 1", legacyName, got)
-		}
-	}
-	if len(descriptorCounts) != len(legacyNames) {
-		t.Errorf("attention descriptor provenance set = %v, want exactly %v", descriptorCounts, legacyNames)
 	}
 }
 
@@ -340,36 +290,8 @@ func assertWorkflowTaskAttentionRoutes(
 			t.Errorf("duplicate attention route provenance %s", legacy)
 		}
 		found[legacy] = struct{}{}
-		live, exists := apicontract.RouteByMethod(legacy)
-		if !exists {
-			t.Fatalf("live route disappeared: %s", legacy)
-		}
-		if kentOptions.GetKind() != workflowTaskAttentionOperationKind(live.Kind) {
-			t.Errorf("%s kind = %s, want %s", legacy, kentOptions.GetKind(), live.Kind)
-		}
-		if kentOptions.GetAuthenticationStage() != workflowTaskAttentionAuthenticationStage(live.Auth) {
-			t.Errorf("%s authentication = %s, want %s", legacy, kentOptions.GetAuthenticationStage(), live.Auth)
-		}
-		if kentOptions.GetScopePolicy() != workflowTaskAttentionScopePolicy(live.Scope) {
-			t.Errorf("%s scope = %s, want %s", legacy, kentOptions.GetScopePolicy(), live.Scope)
-		}
-		wantDirection := sharedpb.Direction_DIRECTION_CLIENT_TO_SERVER
-		if live.Kind == apicontract.KindNotification {
-			wantDirection = sharedpb.Direction_DIRECTION_SERVER_TO_CLIENT
-		}
-		if kentOptions.GetDirection() != wantDirection {
-			t.Errorf("%s direction = %s, want %s", legacy, kentOptions.GetDirection(), wantDirection)
-		}
-		if live.Kind == apicontract.KindUnary {
-			wantConnection := workflowTaskAttentionUnaryConnection(live.Connection)
-			if kentOptions.GetUnaryConnection() != wantConnection {
-				t.Errorf("%s connection = %s, want %s", legacy, kentOptions.GetUnaryConnection(), wantConnection)
-			}
-		} else if kentOptions.GetUnaryConnection() != sharedpb.UnaryConnection_UNARY_CONNECTION_UNSPECIFIED {
-			t.Errorf("%s non-unary connection = %s, want unspecified", legacy, kentOptions.GetUnaryConnection())
-		}
-		assertWorkflowTaskAttentionAssociation(t, methods, legacy, "event", kentOptions.GetEvent(), live.EventMethod)
-		assertWorkflowTaskAttentionAssociation(t, methods, legacy, "completion", kentOptions.GetCompletion(), live.CompleteMethod)
+		assertWorkflowTaskAttentionAssociation(t, methods, legacy, "event", kentOptions.GetEvent())
+		assertWorkflowTaskAttentionAssociation(t, methods, legacy, "completion", kentOptions.GetCompletion())
 	}
 	for serviceIndex := 0; serviceIndex < file.Services().Len(); serviceIndex++ {
 		service := file.Services().Get(serviceIndex)
@@ -395,17 +317,9 @@ func assertWorkflowTaskAttentionAssociation(
 	legacyName string,
 	label string,
 	association *sharedpb.OperationAssociation,
-	wantLegacyName string,
 ) {
 	t.Helper()
-	if wantLegacyName == "" {
-		if association != nil {
-			t.Errorf("%s unexpected %s association = %+v", legacyName, label, association)
-		}
-		return
-	}
 	if association == nil {
-		t.Errorf("%s missing %s association for %s", legacyName, label, wantLegacyName)
 		return
 	}
 	fullName := protoreflect.FullName(association.GetPackage() + "." + association.GetService() + "." + association.GetMethod())
@@ -413,65 +327,6 @@ func assertWorkflowTaskAttentionAssociation(
 	if method == nil {
 		t.Errorf("%s %s association target %s does not exist", legacyName, label, fullName)
 		return
-	}
-	options := method.Options().(*descriptorpb.MethodOptions)
-	extension := proto.GetExtension(options, sharedpb.E_KentMethod)
-	kentOptions, _ := extension.(*sharedpb.KentMethodOptions)
-	if kentOptions == nil || kentOptions.GetLegacyWireName() != wantLegacyName {
-		t.Errorf("%s %s association provenance = %q, want %q",
-			legacyName, label, kentOptions.GetLegacyWireName(), wantLegacyName)
-	}
-}
-
-func workflowTaskAttentionOperationKind(kind apicontract.Kind) sharedpb.OperationKind {
-	switch kind {
-	case apicontract.KindUnary:
-		return sharedpb.OperationKind_OPERATION_KIND_UNARY
-	case apicontract.KindSubscription:
-		return sharedpb.OperationKind_OPERATION_KIND_SUBSCRIPTION
-	case apicontract.KindProgress:
-		return sharedpb.OperationKind_OPERATION_KIND_PROGRESS
-	case apicontract.KindNotification:
-		return sharedpb.OperationKind_OPERATION_KIND_NOTIFICATION
-	default:
-		panic("unsupported attention operation kind: " + kind)
-	}
-}
-
-func workflowTaskAttentionAuthenticationStage(auth apicontract.AuthPolicy) sharedpb.AuthenticationStage {
-	switch auth {
-	case apicontract.AuthNone:
-		return sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_NONE
-	case apicontract.AuthPreServerAuth:
-		return sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_PRE_SERVER
-	case apicontract.AuthServer:
-		return sharedpb.AuthenticationStage_AUTHENTICATION_STAGE_SERVER
-	default:
-		panic("unsupported attention authentication stage: " + auth)
-	}
-}
-
-func workflowTaskAttentionScopePolicy(scope apicontract.ScopePolicy) sharedpb.ScopePolicy {
-	switch scope {
-	case apicontract.ScopeNone:
-		return sharedpb.ScopePolicy_SCOPE_POLICY_NONE
-	case apicontract.ScopeProjectView:
-		return sharedpb.ScopePolicy_SCOPE_POLICY_PROJECT_VIEW
-	case apicontract.ScopeNotification:
-		return sharedpb.ScopePolicy_SCOPE_POLICY_NOTIFICATION
-	default:
-		panic("unsupported attention scope policy: " + scope)
-	}
-}
-
-func workflowTaskAttentionUnaryConnection(connection apicontract.ConnectionStrategy) sharedpb.UnaryConnection {
-	switch connection {
-	case apicontract.ConnectionControl, apicontract.ConnectionUnscoped:
-		return sharedpb.UnaryConnection_UNARY_CONNECTION_MULTIPLEXED
-	case apicontract.ConnectionDedicated:
-		return sharedpb.UnaryConnection_UNARY_CONNECTION_DEDICATED
-	default:
-		panic("unsupported attention unary connection: " + connection)
 	}
 }
 

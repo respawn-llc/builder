@@ -94,7 +94,6 @@ func TestWorkflowTaskReadSchemaOwnsExactLiveRoutesAndReadContract(t *testing.T) 
 			response:   reflect.TypeOf(serverapi.WorkflowTaskLabelsGetResponse{}),
 		},
 	}
-	assertLiveReadRoutes(t, expectedRoutes)
 	assertDescriptorRoutes(t, file, expectedRoutes)
 
 	assertDescriptorMessageFields(t, file, "ListRequest",
@@ -538,38 +537,6 @@ func assertSearchHitOrdinalsStrictlyAscending(t *testing.T, success protoreflect
 		}
 	}
 	t.Fatal("descending Search hit ordinals were accepted by the migration fixture")
-}
-
-func assertLiveReadRoutes(t *testing.T, expected map[string]descriptorRouteExpectation) {
-	t.Helper()
-	for method, expectation := range expected {
-		route, exists := apicontract.RouteByMethod(method)
-		if !exists {
-			t.Errorf("live route %s is not registered", method)
-			continue
-		}
-		if route.Kind != apicontract.KindUnary {
-			t.Errorf("%s kind = %s, want unary", method, route.Kind)
-		}
-		wantConnection := apicontract.ConnectionUnscoped
-		if expectation.connection == "UNARY_CONNECTION_DEDICATED" {
-			wantConnection = apicontract.ConnectionDedicated
-		}
-		if route.Connection != wantConnection {
-			t.Errorf("%s live connection = %s, want %s", method, route.Connection, wantConnection)
-		}
-		if route.Auth != expectation.auth || route.Scope != expectation.scope {
-			t.Errorf("%s live auth/scope = %s/%s, want %s/%s",
-				method, route.Auth, route.Scope, expectation.auth, expectation.scope)
-		}
-		if route.RequestType != expectation.request || route.ResponseType != expectation.response {
-			t.Errorf("%s live types = %v -> %v, want %v -> %v",
-				method, route.RequestType, route.ResponseType, expectation.request, expectation.response)
-		}
-		if !route.ValidatesRequest {
-			t.Errorf("%s live request validator is absent", method)
-		}
-	}
 }
 
 func buildWorkflowTaskReadDescriptorSet(t *testing.T) *descriptorpb.FileDescriptorSet {

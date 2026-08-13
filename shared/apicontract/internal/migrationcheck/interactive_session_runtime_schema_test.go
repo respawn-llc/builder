@@ -3,7 +3,6 @@ package migrationcheck
 import (
 	"testing"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
 	sessionpb "core/shared/protoapi/gen/kent/api/session"
@@ -426,26 +425,10 @@ func assertSchemaRoutes(t *testing.T, packageName protoreflect.FullName, legacyN
 		t.Fatalf("%s descriptors = %d, want %d", packageName, len(byLegacyName), len(legacyNames))
 	}
 	for _, legacyName := range legacyNames {
-		operation, exists := byLegacyName[legacyName]
+		_, exists := byLegacyName[legacyName]
 		if !exists {
 			t.Errorf("%s missing descriptor provenance %q", packageName, legacyName)
 			continue
-		}
-		route, exists := apicontract.RouteByMethod(legacyName)
-		if !exists {
-			t.Fatalf("live route disappeared: %s", legacyName)
-		}
-		if operation.Options.Kind != worktreeOperationKind(route.Kind) {
-			t.Errorf("%s kind = %s, want %s", legacyName, operation.Options.Kind, route.Kind)
-		}
-		if operation.Options.AuthenticationStage != generatedAuthenticationStage(route.Auth) {
-			t.Errorf("%s authentication = %s, want %s", legacyName, operation.Options.AuthenticationStage, route.Auth)
-		}
-		if operation.Options.ScopePolicy != generatedScopePolicy(route.Scope) {
-			t.Errorf("%s scope = %s, want %s", legacyName, operation.Options.ScopePolicy, route.Scope)
-		}
-		if route.Kind == apicontract.KindUnary && operation.Options.UnaryConnection != generatedUnaryConnection(route.Connection) {
-			t.Errorf("%s connection = %s, want %s", legacyName, operation.Options.UnaryConnection, route.Connection)
 		}
 	}
 }

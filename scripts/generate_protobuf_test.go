@@ -185,8 +185,12 @@ if [[ "${1:-}" == "test" ]]; then
 	exit 0
 fi
 
+if [[ "${1:-}" == "run" && "${2:-}" == "./shared/apicontract/cmd/migrationlint" ]]; then
+	exit 0
+fi
+
 if [[ "${1:-}" != "tool" || "${2:-}" != "buf" ]]; then
-	echo "fake go supports only: go test or go tool buf" >&2
+	echo "fake go supports only: go test, go run migrationlint, or go tool buf" >&2
 	exit 2
 fi
 case "${3:-}" in

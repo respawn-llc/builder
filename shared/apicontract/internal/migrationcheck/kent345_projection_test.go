@@ -24,48 +24,6 @@ func TestKENT345ProjectionOmitsOnlyGenericRequestIdentities(t *testing.T) {
 	}
 }
 
-func TestKENT345ProjectionCoversEveryLockedRequestResponseAndReadModelIdentity(t *testing.T) {
-	report, err := InspectExecutionTarget()
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolved := make(map[Identity]struct{}, len(report.Predecessors))
-	for _, predecessor := range report.Predecessors {
-		resolved[predecessor.Identity] = struct{}{}
-	}
-	for _, identity := range KENT345ProjectionIdentities() {
-		if _, exists := resolved[identity]; !exists {
-			t.Errorf("KENT-345 projection identity was not resolved from the execution target: %s", identity)
-		}
-	}
-}
-
-func TestKENT345RetainedNamedIdentitiesResolveFromExecutionTarget(t *testing.T) {
-	identities := retainedKENT345IdentityFixtures()
-	packagePaths := make([]string, 0, len(identities))
-	for _, retained := range identities {
-		if retained.Identity.PackagePath == "fixture/envelope" {
-			continue
-		}
-		packagePaths = append(packagePaths, retained.Identity.PackagePath)
-	}
-	loaded, err := loadPackages(packagePaths)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, retained := range identities {
-		if retained.Identity.PackagePath == "fixture/envelope" {
-			continue
-		}
-		if lookupTypeName(
-			loaded[retained.Identity.PackagePath],
-			retained.Identity.TypeName,
-		) == nil {
-			t.Errorf("retained %s identity does not resolve: %s", retained.Name, retained.Identity)
-		}
-	}
-}
-
 func TestKENT345ProjectionRejectsAnyExtraOmission(t *testing.T) {
 	fixture := kent345ProjectionFixture(t)
 

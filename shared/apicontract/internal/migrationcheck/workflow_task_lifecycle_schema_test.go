@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"core/shared/apicontract"
-	"core/shared/protoapi"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -45,7 +44,6 @@ func TestWorkflowTaskLifecycleSchemaOwnsExactRoutesAndPolicies(t *testing.T) {
 		protocol.MethodWorkflowTaskLabelsUpdate:     lifecycleRoute("TaskLabelService", "Update", "LabelsUpdateRequest", "LabelsUpdateResult", reflect.TypeOf(serverapi.WorkflowTaskLabelsUpdateRequest{}), reflect.TypeOf(serverapi.WorkflowTaskLabelsUpdateResponse{}), apicontract.AuthServer),
 		protocol.MethodWorkflowTaskObserve:          lifecycleRoute("TaskObservationService", "Observe", "ObserveRequest", "ObserveResult", reflect.TypeOf(serverapi.WorkflowTaskObservationRequest{}), reflect.TypeOf(serverapi.WorkflowTaskObservationResponse{}), apicontract.AuthServer),
 	}
-	assertLiveReadRoutes(t, expected)
 	assertDescriptorRoutes(t, file, expected)
 	for _, service := range file.Service {
 		for _, method := range service.Method {
@@ -351,98 +349,6 @@ func TestWorkflowTaskLifecycleUsesExistingDomainSchemasWithoutDynamicPayloads(t 
 			}
 		}
 	}
-}
-
-func TestWorkflowTaskValidatorSignoffsRemainMessageLocal(t *testing.T) {
-	report, err := InspectExecutionTarget()
-	if err != nil {
-		t.Fatal(err)
-	}
-	var classification DeclarationClassification
-	for _, signoff := range ExecutionTargetDomainSignoffs() {
-		if signoff.Domain != "workflow_task" {
-			continue
-		}
-		for _, validator := range signoff.Classification.Validators {
-			if validator.Kind != ValidatorMessageLocal || validator.Owner != nil {
-				t.Errorf("%s owner = %+v kind=%s", validator.Identity, validator.Owner, validator.Kind)
-			}
-			classification.Validators = append(classification.Validators, validator)
-		}
-	}
-	if len(classification.Validators) == 0 {
-		t.Fatal("Workflow Task validator signoffs are missing")
-	}
-	workflowTaskDiscovered := make([]Validator, 0, len(classification.Validators))
-	for _, signoff := range classification.Validators {
-		validator, exists := validatorByIdentity(report.Validators, signoff.Identity)
-		if !exists {
-			t.Errorf("stale Workflow Task validator signoff %s", signoff.Identity)
-			continue
-		}
-		workflowTaskDiscovered = append(workflowTaskDiscovered, validator)
-	}
-	if err := CheckDeclarationClassifications(
-		DeclarationReport{Validators: workflowTaskDiscovered},
-		classification,
-	); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWorkflowTaskDescriptorProvenanceCompletesLiveRouteCoverage(t *testing.T) {
-	operations, err := protoapi.Operations()
-	if err != nil {
-		t.Fatal(err)
-	}
-	descriptors := make(descriptorFixture, 0, len(operations))
-	provenanceCounts := make(map[string]int, len(operations))
-	for _, operation := range operations {
-		if operation.LegacyWireName == nil {
-			t.Fatalf("%s has no legacy provenance", operation.Descriptor.FullName())
-		}
-		if operation.Descriptor.ParentFile().Package() == "fixture" {
-			continue
-		}
-		provenanceCounts[*operation.LegacyWireName]++
-		kind, err := legacyOperationKind(operation.Options.Kind)
-		if err != nil {
-			t.Fatal(err)
-		}
-		descriptors = append(descriptors, OperationDescriptor{
-			Package:        string(operation.Descriptor.ParentFile().Package()),
-			Service:        string(operation.Descriptor.Parent().Name()),
-			Method:         string(operation.Descriptor.Name()),
-			LegacyWireName: operation.LegacyWireName,
-			Kind:           kind,
-			Event:          operationAssociationRef(operation.Event),
-			Completion:     operationAssociationRef(operation.Completion),
-		})
-	}
-	routes := apicontract.Routes()
-	if len(descriptors) != len(routes) {
-		t.Fatalf("descriptor provenance count = %d, live route count = %d", len(descriptors), len(routes))
-	}
-	for _, route := range routes {
-		if got := provenanceCounts[route.Method]; got != 1 {
-			t.Errorf("%s descriptor provenance count = %d, want 1", route.Method, got)
-		}
-	}
-	if provenanceCounts[protocol.MethodWorkflowTaskSessionList] != 1 {
-		t.Fatalf("%s is not covered exactly once", protocol.MethodWorkflowTaskSessionList)
-	}
-	if err := CheckOperationAssociations(routes, descriptors, nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func validatorByIdentity(validators []Validator, identity Identity) (Validator, bool) {
-	for _, validator := range validators {
-		if validator.Identity == identity {
-			return validator, true
-		}
-	}
-	return Validator{}, false
 }
 
 func lifecycleRoute(

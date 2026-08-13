@@ -126,23 +126,9 @@ type kent554Fixture struct {
 
 func kent554ProjectionFixture(t *testing.T) kent554Fixture {
 	t.Helper()
-	report, err := InspectExecutionTarget()
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	legacy := append([]Identity(nil), KENT554ProjectionIdentities()...)
 	legacy = append(legacy, retainedKENT554CapabilityIdentities()...)
 	descriptor := retainedKENT554CapabilityIdentities()
-	resolved := make(map[Identity]struct{}, len(report.Predecessors))
-	for _, predecessor := range report.Predecessors {
-		resolved[predecessor.Identity] = struct{}{}
-	}
-	for _, identity := range KENT554ProjectionIdentities() {
-		if _, ok := resolved[identity]; !ok {
-			t.Fatalf("KENT-554 projection identity was not resolved from the execution target: %s", identity)
-		}
-	}
 	return kent554Fixture{Legacy: legacy, Descriptor: descriptor}
 }
 

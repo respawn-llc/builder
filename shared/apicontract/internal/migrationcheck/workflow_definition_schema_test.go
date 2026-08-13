@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"core/shared/apicontract"
 	"core/shared/protoapi"
 	workflowpb "core/shared/protoapi/gen/kent/api/workflow_definition"
 	"core/shared/protocol"
@@ -54,9 +53,6 @@ func TestWorkflowDefinitionRoutesAndDeferredWorkflowTaskHandoffAreDescriptorOwne
 		protocol.MethodWorkflowTaskGet,
 		protocol.MethodWorkflowAttentionList,
 	} {
-		if _, exists := apicontract.RouteByMethod(legacyName); !exists {
-			t.Fatalf("Workflow Task route disappeared: %s", legacyName)
-		}
 		if operation := operationByLegacyName(t, legacyName); operation == nil {
 			t.Errorf("Workflow Task route %s is missing after its schema handoff", legacyName)
 		}

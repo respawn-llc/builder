@@ -55,12 +55,12 @@
 
 ## Results And Errors
 
-- Each operation declares a result containing exactly one success or error branch.
+- Each unary result, progress final result, and subscription-start acknowledgement contains exactly one success or error branch.
 - An error branch contains a required stable string code and typed detail. Known codes require their declared detail.
 - A non-empty unknown error code is still a generic failure. Future unknown detail fields are preserved even when the client cannot interpret them.
 - A missing result branch, empty error code, or known code without its required detail is a contract violation.
 - A subscription returns a typed start result before events begin. A successful start acknowledges the subscription; a failed start returns one of that operation's supported errors.
-- Subscription events and terminal completion are separate from the start result.
+- Notifications, events, and post-ack subscription completion use separate frames and messages. They do not use success/error result envelopes.
 - Error variants use stable Kent error codes and typed details.
 - Clients own user-visible error wording.
 - A client surfaces an unknown failure as a generic error.
