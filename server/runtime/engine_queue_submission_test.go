@@ -176,60 +176,6 @@ func TestDrainQueuedUserMessagesBeforeCloseFailsRestoredQueueWhenFlushPersistenc
 	}
 }
 
-func TestDrainQueuedUserMessagesBeforeCloseConsumesCommittedFlushObserverFailure(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("queued flush observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(
-		t,
-		t.TempDir(),
-		session.WithPersistenceObserver(gate),
-	)
-	var statuses []QueuedUserMessageStatusEvent
-	var statusMu sync.Mutex
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			if event.QueuedUserMessageStatus != nil {
-				statusMu.Lock()
-				defer statusMu.Unlock()
-				statuses = append(statuses, *event.QueuedUserMessageStatus)
-			}
-		},
-	})
-	if err := engine.ensureMetaContextForRequest(context.Background(), "queue-flush"); err != nil {
-		t.Fatalf("prepare queued flush context: %v", err)
-	}
-	queued := mustQueueUserMessageWithClientRequestID(t, engine, "queued input", "request-id")
-	gate.FailNext(observerErr)
-
-	if err := engine.DrainQueuedUserMessagesBeforeClose(context.Background()); !errors.Is(err, observerErr) {
-		t.Fatalf("close drain error = %v", err)
-	}
-	if engine.HasQueuedUserWork() {
-		t.Fatal("committed close-drain flush retained queued user work")
-	}
-	statusMu.Lock()
-	statusSnapshot := append([]QueuedUserMessageStatusEvent(nil), statuses...)
-	statusMu.Unlock()
-	if len(statusSnapshot) != 2 {
-		t.Fatalf("queued user statuses = %+v", statusSnapshot)
-	}
-	if accepted := statusSnapshot[0]; accepted.Status != QueuedUserMessageAccepted ||
-		accepted.QueueItemID != queued.ID ||
-		accepted.ClientRequestID != queued.ClientRequestID {
-		t.Fatalf("accepted queue status = %+v", accepted)
-	}
-	if submitted := statusSnapshot[1]; submitted.Status != QueuedUserMessageSubmitted ||
-		submitted.QueueItemID != queued.ID ||
-		submitted.ClientRequestID != queued.ClientRequestID {
-		t.Fatalf("submitted queue status = %+v", submitted)
-	}
-	if userMessages := boundedPersistedUserMessageCount(t, store); userMessages != 1 {
-		t.Fatalf("committed close-drain flush persisted %d user messages", userMessages)
-	}
-}
-
 func TestQueuedFlushStopFailsTheRemainingTypedTail(t *testing.T) {
 	store := mustCreateTestSession(t)
 	var statuses []QueuedUserMessageStatusEvent

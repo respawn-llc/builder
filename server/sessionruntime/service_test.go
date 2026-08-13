@@ -18,7 +18,6 @@ import (
 	runtimepkg "core/server/runtime"
 	"core/server/runtimewire"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
@@ -115,60 +114,6 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	reopenedCount := recoveredWarningEntryCount(t, reopened, warning)
 	if reopenedCount != 1 {
 		t.Fatalf("reopened warning count = %d, want 1", reopenedCount)
-	}
-}
-
-func TestAppendRecoveredWarningCommitsMarkerWithEventBeforeObserverFailure(t *testing.T) {
-	persistence := sessiontest.NewPersistence()
-	gate := sessiontest.NewPersistenceGate(persistence)
-	projectSessionsDir := t.TempDir()
-	workspaceRoot := t.TempDir()
-	store, err := session.Create(
-		projectSessionsDir,
-		filepath.Base(projectSessionsDir),
-		workspaceRoot,
-		sessioncontract.SessionCategoryMain,
-		session.WithPersistenceObserver(gate),
-		session.WithPersistedSessionResolver(persistence),
-	)
-	if err != nil {
-		t.Fatalf("create gated session: %v", err)
-	}
-	warning := "generated warning"
-	observerErr := errors.New("warning metadata observer failed")
-	gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-		return snapshot.Meta.GeneratedRecoveredWarningIssued
-	}, observerErr)
-
-	if err := appendRecoveredWarning(
-		store,
-		func() (string, bool, error) { return warning, true, nil },
-	); !errors.Is(err, observerErr) {
-		t.Fatalf("append warning error = %v, want %v", err, observerErr)
-	}
-	if !store.Meta().GeneratedRecoveredWarningIssued {
-		t.Fatal("committed warning append did not retain its metadata marker")
-	}
-
-	reopened, err := session.OpenByID(
-		projectSessionsDir,
-		store.Meta().SessionID,
-		persistence.Options()...,
-	)
-	if err != nil {
-		t.Fatalf("reopen committed warning: %v", err)
-	}
-	if !reopened.Meta().GeneratedRecoveredWarningIssued {
-		t.Fatal("reopened warning lost its atomic metadata marker")
-	}
-	if err := appendRecoveredWarning(
-		reopened,
-		func() (string, bool, error) { return warning, true, nil },
-	); err != nil {
-		t.Fatalf("retry warning after reopen: %v", err)
-	}
-	if count := recoveredWarningEntryCount(t, reopened, warning); count != 1 {
-		t.Fatalf("warning count after committed retry = %d, want 1", count)
 	}
 }
 

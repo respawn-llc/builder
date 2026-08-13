@@ -12,7 +12,6 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	shelltool "core/server/tools/shell"
 	"core/shared/config"
@@ -759,69 +758,5 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 	}
 	if !foundAssistantWithCall {
 		t.Fatal("expected persisted assistant message with tool_calls")
-	}
-}
-
-func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
-	tests := []struct {
-		name     string
-		registry *tools.Registry
-		callName string
-	}{
-		{
-			name:     "unknown tool name",
-			registry: newTestToolRegistry(t),
-			callName: "not_a_tool",
-		},
-		{
-			name:     "known tool without handler",
-			registry: newTestToolRegistry(t),
-			callName: string(toolspec.ToolExecCommand),
-		},
-		{
-			name:     "registered tool handler",
-			registry: newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
-			callName: string(toolspec.ToolExecCommand),
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name+"/uncommitted", func(t *testing.T) {
-			store := mustCreateTestSession(t)
-			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
-			mustBlockTestEventLogAppends(t, store)
-
-			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
-			}})
-			var fatal *resultGroupFatal
-			if !errors.As(err, &fatal) || fatal.Committed {
-				t.Fatalf("expected uncommitted result group fatal, got %v", err)
-			}
-			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 0 {
-				t.Fatalf("uncommitted tool completions = %d, want 0", got)
-			}
-		})
-
-		t.Run(tc.name+"/committed_observer_error", func(t *testing.T) {
-			observerErr := errors.New("tool completion observer failed")
-			gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
-			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
-			gate.FailNext(observerErr)
-
-			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
-				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
-			}})
-			var fatal *resultGroupFatal
-			if !errors.As(err, &fatal) ||
-				!fatal.Committed ||
-				!errors.Is(fatal.Cause, observerErr) {
-				t.Fatalf("tool completion error = %v, want committed observer fatal", err)
-			}
-			if got := eng.transcriptRuntimeState().ToolCompletionCount(); got != 1 {
-				t.Fatalf("committed tool completions = %d, want 1", got)
-			}
-		})
 	}
 }

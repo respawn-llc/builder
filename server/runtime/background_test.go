@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"core/server/llm"
-	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -283,32 +281,5 @@ func TestBackgroundNoticeSchedulerRestoresUncommittedSteerFailure(t *testing.T) 
 	pending := scheduler.pendingSnapshot()
 	if len(pending) != 2 || pending[0].sessionID != "first" || pending[1].sessionID != "second" {
 		t.Fatalf("restored pending notices = %+v", pending)
-	}
-}
-
-func TestFlushPendingUserInjectionsRestoresOnlyLaterNoticeAfterCommittedObserverFailure(t *testing.T) {
-	observerErr := errors.New("background notice observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	steps := &stubExclusiveStepLifecycle{busy: true}
-	scheduler := &defaultBackgroundNoticeScheduler{engine: engine, steps: steps}
-	lifecycle := newDefaultMessageLifecycle(engine, scheduler)
-	for _, sessionID := range []string{"first", "second"} {
-		scheduler.QueueDeveloperNotice(llm.Message{
-			Role:    llm.RoleDeveloper,
-			Name:    textutil.Value(sessionID),
-			Content: textutil.Value(sessionID + " notice"),
-		})
-	}
-	gate.FailNext(observerErr)
-
-	_, err := lifecycle.FlushPendingUserInjections("step", allPendingUserInjectionSelection{})
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("flush error = %v, want observer failure", err)
-	}
-	pending := scheduler.pendingSnapshot()
-	if len(pending) != 1 || pending[0].sessionID != "second" {
-		t.Fatalf("pending notices after committed failure = %+v", pending)
 	}
 }

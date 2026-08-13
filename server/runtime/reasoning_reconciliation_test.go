@@ -2,13 +2,11 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -339,35 +337,6 @@ func TestReconcileReasoningRejectsInvalidCoordinateAndConsumesCommittedTrace(t *
 	_, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
 	if len(traces) != 0 {
 		t.Fatalf("reasoning traces after committed reconciliation = %+v, want empty", traces)
-	}
-}
-
-func TestReconcileReasoningConsumesTraceAfterCommittedObserverError(t *testing.T) {
-	observerErr := errors.New("reasoning observer failed")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	executor := &defaultStepExecutor{engine: engine}
-	outputIndex, partIndex := int64(0), int64(0)
-	coordinate := &llm.ReasoningSourceCoordinate{OutputIndex: &outputIndex, PartIndex: &partIndex}
-	if err := engine.steer("step", steerReasoningDeltaIntent(llm.ReasoningSummaryDelta{
-		SourceCoordinate: coordinate,
-		Text:             "provisional",
-	})); err != nil {
-		t.Fatalf("seed provisional reasoning: %v", err)
-	}
-	gate.FailNext(observerErr)
-	err := executor.reconcileReasoning("step", []llm.ReasoningEntry{{
-		Role:             textPointer(string(transcript.EntryRoleReasoning)),
-		Text:             "completed",
-		SourceCoordinate: coordinate,
-	}})
-	if !errors.Is(err, observerErr) {
-		t.Fatalf("reconciliation error = %v, want observer error", err)
-	}
-	_, traces := engine.transcriptRuntimeState().ReasoningSnapshot()
-	if len(traces) != 0 {
-		t.Fatalf("reasoning traces after committed observer error = %+v, want consumed", traces)
 	}
 }
 

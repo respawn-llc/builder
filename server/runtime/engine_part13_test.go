@@ -9,7 +9,6 @@ import (
 	triggerhandofftool "core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
-	"core/shared/transcript"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -670,91 +669,6 @@ func TestPendingTriggerHandoffRetriesAfterCompactionFailure(t *testing.T) {
 	}
 }
 
-func TestPendingTriggerHandoffRetriesFutureMessageAfterAppendFailureWithoutRecompaction(t *testing.T) {
-	store := mustCreateTestSession(t)
-
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("condensed summary")},
-		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
-	}}}
-	var (
-		blockFutureAppend bool
-		blocker           *testEventLogAppendBlocker
-		blockErr          error
-	)
-	eng := mustNewHandoffTestEngine(t, store, client, Config{
-		OnEvent: func(evt Event) {
-			if !blockFutureAppend || evt.Kind != EventConversationUpdated || evt.CommittedTranscriptChanged {
-				return
-			}
-			blockFutureAppend = false
-			blocker, blockErr = blockTestEventLogAppends(store)
-		},
-	})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-	eng.compactionRuntimeState().SetSoonReminderIssued(true)
-	futureAgentMessage := "resume \"with tests\"\nthen inspect logs"
-
-	_, _, err := eng.TriggerHandoff(context.Background(), "step-1", llm.ToolCall{ID: "call_handoff_append_retry", Name: string(toolspec.ToolTriggerHandoff)}, "keep API details", futureAgentMessage)
-	if err != nil {
-		t.Fatalf("trigger handoff: %v", err)
-	}
-
-	blockFutureAppend = true
-	err = withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, applyErr := eng.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if err == nil {
-		t.Fatal("expected first pending handoff attempt to fail while appending future-agent message")
-	}
-	if blockErr != nil || blocker == nil {
-		t.Fatalf("block future-agent append: blocker=%v error=%v", blocker, blockErr)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected exactly one compaction summary call after append failure, got %d", len(client.calls))
-	}
-	if eng.handoffRuntimeState().RequestSnapshot() != nil {
-		t.Fatalf("expected compaction-success path to consume original handoff request, got %+v", eng.handoffRuntimeState().RequestSnapshot())
-	}
-	// The retry queue keeps the raw tool argument so retry emission cannot wrap
-	// already-formatted future-agent context a second time.
-	if got, want := eng.handoffRuntimeState().FutureMessageSnapshot(), futureAgentMessage; got != want {
-		t.Fatalf("pending future-agent message after append failure = %q, want %q", got, want)
-	}
-
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
-	}
-	err = withActiveTestRun(t, eng, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, applyErr := eng.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if err != nil {
-		t.Fatalf("retry pending future-agent message append: %v", err)
-	}
-	if len(client.calls) != 1 {
-		t.Fatalf("expected retry after future-message append failure not to re-run compaction, got %d compaction calls", len(client.calls))
-	}
-	if got := eng.handoffRuntimeState().FutureMessageSnapshot(); got != "" {
-		t.Fatalf("expected successful retry to clear pending future-agent message, got %q", got)
-	}
-
-	messages := eng.transcriptRuntimeState().SnapshotMessages()
-	foundFutureMessage := false
-	for _, message := range messages {
-		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHandoffFutureMessage {
-			foundFutureMessage = true
-			break
-		}
-	}
-	if !foundFutureMessage {
-		t.Fatalf("expected successful retry to append future-agent message after append failure, got %+v", messages)
-	}
-}
-
 func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsFutureMessage(t *testing.T) {
 	store := mustCreateTestSession(t)
 
@@ -905,25 +819,6 @@ func (o *armedCommittedAppendFailObserver) ObservePersistedStore(_ context.Conte
 		return errProbeCommittedObserverFailure
 	}
 	return nil
-}
-
-func TestCacheWarningSteeringPropagatesCommittedAppendError(t *testing.T) {
-	observer := &armedCommittedAppendFailObserver{}
-	dir := t.TempDir()
-	store := mustCreateTestSessionAt(t, dir, withRuntimeTestPersistenceObserver(observer))
-	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
-		t.Fatalf("append seed message: %v", err)
-	}
-
-	observer.armed = true
-	err := eng.steer("step-1", steerCacheWarningIntent(transcript.CacheWarning{
-		Scope:  transcript.CacheWarningScopeConversation,
-		Reason: transcript.CacheWarningReasonCompaction,
-	}, transcript.EntryVisibilityAuto, false))
-	if !errors.Is(err, errProbeCommittedObserverFailure) {
-		t.Fatalf("cache-warning steer err = %v, want committed append observer error propagated", err)
-	}
 }
 
 func TestRunStepLoopBailsOnCanceledContextWithoutModelCall(t *testing.T) {

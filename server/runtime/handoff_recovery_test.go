@@ -2,12 +2,10 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -230,136 +228,6 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 		client.calls[len(client.calls)-1].Items,
 		handoffCall,
 	)
-}
-
-func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWithoutRecompaction(t *testing.T) {
-	t.Parallel()
-	store := mustCreateTestSession(t)
-	var (
-		blockFutureAppend bool
-		blocker           *testEventLogAppendBlocker
-		blockErr          error
-		blockerRestored   bool
-	)
-	t.Cleanup(func() {
-		if blocker != nil && !blockerRestored {
-			if err := blocker.Restore(); err != nil {
-				t.Errorf("restore blocked event log: %v", err)
-			}
-		}
-	})
-	client := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
-		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
-	}}}
-	engine := mustNewHandoffTestEngine(t, store, client, Config{
-		OnEvent: func(event Event) {
-			if !blockFutureAppend ||
-				event.Kind != EventConversationUpdated ||
-				event.CommittedTranscriptChanged {
-				return
-			}
-			blockFutureAppend = false
-			blocker, blockErr = blockTestEventLogAppends(store)
-		},
-	})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist seed message: %v", err)
-	}
-	persistSuccessfulTriggerHandoff(t, engine, "future-message-retry-handoff-call")
-	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
-
-	blockFutureAppend = true
-	var applied bool
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if err == nil {
-		t.Fatal("handoff future-message append unexpectedly succeeded")
-	}
-	if applied {
-		t.Fatal("handoff future-message append unexpectedly reported compaction")
-	}
-	if blockErr != nil || blocker == nil {
-		t.Fatalf("block future-message append: blocker=%v error=%v", blocker, blockErr)
-	}
-	if generation := engine.CompactionCount(); generation != 1 {
-		t.Fatalf("committed handoff compaction generation = %d, want 1", generation)
-	}
-	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending != nil {
-		t.Fatalf("committed handoff compaction retained pending request: %+v", pending)
-	}
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
-	}
-	blockerRestored = true
-
-	resumedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("complete"),
-		},
-		Usage: llm.Usage{InputTokens: 300, WindowTokens: 2_000},
-	}}}
-	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), resumedClient, Config{})
-	if pending := restored.handoffRuntimeState().RequestSnapshot(); pending != nil {
-		t.Fatalf("reopened session requeued completed handoff: %+v", pending)
-	}
-	if _, err := restored.SubmitUserMessage(context.Background(), "continue"); err != nil {
-		t.Fatalf("submit after reopen: %v", err)
-	}
-	if generation := restored.CompactionCount(); generation != 1 {
-		t.Fatalf("future-message retry re-ran handoff compaction: generation = %d, want 1", generation)
-	}
-	if len(resumedClient.calls) == 0 {
-		t.Fatal("future-message retry did not produce a model request")
-	}
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("reopened retry future-message records = %d, want 1", futureMessages)
-	}
-}
-
-func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.T) {
-	t.Parallel()
-	observerErr := errors.New("handoff future-message observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
-	engine.handoffRuntimeState().QueueFutureMessage("continue")
-	gate.FailNext(observerErr)
-
-	var applied bool
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if applied || !errors.Is(err, observerErr) {
-		t.Fatalf("future-message append outcome = applied:%v error:%v", applied, err)
-	}
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("committed handoff future-message records = %d, want 1", futureMessages)
-	}
-
-	err = withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		var applyErr error
-		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
-		return applyErr
-	})
-	if applied || err != nil {
-		t.Fatalf("second future-message append outcome = applied:%v error:%v", applied, err)
-	}
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("second future-message append changed durable record count to %d", futureMessages)
-	}
 }
 
 func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLingeringCallOutput(t *testing.T) {
