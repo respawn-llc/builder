@@ -102,6 +102,8 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 			authorizationType: reflect.TypeOf(noAuthorizationFacts{}),
 		}
 		handler.owner = inboundHandlerRuntimeLiveOwner
+	case protocol.MethodRuntimeLiveStop, protocol.MethodRuntimeLiveWatch:
+		handler.owner = inboundHandlerRuntimeLiveOwner
 	case protocol.MethodAttachSession,
 		protocol.MethodAuthGetBootstrapStatus,
 		protocol.MethodAuthCompleteBootstrap,
@@ -151,7 +153,21 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodProcessGet,
 		protocol.MethodProcessKill,
 		protocol.MethodProcessInlineOutput,
-		protocol.MethodProcessSubscribeOutput:
+		protocol.MethodProcessSubscribeOutput,
+		protocol.MethodRuntimeSetSessionName,
+		protocol.MethodRuntimeSetThinkingLevel,
+		protocol.MethodRuntimeSetFastModeEnabled,
+		protocol.MethodRuntimeSetReviewerEnabled,
+		protocol.MethodRuntimeSetAutoCompactionEnabled,
+		protocol.MethodRuntimeSetQuestionsEnabled,
+		protocol.MethodRuntimeAppendCommittedEntry,
+		protocol.MethodRuntimeShouldCompactBeforeUserMessage,
+		protocol.MethodRuntimeSubmitUserTurn,
+		protocol.MethodRuntimeSubmitUserShellCommand,
+		protocol.MethodRuntimeCompactContext,
+		protocol.MethodRuntimeInterrupt,
+		protocol.MethodRuntimeDiscardQueuedUserMessage,
+		protocol.MethodRuntimeRecordPromptHistory:
 		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRuntimeGoalShow,
 		protocol.MethodRuntimeGoalSet,
@@ -778,6 +794,16 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 		},
 		handleRuntimeLiveSteer,
 	)
+	executables[protocol.MethodRuntimeLiveStop] = inboundTrustedUnary[serverapi.RuntimeLiveStopRequest, noAuthorizationFacts, serverapi.RuntimeLiveStopResponse](
+		protocol.MethodRuntimeLiveStop,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		func(context.Context, *Gateway, *connectionState, apicontract.Validated[serverapi.RuntimeLiveStopRequest]) (noAuthorizationFacts, error) {
+			return noAuthorizationFacts{}, nil
+		},
+		handleRuntimeLiveStop,
+	)
 	executables[protocol.MethodRuntimeLiveWait] = inboundTrustedUnary[serverapi.RuntimeLiveWaitRequest, noAuthorizationFacts, serverapi.RuntimeLiveWaitResponse](
 		protocol.MethodRuntimeLiveWait,
 		apicontract.SemanticValidationRequired,
@@ -787,6 +813,16 @@ func declareInboundExecutableRoutes() map[string]inboundExecutableRoute {
 			return noAuthorizationFacts{}, nil
 		},
 		handleRuntimeLiveWait,
+	)
+	executables[protocol.MethodRuntimeLiveWatch] = inboundTrustedUnary[serverapi.RuntimeLiveWatchRequest, noAuthorizationFacts, serverapi.RuntimeLiveWatchResponse](
+		protocol.MethodRuntimeLiveWatch,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		func(context.Context, *Gateway, *connectionState, apicontract.Validated[serverapi.RuntimeLiveWatchRequest]) (noAuthorizationFacts, error) {
+			return noAuthorizationFacts{}, nil
+		},
+		handleRuntimeLiveWatch,
 	)
 	registerGoalRoutes(executables)
 	executables[protocol.MethodSessionRuntimeActivate] = inboundTrustedUnary[serverapi.SessionRuntimeActivateRequest, apicontract.AuthorizedSessionInActiveProject, serverapi.SessionRuntimeActivateResponse](
@@ -960,20 +996,20 @@ func registerActiveProjectSessionRoutes(executables map[string]inboundExecutable
 	executables[protocol.MethodWorktreeLeave] = trustedWorktreeSessionUnary(protocol.MethodWorktreeLeave, func(req serverapi.WorktreeLeaveRequest) string { return req.SessionID }, handleWorktreeLeave)
 	executables[protocol.MethodWorktreeDelete] = trustedWorktreeSessionUnary(protocol.MethodWorktreeDelete, func(req serverapi.WorktreeDeleteRequest) string { return req.SessionID }, handleWorktreeDelete)
 
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetSessionName, activeProjectSessionUnary[serverapi.RuntimeSetSessionNameRequest](protocol.MethodRuntimeSetSessionName, func(req serverapi.RuntimeSetSessionNameRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetThinkingLevel, activeProjectSessionUnary[serverapi.RuntimeSetThinkingLevelRequest](protocol.MethodRuntimeSetThinkingLevel, func(req serverapi.RuntimeSetThinkingLevelRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetFastModeEnabled, activeProjectSessionUnary[serverapi.RuntimeSetFastModeEnabledRequest](protocol.MethodRuntimeSetFastModeEnabled, func(req serverapi.RuntimeSetFastModeEnabledRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetReviewerEnabled, activeProjectSessionUnary[serverapi.RuntimeSetReviewerEnabledRequest](protocol.MethodRuntimeSetReviewerEnabled, func(req serverapi.RuntimeSetReviewerEnabledRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetAutoCompactionEnabled, activeProjectSessionUnary[serverapi.RuntimeSetAutoCompactionEnabledRequest](protocol.MethodRuntimeSetAutoCompactionEnabled, func(req serverapi.RuntimeSetAutoCompactionEnabledRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSetQuestionsEnabled, activeProjectSessionUnary[serverapi.RuntimeSetQuestionsEnabledRequest](protocol.MethodRuntimeSetQuestionsEnabled, func(req serverapi.RuntimeSetQuestionsEnabledRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeAppendCommittedEntry, activeProjectSessionUnary[serverapi.RuntimeAppendCommittedEntryRequest](protocol.MethodRuntimeAppendCommittedEntry, func(req serverapi.RuntimeAppendCommittedEntryRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeShouldCompactBeforeUserMessage, activeProjectSessionUnary[serverapi.RuntimeShouldCompactBeforeUserMessageRequest](protocol.MethodRuntimeShouldCompactBeforeUserMessage, func(req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserTurn, activeProjectSessionUnary[serverapi.RuntimeSubmitUserTurnRequest](protocol.MethodRuntimeSubmitUserTurn, func(req serverapi.RuntimeSubmitUserTurnRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserShellCommand, activeProjectSessionUnary[serverapi.RuntimeSubmitUserShellCommandRequest](protocol.MethodRuntimeSubmitUserShellCommand, func(req serverapi.RuntimeSubmitUserShellCommandRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeCompactContext, activeProjectSessionUnary[serverapi.RuntimeCompactContextRequest](protocol.MethodRuntimeCompactContext, func(req serverapi.RuntimeCompactContextRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeInterrupt, activeProjectSessionUnary[serverapi.RuntimeInterruptRequest](protocol.MethodRuntimeInterrupt, func(req serverapi.RuntimeInterruptRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeDiscardQueuedUserMessage, activeProjectSessionUnary[serverapi.RuntimeDiscardQueuedUserMessageRequest](protocol.MethodRuntimeDiscardQueuedUserMessage, func(req serverapi.RuntimeDiscardQueuedUserMessageRequest) string { return req.SessionID }))
-	registerRequiredSessionUnary(protocol.MethodRuntimeRecordPromptHistory, activeProjectSessionUnary[serverapi.RuntimeRecordPromptHistoryRequest](protocol.MethodRuntimeRecordPromptHistory, func(req serverapi.RuntimeRecordPromptHistoryRequest) string { return req.SessionID }))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetSessionName, trustedRuntimeControlNoResponse(protocol.MethodRuntimeSetSessionName, func(req serverapi.RuntimeSetSessionNameRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetSessionNameValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetThinkingLevel, trustedRuntimeControlNoResponse(protocol.MethodRuntimeSetThinkingLevel, func(req serverapi.RuntimeSetThinkingLevelRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetThinkingLevelValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetFastModeEnabled, trustedRuntimeControlUnary(protocol.MethodRuntimeSetFastModeEnabled, func(req serverapi.RuntimeSetFastModeEnabledRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetFastModeEnabledValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetReviewerEnabled, trustedRuntimeControlUnary(protocol.MethodRuntimeSetReviewerEnabled, func(req serverapi.RuntimeSetReviewerEnabledRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetReviewerEnabledValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetAutoCompactionEnabled, trustedRuntimeControlUnary(protocol.MethodRuntimeSetAutoCompactionEnabled, func(req serverapi.RuntimeSetAutoCompactionEnabledRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetAutoCompactionEnabledValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSetQuestionsEnabled, trustedRuntimeControlUnary(protocol.MethodRuntimeSetQuestionsEnabled, func(req serverapi.RuntimeSetQuestionsEnabledRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SetQuestionsEnabledValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeAppendCommittedEntry, trustedRuntimeControlNoResponse(protocol.MethodRuntimeAppendCommittedEntry, func(req serverapi.RuntimeAppendCommittedEntryRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.AppendCommittedEntryValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeShouldCompactBeforeUserMessage, trustedRuntimeControlUnary(protocol.MethodRuntimeShouldCompactBeforeUserMessage, func(req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.ShouldCompactBeforeUserMessageValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserTurn, trustedRuntimeControlUnary(protocol.MethodRuntimeSubmitUserTurn, func(req serverapi.RuntimeSubmitUserTurnRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SubmitUserTurnValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeSubmitUserShellCommand, trustedRuntimeControlNoResponse(protocol.MethodRuntimeSubmitUserShellCommand, func(req serverapi.RuntimeSubmitUserShellCommandRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.SubmitUserShellCommandValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeCompactContext, trustedRuntimeControlNoResponse(protocol.MethodRuntimeCompactContext, func(req serverapi.RuntimeCompactContextRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.CompactContextValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeInterrupt, trustedRuntimeControlUnary(protocol.MethodRuntimeInterrupt, func(req serverapi.RuntimeInterruptRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.InterruptValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeDiscardQueuedUserMessage, trustedRuntimeControlUnary(protocol.MethodRuntimeDiscardQueuedUserMessage, func(req serverapi.RuntimeDiscardQueuedUserMessageRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.DiscardQueuedUserMessageValidated))
+	registerRequiredSessionUnary(protocol.MethodRuntimeRecordPromptHistory, trustedRuntimeControlNoResponse(protocol.MethodRuntimeRecordPromptHistory, func(req serverapi.RuntimeRecordPromptHistoryRequest) string { return req.SessionID }, apicontract.RuntimeControlTrustedService.RecordPromptHistoryValidated))
 
 	registerRequiredSessionUnary(protocol.MethodAskListPending, activeProjectSessionUnary[serverapi.AskListPendingBySessionRequest](protocol.MethodAskListPending, func(req serverapi.AskListPendingBySessionRequest) string { return req.SessionID }))
 	registerRequiredSessionUnary(protocol.MethodPromptAnswerBatch, activeProjectSessionUnary[serverapi.PromptAnswerBatchRequest](protocol.MethodPromptAnswerBatch, func(req serverapi.PromptAnswerBatchRequest) string { return req.SessionID.String() }))
@@ -997,6 +1033,42 @@ func activeProjectSessionUnary[Req any](method string, sessionID func(Req) strin
 		requestDecoderDefault,
 		nil,
 		authorizeSessionActiveProject(sessionID),
+	)
+}
+
+func trustedRuntimeControlUnary[Req any, Resp any](
+	method string,
+	sessionID func(Req) string,
+	call func(apicontract.RuntimeControlTrustedService, context.Context, apicontract.Validated[Req], apicontract.AuthorizedSessionInActiveProject) (Resp, error),
+) inboundExecutableRoute {
+	return inboundTrustedUnary(
+		method,
+		apicontract.SemanticValidationRequired,
+		requestDecoderDefault,
+		nil,
+		authorizeSessionActiveProject(sessionID),
+		func(ctx context.Context, g *Gateway, _ *connectionState, req apicontract.Validated[Req], authorization apicontract.AuthorizedSessionInActiveProject) (Resp, error) {
+			trusted, ok := g.deps.RuntimeControlClient().(apicontract.RuntimeControlTrustedService)
+			if !ok {
+				var zero Resp
+				return zero, errors.New("Runtime Control trusted service is required")
+			}
+			return call(trusted, ctx, req, authorization)
+		},
+	)
+}
+
+func trustedRuntimeControlNoResponse[Req any](
+	method string,
+	sessionID func(Req) string,
+	call func(apicontract.RuntimeControlTrustedService, context.Context, apicontract.Validated[Req], apicontract.AuthorizedSessionInActiveProject) error,
+) inboundExecutableRoute {
+	return trustedRuntimeControlUnary(
+		method,
+		sessionID,
+		func(trusted apicontract.RuntimeControlTrustedService, ctx context.Context, req apicontract.Validated[Req], authorization apicontract.AuthorizedSessionInActiveProject) (struct{}, error) {
+			return struct{}{}, call(trusted, ctx, req, authorization)
+		},
 	)
 }
 
@@ -1039,6 +1111,28 @@ func handleRuntimeLiveSteer(
 	return trusted.LiveSteerValidated(ctx, request)
 }
 
+func runtimeLiveControlTrustedService(g *Gateway) (apicontract.RuntimeLiveControlTrustedService, error) {
+	trusted, ok := g.deps.RuntimeLiveControlClient().(apicontract.RuntimeLiveControlTrustedService)
+	if !ok {
+		return nil, errors.New("Runtime Live Control trusted service is required")
+	}
+	return trusted, nil
+}
+
+func handleRuntimeLiveStop(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.RuntimeLiveStopRequest],
+	_ noAuthorizationFacts,
+) (serverapi.RuntimeLiveStopResponse, error) {
+	trusted, err := runtimeLiveControlTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeLiveStopResponse{}, err
+	}
+	return trusted.LiveStopValidated(ctx, request)
+}
+
 func handleRuntimeLiveWait(
 	ctx context.Context,
 	g *Gateway,
@@ -1051,6 +1145,20 @@ func handleRuntimeLiveWait(
 		return serverapi.RuntimeLiveWaitResponse{}, errors.New("Runtime Live Control trusted service is required")
 	}
 	return trusted.LiveWaitValidated(ctx, request)
+}
+
+func handleRuntimeLiveWatch(
+	ctx context.Context,
+	g *Gateway,
+	_ *connectionState,
+	request apicontract.Validated[serverapi.RuntimeLiveWatchRequest],
+	_ noAuthorizationFacts,
+) (serverapi.RuntimeLiveWatchResponse, error) {
+	trusted, err := runtimeLiveControlTrustedService(g)
+	if err != nil {
+		return serverapi.RuntimeLiveWatchResponse{}, err
+	}
+	return trusted.LiveWatchValidated(ctx, request)
 }
 
 func runtimeGoalTrustedService(g *Gateway) (apicontract.RuntimeGoalTrustedService, error) {

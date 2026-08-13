@@ -216,8 +216,26 @@ type RuntimeGoalTrustedService interface {
 	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest]) (serverapi.RuntimeGoalMutationResponse, error)
 }
 
+type RuntimeControlTrustedService interface {
+	SetSessionNameValidated(ctx context.Context, req Validated[serverapi.RuntimeSetSessionNameRequest], authorization AuthorizedSessionInActiveProject) error
+	SetThinkingLevelValidated(ctx context.Context, req Validated[serverapi.RuntimeSetThinkingLevelRequest], authorization AuthorizedSessionInActiveProject) error
+	SetFastModeEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetFastModeEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetFastModeEnabledResponse, error)
+	SetReviewerEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetReviewerEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetReviewerEnabledResponse, error)
+	SetAutoCompactionEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetAutoCompactionEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error)
+	SetQuestionsEnabledValidated(ctx context.Context, req Validated[serverapi.RuntimeSetQuestionsEnabledRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSetQuestionsEnabledResponse, error)
+	AppendCommittedEntryValidated(ctx context.Context, req Validated[serverapi.RuntimeAppendCommittedEntryRequest], authorization AuthorizedSessionInActiveProject) error
+	ShouldCompactBeforeUserMessageValidated(ctx context.Context, req Validated[serverapi.RuntimeShouldCompactBeforeUserMessageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error)
+	SubmitUserTurnValidated(ctx context.Context, req Validated[serverapi.RuntimeSubmitUserTurnRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeSubmitUserTurnResponse, error)
+	SubmitUserShellCommandValidated(ctx context.Context, req Validated[serverapi.RuntimeSubmitUserShellCommandRequest], authorization AuthorizedSessionInActiveProject) error
+	CompactContextValidated(ctx context.Context, req Validated[serverapi.RuntimeCompactContextRequest], authorization AuthorizedSessionInActiveProject) error
+	InterruptValidated(ctx context.Context, req Validated[serverapi.RuntimeInterruptRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeInterruptResponse, error)
+	DiscardQueuedUserMessageValidated(ctx context.Context, req Validated[serverapi.RuntimeDiscardQueuedUserMessageRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error)
+	RecordPromptHistoryValidated(ctx context.Context, req Validated[serverapi.RuntimeRecordPromptHistoryRequest], authorization AuthorizedSessionInActiveProject) error
+}
+
 type RuntimeControlGatewayService interface {
 	RuntimeControlService
+	RuntimeControlTrustedService
 	RuntimeGoalTrustedService
 }
 
@@ -230,7 +248,9 @@ type RuntimeLiveControlService interface {
 
 type RuntimeLiveControlTrustedService interface {
 	LiveSteerValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error)
+	LiveStopValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveStopRequest]) (serverapi.RuntimeLiveStopResponse, error)
 	LiveWaitValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error)
+	LiveWatchValidated(ctx context.Context, req Validated[serverapi.RuntimeLiveWatchRequest]) (serverapi.RuntimeLiveWatchResponse, error)
 }
 
 type RuntimeLiveControlGatewayService interface {

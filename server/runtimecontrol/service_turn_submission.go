@@ -7,6 +7,7 @@ import (
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
+	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
@@ -64,7 +65,15 @@ func (s *Service) resolveUserTurnInput(ctx context.Context, sessionID string, in
 }
 
 func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmitUserTurnRequest) (serverapi.RuntimeSubmitUserTurnResponse, error) {
-	if err := req.Validate(); err != nil {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSubmitUserTurnRequest]) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+		return s.SubmitUserTurnValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{})
+	})
+}
+
+func (s *Service) SubmitUserTurnValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeSubmitUserTurnRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeSubmitUserTurnResponse, error) {
+	req := validated.Value()
+	sessionID, err := runtimeControlSessionID(req.SessionID, authorization)
+	if err != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, err
 	}
 	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
@@ -79,10 +88,7 @@ func (s *Service) SubmitUserTurn(ctx context.Context, req serverapi.RuntimeSubmi
 		}
 		attempt := newRuntimeCommandAttempt(ctx)
 		defer attempt.Finish()
-		response, commandErr := s.submitUserTurn(attempt, clientRequestID, memoReq, projection, req)
-		if commandErr == nil {
-			commandErr = response.Validate()
-		}
+		response, commandErr := s.submitUserTurn(attempt, clientRequestID, memoReq, projection, sessionID)
 		return response, attempt.Accepted(), commandErr
 	})
 }
@@ -92,10 +98,10 @@ func (s *Service) submitUserTurn(
 	clientRequestID runtimeids.RuntimeClientRequestID,
 	memoReq sessionUserTurnMemoRequest,
 	projection userTurnProjection,
-	req serverapi.RuntimeSubmitUserTurnRequest,
+	sessionID runtimeids.SessionID,
 ) (serverapi.RuntimeSubmitUserTurnResponse, error) {
 	var response serverapi.RuntimeSubmitUserTurnResponse
-	err := s.runAgentExecution(attempt.Context(), req.SessionID, func(runCtx context.Context, engine *runtime.Engine) error {
+	err := s.runAgentExecutionID(attempt.Context(), sessionID, func(runCtx context.Context, engine *runtime.Engine) error {
 		defer func() {
 			if !attempt.Accepted() {
 				return
@@ -177,7 +183,7 @@ func (s *Service) submitUserTurn(
 		clientRequestID,
 		memoReq,
 		projection,
-		req,
+		sessionID,
 	)
 	if activeErr != nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, activeErr
@@ -193,18 +199,14 @@ func (s *Service) trySubmitUserTurnAsActiveExecution(
 	clientRequestID runtimeids.RuntimeClientRequestID,
 	memoReq sessionUserTurnMemoRequest,
 	projection userTurnProjection,
-	req serverapi.RuntimeSubmitUserTurnRequest,
+	sessionID runtimeids.SessionID,
 ) (serverapi.RuntimeSubmitUserTurnResponse, bool, error) {
 	var response serverapi.RuntimeSubmitUserTurnResponse
 	steered := false
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeSubmitUserTurnResponse{}, false, err
-	}
 	if s == nil || s.authority == nil {
 		return serverapi.RuntimeSubmitUserTurnResponse{}, false, errors.New("session runtime authority is required")
 	}
-	err = s.withLiveExecutionRuntime(attempt.Context(), sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+	err := s.withLiveExecutionRuntime(attempt.Context(), sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 		item, accepted, err := engine.QueueUserMessageForActiveRunWithAcceptance(
 			callbackCtx,
 			projection.ExecutionText,

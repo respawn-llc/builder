@@ -388,14 +388,22 @@ func (a *Authority) WithSessionChatSettings(
 	sessionID string,
 	callback func(context.Context, *session.Store, *runtime.Engine) error,
 ) error {
-	if callback == nil {
-		return errors.New("Session Chat settings callback is required")
-	}
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return err
 	}
-	return a.withMaintenanceResource(ctx, id, func(
+	return a.WithSessionChatSettingsID(ctx, id, callback)
+}
+
+func (a *Authority) WithSessionChatSettingsID(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	callback func(context.Context, *session.Store, *runtime.Engine) error,
+) error {
+	if callback == nil {
+		return errors.New("Session Chat settings callback is required")
+	}
+	return a.withMaintenanceResource(ctx, sessionID, func(
 		runCtx context.Context,
 		store *session.Store,
 		_ *agentResource,

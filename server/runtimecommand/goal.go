@@ -3,7 +3,6 @@ package runtimecommand
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"core/server/runtime"
 	"core/server/runtimeactivity"
@@ -77,7 +76,6 @@ func NewGoalAuthority(authority *sessionruntime.Authority, execution *ExecutionA
 }
 
 func (a *GoalAuthority) Set(ctx context.Context, command GoalSetCommand) (GoalCommandResult, error) {
-	command.Objective = strings.TrimSpace(command.Objective)
 	if isStepScoped(command.Actor, command.Execution) {
 		return a.withExactLive(ctx, command.SessionID, command.Execution, func(engine *runtime.Engine) (GoalCommandResult, error) {
 			availability := engine.GoalMutationAvailability()
@@ -322,9 +320,6 @@ func dormantSet(store *session.Store, command GoalSetCommand) (GoalCommandResult
 
 func dormantStatus(store *session.Store, command GoalStatusCommand) (GoalCommandResult, error) {
 	availability := store.GoalMutationAvailability()
-	if current := store.Meta().Goal; current != nil && current.Status == command.Status {
-		return noopGoalResult(*current, availability), nil
-	}
 	goal, transitioned, metadataReceipt, err := store.SetGoalStatus(command.Status, command.Actor)
 	disposition := runtime.GoalCommandApplied
 	if err == nil && !transitioned {

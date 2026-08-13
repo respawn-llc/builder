@@ -29,7 +29,7 @@ func (s *Service) ShowGoalValidated(ctx context.Context, validated servicecontra
 	if s == nil || s.persisted == nil {
 		return serverapi.RuntimeGoalShowResponse{}, errors.New("persisted session resolver is required")
 	}
-	sessionID := strings.TrimSpace(req.SessionID)
+	sessionID := req.SessionID
 	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, fmt.Errorf("resolve persisted session %q: %w", sessionID, err)
@@ -54,12 +54,12 @@ func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontrac
 	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
+		panic("validated Goal Set Session ID is invalid: " + err.Error())
 	}
 	memoReq := goalSetMemoRequest{
 		SessionID: sessionID.String(),
-		Objective: strings.TrimSpace(req.Objective),
-		Actor:     strings.TrimSpace(req.Actor),
+		Objective: req.Objective,
+		Actor:     req.Actor,
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
@@ -107,12 +107,12 @@ func (s *Service) setGoalStatusValidated(ctx context.Context, validated servicec
 	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
+		panic("validated Goal Status Session ID is invalid: " + err.Error())
 	}
 	memoReq := goalStatusMemoRequest{
 		SessionID: sessionID.String(),
 		Status:    string(status),
-		Actor:     strings.TrimSpace(req.Actor),
+		Actor:     req.Actor,
 		RunID:     strings.TrimSpace(req.RunID),
 		StepID:    strings.TrimSpace(req.StepID),
 	}
@@ -151,9 +151,9 @@ func (s *Service) ClearGoalValidated(ctx context.Context, validated servicecontr
 	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeGoalMutationResponse{}, err
+		panic("validated Goal Clear Session ID is invalid: " + err.Error())
 	}
-	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: strings.TrimSpace(req.Actor)}
+	memoReq := goalClearMemoRequest{SessionID: sessionID.String(), Actor: req.Actor}
 	return memoizedGoalMutation(s, ctx, strings.TrimSpace(req.ClientRequestID), memoReq, s.goalClears, sameGoalClearMemoRequest, false, func(ctx context.Context) (runtimecommand.GoalCommandResult, error) {
 		return s.goalAuthority.Clear(ctx, runtimecommand.GoalClearCommand{
 			SessionID: sessionID,

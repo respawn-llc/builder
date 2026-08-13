@@ -33,11 +33,11 @@ func (s *Service) LiveSteerValidated(ctx context.Context, validated servicecontr
 	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
+		panic("validated Runtime Live Steer session ID is invalid: " + err.Error())
 	}
 	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
 	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
+		panic("validated Runtime Live Steer client request ID is invalid: " + err.Error())
 	}
 	memoReq := liveSteerMemoRequest{
 		SessionID:       sessionID,
@@ -52,7 +52,7 @@ func (s *Service) LiveSteerValidated(ctx context.Context, validated servicecontr
 			if memoReq.CallerSessionID.Present {
 				callerID, parseErr := runtimeids.ParseSessionID(memoReq.CallerSessionID.Value)
 				if parseErr != nil {
-					return parseErr
+					panic("validated Runtime Live Steer caller Session ID is invalid: " + parseErr.Error())
 				}
 				agentSteer, err = runtime.NewAgentSteer(callerID, memoReq.Text)
 				if err != nil {
@@ -98,12 +98,16 @@ func (s *Service) LiveSteerValidated(ctx context.Context, validated servicecontr
 }
 
 func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveStopResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveStopRequest]) (serverapi.RuntimeLiveStopResponse, error) {
+		return s.LiveStopValidated(ctx, validated)
+	})
+}
+
+func (s *Service) LiveStopValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveStopRequest]) (serverapi.RuntimeLiveStopResponse, error) {
+	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeLiveStopResponse{}, err
+		panic("validated Runtime Live Stop session ID is invalid: " + err.Error())
 	}
 	memoReq := liveStopMemoRequest{SessionID: sessionID}
 	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
@@ -152,7 +156,7 @@ func (s *Service) LiveWaitValidated(ctx context.Context, validated servicecontra
 	req := validated.Value()
 	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeLiveWaitResponse{}, err
+		panic("validated Runtime Live Wait session ID is invalid: " + err.Error())
 	}
 	var resp serverapi.RuntimeLiveWaitResponse
 	waitHandle, sessionName, err := s.captureLiveRun(ctx, sessionID)
@@ -200,12 +204,16 @@ func (s *Service) pendingWatchQuestion(ctx context.Context, sessionID string) (*
 }
 
 func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveWatchRequest]) (serverapi.RuntimeLiveWatchResponse, error) {
+		return s.LiveWatchValidated(ctx, validated)
+	})
+}
+
+func (s *Service) LiveWatchValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveWatchRequest]) (serverapi.RuntimeLiveWatchResponse, error) {
+	req := validated.Value()
 	id, err := runtimeids.ParseSessionID(req.SessionID)
 	if err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
+		panic("validated Runtime Live Watch session ID is invalid: " + err.Error())
 	}
 	if s.attention == nil {
 		return serverapi.RuntimeLiveWatchResponse{}, errors.New("attention notification service is required")
@@ -289,15 +297,6 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		}
 		return liveWatchResult(id, name, terminal.result, terminal.err)
 	case err := <-attentionErrCh:
-		if ctx.Err() == nil {
-			select {
-			case terminal := <-terminalCh:
-				cancel()
-				wg.Wait()
-				return liveWatchResult(id, name, terminal.result, terminal.err)
-			default:
-			}
-		}
 		cancel()
 		wg.Wait()
 		return serverapi.RuntimeLiveWatchResponse{}, err
@@ -330,86 +329,40 @@ func liveWatchAttentionStreamError(err error) error {
 	return serverapi.NormalizeStreamError(err)
 }
 
-type liveRunTerminal struct {
-	result        runtime.LiveRunResult
-	err           error
-	noFinal       bool
-	noFinalReason runtime.LiveRunNoFinalAnswerReason
-	status        runtime.RunStatus
-	reason        *string
-	diagnostic    *string
-}
-
-func classifyLiveRun(result runtime.LiveRunResult, err error) liveRunTerminal {
-	terminal := liveRunTerminal{
-		result: result,
-		err:    err,
-		status: result.Status,
-	}
-	if errors.Is(err, runtime.ErrLiveRunNoFinalAnswer) {
-		terminal.noFinal = true
-		terminal.noFinalReason = result.NoFinalReason
-		return terminal
-	}
-	if terminal.err == nil {
-		terminal.err = result.Error
-	}
-	if terminal.err != nil {
-		if terminal.status == runtime.RunStatusInterrupted {
-			reason := strings.TrimSpace(string(terminal.status))
-			terminal.reason = &reason
-			diagnosticErr := result.Error
-			if diagnosticErr == nil {
-				diagnosticErr = terminal.err
-			}
-			diagnostic := strings.TrimSpace(diagnosticErr.Error())
-			if diagnostic != "" && diagnostic != reason {
-				terminal.diagnostic = &diagnostic
-			}
-			return terminal
-		}
-		reason := strings.TrimSpace(terminal.err.Error())
-		if reason == "" {
-			reason = strings.TrimSpace(string(result.Status))
-		}
-		if reason == "" {
-			reason = "execution error"
-		}
-		terminal.reason = &reason
-	}
-	if result.Error != nil && (terminal.reason == nil || result.Error.Error() != *terminal.reason) {
-		value := result.Error.Error()
-		terminal.diagnostic = &value
-	}
-	return terminal
-}
-
 func liveWatchResult(id runtimeids.SessionID, name string, result runtime.LiveRunResult, err error) (serverapi.RuntimeLiveWatchResponse, error) {
-	terminal := classifyLiveRun(result, err)
 	if name == "" {
 		name = id.String()
 	}
-	if terminal.noFinal {
-		reason := strings.TrimSpace(string(terminal.noFinalReason))
-		if reason == "" {
-			reason = string(runtime.LiveRunNoFinalAnswerReasonUnknown)
+	if errors.Is(err, runtime.ErrLiveRunNoFinalAnswer) {
+		if result.NoFinalReason == "" {
+			return serverapi.RuntimeLiveWatchResponse{}, errors.New("live run completed without a typed no-final-answer reason")
 		}
 		return serverapi.RuntimeLiveWatchResponse{SessionID: id.String(), Outcome: serverapi.RuntimeLiveWatchOutcome{
-			Kind:    serverapi.RuntimeLiveWatchNoFinalResult,
-			Failure: &serverapi.RuntimeLiveWatchFailure{Reason: reason},
+			Kind: serverapi.RuntimeLiveWatchNoFinalResult,
+			Failure: &serverapi.RuntimeLiveWatchFailure{
+				Reason: string(result.NoFinalReason),
+			},
 		}}, nil
 	}
-	if terminal.err != nil {
-		kind := serverapi.RuntimeLiveWatchExecutionError
-		reason := "execution error"
-		if terminal.reason != nil {
-			reason = *terminal.reason
+	if err == nil {
+		err = result.Error
+	}
+	if err != nil {
+		reason := strings.TrimSpace(err.Error())
+		if reason == "" {
+			return serverapi.RuntimeLiveWatchResponse{}, errors.New("live run failed without a diagnostic")
 		}
-		if terminal.status == runtime.RunStatusInterrupted {
+		kind := serverapi.RuntimeLiveWatchExecutionError
+		if result.Status == runtime.RunStatusInterrupted {
 			kind = serverapi.RuntimeLiveWatchInterrupted
 		}
+		var diagnostic *string
+		if result.Error != nil && result.Error.Error() != reason {
+			value := result.Error.Error()
+			diagnostic = &value
+		}
 		return serverapi.RuntimeLiveWatchResponse{SessionID: id.String(), Outcome: serverapi.RuntimeLiveWatchOutcome{
-			Kind: kind, Failure: &serverapi.RuntimeLiveWatchFailure{Reason: reason, Diagnostic: terminal.diagnostic},
+			Kind: kind, Failure: &serverapi.RuntimeLiveWatchFailure{Reason: reason, Diagnostic: diagnostic},
 		}}, nil
 	}
 	return serverapi.RuntimeLiveWatchResponse{SessionID: id.String(), Outcome: serverapi.RuntimeLiveWatchOutcome{

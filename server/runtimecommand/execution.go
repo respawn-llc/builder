@@ -33,6 +33,14 @@ func (a *ExecutionAdapter) RunAgentExecution(
 	return a.RunAgentExecutionAdmission(ctx, sessionID, run).Err
 }
 
+func (a *ExecutionAdapter) RunAgentExecutionID(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+	run func(context.Context, *runtime.Engine) error,
+) error {
+	return a.runAgentExecutionAdmission(ctx, sessionID, run).Err
+}
+
 func (a *ExecutionAdapter) RunAgentExecutionAdmission(
 	ctx context.Context,
 	sessionID string,
@@ -44,6 +52,17 @@ func (a *ExecutionAdapter) RunAgentExecutionAdmission(
 	id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
 	if err != nil {
 		return AgentExecutionAdmission{Err: err}
+	}
+	return a.runAgentExecutionAdmission(ctx, id, run)
+}
+
+func (a *ExecutionAdapter) runAgentExecutionAdmission(
+	ctx context.Context,
+	id runtimeids.SessionID,
+	run func(context.Context, *runtime.Engine) error,
+) AgentExecutionAdmission {
+	if a == nil || a.authority == nil {
+		return AgentExecutionAdmission{Err: errors.New("session runtime authority is required")}
 	}
 	descriptor, err := session.NewOpenSessionDescriptor(id)
 	if err != nil {

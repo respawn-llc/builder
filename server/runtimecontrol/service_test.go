@@ -841,7 +841,7 @@ func (r *failingRuntimeActivityResolver) RuntimeReadModelSnapshot(ctx context.Co
 	return runtimeactivity.ResponseSnapshot{}, r.err
 }
 
-func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails(t *testing.T) {
+func TestServiceInterruptSurfacesPostInterruptSnapshotFailure(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(client.release) }) }
@@ -868,14 +868,11 @@ func TestServiceInterruptReturnsDiagnosticActivityWhenPostInterruptSnapshotFails
 		ClientRequestID: "interrupt-snapshot-failure",
 		SessionID:       store.Meta().SessionID,
 	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
+	if !errors.Is(err, snapshotErr) {
+		t.Fatalf("Interrupt error = %v, want projection failure", err)
 	}
-	if err := resp.Version.Validate(); err != nil {
-		t.Fatalf("fallback version: %v", err)
-	}
-	if resp.Activity.State != clientui.RuntimeActivityUnavailable || !resp.Activity.DiagnosticRecovery {
-		t.Fatalf("fallback activity = %+v, want diagnostic unavailable", resp.Activity)
+	if resp != (serverapi.RuntimeInterruptResponse{}) {
+		t.Fatalf("Interrupt response = %+v, want no fabricated activity", resp)
 	}
 	if resolver.observedContext == nil || resolver.observedContext.Value(interruptContextKey{}) != "interrupt-context" {
 		t.Fatal("post-interrupt snapshot did not receive the caller context")
@@ -1493,7 +1490,7 @@ func TestServiceDurableWorkflowSessionRejectsAutoCompactionDisable(t *testing.T)
 	}
 }
 
-func TestServiceSetGoalMemoNormalizesObjectiveWhitespace(t *testing.T) {
+func TestServiceSetGoalMemoUsesIngressObjectiveIdentity(t *testing.T) {
 	store, _, service := newRuntimeControlTestService(t, &blockingRuntimeControlClient{}, nil, runtime.Config{EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 
 	req := serverapi.RuntimeGoalSetRequest{
@@ -1502,17 +1499,13 @@ func TestServiceSetGoalMemoNormalizesObjectiveWhitespace(t *testing.T) {
 		Objective:       "  ship memo goal  ",
 		Actor:           "user",
 	}
-	first, err := service.SetGoal(context.Background(), req)
+	_, err := service.SetGoal(context.Background(), req)
 	if err != nil {
 		t.Fatalf("SetGoal first: %v", err)
 	}
 	req.Objective = "ship memo goal"
-	second, err := service.SetGoal(context.Background(), req)
-	if err != nil {
-		t.Fatalf("SetGoal equivalent retry: %v", err)
-	}
-	if first.Goal == nil || second.Goal == nil || first.Goal.ID != second.Goal.ID {
-		t.Fatalf("retry goal = %+v, want same id as %+v", second.Goal, first.Goal)
+	if _, err := service.SetGoal(context.Background(), req); err == nil {
+		t.Fatal("SetGoal changed-objective retry succeeded")
 	}
 	if messages := runtimeControlGoalDeveloperMessages(t, store); len(messages) != 1 {
 		t.Fatalf("goal developer message count = %d, want 1", len(messages))
@@ -1977,8 +1970,8 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-flushed-submit",
 		SessionID:       req.SessionID,
-	}); err != nil {
-		t.Fatalf("Interrupt: %v", err)
+	}); err == nil {
+		t.Fatal("Interrupt projection error = nil, want unavailable activity projection")
 	}
 	select {
 	case <-client.ctxCanceled:
@@ -2435,8 +2428,8 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 		ClientRequestID: "interrupt-active-with-steering",
 		SessionID:       store.Meta().SessionID,
 	})
-	if err != nil {
-		t.Fatalf("Interrupt: %v", err)
+	if err == nil {
+		t.Fatal("Interrupt projection error = nil, want unavailable activity projection")
 	}
 	if engine.HasQueuedUserWork() {
 		t.Fatal("interrupt left accepted steering queued")

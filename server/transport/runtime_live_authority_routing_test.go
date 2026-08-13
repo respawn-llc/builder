@@ -36,6 +36,20 @@ func (*runtimeLiveAuthorityRoutingService) LiveWatch(context.Context, serverapi.
 	return serverapi.RuntimeLiveWatchResponse{}, nil
 }
 
+func (*runtimeLiveAuthorityRoutingService) LiveStopValidated(
+	context.Context,
+	apicontract.Validated[serverapi.RuntimeLiveStopRequest],
+) (serverapi.RuntimeLiveStopResponse, error) {
+	return serverapi.RuntimeLiveStopResponse{}, nil
+}
+
+func (*runtimeLiveAuthorityRoutingService) LiveWatchValidated(
+	context.Context,
+	apicontract.Validated[serverapi.RuntimeLiveWatchRequest],
+) (serverapi.RuntimeLiveWatchResponse, error) {
+	return serverapi.RuntimeLiveWatchResponse{}, nil
+}
+
 func (s *runtimeLiveAuthorityRoutingService) LiveSteerValidated(
 	_ context.Context,
 	_ apicontract.Validated[serverapi.RuntimeLiveSteerRequest],
@@ -90,7 +104,7 @@ func TestGatewayRoutesRuntimeLiveSteerAndWaitDirectlyToRuntimeAuthority(t *testi
 		}),
 	})
 	if steer.Error == nil || steer.Error.Code != protocol.ErrCodeRuntimeUnavailable {
-		t.Fatalf("LiveSteer response = %+v, want Runtime Authority unavailable", steer)
+		t.Fatalf("LiveSteer response = %+v error=%+v, want Runtime Authority unavailable", steer, steer.Error)
 	}
 
 	wait := gateway.dispatch(t.Context(), state, protocol.Request{

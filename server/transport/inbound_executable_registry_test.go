@@ -228,6 +228,44 @@ func TestSessionViewLifecycleLaunchAndRuntimeResourceRoutesUseTrustedOwners(t *t
 	}
 }
 
+func TestRuntimeControlAndLiveRoutesUseTrustedOwners(t *testing.T) {
+	methods := []string{
+		protocol.MethodRuntimeSetSessionName,
+		protocol.MethodRuntimeSetThinkingLevel,
+		protocol.MethodRuntimeSetFastModeEnabled,
+		protocol.MethodRuntimeSetReviewerEnabled,
+		protocol.MethodRuntimeSetAutoCompactionEnabled,
+		protocol.MethodRuntimeSetQuestionsEnabled,
+		protocol.MethodRuntimeAppendCommittedEntry,
+		protocol.MethodRuntimeShouldCompactBeforeUserMessage,
+		protocol.MethodRuntimeSubmitUserTurn,
+		protocol.MethodRuntimeSubmitUserShellCommand,
+		protocol.MethodRuntimeCompactContext,
+		protocol.MethodRuntimeInterrupt,
+		protocol.MethodRuntimeDiscardQueuedUserMessage,
+		protocol.MethodRuntimeRecordPromptHistory,
+		protocol.MethodRuntimeLiveSteer,
+		protocol.MethodRuntimeLiveStop,
+		protocol.MethodRuntimeLiveWait,
+		protocol.MethodRuntimeLiveWatch,
+		protocol.MethodRuntimeGoalShow,
+		protocol.MethodRuntimeGoalSet,
+		protocol.MethodRuntimeGoalPause,
+		protocol.MethodRuntimeGoalResume,
+		protocol.MethodRuntimeGoalComplete,
+		protocol.MethodRuntimeGoalClear,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			executable := inboundExecutableRoutes[method]
+			if executable.handlerClassification.owner != inboundHandlerTrustedOwner &&
+				executable.handlerClassification.owner != inboundHandlerRuntimeLiveOwner {
+				t.Fatalf("handler owner = %q, want trusted Runtime owner", executable.handlerClassification.owner)
+			}
+		})
+	}
+}
+
 func TestInboundExecutableRegistryExhaustivelyClassifiesScopeAuthorization(t *testing.T) {
 	seenScopes := make(map[apicontract.ScopePolicy]bool)
 	for _, route := range apicontract.Routes() {
