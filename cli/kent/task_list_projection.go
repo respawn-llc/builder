@@ -142,8 +142,6 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 				return taskListProjection{}, fmt.Errorf("task list response task %q is missing an exact workflow_name for multiple-workflow rendering", task.TaskID)
 			}
 			workflowName = *task.WorkflowName
-		} else if task.WorkflowName != nil {
-			return taskListProjection{}, fmt.Errorf("task list response task %q contains workflow_name when workflow labels are hidden", task.TaskID)
 		}
 		item := taskListItem{
 			ShortID:         task.ShortID,

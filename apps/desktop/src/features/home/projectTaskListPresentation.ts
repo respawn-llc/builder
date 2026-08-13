@@ -149,7 +149,12 @@ function boundaryEntry({
           ? data.isFetchingNextPage
           : data.isFetching,
     loadingLabel: t("app.loadingMore"),
-    requestGeneration: `${direction}:${data.pages.length.toString()}`,
+    requestGeneration:
+      direction === "previous"
+        ? `${direction}:${data.previousRequestGeneration}`
+        : direction === "next"
+          ? `${direction}:${data.nextRequestGeneration}`
+          : "initial",
     onLoadMore:
       direction === "previous"
         ? () => {

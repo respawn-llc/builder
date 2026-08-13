@@ -5,7 +5,7 @@ import {
   type InfiniteData,
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   errorMessage,
@@ -45,7 +45,9 @@ export type ProjectTaskGroupData = Readonly<{
   isFetchingNextPage: boolean;
   isFetchingPreviousPage: boolean;
   isPending: boolean;
+  nextRequestGeneration: string;
   pages: readonly TaskListPage[];
+  previousRequestGeneration: string;
   refetch(): Promise<unknown>;
   tasks: readonly TaskListItem[];
 }>;
@@ -115,6 +117,8 @@ function useProjectTaskGroupData(
 ): ProjectTaskGroupData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
+  const [ownerGeneration, setOwnerGeneration] = useState(enabled ? 1 : 0);
+  const wasEnabled = useRef(enabled);
   const queryKey = queryKeys.projectTaskGroup(projectID, group);
   const query = useInfiniteQuery<
     TaskListPage,
@@ -142,6 +146,10 @@ function useProjectTaskGroupData(
     gcTime: 0,
   });
   useEffect(() => {
+    if (enabled && !wasEnabled.current) {
+      setOwnerGeneration((generation) => generation + 1);
+    }
+    wasEnabled.current = enabled;
     if (enabled) {
       return;
     }
@@ -150,17 +158,22 @@ function useProjectTaskGroupData(
       exact: true,
     });
   }, [enabled, group, projectID, queryClient]);
-  return projectTaskGroupData(query, enabled);
+  return projectTaskGroupData(query, enabled, ownerGeneration, projectID);
 }
 
 function projectTaskGroupData(
   query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>,
   enabled: boolean,
+  ownerGeneration: number,
+  projectID: string,
 ): ProjectTaskGroupData {
   if (!enabled) {
     return emptyProjectTaskGroupData;
   }
   const pages = query.data?.pages ?? [];
+  const pageParams = query.data?.pageParams ?? [];
+  const firstPageParam = pageParams[0] ?? 0;
+  const nextPageParam = pages.at(-1)?.nextOffset;
   return {
     error: query.error,
     fetchNextPage: query.fetchNextPage,
@@ -174,7 +187,9 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
+    nextRequestGeneration: `${projectID}:${ownerGeneration.toString()}:${nextPageParam?.toString() ?? "end"}`,
     pages,
+    previousRequestGeneration: `${projectID}:${ownerGeneration.toString()}:${firstPageParam.toString()}`,
     refetch: query.refetch,
     tasks: pages.flatMap((page) => page.tasks),
   };
@@ -193,7 +208,9 @@ const emptyProjectTaskGroupData: ProjectTaskGroupData = {
   isFetchingNextPage: false,
   isFetchingPreviousPage: false,
   isPending: false,
+  nextRequestGeneration: "disabled",
   pages: [],
+  previousRequestGeneration: "disabled",
   refetch: async () => undefined,
   tasks: [],
 };

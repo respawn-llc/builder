@@ -11,6 +11,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 )
@@ -255,6 +256,35 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	workflowName := "Delivery"
+	projection, err := taskListProjectionFromResponse(
+		serverapi.WorkflowTaskListResponse{
+			Scope: serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+			Tasks: []serverapi.WorkflowTaskListItem{{
+				TaskID:       "task-1",
+				ShortID:      "KENT-1",
+				WorkflowID:   workflowID,
+				WorkflowName: &workflowName,
+				Title:        "One Workflow",
+				Status:       taskContractStatus(serverapi.WorkflowTaskStatusKindActive),
+			}},
+		},
+		taskListExpectedScope{
+			ProjectID:     "project-1",
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
+		},
+	)
+	if err != nil {
+		t.Fatalf("project Task-list projection: %v", err)
+	}
+	if len(projection.Rows) != 1 || projection.Rows[0].ShowWorkflow || projection.Rows[0].WorkflowName != "" {
+		t.Fatalf("one-Workflow row = %+v", projection.Rows)
 	}
 }
 

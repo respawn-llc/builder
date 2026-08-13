@@ -142,7 +142,7 @@ describe("Project Task-list data ownership", () => {
     ).toHaveLength(2);
   });
 
-  it("starts at zero and retains only three independently paged pages", async () => {
+  it("starts at zero and advances edge generations while retaining only three pages", async () => {
     const harness = createHarness();
     const { result } = renderHook(
       () =>
@@ -175,6 +175,7 @@ describe("Project Task-list data ownership", () => {
     await waitFor(() => {
       expect(result.current.active.pages).toHaveLength(3);
     });
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:1:75");
     await act(async () => {
       await result.current.active.fetchNextPage();
     });
@@ -183,7 +184,33 @@ describe("Project Task-list data ownership", () => {
     });
     expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
     expect(result.current.active.pages).toHaveLength(3);
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:1:100");
     expect(result.current.backlog.pages).toEqual([]);
+  });
+
+  it("resets edge generations when a collapsed group reopens", async () => {
+    const harness = createHarness();
+    const { result, rerender } = renderHook(
+      ({ expanded }) =>
+        useProjectTaskListData({
+          projectID: "project-1",
+          gateReady: true,
+          expanded: { active: expanded, backlog: false, done: false },
+        }),
+      {
+        initialProps: { expanded: true },
+        wrapper: ({ children }) => harness.render(children),
+      },
+    );
+    await waitFor(() => {
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:1:25");
+    });
+
+    rerender({ expanded: false });
+    rerender({ expanded: true });
+    await waitFor(() => {
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:2:25");
+    });
   });
 
   it("keeps rows and exact counts visible while replacement requests refresh", async () => {
