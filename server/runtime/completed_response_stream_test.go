@@ -41,7 +41,7 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 	}
 
 	var delta, assistant, reset *Event
-	deltaIndex, assistantIndex, resetIndex := -1, -1, -1
+	deltaIndex, resetIndex, assistantIndex := -1, -1, -1
 	for index := range events {
 		event := &events[index]
 		switch event.Kind {
@@ -68,8 +68,8 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 
 	if delta == nil || assistant == nil || reset == nil ||
 		delta.AssistantTranscriptStreamID == nil ||
-		assistant.AssistantTranscriptStreamID == nil ||
 		reset.AssistantTranscriptStreamID == nil ||
+		assistant.AssistantTranscriptStreamID != nil ||
 		assistant.Message.Role != llm.RoleAssistant ||
 		assistant.Message.Phase == nil ||
 		*assistant.Message.Phase != llm.MessagePhaseFinal ||
@@ -81,23 +81,110 @@ func TestCompletedResponseActiveStreamFinalizesOnce(t *testing.T) {
 			reset,
 		)
 	}
-	if deltaIndex >= assistantIndex || assistantIndex >= resetIndex {
+	if deltaIndex >= resetIndex || resetIndex >= assistantIndex {
 		t.Fatalf(
-			"stream finalization order = delta:%d assistant:%d reset:%d events:%+v",
+			"stream divergence order = delta:%d reset:%d assistant:%d events:%+v",
 			deltaIndex,
-			assistantIndex,
 			resetIndex,
+			assistantIndex,
 			events,
 		)
 	}
-	if *delta.AssistantTranscriptStreamID != *assistant.AssistantTranscriptStreamID ||
-		*delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID {
+	if *delta.AssistantTranscriptStreamID != *reset.AssistantTranscriptStreamID ||
+		reset.AssistantStreamAbortReason != string(AssistantStreamAbortSuperseded) {
 		t.Fatalf(
-			"stream finalization UUIDs differ: delta:%s assistant:%s reset:%s",
+			"divergent stream terminal = delta:%s reset:%s reason:%q",
 			*delta.AssistantTranscriptStreamID,
-			*assistant.AssistantTranscriptStreamID,
 			*reset.AssistantTranscriptStreamID,
+			reset.AssistantStreamAbortReason,
 		)
+	}
+}
+
+func TestCompletedResponseFinalPhaseSupersedesCommentaryStream(t *testing.T) {
+	t.Parallel()
+	step := scriptedllm.FinalAnswer("completed")
+	step.StreamDeltas = []llm.AssistantDelta{
+		{Text: "I’m checking the relevant terminal behavior before answering.", Phase: llm.MessagePhaseCommentary},
+		{Text: "Yes — **Ghostty is likely the second actor**, but the user probably did **not** explicitly enable it.", Phase: llm.MessagePhaseFinal},
+	}
+	step.Response.Assistant.Content = textutil.Value("Yes — **Ghostty is likely the second actor**, but the user probably did **not** explicitly enable it.")
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	assertSupersededStreamPrecedesFinalContinuation(t, events, "assistant phase transition")
+}
+
+func TestCompletedResponseUnphasedDeltaJoinsFinalStream(t *testing.T) {
+	t.Parallel()
+	step := scriptedllm.FinalAnswer("completed")
+	step.StreamDeltas = []llm.AssistantDelta{
+		{Text: "complete"},
+		{Text: "d", Phase: llm.MessagePhaseFinal},
+	}
+	var events []Event
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		scriptedllm.NewClient(scriptedllm.Script{Steps: []scriptedllm.Step{step}}),
+		Config{
+			Model:   "gpt-5",
+			OnEvent: func(event Event) { events = append(events, event) },
+		},
+	)
+
+	if _, err := engine.SubmitUserMessage(context.Background(), "turn"); err != nil {
+		t.Fatalf("submit user turn: %v", err)
+	}
+
+	var firstDelta, secondDelta, finalAssistant *Event
+	resetCount := 0
+	for index := range events {
+		event := &events[index]
+		switch event.Kind {
+		case EventAssistantDelta:
+			if firstDelta == nil {
+				firstDelta = event
+			} else {
+				secondDelta = event
+			}
+		case EventAssistantDeltaReset:
+			if event.AssistantStreamAbortReason != "" {
+				resetCount++
+			}
+		case EventAssistantMessage:
+			finalAssistant = event
+		}
+	}
+	if firstDelta == nil || secondDelta == nil || finalAssistant == nil ||
+		firstDelta.AssistantTranscriptStreamID == nil ||
+		secondDelta.AssistantTranscriptStreamID == nil ||
+		finalAssistant.AssistantTranscriptStreamID == nil {
+		t.Fatalf("unphased final stream facts = first:%+v second:%+v final:%+v", firstDelta, secondDelta, finalAssistant)
+	}
+	if *firstDelta.AssistantTranscriptStreamID != *secondDelta.AssistantTranscriptStreamID ||
+		*secondDelta.AssistantTranscriptStreamID != *finalAssistant.AssistantTranscriptStreamID {
+		t.Fatalf(
+			"unphased final stream IDs = first:%s second:%s final:%s",
+			*firstDelta.AssistantTranscriptStreamID,
+			*secondDelta.AssistantTranscriptStreamID,
+			*finalAssistant.AssistantTranscriptStreamID,
+		)
+	}
+	if resetCount != 0 {
+		t.Fatalf("unphased final stream emitted %d superseded terminals", resetCount)
 	}
 }
 
@@ -169,7 +256,7 @@ func TestCompletedResponseWorkflowPreflightAbortsBeforeContinuation(t *testing.T
 	}}
 	accepted := scriptedllm.FinalAnswer(`{"transition":"done","summary":"done"}`)
 	accepted.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "completed",
+		Text:  `{"transition"`,
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -300,7 +387,7 @@ func TestCompletedResponseReasoningOnlyAbortsBeforeContinuation(t *testing.T) {
 	}
 	final := scriptedllm.FinalAnswer("completed")
 	final.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "resolved",
+		Text:  "complete",
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -414,7 +501,7 @@ func TestCompletedResponseFinalAnswerWithToolsFinalizesAfterToolPersistence(t *t
 	})
 	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
 	step.StreamDeltas = []llm.AssistantDelta{{
-		Text:  "draft",
+		Text:  "complete",
 		Phase: llm.MessagePhaseFinal,
 	}}
 	var events []Event
@@ -577,7 +664,7 @@ func TestSubmitUserMessageFinalAnswerWithMixedToolCallsMaterializesAllToolsBefor
 	}
 	step := scriptedllm.ToolBatch("completed", calls...)
 	step.Response.Assistant.Phase = textutil.Value(llm.MessagePhaseFinal)
-	step.StreamDeltas = []llm.AssistantDelta{{Text: "draft", Phase: llm.MessagePhaseFinal}}
+	step.StreamDeltas = []llm.AssistantDelta{{Text: "complete", Phase: llm.MessagePhaseFinal}}
 	reasoningOutput, reasoningPart := int64(0), int64(0)
 	step.ReasoningDeltas = []llm.ReasoningSummaryDelta{{
 		SourceCoordinate: &llm.ReasoningSourceCoordinate{
