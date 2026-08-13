@@ -452,10 +452,7 @@ type currentNodeCompletionExecutionStub struct {
 func (s *currentNodeCompletionExecutionStub) configuredResumePreflight(
 	taskID workflow.TaskID,
 ) (workflowexecution.TaskResumePreflight, bool) {
-	if s.resumePreflight.Outcome != "" {
-		return s.resumePreflight, true
-	}
-	if s.resumePreflight.CurrentNodes == nil {
+	if s.resumePreflight.Outcome == "" && s.resumePreflight.CurrentNodes == nil {
 		return workflowexecution.TaskResumePreflight{}, false
 	}
 	preflight := s.resumePreflight

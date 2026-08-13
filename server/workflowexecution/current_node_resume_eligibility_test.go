@@ -100,8 +100,14 @@ func TestCurrentNodeControllerResumeEligibilityAcceptsMixedValidAndInvalidClassi
 		}
 	})
 
-	if _, err := controller.PreflightTaskResume(context.Background(), taskID); err != nil {
+	preflight, err := controller.PreflightTaskResume(context.Background(), taskID)
+	if err != nil {
 		t.Fatalf("PreflightTaskResume: %v", err)
+	}
+	if preflight.Outcome != TaskResumePreflightResumable ||
+		len(preflight.CurrentNodes) != 1 ||
+		!preflight.CurrentNodes[0].Reference.Equal(validReference) {
+		t.Fatalf("PreflightTaskResume result = %+v, want resumable %v", preflight, validReference)
 	}
 	if len(store.resumed) != 0 {
 		t.Fatalf("resume mutations = %v, want none", store.resumed)

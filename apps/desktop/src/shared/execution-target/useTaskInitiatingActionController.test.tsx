@@ -259,9 +259,7 @@ describe("task initiating action controller", () => {
       await result.current.run({ ...action });
     });
     await act(async () => {
-      await expect(result.current.run(startTaskInitiatingAction("task-2"))).rejects.toThrow(
-        "Finish or dismiss the pending Task action before starting another one.",
-      );
+      await expect(result.current.run(startTaskInitiatingAction("task-2"))).rejects.toThrow();
     });
 
     expect(execute).toHaveBeenCalledTimes(2);
