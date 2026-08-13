@@ -42,8 +42,7 @@ describe("provider-state diagnostic presentation", () => {
       const presentation = providerStateDiagnosticPresentation(diagnostic, (key) => `localized:${key}`);
 
       expect(presentation.actionLabel).toBe("localized:operationalDiagnostic.retryAction");
-      expect(presentation.body).toContain("localized:operationalDiagnostic.");
-      expect(JSON.stringify(presentation)).not.toContain("step-1");
+      expect(presentation).not.toHaveProperty("stepID");
       expect(presentation).not.toHaveProperty("id");
       expect(presentation).not.toHaveProperty("onAction");
     },

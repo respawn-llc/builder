@@ -16,13 +16,6 @@ func (c *CodexDispatchContext) observeTurnStateHTTPHeaders(header http.Header) {
 	}
 }
 
-func responseHeaders(response *http.Response) http.Header {
-	if response == nil {
-		return nil
-	}
-	return response.Header
-}
-
 func observeCodexTurnStateResponseHeaders(dispatch *CodexDispatchContext, response *http.Response, observed *bool) {
 	if observed == nil || *observed || response == nil {
 		return

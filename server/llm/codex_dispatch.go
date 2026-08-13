@@ -255,6 +255,21 @@ func validateOpenAIDispatchSessionID(sessionID string) error {
 	return nil
 }
 
+func validateSessionDispatchPairing(sessionID *string, dispatch *CodexDispatchContext) error {
+	if sessionID != nil {
+		if err := validateOpenAIDispatchSessionID(*sessionID); err != nil {
+			return err
+		}
+	}
+	if dispatch == nil {
+		return nil
+	}
+	if sessionID == nil {
+		return fmt.Errorf("%w: Session identity is required with Codex dispatch context", ErrInvalidRequest)
+	}
+	return dispatch.validateForSession(*sessionID)
+}
+
 func validateOpenAIDispatchForMode(
 	sessionID string,
 	model string,

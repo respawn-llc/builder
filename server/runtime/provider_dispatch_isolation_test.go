@@ -171,6 +171,7 @@ func TestSequentialAgentTurnsIsolateProviderDispatches(t *testing.T) {
 			client := newDispatchIsolationClient(server)
 			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 			first := make(chan error, 1)
 			go func() {
 				_, err := engine.SubmitUserMessage(ctx, "first")

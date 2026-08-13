@@ -241,18 +241,8 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if request.Model == "" {
 		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
 	}
-	if request.SessionID != nil {
-		if err := validateOpenAIDispatchSessionID(*request.SessionID); err != nil {
-			return CompactionResponse{}, err
-		}
-	}
-	if request.CodexDispatch != nil {
-		if request.SessionID == nil {
-			return CompactionResponse{}, fmt.Errorf("%w: Session identity is required with Codex dispatch context", ErrInvalidRequest)
-		}
-		if err := request.CodexDispatch.validateForSession(*request.SessionID); err != nil {
-			return CompactionResponse{}, err
-		}
+	if err := validateSessionDispatchPairing(request.SessionID, request.CodexDispatch); err != nil {
+		return CompactionResponse{}, err
 	}
 
 	providerReq := OpenAICompactionRequest{

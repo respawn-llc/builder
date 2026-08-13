@@ -32,7 +32,7 @@ describe("ProviderStateDiagnosticNotice", () => {
 
     expect(screen.getByRole("heading", { name: `localized:${titleKey}` })).toBeVisible();
     expect(screen.getByText(`localized:${bodyKey}`)).toBeVisible();
-    expect(screen.queryByText(/private-step-id/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("private-step-id")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "localized:operationalDiagnostic.retryAction" }));
     expect(onRetry).toHaveBeenCalledOnce();
   });

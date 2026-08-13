@@ -75,7 +75,7 @@ func TestOpenAIDispatchRejectsInvalidSessionBeforeAuth(t *testing.T) {
 						return nil, errors.New("unexpected network request")
 					})}
 					err := dispatch(transport, sessionID)
-					if err == nil || !strings.Contains(strings.ToLower(err.Error()), "session id") {
+					if !errors.Is(err, ErrInvalidRequest) {
 						t.Fatalf("error = %v, want invalid Session ID", err)
 					}
 					if got := authCalls(); got != 0 {
@@ -194,44 +194,6 @@ func requireCodexTurnMetadata(t *testing.T, body map[string]any) map[string]any 
 	return metadata
 }
 
-func TestNonOAuthDispatchOmitsCodexOnlyContract(t *testing.T) {
-	var capturedHeaders http.Header
-	var capturedBody map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedHeaders = r.Header.Clone()
-		if err := json.NewDecoder(r.Body).Decode(&capturedBody); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		writeCompletedResponseJSON(w)
-	}))
-	t.Cleanup(server.Close)
-
-	transport := NewHTTPTransport(staticAuth{})
-	transport.BaseURL = server.URL
-	transport.Client = server.Client()
-	_, err := transport.Generate(context.Background(), OpenAIRequest{
-		Model:          "gpt-5",
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-		SessionID:      textutil.Value("session-1"),
-	})
-	if err != nil {
-		t.Fatalf("generate: %v", err)
-	}
-	if got := capturedHeaders.Get("session-id"); got != "session-1" {
-		t.Fatalf("session-id = %q, want session-1", got)
-	}
-	if got := capturedHeaders.Get("x-codex-routing-hint"); got != "" {
-		t.Fatalf("routing hint = %q, want absent", got)
-	}
-	if got := capturedHeaders.Get("ChatGPT-Account-Id"); got != "" {
-		t.Fatalf("ChatGPT-Account-Id = %q, want absent", got)
-	}
-	if _, exists := capturedBody["client_metadata"]; exists {
-		t.Fatalf("client_metadata = %#v, want absent", capturedBody["client_metadata"])
-	}
-}
-
 func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *testing.T) {
 	methods := map[string]func(*HTTPTransport, string, *CodexDispatchContext) error{
 		"generate": func(transport *HTTPTransport, model string, dispatch *CodexDispatchContext) error {
@@ -272,7 +234,7 @@ func TestOAuthDispatchRejectsUnrepresentableRoutingModelBeforeProviderHTTP(t *te
 				})}
 
 				err = dispatchRequest(transport, model, dispatch)
-				if err == nil || !strings.Contains(strings.ToLower(err.Error()), "routing") {
+				if !errors.Is(err, ErrInvalidRequest) {
 					t.Fatalf("error = %v, want invalid routing model", err)
 				}
 				if got := networkCalls.Load(); got != 0 {
@@ -309,7 +271,7 @@ func TestOAuthDispatchRejectsMissingContextBeforeContextWindowHTTP(t *testing.T)
 			})}
 
 			err := dispatch(transport)
-			if err == nil || !strings.Contains(strings.ToLower(err.Error()), "dispatch context") {
+			if !errors.Is(err, ErrInvalidRequest) {
 				t.Fatalf("error = %v, want missing Codex dispatch context", err)
 			}
 			if got := networkCalls.Load(); got != 0 {

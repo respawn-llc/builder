@@ -570,18 +570,8 @@ func (r Request) Validate() error {
 			return fmt.Errorf("%w: structured_output.schema must be prepared", ErrInvalidRequest)
 		}
 	}
-	if r.SessionID != nil {
-		if err := validateOpenAIDispatchSessionID(*r.SessionID); err != nil {
-			return err
-		}
-	}
-	if r.CodexDispatch != nil {
-		if r.SessionID == nil {
-			return fmt.Errorf("%w: Session identity is required with Codex dispatch context", ErrInvalidRequest)
-		}
-		if err := r.CodexDispatch.validateForSession(*r.SessionID); err != nil {
-			return err
-		}
+	if err := validateSessionDispatchPairing(r.SessionID, r.CodexDispatch); err != nil {
+		return err
 	}
 	return nil
 }

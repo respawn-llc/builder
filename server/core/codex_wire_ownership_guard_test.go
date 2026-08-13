@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -42,7 +43,7 @@ func TestCodexWireHeadersHaveOneCanonicalAuthority(t *testing.T) {
 func TestCodexWireOwnershipGuardRecognizesOnlyHeaderAuthorities(t *testing.T) {
 	source := `package fixture
 func set(request *http.Request) {
-	request.Header.Set("session_id", "session"); request.Header.Add("x-codex-turn-metadata", "metadata")
+	request.Header.Set("SeSsIoN_Id", "session"); request.Header.Add("X-CoDeX-TuRn-MeTaDaTa", "metadata")
 	_ = option.WithHeader("x-codex-window-id", "window")
 }
 type metadata struct { SessionID string ` + "`json:\"session_id\"`" + ` }
@@ -123,7 +124,7 @@ func structurallySetHeaderName(call *ast.CallExpr) (string, headerCallKind, bool
 		return "", 0, false
 	}
 	value, err := strconv.Unquote(literal.Value)
-	return value, callKind, err == nil
+	return strings.ToLower(value), callKind, err == nil
 }
 
 func codexWireFinding(fileSet *token.FileSet, position token.Pos, relativePath string, description string) string {
