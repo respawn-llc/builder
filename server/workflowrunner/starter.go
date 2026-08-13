@@ -264,7 +264,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 			continue
 		}
 		if input.Node.Kind != workflow.NodeKindAgent {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference)
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference))
 		}
 		key, err := input.CurrentNode.Reference.Key()
 		if err != nil {
