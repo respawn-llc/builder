@@ -198,7 +198,19 @@ func inboundRouteClassificationForRoute(route apicontract.Route) inboundRouteCla
 		protocol.MethodWorkflowTaskMove,
 		protocol.MethodWorkflowTaskComplete,
 		protocol.MethodWorkflowTaskDelete,
-		protocol.MethodWorkflowTaskObserve:
+		protocol.MethodWorkflowTaskObserve,
+		protocol.MethodWorkflowProjectLabelList,
+		protocol.MethodWorkflowTaskLabelsGet,
+		protocol.MethodWorkflowAttentionList,
+		protocol.MethodWorkflowTaskAttentionList,
+		protocol.MethodWorkflowTaskCommentList,
+		protocol.MethodWorkflowTaskActivityList,
+		protocol.MethodWorkflowTaskSessionList,
+		protocol.MethodWorkflowTaskList,
+		protocol.MethodWorkflowTaskSearch,
+		protocol.MethodWorkflowBoardGet,
+		protocol.MethodWorkflowBoardNodeCardsList,
+		protocol.MethodWorkflowTaskGet:
 		handler.owner = inboundHandlerTrustedOwner
 	case protocol.MethodRuntimeGoalShow,
 		protocol.MethodRuntimeGoalSet,
@@ -939,6 +951,18 @@ func registerProjectAndSmallServiceRoutes(executables map[string]inboundExecutab
 	executables[protocol.MethodWorkflowTaskComplete] = trustedServiceUnary(protocol.MethodWorkflowTaskComplete, workflowClient, apicontract.WorkflowTrustedService.CompleteWorkflowTaskValidated)
 	executables[protocol.MethodWorkflowTaskDelete] = trustedServiceUnaryNoResponse(protocol.MethodWorkflowTaskDelete, workflowClient, apicontract.WorkflowTrustedService.DeleteWorkflowTaskValidated)
 	executables[protocol.MethodWorkflowTaskObserve] = trustedServiceUnary(protocol.MethodWorkflowTaskObserve, workflowClient, apicontract.WorkflowTrustedService.ObserveWorkflowTaskValidated)
+	executables[protocol.MethodWorkflowProjectLabelList] = trustedServiceUnary(protocol.MethodWorkflowProjectLabelList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowProjectLabelsValidated)
+	executables[protocol.MethodWorkflowTaskLabelsGet] = trustedServiceUnary(protocol.MethodWorkflowTaskLabelsGet, workflowClient, apicontract.WorkflowTrustedService.GetWorkflowTaskLabelsValidated)
+	executables[protocol.MethodWorkflowAttentionList] = trustedServiceUnary(protocol.MethodWorkflowAttentionList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowAttentionValidated)
+	executables[protocol.MethodWorkflowTaskAttentionList] = trustedServiceUnary(protocol.MethodWorkflowTaskAttentionList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowTaskAttentionValidated)
+	executables[protocol.MethodWorkflowTaskCommentList] = trustedServiceUnary(protocol.MethodWorkflowTaskCommentList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowTaskCommentsValidated)
+	executables[protocol.MethodWorkflowTaskActivityList] = trustedServiceUnary(protocol.MethodWorkflowTaskActivityList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowTaskActivityValidated)
+	executables[protocol.MethodWorkflowTaskSessionList] = trustedServiceUnary(protocol.MethodWorkflowTaskSessionList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowTaskSessionsValidated)
+	executables[protocol.MethodWorkflowTaskList] = trustedServiceUnary(protocol.MethodWorkflowTaskList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowTasksValidated)
+	executables[protocol.MethodWorkflowTaskSearch] = trustedServiceUnary(protocol.MethodWorkflowTaskSearch, workflowClient, apicontract.WorkflowTrustedService.SearchWorkflowTasksValidated)
+	executables[protocol.MethodWorkflowBoardGet] = trustedServiceUnary(protocol.MethodWorkflowBoardGet, workflowClient, apicontract.WorkflowTrustedService.GetWorkflowBoardValidated)
+	executables[protocol.MethodWorkflowBoardNodeCardsList] = trustedServiceUnary(protocol.MethodWorkflowBoardNodeCardsList, workflowClient, apicontract.WorkflowTrustedService.ListWorkflowBoardNodeCardsValidated)
+	executables[protocol.MethodWorkflowTaskGet] = trustedServiceUnary(protocol.MethodWorkflowTaskGet, workflowClient, apicontract.WorkflowTrustedService.GetWorkflowTaskValidated)
 
 	executables[protocol.MethodAuthGetStatus] = trustedServiceUnary(
 		protocol.MethodAuthGetStatus,

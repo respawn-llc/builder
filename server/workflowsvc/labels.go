@@ -27,9 +27,13 @@ func (s *Service) CreateWorkflowProjectLabel(ctx context.Context, req serverapi.
 }
 
 func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelCatalogRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowProjectLabelCatalogResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
+		return s.ListWorkflowProjectLabelsValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ListWorkflowProjectLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
+	req := validated.Value()
 	records, err := s.store.ListProjectLabels(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelCatalogResponse{}, workflowLabelError(err, workflowLabelErrorScope{
@@ -131,9 +135,13 @@ func (s *Service) ReorderWorkflowProjectLabelsValidated(ctx context.Context, val
 }
 
 func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsGetRequest) (serverapi.WorkflowTaskLabelsGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskLabelsGetResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error) {
+		return s.GetWorkflowTaskLabelsValidated(ctx, validated)
+	})
+}
+
+func (s *Service) GetWorkflowTaskLabelsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error) {
+	req := validated.Value()
 	ids, err := s.store.GetTaskLabelIDs(ctx, workflow.TaskID(req.TaskID))
 	if err != nil {
 		return serverapi.WorkflowTaskLabelsGetResponse{}, workflowLabelError(err, workflowLabelErrorScope{

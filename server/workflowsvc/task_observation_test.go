@@ -56,11 +56,11 @@ func (observationDefinitionStub) GetDefinition(context.Context, runtimeids.Workf
 
 type observationAttentionStub struct{}
 
-func (observationAttentionStub) List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
+func (observationAttentionStub) ReadAttention(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
 	return serverapi.WorkflowAttentionListResponse{}, nil
 }
 
-func (observationAttentionStub) ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
+func (observationAttentionStub) ListTaskByID(context.Context, string) (serverapi.WorkflowTaskAttentionListResponse, error) {
 	return serverapi.WorkflowTaskAttentionListResponse{}, nil
 }
 

@@ -80,6 +80,13 @@ func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
 	return s.getWorkflowTask(ctx, req)
 }
 
+func (s *gatewayConcurrencyWorkflowService) GetWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
+) (serverapi.WorkflowTaskGetResponse, error) {
+	return s.GetWorkflowTask(ctx, req.Value())
+}
+
 func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTask(
 	ctx context.Context,
 	req serverapi.WorkflowTaskCompleteRequest,
@@ -221,6 +228,7 @@ type gatewayCloseTracker struct {
 
 type gatewayCloseWorkflowService struct {
 	apicontract.WorkflowService
+	apicontract.WorkflowTrustedService
 	tracker *gatewayCloseTracker
 }
 
@@ -234,6 +242,13 @@ func (s *gatewayCloseWorkflowService) GetWorkflowTask(ctx context.Context, _ ser
 	<-ctx.Done()
 	s.tracker.canceled <- "workflow"
 	return serverapi.WorkflowTaskGetResponse{}, ctx.Err()
+}
+
+func (s *gatewayCloseWorkflowService) GetWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
+) (serverapi.WorkflowTaskGetResponse, error) {
+	return s.GetWorkflowTask(ctx, req.Value())
 }
 
 type gatewayCloseRuntimeService struct {

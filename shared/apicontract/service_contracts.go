@@ -459,9 +459,18 @@ type WorkflowTrustedService interface {
 	CompleteWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskCompleteRequest]) (serverapi.WorkflowTaskCompleteResponse, error)
 	DeleteWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskDeleteRequest]) error
 	ObserveWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskObservationRequest]) (serverapi.WorkflowTaskObservationResponse, error)
+	ListWorkflowProjectLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelCatalogRequest]) (serverapi.WorkflowProjectLabelCatalogResponse, error)
 	ReorderWorkflowProjectLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectLabelReorderRequest]) (serverapi.WorkflowProjectLabelReorderResponse, error)
+	GetWorkflowTaskLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskLabelsGetRequest]) (serverapi.WorkflowTaskLabelsGetResponse, error)
 	UpdateWorkflowTaskLabelsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskLabelsUpdateRequest]) (serverapi.WorkflowTaskLabelsUpdateResponse, error)
+	ListWorkflowAttentionValidated(ctx context.Context, req Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error)
+	ListWorkflowTaskAttentionValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error)
+	ListWorkflowTaskCommentsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskCommentListResponse, error)
+	ListWorkflowTaskActivityValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error)
+	ListWorkflowTaskSessionsValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error)
 	ListWorkflowTasksValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error)
+	SearchWorkflowTasksValidated(ctx context.Context, req Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error)
 	GetWorkflowBoardValidated(ctx context.Context, req Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoardResponse, error)
 	ListWorkflowBoardNodeCardsValidated(ctx context.Context, req Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error)
+	GetWorkflowTaskValidated(ctx context.Context, req Validated[serverapi.WorkflowTaskGetRequest]) (serverapi.WorkflowTaskGetResponse, error)
 }

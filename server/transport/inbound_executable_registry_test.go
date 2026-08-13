@@ -258,6 +258,31 @@ func TestWorkflowCatalogGraphAndProjectLinkRoutesUseTrustedOwners(t *testing.T) 
 	}
 }
 
+func TestWorkflowReadModelRoutesUseTrustedOwners(t *testing.T) {
+	methods := []string{
+		protocol.MethodWorkflowProjectLabelList,
+		protocol.MethodWorkflowTaskLabelsGet,
+		protocol.MethodWorkflowAttentionList,
+		protocol.MethodWorkflowTaskAttentionList,
+		protocol.MethodWorkflowTaskCommentList,
+		protocol.MethodWorkflowTaskActivityList,
+		protocol.MethodWorkflowTaskSessionList,
+		protocol.MethodWorkflowTaskList,
+		protocol.MethodWorkflowTaskSearch,
+		protocol.MethodWorkflowBoardGet,
+		protocol.MethodWorkflowBoardNodeCardsList,
+		protocol.MethodWorkflowTaskGet,
+	}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			executable := inboundExecutableRoutes[method]
+			if executable.handlerClassification.owner != inboundHandlerTrustedOwner {
+				t.Fatalf("handler owner = %q, want trusted owner", executable.handlerClassification.owner)
+			}
+		})
+	}
+}
+
 func TestRuntimeControlAndLiveRoutesUseTrustedOwners(t *testing.T) {
 	methods := []string{
 		protocol.MethodRuntimeSetSessionName,

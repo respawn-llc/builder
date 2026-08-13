@@ -47,11 +47,15 @@ func NewTaskSearch(
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
-		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
-	}
 	if err := req.Validate(); err != nil {
 		return serverapi.TaskSearchResponse{}, err
+	}
+	return s.ReadSearch(ctx, req)
+}
+
+func (s *TaskSearch) ReadSearch(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
+	if s == nil || s.metadata == nil || s.metadata.DB() == nil || s.queries == nil || s.projection == nil {
+		return serverapi.TaskSearchResponse{}, errors.New("task search is required")
 	}
 	if err := context.Cause(ctx); err != nil {
 		return serverapi.TaskSearchResponse{}, err
@@ -101,11 +105,7 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 		value := offset + len(rows)
 		next = &value
 	}
-	response = serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextOffset: next}
-	if err := response.Validate(); err != nil {
-		return serverapi.TaskSearchResponse{}, fmt.Errorf("validate task search response: %w", err)
-	}
-	return response, nil
+	return serverapi.TaskSearchResponse{Mode: req.Mode, Groups: groups, NextOffset: next}, nil
 }
 
 func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {

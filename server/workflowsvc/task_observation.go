@@ -102,7 +102,7 @@ func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.Workflo
 		}
 	}
 
-	attention, err := s.readModels.Attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: req.TaskID})
+	attention, err := s.readModels.Attention.ListTaskByID(ctx, req.TaskID)
 	if err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, false, normalizeTaskObservationError(err)
 	}

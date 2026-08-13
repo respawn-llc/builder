@@ -3607,9 +3607,9 @@ func newWorkflowServiceReadModels(
 
 type emptyWorkflowTaskSessionReadModel struct{}
 
-func (emptyWorkflowTaskSessionReadModel) List(_ context.Context, request serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+func (emptyWorkflowTaskSessionReadModel) ReadSessions(_ context.Context, taskID string, _ serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error) {
 	return serverapi.WorkflowTaskSessionListResponse{
-		TaskID: request.TaskID,
+		TaskID: taskID,
 		WorkflowOffsetPage: serverapi.WorkflowOffsetPage[serverapi.WorkflowTaskSessionItem]{
 			Items: []serverapi.WorkflowTaskSessionItem{},
 		},

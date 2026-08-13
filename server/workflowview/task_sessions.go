@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
@@ -43,18 +42,21 @@ func NewTaskSessions(metadataStore *metadata.Store, activities ActiveTaskSession
 }
 
 func (s *TaskSessions) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
-	if s == nil || s.queries == nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, errors.New("Task Sessions read model is required")
-	}
 	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, err
-	}
-	taskID := strings.TrimSpace(req.TaskID)
-	if _, err := s.queries.GetTask(ctx, taskID); err != nil {
 		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
 	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	return s.ReadSessions(ctx, req.TaskID, window)
+}
+
+func (s *TaskSessions) ReadSessions(ctx context.Context, taskID string, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error) {
+	if s == nil || s.queries == nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, errors.New("Task Sessions read model is required")
+	}
+	if _, err := s.queries.GetTask(ctx, taskID); err != nil {
 		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
 	active, activeSessionIDs, err := s.activeTaskSessions(ctx, taskID)

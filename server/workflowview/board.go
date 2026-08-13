@@ -46,13 +46,17 @@ func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, 
 }
 
 func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error) {
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowBoard{}, err
+	}
+	return b.ReadBoard(ctx, req)
+}
+
+func (b *Board) ReadBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error) {
 	if b == nil {
 		return serverapi.WorkflowBoard{}, errors.New("board is required")
 	}
-	projectID := strings.TrimSpace(req.ProjectID)
-	if projectID == "" {
-		return serverapi.WorkflowBoard{}, errors.New("project_id is required")
-	}
+	projectID := req.ProjectID
 	definitions, picker, err := b.selectionInputs(ctx, projectID)
 	if err != nil {
 		return serverapi.WorkflowBoard{}, err
@@ -94,12 +98,19 @@ func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (se
 }
 
 func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	return b.ReadNodeCards(ctx, req)
+}
+
+func (b *Board) ReadNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
 	if b == nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, errors.New("board is required")
 	}
-	projectID := strings.TrimSpace(req.ProjectID)
+	projectID := req.ProjectID
 	workflowID := req.WorkflowID
-	nodeID := strings.TrimSpace(req.NodeID)
+	nodeID := req.NodeID
 	project, err := b.metadata.GetProjectOverview(ctx, projectID)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err

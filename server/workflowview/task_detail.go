@@ -44,9 +44,6 @@ func (d *TaskDetail) GetTask(ctx context.Context, taskID string) (serverapi.Work
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
-	if strings.TrimSpace(taskID) == "" {
-		return serverapi.WorkflowTaskDetail{}, ErrTaskIDRequired
-	}
 	task, err := d.queries.GetTask(ctx, taskID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
@@ -72,15 +69,7 @@ func (d *TaskDetail) GetTaskByProjectShortID(ctx context.Context, projectID stri
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	if trimmedProjectID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("project_id is required")
-	}
-	trimmedShortID := strings.TrimSpace(shortID)
-	if trimmedShortID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
-	}
-	task, err := d.queries.GetTaskByProjectShortID(ctx, sqlitegen.GetTaskByProjectShortIDParams{ProjectID: trimmedProjectID, ShortID: trimmedShortID})
+	task, err := d.queries.GetTaskByProjectShortID(ctx, sqlitegen.GetTaskByProjectShortIDParams{ProjectID: projectID, ShortID: shortID})
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
@@ -91,11 +80,7 @@ func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serv
 	if d == nil {
 		return serverapi.WorkflowTaskDetail{}, errors.New("task detail is required")
 	}
-	trimmedShortID := strings.TrimSpace(shortID)
-	if trimmedShortID == "" {
-		return serverapi.WorkflowTaskDetail{}, errors.New("short_id is required")
-	}
-	tasks, err := d.queries.ListTasksByShortID(ctx, trimmedShortID)
+	tasks, err := d.queries.ListTasksByShortID(ctx, shortID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
@@ -103,7 +88,7 @@ func (d *TaskDetail) GetTaskByShortID(ctx context.Context, shortID string) (serv
 		return serverapi.WorkflowTaskDetail{}, sql.ErrNoRows
 	}
 	if len(tasks) > 1 {
-		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task short_id %q is ambiguous; use task id", trimmedShortID)
+		return serverapi.WorkflowTaskDetail{}, fmt.Errorf("task short_id %q is ambiguous; use task id", shortID)
 	}
 	return d.GetTask(ctx, tasks[0].ID)
 }

@@ -173,6 +173,31 @@ type rejectingRawWorkflowService struct {
 	apicontract.WorkflowTrustedService
 }
 
+type countingWorkflowReadService struct {
+	apicontract.WorkflowService
+	apicontract.WorkflowTrustedService
+	attentionCalls int
+	searchCalls    int
+}
+
+func (*countingWorkflowReadService) ListWorkflowAttention(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
+	panic("gateway re-entered raw Workflow attention service")
+}
+
+func (s *countingWorkflowReadService) ListWorkflowAttentionValidated(_ context.Context, req apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error) {
+	s.attentionCalls++
+	return serverapi.WorkflowAttentionListResponse{NextPageToken: req.Value().PageToken}, nil
+}
+
+func (*countingWorkflowReadService) SearchWorkflowTasks(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
+	panic("gateway re-entered raw Workflow task search service")
+}
+
+func (s *countingWorkflowReadService) SearchWorkflowTasksValidated(_ context.Context, req apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error) {
+	s.searchCalls++
+	return serverapi.TaskSearchResponse{Mode: req.Value().Mode, Groups: []serverapi.TaskSearchGroup{}}, nil
+}
+
 func TestGatewayWorkflowTaskMutationsRejectMalformedRequestsBeforeTrustedOwner(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	t.Cleanup(func() { _ = appCore.Close() })
@@ -210,6 +235,93 @@ func TestGatewayWorkflowTaskMutationsRejectMalformedRequestsBeforeTrustedOwner(t
 				t.Fatalf("response = %+v, want request validation failure before trusted owner", response)
 			}
 		})
+	}
+}
+
+func TestGatewayWorkflowReadModelsRejectMalformedRequestsBeforeTrustedOwner(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	deps := &customRouteGatewayDependencies{
+		Core:     appCore,
+		workflow: &rejectingRawWorkflowService{},
+	}
+	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+	for _, method := range []string{
+		protocol.MethodWorkflowProjectLabelList,
+		protocol.MethodWorkflowTaskLabelsGet,
+		protocol.MethodWorkflowAttentionList,
+		protocol.MethodWorkflowTaskAttentionList,
+		protocol.MethodWorkflowTaskCommentList,
+		protocol.MethodWorkflowTaskActivityList,
+		protocol.MethodWorkflowTaskSessionList,
+		protocol.MethodWorkflowTaskList,
+		protocol.MethodWorkflowTaskSearch,
+		protocol.MethodWorkflowBoardGet,
+		protocol.MethodWorkflowBoardNodeCardsList,
+		protocol.MethodWorkflowTaskGet,
+	} {
+		t.Run(method, func(t *testing.T) {
+			params := []byte(`{}`)
+			if method == protocol.MethodWorkflowAttentionList {
+				params = []byte(`{"page_size":-1}`)
+			}
+			response := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+				JSONRPC: protocol.JSONRPCVersion,
+				ID:      method,
+				Method:  method,
+				Params:  params,
+			})
+			if response.Error == nil || response.Error.Code == protocol.ErrCodeInternalError {
+				t.Fatalf("response = %+v, want request validation failure before trusted owner", response)
+			}
+		})
+	}
+}
+
+func TestGatewayWorkflowReadModelsValidateOnceBeforeTrustedOwner(t *testing.T) {
+	appCore, _ := newGatewayTestCore(t, true, true)
+	t.Cleanup(func() { _ = appCore.Close() })
+	workflowService := &countingWorkflowReadService{}
+	gateway, err := NewGateway(&customRouteGatewayDependencies{
+		Core:     appCore,
+		workflow: workflowService,
+	}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
+	if err != nil {
+		t.Fatalf("NewGateway: %v", err)
+	}
+
+	attention := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      "attention",
+		Method:  protocol.MethodWorkflowAttentionList,
+		Params:  mustJSON(t, serverapi.WorkflowAttentionListRequest{PageSize: 7}),
+	})
+	if attention.Error != nil {
+		t.Fatalf("attention response = %+v", attention)
+	}
+	if workflowService.attentionCalls != 1 {
+		t.Fatalf("attention trusted calls = %d, want 1", workflowService.attentionCalls)
+	}
+
+	search := gateway.dispatch(t.Context(), &connectionState{handshakeDone: true}, protocol.Request{
+		JSONRPC: protocol.JSONRPCVersion,
+		ID:      apicontract.TaskSearchDedicatedRequestID,
+		Method:  protocol.MethodWorkflowTaskSearch,
+		Params: mustJSON(t, serverapi.TaskSearchRequest{
+			Mode:     serverapi.TaskSearchModeLiteral,
+			Query:    "task",
+			Context:  serverapi.TaskSearchDefaultContext,
+			PageSize: 10,
+		}),
+	})
+	if search.Error != nil {
+		t.Fatalf("search response error = %+v", *search.Error)
+	}
+	if workflowService.searchCalls != 1 {
+		t.Fatalf("search trusted calls = %d, want 1", workflowService.searchCalls)
 	}
 }
 
