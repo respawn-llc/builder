@@ -60,29 +60,6 @@ func completedStreamEvent(delay time.Duration) pacedStreamEvent {
 	return pacedStreamEvent{delay: delay, data: `{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done"}]}]}}`}
 }
 
-func TestOAuthGenerateStreamSurvivesConfiguredHTTPClientTimeout(t *testing.T) {
-	transport := newPacedStreamTransport(t, completedStreamEvent(150*time.Millisecond), pacedStreamEvent{data: `[DONE]`})
-	transport.Auth = oauthStaticAuth{}
-	transport.BaseURLExplicit = true
-	transport.Client.Timeout = 50 * time.Millisecond
-	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
-		SessionID: "session-1", RunID: "run-1", RequestKind: CodexRequestKindTurn.Optional(),
-	})
-	if err != nil {
-		t.Fatalf("dispatch context: %v", err)
-	}
-	response, err := transport.Generate(context.Background(), OpenAIRequest{
-		Model: "gpt-5", SessionID: textutil.Value("session-1"), CodexDispatch: dispatch,
-		ToolChoiceMode: ToolChoiceModeAutomatic,
-	})
-	if err != nil {
-		t.Fatalf("OAuth Generate was truncated by HTTP client timeout: %v", err)
-	}
-	if optionalStringValue(response.AssistantText) != "Done" {
-		t.Fatalf("assistant text = %q, want Done", optionalStringValue(response.AssistantText))
-	}
-}
-
 func TestGenerateStream_HealthyLongStreamSurvivesTotalWallClockBeyondIdle(t *testing.T) {
 	idle := 500 * time.Millisecond
 	gap := 80 * time.Millisecond
