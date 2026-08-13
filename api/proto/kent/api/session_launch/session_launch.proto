@@ -278,13 +278,21 @@ message ToolEnabledFact {
 }
 
 message Settings {
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.compaction_threshold_below_model_window"
+    message: "context_compaction_threshold_tokens must be less than model_context_window"
+    expression: "this.context_compaction_threshold_tokens < this.model_context_window"
+  };
+
   string model = 1;
   string thinking_level = 2;
   ModelVerbosity model_verbosity = 3 [(buf.validate.field).enum.defined_only = true];
   string system_prompt_file = 4;
   repeated SystemPromptFile system_prompt_files = 5;
   ModelCapabilitiesOverride model_capabilities = 6 [(buf.validate.field).required = true];
-  string theme = 7;
+  string theme = 7 [(buf.validate.field).string = {
+    in: ["auto", "light", "dark"]
+  }];
   string notification_method = 8;
   bool tool_preambles = 9;
   bool priority_request_mode = 10;

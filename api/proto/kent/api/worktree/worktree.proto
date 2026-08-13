@@ -117,12 +117,40 @@ enum SetupExecutionTargetMode {
 message GitFacts {
   string canonical_root = 1 [(buf.validate.field).string.min_len = 1];
   string head_object = 2 [(buf.validate.field).string.min_len = 1];
-  optional string branch_ref = 3 [(buf.validate.field).string.min_len = 1];
-  optional string branch_name = 4 [(buf.validate.field).string.min_len = 1];
+  optional string branch_ref = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.branch_ref_nonblank"
+      message: "branch_ref must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string branch_name = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.branch_name_nonblank"
+      message: "branch_name must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool detached = 5;
   bool bare = 6;
-  optional string locked_reason = 7 [(buf.validate.field).string.min_len = 1];
-  optional string prunable_reason = 8 [(buf.validate.field).string.min_len = 1];
+  optional string locked_reason = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.locked_reason_nonblank"
+      message: "locked_reason must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string prunable_reason = 8 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.prunable_reason_nonblank"
+      message: "prunable_reason must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool is_main = 9;
   bool path_available = 10;
 }

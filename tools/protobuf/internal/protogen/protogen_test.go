@@ -31,12 +31,20 @@ func TestEnsureGeneratesOnlyWhenInputsOrOutputsChange(t *testing.T) {
 		t.Fatalf("changed-input generation count = %d, want 2", got)
 	}
 
-	writeFile(t, manager.RepositoryRoot, filepath.Join(target.OutputPath, "contract.generated"), "edited output\n")
+	writeFile(t, manager.RepositoryRoot, "tools/protobuf/internal/protogen/generate.go", "changed orchestration\n")
 	if err := manager.Ensure([]Target{target}); err != nil {
 		t.Fatal(err)
 	}
 	if got := generations.Load(); got != 3 {
-		t.Fatalf("changed-output generation count = %d, want 3", got)
+		t.Fatalf("changed-orchestration generation count = %d, want 3", got)
+	}
+
+	writeFile(t, manager.RepositoryRoot, filepath.Join(target.OutputPath, "contract.generated"), "edited output\n")
+	if err := manager.Ensure([]Target{target}); err != nil {
+		t.Fatal(err)
+	}
+	if got := generations.Load(); got != 4 {
+		t.Fatalf("changed-output generation count = %d, want 4", got)
 	}
 }
 
@@ -147,6 +155,7 @@ func newFixtureManager(t *testing.T) (*Manager, Target, *atomic.Int32) {
 		"buf.gen.fixture.yaml":                  "template\n",
 		"tools/protobuf/go.mod":                 "module fixture\n",
 		"tools/protobuf/go.sum":                 "sum\n",
+		"tools/protobuf/internal/protogen/x":    "orchestration\n",
 		"tools/protobuf/internal/registrygen/x": "registry\n",
 		"tools/protobuf/generator/main.go":      "generator\n",
 	} {

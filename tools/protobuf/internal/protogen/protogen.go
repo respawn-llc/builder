@@ -314,6 +314,7 @@ func (m *Manager) inputFingerprint(target Target) (string, error) {
 		target.Template,
 		"tools/protobuf/go.mod",
 		"tools/protobuf/go.sum",
+		"tools/protobuf/internal/protogen",
 		"tools/protobuf/internal/registrygen",
 	}
 	inputs = append(inputs, target.Inputs...)

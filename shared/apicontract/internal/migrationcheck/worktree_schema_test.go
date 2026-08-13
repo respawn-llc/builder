@@ -202,6 +202,31 @@ func TestWorktreeLegacyFieldCoverageAndIntentionalReshapesAreExact(t *testing.T)
 	)
 }
 
+func TestWorktreeGitFactsRejectBlankPresentOptionalValues(t *testing.T) {
+	valid := &worktreepb.GitFacts{
+		CanonicalRoot: "/repo",
+		HeadObject:    "abc123",
+	}
+	for _, field := range []struct {
+		name string
+		set  func(*worktreepb.GitFacts, *string)
+	}{
+		{name: "branch ref", set: func(facts *worktreepb.GitFacts, value *string) { facts.BranchRef = value }},
+		{name: "branch name", set: func(facts *worktreepb.GitFacts, value *string) { facts.BranchName = value }},
+		{name: "locked reason", set: func(facts *worktreepb.GitFacts, value *string) { facts.LockedReason = value }},
+		{name: "prunable reason", set: func(facts *worktreepb.GitFacts, value *string) { facts.PrunableReason = value }},
+	} {
+		t.Run(field.name, func(t *testing.T) {
+			facts := proto.Clone(valid).(*worktreepb.GitFacts)
+			blank := " "
+			field.set(facts, &blank)
+			if err := protoapi.ValidateGeneratedMessage(facts); err == nil {
+				t.Fatal("blank present Git fact accepted")
+			}
+		})
+	}
+}
+
 func TestWorktreeSetupCompletionReshapeIsExact(t *testing.T) {
 	completion := (&worktreepb.SetupCompletion{}).ProtoReflect().Descriptor()
 	assertExactFields(t, completion, "code", "diagnostic")

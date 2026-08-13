@@ -51,6 +51,12 @@ func TestSessionPlanActiveSettingsRejectInvalidZeroValues(t *testing.T) {
 		{name: "reviewer timeout", mutate: func(settings *sessionlaunchpb.Settings) {
 			settings.Reviewer.TimeoutSeconds = 0
 		}},
+		{name: "unknown theme", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.Theme = "bogus"
+		}},
+		{name: "threshold equals model window", mutate: func(settings *sessionlaunchpb.Settings) {
+			settings.ContextCompactionThresholdTokens = settings.ModelContextWindow
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			settings := proto.Clone(valid).(*sessionlaunchpb.Settings)
@@ -95,6 +101,7 @@ func validGeneratedActiveSettings() *sessionlaunchpb.Settings {
 	return &sessionlaunchpb.Settings{
 		ModelCapabilities:                &sessionlaunchpb.ModelCapabilitiesOverride{},
 		ProviderCapabilities:             &sessionlaunchpb.ProviderCapabilitiesOverride{},
+		Theme:                            "auto",
 		ServerPort:                       53082,
 		ModelContextWindow:               40000,
 		ContextCompactionThresholdTokens: 38000,
