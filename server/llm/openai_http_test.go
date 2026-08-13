@@ -753,6 +753,32 @@ func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing
 	}
 }
 
+func TestNewOpenAIProviderContractErrorEnrichesResponseDiagnostics(t *testing.T) {
+	cause := errors.New("invalid provider response")
+	rawResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"X-Request-Id":                 []string{"request-id"},
+			"X-Openai-Authorization-Error": []string{"authorization diagnostic"},
+		},
+	}
+	err := newOpenAIProviderContractError("openai-compatible", rawResp, cause)
+
+	var providerErr *ProviderAPIError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("error = %T, want ProviderAPIError", err)
+	}
+	if providerErr.Code != UnifiedErrorCodeProviderContract || providerErr.StatusCode != http.StatusOK {
+		t.Fatalf("provider contract classification changed: %+v", providerErr)
+	}
+	if providerErr.ProviderRequestID == nil || *providerErr.ProviderRequestID != "request-id" {
+		t.Fatalf("provider request ID = %#v, want response header value", providerErr.ProviderRequestID)
+	}
+	if providerErr.AuthorizationDiagnostic == nil || *providerErr.AuthorizationDiagnostic != "authorization diagnostic" {
+		t.Fatalf("authorization diagnostic = %#v, want response header value", providerErr.AuthorizationDiagnostic)
+	}
+}
+
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
 	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "")) != 2 {

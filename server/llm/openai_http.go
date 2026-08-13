@@ -121,7 +121,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 
 	outputItems, assistantText, _, providerPhase, toolCalls, reasoning, reasoningItems, parseErr := parseOutputItems(decoded.Output)
 	if parseErr != nil {
-		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+		return OpenAIResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, parseErr)
 	}
 	return OpenAIResponse{
 		AssistantText:     assistantText,
@@ -192,26 +192,30 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		if accumulator.hasCompleted() && !callerCanceledStreamRead(ctx) {
 			return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 		}
-		responseStatus := newOpenAIResponseStatus(rawResp)
-		if responseStatus != nil && isOpenAIResponsesStreamFramingError(err) {
-			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
-				providerCaps.ProviderID,
-				responseStatus.Code,
-				fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
-			))
+		if rawResp != nil && isOpenAIResponsesStreamFramingError(err) {
+			return OpenAIResponse{}, fmt.Errorf(
+				"read responses stream events: %w",
+				newOpenAIProviderContractError(
+					providerCaps.ProviderID,
+					rawResp,
+					fmt.Errorf("%s: %w", openAIResponsesStreamEndedBeforeTerminalMessage, err),
+				),
+			)
 		}
 		return OpenAIResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses stream events")
 	}
 	if !accumulator.hasCompleted() {
-		responseStatus := newOpenAIResponseStatus(rawResp)
-		if responseStatus == nil {
+		if rawResp == nil {
 			return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
 		}
-		return OpenAIResponse{}, fmt.Errorf("read responses stream events: %w", llmerrors.NewProviderContractError(
-			providerCaps.ProviderID,
-			responseStatus.Code,
-			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
-		))
+		return OpenAIResponse{}, fmt.Errorf(
+			"read responses stream events: %w",
+			newOpenAIProviderContractError(
+				providerCaps.ProviderID,
+				rawResp,
+				errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
+			),
+		)
 	}
 	return responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 }
@@ -221,7 +225,7 @@ func responseFromStreamAccumulator(accumulator *responseStreamAccumulator, provi
 	if err != nil {
 		return OpenAIResponse{}, fmt.Errorf(
 			"read responses stream events: %w",
-			newOpenAIProviderContractError(providerID, newOpenAIResponseStatus(rawResp), err),
+			newOpenAIProviderContractError(providerID, rawResp, err),
 		)
 	}
 	response.ServedModel = servedModelMetadata(rawResp, optionalStringValue(response.ServedModel))
@@ -268,11 +272,13 @@ func newOpenAIResponseStatus(rawResp *http.Response) *openAIResponseStatus {
 	return &openAIResponseStatus{Code: rawResp.StatusCode}
 }
 
-func newOpenAIProviderContractError(providerID string, status *openAIResponseStatus, cause error) error {
-	if status == nil {
+func newOpenAIProviderContractError(providerID string, rawResp *http.Response, cause error) error {
+	if rawResp == nil {
 		return &providerContractErrorWithoutStatus{ProviderID: providerID, Err: cause}
 	}
-	return llmerrors.NewProviderContractError(providerID, status.Code, cause)
+	providerErr := llmerrors.NewProviderContractError(providerID, rawResp.StatusCode, cause)
+	enrichProviderAPIErrorFromResponseHeaders(providerErr, rawResp)
+	return providerErr
 }
 
 func callerCanceledStreamRead(ctx context.Context) bool {
@@ -349,7 +355,7 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 		return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
 	}
 	if !accumulator.hasCompleted() {
-		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, errors.New(openAIResponsesStreamEndedBeforeTerminalMessage))
 	}
 	response, err := responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
 	if err != nil {
@@ -357,7 +363,7 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 	}
 	checkpoint, err := requireSingleEncryptedCompactionOutput(response.OutputItems)
 	if err != nil {
-		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), err)
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, rawResp, err)
 	}
 	return OpenAICompactionResponse{OutputItems: []ResponseItem{checkpoint}, Usage: response.Usage}, nil
 }
