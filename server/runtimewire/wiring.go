@@ -134,7 +134,7 @@ func NewRuntimeWiringWithBackground(
 
 	mainProvider := mainProviderRuntimeSettings(active)
 	if resolvedCapabilities, ok := llm.ProviderCapabilitiesFromLockedOrOverride(store.Meta().Locked, active.ProviderCapabilities); ok {
-		mainProvider.ProviderCapabilitiesOverride = &resolvedCapabilities
+		mainProvider.ProviderCapabilitiesOverride = runtimeProviderCapabilitiesOverridePtr(&resolvedCapabilities)
 	}
 	var client llm.Client
 	if opts.Client != nil {
@@ -167,14 +167,7 @@ func NewRuntimeWiringWithBackground(
 	}
 	providerCapabilitiesOverride := mainProvider.ProviderCapabilitiesOverride
 	if opts.ProviderCapabilitiesOverride != nil {
-		providerCapabilitiesOverride = opts.ProviderCapabilitiesOverride
-	}
-	if provider, ok := client.(llm.ProviderCapabilitiesClient); ok {
-		capabilities, capabilitiesErr := provider.ProviderCapabilities(factoryContext)
-		if capabilitiesErr != nil {
-			return nil, fmt.Errorf("resolve runtime provider capabilities from client: %w", capabilitiesErr)
-		}
-		providerCapabilitiesOverride = &capabilities
+		providerCapabilitiesOverride = runtimeProviderCapabilitiesOverridePtr(opts.ProviderCapabilitiesOverride)
 	}
 
 	reviewerProvider := reviewerProviderRuntimeSettings(active)
@@ -407,5 +400,16 @@ func providerCapabilitiesOverridePtr(override config.ProviderCapabilitiesOverrid
 	if !ok {
 		return nil
 	}
-	return &caps
+	return runtimeProviderCapabilitiesOverridePtr(&caps)
+}
+
+func runtimeProviderCapabilitiesOverridePtr(capabilities *llm.ProviderCapabilities) *llm.ProviderCapabilities {
+	if capabilities == nil {
+		return nil
+	}
+	if _, builtIn := llm.LookupProviderCapabilityContract(capabilities.ProviderID); builtIn {
+		return nil
+	}
+	value := *capabilities
+	return &value
 }
