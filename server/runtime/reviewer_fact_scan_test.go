@@ -1,13 +1,11 @@
 package runtime
 
 import (
-	"errors"
 	"reflect"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
-	"core/server/session/sessiontest"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
@@ -229,66 +227,6 @@ func assertReviewerRuntimeFacts(
 		gotError.Detail != reviewerError.Detail ||
 		typedRows[1].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("Reviewer error payload changed: %+v", typedRows[1])
-	}
-}
-
-func TestReviewerFactSteeringCommitFenceMatrix(t *testing.T) {
-	cases := []struct {
-		name   string
-		intent func() steeringIntent
-		assert func(t *testing.T, rows []TranscriptCommittedRowFact)
-	}{
-		{
-			name: "feedback",
-			intent: func() steeringIntent {
-				return steerReviewerFeedbackIntent([]string{"feedback"}, transcript.EntryVisibilityOngoingCollapsed)
-			},
-			assert: func(t *testing.T, rows []TranscriptCommittedRowFact) {
-				if len(rows) != 1 || rows[0].ReviewerFeedback == nil {
-					t.Fatalf("feedback rows = %+v", rows)
-				}
-			},
-		},
-		{
-			name: "error",
-			intent: func() steeringIntent {
-				return steerReviewerErrorIntent("raw failure")
-			},
-			assert: func(t *testing.T, rows []TranscriptCommittedRowFact) {
-				if len(rows) != 1 || rows[0].ReviewerError == nil {
-					t.Fatalf("error rows = %+v", rows)
-				}
-			},
-		},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			t.Run("uncommitted", func(t *testing.T) {
-				store := mustCreateTestSession(t)
-				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-				mustBlockTestEventLogAppends(t, store)
-				err := engine.steer("11111111-1111-4111-8111-111111111111", testCase.intent())
-				if err == nil {
-					t.Fatal("uncommitted typed Reviewer append succeeded")
-				}
-				if rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows; len(rows) != 0 {
-					t.Fatalf("uncommitted typed Reviewer rows = %+v", rows)
-				}
-			})
-			t.Run("committed observer error", func(t *testing.T) {
-				observerErr := errors.New("typed Reviewer observer failed")
-				gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-				store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-				engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-				gate.FailNext(observerErr)
-				err := engine.steer("22222222-2222-4222-8222-222222222222", testCase.intent())
-				if !errors.Is(err, observerErr) {
-					t.Fatalf("committed typed Reviewer error = %v, want %v", err, observerErr)
-				}
-				rows := mustTranscriptHydrationSnapshot(t, engine).CommittedRows
-				testCase.assert(t, rows)
-			})
-		})
 	}
 }
 

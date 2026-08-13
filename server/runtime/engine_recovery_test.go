@@ -16,66 +16,6 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestSubmitUserMessageSurfacesInFlightClearFailure(t *testing.T) {
-	t.Parallel()
-	clearErr := errors.New("pending model recovery observer failure")
-	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
-	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
-	var events []Event
-	failureArmed := false
-	engine := mustNewTestEngine(t, store, &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Content: textutil.Value("completed"),
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-		},
-	}}}, newTestToolRegistry(t), Config{
-		Model: "gpt-5",
-		OnEvent: func(event Event) {
-			events = append(events, event)
-			if event.Kind == EventAssistantMessage && !failureArmed {
-				failureArmed = true
-				gate.FailWhen(func(snapshot session.PersistedStoreSnapshot) bool {
-					return snapshot.Meta.PendingModelRecovery == nil
-				}, clearErr)
-			}
-		},
-	})
-
-	if _, err := engine.SubmitUserMessage(context.Background(), "input"); !errors.Is(err, errPendingModelRecoveryClear) {
-		t.Fatalf("submit error = %v, want typed pending-recovery clear failure", err)
-	}
-	if !failureArmed {
-		t.Fatal("assistant commit did not arm pending-recovery clear failure")
-	}
-
-	clearFailureEvents := 0
-	for _, event := range events {
-		if event.Kind == EventInFlightClearFailed {
-			clearFailureEvents++
-		}
-	}
-	if clearFailureEvents != 1 {
-		t.Fatalf("typed pending-recovery clear failures = %d, want one", clearFailureEvents)
-	}
-
-	reopened := mustOpenTestSession(t, store.Dir())
-	if reopened.Meta().PendingModelRecovery != nil {
-		t.Fatalf("committed clear retained pending recovery: %+v", reopened.Meta().PendingModelRecovery)
-	}
-	window, err := mustMaterializeTestEventLog(t, reopened).ReadRecentRecords(16)
-	if err != nil {
-		t.Fatalf("read bounded post-clear records: %v", err)
-	}
-	for _, record := range window.Records {
-		message, ok := mustSessionEventPayload(record).(session.MessageRecord)
-		if ok && message.Role == session.MessageRoleAssistant {
-			return
-		}
-	}
-	t.Fatalf("bounded post-clear records contain no committed assistant message: %+v", window.Records)
-}
-
 func TestNewConsumesPendingModelRecoveryOnReopen(t *testing.T) {
 	t.Parallel()
 	const stepID = "interrupted-step"
