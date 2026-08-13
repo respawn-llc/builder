@@ -545,6 +545,17 @@ func TestEventLogV1TypedRepairNoticePersistsNullText(t *testing.T) {
 	}
 }
 
+func TestEventLogV1LocalEntryRejectsMultipleTypedNoticeFacts(t *testing.T) {
+	_, err := NewEventRecord(1, nil, LocalEntryRecord{
+		Visibility: EntryVisibilityDetail, Role: "warning",
+		ToolOutputRepair:      &transcript.ToolOutputRepairNotice{Kind: transcript.ToolOutputRepairFreshResource, Count: 1},
+		ProviderModelMismatch: &transcript.ProviderModelMismatchNotice{RequestedModel: "requested", ServedModel: "served"},
+	})
+	if err == nil {
+		t.Fatal("local entry with multiple typed notice facts was accepted")
+	}
+}
+
 func TestEventLogV1ProviderModelMismatchNoticeRoundTrip(t *testing.T) {
 	record, err := NewEventRecord(1, nil, LocalEntryRecord{
 		Visibility: EntryVisibilityDetail,

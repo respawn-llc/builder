@@ -3,7 +3,6 @@ package llmerrors
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -37,11 +36,12 @@ func TestUserFacingAuthenticationErrorIncludesProviderDiagnosticsWhenPresent(t *
 		name       string
 		requestID  *string
 		diagnostic *string
+		suffix     string
 	}{
 		{name: "neither"},
-		{name: "diagnostic only", diagnostic: stringPointer("token rejected")},
-		{name: "request ID only", requestID: stringPointer("request-1")},
-		{name: "both", requestID: stringPointer("request-1"), diagnostic: stringPointer("token rejected")},
+		{name: "diagnostic only", diagnostic: stringPointer("token rejected"), suffix: providerAuthorizationDiagnosticPrefix + "token rejected."},
+		{name: "request ID only", requestID: stringPointer("request-1"), suffix: providerRequestIDPrefix + "request-1."},
+		{name: "both", requestID: stringPointer("request-1"), diagnostic: stringPointer("token rejected"), suffix: providerAuthorizationDiagnosticPrefix + "token rejected." + providerRequestIDPrefix + "request-1."},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,23 +56,9 @@ func TestUserFacingAuthenticationErrorIncludesProviderDiagnosticsWhenPresent(t *
 				t.Fatal("provider diagnostics changed authentication or retry classification")
 			}
 			got := UserFacingError(providerErr)
-			base := authenticationFailedWarning("chatgpt-codex", 401)
-			if !strings.HasPrefix(got, base) {
-				t.Fatalf("user-facing error = %q, want actionable authentication prefix %q", got, base)
-			}
-			wantDiagnostic := test.diagnostic != nil
-			if strings.Contains(got, providerAuthorizationDiagnosticPrefix) != wantDiagnostic {
-				t.Fatalf("authorization diagnostic presence = %t, want %t; error=%q", strings.Contains(got, providerAuthorizationDiagnosticPrefix), wantDiagnostic, got)
-			}
-			wantRequestID := test.requestID != nil
-			if strings.Contains(got, providerRequestIDPrefix) != wantRequestID {
-				t.Fatalf("request ID presence = %t, want %t; error=%q", strings.Contains(got, providerRequestIDPrefix), wantRequestID, got)
-			}
-			if test.diagnostic != nil && !strings.Contains(got, *test.diagnostic) {
-				t.Fatalf("user-facing error omitted diagnostic value: %q", got)
-			}
-			if test.requestID != nil && !strings.Contains(got, *test.requestID) {
-				t.Fatalf("user-facing error omitted request ID value: %q", got)
+			want := authenticationFailedWarning("chatgpt-codex", 401) + test.suffix
+			if got != want {
+				t.Fatalf("user-facing error = %q, want %q", got, want)
 			}
 		})
 	}

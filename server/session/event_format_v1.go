@@ -479,6 +479,9 @@ func (r LocalEntryRecord) validate() error {
 	if r.ProviderModelMismatch != nil && !r.ProviderModelMismatch.Valid() {
 		return fmt.Errorf("provider-model mismatch facts are invalid")
 	}
+	if r.ToolOutputRepair != nil && r.ProviderModelMismatch != nil {
+		return fmt.Errorf("local entry cannot carry multiple typed notice facts")
+	}
 	if r.DurationMs != nil && *r.DurationMs < 0 {
 		return fmt.Errorf("duration_ms must not be negative")
 	}
