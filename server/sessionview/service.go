@@ -162,22 +162,14 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 	if err != nil {
 		return serverapi.ChatContext{}, err
 	}
-	capabilities, configured := llm.ProviderCapabilitiesFromLockedOrOverride(
+	provider, err := llm.ResolveEffectiveProviderCapabilities(
+		ctx,
 		snapshot.Meta.Locked,
-		current.Settings.ProviderCapabilities,
+		current.Settings,
+		s.contextAuth,
 	)
-	if !configured {
-		if s.contextAuth == nil {
-			return serverapi.ChatContext{}, errors.New("effective auth reader is required")
-		}
-		authState, loadErr := s.contextAuth.Load(ctx)
-		if loadErr != nil {
-			return serverapi.ChatContext{}, loadErr
-		}
-		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, current.Settings)
-		if err != nil {
-			return serverapi.ChatContext{}, err
-		}
+	if err != nil {
+		return serverapi.ChatContext{}, err
 	}
 	usedTokens := int64(0)
 	if snapshot.Meta.UsageState != nil {
@@ -189,7 +181,7 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 	}
 	manualEligible := snapshot.Facts.ManualCompactEligible != nil && *snapshot.Facts.ManualCompactEligible
 	return chatcontext.Project(chatcontext.ProjectionInput{
-		Policy:                   chatcontext.ResolvePolicy(current.Settings, capabilities, snapshot.Meta.Locked),
+		Policy:                   chatcontext.ResolvePolicy(current.Settings, provider.Capabilities, snapshot.Meta.Locked),
 		UsedTokens:               usedTokens,
 		AutoCompactionEnabled:    current.AutoCompactionEnabled,
 		CompletedCompactionCount: completedCount,

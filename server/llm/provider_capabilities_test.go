@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -9,6 +10,92 @@ import (
 	"core/server/session"
 	"core/shared/config"
 )
+
+type effectiveProviderAuthReader struct {
+	state auth.State
+	err   error
+	calls int
+}
+
+func (r *effectiveProviderAuthReader) Load(context.Context) (auth.State, error) {
+	r.calls++
+	return r.state, r.err
+}
+
+func TestResolveEffectiveProviderCapabilitiesOwnsPrecedenceAndAuthLoading(t *testing.T) {
+	t.Run("effective auth derives unlocked capabilities", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{state: auth.State{
+			Method: auth.Method{Type: auth.MethodOAuth},
+		}}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{Model: "gpt-5.6-sol"},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 1 || got.AuthState.Method.Type != auth.MethodOAuth ||
+			got.Capabilities.ProviderID != "chatgpt-codex" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("explicit capabilities bypass failing auth", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{err: errors.New("auth unavailable")}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID: "custom",
+			}},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 0 || got.AuthState.Method.Type != auth.MethodNone ||
+			got.Capabilities.ProviderID != "custom" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("locked capabilities take precedence over settings and auth", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{err: errors.New("auth unavailable")}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+				ProviderID: "locked",
+			}},
+			config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID: "configured",
+			}},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 0 || got.Capabilities.ProviderID != "locked" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("missing reader is effective no auth", func(t *testing.T) {
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{Model: "gpt-5.6-sol"},
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if got.AuthState.Method.Type != auth.MethodNone || got.Capabilities.ProviderID != "openai" {
+			t.Fatalf("resolution = %+v, want no-auth OpenAI", got)
+		}
+	})
+}
 
 func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	openai, err := InferProviderCapabilities("openai")

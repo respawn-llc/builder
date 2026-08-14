@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
 )
 
-func TestStarterLoadsEffectiveAuthUntilProviderContractIsEstablished(t *testing.T) {
+func TestStarterResolvesEffectiveProviderUntilCapabilitiesAreEstablished(t *testing.T) {
 	manager := auth.NewManager(auth.NewMemoryStore(auth.State{
 		Method: auth.Method{
 			Type:  auth.MethodOAuth,
@@ -18,31 +19,37 @@ func TestStarterLoadsEffectiveAuthUntilProviderContractIsEstablished(t *testing.
 	}), nil, time.Now)
 	starter := &Starter{authManager: manager}
 
-	state, err := starter.loadEffectiveAuthState(t.Context(), &session.LockedContract{}, config.Settings{})
-	if err != nil {
-		t.Fatalf("loadEffectiveAuthState without provider contract: %v", err)
-	}
-	if state.Method.Type != auth.MethodOAuth {
-		t.Fatalf("effective auth method = %q, want OAuth", state.Method.Type)
-	}
-
-	state, err = starter.loadEffectiveAuthState(t.Context(), &session.LockedContract{
-		ProviderContract: session.LockedProviderCapabilities{ProviderID: "chatgpt-codex"},
-	}, config.Settings{})
-	if err != nil {
-		t.Fatalf("loadEffectiveAuthState with provider contract: %v", err)
-	}
-	if state.Method.Type != auth.MethodNone {
-		t.Fatalf("established provider contract auth method = %q, want no auth read", state.Method.Type)
-	}
-
-	state, err = starter.loadEffectiveAuthState(t.Context(), nil, config.Settings{
-		ProviderCapabilities: config.ProviderCapabilitiesOverride{ProviderID: "custom"},
+	provider, err := starter.resolveEffectiveProviderCapabilities(t.Context(), launch.SessionPlan{
+		Locked: &session.LockedContract{},
 	})
 	if err != nil {
-		t.Fatalf("loadEffectiveAuthState with explicit provider capabilities: %v", err)
+		t.Fatalf("resolveEffectiveProviderCapabilities without provider contract: %v", err)
 	}
-	if state.Method.Type != auth.MethodNone {
-		t.Fatalf("explicit provider capabilities auth method = %q, want no auth read", state.Method.Type)
+	if provider.AuthState.Method.Type != auth.MethodOAuth || provider.Capabilities.ProviderID != "chatgpt-codex" {
+		t.Fatalf("effective provider = %+v, want OAuth-derived chatgpt-codex", provider)
+	}
+
+	provider, err = starter.resolveEffectiveProviderCapabilities(t.Context(), launch.SessionPlan{
+		Locked: &session.LockedContract{
+			ProviderContract: session.LockedProviderCapabilities{ProviderID: "chatgpt-codex"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveEffectiveProviderCapabilities with provider contract: %v", err)
+	}
+	if provider.AuthState.Method.Type != auth.MethodNone || provider.Capabilities.ProviderID != "chatgpt-codex" {
+		t.Fatalf("locked provider = %+v, want locked capabilities without auth", provider)
+	}
+
+	provider, err = starter.resolveEffectiveProviderCapabilities(t.Context(), launch.SessionPlan{
+		ActiveSettings: config.Settings{
+			ProviderCapabilities: config.ProviderCapabilitiesOverride{ProviderID: "custom"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resolveEffectiveProviderCapabilities with explicit provider capabilities: %v", err)
+	}
+	if provider.AuthState.Method.Type != auth.MethodNone || provider.Capabilities.ProviderID != "custom" {
+		t.Fatalf("explicit provider = %+v, want explicit capabilities without auth", provider)
 	}
 }

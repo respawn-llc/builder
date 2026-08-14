@@ -582,9 +582,9 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, disposable, err
 		}
 		thinkingMutation := workflowThinkingMutationFor(input, selection)
-		authState, authErr := s.loadEffectiveAuthState(ctx, plan.Locked, plan.ActiveSettings)
-		if authErr != nil {
-			return launch.SessionPlan{}, disposable, authErr
+		provider, providerErr := s.resolveEffectiveProviderCapabilities(ctx, plan)
+		if providerErr != nil {
+			return launch.SessionPlan{}, disposable, providerErr
 		}
 		if thinkingMutation.Kind() != launch.WorkflowThinkingMutationUnchanged {
 			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
@@ -593,7 +593,7 @@ func (s *Starter) planCurrentNodeSession(
 					plan,
 					store,
 					serverapi.RunPromptOverrides{},
-					authState,
+					provider.AuthState,
 					launch.RunPromptOverrideOptions{WorkflowThinking: thinkingMutation},
 				)
 				return applyErr
@@ -601,8 +601,7 @@ func (s *Starter) planCurrentNodeSession(
 				return launch.SessionPlan{}, disposable, err
 			}
 		}
-		plan, err = launch.ApplyContextPolicy(plan, authState)
-		return plan, disposable, err
+		return launch.ApplyContextPolicy(plan, provider.Capabilities), disposable, nil
 	}
 	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
 		return launch.SessionPlan{}, disposable, err
@@ -626,7 +625,7 @@ func (s *Starter) planCurrentNodeSession(
 	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
 		overrides = workflowPromptOverrides(selection.Assignee)
 	}
-	authState, err := s.loadEffectiveAuthState(ctx, plan.Locked, plan.ActiveSettings)
+	provider, err := s.resolveEffectiveProviderCapabilities(ctx, plan)
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
@@ -636,7 +635,7 @@ func (s *Starter) planCurrentNodeSession(
 			plan,
 			store,
 			overrides,
-			authState,
+			provider.AuthState,
 			options,
 		)
 		return applyErr
@@ -644,24 +643,32 @@ func (s *Starter) planCurrentNodeSession(
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	plan, err = launch.ApplyContextPolicy(plan, authState)
-	return plan, disposable, err
+	if policy.assignee == currentNodeSessionAssigneeEstablishTarget {
+		provider, err = s.resolveEffectiveProviderCapabilities(ctx, plan)
+		if err != nil {
+			return launch.SessionPlan{}, disposable, err
+		}
+	}
+	return launch.ApplyContextPolicy(plan, provider.Capabilities), disposable, nil
 }
 
 func (s *Starter) applyContextPolicy(ctx context.Context, plan launch.SessionPlan) (launch.SessionPlan, error) {
-	authState, err := s.loadEffectiveAuthState(ctx, plan.Locked, plan.ActiveSettings)
+	provider, err := s.resolveEffectiveProviderCapabilities(ctx, plan)
 	if err != nil {
 		return launch.SessionPlan{}, err
 	}
-	return launch.ApplyContextPolicy(plan, authState)
+	return launch.ApplyContextPolicy(plan, provider.Capabilities), nil
 }
 
-func (s *Starter) loadEffectiveAuthState(ctx context.Context, locked *session.LockedContract, settings config.Settings) (auth.State, error) {
-	_, capabilitiesConfigured := llm.ProviderCapabilitiesFromLockedOrOverride(locked, settings.ProviderCapabilities)
-	if capabilitiesConfigured || s.authManager == nil {
-		return auth.EmptyState(), nil
+func (s *Starter) resolveEffectiveProviderCapabilities(
+	ctx context.Context,
+	plan launch.SessionPlan,
+) (llm.EffectiveProviderResolution, error) {
+	var authStates llm.EffectiveAuthStateReader
+	if s.authManager != nil {
+		authStates = s.authManager
 	}
-	return s.authManager.Load(ctx)
+	return llm.ResolveEffectiveProviderCapabilities(ctx, plan.Locked, plan.ActiveSettings, authStates)
 }
 
 type currentNodeSessionAssigneePolicy = workflow.AssigneeSessionPolicy
