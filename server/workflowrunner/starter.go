@@ -41,6 +41,7 @@ const (
 
 type RuntimeStore interface {
 	ResolveCurrentNodeStartContext(context.Context, workflow.CurrentNodeReference) (workflowstore.CurrentNodeStartContext, error)
+	ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 	BindSessionToCurrentNode(context.Context, workflowstore.CurrentNodeSessionBindingRequest) (workflowstore.CurrentNodeSessionBindingAuthority, error)
 	ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 	CountTaskComments(context.Context, workflow.TaskID) (int64, error)
@@ -250,6 +251,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 ) {
 	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
 	steers := make(map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer, len(inputs))
+	restoreContexts := make(map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext)
 	var diagnostics []error
 	cleanupPrepared := func(cause error) error {
 		for _, steer := range steers {
@@ -257,7 +259,14 @@ func (s *Starter) PrepareManualMoveAssignments(
 				cause = assignment.cleanupUncommitted(cause)
 			}
 		}
+		for _, input := range restoreContexts {
+			cause = errors.Join(cause, s.restoreManualMoveOriginAssignment(ctx, input))
+		}
 		return cause
+	}
+	originBySession, err := s.manualMoveOriginContextsBySession(ctx, inputs)
+	if err != nil {
+		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 	}
 	for _, input := range inputs {
 		if input.Node.Kind == workflow.NodeKindScript {
@@ -290,12 +299,64 @@ func (s *Starter) PrepareManualMoveAssignments(
 			CurrentNode: input.CurrentNode.Reference,
 			SessionID:   assignment.SessionID(),
 		})
+		if origin, exists := originBySession[assignment.SessionID()]; exists {
+			restoreContexts[assignment.SessionID()] = origin
+		}
 	}
 	return workflowstore.ManualMoveTargetAssignmentPreparation{
 		Assignments: assignments,
 		Diagnostic:  errors.Join(diagnostics...),
 		Abort:       cleanupPrepared,
 	}, steers, nil
+}
+
+func (s *Starter) manualMoveOriginContextsBySession(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext, error) {
+	result := make(map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext)
+	if len(inputs) == 0 {
+		return result, nil
+	}
+	currentNodes, err := s.store.ListCurrentNodes(ctx, inputs[0].Task.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.SessionID == nil {
+			continue
+		}
+		input, err := s.store.ResolveCurrentNodeStartContext(ctx, currentNode.Reference)
+		if err != nil {
+			return nil, err
+		}
+		if input.Node.Kind == workflow.NodeKindAgent {
+			result[*currentNode.SessionID] = input
+		}
+	}
+	return result, nil
+}
+
+func (s *Starter) restoreManualMoveOriginAssignment(
+	ctx context.Context,
+	input workflowstore.CurrentNodeStartContext,
+) error {
+	restoreCtx := context.WithoutCancel(ctx)
+	prepared, err := s.prepareCurrentNodeAgentAssignment(restoreCtx, input, false)
+	if err != nil {
+		return fmt.Errorf("restore Manual Move origin %v assignment: %w", input.CurrentNode.Reference, err)
+	}
+	receipt, waitErr := prepared.Wait(restoreCtx)
+	if !receipt.Committed {
+		if assignment, ok := prepared.(*currentNodeAgentAssignmentSteer); ok {
+			waitErr = assignment.cleanupUncommitted(waitErr)
+		}
+		return errors.Join(
+			fmt.Errorf("restore Manual Move origin %v assignment was not committed", input.CurrentNode.Reference),
+			waitErr,
+		)
+	}
+	return waitErr
 }
 
 type currentNodeAgentAssignmentSteer struct {

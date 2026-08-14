@@ -1328,6 +1328,7 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 	if err != nil || before.Meta == nil {
 		t.Fatalf("resolve retained Session before Manual Move: %+v, %v", before, err)
 	}
+	beforeAssignments := f.workflowAssignmentRecordCount(t, sessionID)
 	definition, _, err := f.store.GetDefinition(context.Background(), workflowID)
 	if err != nil {
 		t.Fatalf("GetDefinition: %v", err)
@@ -1363,6 +1364,13 @@ func TestManualMoveRetainedSessionPreparationFailureRestoresPromptFacingMetadata
 		before.Meta.PromptCacheLineageGeneration != after.Meta.PromptCacheLineageGeneration ||
 		!reflect.DeepEqual(before.Meta.Locked, after.Meta.Locked) {
 		t.Fatalf("retained Session prompt-facing metadata changed after rejected Manual Move:\nbefore=%+v\nafter=%+v", before.Meta, after.Meta)
+	}
+	if assignments := f.workflowAssignmentRecordCount(t, sessionID); assignments != beforeAssignments+2 {
+		t.Fatalf(
+			"retained Session assignments after rejected Manual Move = %d, want target plus origin restoration after %d existing",
+			assignments,
+			beforeAssignments,
+		)
 	}
 }
 
