@@ -2185,7 +2185,24 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 }
 
 func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
-	f := newCurrentNodeRunnerFixture(t, ScriptedFinalAnswer(`{"commentary":"done"}`))
+	responseStarted := make(chan struct{})
+	responseRelease := make(chan struct{})
+	var releaseResponse sync.Once
+	t.Cleanup(func() {
+		releaseResponse.Do(func() { close(responseRelease) })
+	})
+	f := newCurrentNodeRunnerFixture(t, ScriptedRuntimeStep{
+		BeforeResponse: func(ctx context.Context) error {
+			close(responseStarted)
+			select {
+			case <-responseRelease:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		},
+		Response: ScriptedFinalAnswer(`{"commentary":"done"}`).Response,
+	})
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
@@ -2222,6 +2239,11 @@ func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testin
 	}
 	f.waitForModelRequests(t, 1)
 	f.waitForWorkflowExecution(t, currentNode.Reference)
+	select {
+	case <-responseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("resumed Agent did not begin its model response")
+	}
 	resumed := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].Reference.Equal(currentNode.Reference) &&
@@ -2231,6 +2253,7 @@ func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testin
 		resumed[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
 		t.Fatalf("resumed Current Node remained interrupted: %+v", resumed[0].Scheduling)
 	}
+	releaseResponse.Do(func() { close(responseRelease) })
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
