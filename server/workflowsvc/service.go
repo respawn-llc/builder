@@ -580,25 +580,25 @@ func (s *Service) PreviewWorkflowGraphSave(ctx context.Context, req serverapi.Wo
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowGraphSavePreviewResponse{}, err
 	}
-	result, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
-		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
-		}
-		if currentVersion != req.ExpectedVersion {
-			return workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion), nil
-		}
+	currentVersion, err := s.workflowGraphSaveCurrentVersion(ctx, req.WorkflowID)
+	if err != nil {
+		return serverapi.WorkflowGraphSavePreviewResponse{}, err
+	}
+	var result workflowstore.WorkflowGraphSaveResult
+	if currentVersion != req.ExpectedVersion {
+		result = workflowstore.WorkflowGraphSaveVersionChangedResult(currentVersion)
+	} else {
 		if err := req.Validate(); err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
+			return serverapi.WorkflowGraphSavePreviewResponse{}, err
 		}
 		storeRequest, err := workflowGraphStoreSaveRequest(req.WorkflowID, req.ExpectedVersion, req.Metadata, req.Graph, nil)
 		if err != nil {
-			return workflowstore.WorkflowGraphSaveResult{}, err
+			return serverapi.WorkflowGraphSavePreviewResponse{}, err
 		}
-		return s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
-	})
-	if err != nil {
-		return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
+		result, err = s.store.PreviewWorkflowGraphSave(ctx, storeRequest)
+		if err != nil {
+			return serverapi.WorkflowGraphSavePreviewResponse{}, workflowGraphSaveError(err)
+		}
 	}
 	resp := workflowGraphSavePreviewResponse(result, workflowGraphSaveValidationResponses(result))
 	if err := resp.Validate(); err != nil {
