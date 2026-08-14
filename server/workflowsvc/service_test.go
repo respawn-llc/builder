@@ -350,7 +350,7 @@ func TestServiceTaskStartRequiresSelectionWithoutApplyingAction(t *testing.T) {
 }
 
 func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -360,6 +360,7 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
 	execution := newManualMoveExecutionStub(service)
+	execution.manualMoveAssignments = workflowServiceTestManualMoveAssignments(t, metadataStore)
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
@@ -588,7 +589,7 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 }
 
 func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "next")
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -599,6 +600,7 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "implement")
 	execution := newManualMoveExecutionStub(service)
+	execution.manualMoveAssignments = workflowServiceTestManualMoveAssignments(t, metadataStore)
 	service.currentNodeExecution = execution
 	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
 	execution.started = nil
@@ -2143,7 +2145,10 @@ func (r *workflowAttentionRecorder) resolvedApprovalIDs() []workflow.ApprovalID 
 
 func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
 	return &manualMoveExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+		},
 	}
 }
 
@@ -3648,7 +3653,11 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	baseExecution := &currentNodeCompletionExecutionStub{
+		store:                 store,
+		manualMoveAssignments: workflowServiceTestManualMoveAssignments(t, metadataStore),
+	}
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(baseExecution))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

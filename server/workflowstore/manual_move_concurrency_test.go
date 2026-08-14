@@ -40,8 +40,10 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, nil)
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, nil)
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if err := writer.Commit(); err != nil {
@@ -85,8 +87,10 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLock
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, candidate)
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, candidate)
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if err := writer.Commit(); err != nil {
@@ -140,8 +144,10 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if _, err := writer.ExecContext(
@@ -215,8 +221,10 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if _, err := writer.ExecContext(

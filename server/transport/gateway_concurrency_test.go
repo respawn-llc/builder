@@ -92,6 +92,17 @@ func (s gatewayAutomaticFatalSteerer) SteerCurrentNodeAssignment(
 	return nil, s.cause
 }
 
+func (gatewayAutomaticFatalSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
 type gatewayFailingRunner struct {
 	cause error
 }
@@ -114,6 +125,17 @@ func (gatewayCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
 	workflow.CurrentNodeReference,
 ) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	return gatewayCommittedAssignment{}, nil
+}
+
+func (gatewayCommittedAssignmentSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
 }
 
 type gatewayCommittedAssignment struct{}
