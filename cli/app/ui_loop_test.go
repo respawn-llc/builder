@@ -103,7 +103,7 @@ func TestRunUIProgramPropagatesLatchedTerminalFailureWithoutStdoutRetry(t *testi
 	if raw.writes != 2 {
 		t.Fatalf("underlying stdout writes = %d, want failed payload plus one restoration", raw.writes)
 	}
-	if got := string(raw.payloads[1]); got != "\x1b[?1007l\x1b[?1049l\x1b[?25h" {
+	if got := string(raw.payloads[1]); got != "\x1b[?1049l\x1b[?25h" {
 		t.Fatalf("restoration = %q", got)
 	}
 }

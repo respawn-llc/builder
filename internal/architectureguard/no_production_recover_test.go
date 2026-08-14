@@ -28,7 +28,11 @@ func TestCheckNoProductionRecoverAllowsTestCall(t *testing.T) {
 
 func writeGuardFixture(t *testing.T, root string, name string, content string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o600); err != nil {
+	filename := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(filename), 0o700); err != nil {
+		t.Fatalf("create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(filename, []byte(content), 0o600); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 }

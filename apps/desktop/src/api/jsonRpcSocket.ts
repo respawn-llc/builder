@@ -41,6 +41,7 @@ const subscriptionCompleteParamsSchema = z
   })
   .strict();
 const textFrameSchema = z.string();
+type SubscriptionNotification = z.infer<typeof notificationSchema>;
 
 export async function openSocket(
   endpoint: string,
@@ -278,6 +279,12 @@ export type SubscriptionMessageResult = Readonly<
   | { kind: "terminal_failure"; error: Error }
 >;
 
+type DecodedSubscriptionFrame = Readonly<
+  | { kind: "notification"; notification: SubscriptionNotification }
+  | { kind: "response" }
+  | { kind: "terminal_failure"; error: Error }
+>;
+
 export function subscriptionCompleteMethod(subscriptionMethod: string): string | null {
   switch (subscriptionMethod) {
     case "workflow.subscribe":
@@ -298,6 +305,17 @@ export function handleSubscriptionMessage(
   handler: RpcEventHandler,
   completeMethod: string | null,
 ): SubscriptionMessageResult {
+  const decoded = decodeSubscriptionFrame(event);
+  if (decoded.kind !== "notification") {
+    return decoded.kind === "response" ? { kind: "active" } : decoded;
+  }
+  if (completeMethod !== null && decoded.notification.method === completeMethod) {
+    return handleSubscriptionCompletion(decoded.notification.params, handler);
+  }
+  return handleSubscriptionEvent(decoded.notification, handler);
+}
+
+function decodeSubscriptionFrame(event: MessageEvent<unknown>): DecodedSubscriptionFrame {
   const textFrame = textFrameSchema.safeParse(event.data);
   if (!textFrame.success) {
     return {
@@ -315,37 +333,48 @@ export function handleSubscriptionMessage(
     };
   }
   const notification = notificationSchema.safeParse(parsed);
-  if (!notification.success) {
-    if (responseSchema.safeParse(parsed).success) {
-      return { kind: "active" };
-    }
+  if (notification.success) {
+    return { kind: "notification", notification: notification.data };
+  }
+  if (responseSchema.safeParse(parsed).success) {
+    return { kind: "response" };
+  }
+  return {
+    kind: "terminal_failure",
+    error: new ContractError("Subscription received a frame outside the JSON-RPC contract."),
+  };
+}
+
+function handleSubscriptionCompletion(
+  params: unknown,
+  handler: RpcEventHandler,
+): SubscriptionMessageResult {
+  const complete = subscriptionCompleteParamsSchema.safeParse(params ?? {});
+  if (!complete.success) {
     return {
       kind: "terminal_failure",
-      error: new ContractError("Subscription received a frame outside the JSON-RPC contract."),
+      error: new ContractError("Subscription completion did not match the JSON-RPC contract."),
     };
   }
-  if (completeMethod !== null && notification.data.method === completeMethod) {
-    const complete = subscriptionCompleteParamsSchema.safeParse(notification.data.params ?? {});
-    if (!complete.success) {
-      return {
-        kind: "terminal_failure",
-        error: new ContractError("Subscription completion did not match the JSON-RPC contract."),
-      };
-    }
-    const code = complete.data.code ?? 0;
-    const message = complete.data.message ?? "";
-    try {
-      handler.onComplete(code, message);
-    } catch (error) {
-      return {
-        kind: "terminal_failure",
-        error: error instanceof Error ? error : new ContractError("Subscription completion handler failed."),
-      };
-    }
-    return { kind: "complete", code, message };
-  }
+  const code = complete.data.code ?? 0;
+  const message = complete.data.message ?? "";
   try {
-    const handlerError = handler.onEvent(notification.data.method, notification.data.params);
+    handler.onComplete(code, message);
+  } catch (error) {
+    return {
+      kind: "terminal_failure",
+      error: error instanceof Error ? error : new ContractError("Subscription completion handler failed."),
+    };
+  }
+  return { kind: "complete", code, message };
+}
+
+function handleSubscriptionEvent(
+  notification: SubscriptionNotification,
+  handler: RpcEventHandler,
+): SubscriptionMessageResult {
+  try {
+    const handlerError = handler.onEvent(notification.method, notification.params);
     if (handlerError instanceof Error) {
       return { kind: "terminal_failure", error: handlerError };
     }

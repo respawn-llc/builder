@@ -309,7 +309,7 @@ async function handleNativeDeliveryError({
 }
 
 function appDebugModeEnabled(): boolean {
-  const configured = import.meta.env.KENT_DEBUG;
+  const configured: unknown = import.meta.env.KENT_DEBUG;
   if (configured === true || configured === "true" || configured === "1") {
     return true;
   }

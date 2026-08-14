@@ -76,8 +76,7 @@ func (w *uiTerminalOutput) Restore() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	_, _ = w.out.Write([]byte(
-		"\x1b[?1007l" +
-			xansi.ResetModeAltScreenSaveCursor +
+		xansi.ResetModeAltScreenSaveCursor +
 			xansi.ShowCursor,
 	))
 }
