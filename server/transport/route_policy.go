@@ -128,24 +128,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		_, err := e.gateway.activeProjectID(ctx, state)
 		return err
 	case rpccontract.ScopeProjectWorkspaceBinding:
-		activeProjectID, err := e.gateway.activeProjectID(ctx, state)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(scopeParams.projectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		if strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(scopeParams.workspaceID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		binding, err := e.gateway.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, scopeParams.workspaceID)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
-			return serverapi.ErrWorkspaceNotRegistered
-		}
-		return nil
+		return errors.New("Project Workspace binding scope requires typed authorization")
 	case rpccontract.ScopeAttachSession:
 		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
 		return err
@@ -157,7 +140,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		}
 		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
 	case rpccontract.ScopeSessionAttachedProject:
-		return e.gateway.requireSessionInAttachedProject(ctx, state, scopeParams.sessionID)
+		return errors.New("Session attached-Project scope requires a typed constraint")
 	case rpccontract.ScopeAttachedSession:
 		if state.attachedSession == nil || state.attachedSession.String() != scopeParams.sessionID {
 			return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
@@ -168,8 +151,7 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeRuntimeLiveSessionOptional:
 		return nil
 	case rpccontract.ScopeProcessActiveProject:
-		_, err := e.gateway.processInActiveProject(ctx, state, scopeParams.processID)
-		return err
+		return errors.New("Process active-Project scope requires typed authorization")
 	case rpccontract.ScopeProcessListActiveProject:
 		if strings.TrimSpace(scopeParams.ownerSessionID) != "" {
 			return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.ownerSessionID)
@@ -407,45 +389,99 @@ func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectio
 	return g.requireSessionInActiveProject(ctx, state, sessionID)
 }
 
-func (g *Gateway) requireRuntimeLiveSession(ctx context.Context, sessionID string) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return serverapi.ErrRuntimeUnavailable
+func authorizeSessionActiveProject[Req any](
+	sessionID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
+		activeProjectID, err := g.activeProjectID(ctx, state)
+		if err != nil {
+			return rpccontract.AuthorizedSessionInActiveProject{}, err
+		}
+		metadataStore := g.deps.MetadataStore()
+		if metadataStore == nil {
+			return rpccontract.AuthorizedSessionInActiveProject{}, errors.New("metadata store is required")
+		}
+		resolved, err := metadataStore.ResolveActiveProjectSession(ctx, sessionID(validated.Value()))
+		if err != nil {
+			return rpccontract.AuthorizedSessionInActiveProject{}, err
+		}
+		if resolved.OwningProjectID != strings.TrimSpace(activeProjectID) {
+			return rpccontract.AuthorizedSessionInActiveProject{}, sessionOutsideActiveProjectError{
+				sessionID: resolved.SessionID.String(),
+			}
+		}
+		return rpccontract.AuthorizedSessionInActiveProject{
+			SessionID:       resolved.SessionID,
+			ActiveProjectID: strings.TrimSpace(activeProjectID),
+			OwningProjectID: resolved.OwningProjectID,
+			ExecutionTarget: resolved.ExecutionTarget,
+		}, nil
 	}
-	metadataStore := g.deps.MetadataStore()
-	if metadataStore == nil {
-		return serverapi.ErrRuntimeUnavailable
-	}
-	if _, err := metadataStore.ResolvePersistedSession(ctx, trimmedSessionID); err != nil {
-		return fmt.Errorf("%w: %w", serverapi.ErrRuntimeUnavailable, err)
-	}
-	return nil
 }
 
-func (g *Gateway) requireSessionInAttachedProject(ctx context.Context, state *connectionState, sessionID string) error {
-	projectID := strings.TrimSpace(state.attachedProject)
-	if projectID == "" {
-		return nil
+func authorizeOptionalSessionActiveProject[Req any](
+	sessionID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.OptionalAuthorizedSessionInActiveProject, error) {
+	required := authorizeSessionActiveProject(sessionID)
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated rpccontract.Validated[Req]) (rpccontract.OptionalAuthorizedSessionInActiveProject, error) {
+		if strings.TrimSpace(sessionID(validated.Value())) == "" {
+			return rpccontract.AbsentAuthorizedSessionInActiveProject(), nil
+		}
+		authorization, err := required(ctx, g, state, validated)
+		if err != nil {
+			return rpccontract.OptionalAuthorizedSessionInActiveProject{}, err
+		}
+		return rpccontract.PresentAuthorizedSessionInActiveProject(authorization), nil
 	}
-	return g.deps.SessionBelongsToProject(ctx, sessionID, projectID)
 }
 
-func (g *Gateway) processInActiveProject(ctx context.Context, state *connectionState, processID string) (serverapi.ProcessGetResponse, error) {
-	resp, err := g.deps.ProcessViewClient().GetProcess(ctx, serverapi.ProcessGetRequest{ProcessID: processID})
+func authorizeProcessActiveProject[Req any](
+	processID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.AuthorizedProcessInActiveProject, error) {
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated rpccontract.Validated[Req]) (rpccontract.AuthorizedProcessInActiveProject, error) {
+		resolver, ok := g.deps.ProcessViewClient().(rpccontract.ProcessViewTrustedService)
+		if !ok {
+			return rpccontract.AuthorizedProcessInActiveProject{}, errors.New("Process View trusted service is required")
+		}
+		candidate, err := resolver.ResolveProcessAuthorization(ctx, processID(validated.Value()))
+		if err != nil {
+			return rpccontract.AuthorizedProcessInActiveProject{}, err
+		}
+		if strings.TrimSpace(candidate.OwnerSessionID) == "" {
+			return rpccontract.AuthorizedProcessInActiveProject{}, fmt.Errorf("process %q not available", candidate.ProcessID)
+		}
+		if err := g.requireSessionInActiveProject(ctx, state, candidate.OwnerSessionID); err != nil {
+			return rpccontract.AuthorizedProcessInActiveProject{}, err
+		}
+		return rpccontract.AuthorizedProcessInActiveProject{
+			ProcessID:      candidate.ProcessID,
+			OwnerSessionID: candidate.OwnerSessionID,
+			Process:        candidate.Process,
+		}, nil
+	}
+}
+
+func (g *Gateway) authorizeProjectWorkspaceBinding(ctx context.Context, state *connectionState, req serverapi.WorktreeWorkspaceListRequest) (rpccontract.AuthorizedProjectWorkspaceBinding, error) {
+	activeProjectID, err := g.activeProjectID(ctx, state)
 	if err != nil {
-		return serverapi.ProcessGetResponse{}, err
+		return rpccontract.AuthorizedProjectWorkspaceBinding{}, err
 	}
-	if resp.Process == nil {
-		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
+	if strings.TrimSpace(req.ProjectID) != strings.TrimSpace(activeProjectID) ||
+		strings.TrimSpace(state.attachedWorkspaceID) != strings.TrimSpace(req.WorkspaceID) {
+		return rpccontract.AuthorizedProjectWorkspaceBinding{}, serverapi.ErrWorkspaceNotRegistered
 	}
-	ownerSessionID := strings.TrimSpace(resp.Process.OwnerSessionID)
-	if ownerSessionID == "" {
-		return serverapi.ProcessGetResponse{}, fmt.Errorf("process %q not available", strings.TrimSpace(processID))
+	binding, err := g.deps.MetadataStore().LookupWorkspaceBindingByID(ctx, req.WorkspaceID)
+	if err != nil {
+		return rpccontract.AuthorizedProjectWorkspaceBinding{}, err
 	}
-	if err := g.requireSessionInActiveProject(ctx, state, ownerSessionID); err != nil {
-		return serverapi.ProcessGetResponse{}, err
+	if strings.TrimSpace(binding.ProjectID) != strings.TrimSpace(activeProjectID) {
+		return rpccontract.AuthorizedProjectWorkspaceBinding{}, serverapi.ErrWorkspaceNotRegistered
 	}
-	return resp, nil
+	return rpccontract.AuthorizedProjectWorkspaceBinding{
+		ProjectID:     binding.ProjectID,
+		WorkspaceID:   binding.WorkspaceID,
+		CanonicalRoot: binding.CanonicalRoot,
+	}, nil
 }
 
 func (g *Gateway) filterProcessesForActiveProject(ctx context.Context, state *connectionState, processes []clientui.BackgroundProcess) ([]clientui.BackgroundProcess, error) {

@@ -763,12 +763,6 @@ func (d *startupGatewayDependencies) WorkflowClient() apicontract.WorkflowServic
 	}
 	return nil
 }
-func (d *startupGatewayDependencies) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) error {
-	if c := d.activeCore(); c != nil {
-		return c.SessionBelongsToProject(ctx, sessionID, projectID)
-	}
-	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-}
 func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionViewService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionViewClient()

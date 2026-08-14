@@ -288,30 +288,139 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return launchClient.MaterializeWorkspaceChat(ctx, params)
 		})
 	},
-	protocol.MethodSessionGetMainView:                            gatewayClientCall[apicontract.SessionViewService, serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionMainView),
-	protocol.MethodSessionGetTranscriptPage:                      gatewayClientCall[apicontract.SessionViewService, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionTranscriptPage),
-	protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer: gatewayClientCall[apicontract.SessionViewService, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetLatestCommittedAssistantFinalAnswer),
+	protocol.MethodSessionGetMainView: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionMainViewRequest]) (serverapi.SessionMainViewResponse, error) {
+			authorization, err := authorizeSessionActiveProject(func(request serverapi.SessionMainViewRequest) string { return request.SessionID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionMainViewResponse{}, err
+			}
+			trusted, ok := g.deps.SessionViewClient().(apicontract.SessionMainViewTrustedService)
+			if !ok {
+				return serverapi.SessionMainViewResponse{}, errors.New("Session View trusted service is required")
+			}
+			return trusted.GetSessionMainViewValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodSessionGetTranscriptPage: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionTranscriptPageRequest]) (serverapi.SessionTranscriptPageResponse, error) {
+			authorization, err := authorizeSessionActiveProject(func(request serverapi.SessionTranscriptPageRequest) string { return request.SessionID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionTranscriptPageResponse{}, err
+			}
+			trusted, ok := g.deps.SessionViewClient().(apicontract.SessionTranscriptPageTrustedService)
+			if !ok {
+				return serverapi.SessionTranscriptPageResponse{}, errors.New("Session View trusted service is required")
+			}
+			return trusted.GetSessionTranscriptPageValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionLatestCommittedAssistantFinalAnswerRequest]) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error) {
+			authorization, err := authorizeSessionActiveProject(func(request serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) string {
+				return request.SessionID
+			})(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
+			}
+			trusted, ok := g.deps.SessionViewClient().(apicontract.SessionFinalAnswerTrustedService)
+			if !ok {
+				return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errors.New("Session View trusted service is required")
+			}
+			return trusted.GetLatestCommittedAssistantFinalAnswerValidated(ctx, validated, authorization)
+		})
+	},
 	protocol.MethodSessionGetExecutionEnvironment: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := g.sessionExecutionRequestContract.Decode(req.Params)
 		if err != nil {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
 		}
-		if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
-			return responseForError(req.ID, err)
-		}
-		response, err := g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
+		response, err := apicontract.WithValidated(params, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.SessionExecutionEnvironmentRequest]) (serverapi.SessionExecutionEnvironmentResponse, error) {
+			authorization, err := authorizeSessionActiveProject(func(request serverapi.SessionExecutionEnvironmentRequest) string { return request.SessionID.String() })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
+			}
+			trusted, ok := g.deps.SessionViewClient().(apicontract.SessionExecutionEnvironmentTrustedService)
+			if !ok {
+				return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: errors.New("Session View trusted service is required")}
+			}
+			response, err := trusted.GetSessionExecutionEnvironmentValidated(ctx, validated, authorization)
+			if err != nil {
+				return serverapi.SessionExecutionEnvironmentResponse{}, validatedOwnerError{cause: err}
+			}
+			return response, nil
+		})
 		if err != nil {
-			return responseForError(req.ID, err)
+			return responseForValidationOrOwnerError(req.ID, err)
 		}
 		return protocol.NewSuccessResponse(req.ID, response)
 	},
-	protocol.MethodSessionGetInitialInput:      gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
-	protocol.MethodSessionPersistInputDraft:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),
-	protocol.MethodSessionRetargetWorkspace:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionRetargetWorkspaceRequest, serverapi.SessionRetargetWorkspaceResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.RetargetSessionWorkspace),
-	protocol.MethodSessionResolveTransition:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionResolveTransitionRequest, serverapi.SessionResolveTransitionResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.ResolveTransition),
-	protocol.MethodWorktreeStatus:              gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.GetWorktreeStatus),
-	protocol.MethodWorktreeList:                gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
-	protocol.MethodWorktreeWorkspaceList:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeWorkspaceListRequest, serverapi.WorktreeWorkspaceListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorkspaceWorktrees),
+	protocol.MethodSessionGetInitialInput: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionInitialInputRequest]) (serverapi.SessionInitialInputResponse, error) {
+			authorization, err := authorizeOptionalSessionActiveProject(func(request serverapi.SessionInitialInputRequest) string { return request.SessionID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionInitialInputResponse{}, err
+			}
+			trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionInitialInputTrustedService)
+			if !ok {
+				return serverapi.SessionInitialInputResponse{}, errors.New("Session Lifecycle trusted service is required")
+			}
+			return trusted.GetInitialInputValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodSessionPersistInputDraft: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionPersistInputDraftRequest]) (serverapi.SessionPersistInputDraftResponse, error) {
+			authorization, err := authorizeSessionActiveProject(func(request serverapi.SessionPersistInputDraftRequest) string { return request.SessionID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionPersistInputDraftResponse{}, err
+			}
+			trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionPersistInputDraftTrustedService)
+			if !ok {
+				return serverapi.SessionPersistInputDraftResponse{}, errors.New("Session Lifecycle trusted service is required")
+			}
+			return trusted.PersistInputDraftValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodSessionRetargetWorkspace: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionRetargetWorkspaceRequest]) (serverapi.SessionRetargetWorkspaceResponse, error) {
+			constraint := apicontract.AbsentAttachedProjectConstraint()
+			if projectID := strings.TrimSpace(state.attachedProject); projectID != "" {
+				constraint = apicontract.PresentAttachedProjectConstraint(projectID)
+			}
+			trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionRetargetWorkspaceTrustedService)
+			if !ok {
+				return serverapi.SessionRetargetWorkspaceResponse{}, errors.New("Session Lifecycle trusted service is required")
+			}
+			return trusted.RetargetSessionWorkspaceValidated(ctx, validated, constraint)
+		})
+	},
+	protocol.MethodSessionResolveTransition: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionResolveTransitionRequest]) (serverapi.SessionResolveTransitionResponse, error) {
+			authorization, err := authorizeOptionalSessionActiveProject(func(request serverapi.SessionResolveTransitionRequest) string { return request.SessionID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.SessionResolveTransitionResponse{}, err
+			}
+			trusted, ok := g.deps.SessionLifecycleClient().(apicontract.SessionResolveTransitionTrustedService)
+			if !ok {
+				return serverapi.SessionResolveTransitionResponse{}, errors.New("Session Lifecycle trusted service is required")
+			}
+			return trusted.ResolveTransitionValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodWorktreeStatus: gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeStatusRequest, serverapi.WorktreeStatusResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.GetWorktreeStatus),
+	protocol.MethodWorktreeList:   gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeListRequest, serverapi.WorktreeListResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ListWorktrees),
+	protocol.MethodWorktreeWorkspaceList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.WorktreeWorkspaceListRequest]) (serverapi.WorktreeWorkspaceListResponse, error) {
+			authorization, err := g.authorizeProjectWorkspaceBinding(ctx, state, validated.Value())
+			if err != nil {
+				return serverapi.WorktreeWorkspaceListResponse{}, err
+			}
+			trusted, ok := g.deps.WorktreeClient().(apicontract.WorktreeTrustedService)
+			if !ok {
+				return serverapi.WorktreeWorkspaceListResponse{}, errors.New("Worktree trusted service is required")
+			}
+			return trusted.ListWorkspaceWorktreesValidated(ctx, validated, authorization)
+		})
+	},
 	protocol.MethodWorktreeSelectorResolve:     gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeSelectorPreviewRequest, serverapi.WorktreeSelectorPreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeSelector),
 	protocol.MethodWorktreeDeletePreview:       gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeDeletePreviewRequest, serverapi.WorktreeDeletePreviewResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.PreviewWorktreeDelete),
 	protocol.MethodWorktreeCreateTargetResolve: gatewayClientCall[apicontract.WorktreeService, serverapi.WorktreeCreateTargetResolveRequest, serverapi.WorktreeCreateTargetResolveResponse](GatewayDependencies.WorktreeClient, apicontract.WorktreeService.ResolveWorktreeCreateTarget),
@@ -404,12 +513,44 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodProcessGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
-			return g.processInActiveProject(ctx, state, params.ProcessID)
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.ProcessGetRequest]) (serverapi.ProcessGetResponse, error) {
+			authorization, err := authorizeProcessActiveProject(func(request serverapi.ProcessGetRequest) string { return request.ProcessID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.ProcessGetResponse{}, err
+			}
+			trusted, ok := g.deps.ProcessViewClient().(apicontract.ProcessGetTrustedService)
+			if !ok {
+				return serverapi.ProcessGetResponse{}, errors.New("Process View trusted service is required")
+			}
+			return trusted.GetProcessValidated(ctx, validated, authorization)
 		})
 	},
-	protocol.MethodProcessKill:         gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.KillProcess),
-	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
+	protocol.MethodProcessKill: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.ProcessKillRequest]) (serverapi.ProcessKillResponse, error) {
+			authorization, err := authorizeProcessActiveProject(func(request serverapi.ProcessKillRequest) string { return request.ProcessID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.ProcessKillResponse{}, err
+			}
+			trusted, ok := g.deps.ProcessControlClient().(apicontract.ProcessKillTrustedService)
+			if !ok {
+				return serverapi.ProcessKillResponse{}, errors.New("Process Control trusted service is required")
+			}
+			return trusted.KillProcessValidated(ctx, validated, authorization)
+		})
+	},
+	protocol.MethodProcessInlineOutput: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.ProcessInlineOutputRequest]) (serverapi.ProcessInlineOutputResponse, error) {
+			authorization, err := authorizeProcessActiveProject(func(request serverapi.ProcessInlineOutputRequest) string { return request.ProcessID })(ctx, g, state, validated)
+			if err != nil {
+				return serverapi.ProcessInlineOutputResponse{}, err
+			}
+			trusted, ok := g.deps.ProcessControlClient().(apicontract.ProcessInlineOutputTrustedService)
+			if !ok {
+				return serverapi.ProcessInlineOutputResponse{}, errors.New("Process Control trusted service is required")
+			}
+			return trusted.GetInlineOutputValidated(ctx, validated, authorization)
+		})
+	},
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),
 	protocol.MethodPromptAnswerBatch:   gatewayClientCall[apicontract.PromptControlService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](GatewayDependencies.PromptControlClient, apicontract.PromptControlService.AnswerPromptBatch),
 	protocol.MethodApprovalListPending: gatewayClientCall[apicontract.ApprovalViewService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](GatewayDependencies.ApprovalViewClient, apicontract.ApprovalViewService.ListPendingApprovalsBySession),

@@ -80,33 +80,6 @@ func (s *Core) ProjectExists(ctx context.Context, projectID string) error {
 	return err
 }
 
-func (s *Core) SessionBelongsToProject(ctx context.Context, sessionID string, projectID string) error {
-	trimmedSessionID := strings.TrimSpace(sessionID)
-	if trimmedSessionID == "" {
-		return fmt.Errorf("session id is required")
-	}
-	trimmedProjectID := strings.TrimSpace(projectID)
-	if trimmedProjectID == "" {
-		return fmt.Errorf("project id is required")
-	}
-	if s == nil || s.safeBundles().Persistence.metadataStore == nil {
-		return errors.New("metadata store is required")
-	}
-	belongs, err := s.safeBundles().Persistence.metadataStore.SessionBelongsToProject(ctx, trimmedSessionID, trimmedProjectID)
-	if err != nil {
-		return fmt.Errorf(
-			"resolve project membership for session %q in project %q: %w",
-			trimmedSessionID,
-			trimmedProjectID,
-			err,
-		)
-	}
-	if !belongs {
-		return fmt.Errorf("session %q not available", trimmedSessionID)
-	}
-	return nil
-}
-
 func (s *Core) SessionLaunchClientForProject(ctx context.Context, projectID string) (apicontract.SessionLaunchService, error) {
 	return s.SessionLaunchClientForProjectWorkspace(ctx, projectID, s.safeBundles().Projects.cfg.WorkspaceRoot)
 }

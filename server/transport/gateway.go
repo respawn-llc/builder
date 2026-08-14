@@ -92,7 +92,6 @@ type GatewayProjectDependencies interface {
 }
 
 type GatewaySessionDependencies interface {
-	SessionBelongsToProject(context.Context, string, string) error
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
@@ -542,6 +541,52 @@ func decodeValidatedParams[TReq any](req protocol.Request) (TReq, protocol.Respo
 		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error()), true
 	}
 	return params, protocol.Response{}, false
+}
+
+type validatedOwnerError struct{ cause error }
+
+func (e validatedOwnerError) Error() string { return e.cause.Error() }
+func (e validatedOwnerError) Unwrap() error { return e.cause }
+
+func responseForValidationOrOwnerError(id string, err error) protocol.Response {
+	var ownerErr validatedOwnerError
+	if errors.As(err, &ownerErr) {
+		return responseForError(id, ownerErr.cause)
+	}
+	var rpcErr interface {
+		RPCErrorCode() int
+		RPCErrorData() json.RawMessage
+	}
+	if errors.As(err, &rpcErr) {
+		return responseForError(id, err)
+	}
+	return protocol.NewErrorResponse(id, protocol.ErrCodeInvalidParams, err.Error())
+}
+
+func decodeValidatedAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	params, err := decodeParams[TReq](req.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	resp, err := apicontract.WithValidated(params, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[TReq]) (TResp, error) {
+		resp, ownerErr := handler(validated)
+		if ownerErr != nil {
+			return resp, validatedOwnerError{cause: ownerErr}
+		}
+		return resp, nil
+	})
+	if err != nil {
+		return responseForValidationOrOwnerError(req.ID, err)
+	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
+	return protocol.NewSuccessResponse(req.ID, resp)
 }
 
 func decodeAuthorizeAndHandle[TReq any, TResp any](
