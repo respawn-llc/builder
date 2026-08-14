@@ -45,11 +45,7 @@ func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPag
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err
 	}
-	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
-	if err != nil {
-		return serverapi.WorkflowTaskActivityListResponse{}, err
-	}
-	return a.ReadActivity(ctx, req.TaskID, window)
+	return a.ReadActivity(ctx, req.TaskID, workflowOffsetWindowFromValidated(req.Offset, req.Limit))
 }
 
 func (a *Activity) ReadActivity(ctx context.Context, taskID string, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskActivityListResponse, error) {

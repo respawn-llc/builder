@@ -46,7 +46,7 @@ func (s *PromptControlService) AnswerPromptBatch(
 		req,
 		servicecontract.SemanticValidationRequired,
 		func(validated servicecontract.Validated[serverapi.PromptAnswerBatchRequest]) (serverapi.PromptAnswerBatchResponse, error) {
-			return s.AnswerPromptBatchValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{SessionID: req.SessionID})
+			return s.AnswerPromptBatchValidated(ctx, validated, req.SessionID)
 		},
 	)
 }
@@ -54,7 +54,7 @@ func (s *PromptControlService) AnswerPromptBatch(
 func (s *PromptControlService) AnswerPromptBatchValidated(
 	ctx context.Context,
 	validated servicecontract.Validated[serverapi.PromptAnswerBatchRequest],
-	authorization servicecontract.AuthorizedSessionInActiveProject,
+	sessionID runtimeids.SessionID,
 ) (serverapi.PromptAnswerBatchResponse, error) {
 	req := validated.Value()
 	if s == nil || s.prompts == nil {
@@ -85,7 +85,7 @@ func (s *PromptControlService) AnswerPromptBatchValidated(
 		}
 		commands = append(commands, command)
 	}
-	results, err := s.prompts.ResolvePromptBatch(ctx, authorization.SessionID, req.StepID, commands)
+	results, err := s.prompts.ResolvePromptBatch(ctx, sessionID, req.StepID, commands)
 	if err != nil {
 		return serverapi.PromptAnswerBatchResponse{}, err
 	}

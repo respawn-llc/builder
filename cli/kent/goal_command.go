@@ -13,6 +13,7 @@ import (
 	"core/shared/client"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessionenv"
 	"github.com/google/uuid"
@@ -149,7 +150,7 @@ func goalSetSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		defer cancel()
 		resp, err := remote.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: uuid.NewString(), SessionID: target, Objective: objective, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
-			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target.String(), err))
 			return 1
 		}
 		writeGoalMutationText(stdout, resp)
@@ -194,7 +195,7 @@ func goalStatusSubcommand(action string, args []string, stdout io.Writer, stderr
 			resp, callErr = remote.ResumeGoal(ctx, req)
 		}
 		if callErr != nil {
-			fmt.Fprintln(stderr, goalMutationCommandError(target, callErr))
+			fmt.Fprintln(stderr, goalMutationCommandError(target.String(), callErr))
 			return 1
 		}
 		writeGoalMutationText(stdout, resp)
@@ -248,7 +249,7 @@ func goalCompleteSubcommand(args []string, stdout io.Writer, stderr io.Writer) i
 		defer completeCancel()
 		resp, err := remote.CompleteGoal(completeCtx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: actor, RunID: runID, StepID: stepID})
 		if err != nil {
-			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target.String(), err))
 			return 1
 		}
 		writeGoalMutationText(stdout, resp)
@@ -284,7 +285,7 @@ func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 		defer cancel()
 		resp, err := remote.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: uuid.NewString(), SessionID: target, Actor: "user"})
 		if err != nil {
-			fmt.Fprintln(stderr, goalMutationCommandError(target, err))
+			fmt.Fprintln(stderr, goalMutationCommandError(target.String(), err))
 			return 1
 		}
 		writeGoalMutationText(stdout, resp)
@@ -292,15 +293,17 @@ func goalClearSubcommand(args []string, stdout io.Writer, stderr io.Writer) int 
 	})
 }
 
-func resolveGoalCommandSession(sessionFlag string) (sessionID string, agent bool, err error) {
+func resolveGoalCommandSession(sessionFlag string) (sessionID runtimeids.SessionID, agent bool, err error) {
 	if envSessionID, ok := sessionenv.LookupSessionID(os.LookupEnv); ok {
-		return envSessionID, true, nil
+		sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(envSessionID))
+		return sessionID, true, err
 	}
 	trimmed := strings.TrimSpace(sessionFlag)
 	if trimmed == "" {
-		return "", false, errors.New("goal command requires --session outside " + config.Product + " shell commands")
+		return runtimeids.SessionID{}, false, errors.New("goal command requires --session outside " + config.Product + " shell commands")
 	}
-	return trimmed, false, nil
+	sessionID, err = runtimeids.ParseSessionID(trimmed)
+	return sessionID, false, err
 }
 
 func openGoalCommandRemote(ctx context.Context) (goalCommandRemote, error) {

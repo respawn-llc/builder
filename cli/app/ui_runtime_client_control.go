@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"github.com/google/uuid"
@@ -99,8 +100,12 @@ func (c *sessionRuntimeClient) SetQuestionsEnabled(enabled bool) (bool, error) {
 }
 
 func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return nil, err
+	}
 	resp, err := runtimeControlCall(func(ctx context.Context, _ string) (serverapi.RuntimeGoalShowResponse, error) {
-		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: c.sessionID})
+		return c.controls.ShowGoal(ctx, serverapi.RuntimeGoalShowRequest{SessionID: sessionID})
 	})
 	if err != nil {
 		return nil, err
@@ -109,8 +114,12 @@ func (c *sessionRuntimeClient) ShowGoal() (*clientui.RuntimeGoal, error) {
 }
 
 func (c *sessionRuntimeClient) SetGoal(objective string) (clientui.GoalMutationResult, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return clientui.GoalMutationResult{}, err
+	}
 	resp, err := runtimeControlCall(func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
-		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: c.sessionID, Objective: objective, Actor: "user"})
+		return c.controls.SetGoal(ctx, serverapi.RuntimeGoalSetRequest{ClientRequestID: requestID, SessionID: sessionID, Objective: objective, Actor: "user"})
 	})
 	return clientui.GoalMutationResult(resp), err
 }
@@ -134,15 +143,23 @@ func (c *sessionRuntimeClient) CompleteGoal() (clientui.GoalMutationResult, erro
 }
 
 func (c *sessionRuntimeClient) ClearGoal() (clientui.GoalMutationResult, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return clientui.GoalMutationResult{}, err
+	}
 	resp, err := runtimeControlCall(func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
-		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+		return c.controls.ClearGoal(ctx, serverapi.RuntimeGoalClearRequest{ClientRequestID: requestID, SessionID: sessionID, Actor: "user"})
 	})
 	return clientui.GoalMutationResult(resp), err
 }
 
 func (c *sessionRuntimeClient) setGoalStatus(call func(context.Context, serverapi.RuntimeGoalStatusRequest) (serverapi.RuntimeGoalMutationResponse, error)) (clientui.GoalMutationResult, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(c.sessionID))
+	if err != nil {
+		return clientui.GoalMutationResult{}, err
+	}
 	resp, err := runtimeControlCall(func(ctx context.Context, requestID string) (serverapi.RuntimeGoalMutationResponse, error) {
-		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: c.sessionID, Actor: "user"})
+		return call(ctx, serverapi.RuntimeGoalStatusRequest{ClientRequestID: requestID, SessionID: sessionID, Actor: "user"})
 	})
 	return clientui.GoalMutationResult(resp), err
 }

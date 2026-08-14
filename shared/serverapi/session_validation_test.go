@@ -1,8 +1,11 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
+
+	"core/shared/runtimeids"
 )
 
 func TestValidateRequiredSessionID(t *testing.T) {
@@ -31,8 +34,20 @@ func TestValidateScopedSessionID(t *testing.T) {
 }
 
 func TestRuntimeGoalShowRejectsPathLikeSessionID(t *testing.T) {
-	if err := (RuntimeGoalShowRequest{SessionID: "../session"}).Validate(); !errors.Is(err, ErrSessionIDNotSingle) {
-		t.Fatalf("Validate error = %v, want ErrSessionIDNotSingle", err)
+	var request RuntimeGoalShowRequest
+	if err := json.Unmarshal([]byte(`{"session_id":"../session"}`), &request); !errors.Is(err, ErrSessionIDNotSingle) {
+		t.Fatalf("decode error = %v, want ErrSessionIDNotSingle", err)
+	}
+}
+
+func TestRuntimeGoalShowCanonicalizesAcceptedWhitespaceOnce(t *testing.T) {
+	sessionID := runtimeids.NewSessionID()
+	var request RuntimeGoalShowRequest
+	if err := json.Unmarshal([]byte(`{"session_id":"  `+sessionID.String()+`  "}`), &request); err != nil {
+		t.Fatalf("decode padded Session ID: %v", err)
+	}
+	if request.SessionID != sessionID {
+		t.Fatalf("decoded Session ID = %q, want %q", request.SessionID.String(), sessionID.String())
 	}
 }
 

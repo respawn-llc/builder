@@ -161,7 +161,7 @@ func authorizeSessionActiveProject[Req any](
 		if metadataStore == nil {
 			return rpccontract.AuthorizedSessionInActiveProject{}, errors.New("metadata store is required")
 		}
-		resolved, err := metadataStore.ResolveActiveProjectSession(ctx, sessionID(validated.Value()))
+		resolved, err := metadataStore.ResolveActiveProjectSession(ctx, strings.TrimSpace(sessionID(validated.Value())))
 		if err != nil {
 			return rpccontract.AuthorizedSessionInActiveProject{}, err
 		}
@@ -195,20 +195,31 @@ func authorizeOptionalSessionActiveProject[Req any](
 	}
 }
 
-func authorizeGoalSession[Req any](
-	sessionID func(Req) string,
-) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
-	required := authorizeSessionActiveProject(sessionID)
-	return func(ctx context.Context, g *Gateway, state *connectionState, validated rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
-		if strings.TrimSpace(state.attachedProject) != "" || strings.TrimSpace(g.deps.ProjectID()) != "" {
-			return required(ctx, g, state, validated)
-		}
-		parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID(validated.Value())))
+func authorizeGoalSession(
+	ctx context.Context,
+	g *Gateway,
+	state *connectionState,
+	sessionID runtimeids.SessionID,
+) (runtimeids.SessionID, error) {
+	if strings.TrimSpace(state.attachedProject) != "" || strings.TrimSpace(g.deps.ProjectID()) != "" {
+		activeProjectID, err := g.activeProjectID(ctx, state)
 		if err != nil {
-			return rpccontract.AuthorizedSessionInActiveProject{}, err
+			return runtimeids.SessionID{}, err
 		}
-		return rpccontract.AuthorizedSessionInActiveProject{SessionID: parsed}, nil
+		metadataStore := g.deps.MetadataStore()
+		if metadataStore == nil {
+			return runtimeids.SessionID{}, errors.New("metadata store is required")
+		}
+		resolved, err := metadataStore.ResolveActiveProjectSession(ctx, sessionID.String())
+		if err != nil {
+			return runtimeids.SessionID{}, err
+		}
+		if resolved.OwningProjectID != strings.TrimSpace(activeProjectID) {
+			return runtimeids.SessionID{}, sessionOutsideActiveProjectError{sessionID: resolved.SessionID.String()}
+		}
+		return resolved.SessionID, nil
 	}
+	return sessionID, nil
 }
 
 func authorizeProcessActiveProject[Req any](

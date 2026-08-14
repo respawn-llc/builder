@@ -19,6 +19,13 @@ type BootstrapService struct {
 	supportedModes []serverapi.AuthBootstrapMode
 }
 
+func validateAuthIngress[T any](request T) error {
+	_, err := servicecontract.WithValidated(request, servicecontract.SemanticValidationRequired, func(servicecontract.Validated[T]) (struct{}, error) {
+		return struct{}{}, nil
+	})
+	return err
+}
+
 func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOptions, settings config.Settings, allowedPreAuthMethods []string) *BootstrapService {
 	return &BootstrapService{
 		manager:        manager,
@@ -81,7 +88,7 @@ func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.Au
 }
 
 func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := validateAuthIngress(req); err != nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, err
 	}
 	if s == nil || s.manager == nil {

@@ -24,7 +24,7 @@ type WorkflowTaskListReadModel interface {
 }
 
 type WorkflowTaskSearchReadModel interface {
-	Search(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
+	ReadSearch(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
 }
 
 type WorkflowTaskDetailReadModel interface {
@@ -41,11 +41,11 @@ type WorkflowTaskDependencyReadModel interface {
 }
 
 type WorkflowActivityReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
+	ReadActivity(context.Context, string, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskActivityListResponse, error)
 }
 
 type WorkflowTaskSessionReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error)
+	ReadSessions(context.Context, string, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error)
 }
 
 type WorkflowAttentionReadModel interface {

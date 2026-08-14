@@ -1370,18 +1370,22 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 
 func assertForeignGoalAccessRejected(t *testing.T, conn *websocket.Conn, sessionID string) {
 	t.Helper()
+	typedSessionID, err := runtimeids.ParseSessionID(sessionID)
+	if err != nil {
+		t.Fatalf("parse foreign Session ID: %v", err)
+	}
 	wantMessage := "session " + strconv.Quote(sessionID) + " not available"
 	for _, tc := range []struct {
 		name   string
 		method string
 		params any
 	}{
-		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: sessionID}},
-		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "foreign-goal-set", SessionID: sessionID, Objective: "ship", Actor: "user"}},
-		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-pause", SessionID: sessionID, Actor: "user"}},
-		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-resume", SessionID: sessionID, Actor: "user"}},
-		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-complete", SessionID: sessionID, Actor: "agent"}},
-		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "foreign-goal-clear", SessionID: sessionID, Actor: "user"}},
+		{name: "show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: typedSessionID}},
+		{name: "set", method: protocol.MethodRuntimeGoalSet, params: serverapi.RuntimeGoalSetRequest{ClientRequestID: "foreign-goal-set", SessionID: typedSessionID, Objective: "ship", Actor: "user"}},
+		{name: "pause", method: protocol.MethodRuntimeGoalPause, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-pause", SessionID: typedSessionID, Actor: "user"}},
+		{name: "resume", method: protocol.MethodRuntimeGoalResume, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-resume", SessionID: typedSessionID, Actor: "user"}},
+		{name: "complete", method: protocol.MethodRuntimeGoalComplete, params: serverapi.RuntimeGoalStatusRequest{ClientRequestID: "foreign-goal-complete", SessionID: typedSessionID, Actor: "agent"}},
+		{name: "clear", method: protocol.MethodRuntimeGoalClear, params: serverapi.RuntimeGoalClearRequest{ClientRequestID: "foreign-goal-clear", SessionID: typedSessionID, Actor: "user"}},
 	} {
 		err := callGatewayExpectError(t, conn, "foreign-goal-"+tc.name, tc.method, tc.params)
 		if err.Code != protocol.ErrCodeInternalError || err.Message != wantMessage {

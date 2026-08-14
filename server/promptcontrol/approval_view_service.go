@@ -31,15 +31,14 @@ func (s *ApprovalViewService) ListPendingApprovalsBySession(ctx context.Context,
 		if err != nil {
 			return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval session identity: %w", err)
 		}
-		return s.ListPendingApprovalsBySessionValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{SessionID: sessionID})
+		return s.ListPendingApprovalsBySessionValidated(ctx, validated, sessionID)
 	})
 }
 
-func (s *ApprovalViewService) ListPendingApprovalsBySessionValidated(_ context.Context, _ servicecontract.Validated[serverapi.ApprovalListPendingBySessionRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.ApprovalListPendingBySessionResponse, error) {
+func (s *ApprovalViewService) ListPendingApprovalsBySessionValidated(_ context.Context, _ servicecontract.Validated[serverapi.ApprovalListPendingBySessionRequest], sessionID runtimeids.SessionID) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}
-	sessionID := authorization.SessionID
 	items := s.prompts.ListPendingPrompts(sessionID.String())
 	approvals := make([]clientui.PendingApproval, 0, len(items))
 	for _, item := range items {

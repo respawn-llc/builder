@@ -19,15 +19,14 @@ import (
 )
 
 func (s *Service) ShowGoal(ctx context.Context, req serverapi.RuntimeGoalShowRequest) (serverapi.RuntimeGoalShowResponse, error) {
-	sessionID, err := serverapi.PrepareRuntimeGoalShowRequest(req)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
-	return s.showGoal(ctx, sessionID)
+	return s.showGoal(ctx, req.SessionID)
 }
 
-func (s *Service) ShowGoalValidated(ctx context.Context, _ servicecontract.Validated[serverapi.RuntimeGoalShowRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalShowResponse, error) {
-	return s.showGoal(ctx, authorization.SessionID)
+func (s *Service) ShowGoalValidated(ctx context.Context, _ servicecontract.Validated[serverapi.RuntimeGoalShowRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalShowResponse, error) {
+	return s.showGoal(ctx, sessionID)
 }
 
 func (s *Service) showGoal(ctx context.Context, sessionID runtimeids.SessionID) (serverapi.RuntimeGoalShowResponse, error) {
@@ -49,15 +48,14 @@ func (s *Service) showGoal(ctx context.Context, sessionID runtimeids.SessionID) 
 }
 
 func (s *Service) SetGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	sessionID, err := serverapi.PrepareRuntimeGoalSetRequest(req)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
-	return s.setGoal(ctx, req, sessionID)
+	return s.setGoal(ctx, req, req.SessionID)
 }
 
-func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoal(ctx, validated.Value(), authorization.SessionID)
+func (s *Service) SetGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalSetRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoal(ctx, validated.Value(), sessionID)
 }
 
 func (s *Service) setGoal(ctx context.Context, req serverapi.RuntimeGoalSetRequest, sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
@@ -91,23 +89,22 @@ func (s *Service) CompleteGoal(ctx context.Context, req serverapi.RuntimeGoalSta
 }
 
 func (s *Service) validateAndSetGoalStatus(ctx context.Context, req serverapi.RuntimeGoalStatusRequest, status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
-	sessionID, err := serverapi.PrepareRuntimeGoalStatusRequest(req)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
-	return s.setGoalStatus(ctx, req, sessionID, status)
+	return s.setGoalStatus(ctx, req, req.SessionID, status)
 }
 
-func (s *Service) PauseGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, validated.Value(), authorization.SessionID, session.GoalStatusPaused)
+func (s *Service) PauseGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatus(ctx, validated.Value(), sessionID, session.GoalStatusPaused)
 }
 
-func (s *Service) ResumeGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, validated.Value(), authorization.SessionID, session.GoalStatusActive)
+func (s *Service) ResumeGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatus(ctx, validated.Value(), sessionID, session.GoalStatusActive)
 }
 
-func (s *Service) CompleteGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.setGoalStatus(ctx, validated.Value(), authorization.SessionID, session.GoalStatusComplete)
+func (s *Service) CompleteGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.setGoalStatus(ctx, validated.Value(), sessionID, session.GoalStatusComplete)
 }
 
 func (s *Service) setGoalStatus(ctx context.Context, req serverapi.RuntimeGoalStatusRequest, sessionID runtimeids.SessionID, status session.GoalStatus) (serverapi.RuntimeGoalMutationResponse, error) {
@@ -144,15 +141,14 @@ func optionalGoalExecutionID(raw string) *string {
 }
 
 func (s *Service) ClearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest) (serverapi.RuntimeGoalMutationResponse, error) {
-	sessionID, err := serverapi.PrepareRuntimeGoalClearRequest(req)
-	if err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeGoalMutationResponse{}, err
 	}
-	return s.clearGoal(ctx, req, sessionID)
+	return s.clearGoal(ctx, req, req.SessionID)
 }
 
-func (s *Service) ClearGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error) {
-	return s.clearGoal(ctx, validated.Value(), authorization.SessionID)
+func (s *Service) ClearGoalValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeGoalClearRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {
+	return s.clearGoal(ctx, validated.Value(), sessionID)
 }
 
 func (s *Service) clearGoal(ctx context.Context, req serverapi.RuntimeGoalClearRequest, sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error) {

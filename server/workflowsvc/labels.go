@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Service) CreateWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelCreateRequest) (serverapi.WorkflowProjectLabelCreateResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowProjectLabelCreateResponse{}, err
 	}
 	record, err := s.store.CreateProjectLabel(ctx, req.ProjectID, req.Name)
@@ -27,7 +27,7 @@ func (s *Service) CreateWorkflowProjectLabel(ctx context.Context, req serverapi.
 }
 
 func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelCatalogRequest) (serverapi.WorkflowProjectLabelCatalogResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowProjectLabelCatalogResponse{}, err
 	}
 	records, err := s.store.ListProjectLabels(ctx, req.ProjectID)
@@ -49,7 +49,7 @@ func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
 	}
 	id, err := label.ParseID(req.LabelID)
@@ -68,7 +68,7 @@ func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.
 }
 
 func (s *Service) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelDeleteRequest) (serverapi.WorkflowProjectLabelDeleteResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowProjectLabelDeleteResponse{}, err
 	}
 	id, err := label.ParseID(req.LabelID)
@@ -87,7 +87,7 @@ func (s *Service) DeleteWorkflowProjectLabel(ctx context.Context, req serverapi.
 }
 
 func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverapi.WorkflowProjectLabelReorderRequest) (serverapi.WorkflowProjectLabelReorderResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowProjectLabelReorderResponse{}, err
 	}
 	orderedIDs := make([]label.ID, 0, len(req.LabelIDs))
@@ -127,7 +127,7 @@ func (s *Service) ReorderWorkflowProjectLabels(ctx context.Context, req serverap
 }
 
 func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsGetRequest) (serverapi.WorkflowTaskLabelsGetResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowTaskLabelsGetResponse{}, err
 	}
 	ids, err := s.store.GetTaskLabelIDs(ctx, workflow.TaskID(req.TaskID))
@@ -145,7 +145,7 @@ func (s *Service) GetWorkflowTaskLabels(ctx context.Context, req serverapi.Workf
 }
 
 func (s *Service) UpdateWorkflowTaskLabels(ctx context.Context, req serverapi.WorkflowTaskLabelsUpdateRequest) (serverapi.WorkflowTaskLabelsUpdateResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowTaskLabelsUpdateResponse{}, err
 	}
 	scope, err := s.store.GetTaskLabelScope(ctx, workflow.TaskID(req.TaskID))

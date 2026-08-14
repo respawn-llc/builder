@@ -1,6 +1,7 @@
 package serverapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -235,7 +236,7 @@ type RuntimeRecordPromptHistoryRequest struct {
 }
 
 type RuntimeGoalShowRequest struct {
-	SessionID string `json:"session_id"`
+	SessionID runtimeids.SessionID `json:"session_id"`
 }
 
 type RuntimeGoalShowResponse struct {
@@ -257,26 +258,26 @@ func (r RuntimeGoalMutationResponse) Validate() error {
 }
 
 type RuntimeGoalSetRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Objective       string `json:"objective"`
-	Actor           string `json:"actor"`
-	RunID           string `json:"run_id,omitempty"`
-	StepID          string `json:"step_id,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Objective       string               `json:"objective"`
+	Actor           string               `json:"actor"`
+	RunID           string               `json:"run_id,omitempty"`
+	StepID          string               `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalStatusRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Actor           string `json:"actor"`
-	RunID           string `json:"run_id,omitempty"`
-	StepID          string `json:"step_id,omitempty"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Actor           string               `json:"actor"`
+	RunID           string               `json:"run_id,omitempty"`
+	StepID          string               `json:"step_id,omitempty"`
 }
 
 type RuntimeGoalClearRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	SessionID       string `json:"session_id"`
-	Actor           string `json:"actor"`
+	ClientRequestID string               `json:"client_request_id"`
+	SessionID       runtimeids.SessionID `json:"session_id"`
+	Actor           string               `json:"actor"`
 }
 
 func validateClientRequestID(clientRequestID string) error {
@@ -369,7 +370,7 @@ func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeLiveSteerRequest) Validate() error {
-	_, _, _, err := PrepareRuntimeLiveSteerRequest(r)
+	_, _, _, err := prepareRuntimeLiveSteerRequest(r)
 	return err
 }
 func (r RuntimeLiveSteerResponse) Validate() error {
@@ -385,7 +386,7 @@ func (r RuntimeLiveSteerResponse) Validate() error {
 	return nil
 }
 func (r RuntimeLiveStopRequest) Validate() error {
-	_, _, err := PrepareRuntimeLiveStopRequest(r)
+	_, _, err := prepareRuntimeLiveStopRequest(r)
 	return err
 }
 func (r RuntimeLiveStopResponse) Validate() error {
@@ -397,7 +398,7 @@ func (r RuntimeLiveStopResponse) Validate() error {
 	}
 }
 func (r RuntimeLiveWaitRequest) Validate() error {
-	_, err := PrepareRuntimeLiveWaitRequest(r)
+	_, err := prepareRuntimeLiveWaitRequest(r)
 	return err
 }
 func (r RuntimeLiveWaitResponse) Validate() error {
@@ -449,15 +450,10 @@ func (r RuntimeRecordPromptHistoryRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
-	_, err := PrepareRuntimeGoalShowRequest(r)
-	return err
+	return validatePreparedGoalSessionID(r.SessionID)
 }
 
-func PrepareRuntimeGoalShowRequest(r RuntimeGoalShowRequest) (runtimeids.SessionID, error) {
-	return parseScopedSessionID(r.SessionID)
-}
-
-func PrepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, *runtimeids.SessionID, error) {
+func prepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, *runtimeids.SessionID, error) {
 	sessionID, clientRequestID, err := prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
 	if err != nil {
 		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, err
@@ -476,11 +472,11 @@ func PrepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.Sessi
 	return sessionID, clientRequestID, callerSessionID, nil
 }
 
-func PrepareRuntimeLiveStopRequest(r RuntimeLiveStopRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
+func prepareRuntimeLiveStopRequest(r RuntimeLiveStopRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
 	return prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
 }
 
-func PrepareRuntimeLiveWaitRequest(r RuntimeLiveWaitRequest) (runtimeids.SessionID, error) {
+func prepareRuntimeLiveWaitRequest(r RuntimeLiveWaitRequest) (runtimeids.SessionID, error) {
 	return parseCanonicalRuntimeSessionID(r.SessionID)
 }
 
@@ -507,50 +503,140 @@ func parseCanonicalRuntimeSessionID(raw string) (runtimeids.SessionID, error) {
 	return sessionID, nil
 }
 func (r RuntimeGoalSetRequest) Validate() error {
-	_, err := PrepareRuntimeGoalSetRequest(r)
-	return err
-}
-
-func PrepareRuntimeGoalSetRequest(r RuntimeGoalSetRequest) (runtimeids.SessionID, error) {
-	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
-	if err != nil {
-		return runtimeids.SessionID{}, err
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
+		return err
 	}
 	if strings.TrimSpace(r.Objective) == "" {
-		return runtimeids.SessionID{}, errors.New("objective is required")
+		return errors.New("objective is required")
 	}
 	if err := validateGoalActor(r.Actor); err != nil {
-		return runtimeids.SessionID{}, err
+		return err
 	}
-	return sessionID, nil
+	return nil
 }
 func (r RuntimeGoalStatusRequest) Validate() error {
-	_, err := PrepareRuntimeGoalStatusRequest(r)
-	return err
-}
-
-func PrepareRuntimeGoalStatusRequest(r RuntimeGoalStatusRequest) (runtimeids.SessionID, error) {
-	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
-	if err != nil {
-		return runtimeids.SessionID{}, err
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
+		return err
 	}
 	if err := validateGoalActor(r.Actor); err != nil {
-		return runtimeids.SessionID{}, err
+		return err
 	}
-	return sessionID, nil
+	return nil
 }
 func (r RuntimeGoalClearRequest) Validate() error {
-	_, err := PrepareRuntimeGoalClearRequest(r)
-	return err
-}
-
-func PrepareRuntimeGoalClearRequest(r RuntimeGoalClearRequest) (runtimeids.SessionID, error) {
-	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
-	if err != nil {
-		return runtimeids.SessionID{}, err
+	if err := validateClientRequestID(r.ClientRequestID); err != nil {
+		return err
+	}
+	if err := validatePreparedGoalSessionID(r.SessionID); err != nil {
+		return err
 	}
 	if err := validateGoalActor(r.Actor); err != nil {
-		return runtimeids.SessionID{}, err
+		return err
 	}
-	return sessionID, nil
+	return nil
+}
+
+func validatePreparedGoalSessionID(sessionID runtimeids.SessionID) error {
+	if sessionID.IsZero() {
+		return ErrSessionIDRequired
+	}
+	return nil
+}
+
+func decodeGoalSessionID(raw string) (runtimeids.SessionID, error) {
+	return parseScopedSessionID(raw)
+}
+
+func (r *RuntimeGoalShowRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalShowRequest{SessionID: sessionID}
+	return nil
+}
+
+func (r *RuntimeGoalSetRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Objective       string `json:"objective"`
+		Actor           string `json:"actor"`
+		RunID           string `json:"run_id,omitempty"`
+		StepID          string `json:"step_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalSetRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Objective:       wire.Objective,
+		Actor:           wire.Actor,
+		RunID:           wire.RunID,
+		StepID:          wire.StepID,
+	}
+	return nil
+}
+
+func (r *RuntimeGoalStatusRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Actor           string `json:"actor"`
+		RunID           string `json:"run_id,omitempty"`
+		StepID          string `json:"step_id,omitempty"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalStatusRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Actor:           wire.Actor,
+		RunID:           wire.RunID,
+		StepID:          wire.StepID,
+	}
+	return nil
+}
+
+func (r *RuntimeGoalClearRequest) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		ClientRequestID string `json:"client_request_id"`
+		SessionID       string `json:"session_id"`
+		Actor           string `json:"actor"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	sessionID, err := decodeGoalSessionID(wire.SessionID)
+	if err != nil {
+		return err
+	}
+	*r = RuntimeGoalClearRequest{
+		ClientRequestID: wire.ClientRequestID,
+		SessionID:       sessionID,
+		Actor:           wire.Actor,
+	}
+	return nil
 }

@@ -17,7 +17,7 @@ import (
 )
 
 func (s *Service) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	if err := req.Validate(); err != nil {
+	if err := validateWorkflowIngress(req); err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
 	sub, err := s.events.subscribe(req.ProjectID, nil)

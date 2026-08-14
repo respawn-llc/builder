@@ -53,11 +53,11 @@ const (
 )
 
 func (r SessionRuntimeActivateRequest) Validate() error {
-	_, err := PrepareSessionRuntimeActivateRequest(r)
+	_, err := prepareSessionRuntimeActivateRequest(r)
 	return err
 }
 
-func PrepareSessionRuntimeActivateRequest(r SessionRuntimeActivateRequest) (runtimeids.SessionID, error) {
+func prepareSessionRuntimeActivateRequest(r SessionRuntimeActivateRequest) (runtimeids.SessionID, error) {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return runtimeids.SessionID{}, errors.New("client_request_id is required")
 	}
@@ -100,11 +100,11 @@ func (r SessionRuntimeActivateResponse) ValidateForSession(sessionID string) err
 }
 
 func (r SessionRuntimeReleaseRequest) Validate() error {
-	_, err := PrepareSessionRuntimeReleaseRequest(r)
+	_, err := prepareSessionRuntimeReleaseRequest(r)
 	return err
 }
 
-func PrepareSessionRuntimeReleaseRequest(r SessionRuntimeReleaseRequest) (runtimeids.SessionID, error) {
+func prepareSessionRuntimeReleaseRequest(r SessionRuntimeReleaseRequest) (runtimeids.SessionID, error) {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return runtimeids.SessionID{}, errors.New("client_request_id is required")
 	}

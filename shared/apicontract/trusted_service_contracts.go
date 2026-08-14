@@ -16,15 +16,15 @@ type PromptControlTrustedService interface {
 }
 
 type PromptAnswerBatchTrustedService interface {
-	AnswerPromptBatchValidated(ctx context.Context, req Validated[serverapi.PromptAnswerBatchRequest], authorization AuthorizedSessionInActiveProject) (serverapi.PromptAnswerBatchResponse, error)
+	AnswerPromptBatchValidated(ctx context.Context, req Validated[serverapi.PromptAnswerBatchRequest], sessionID runtimeids.SessionID) (serverapi.PromptAnswerBatchResponse, error)
 }
 
 type AskViewTrustedService interface {
-	ListPendingAsksBySessionValidated(ctx context.Context, req Validated[serverapi.AskListPendingBySessionRequest], authorization AuthorizedSessionInActiveProject) (serverapi.AskListPendingBySessionResponse, error)
+	ListPendingAsksBySessionValidated(ctx context.Context, req Validated[serverapi.AskListPendingBySessionRequest], sessionID runtimeids.SessionID) (serverapi.AskListPendingBySessionResponse, error)
 }
 
 type ApprovalViewTrustedService interface {
-	ListPendingApprovalsBySessionValidated(ctx context.Context, req Validated[serverapi.ApprovalListPendingBySessionRequest], authorization AuthorizedSessionInActiveProject) (serverapi.ApprovalListPendingBySessionResponse, error)
+	ListPendingApprovalsBySessionValidated(ctx context.Context, req Validated[serverapi.ApprovalListPendingBySessionRequest], sessionID runtimeids.SessionID) (serverapi.ApprovalListPendingBySessionResponse, error)
 }
 
 type PromptCommandCatalogTrustedService interface {
@@ -141,12 +141,12 @@ type RuntimeInterruptTrustedService interface {
 }
 
 type RuntimeGoalTrustedService interface {
-	ShowGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalShowRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalShowResponse, error)
-	SetGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalSetRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
-	PauseGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
-	ResumeGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
-	CompleteGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
-	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
+	ShowGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalShowRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalShowResponse, error)
+	SetGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalSetRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error)
+	PauseGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error)
+	ResumeGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error)
+	CompleteGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error)
+	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest], sessionID runtimeids.SessionID) (serverapi.RuntimeGoalMutationResponse, error)
 }
 
 type WorktreeQueryTrustedService interface {

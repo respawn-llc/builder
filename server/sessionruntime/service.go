@@ -72,7 +72,10 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	prepared := req
 	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	sessionID, err := serverapi.PrepareSessionRuntimeActivateRequest(prepared)
+	if err := prepared.Validate(); err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(prepared.SessionID))
 	if err != nil {
 		return serverapi.SessionRuntimeActivateResponse{}, err
 	}
@@ -228,7 +231,10 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 func (s *API) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	prepared := req
 	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	sessionID, err := serverapi.PrepareSessionRuntimeReleaseRequest(prepared)
+	if err := prepared.Validate(); err != nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, err
+	}
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(prepared.Attachment.SessionID))
 	if err != nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, err
 	}

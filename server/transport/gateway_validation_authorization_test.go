@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"encoding/json"
 	"testing"
 
 	"core/shared/protocol"
@@ -124,7 +125,7 @@ func TestGatewayValidatesBeforeProjectAndSessionResolution(t *testing.T) {
 				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 			},
 		},
-		{name: "Goal show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "../session"}},
+		{name: "Goal show", method: protocol.MethodRuntimeGoalShow, params: json.RawMessage(`{"session_id":"../session"}`)},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			response := callGatewayExpectError(t, conn, "invalid-"+testCase.name, testCase.method, testCase.params)
@@ -133,4 +134,16 @@ func TestGatewayValidatesBeforeProjectAndSessionResolution(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGatewayPreservesPaddedAskAndApprovalSessionIDs(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	store := createGatewayAuthoritativeSession(t, appCore)
+	conn := dialGateway(t, server)
+	defer conn.Close()
+	handshakeGateway(t, conn)
+
+	paddedSessionID := "  " + store.Meta().SessionID + "  "
+	callGateway(t, conn, "padded-asks", protocol.MethodAskListPending, serverapi.AskListPendingBySessionRequest{SessionID: paddedSessionID}, nil)
+	callGateway(t, conn, "padded-approvals", protocol.MethodApprovalListPending, serverapi.ApprovalListPendingBySessionRequest{SessionID: paddedSessionID}, nil)
 }
