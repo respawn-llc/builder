@@ -397,13 +397,19 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	}
 
 	persistence := newCompactionPersistence(e)
+	if err := persistence.setActivity(stepID, mode, e.compactionRuntimeState().Count()+1, true); err != nil {
+		return compactionResult{}, session.CommitReceipt{}, err
+	}
+	defer func() {
+		if err := persistence.setActivity(stepID, mode, 0, false); err != nil {
+			e.surfaceRunError(fmt.Errorf("clear compaction activity: %w", err))
+		}
+	}()
 	if accept == nil {
 		if err := persistence.emitStatus(stepID, EventCompactionStarted, mode, "selector", providerID, nil, 0, ""); err != nil {
 			return compactionResult{}, session.CommitReceipt{}, err
 		}
 	}
-	e.setCompactionActive(stepID, string(mode), e.compactionRuntimeState().Count()+1)
-	defer e.clearCompactionActive(stepID)
 	compactionFailure := func(result compactionResult, err error) error {
 		if accept != nil {
 			return err

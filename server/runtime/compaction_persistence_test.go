@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"fmt"
 	"testing"
 
 	"core/server/llm"
@@ -106,5 +107,43 @@ func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T
 	}
 	if len(events) != 1 || events[0].Kind != EventCompactionCompleted || events[0].CommittedEntryStartSet {
 		t.Fatalf("auto compaction status facts = %+v", events)
+	}
+}
+
+func TestCompactionLifecycleUsesOneSteeringAuthorityWithAndWithoutStatusPublication(t *testing.T) {
+	t.Parallel()
+	for _, publishStatus := range []bool{false, true} {
+		t.Run(fmt.Sprintf("publish_status_%t", publishStatus), func(t *testing.T) {
+			var events []Event
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, newTestToolRegistry(t), Config{
+				Model:   "gpt-5",
+				OnEvent: func(event Event) { events = append(events, event) },
+			})
+			persistence := newCompactionPersistence(engine)
+			if err := persistence.setActivity("compact", compactionModeManual, 1, true); err != nil {
+				t.Fatalf("start activity: %v", err)
+			}
+			if publishStatus {
+				if err := persistence.emitStatus("compact", EventCompactionStarted, compactionModeManual, "local", "openai", nil, 1, ""); err != nil {
+					t.Fatalf("emit started status: %v", err)
+				}
+			}
+			if !engine.LiveChatContextSnapshot().CompactionRunning {
+				t.Fatal("started compaction is not active")
+			}
+			if err := persistence.setActivity("compact", compactionModeManual, 1, false); err != nil {
+				t.Fatalf("finish activity: %v", err)
+			}
+			if engine.LiveChatContextSnapshot().CompactionRunning {
+				t.Fatal("finished compaction remains active")
+			}
+			wantEvents := 0
+			if publishStatus {
+				wantEvents = 1
+			}
+			if len(events) != wantEvents {
+				t.Fatalf("events = %+v, want %d", events, wantEvents)
+			}
+		})
 	}
 }

@@ -87,6 +87,7 @@ func TestLiveChatContextSnapshotCannotMixUsageAndCompactionTransitions(t *testin
 					Content: textutil.Value(strings.Repeat("context ", 20_000)),
 				}},
 			),
+			steerCompactionActivityIntent(true, "manual", 1),
 			steerEventIntent(Event{
 				Kind:       EventCompactionStarted,
 				StepID:     "compact-step",
