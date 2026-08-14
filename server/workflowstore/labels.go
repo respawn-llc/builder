@@ -510,7 +510,7 @@ func validateTaskLabelReferences(
 }
 
 func listTaskLabelIDs(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]label.ID, error) {
-	rows, err := q.ListTaskAssignedLabelIDsByTasks(ctx, []string{string(taskID)})
+	rows, err := q.ListTaskAssignedLabelsByTasks(ctx, []string{string(taskID)})
 	if err != nil {
 		return nil, err
 	}

@@ -243,18 +243,20 @@ export const workflowPickerItemSchema: z.ZodType<WorkflowPickerItem> = z
     validationErrors: value.validation_errors,
   }));
 
+export const taskStatusKindSchema: z.ZodType<TaskStatusKind> = z.enum([
+  "done",
+  "waiting_question",
+  "waiting_approval",
+  "interrupted",
+  "running",
+  "queued",
+  "backlog",
+  "active",
+]);
+
 export const taskStatusSchema: z.ZodType<TaskStatus> = z
   .object({
-    kind: z.enum([
-      "done",
-      "waiting_question",
-      "waiting_approval",
-      "interrupted",
-      "running",
-      "queued",
-      "backlog",
-      "active",
-    ]),
+    kind: taskStatusKindSchema,
     native_state: z.string(),
     node_ids: stringList,
     attention_types: stringList,

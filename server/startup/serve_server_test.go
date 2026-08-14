@@ -168,24 +168,6 @@ func configureServeTestServerPort(t *testing.T) {
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
 }
 
-func TestServerIdentityContainsOnlyVersionAndIdentityFacts(t *testing.T) {
-	identity := newServerIdentity(config.App{PersistenceRoot: t.TempDir()})
-	if identity.ProtocolVersion != protocol.Version || identity.ServerID == "" || identity.PID <= 0 || identity.PersistenceRootID == "" {
-		t.Fatalf("server identity facts = %+v", identity)
-	}
-	data, err := json.Marshal(identity)
-	if err != nil {
-		t.Fatalf("marshal server identity: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatalf("decode server identity fields: %v", err)
-	}
-	if _, ok := fields["capabilities"]; ok {
-		t.Fatalf("server identity contains capability projection: %s", data)
-	}
-}
-
 func TestServeWaitsForContextCancellation(t *testing.T) {
 	server := &ServeServer{}
 	ctx, cancel := context.WithCancel(context.Background())

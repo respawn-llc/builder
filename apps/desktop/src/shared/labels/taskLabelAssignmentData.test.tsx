@@ -102,6 +102,7 @@ describe("useManagedTaskLabelAssignment", () => {
     });
     const scheduleCatalogRefresh = vi.fn();
     const scheduleTaskAssignmentRefresh = vi.fn();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const loadingCatalogLabelIDs: readonly string[] = [];
     const { result, rerender } = renderHook(
       ({ availableLabelIDs }: Readonly<{ availableLabelIDs: readonly string[] }>) =>
@@ -136,6 +137,10 @@ describe("useManagedTaskLabelAssignment", () => {
     await waitFor(() => {
       expect(scheduleCatalogRefresh).toHaveBeenCalledOnce();
       expect(scheduleTaskAssignmentRefresh).toHaveBeenCalledWith(taskID);
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: queryKeys.projectTaskListsRoot(projectID),
+      refetchType: "active",
     });
     expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
 
@@ -486,6 +491,39 @@ describe("useManagedTaskLabelAssignment", () => {
     expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toBeUndefined();
     expect(queryClient.getQueryData(queryKeys.task(taskID))).toBeUndefined();
+  });
+
+  it("retries a mounted row owner without cached Task data", async () => {
+    appServiceMocks.getTaskLabels
+      .mockRejectedValueOnce(new Error("load failed"))
+      .mockResolvedValueOnce(assignment([]));
+    appServiceMocks.updateTaskLabels.mockResolvedValueOnce(assignment([alphaID]));
+    const queryClient = createQueryClient([alphaID]);
+    queryClient.removeQueries({ queryKey: queryKeys.task(taskID), exact: true });
+    const { result } = renderHook(
+      () =>
+        useManagedTaskLabelAssignment({
+          availableLabelIDs: [alphaID],
+          projectID,
+          scheduleCatalogRefresh: vi.fn(),
+          scheduleTaskAssignmentRefresh: vi.fn(),
+          taskID,
+        }),
+      { wrapper: createWrapper(queryClient) },
+    );
+    await waitFor(() => {
+      expect(result.current.error).not.toBeNull();
+    });
+    act(result.current.retryLoad);
+    await waitFor(() => {
+      expect(result.current.error).toBeNull();
+    });
+    act(() => {
+      result.current.setSelected(alphaID, true);
+    });
+    await waitFor(() => {
+      expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledWith(taskID, [alphaID], []);
+    });
   });
 
   it("drops queued work and late success or failure after unmount without touching caches", async () => {

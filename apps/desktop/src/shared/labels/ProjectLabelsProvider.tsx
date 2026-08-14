@@ -11,11 +11,13 @@ import { useManagedProjectLabelFilter } from "./projectLabelFilter";
 export function ProjectLabelsProvider({
   children,
   onBackgroundError,
+  queryEnabled = true,
   subscribeToProject = true,
   projectID,
 }: Readonly<{
   children: ReactNode;
   onBackgroundError?: ((error: unknown) => void) | undefined;
+  queryEnabled?: boolean | undefined;
   subscribeToProject?: boolean | undefined;
   projectID: string;
 }>) {
@@ -25,6 +27,7 @@ export function ProjectLabelsProvider({
   const catalog = useQuery({
     queryKey: queryKeys.projectLabels(projectID),
     queryFn: async () => api.listProjectLabels(projectID),
+    enabled: queryEnabled,
     retry: false,
   });
   const catalogLabelIDs = useMemo(

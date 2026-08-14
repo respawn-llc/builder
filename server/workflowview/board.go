@@ -186,10 +186,11 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	taskIDStrings := taskIDs(tasks)
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, b.queries, taskIDStrings)
+	labelsByTask, err := loadTaskLabelsByTask(ctx, b.queries, taskIDStrings)
 	if err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
+	labelIDsByTask := taskLabelIDsByTask(labelsByTask)
 	cards := make([]serverapi.WorkflowBoardTaskCard, 0, len(tasks))
 	for _, task := range tasks {
 		projected, exists := projectedByTaskID[workflow.TaskID(task.ID)]
@@ -237,8 +238,28 @@ func (b *Board) card(projected TaskStatusProjectionResult, labelIDs []string, so
 	}, projected.Done
 }
 
-func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {
+type taskDependencyProgressRow struct {
+	taskID         string
+	satisfiedCount int64
+	totalCount     int64
+}
+
+func projectTaskDependencyProgress(rows []taskDependencyProgressRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {
 	progress := make(map[string]*serverapi.WorkflowTaskDependencyProgress)
+	for _, row := range rows {
+		if row.totalCount < 1 || row.satisfiedCount < 0 || row.satisfiedCount > row.totalCount {
+			return nil, fmt.Errorf("task %q dependency aggregate is invalid: satisfied=%d total=%d", row.taskID, row.satisfiedCount, row.totalCount)
+		}
+		progress[row.taskID] = &serverapi.WorkflowTaskDependencyProgress{
+			SatisfiedCount: int(row.satisfiedCount),
+			TotalCount:     int(row.totalCount),
+		}
+	}
+	return progress, nil
+}
+
+func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (map[string]*serverapi.WorkflowTaskDependencyProgress, error) {
+	progressRows := make([]taskDependencyProgressRow, 0, len(rows))
 	for _, row := range rows {
 		if row.DependencySatisfiedCount.Valid != row.DependencyTotalCount.Valid {
 			return nil, fmt.Errorf("board task %q dependency aggregate has inconsistent absence", row.ID)
@@ -246,15 +267,13 @@ func boardDependencyProgressByTaskID(rows []sqlitegen.ListBoardNodeTasksRow) (ma
 		if !row.DependencyTotalCount.Valid {
 			continue
 		}
-		if row.DependencyTotalCount.Int64 < 1 || row.DependencySatisfiedCount.Int64 < 0 || row.DependencySatisfiedCount.Int64 > row.DependencyTotalCount.Int64 {
-			return nil, fmt.Errorf("board task %q dependency aggregate is invalid: satisfied=%d total=%d", row.ID, row.DependencySatisfiedCount.Int64, row.DependencyTotalCount.Int64)
-		}
-		progress[row.ID] = &serverapi.WorkflowTaskDependencyProgress{
-			SatisfiedCount: int(row.DependencySatisfiedCount.Int64),
-			TotalCount:     int(row.DependencyTotalCount.Int64),
-		}
+		progressRows = append(progressRows, taskDependencyProgressRow{
+			taskID:         row.ID,
+			satisfiedCount: row.DependencySatisfiedCount.Int64,
+			totalCount:     row.DependencyTotalCount.Int64,
+		})
 	}
-	return progress, nil
+	return projectTaskDependencyProgress(progressRows)
 }
 
 func taskIDs(tasks []sqlitegen.TaskRecord) []string {

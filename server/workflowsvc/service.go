@@ -2233,6 +2233,13 @@ func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowT
 	return s.readModels.TaskList.List(ctx, req)
 }
 
+func (s *Service) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	return s.readModels.TaskList.CountGroups(ctx, req)
+}
+
 func (s *Service) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
 	if err := req.Validate(); err != nil {
 		return serverapi.TaskSearchResponse{}, err

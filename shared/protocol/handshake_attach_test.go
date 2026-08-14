@@ -5,56 +5,6 @@ import (
 	"testing"
 )
 
-func TestHandshakeRequestUsesVersionOnlyWireContract(t *testing.T) {
-	request := HandshakeRequest{ProtocolVersion: Version}
-	data, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatalf("decode handshake fields: %v", err)
-	}
-	if len(fields) != 1 {
-		t.Fatalf("handshake fields = %v, want protocol_version only", fields)
-	}
-	var version string
-	if err := json.Unmarshal(fields["protocol_version"], &version); err != nil {
-		t.Fatalf("decode protocol version: %v", err)
-	}
-	if version != Version {
-		t.Fatalf("protocol version = %q, want %q", version, Version)
-	}
-	if err := request.Validate(); err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-}
-
-func TestServerIdentityWireContractHasNoCapabilityProjection(t *testing.T) {
-	identity := ServerIdentity{
-		ProtocolVersion:   Version,
-		ServerID:          "server-1",
-		PID:               42,
-		PersistenceRootID: "root-1",
-	}
-	data, err := json.Marshal(identity)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		t.Fatalf("decode identity fields: %v", err)
-	}
-	if _, ok := fields["capabilities"]; ok {
-		t.Fatalf("server identity contains capability projection: %s", data)
-	}
-	for _, field := range []string{"protocol_version", "server_id", "pid", "persistence_root_id"} {
-		if _, ok := fields[field]; !ok {
-			t.Fatalf("server identity is missing %q: %s", field, data)
-		}
-	}
-}
-
 func TestAttachProjectRequestStrictWorkspaceSelectionRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

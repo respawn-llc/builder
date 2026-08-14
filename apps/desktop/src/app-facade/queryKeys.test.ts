@@ -96,4 +96,15 @@ describe("board query identities", () => {
     expect(all).not.toEqual(blocked);
     expect(unblocked).not.toEqual(blocked);
   });
+
+  it("keeps Project Task counts and independent groups below one invalidation root", () => {
+    const root = queryKeys.projectTaskListsRoot("project-1");
+    const counts = queryKeys.projectTaskGroupCounts("project-1");
+    const active = queryKeys.projectTaskGroup("project-1", "active");
+    const backlog = queryKeys.projectTaskGroup("project-1", "backlog");
+
+    expect(counts.slice(0, root.length)).toEqual(root);
+    expect(active.slice(0, root.length)).toEqual(root);
+    expect(active).not.toEqual(backlog);
+  });
 });

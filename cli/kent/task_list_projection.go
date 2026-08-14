@@ -36,9 +36,8 @@ type taskListProjection struct {
 
 type taskListRenderItem struct {
 	Item         taskListItem
-	WorkflowName string
+	WorkflowName *string
 	LabelNames   []string
-	ShowWorkflow bool
 	ShowColumns  bool
 }
 
@@ -136,14 +135,18 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		} else if task.ColumnKeys != nil {
 			return taskListProjection{}, fmt.Errorf("project-wide task list response task %q contains workflow-relative columns", task.TaskID)
 		}
-		workflowName := ""
+		var workflowName *string
 		if showWorkflow {
 			if task.WorkflowName == nil || strings.TrimSpace(*task.WorkflowName) == "" || strings.TrimSpace(*task.WorkflowName) != *task.WorkflowName {
 				return taskListProjection{}, fmt.Errorf("task list response task %q is missing an exact workflow_name for multiple-workflow rendering", task.TaskID)
 			}
-			workflowName = *task.WorkflowName
-		} else if task.WorkflowName != nil {
-			return taskListProjection{}, fmt.Errorf("task list response task %q contains workflow_name when workflow labels are hidden", task.TaskID)
+			value := *task.WorkflowName
+			workflowName = &value
+		}
+		labelIDs := make([]string, len(task.Labels))
+		labelNames := make([]string, len(task.Labels))
+		for index, label := range task.Labels {
+			labelIDs[index], labelNames[index] = label.ID, label.Name
 		}
 		item := taskListItem{
 			ShortID:         task.ShortID,
@@ -154,13 +157,13 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			Title:           task.Title,
 			CreatedAtUnixMs: task.CreatedAtUnixMs,
 			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-			LabelIDs:        normalizedLabelIDs(task.LabelIDs),
+			LabelIDs:        labelIDs,
 		}
 		items = append(items, item)
 		rows = append(rows, taskListRenderItem{
 			Item:         item,
 			WorkflowName: workflowName,
-			ShowWorkflow: showWorkflow,
+			LabelNames:   labelNames,
 			ShowColumns:  showColumns,
 		})
 	}

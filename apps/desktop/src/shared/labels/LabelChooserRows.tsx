@@ -119,6 +119,7 @@ export function LabelResultRow({
   onSelect,
   reorder,
   selection,
+  selectionDisabled = false,
 }: Readonly<{
   catalogMutationPending?: boolean;
   deletion: DeleteState | null;
@@ -130,6 +131,7 @@ export function LabelResultRow({
   onSelect(): void;
   reorder?: ReorderableListItemRenderProps | undefined;
   selection: LabelResultRowSelection;
+  selectionDisabled?: boolean;
 }>) {
   const { t } = useTranslation();
   const reorderActivatorRef = useCallback(
@@ -204,6 +206,7 @@ export function LabelResultRow({
       name={label.name}
       onSelect={onSelect}
       selection={selection}
+      selectionDisabled={selectionDisabled}
     />
   );
 }
@@ -236,6 +239,7 @@ function LabelSelectionRow({
   name,
   onSelect,
   selection,
+  selectionDisabled = false,
 }: Readonly<{
   contextualActions?: ReactNode;
   highlighted: boolean;
@@ -243,6 +247,7 @@ function LabelSelectionRow({
   name: string;
   onSelect(): void;
   selection: LabelResultRowSelection;
+  selectionDisabled?: boolean;
 }>) {
   const { t } = useTranslation();
   const conditionDescriptionID = useId();
@@ -251,7 +256,7 @@ function LabelSelectionRow({
       ? {
           conditionDescription: null,
           conditionState: null,
-          selectButtonProps: { onClick: onSelect },
+          selectButtonProps: { disabled: selectionDisabled, onClick: onSelect },
           selected: selection.selected,
         }
       : {
