@@ -116,8 +116,6 @@ describe("attention notification API", () => {
         },
       },
     });
-    expect(errors[1]).toBeInstanceOf(ContractError);
-
     transport.emit("attention.notification", {
       event: {
         type: "pending",
@@ -134,8 +132,7 @@ describe("attention notification API", () => {
     });
 
     expect(events).toHaveLength(1);
-    expect(errors).toHaveLength(3);
-    expect(errors[2]).toBeInstanceOf(ContractError);
+    expect(errors).toHaveLength(1);
   });
 
   it("parses generic and Workflow Approvals as distinct payloads", () => {
@@ -262,22 +259,6 @@ describe("attention notification API", () => {
   });
 
   it("rejects incoherent attention payloads and targets", () => {
-    const transport = new FakeRpcTransport([]);
-    const client = new ApiClient(transport);
-    const errors: Error[] = [];
-
-    client.subscribeAttentionNotifications({
-      onEvent() {
-        throw new Error("Incoherent attention notification must not reach the UI.");
-      },
-      onComplete() {
-        return;
-      },
-      onError(error) {
-        errors.push(error);
-      },
-    });
-
     const question = {
       id: { kind: "question", uuid: "question-1" },
       kind: "question",
@@ -336,18 +317,33 @@ describe("attention notification API", () => {
       },
     ];
 
-    incoherentNotifications.forEach((pending, index) => {
+    incoherentNotifications.forEach((pending) => {
+      const transport = new FakeRpcTransport([]);
+      const client = new ApiClient(transport);
+      const errors: Error[] = [];
+      const events: AttentionNotificationEvent[] = [];
+      client.subscribeAttentionNotifications({
+        onEvent(event) {
+          events.push(event);
+        },
+        onComplete() {
+          return;
+        },
+        onError(error) {
+          errors.push(error);
+        },
+      });
       transport.emit("attention.notification", {
         event: {
           type: "pending",
-          sequence: index + 1,
+          sequence: 1,
           source: "live",
           pending,
         },
       });
+      expect(events).toHaveLength(0);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toBeInstanceOf(ContractError);
     });
-
-    expect(errors).toHaveLength(incoherentNotifications.length);
-    expect(errors.every((error) => error instanceof ContractError)).toBe(true);
   });
 });
