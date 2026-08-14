@@ -216,6 +216,19 @@ type Meta struct {
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
+	ActiveWorkflowAssignment        *MessageRecord                   `json:"active_workflow_assignment,omitempty"`
+}
+
+// PromptFacingMetadataSnapshot captures metadata that Session planning may
+// change before a Workflow assignment commits.
+type PromptFacingMetadataSnapshot struct {
+	Name                         string
+	FirstPromptPreview           string
+	Continuation                 *ContinuationContext
+	ChatSettings                 *ChatSettingsOverrides
+	PromptCacheLineageGeneration int
+	Locked                       *LockedContract
+	ActiveWorkflowAssignment     *MessageRecord
 }
 
 type PendingModelRecovery struct {

@@ -296,6 +296,12 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		s.mu.Unlock()
 		return recordAppendOutcome{records: records}, err
 	}
+	if err := advanceActiveWorkflowAssignmentFromRecords(&s.meta, records); err != nil {
+		s.meta = previousMeta
+		s.conversationFreshness = previousFreshness
+		s.mu.Unlock()
+		return recordAppendOutcome{records: records}, err
+	}
 	if transition != nil {
 		applied, err := transition(&s.meta)
 		if err != nil {
@@ -363,6 +369,55 @@ func projectEventPayloadForVersion(version int, payload EventRecordPayload) (Eve
 	default:
 		return nil, fmt.Errorf("unsupported event log version %d", version)
 	}
+}
+
+func advanceActiveWorkflowAssignmentFromRecords(meta *Meta, records []EventRecord) error {
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		switch value := payload.(type) {
+		case MessageRecord:
+			if value.MessageType == nil {
+				continue
+			}
+			switch *value.MessageType {
+			case MessageTypeWorkflowMode:
+				meta.ActiveWorkflowAssignment = cloneMessageRecord(&value)
+			case MessageTypeWorkflowModeExit:
+				meta.ActiveWorkflowAssignment = nil
+			}
+		case HistoryReplacementRecord:
+			meta.ActiveWorkflowAssignment = nil
+			for _, item := range value.Items {
+				if item.Type != ProviderHistoryItemTypeMessage ||
+					item.Role == nil ||
+					*item.Role != MessageRoleDeveloper ||
+					item.MessageType == nil {
+					continue
+				}
+				switch *item.MessageType {
+				case MessageTypeWorkflowMode:
+					message, err := normalizeMessageRecord(MessageRecord{
+						Role:            *item.Role,
+						MessageType:     item.MessageType,
+						SourcePath:      item.SourcePath,
+						WorktreeContext: item.WorktreeContext,
+						Content:         item.Content,
+						CompactContent:  item.CompactContent,
+					})
+					if err != nil {
+						return err
+					}
+					meta.ActiveWorkflowAssignment = &message
+				case MessageTypeWorkflowModeExit:
+					meta.ActiveWorkflowAssignment = nil
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {

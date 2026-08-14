@@ -169,6 +169,8 @@ func sameMetaContextSlot(left, right metaContextKind) bool {
 	switch right {
 	case metaContextKindHeadless, metaContextKindHeadlessExit:
 		return left == metaContextKindHeadless || left == metaContextKindHeadlessExit
+	case metaContextKindWorkflow, metaContextKindWorkflowExit:
+		return left == metaContextKindWorkflow || left == metaContextKindWorkflowExit
 	case metaContextKindWorktree, metaContextKindWorktreeExit:
 		return left == metaContextKindWorktree || left == metaContextKindWorktreeExit
 	default:
