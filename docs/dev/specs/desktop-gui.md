@@ -334,7 +334,8 @@
 - Reaching a direction's 50-Task limit closes its open picker and leaves the accessible disabled Add control visible.
 - The picker excludes the open Task when present and Tasks already related or prepared in the chosen direction.
 - A Task prepared in one direction remains eligible in the opposite direction; Task creation applies the ordinary reciprocal-relationship validation.
-- Before sending each New Task creation request, Desktop dismisses the preceding creation-error notification; successful creation only pops the current sidebar destination.
+- Desktop must dismiss the preceding New Task creation-error notification before sending each New Task creation request.
+- Successful New Task creation must only pop the current sidebar destination.
 - Back returns to the preceding sidebar destination.
 - Back is hidden at the root.
 - X closes the complete sidebar stack.
@@ -370,7 +371,6 @@
 - Desktop New Task exists only as a sidebar destination; it has no fallback dialog or separate native-window route.
 - New Task Dependencies uses the same two visible subsections, selected-row presentation, and Add controls as Task Detail.
 - New Task permits up to 50 prepared `Blocked by` Tasks and 50 prepared `Blocks` Tasks.
-- New Task never accepts a 51st prepared Task in either direction.
 - New Task labels dependency progress as a preview and derives it from the selected Blocker Task statuses available in the form without separate polling or refresh orchestration.
 - The New Task dependency picker's New Task action pushes another New Task destination without a relationship to its unsaved parent.
 - Selecting a prepared relationship row uses ordinary Task Detail sidebar navigation. When that Task is not retained, Back restores the authored New Task Draft. When that Task is already retained, including the originating Task, Desktop returns to the retained Task Detail, discards New Task and its Draft, and has no Back return to that Draft.
