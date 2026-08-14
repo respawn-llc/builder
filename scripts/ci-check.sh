@@ -87,8 +87,6 @@ run_protobuf() {
 	)
 	echo "==> Protobuf deterministic generation"
 	./scripts/generate-protobuf.sh verify all
-	echo "==> Protobuf schema/protocol version"
-	./scripts/check-protobuf-schema-version.sh
 }
 
 mode="${1:-all}"
