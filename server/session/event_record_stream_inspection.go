@@ -105,12 +105,7 @@ func inspectEventRecordStream(
 	}); err != nil {
 		return eventRecordStreamInspection{}, err
 	}
-	if err := decoder.Skip(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return eventRecordStreamInspection{}, errors.New(
-				"unexpected trailing JSON value",
-			)
-		}
+	if err := inspectEventRecordEOF(decoder); err != nil {
 		return eventRecordStreamInspection{}, err
 	}
 	if !sequencePresent || inspection.Sequence <= 0 {
@@ -144,6 +139,124 @@ func inspectEventRecordStream(
 		}
 	}
 	return inspection, nil
+}
+
+func inspectHistoryReplacementRecordStream(reader io.Reader) error {
+	inspectionReader := &eventRecordInspectionReader{reader: reader}
+	decoder := jx.Decode(inspectionReader, int(eventLogScanChunkSize))
+	var payloadPresent bool
+	replacement := HistoryReplacementRecord{}
+	if err := inspectEventRecordObject(decoder, inspectionReader, func(
+		decoder *jx.Decoder,
+		field string,
+	) error {
+		if field != "payload" {
+			return decoder.Skip()
+		}
+		payloadPresent = true
+		if decoder.Next() != jx.Object {
+			if err := decoder.Skip(); err != nil {
+				return err
+			}
+			return errors.New("history replacement payload must be a JSON object")
+		}
+		return inspectEventRecordObject(decoder, inspectionReader, func(
+			decoder *jx.Decoder,
+			field string,
+		) error {
+			switch field {
+			case "engine":
+				value, err := inspectEventRecordString(decoder, inspectionReader)
+				if err != nil {
+					return err
+				}
+				replacement.Engine = value
+			case "mode":
+				value, err := inspectEventRecordString(decoder, inspectionReader)
+				if err != nil {
+					return err
+				}
+				replacement.Mode = CompactionMode(value)
+			case "compaction_number":
+				value, err := inspectOptionalEventRecordInt(decoder)
+				if err != nil {
+					return err
+				}
+				replacement.CompactionNumber = value
+			case "committed_entry_start":
+				value, err := inspectOptionalEventRecordInt(decoder)
+				if err != nil {
+					return err
+				}
+				replacement.CommittedEntryStart = value
+			case "pending_handoff_future_message",
+				"last_committed_assistant_final_answer":
+				return inspectOptionalEventRecordType(decoder, jx.String, field)
+			case "latest_rollback_candidate":
+				return inspectOptionalEventRecordType(decoder, jx.Object, field)
+			case "items":
+				return inspectOptionalEventRecordType(decoder, jx.Array, field)
+			default:
+				return decoder.Skip()
+			}
+			return nil
+		})
+	}); err != nil {
+		return err
+	}
+	if err := inspectEventRecordEOF(decoder); err != nil {
+		return err
+	}
+	if !payloadPresent {
+		return errors.New("history replacement payload is required")
+	}
+	if _, err := normalizeHistoryReplacementRecord(replacement); err != nil {
+		return fmt.Errorf("validate history replacement payload: %w", err)
+	}
+	return nil
+}
+
+func inspectOptionalEventRecordInt(decoder *jx.Decoder) (*int, error) {
+	if decoder.Next() == jx.Null {
+		if err := decoder.Skip(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	value, err := decoder.Int()
+	if err != nil {
+		return nil, err
+	}
+	return &value, nil
+}
+
+func inspectOptionalEventRecordType(
+	decoder *jx.Decoder,
+	expected jx.Type,
+	field string,
+) error {
+	actual := decoder.Next()
+	if actual != jx.Null && actual != expected {
+		if err := decoder.Skip(); err != nil {
+			return err
+		}
+		return fmt.Errorf(
+			"history replacement field %q must be %s or null",
+			field,
+			expected,
+		)
+	}
+	return decoder.Skip()
+}
+
+func inspectEventRecordEOF(decoder *jx.Decoder) error {
+	if err := decoder.Skip(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 func inspectEventToolCompletionPayload(

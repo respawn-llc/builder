@@ -137,6 +137,60 @@ func TestQuestionHistoryCursorMaxHandoffsOneDetectsOmissionWithoutDecodingOlderC
 	}
 }
 
+func TestQuestionHistoryCursorRejectsCorruptReplacementAtBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		line []byte
+	}{
+		{
+			name: "missing payload",
+			line: []byte(`{"seq":2,"kind":"history_replaced"}`),
+		},
+		{
+			name: "invalid mode",
+			line: []byte(`{"seq":2,"kind":"history_replaced","payload":{"engine":"local","mode":"future","items":[]}}`),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			olderLine, err := encodeEventRecordV2(
+				mustQuestionHistoryCursorRecord(t, 1, "older"),
+			)
+			if err != nil {
+				t.Fatalf("encode older: %v", err)
+			}
+			newest := mustQuestionHistoryCursorRecord(t, 3, "newest")
+			newestLine, err := encodeEventRecordV2(newest)
+			if err != nil {
+				t.Fatalf("encode newest: %v", err)
+			}
+			writeRawVersionedEventLog(
+				t,
+				filepath.Join(dir, eventsFile),
+				EventLogVersionV2,
+				[][]byte{
+					olderLine,
+					test.line,
+					newestLine,
+				},
+			)
+			cursor, err := OpenQuestionHistoryCursor(dir, 1)
+			if err != nil {
+				t.Fatalf("open cursor: %v", err)
+			}
+			defer cursor.Close()
+			record, err := cursor.Next()
+			if err != nil || record == nil || record.Seq() != 3 {
+				t.Fatalf("newest Next = %#v, %v", record, err)
+			}
+			if _, err := cursor.Next(); err == nil {
+				t.Fatal("corrupt replacement completed history scan")
+			}
+		})
+	}
+}
+
 func TestQuestionHistoryCursorStreamsLargeReplacementBoundaryWithoutMaterializingItems(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, eventsFile)

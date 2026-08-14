@@ -129,6 +129,15 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 			)
 		}
 		if inspection.Kind == EventKindHistoryReplace {
+			if err := inspectHistoryReplacementRecordStream(
+				io.NewSectionReader(c.fp, recordOffset, lineEnd-recordOffset),
+			); err != nil {
+				return nil, fmt.Errorf(
+					"decode Question-history replacement at byte %d: %w",
+					recordOffset,
+					err,
+				)
+			}
 			if c.historyWindows == c.maxHandoffs {
 				c.historyOmitted = recordOffset > c.firstEventOffset
 				c.done = true

@@ -433,6 +433,9 @@ func assertMigrationWorkspaceRecovery(t *testing.T, version int) {
 	writeVersionedEventLog(t, stagedPath, version, []EventRecord{
 		mustVersionMatrixRecord(t, 1, MessageRoleUser, "staged"),
 	})
+	if err := markStagedCurrentEventLogReady(workspace); err != nil {
+		t.Fatalf("mark staged event log ready: %v", err)
+	}
 
 	log := mustMaterializeSessionTestEventLog(t, store)
 	window, err := log.ReadRecentRecords(1)
