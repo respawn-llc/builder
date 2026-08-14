@@ -103,38 +103,14 @@ func prepareChatAgentCatalogEntry(
 			Agent: selector, Category: category,
 		}
 	}
-	var valid bool
-	if selector, valid = session.NormalizeChatAgent(selector); !valid {
-		return fail(serverapi.ChatSettingsAgentInvalidConfiguration)
-	}
-	role := selector
-	prepared, err := PrepareRunPromptOverridesWithContext(
-		app,
-		serverapi.RunPromptOverrides{AgentRole: &role},
-		authState,
-		RunPromptPreparationContext{
-			SkipProviderReadinessValidation: skipProviderReadinessValidation,
-		},
+	target, prepared, err := prepareChatSettingsTargetForAgent(
+		app, authState, selector, skipProviderReadinessValidation,
 	)
 	if err != nil {
 		return fail(classifyChatAgentPreparationError(err))
 	}
-	target := prepared.BaseTarget
-	if selector != config.DefaultSubagentRole {
-		target = nil
-		if prepared.NamedTarget != nil {
-			target = &PreparedBaseTarget{
-				Settings:     prepared.NamedTarget.Settings,
-				Source:       prepared.NamedTarget.Source,
-				EnabledTools: prepared.NamedTarget.EnabledTools,
-			}
-		}
-	}
-	if target == nil {
-		return fail(serverapi.ChatSettingsAgentInternalPreparation)
-	}
 	var capabilities llm.ProviderCapabilities
-	fastAvailable := prepared.FastAvailable
+	var fastAvailable bool
 	if skipProviderReadinessValidation {
 		capabilities, _ = llm.ProviderCapabilitiesFromOverride(target.Settings.ProviderCapabilities)
 		fastAvailable = true
@@ -148,7 +124,7 @@ func prepareChatAgentCatalogEntry(
 		}
 		fastAvailable = llm.SupportsFastModeProvider(capabilities)
 	}
-	settings, err := PrepareChatSettingsForPreparedTarget(*target, fastAvailable)
+	settings, err := PrepareChatSettingsForPreparedTarget(target, fastAvailable)
 	if err != nil {
 		return fail(serverapi.ChatSettingsAgentInvalidConfiguration)
 	}
@@ -190,16 +166,8 @@ func chatAgentHasExplicitCapabilities(settings config.Settings, selector string)
 		return false
 	}
 	lookup := config.LookupSubagentRole(settings, selector)
-	if lookup.Status != config.SubagentRoleLookupPresent {
-		return false
-	}
-	for key := range lookup.Role.Sources {
-		if strings.HasPrefix(key, "model_capabilities.") ||
-			strings.HasPrefix(key, "provider_capabilities.") {
-			return true
-		}
-	}
-	return false
+	return lookup.Status == config.SubagentRoleLookupPresent &&
+		config.SubagentRoleHasCapabilityOverrides(lookup.Role)
 }
 
 func chatAgentCallable(settings config.Settings, selector string) bool {
@@ -212,19 +180,19 @@ func chatAgentCallable(settings config.Settings, selector string) bool {
 }
 
 func PrepareChatSettingsForAgent(app config.App, authState auth.State, agent string) (PreparedChatSettings, error) {
-	target, fastAvailable, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	target, prepared, err := prepareChatSettingsTargetForAgent(app, authState, agent, false)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	return PrepareChatSettingsForPreparedTarget(target, fastAvailable)
+	return PrepareChatSettingsForPreparedTarget(target, prepared.FastAvailable)
 }
 
 func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, agent string, promptFacing PreparedBaseTarget) (PreparedChatSettings, error) {
-	baselineTarget, fastAvailable, err := prepareChatSettingsTargetForAgent(app, authState, agent)
+	baselineTarget, prepared, err := prepareChatSettingsTargetForAgent(app, authState, agent, false)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
-	baseline, err := PrepareChatSettingsForPreparedTarget(baselineTarget, fastAvailable)
+	baseline, err := PrepareChatSettingsForPreparedTarget(baselineTarget, prepared.FastAvailable)
 	if err != nil {
 		return PreparedChatSettings{}, err
 	}
@@ -240,20 +208,27 @@ func PrepareSessionChatSettingsForAgent(app config.App, authState auth.State, ag
 	return baseline, nil
 }
 
-func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, agent string) (PreparedBaseTarget, bool, error) {
+func prepareChatSettingsTargetForAgent(
+	app config.App,
+	authState auth.State,
+	agent string,
+	skipProviderReadinessValidation bool,
+) (PreparedBaseTarget, PreparedRunPromptOverrides, error) {
 	var valid bool
 	agent, valid = session.NormalizeChatAgent(agent)
 	if !valid {
-		return PreparedBaseTarget{}, false, errors.New("Chat Agent is required")
+		return PreparedBaseTarget{}, PreparedRunPromptOverrides{}, fmt.Errorf("%w: Chat Agent is required", errInvalidAgentRole)
 	}
 	prepared, err := PrepareRunPromptOverridesWithContext(
 		app,
 		serverapi.RunPromptOverrides{AgentRole: &agent},
 		authState,
-		RunPromptPreparationContext{},
+		RunPromptPreparationContext{
+			SkipProviderReadinessValidation: skipProviderReadinessValidation,
+		},
 	)
 	if err != nil {
-		return PreparedBaseTarget{}, false, err
+		return PreparedBaseTarget{}, PreparedRunPromptOverrides{}, err
 	}
 	target := prepared.BaseTarget
 	if agent != config.DefaultSubagentRole {
@@ -267,9 +242,9 @@ func prepareChatSettingsTargetForAgent(app config.App, authState auth.State, age
 		}
 	}
 	if target == nil {
-		return PreparedBaseTarget{}, false, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
+		return PreparedBaseTarget{}, PreparedRunPromptOverrides{}, fmt.Errorf("prepare Chat Agent %q returned no target", agent)
 	}
-	return *target, prepared.FastAvailable, nil
+	return *target, prepared, nil
 }
 
 func PrepareChatSettingsForTarget(authState auth.State, target PreparedBaseTarget) (PreparedChatSettings, error) {
