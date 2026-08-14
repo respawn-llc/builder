@@ -237,7 +237,7 @@ func (a *Authority) PrepareDetachedAgentExecution(
 		a.mu.Unlock()
 		return nil, err
 	}
-	if a.workflowExecutionLocked(request.Workflow, workflowKey) != nil {
+	if a.workflowExecutionByCurrentNodeLocked(request.Workflow, workflowKey) != nil {
 		a.mu.Unlock()
 		return nil, fmt.Errorf("workflow current node %v is already live", request.Workflow.CurrentNode)
 	}
@@ -351,7 +351,7 @@ func (d *DetachedAgentExecution) Publish(
 		return nil, nil, invariantErr
 	}
 	if d.authority.closed || d.resource.current != nil ||
-		d.authority.workflowExecutionLocked(workflowRef, d.workflowKey) != nil {
+		d.authority.workflowExecutionByCurrentNodeLocked(workflowRef, d.workflowKey) != nil {
 		d.execution.exactMu.Unlock()
 		d.resource.mu.Unlock()
 		d.authority.mu.Unlock()

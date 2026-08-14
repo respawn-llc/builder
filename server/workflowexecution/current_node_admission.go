@@ -68,13 +68,6 @@ type currentNodeQueuedStart struct {
 	agentCapacityLease *currentNodeAgentCapacityLease
 }
 
-type currentNodeLiveScope struct {
-	reference          workflow.CurrentNodeReference
-	scopeID            runtimeids.ExecutionScopeID
-	policy             currentNodeAdmissionPolicy
-	agentCapacityLease *currentNodeAgentCapacityLease
-}
-
 type currentNodeAdmissionError struct {
 	cause    error
 	admitted bool
@@ -217,14 +210,15 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err != nil {
 		return err
 	}
+	operationID := runtimeids.NewCurrentNodeOperationID()
 	defer c.releaseReservation(key, start.policy, start.agentCapacityLease)
-	scriptPublication, err := c.runner.PrepareScriptPublication(ctx, reference, c)
+	scriptPublication, err := c.runner.PrepareScriptPublication(ctx, reference, operationID, c)
 	if err != nil {
 		return err
 	}
 	if scriptPublication != nil {
 		start.nodeKind = workflow.NodeKindScript
-		return c.admitPreparedScript(ctx, start, key, scriptPublication)
+		return c.admitPreparedScript(ctx, start, key, operationID, scriptPublication)
 	}
 	if start.nodeKind == workflow.NodeKindScript {
 		return errors.New("Script publication preparation returned no publication")
@@ -251,6 +245,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	publication, err := c.runner.PrepareAgentPublication(
 		ctx,
 		reference,
+		operationID,
 		start.taskPromptDelivery,
 		assignmentSteer,
 		c,
@@ -261,13 +256,14 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if publication == nil {
 		return errors.New("Agent publication preparation returned no publication")
 	}
-	return c.admitPreparedAgent(ctx, start, key, publication)
+	return c.admitPreparedAgent(ctx, start, key, operationID, publication)
 }
 
 func (c *CurrentNodeController) admitPreparedScript(
 	ctx context.Context,
 	start currentNodeQueuedStart,
 	key workflow.CurrentNodeReferenceKey,
+	operationID runtimeids.CurrentNodeOperationID,
 	publication CurrentNodeScriptPublication,
 ) error {
 	defer publication.Cancel()
@@ -284,9 +280,9 @@ func (c *CurrentNodeController) admitPreparedScript(
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, exists := c.liveByNode[key]; exists {
+		if _, exists := c.operations[key]; exists {
 			c.mu.Unlock()
-			return fmt.Errorf("current node %v already has a live execution scope", start.reference)
+			return fmt.Errorf("current node %v already has an admitted operation", start.reference)
 		}
 		c.deleteAdmissionReservationLocked(key, start.policy)
 		c.mu.Unlock()
@@ -295,15 +291,32 @@ func (c *CurrentNodeController) admitPreparedScript(
 		handle, launch, publishErr = publication.Publish(ctx, func() error {
 			receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
 			admitted = receipt.Committed
-			return classifyCurrentNodeAdmission(receipt, err)
-		}, func(published sessionruntime.ExecutionHandle) {
-			scope := published.Scope()
+			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
+				return admissionErr
+			}
 			c.mu.Lock()
-			c.live[scope.ID()] = currentNodeLiveScope{
-				reference: start.reference, scopeID: scope.ID(), policy: start.policy,
+			c.operations[key] = &currentNodeOperation{
+				ref: sessionruntime.WorkflowOperationRef{
+					OperationID: operationID,
+					CurrentNode: start.reference,
+				},
+				policy:             start.policy,
 				agentCapacityLease: start.agentCapacityLease,
 			}
-			c.liveByNode[key] = scope.ID()
+			c.mu.Unlock()
+			return nil
+		}, func(published sessionruntime.ExecutionHandle) {
+			workflowRef, ok := published.Scope().Workflow()
+			if !ok {
+				panic("published Script execution has no Workflow metadata")
+			}
+			c.mu.Lock()
+			operation := c.operations[key]
+			if operation == nil || operation.ref.OperationID != operationID {
+				c.mu.Unlock()
+				panic("published Script execution has no matching admitted operation")
+			}
+			operation.workflow = &workflowRef
 			c.mu.Unlock()
 		})
 		if publishErr != nil {
@@ -337,6 +350,7 @@ func (c *CurrentNodeController) admitPreparedAgent(
 	ctx context.Context,
 	start currentNodeQueuedStart,
 	key workflow.CurrentNodeReferenceKey,
+	operationID runtimeids.CurrentNodeOperationID,
 	publication CurrentNodeAgentPublication,
 ) error {
 	defer func() {
@@ -359,9 +373,9 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			c.mu.Unlock()
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
-		if _, exists := c.liveByNode[key]; exists {
+		if _, exists := c.operations[key]; exists {
 			c.mu.Unlock()
-			return fmt.Errorf("current node %v already has a live execution scope", start.reference)
+			return fmt.Errorf("current node %v already has an admitted operation", start.reference)
 		}
 		c.deleteAdmissionReservationLocked(key, start.policy)
 		c.transitionAgentCapacityLocked(
@@ -375,15 +389,32 @@ func (c *CurrentNodeController) admitPreparedAgent(
 		handle, launch, publishErr = publication.Publish(ctx, func() error {
 			receipt, err := c.store.AdmitCurrentNode(context.WithoutCancel(ctx), start.reference)
 			admitted = receipt.Committed
-			return classifyCurrentNodeAdmission(receipt, err)
-		}, func(published sessionruntime.ExecutionHandle) {
-			scope := published.Scope()
+			if admissionErr := classifyCurrentNodeAdmission(receipt, err); admissionErr != nil {
+				return admissionErr
+			}
 			c.mu.Lock()
-			c.live[scope.ID()] = currentNodeLiveScope{
-				reference: start.reference, scopeID: scope.ID(), policy: start.policy,
+			c.operations[key] = &currentNodeOperation{
+				ref: sessionruntime.WorkflowOperationRef{
+					OperationID: operationID,
+					CurrentNode: start.reference,
+				},
+				policy:             start.policy,
 				agentCapacityLease: start.agentCapacityLease,
 			}
-			c.liveByNode[key] = scope.ID()
+			c.mu.Unlock()
+			return nil
+		}, func(published sessionruntime.ExecutionHandle) {
+			workflowRef, ok := published.Scope().Workflow()
+			if !ok {
+				panic("published Agent execution has no Workflow metadata")
+			}
+			c.mu.Lock()
+			operation := c.operations[key]
+			if operation == nil || operation.ref.OperationID != operationID {
+				c.mu.Unlock()
+				panic("published Agent execution has no matching admitted operation")
+			}
+			operation.workflow = &workflowRef
 			c.mu.Unlock()
 		})
 		if publishErr != nil {
@@ -409,12 +440,6 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			cause:    errors.New("detached Agent publication started a mismatched Workflow scope"),
 			admitted: true,
 		}
-	}
-	c.mu.Lock()
-	_, stopping := c.stopping[scope.ID()]
-	c.mu.Unlock()
-	if stopping {
-		return currentNodeAdmissionError{cause: sessionruntime.ErrExecutionNoLongerLive, admitted: true}
 	}
 	if !start.policy.isAutomatic() {
 		c.wakeAdmissionWorker()
@@ -714,8 +739,8 @@ func (c *CurrentNodeController) currentNodeOwnedLocked(key workflow.CurrentNodeR
 	if _, reserved := c.automaticReservations[key]; reserved {
 		return true
 	}
-	_, live := c.liveByNode[key]
-	return live
+	_, admitted := c.operations[key]
+	return admitted
 }
 
 func (c *CurrentNodeController) wakeAdmissionWorker() {
@@ -865,7 +890,7 @@ func (c *CurrentNodeController) inFlightAdmissionCountLocked(policy currentNodeA
 	for key, start := range c.admissionWorkers {
 		if start.policy == policy {
 			if policy.countsAgentCapacity() {
-				if _, live := c.liveByNode[key]; live {
+				if _, admitted := c.operations[key]; admitted {
 					continue
 				}
 			}

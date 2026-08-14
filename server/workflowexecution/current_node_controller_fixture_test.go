@@ -81,10 +81,11 @@ type workflowExecutionStart struct {
 }
 
 type workflowExecutionStartState struct {
-	reference workflow.CurrentNodeReference
-	admit     func() error
-	published func(sessionruntime.ExecutionHandle)
-	handle    sessionruntime.ExecutionHandle
+	reference   workflow.CurrentNodeReference
+	operationID runtimeids.CurrentNodeOperationID
+	admit       func() error
+	published   func(sessionruntime.ExecutionHandle)
+	handle      sessionruntime.ExecutionHandle
 }
 
 type currentNodeTestRunner interface {
@@ -114,10 +115,11 @@ type currentNodeTestPublicationRunner struct {
 func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
 	controller workflowruntime.Controller,
 ) (CurrentNodeScriptPublication, error) {
 	if preparation, ok := r.runner.(CurrentNodeScriptPublicationPreparation); ok {
-		return preparation.PrepareScriptPublication(ctx, reference, controller)
+		return preparation.PrepareScriptPublication(ctx, reference, operationID, controller)
 	}
 	if scriptRunner, ok := r.runner.(currentNodeTestScriptRunner); ok && scriptRunner.UsesScriptPublication(reference) {
 		if preparation, ok := r.runner.(currentNodeTestPreparation); ok {
@@ -130,7 +132,8 @@ func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 			}
 		}
 		return &currentNodeTestScriptPublication{
-			runner: r.runner, authority: r.authority, reference: reference, controller: controller,
+			runner: r.runner, authority: r.authority, reference: reference,
+			operationID: operationID, controller: controller,
 		}, nil
 	}
 	return nil, nil
@@ -139,6 +142,7 @@ func (r currentNodeTestPublicationRunner) PrepareScriptPublication(
 func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
 	delivery workflowruntime.TaskPromptDelivery,
 	assignment CurrentNodeAssignmentSteer,
 	controller workflowruntime.Controller,
@@ -150,24 +154,26 @@ func (r currentNodeTestPublicationRunner) PrepareAgentPublication(
 	}
 	return &currentNodeTestPublication{
 		runner: r.runner, authority: r.authority, reference: reference,
-		delivery: delivery, assignment: assignment, controller: controller,
+		operationID: operationID, delivery: delivery, assignment: assignment, controller: controller,
 	}, nil
 }
 
 type currentNodeTestPublication struct {
-	runner     currentNodeTestRunner
-	authority  *sessionruntime.Authority
-	reference  workflow.CurrentNodeReference
-	delivery   workflowruntime.TaskPromptDelivery
-	assignment CurrentNodeAssignmentSteer
-	controller workflowruntime.Controller
+	runner      currentNodeTestRunner
+	authority   *sessionruntime.Authority
+	reference   workflow.CurrentNodeReference
+	operationID runtimeids.CurrentNodeOperationID
+	delivery    workflowruntime.TaskPromptDelivery
+	assignment  CurrentNodeAssignmentSteer
+	controller  workflowruntime.Controller
 }
 
 type currentNodeTestScriptPublication struct {
-	runner     currentNodeTestRunner
-	authority  *sessionruntime.Authority
-	reference  workflow.CurrentNodeReference
-	controller workflowruntime.Controller
+	runner      currentNodeTestRunner
+	authority   *sessionruntime.Authority
+	reference   workflow.CurrentNodeReference
+	operationID runtimeids.CurrentNodeOperationID
+	controller  workflowruntime.Controller
 }
 
 func (p *currentNodeTestScriptPublication) Publish(
@@ -179,7 +185,8 @@ func (p *currentNodeTestScriptPublication) Publish(
 		return nil, nil, err
 	}
 	state := &workflowExecutionStartState{
-		reference: p.reference, admit: func() error { return nil }, published: published,
+		reference: p.reference, operationID: p.operationID,
+		admit: func() error { return nil }, published: published,
 	}
 	if err := p.runner.PublishCurrentNode(
 		context.Background(), p.reference, workflowruntime.TaskPromptDeliveryAssignment, nil,
@@ -204,7 +211,8 @@ func (p *currentNodeTestPublication) Publish(
 		return nil, nil, err
 	}
 	state := &workflowExecutionStartState{
-		reference: p.reference, admit: func() error { return nil }, published: published,
+		reference: p.reference, operationID: p.operationID,
+		admit: func() error { return nil }, published: published,
 	}
 	if err := p.runner.PublishCurrentNode(
 		context.Background(), p.reference, p.delivery, p.assignment,
@@ -239,6 +247,7 @@ func startTestWorkflowScript(
 	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), sessionruntime.DetachedScriptExecutionRequest{
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
+			OperationID: start.state.operationID,
 			CurrentNode: start.state.reference,
 		},
 		Command: request.Command, Finalize: request.Finalize,
@@ -262,9 +271,11 @@ func startLiveTestWorkflowScript(
 	request sessionruntime.ScriptExecutionRequest,
 ) sessionruntime.ExecutionHandle {
 	t.Helper()
+	operationID := runtimeids.NewCurrentNodeOperationID()
 	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), sessionruntime.DetachedScriptExecutionRequest{
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
+			OperationID: operationID,
 			CurrentNode: reference,
 		},
 		Command: request.Command, Finalize: request.Finalize,
@@ -278,10 +289,14 @@ func startLiveTestWorkflowScript(
 			t.Fatalf("Current Node key: %v", keyErr)
 		}
 		controller.mu.Lock()
-		controller.live[published.Scope().ID()] = currentNodeLiveScope{
-			reference: reference, scopeID: published.Scope().ID(),
+		workflowRef, _ := published.Scope().Workflow()
+		controller.operations[key] = &currentNodeOperation{
+			ref: sessionruntime.WorkflowOperationRef{
+				OperationID: operationID,
+				CurrentNode: reference,
+			},
+			workflow: &workflowRef,
 		}
-		controller.liveByNode[key] = published.Scope().ID()
 		controller.mu.Unlock()
 	})
 	if err != nil {
@@ -490,9 +505,7 @@ func currentNodeReferenceForControllerTest(t *testing.T, taskID string, nodeID s
 
 func singleLiveScope(t *testing.T, authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) runtimeids.ExecutionScopeID {
 	t.Helper()
-	handle, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
-		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
-	})
+	handle, live := authority.ExecutionByCurrentNode("project-test", currentNodeControllerTestWorkflowID, reference)
 	if live {
 		return handle.Scope().ID()
 	}
@@ -501,9 +514,7 @@ func singleLiveScope(t *testing.T, authority *sessionruntime.Authority, referenc
 }
 
 func hasLiveCurrentNode(authority *sessionruntime.Authority, reference workflow.CurrentNodeReference) bool {
-	_, live := authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
-		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID, CurrentNode: reference,
-	})
+	_, live := authority.ExecutionByCurrentNode("project-test", currentNodeControllerTestWorkflowID, reference)
 	return live
 }
 
@@ -1052,6 +1063,7 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 		Runtime:    &plan,
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
+			OperationID: runtimeids.NewCurrentNodeOperationID(),
 			CurrentNode: reference,
 		},
 		Resource: sessionruntime.OpenAgentResource{},
@@ -1082,10 +1094,11 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 			t.Fatalf("current node key: %v", keyErr)
 		}
 		f.controller.mu.Lock()
-		f.controller.live[published.Scope().ID()] = currentNodeLiveScope{
-			reference: reference, scopeID: published.Scope().ID(),
+		workflowRef, _ := published.Scope().Workflow()
+		f.controller.operations[key] = &currentNodeOperation{
+			ref:      workflowRef.Operation(),
+			workflow: &workflowRef,
 		}
-		f.controller.liveByNode[key] = published.Scope().ID()
 		f.controller.mu.Unlock()
 	})
 	if err != nil {
@@ -1169,6 +1182,7 @@ func (p *controlledScriptPublication) Cancel() {
 func (r *controlledScriptRunner) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
 	_ workflowruntime.Controller,
 ) (CurrentNodeScriptPublication, error) {
 	close(r.entered)
@@ -1177,6 +1191,7 @@ func (r *controlledScriptRunner) PrepareScriptPublication(
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID:   "project-test",
 			WorkflowID:  currentNodeControllerTestWorkflowID,
+			OperationID: operationID,
 			CurrentNode: reference,
 		},
 		Command: r.command,

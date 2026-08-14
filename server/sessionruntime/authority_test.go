@@ -3053,7 +3053,10 @@ func workflowExecutionRefForTest(
 	if err != nil {
 		t.Fatalf("NewCurrentNodeReference: %v", err)
 	}
-	return WorkflowExecutionRef{ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"), CurrentNode: reference}
+	return WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: authorityWorkflowID(t, "test"),
+		OperationID: runtimeids.NewCurrentNodeOperationID(), CurrentNode: reference,
+	}
 }
 
 func startDetachedScriptExecutionForTest(

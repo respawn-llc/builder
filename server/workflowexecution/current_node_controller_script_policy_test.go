@@ -28,13 +28,14 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 		{
 			name: "predecessor held",
 			apply: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
+				key, _ := occupyingAgent.Key()
+				controller.operations[key].heldStarts = []currentNodeQueuedStart{{
+					reference: script, policy: currentNodeAdmissionAutomaticScript,
 				}}
 			},
 			clean: func(controller *CurrentNodeController, _ workflow.CurrentNodeReferenceKey) {
-				controller.heldStarts = make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart)
+				key, _ := occupyingAgent.Key()
+				controller.operations[key].heldStarts = nil
 			},
 		},
 		{
@@ -50,37 +51,18 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			},
 		},
 		{
-			name: "live",
+			name: "admitted",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := runtimeids.NewExecutionScopeID()
-				controller.live[scopeID] = currentNodeLiveScope{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
+				controller.operations[key] = &currentNodeOperation{
+					ref: sessionruntime.WorkflowOperationRef{
+						OperationID: runtimeids.NewCurrentNodeOperationID(),
+						CurrentNode: script,
+					},
+					policy: currentNodeAdmissionAutomaticScript,
 				}
-				controller.liveByNode[key] = scopeID
 			},
 			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := controller.liveByNode[key]
-				delete(controller.liveByNode, key)
-				delete(controller.live, scopeID)
-			},
-		},
-		{
-			name: "finalizing",
-			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := runtimeids.NewExecutionScopeID()
-				controller.live[scopeID] = currentNodeLiveScope{
-					reference: script,
-					policy:    currentNodeAdmissionAutomaticScript,
-				}
-				controller.liveByNode[key] = scopeID
-				controller.stopping[scopeID] = struct{}{}
-			},
-			clean: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
-				scopeID := controller.liveByNode[key]
-				delete(controller.liveByNode, key)
-				delete(controller.live, scopeID)
-				delete(controller.stopping, scopeID)
+				delete(controller.operations, key)
 			},
 		},
 	}
@@ -105,9 +87,13 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 				t.Fatalf("Script key: %v", err)
 			}
 			controller.mu.Lock()
-			controller.live[runtimeids.NewExecutionScopeID()] = currentNodeLiveScope{
-				reference: occupyingAgent,
-				policy:    currentNodeAdmissionAutomaticAgent,
+			occupyingKey, _ := occupyingAgent.Key()
+			controller.operations[occupyingKey] = &currentNodeOperation{
+				ref: sessionruntime.WorkflowOperationRef{
+					OperationID: runtimeids.NewCurrentNodeOperationID(),
+					CurrentNode: occupyingAgent,
+				},
+				policy: currentNodeAdmissionAutomaticAgent,
 			}
 			controller.agentCapacityActive = 1
 			controller.automaticQueue.append(currentNodeQueuedStart{

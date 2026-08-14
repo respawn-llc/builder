@@ -427,6 +427,7 @@ func (f currentNodeViewFixture) startCurrentNodePrompt(
 	workflowRef := sessionruntime.WorkflowExecutionRef{
 		ProjectID:   f.binding.ProjectID,
 		WorkflowID:  f.workflowID,
+		OperationID: runtimeids.NewCurrentNodeOperationID(),
 		CurrentNode: started.currentNode,
 	}
 	detached, err := authority.PrepareDetachedAgentExecution(f.ctx, sessionruntime.DetachedAgentExecutionRequest{

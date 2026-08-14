@@ -77,7 +77,7 @@ func (a *Authority) PrepareDetachedScriptExecution(
 	if err != nil {
 		return nil, err
 	}
-	if a.workflowExecutionLocked(req.Workflow, workflowKey) != nil {
+	if a.workflowExecutionByCurrentNodeLocked(req.Workflow, workflowKey) != nil {
 		return nil, fmt.Errorf("workflow current node %v is already live", req.Workflow.CurrentNode)
 	}
 	executionGeneration := a.nextExecutionGenerationLocked()
@@ -139,7 +139,7 @@ func (d *DetachedScriptExecution) Publish(
 	d.authority.mu.Lock()
 	d.execution.exactMu.Lock()
 	workflowRef, _ := d.execution.scope.Workflow()
-	if d.authority.closed || d.authority.workflowExecutionLocked(workflowRef, d.workflowKey) != nil {
+	if d.authority.closed || d.authority.workflowExecutionByCurrentNodeLocked(workflowRef, d.workflowKey) != nil {
 		d.execution.exactMu.Unlock()
 		d.authority.mu.Unlock()
 		d.execution.cancel()

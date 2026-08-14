@@ -888,6 +888,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 	ref := sessionruntime.WorkflowExecutionRef{
 		ProjectID:   binding.ProjectID,
 		WorkflowID:  workflowID,
+		OperationID: runtimeids.NewCurrentNodeOperationID(),
 		CurrentNode: started.Mutation.Created[0].Reference,
 	}
 	detached, err := authority.PrepareDetachedScriptExecution(ctx, sessionruntime.DetachedScriptExecutionRequest{

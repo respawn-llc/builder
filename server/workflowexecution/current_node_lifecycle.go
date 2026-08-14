@@ -467,20 +467,25 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			c.mu.Unlock()
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		sourceScopeID, sourceLive := c.liveByNode[sourceKey]
-		if sourceLive {
-			if _, completed := c.completed[sourceScopeID]; !completed {
+		sourceOperation := c.operations[sourceKey]
+		if sourceOperation != nil {
+			if sourceOperation.completion == nil {
 				c.mu.Unlock()
-				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source scope has not completed")
+				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source operation has not completed")
 			}
-			if _, finalizing := c.postTurnFinalization[sourceScopeID]; finalizing {
+			if sourceOperation.postTurnFinalization != nil {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 			}
-			if _, stopping := c.stopping[sourceScopeID]; stopping {
+			if sourceOperation.workflow == nil {
 				c.mu.Unlock()
 				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
 			}
+		}
+		sourceLive := sourceOperation != nil
+		var sourceWorkflow sessionruntime.WorkflowExecutionRef
+		if sourceLive {
+			sourceWorkflow = *sourceOperation.workflow
 		}
 		c.mu.Unlock()
 
@@ -513,7 +518,7 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			return applied, nil
 		}
-		handle, live := c.authority.ExecutionByScope(sourceScopeID)
+		handle, live := c.authority.ExecutionByWorkflow(sourceWorkflow)
 		if !live {
 			return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
 		}
@@ -528,7 +533,12 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
 			c.mu.Lock()
-			c.heldStarts[sourceScopeID] = append(c.heldStarts[sourceScopeID], starts...)
+			current := c.operations[sourceKey]
+			if current == nil || current.ref.OperationID != sourceWorkflow.OperationID {
+				c.mu.Unlock()
+				return sessionruntime.ErrExecutionNoLongerLive
+			}
+			current.heldStarts = append(current.heldStarts, starts...)
 			c.mu.Unlock()
 			return applyErr
 		})
@@ -643,8 +653,8 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 	if c.queuedTaskPreparationLocked(taskID) != nil || c.runningTaskPreparationLocked(taskID) != nil {
 		return false
 	}
-	for _, live := range c.live {
-		if live.reference.TaskID == taskID {
+	for _, operation := range c.operations {
+		if operation.ref.CurrentNode.TaskID == taskID {
 			return false
 		}
 	}
@@ -672,13 +682,6 @@ func (c *CurrentNodeController) taskExecutionQuiescentLocked(taskID workflow.Tas
 	for _, start := range c.admissionWorkers {
 		if start.reference.TaskID == taskID {
 			return false
-		}
-	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
-			if start.reference.TaskID == taskID {
-				return false
-			}
 		}
 	}
 	return true

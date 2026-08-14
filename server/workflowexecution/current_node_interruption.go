@@ -64,13 +64,13 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
 	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
-		c.mu.Lock()
-		defer c.mu.Unlock()
 		for _, handle := range state.waitHandles {
-			if _, live := c.live[handle.Scope().ID()]; live {
+			if _, live := c.authority.ExecutionByScope(handle.Scope().ID()); live {
 				return errors.New("workflow interruption left an affected exact execution scope")
 			}
 		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
 		if state.taskFence != nil && c.interrupts.fenceActive(state.taskFence) {
 			return errors.New("workflow interruption fence remains active")
 		}
@@ -98,7 +98,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 	)
 	if err := c.permit.Run(ctx, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
-			selected := append([]sessionruntime.ExecutionHandle(nil), selection.Interruptible...)
+			selected := append([]sessionruntime.WorkflowExecutionSelection(nil), selection.Interruptible...)
 			if selector.SessionID == nil {
 				selected = append(selected, selection.Queued...)
 			}
@@ -113,19 +113,15 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			if c.interrupts.taskActive(selector.TaskID) {
 				return ErrTaskExecutionNotQuiescent
 			}
-			for _, handle := range selected {
-				scopeID := handle.Scope().ID()
-				scopeRef, workflowScoped := handle.Scope().Workflow()
-				if !workflowScoped {
-					return errors.New("authority interrupt selection is not workflow scoped")
+			for _, selectedExecution := range selected {
+				key, err := selectedExecution.Operation.CurrentNode.Key()
+				if err != nil {
+					return err
 				}
-				if live, exists := c.live[scopeID]; exists {
-					if !scopeRef.CurrentNode.Equal(live.reference) {
-						return errors.New("authority interrupt selection does not match live workflow execution ownership")
-					}
-					continue
+				operation := c.operations[key]
+				if operation == nil || operation.ref.OperationID != selectedExecution.Operation.OperationID {
+					return errors.New("authority interrupt selection does not match admitted workflow operation")
 				}
-				return errors.New("authority interrupt selection does not match workflow execution ownership")
 			}
 
 			if selector.SessionID == nil {
@@ -138,15 +134,12 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 					return fenceErr
 				}
 			}
-			for _, handle := range selected {
-				scopeID := handle.Scope().ID()
-				scopeRef, _ := handle.Scope().Workflow()
-				c.stopping[scopeID] = struct{}{}
-				stopHandles = append(stopHandles, handle)
-				waitHandles = append(waitHandles, handle)
-				references = append(references, scopeRef.CurrentNode)
+			for _, selectedExecution := range selected {
+				stopHandles = append(stopHandles, selectedExecution.Handle)
+				waitHandles = append(waitHandles, selectedExecution.Handle)
+				references = append(references, selectedExecution.Operation.CurrentNode)
 				if taskFence != nil {
-					c.interrupts.addScope(taskFence, scopeID)
+					c.interrupts.addOperation(taskFence, selectedExecution.Operation.OperationID)
 				}
 			}
 			if taskFence == nil {
@@ -246,14 +239,16 @@ func (c *CurrentNodeController) InterruptForManualMove(
 				return ErrTaskExecutionNotQuiescent
 			}
 
-			for _, handle := range selection.Interruptible {
-				scopeID := handle.Scope().ID()
-				scopeRef, workflowScoped := handle.Scope().Workflow()
-				if !workflowScoped || scopeRef.CurrentNode.TaskID != taskID {
+			for _, selectedExecution := range selection.Interruptible {
+				if selectedExecution.Operation.CurrentNode.TaskID != taskID {
 					return errors.New("manual move interruption selection is not workflow scoped")
 				}
-				live, exists := c.live[scopeID]
-				if !exists || !live.reference.Equal(scopeRef.CurrentNode) {
+				key, err := selectedExecution.Operation.CurrentNode.Key()
+				if err != nil {
+					return err
+				}
+				operation := c.operations[key]
+				if operation == nil || operation.ref.OperationID != selectedExecution.Operation.OperationID {
 					return errors.New("manual move interruption selection does not match controller ownership")
 				}
 			}
@@ -271,8 +266,8 @@ func (c *CurrentNodeController) InterruptForManualMove(
 					}
 				}
 			}
-			for _, starts := range c.heldStarts {
-				for _, start := range starts {
+			for _, operation := range c.operations {
+				for _, start := range operation.heldStarts {
 					if start.reference.TaskID == taskID {
 						if _, err := start.reference.Key(); err != nil {
 							return err
@@ -305,16 +300,13 @@ func (c *CurrentNodeController) InterruptForManualMove(
 					return err
 				}
 			}
-			for _, handle := range selection.Interruptible {
-				scopeID := handle.Scope().ID()
-				scopeRef, _ := handle.Scope().Workflow()
-				c.stopping[scopeID] = struct{}{}
+			for _, selectedExecution := range selection.Interruptible {
 				if taskFence != nil {
-					c.interrupts.addScope(taskFence, scopeID)
+					c.interrupts.addOperation(taskFence, selectedExecution.Operation.OperationID)
 				}
-				stopHandles = append(stopHandles, handle)
-				waitHandles = append(waitHandles, handle)
-				references = append(references, scopeRef.CurrentNode)
+				stopHandles = append(stopHandles, selectedExecution.Handle)
+				waitHandles = append(waitHandles, selectedExecution.Handle)
+				references = append(references, selectedExecution.Operation.CurrentNode)
 			}
 			if taskFence != nil {
 				if err := drainTaskControllerWorkLocked(c, taskID, taskFence, &references, &admissionWaits); err != nil {
@@ -363,8 +355,8 @@ func taskHasControllerQueuedWorkLocked(c *CurrentNodeController, taskID workflow
 			return true
 		}
 	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
+	for _, operation := range c.operations {
+		for _, start := range operation.heldStarts {
 			if start.reference.TaskID == taskID {
 				return true
 			}
@@ -417,8 +409,8 @@ func validateTaskControllerWorkLocked(c *CurrentNodeController, taskID workflow.
 			}
 		}
 	}
-	for _, starts := range c.heldStarts {
-		for _, start := range starts {
+	for _, operation := range c.operations {
+		for _, start := range operation.heldStarts {
 			if start.reference.TaskID == taskID {
 				if _, err := start.reference.Key(); err != nil {
 					return fmt.Errorf("validate held start for task %s: %w", taskID, err)
@@ -492,7 +484,8 @@ func drainTaskControllerWorkLocked(
 		entry = next
 	}
 
-	for sourceScope, starts := range c.heldStarts {
+	for _, operation := range c.operations {
+		starts := operation.heldStarts
 		kept := starts[:0]
 		for _, start := range starts {
 			if start.reference.TaskID != taskID {
@@ -508,9 +501,9 @@ func drainTaskControllerWorkLocked(
 			*admissionWaits = appendAdmissionWait(*admissionWaits, key, nil)
 		}
 		if len(kept) == 0 {
-			delete(c.heldStarts, sourceScope)
+			operation.heldStarts = nil
 		} else {
-			c.heldStarts[sourceScope] = kept
+			operation.heldStarts = kept
 		}
 	}
 

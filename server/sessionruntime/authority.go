@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -140,7 +141,42 @@ func (a *Authority) ExecutionByWorkflow(ref WorkflowExecutionRef) (ExecutionHand
 	return executionHandle{execution: execution}, true
 }
 
+func (a *Authority) ExecutionByCurrentNode(
+	projectID string,
+	workflowID runtimeids.WorkflowID,
+	currentNode workflow.CurrentNodeReference,
+) (ExecutionHandle, bool) {
+	if a == nil || strings.TrimSpace(projectID) == "" || workflowID.IsZero() {
+		return nil, false
+	}
+	key, err := currentNode.Key()
+	if err != nil {
+		return nil, false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	execution := a.workflowExecutionByCurrentNodeLocked(WorkflowExecutionRef{
+		ProjectID: projectID, WorkflowID: workflowID, CurrentNode: currentNode,
+	}, key)
+	if execution == nil {
+		return nil, false
+	}
+	return executionHandle{execution: execution}, true
+}
+
 func (a *Authority) workflowExecutionLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
+	execution := a.workflowExecutionByCurrentNodeLocked(ref, key)
+	if execution == nil {
+		return nil
+	}
+	current, ok := execution.scope.Workflow()
+	if !ok || current.OperationID != ref.OperationID {
+		return nil
+	}
+	return execution
+}
+
+func (a *Authority) workflowExecutionByCurrentNodeLocked(ref WorkflowExecutionRef, key workflow.CurrentNodeReferenceKey) *execution {
 	byProject := a.workflowExecutions[ref.ProjectID]
 	if byProject == nil {
 		return nil

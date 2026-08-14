@@ -47,6 +47,7 @@ func (p *currentNodeScriptPublication) Cancel() {
 func (s *Starter) PrepareScriptPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
 	controller workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeScriptPublication, error) {
 	if s.closed.Load() {
@@ -67,6 +68,7 @@ func (s *Starter) PrepareScriptPublication(
 		Workflow: sessionruntime.WorkflowExecutionRef{
 			ProjectID:   input.Task.ProjectID,
 			WorkflowID:  input.Workflow.ID,
+			OperationID: operationID,
 			CurrentNode: input.CurrentNode.Reference,
 		},
 		Command: command,

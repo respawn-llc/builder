@@ -65,6 +65,8 @@ type execution struct {
 
 	phase executionPhase
 
+	protocolViolations int64
+
 	closeResource bool
 }
 

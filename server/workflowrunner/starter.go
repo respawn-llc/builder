@@ -183,6 +183,7 @@ type currentNodeAgentPublication struct {
 	starter            *Starter
 	input              workflowstore.CurrentNodeStartContext
 	prepared           preparedCurrentNodeAgentSession
+	operationID        runtimeids.CurrentNodeOperationID
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
 	controller         workflowruntime.Controller
 	mu                 sync.Mutex
@@ -205,6 +206,7 @@ func (p *currentNodeAgentPublication) Publish(
 		ctx,
 		p.input,
 		p.prepared,
+		p.operationID,
 		p.taskPromptDelivery,
 		p.controller,
 		admit,
@@ -232,6 +234,7 @@ func (s *currentNodeAgentAssignmentSteer) Wait(ctx context.Context) (session.Com
 func (s *Starter) PrepareAgentPublication(
 	ctx context.Context,
 	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	assignmentSteer workflowexecution.CurrentNodeAssignmentSteer,
 	controller workflowruntime.Controller,
@@ -245,7 +248,7 @@ func (s *Starter) PrepareAgentPublication(
 	}
 	return &currentNodeAgentPublication{
 		starter: s, input: assignment.input,
-		prepared:           assignment.prepared,
+		prepared: assignment.prepared, operationID: operationID,
 		taskPromptDelivery: taskPromptDelivery, controller: controller,
 	}, nil
 }
@@ -254,6 +257,7 @@ func (s *Starter) publishCurrentNodeAgent(
 	ctx context.Context,
 	input workflowstore.CurrentNodeStartContext,
 	prepared preparedCurrentNodeAgentSession,
+	operationID runtimeids.CurrentNodeOperationID,
 	taskPromptDelivery workflowruntime.TaskPromptDelivery,
 	controller workflowruntime.Controller,
 	admit func() error,
@@ -314,6 +318,7 @@ func (s *Starter) publishCurrentNodeAgent(
 			Workflow: sessionruntime.WorkflowExecutionRef{
 				ProjectID:   input.Task.ProjectID,
 				WorkflowID:  input.Workflow.ID,
+				OperationID: operationID,
 				CurrentNode: reference,
 			},
 			Resource: resource,

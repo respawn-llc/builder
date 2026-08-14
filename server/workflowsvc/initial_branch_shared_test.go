@@ -8,6 +8,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
+	"core/shared/runtimeids"
 )
 
 type initialBranchControllerRunner struct{}
@@ -15,6 +16,7 @@ type initialBranchControllerRunner struct{}
 func (initialBranchControllerRunner) PrepareAgentPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
 	workflowruntime.TaskPromptDelivery,
 	workflowexecution.CurrentNodeAssignmentSteer,
 	workflowruntime.Controller,
@@ -25,6 +27,7 @@ func (initialBranchControllerRunner) PrepareAgentPublication(
 func (initialBranchControllerRunner) PrepareScriptPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
 	workflowruntime.Controller,
 ) (workflowexecution.CurrentNodeScriptPublication, error) {
 	return nil, errors.New("runner must not prepare publication after branch preparation failure")

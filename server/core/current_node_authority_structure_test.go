@@ -22,6 +22,7 @@ const (
 	findingSecondControllerImplementation currentNodeStructureFindingKind = "second_controller_implementation"
 	findingControllerComposition          currentNodeStructureFindingKind = "controller_composition"
 	findingForeignControllerMapIdentity   currentNodeStructureFindingKind = "foreign_controller_map_identity"
+	findingScopeKeyedControllerAuthority  currentNodeStructureFindingKind = "scope_keyed_controller_authority"
 	findingSerializedExecutionAuthority   currentNodeStructureFindingKind = "serialized_execution_authority"
 	findingWorkflowSessionMetadata        currentNodeStructureFindingKind = "workflow_session_metadata"
 )
@@ -99,6 +100,20 @@ func (*CurrentNodeController) rememberAttempt(AttemptID) {}
 		testharness.WriteFile(t, filepath.Join(currentNodeFixtureRoot(t, pkgs), "server/workflowexecution/controller.go"), currentNodeFixtureControllerSource("attempts map[AttemptID]struct{}"))
 		pkgs = testharness.LoadTypedPackages(t, currentNodeFixtureRoot(t, pkgs), false, "./...")
 		assertCurrentNodeFinding(t, analyzeCurrentNodeGoStructure(pkgs), findingForeignControllerMapIdentity)
+	})
+
+	t.Run("scope keyed workflow execution state", func(t *testing.T) {
+		pkgs := currentNodeStructureFixture(t, map[string]string{
+			"server/workflowexecution/scope_state.go": `package workflowexecution
+
+import "core/shared/runtimeids"
+
+type scopeState struct {
+	byScope map[runtimeids.ExecutionScopeID]struct{}
+}
+`,
+		})
+		assertCurrentNodeFinding(t, analyzeCurrentNodeGoStructure(pkgs), findingScopeKeyedControllerAuthority)
 	})
 
 	t.Run("wire projection adds execution identity", func(t *testing.T) {
@@ -489,6 +504,28 @@ func currentNodeControllerFindings(index currentNodeTypeIndex) []currentNodeStru
 		}
 	}
 	var findings []currentNodeStructureFinding
+	workflowExecutionPackage := index.packages["core/server/workflowexecution"]
+	if workflowExecutionPackage != nil {
+		for _, named := range index.named {
+			if named.Obj().Pkg() == nil || named.Obj().Pkg().Path() != workflowExecutionPackage.PkgPath {
+				continue
+			}
+			structure, isStruct := named.Underlying().(*types.Struct)
+			if !isStruct {
+				continue
+			}
+			for fieldIndex := 0; fieldIndex < structure.NumFields(); fieldIndex++ {
+				fieldType := types.Unalias(structure.Field(fieldIndex).Type())
+				mapType, isMap := fieldType.(*types.Map)
+				if isMap && types.Identical(types.Unalias(mapType.Key()), scopeID) {
+					findings = append(findings, currentNodeStructureFinding{
+						kind:     findingScopeKeyedControllerAuthority,
+						position: namedTypePosition(index, named) + "." + structure.Field(fieldIndex).Name(),
+					})
+				}
+			}
+		}
+	}
 	for _, implementation := range implementations {
 		if !types.Identical(implementation, canonicalController) {
 			findings = append(findings, currentNodeStructureFinding{
@@ -593,7 +630,7 @@ func currentNodeWireFindings(index currentNodeTypeIndex) []currentNodeStructureF
 	}
 	sort.Strings(serializedShapes)
 	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(serializedShapes, "\n"))))
-	const expectedWorkflowCurrentNodeWireDigest = "707b8d5f4a561f86ac5bdbe3405a9b3edf3902f5fb3469f34af5b4b3ed710042"
+	const expectedWorkflowCurrentNodeWireDigest = "a150974d8a23869d844f2a6df1ba9e8465931588d9193f242585f6ccbfc0298d"
 	if digest != expectedWorkflowCurrentNodeWireDigest {
 		return []currentNodeStructureFinding{{
 			kind:     findingSerializedExecutionAuthority,

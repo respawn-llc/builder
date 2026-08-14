@@ -38,7 +38,7 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	})
 	runner := &controlledScriptRunner{
 		authority:   authority,
-		command:     sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", `printf started > "$1"`, "sh", outputPath}},
+		command:     sessionruntime.ScriptCommand{Path: shellPath, Args: []string{"-c", `printf started > "$1"; trap 'exit 0' TERM; while :; do sleep 1; done`, "sh", outputPath}},
 		entered:     make(chan struct{}),
 		startRunner: make(chan struct{}),
 		registered:  make(chan struct{}),
@@ -71,6 +71,16 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	if store.admitCount() != 0 {
 		t.Fatalf("admitted current nodes before publication validation = %d, want 0", store.admitCount())
 	}
+	key, err := reference.Key()
+	if err != nil {
+		t.Fatalf("Current Node key: %v", err)
+	}
+	controller.mu.Lock()
+	_, operationBeforeCommit := controller.operations[key]
+	controller.mu.Unlock()
+	if operationBeforeCommit {
+		t.Fatal("Current Node operation existed before durable admission committed")
+	}
 	close(runner.returnStart)
 	handle := <-runner.handles
 	if store.admitCount() != 1 {
@@ -79,11 +89,23 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	if err := <-started; err != nil {
 		t.Fatalf("start current node: %v", err)
 	}
-	if _, err := handle.Wait(context.Background()); err != nil {
-		t.Fatalf("wait script: %v", err)
+	workflowRef, workflowScoped := handle.Scope().Workflow()
+	if !workflowScoped || workflowRef.OperationID.IsZero() {
+		t.Fatalf("published Workflow metadata = %+v, want typed operation correlation", workflowRef)
 	}
-	if _, err := os.Stat(outputPath); err != nil {
-		t.Fatalf("script did not start after controller released lease: %v", err)
+	controller.mu.Lock()
+	operation := controller.operations[key]
+	controller.mu.Unlock()
+	if operation == nil || operation.ref.OperationID != workflowRef.OperationID ||
+		!operation.ref.CurrentNode.Equal(reference) {
+		t.Fatalf("admitted operation = %+v, Workflow metadata = %+v", operation, workflowRef)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, err := os.Stat(outputPath)
+		return err == nil
+	}, "script did not start after controller released lease")
+	if err := handle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop Script: %v", err)
 	}
 	if hasLiveCurrentNode(authority, reference) {
 		t.Fatal("script execution remained live after retirement")
@@ -1212,19 +1234,32 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 		{
 			name: "retirement held intent",
 			apply: func(controller *CurrentNodeController) {
-				controller.heldStarts[runtimeids.NewExecutionScopeID()] = []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}}
-			},
-		},
-		{
-			name: "live scope",
-			apply: func(controller *CurrentNodeController) {
-				scopeID := runtimeids.NewExecutionScopeID()
 				key, err := reference.Key()
 				if err != nil {
 					t.Fatalf("reference key: %v", err)
 				}
-				controller.live[scopeID] = currentNodeLiveScope{reference: reference}
-				controller.liveByNode[key] = scopeID
+				controller.operations[key] = &currentNodeOperation{
+					ref: sessionruntime.WorkflowOperationRef{
+						OperationID: runtimeids.NewCurrentNodeOperationID(),
+						CurrentNode: reference,
+					},
+					heldStarts: []currentNodeQueuedStart{{reference: reference, policy: currentNodeAdmissionAutomaticAgent}},
+				}
+			},
+		},
+		{
+			name: "admitted operation",
+			apply: func(controller *CurrentNodeController) {
+				key, err := reference.Key()
+				if err != nil {
+					t.Fatalf("reference key: %v", err)
+				}
+				controller.operations[key] = &currentNodeOperation{
+					ref: sessionruntime.WorkflowOperationRef{
+						OperationID: runtimeids.NewCurrentNodeOperationID(),
+						CurrentNode: reference,
+					},
+				}
 			},
 		},
 	}

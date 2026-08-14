@@ -59,8 +59,7 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 		t.Fatalf("current node key: %v", err)
 	}
 	fixture.controller.mu.Lock()
-	delete(fixture.controller.live, handle.Scope().ID())
-	delete(fixture.controller.liveByNode, key)
+	delete(fixture.controller.operations, key)
 	fixture.controller.mu.Unlock()
 	fixture.store.interrupted = []workflow.CurrentNode{{
 		Reference: reference,
@@ -83,37 +82,16 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
-	sessionID := runtimeids.NewSessionID()
-	scopeID := runtimeids.NewExecutionScopeID()
-	key, err := source.Key()
-	if err != nil {
-		t.Fatalf("source key: %v", err)
-	}
+	controller, scopeID, sessionID := newPostTurnFinalizationControllerForReferenceTest(
+		t,
+		source,
+		workflow.SessionReuseGuaranteedCACReuse,
+	)
 	entered := make(chan struct{})
 	release := make(chan struct{})
-	controller := &CurrentNodeController{
-		store: &currentNodeControllerStore{
-			pendingApproval: workflow.PendingApproval{Source: source},
-		},
-		permit:    NewMutationPermit(),
-		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
-			key: scopeID,
-		},
-		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
-			scopeID: {reference: source},
-		},
-		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
-		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
-			scopeID: {
-				sessionID:      &sessionID,
-				classification: workflow.SessionReuseGuaranteedCACReuse,
-				reference:      source,
-			},
-		},
-		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+	controller.store = &currentNodeControllerStore{
+		pendingApproval: workflow.PendingApproval{Source: source},
 	}
-	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
 
 	finalizationDone := make(chan error, 1)
 	go func() {
@@ -131,7 +109,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 	case <-time.After(time.Second):
 		t.Fatal("post-turn compaction did not start")
 	}
-	_, err = controller.ApplyPendingApproval(context.Background(), "approval")
+	_, err := controller.ApplyPendingApproval(context.Background(), "approval")
 	if !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("approval apply while post-turn compaction = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
@@ -213,10 +191,7 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 			if compactions != test.wantCompactions {
 				t.Fatalf("compactions = %d, want %d", compactions, test.wantCompactions)
 			}
-			controller.mu.Lock()
-			_, finalizing := controller.postTurnFinalization[scopeID]
-			controller.mu.Unlock()
-			if finalizing {
+			if postTurnFinalizationPendingForTest(t, controller, scopeID) {
 				t.Fatal("post-turn finalization fence remained after finalization")
 			}
 		})
@@ -235,10 +210,7 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 		if err == nil {
 			t.Fatal("invalid pre-compaction threshold returned nil")
 		}
-		controller.mu.Lock()
-		_, finalizing := controller.postTurnFinalization[scopeID]
-		controller.mu.Unlock()
-		if !finalizing {
+		if !postTurnFinalizationPendingForTest(t, controller, scopeID) {
 			t.Fatal("invalid threshold cleared the finalization fence")
 		}
 	})
@@ -285,33 +257,91 @@ func newPostTurnFinalizationControllerForTest(
 ) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
 	t.Helper()
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
+	return newPostTurnFinalizationControllerForReferenceTest(t, source, classification)
+}
+
+func newPostTurnFinalizationControllerForReferenceTest(
+	t *testing.T,
+	source workflow.CurrentNodeReference,
+	classification workflow.SessionReuseClassification,
+) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+	t.Helper()
 	sessionID := runtimeids.NewSessionID()
-	scopeID := runtimeids.NewExecutionScopeID()
 	key, err := source.Key()
 	if err != nil {
 		t.Fatalf("source key: %v", err)
 	}
-	controller := &CurrentNodeController{
-		permit:    NewMutationPermit(),
-		authority: sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{}),
-		liveByNode: map[workflow.CurrentNodeReferenceKey]runtimeids.ExecutionScopeID{
-			key: scopeID,
-		},
-		live: map[runtimeids.ExecutionScopeID]currentNodeLiveScope{
-			scopeID: {reference: source},
-		},
-		completed: map[runtimeids.ExecutionScopeID]struct{}{scopeID: {}},
-		postTurnFinalization: map[runtimeids.ExecutionScopeID]currentNodePostTurnFinalization{
-			scopeID: {
-				sessionID:      &sessionID,
-				classification: classification,
-				reference:      source,
-			},
-		},
-		heldStarts: make(map[runtimeids.ExecutionScopeID][]currentNodeQueuedStart),
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
 	}
-	t.Cleanup(func() { _ = controller.authority.Close(context.Background()) })
-	return controller, scopeID, sessionID
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{
+		permit:     NewMutationPermit(),
+		authority:  authority,
+		operations: make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation),
+	}
+	operationID := runtimeids.NewCurrentNodeOperationID()
+	workflowRef := sessionruntime.WorkflowExecutionRef{
+		ProjectID: "project-test", WorkflowID: currentNodeControllerTestWorkflowID,
+		OperationID: operationID, CurrentNode: source,
+	}
+	detached, err := authority.PrepareDetachedScriptExecution(context.Background(), sessionruntime.DetachedScriptExecutionRequest{
+		Workflow: workflowRef,
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare post-turn Script execution: %v", err)
+	}
+	handle, launch, err := detached.Publish(context.Background(), func() error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("publish post-turn Script execution: %v", err)
+	}
+	launch()
+	completion := workflowstore.CurrentNodeCompletionResult{PostCompletionEligible: true}
+	phase := currentNodePostTurnFinalization{
+		sessionID: &sessionID, classification: classification, reference: source,
+	}
+	controller.operations[key] = &currentNodeOperation{
+		ref: workflowRef.Operation(), workflow: &workflowRef,
+		completion: &completion, postTurnFinalization: &phase,
+	}
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = handle.Stop(stopCtx)
+		_ = authority.Close(context.Background())
+	})
+	return controller, handle.Scope().ID(), sessionID
+}
+
+func postTurnFinalizationPendingForTest(
+	t *testing.T,
+	controller *CurrentNodeController,
+	scopeID runtimeids.ExecutionScopeID,
+) bool {
+	t.Helper()
+	handle, live := controller.authority.ExecutionByScope(scopeID)
+	if !live {
+		t.Fatal("post-turn test execution is not live")
+	}
+	ref, ok := handle.Scope().Workflow()
+	if !ok {
+		t.Fatal("post-turn test execution has no Workflow metadata")
+	}
+	key, err := ref.CurrentNode.Key()
+	if err != nil {
+		t.Fatalf("post-turn Current Node key: %v", err)
+	}
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	operation := controller.operations[key]
+	return operation != nil &&
+		operation.ref.OperationID == ref.OperationID &&
+		operation.postTurnFinalization != nil
 }
 
 func TestObserveWorkflowTaskExecutionsIgnoresLatchedWorkerFailure(t *testing.T) {
@@ -485,19 +515,9 @@ func mustAgentCompletionStepID(t *testing.T, raw string) runtimeids.StepID {
 	return value
 }
 
-func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterScopeRetires(t *testing.T) {
+func TestCurrentNodeControllerRejectsProtocolViolationsAfterScopeRetires(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
-	source := currentNodeReferenceForControllerTest(t, "task-retained-session-violation", "node-source")
-	sourceNode := workflow.CurrentNode{
-		Reference: source,
-		SessionID: &sessionID,
-		Scheduling: &workflow.CurrentNodeScheduling{
-			State: workflow.CurrentNodeSchedulingInterrupted,
-		},
-	}
-	store := &currentNodeControllerStore{
-		idleResolved: &sourceNode,
-	}
+	store := &currentNodeControllerStore{}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
 	t.Cleanup(func() {
@@ -511,38 +531,14 @@ func TestCurrentNodeControllerRecordsProtocolViolationsForRetainedSessionAfterSc
 		MaxCount:  2,
 	}
 
-	first, err := controller.RecordProtocolViolation(context.Background(), request)
-	if err != nil {
-		t.Fatalf("record first retained Session protocol violation: %v", err)
-	}
-	if first.Count != 1 || first.Interrupted {
-		t.Fatalf("first retained Session protocol violation = %+v", first)
+	if _, err := controller.RecordProtocolViolation(context.Background(), request); !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+		t.Fatalf("record retired-scope protocol violation error = %v, want %v", err, sessionruntime.ErrExecutionNoLongerLive)
 	}
 	if err := controller.ResetProtocolViolationBudget(context.Background(), workflowruntime.ViolationResetRequest{
 		ScopeID:   request.ScopeID,
 		SessionID: &sessionID,
-	}); err != nil {
-		t.Fatalf("reset retained Session protocol violation budget: %v", err)
-	}
-	afterReset, err := controller.RecordProtocolViolation(context.Background(), request)
-	if err != nil {
-		t.Fatalf("record retained Session protocol violation after reset: %v", err)
-	}
-	if afterReset.Count != 1 || afterReset.Interrupted {
-		t.Fatalf("retained Session protocol violation after reset = %+v", afterReset)
-	}
-	atCap, err := controller.RecordProtocolViolation(context.Background(), request)
-	if err != nil {
-		t.Fatalf("record retained Session protocol violation at cap: %v", err)
-	}
-	if atCap.Count != 2 || !atCap.Interrupted {
-		t.Fatalf("retained Session protocol violation at cap = %+v", atCap)
-	}
-	controller.mu.Lock()
-	_, retainedViolation := controller.violations[request.ScopeID]
-	controller.mu.Unlock()
-	if retainedViolation {
-		t.Fatal("retained Session kept retired-scope violation counter after reaching cap")
+	}); !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+		t.Fatalf("reset retired-scope protocol violation error = %v, want %v", err, sessionruntime.ErrExecutionNoLongerLive)
 	}
 }
 

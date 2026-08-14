@@ -1228,11 +1228,7 @@ func TestWorkflowRunnerCompletedAgentRejectsStopDuringPostTurnFinalization(t *te
 	if len(client.CompactionCalls()) != 1 {
 		t.Fatalf("post-turn compactions before cancellation = %d, want one committed replacement", len(client.CompactionCalls()))
 	}
-	execution, exists := f.authority.ExecutionByWorkflow(sessionruntime.WorkflowExecutionRef{
-		ProjectID:   f.projectID,
-		WorkflowID:  workflowID,
-		CurrentNode: source,
-	})
+	execution, exists := f.authority.ExecutionByCurrentNode(f.projectID, workflowID, source)
 	if !exists {
 		t.Fatal("post-turn finalization had no live exact execution scope")
 	}

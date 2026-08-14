@@ -493,14 +493,18 @@ func TestCurrentNodeControllerScopeFailurePersistsDespiteUnrelatedWorkerError(t 
 			t.Errorf("close authority: %v", err)
 		}
 	})
-	scopeID := runtimeids.NewExecutionScopeID()
-	key, err := reference.Key()
+	shellPath, err := exec.LookPath("sh")
 	if err != nil {
-		t.Fatalf("Current Node key: %v", err)
+		t.Skipf("sh executable unavailable: %v", err)
 	}
+	handle := startLiveTestWorkflowScript(t, controller, authority, reference, sessionruntime.ScriptExecutionRequest{
+		Command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+	})
+	scopeID := handle.Scope().ID()
 	controller.mu.Lock()
-	controller.live[scopeID] = currentNodeLiveScope{reference: reference, scopeID: scopeID}
-	controller.liveByNode[key] = scopeID
 	controller.workerErr = errors.New("unrelated admission persistence failed")
 	controller.mu.Unlock()
 
