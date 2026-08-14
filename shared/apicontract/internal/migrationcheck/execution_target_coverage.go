@@ -23,12 +23,12 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "6ff799e833b6f30cf308979e3e24d1ed05d1bc37ac9d5e42be35dc6e05d9e0bd"
+const reviewedExceptionalWireFingerprint = "f6e2c073dc0a8288abe86697517a78434a384eec1fadbd11eb9cb014ee18cc79"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
-		wireExceptionSignoff[serverapi.OnboardingImportSelection]("kent.api.onboarding.ImportSelection", WireExceptionCustomWire, "e473d132e13439ce788ddeb22a4e3afc904f8d6e8c23a01ead50fa79e2a17f09", "5425c895403bbbc7477807f09bf3d69c4c7065cf90b4420090f9471c231160f2"),
-		wireExceptionSignoff[serverapi.SessionLaunchIntent]("kent.api.session_launch.SessionLaunchIntent", WireExceptionCustomWire, "e7f701fee4ff7f147ffbb75cd5761737749b546e38c96bd666e46191c5e43207", "a1b393902feb4df451a2221e72908f0a22f6b9ffae847eda96c879e1518461a2"),
+		wireExceptionSignoff[serverapi.OnboardingImportSelection]("kent.api.onboarding.ImportSelection", WireExceptionCustomWire, "e473d132e13439ce788ddeb22a4e3afc904f8d6e8c23a01ead50fa79e2a17f09", "90d4b8acd87ebe1653a30c80790588c9223a498b3d969c3f32538f5b71c8568e"),
+		wireExceptionSignoff[serverapi.SessionLaunchIntent]("kent.api.session_launch.SessionLaunchIntent", WireExceptionCustomWire, "e7f701fee4ff7f147ffbb75cd5761737749b546e38c96bd666e46191c5e43207", "c82e848f4bd5dae76c372c2daf0da9c038173a385f206fba54c3ebc989175162"),
 		wireExceptionSignoff[serverapi.SessionExecutionEnvironment]("kent.api.session.ExecutionEnvironment", WireExceptionCustomWire, "a231e422b41e62fa1b5f307614a961db5a7490ec2c141e77bb5c8b6b1f32b02a", "d316523023a6d35f938e46044f3070e0c48628e30ccbec7924cef51d7f386712"),
 		wireExceptionSignoff[serverapi.AskListPendingBySessionResponse]("kent.api.prompt.ListQuestionsSuccess", WireExceptionFieldReshape, "85425761cf10ee8555ebb1f2e5686d10b1e0f7b618be215239c203e4c8cfee08", "9f24f00e5eb22ee246ec6b2176f45ace3d9d262d943880bac8c042d0f389c250"),
 		wireExceptionSignoff[protocol.AttentionNotificationEventParams]("kent.api.attention.NotificationEvent", WireExceptionOneofReshape, "14cb26bba252154f7fa5c4b670538eb7616da092a5d489e736706631fca5b6d9", "412f8ed976baa568a437096e2cc1d26dc99bda41031c3a6ca14fa021031547e7"),
@@ -49,7 +49,7 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[protocol.PromptFollowUpEventParams]("kent.api.prompt.FollowUpEvent", WireExceptionFieldReshape, "cac9a46268261f2cb2f00a700af482264ff6a445c80ba5ba5b15d80daf6665db", "47b516bee6246428c18cdb37b86c6f9a4949bff8fd0e00703ff1e4053b705b4e"),
 		wireExceptionSignoff[serverapi.RunPromptProgress]("kent.api.run_prompt.ProgressEvent", WireExceptionOneofReshape, "b3db3e2787e6f7433efaf5e10ff0d72377c5511894dd555c17c32a62f7e40ebe", "4d1829873a3cb385f91675df1cde9b056cb7bb833b1913635684bad4730fa302"),
 		wireExceptionSignoff[serverapi.RunPromptResponse]("kent.api.run_prompt.Success", WireExceptionFieldReshape, "6a455ce700dd4e28400c184d7b685ccf2288555ea3d0e473e60e27118e97422d", "861bd4f818780f6b8ed073437422b0bf2f1cdeffdd85ed5f1d1021f2ac9e340b"),
-		wireExceptionSignoff[serverapi.RuntimeLiveWaitResponse]("kent.api.runtime.LiveWaitSuccess", WireExceptionOneofReshape, "1219a8f4adf8c6913fda169331d7a32ac0381199a627e4f6643d4e7697c7cef3", "08dda6168e52a39e2c0ef234f8b05430f1370c9542738f85de0512aba2ddadca"),
+		wireExceptionSignoff[serverapi.RuntimeLiveWaitResponse]("kent.api.runtime.LiveWaitSuccess", WireExceptionOneofReshape, "1219a8f4adf8c6913fda169331d7a32ac0381199a627e4f6643d4e7697c7cef3", "c8973268814a042750428b1e87d953a837978136007cfa4c8deaaecc9cb45e3e"),
 		wireExceptionSignoff[serverapi.RuntimeLiveWatchOutcome]("kent.api.prompt.LiveWatchOutcome", WireExceptionOneofReshape, "2c1fcb261f58e21765c3ebba2187e963e3cb2c21835a6777138c0c8d25b1ac32", "dcd6360e9d859ef10a2951a58afd2780f5bf88339013c11154e3efab925ebeed"),
 		wireExceptionSignoff[serverapi.RuntimeGoalShowResponse]("kent.api.runtime.GoalShowSuccess", WireExceptionFieldReshape, "30aea36c1ebcbbee81b278b17858ad9653d22be144a712945222d7b2641690fa", "eb882fe50da68f7043b2fbec2743ab09f387d2c24d18454bdbada26b1ca5a2e2"),
 		wireExceptionSignoff[clientui.RuntimeGoal]("kent.api.runtime.GoalView", WireExceptionFieldReshape, "5d495850fce6a0006c55f0cc9ab085874d4da742fe66ec00930b325132c2d222", "57d6ad969788d140749f35471bde62912ae2e29c8ed6cd5f40727f93b9361a60"),
@@ -94,7 +94,7 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[serverapi.WorktreeEnterRequest]("kent.api.worktree.EnterRequest", WireExceptionFieldReshape, "a0f130be369436c2d0c9b23bf0eb65b8c4118e498dbc8bc816316b2cb5ed4f09", "993589cf55620531c271e7bda58cac686ca7a9e88afc95b8a59464588ebec62e"),
 		wireExceptionSignoff[serverapi.WorktreeLeaveRequest]("kent.api.worktree.LeaveRequest", WireExceptionFieldReshape, "ada2e2d635da350049bfbdd29d72e8b73fdf8f0ada904b0ce482745ae1bdb6b5", "20a0a210647730cbee2ba1e51277a2582b9ee6347834e80e549251a0123911b4"),
 		wireExceptionSignoff[protocol.StreamCompleteParams]("kent.api.worktree.SetupCompletion", WireExceptionFieldReshape, "ec45766d5d031f43b6b72f68b420eaa81d70c43d04433406c417988f4c753b43", "1834eba547236ef20959077e5705ccf23c5eac3537b271635be0800b6e3ca1d9"),
-		wireExceptionSignoff[protocol.WorktreeSetupEventParams]("kent.api.worktree.SetupEvent", WireExceptionOneofReshape, "08515f0e3215c776c462aaf31310c36ac4783dcb6c30ee2dafb8174b844beac9", "5c082ee5f88bb9c2fba3f5fefa48124dc7a27715ab85de5691f844a1ae4af098"),
+		wireExceptionSignoff[protocol.WorktreeSetupEventParams]("kent.api.worktree.SetupEvent", WireExceptionOneofReshape, "08515f0e3215c776c462aaf31310c36ac4783dcb6c30ee2dafb8174b844beac9", "9a1f920269c6700bbaa9fd0cd2631bea5d378af837835d04309269233fd71b17"),
 	}
 }
 
@@ -214,6 +214,8 @@ func actualTargetPresenceMappings() []WirePresenceMapping {
 	result = append(result, presenceMappings[serverapi.RuntimeAppendCommittedEntryRequest]("kent.api.transcript.AppendCommittedEntryRequest", "notice_id", "visibility")...)
 	result = append(result, presenceMappings[serverapi.RuntimeGoalSetRequest]("kent.api.runtime.GoalSetRequest", "run_id", "step_id")...)
 	result = append(result, presenceMappings[serverapi.RuntimeGoalStatusRequest]("kent.api.runtime.GoalMutationRequest", "run_id", "step_id")...)
+	result = append(result, presenceMappingsAs[serverapi.WorkflowNode](true, "kent.api.workflow_definition.WorkflowNode", "subagent_role")...)
+	result = append(result, presenceMappingsAs[serverapi.WorkflowGraphDraftNode](true, "kent.api.workflow_definition.GraphDraftNode", "subagent_role")...)
 	result = append(result, presenceMappings[clientui.SessionSummary]("kent.api.project.SessionSummary", "first_prompt_preview", "name")...)
 	result = append(result, presenceMappings[serverapi.SessionInitialInputRequest]("kent.api.session_launch.SessionInitialInputRequest", "session_id")...)
 	result = append(result, presenceMappings[serverapi.SessionPlan]("kent.api.session_launch.SessionPlan", "configured_model_name")...)

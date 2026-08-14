@@ -141,9 +141,23 @@ message DependencyCreateIntent {
 }
 
 message CreateRequest {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.create_project_id_nonblank"
+      message: "project_id must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
-  string title = 3 [(buf.validate.field).string.min_len = 1];
+  string title = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.create_title_nonblank"
+      message: "title must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional string body = 4;
   optional string source_url = 5 [(buf.validate.field).string.min_len = 1];
   optional string source_workspace_id = 6 [(buf.validate.field).string.min_len = 1];
@@ -163,7 +177,14 @@ message CreateSuccess {
 
 message UpdateRequest {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
-  optional string title = 2 [(buf.validate.field).string.min_len = 1];
+  optional string title = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_task.update_title_nonblank"
+      message: "title must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional string body = 3;
   optional string source_workspace_id = 4 [(buf.validate.field).string.min_len = 1];
 }

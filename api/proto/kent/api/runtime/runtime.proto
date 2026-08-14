@@ -7,6 +7,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "kent/api/prompt_command/validation.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 import "kent/api/worktree/worktree.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/runtime;runtimepb";
@@ -75,19 +76,11 @@ message ReadModelVersion {
 message ActiveStep {
   string run_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.active_step_run_id.uuid_v4"
-      message: "run_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string step_id = 2 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.active_step_step_id.uuid_v4"
-      message: "step_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   ActivityActiveKind active_kind = 3 [(buf.validate.field).enum = {
     defined_only: true
@@ -291,11 +284,7 @@ message SubmitUserTurnRequest {
 message SubmitUserTurnQueued {
   string queue_item_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.queue_item_id.uuid_v4"
-      message: "queue_item_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   bool compacted = 2;
   bool steered = 3;
@@ -367,19 +356,11 @@ message InterruptSuccess {
 message LiveSteerRequest {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_steer_session_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   optional string caller_session_id = 2 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_steer_caller_session_id.uuid_v4"
-      message: "caller_session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string text = 3 [
     (buf.validate.field).string.min_len = 1,
@@ -394,11 +375,7 @@ message LiveSteerRequest {
 message LiveSteerSuccess {
   string queue_item_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_steer_queue_item_id.uuid_v4"
-      message: "queue_item_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string text = 2 [
     (buf.validate.field).string.min_len = 1,
@@ -413,11 +390,7 @@ message LiveSteerSuccess {
 message LiveStopRequest {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_stop_session_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -437,11 +410,7 @@ message LiveStopSuccess {
 message LiveWaitRequest {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_wait_session_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -470,11 +439,7 @@ message LiveWaitNoFinalAnswer {
 message LiveWaitSuccess {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_wait_result_session_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string session_name = 2 [
     (buf.validate.field).string.min_len = 1,
@@ -490,27 +455,15 @@ message LiveWaitSuccess {
   }];
   string live_run_group_id = 4 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_wait_group_id.uuid_v4"
-      message: "live_run_group_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string terminal_run_id = 5 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_wait_terminal_run_id.uuid_v4"
-      message: "terminal_run_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string terminal_step_id = 6 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.runtime.live_wait_terminal_step_id.uuid_v4"
-      message: "terminal_step_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string terminal_status = 7 [
     (buf.validate.field).string.min_len = 1,
@@ -557,8 +510,14 @@ message Goal {
     defined_only: true
     not_in: [0]
   }];
-  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
-  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp created_at = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  google.protobuf.Timestamp updated_at = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
 }
 
 message GoalPreview {

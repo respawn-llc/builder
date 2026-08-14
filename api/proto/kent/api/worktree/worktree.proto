@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/worktree;worktreepb";
 
@@ -312,36 +313,18 @@ message BranchCleanupOutcome {
 message RuntimeStepOrigin {
   string run_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.origin_run_id.uuid_v4"
-      message: "run_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string step_id = 2 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.origin_step_id.uuid_v4"
-      message: "step_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
 message TransitionHeader {
   string operation_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.operation_id.uuid_v4"
-      message: "operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string session_id = 2 [(buf.validate.field).string.min_len = 1];
   optional RuntimeStepOrigin origin = 3;
@@ -350,13 +333,7 @@ message TransitionHeader {
 message ScheduledAcknowledgement {
   string operation_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.ack_operation_id.uuid_v4"
-      message: "operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -392,13 +369,7 @@ message TransitionPendingDetails {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
   string pending_operation_id = 2 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.pending_operation_id.uuid_v4"
-      message: "pending_operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -666,13 +637,7 @@ message CreateTargetResolveResult {
 message CreateRequest {
   string setup_operation_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.setup_operation_id.uuid_v4"
-      message: "setup_operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   string session_id = 2 [(buf.validate.field).string.min_len = 1];
   optional string base_ref = 3 [(buf.validate.field).string.min_len = 1];
@@ -973,13 +938,7 @@ message SetupFailed {
 message SetupEvent {
   string setup_operation_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.event_setup_operation_id.uuid_v4"
-      message: "setup_operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   oneof phase {
     option (buf.validate.oneof).required = true;
@@ -993,13 +952,7 @@ message SetupEvent {
 message SetupSubscribeRequest {
   string setup_operation_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.worktree.subscribe_setup_operation_id.uuid_v4"
-      message: "setup_operation_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 

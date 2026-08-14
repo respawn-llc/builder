@@ -7,6 +7,7 @@ import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
 import "kent/api/runtime/runtime.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
 
@@ -23,23 +24,11 @@ message SessionCreateOrigin {
     google.protobuf.Empty independent = 1;
     string previous_session_id = 2 [
       (buf.validate.field).string.uuid = true,
-      (buf.validate.field).cel = {
-        id: "kent.session_launch.previous_session_id.uuid_v4"
-        message: "previous_session_id must be canonical lowercase UUID v4 text"
-        expression:
-          "size(this) == 36 && this == this.lowerAscii() && "
-          "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-      }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
     ];
     string parent_agent_session_id = 3 [
       (buf.validate.field).string.uuid = true,
-      (buf.validate.field).cel = {
-        id: "kent.session_launch.parent_agent_session_id.uuid_v4"
-        message: "parent_agent_session_id must be canonical lowercase UUID v4 text"
-        expression:
-          "size(this) == 36 && this == this.lowerAscii() && "
-          "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-      }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
     ];
   }
 }
@@ -51,13 +40,7 @@ message SessionLaunchIntent {
     SessionCreateOrigin create_new = 1 [(buf.validate.field).required = true];
     string open_existing_session_id = 2 [
       (buf.validate.field).string.uuid = true,
-      (buf.validate.field).cel = {
-        id: "kent.session_launch.open_existing_session_id.uuid_v4"
-        message: "open_existing_session_id must be canonical lowercase UUID v4 text"
-        expression:
-          "size(this) == 36 && this == this.lowerAscii() && "
-          "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-      }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
     ];
   }
 }
@@ -370,13 +353,7 @@ message SessionPlanRequest {
 message SessionPlan {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.session_plan_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   Settings active_settings = 2 [(buf.validate.field).required = true];
   repeated ToolID enabled_tool_ids = 3 [(buf.validate.field).repeated.items.enum = {
@@ -478,28 +455,12 @@ message SubagentLaunchMaxDepthExceededDetails {
 message SubagentLaunchLineageCorruptDetails {
   string repeated_session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.repeated_session_id.uuid_v4"
-      message: "repeated_session_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   repeated string visited_session_ids = 2 [
-    (buf.validate.field).repeated = {
-      min_items: 1
-      items: {
-        string: {uuid: true}
-      }
-    },
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.visited_session_ids.uuid_v4"
-      message: "visited_session_ids must contain canonical lowercase UUID v4 text"
-      expression:
-        "this.all(id, size(id) == 36 && id == id.lowerAscii() && "
-        "id.charAt(14) == '4' && id.charAt(19) in ['8', '9', 'a', 'b'])"
-    }
+    (buf.validate.field).repeated.min_items = 1,
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -557,15 +518,7 @@ message WorkspaceChatDraftResult {
 message MaterializeWorkspaceChatSuccess {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.materialized_session_uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && "
-        "this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && "
-        "this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 

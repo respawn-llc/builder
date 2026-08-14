@@ -221,6 +221,20 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 			Objective: " ",
 			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
 		},
+		"zero goal result creation time": &runtimepb.Goal{
+			Id:        "goal",
+			Objective: "objective",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+			CreatedAt: zeroTimestamp,
+			UpdatedAt: validTimestamp,
+		},
+		"zero goal result update time": &runtimepb.Goal{
+			Id:        "goal",
+			Objective: "objective",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+			CreatedAt: validTimestamp,
+			UpdatedAt: zeroTimestamp,
+		},
 		"zero goal creation time": &runtimepb.GoalView{
 			Id:        "goal",
 			Objective: "objective",

@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+package kent.api.shared;
+
+import "buf/validate/validate.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/shared;sharedpb";
+
+extend buf.validate.StringRules {
+  optional bool canonical_uuid_v4 = 50002 [(buf.validate.predefined).cel = {
+    id: "kent.shared.canonical_uuid_v4"
+    message: "must be canonical lowercase UUID v4 text"
+    expression:
+      "!rule || ("
+      "size(this) == 36 && this == this.lowerAscii() && "
+      "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b'])"
+  }];
+}

@@ -217,6 +217,21 @@ func TestWorkflowTaskLifecycleGeneratedValidationPreservesMutationPredicates(t *
 		t.Fatal(err)
 	}
 
+	for _, fixture := range []struct {
+		message string
+		fields  map[string]string
+	}{
+		{message: "CreateRequest", fields: map[string]string{"project_id": " ", "title": "task"}},
+		{message: "CreateRequest", fields: map[string]string{"project_id": "project", "title": " "}},
+		{message: "UpdateRequest", fields: map[string]string{"task_id": "task", "title": " "}},
+	} {
+		request := dynamicMessage(t, files, protoreflect.FullName("kent.api.workflow_task."+fixture.message))
+		for field, value := range fixture.fields {
+			setStringField(t, request, protoreflect.Name(field), value)
+		}
+		assertDynamicInvalid(t, request)
+	}
+
 	complete := dynamicMessage(t, files, "kent.api.workflow_task.CompleteRequest")
 	setEnumField(t, complete, "actor_kind", 2)
 	setStringField(t, complete, "task_id", "task-1")

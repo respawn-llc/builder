@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 import "kent/api/session_launch/validation.proto";
 import "kent/api/session_launch/session_launch.proto";
 
@@ -326,13 +327,7 @@ message SessionRuntimeActivateRequest {
 message SessionRuntimeAttachment {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.runtime_attachment_session_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression:
-        "size(this) == 36 && this == this.lowerAscii() && "
-        "this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   uint64 generation = 2 [
     (buf.validate.field).uint64 = {

@@ -7,6 +7,7 @@ import "google/protobuf/duration.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/session_launch/session_launch.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/run_prompt;runpromptpb";
 
@@ -62,11 +63,7 @@ message Result {
 message SessionStarted {
   string session_id = 1 [
     (buf.validate.field).string.uuid = true,
-    (buf.validate.field).cel = {
-      id: "kent.run_prompt.session_started_id.uuid_v4"
-      message: "session_id must be canonical lowercase UUID v4 text"
-      expression: "size(this) == 36 && this == this.lowerAscii() && this.charAt(14) == '4' && this.charAt(19) in ['8', '9', 'a', 'b']"
-    }
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 

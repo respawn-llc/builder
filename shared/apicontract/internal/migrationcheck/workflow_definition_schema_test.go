@@ -241,6 +241,22 @@ func TestWorkflowDefinitionGeneratedValidationCoversGraphAndLabelBoundaries(t *t
 
 func TestWorkflowDefinitionGeneratedValidationCoversCrossFieldGraphRules(t *testing.T) {
 	validUUID := "123e4567-e89b-42d3-a456-426614174000"
+	nonAgentRole := &workflowpb.GraphDraftNode{
+		Kind:         workflowpb.NodeKind_WORKFLOW_NODE_KIND_START,
+		SubagentRole: stringPointer(" "),
+	}
+	if err := protoapi.ValidateGeneratedMessage(nonAgentRole); err == nil {
+		t.Fatal("non-agent node with a present blank subagent role was accepted")
+	}
+	nonAgentRole.SubagentRole = stringPointer("worker")
+	if err := protoapi.ValidateGeneratedMessage(nonAgentRole); err == nil {
+		t.Fatal("non-agent node with a subagent role was accepted")
+	}
+	nonAgentRole.SubagentRole = nil
+	if err := protoapi.ValidateGeneratedMessage(nonAgentRole); err != nil {
+		t.Fatalf("non-agent node without a subagent role: %v", err)
+	}
+
 	validContext := &workflowpb.ContextSource{
 		Kind: workflowpb.ContextSourceKind_WORKFLOW_CONTEXT_SOURCE_KIND_IMMEDIATE_SOURCE,
 	}

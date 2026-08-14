@@ -1,12 +1,16 @@
 import {
+  createRegistry,
   fromBinary,
   toBinary,
   type DescMessage,
   type MessageShape,
 } from "@bufbuild/protobuf";
 import { createValidator } from "@bufbuild/protovalidate";
+import { canonical_uuid_v4 } from "./gen/kent/api/shared/validation_pb.js";
 
-const validator = createValidator();
+const validator = createValidator({
+  registry: createRegistry(canonical_uuid_v4),
+});
 
 export function decodeGeneratedMessage<Descriptor extends DescMessage>(
   descriptor: Descriptor,

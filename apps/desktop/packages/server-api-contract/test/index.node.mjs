@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
+import { create, createRegistry, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
   DurationSchema,
   EmptySchema,
@@ -35,6 +35,7 @@ import {
   schema_kent_api_prompt_prompt as prompt,
   schema_kent_api_run_prompt_run_prompt as runPrompt,
   schema_kent_api_shared_foundation as foundation,
+  schema_kent_api_shared_validation as sharedValidation,
   schema_kent_api_server_server as server,
   schema_kent_api_transcript_transcript as transcript,
 } from "../dist/index.js";
@@ -105,7 +106,9 @@ const {
   SessionStartedSchema,
 } = runPrompt;
 
-const validator = createValidator();
+const validator = createValidator({
+  registry: createRegistry(sharedValidation.canonical_uuid_v4),
+});
 const javaScriptSafeIntegerMaximum = 9007199254740991n;
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
