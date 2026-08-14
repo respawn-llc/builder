@@ -820,6 +820,34 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
+	var executionRoot *ExecutionRoot
+	if task.ExecutionTarget != nil {
+		root, err := executionRootForTask(ctx, s.queries, taskRow)
+		if err != nil {
+			return CurrentNodeStartContext{}, err
+		}
+		executionRoot = &root
+	}
+	return s.resolveMaterializedCurrentNodeStartContext(
+		ctx,
+		s.queries,
+		task,
+		workflowRecord,
+		definition,
+		currentNode,
+		executionRoot,
+	)
+}
+
+func (s *Store) resolveMaterializedCurrentNodeStartContext(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	task TaskRecord,
+	workflowRecord WorkflowRecord,
+	definition workflow.Definition,
+	currentNode workflow.CurrentNode,
+	executionRoot *ExecutionRoot,
+) (CurrentNodeStartContext, error) {
 	node, err := currentNodeDefinitionNode(definition, currentNode.Reference.NodeID)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
@@ -831,17 +859,9 @@ func (s *Store) resolveCurrentNodeStartContext(ctx context.Context, currentNode 
 	if err != nil {
 		return CurrentNodeStartContext{}, err
 	}
-	transitionIDs, transitionOptions, err := s.currentNodeTransitionOptions(ctx, s.queries, definition, currentNode, node)
+	transitionIDs, transitionOptions, err := s.currentNodeTransitionOptions(ctx, q, definition, currentNode, node)
 	if err != nil {
 		return CurrentNodeStartContext{}, err
-	}
-	var executionRoot *ExecutionRoot
-	if task.ExecutionTarget != nil {
-		root, err := executionRootForTask(ctx, s.queries, taskRow)
-		if err != nil {
-			return CurrentNodeStartContext{}, err
-		}
-		executionRoot = &root
 	}
 	values := cloneCurrentNodeOutputValues(currentNode.CurrentInputValues)
 	if _, ok := values[workflow.RuntimePromptParameterCommentary]; !ok {

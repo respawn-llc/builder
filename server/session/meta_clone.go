@@ -27,5 +27,17 @@ func cloneMeta(in Meta) Meta {
 		out.Goal = &goal
 	}
 	out.Locked = cloneLockedContract(in.Locked)
+	out.ActiveWorkflowAssignment = cloneMessageRecord(in.ActiveWorkflowAssignment)
 	return out
+}
+
+func cloneMessageRecord(in *MessageRecord) *MessageRecord {
+	if in == nil {
+		return nil
+	}
+	out, err := normalizeMessageRecord(*in)
+	if err != nil {
+		panic(err)
+	}
+	return &out
 }
