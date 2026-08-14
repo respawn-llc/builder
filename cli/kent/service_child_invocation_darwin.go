@@ -80,16 +80,11 @@ func prepareServiceChildInvocation(persistenceRoot string) (serviceChildContainm
 		closeDarwinFiles(lock, lease, gate)
 		return serviceChildContainment{}, err
 	}
-	watchdogAck, err := readDarwinServiceMessage(lease)
-	if err != nil {
-		closeDarwinFiles(lock, lease, gate)
-		return serviceChildContainment{}, fmt.Errorf("wait for Darwin watchdog acknowledgement: %w", err)
-	}
-	gateAck, err := readDarwinServiceMessage(gate)
+	watchdogAck, gateAck, err := waitForDarwinChildArming(lease, gate)
 	_ = gate.Close()
 	if err != nil {
 		closeDarwinFiles(lock, lease)
-		return serviceChildContainment{}, fmt.Errorf("wait for Darwin host start gate: %w", err)
+		return serviceChildContainment{}, err
 	}
 	if err := validateDarwinArmedAcknowledgement(watchdogAck, os.Getpid()); err != nil {
 		closeDarwinFiles(lock, lease)
@@ -102,6 +97,59 @@ func prepareServiceChildInvocation(persistenceRoot string) (serviceChildContainm
 	containment := serviceChildContainment{lock: lock, lease: lease, leaseLost: make(chan struct{})}
 	containment.startLeaseMonitor()
 	return containment, nil
+}
+
+func waitForDarwinChildArming(lease, gate *os.File) (darwinServiceMessage, darwinServiceMessage, error) {
+	queue, err := unix.Kqueue()
+	if err != nil {
+		return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("create Darwin child arming queue: %w", err)
+	}
+	defer unix.Close(queue)
+	changes := []unix.Kevent_t{
+		{Ident: uint64(lease.Fd()), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD | unix.EV_ENABLE},
+		{Ident: uint64(gate.Fd()), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD | unix.EV_ENABLE},
+	}
+	if _, err := unix.Kevent(queue, changes, nil, nil); err != nil {
+		return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("arm Darwin child startup channels: %w", err)
+	}
+	var watchdogAck darwinServiceMessage
+	watchdogReady := false
+	events := make([]unix.Kevent_t, 2)
+	for {
+		count, err := unix.Kevent(queue, nil, events, nil)
+		if err != nil {
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("wait for Darwin child startup: %w", err)
+		}
+		for _, event := range events[:count] {
+			switch int(event.Ident) {
+			case int(lease.Fd()):
+				message, err := readDarwinServiceMessage(lease)
+				if err != nil {
+					if watchdogReady {
+						return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("Darwin watchdog lease failed before host start gate: %w", err)
+					}
+					return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("wait for Darwin watchdog acknowledgement: %w", err)
+				}
+				if watchdogReady {
+					return darwinServiceMessage{}, darwinServiceMessage{}, errors.New("unexpected Darwin watchdog message before host start gate")
+				}
+				watchdogAck = message
+				watchdogReady = true
+			case int(gate.Fd()):
+				gateAck, err := readDarwinServiceMessage(gate)
+				if err != nil {
+					return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("wait for Darwin host start gate: %w", err)
+				}
+				if !watchdogReady {
+					return darwinServiceMessage{}, darwinServiceMessage{}, errors.New("Darwin host opened the start gate before watchdog acknowledgement")
+				}
+				return watchdogAck, gateAck, nil
+			}
+		}
+	}
 }
 
 func validateDarwinArmedAcknowledgement(message darwinServiceMessage, childPID int) error {

@@ -133,7 +133,11 @@ func (launchdServiceBackend) Start(ctx context.Context, spec serviceSpec) error 
 		}
 		return fmt.Errorf("stat launchd plist: %w", err)
 	}
-	if loaded, _ := launchdLoaded(ctx); !loaded {
+	inspection, err := inspectLaunchdService(ctx)
+	if err != nil {
+		return err
+	}
+	if !inspection.Loaded {
 		if err := bootstrapLaunchdService(ctx, spec, path); err != nil {
 			return err
 		}
@@ -143,10 +147,13 @@ func (launchdServiceBackend) Start(ctx context.Context, spec serviceSpec) error 
 	if err != nil {
 		return err
 	}
-	if _, err = runServiceCommand(ctx, "launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel); err != nil {
+	if _, err = runServiceCommand(ctx, "launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel); err != nil {
 		return err
 	}
-	if err := waitForCapturedDarwinTopologyShutdown(ctx, topology, false); err != nil {
+	if err := waitForCapturedDarwinTopologyShutdown(ctx, topology, true); err != nil {
+		return err
+	}
+	if err := bootstrapLaunchdService(ctx, spec, path); err != nil {
 		return err
 	}
 	return waitForLaunchdServiceStartup(ctx, spec)
@@ -200,21 +207,23 @@ func (launchdServiceBackend) Status(ctx context.Context, spec serviceSpec) (serv
 		return serviceStatus{}, topologyErr
 	}
 	command := serverChildCommand(spec)
+	registeredCommand := readLaunchdRegisteredCommand(path)
 	pid := 0
 	if topology.Child != nil {
 		pid = topology.Child.PID
 		command = topology.Child.Command
 	}
 	return serviceStatus{
-		Backend:     "launchd",
-		Installed:   installed,
-		Loaded:      topology.Host.Loaded,
-		Running:     topology.Host.PID > 0 || topology.Host.State == "running",
-		PID:         pid,
-		Command:     command,
-		Endpoint:    spec.Endpoint,
-		Logs:        []string{spec.StdoutLogPath, spec.StderrLogPath},
-		InstallPath: path,
+		Backend:           "launchd",
+		Installed:         installed,
+		Loaded:            topology.Host.Loaded,
+		Running:           topology.Host.PID > 0 || topology.Host.State == "running",
+		PID:               pid,
+		Command:           command,
+		Endpoint:          spec.Endpoint,
+		Logs:              []string{spec.StdoutLogPath, spec.StderrLogPath},
+		InstallPath:       path,
+		registeredCommand: registeredCommand,
 	}, nil
 }
 
@@ -248,6 +257,9 @@ func reloadLaunchdService(ctx context.Context, spec serviceSpec, path string) er
 }
 
 func darwinServiceLockAvailable(spec serviceSpec) (bool, error) {
+	if err := os.MkdirAll(darwinServiceRuntimeDir(spec.Config.PersistenceRoot), 0o755); err != nil {
+		return false, fmt.Errorf("create Darwin service runtime directory: %w", err)
+	}
 	path := darwinServiceLockPath(spec.Config.PersistenceRoot)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -336,7 +348,11 @@ func waitForCapturedDarwinTopologyShutdown(ctx context.Context, topology darwinS
 	for {
 		loaded := false
 		if requireLaunchdRelease {
-			loaded, _ = launchdLoaded(ctx)
+			inspection, err := inspectLaunchdService(ctx)
+			if err != nil {
+				return err
+			}
+			loaded = inspection.Loaded
 		}
 		hostAlive := false
 		childAlive := false
@@ -462,12 +478,24 @@ func launchdPlistPath() (string, error) {
 	return filepath.Join(home, "Library", "LaunchAgents", serviceLaunchdLabel+".plist"), nil
 }
 
-func launchdLoaded(ctx context.Context) (bool, string) {
+type launchdServiceInspection struct {
+	Loaded bool
+	Output string
+}
+
+func inspectLaunchdService(ctx context.Context) (launchdServiceInspection, error) {
 	result, err := runServiceCommand(ctx, "launchctl", "print", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel)
 	if err != nil {
-		return false, strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
+		var commandErr serviceCommandError
+		if errors.As(err, &commandErr) && (commandErr.Result.Code == 3 || commandErr.Result.Code == 113) {
+			return launchdServiceInspection{}, nil
+		}
+		return launchdServiceInspection{}, fmt.Errorf("inspect launchd service: %w", err)
 	}
-	return true, strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n"))
+	return launchdServiceInspection{
+		Loaded: true,
+		Output: strings.TrimSpace(strings.Join([]string{result.Stdout, result.Stderr}, "\n")),
+	}, nil
 }
 
 func launchdPID(output string) int {

@@ -29,10 +29,14 @@ type darwinServiceTopology struct {
 }
 
 func resolveDarwinLaunchdHost(ctx context.Context, spec serviceSpec) (darwinLaunchdHost, error) {
-	loaded, output := launchdLoaded(ctx)
-	if !loaded {
+	inspection, err := inspectLaunchdService(ctx)
+	if err != nil {
+		return darwinLaunchdHost{}, err
+	}
+	if !inspection.Loaded {
 		return darwinLaunchdHost{}, nil
 	}
+	output := inspection.Output
 	command := parseLaunchdPrintProgramArguments(output)
 	expected := darwinServiceHostCommand(spec)
 	if !commandArgsEqual(command, expected) {
@@ -47,11 +51,15 @@ func resolveDarwinLaunchdHost(ctx context.Context, spec serviceSpec) (darwinLaun
 		if !alive {
 			return darwinLaunchdHost{}, fmt.Errorf("launchd reports host process %d, but it is not alive", pid)
 		}
-		if err := validateDarwinProcessIdentity(pid, expected); err != nil {
+		identity, err := inspectDarwinProcessIdentity(pid)
+		if err != nil {
 			if errors.Is(err, unix.ESRCH) {
 				return darwinLaunchdHost{}, fmt.Errorf("launchd host process %d exited during inspection", pid)
 			}
 			return darwinLaunchdHost{}, err
+		}
+		if !commandArgsEqual(identity.Command, expected) {
+			return darwinLaunchdHost{}, fmt.Errorf("process %d command is %s, expected %s", pid, commandString(identity.Command), commandString(expected))
 		}
 	}
 	return darwinLaunchdHost{Loaded: true, PID: pid, State: launchdState(output), Command: command}, nil
@@ -61,7 +69,7 @@ func resolveDarwinHostChild(spec serviceSpec, host darwinLaunchdHost) (*darwinOw
 	if !host.Loaded || host.PID == 0 {
 		return nil, nil
 	}
-	children, err := listDarwinDirectChildren(host.PID)
+	children, err := listDarwinChildProcesses(host.PID)
 	if err != nil {
 		return nil, err
 	}
@@ -96,10 +104,14 @@ func resolveDarwinServiceReadiness(ctx context.Context, spec serviceSpec) error 
 	if err != nil {
 		return err
 	}
+	healthStatus, healthPID := probeServiceHealth(ctx, spec)
+	return validateDarwinServiceReadiness(topology, healthStatus, healthPID)
+}
+
+func validateDarwinServiceReadiness(topology darwinServiceTopology, healthStatus string, healthPID int) error {
 	if topology.Child == nil {
 		return errors.New("launchd host has not started its server child")
 	}
-	healthStatus, healthPID := probeServiceHealth(ctx, spec)
 	if healthStatus != protocol.HealthStatusOK || healthPID != topology.Child.PID {
 		return fmt.Errorf("owned server child %d is not ready (health=%s health_pid=%d)", topology.Child.PID, healthStatus, healthPID)
 	}

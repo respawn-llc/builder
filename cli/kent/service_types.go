@@ -91,19 +91,20 @@ type serviceSpec struct {
 }
 
 type serviceStatus struct {
-	Backend      string   `json:"backend"`
-	Installed    bool     `json:"installed"`
-	Loaded       bool     `json:"loaded"`
-	Running      bool     `json:"running"`
-	PID          int      `json:"pid,omitempty"`
-	Command      []string `json:"command,omitempty"`
-	Endpoint     string   `json:"endpoint"`
-	Logs         []string `json:"logs"`
-	InstallPath  string   `json:"install_path,omitempty"`
-	Detail       string   `json:"detail,omitempty"`
-	Hints        []string `json:"hints,omitempty"`
-	HealthStatus string   `json:"health_status,omitempty"`
-	HealthPID    int      `json:"health_pid,omitempty"`
+	Backend           string   `json:"backend"`
+	Installed         bool     `json:"installed"`
+	Loaded            bool     `json:"loaded"`
+	Running           bool     `json:"running"`
+	PID               int      `json:"pid,omitempty"`
+	Command           []string `json:"command,omitempty"`
+	Endpoint          string   `json:"endpoint"`
+	Logs              []string `json:"logs"`
+	InstallPath       string   `json:"install_path,omitempty"`
+	Detail            string   `json:"detail,omitempty"`
+	Hints             []string `json:"hints,omitempty"`
+	HealthStatus      string   `json:"health_status,omitempty"`
+	HealthPID         int      `json:"health_pid,omitempty"`
+	registeredCommand []string
 }
 
 type serviceBackend interface {

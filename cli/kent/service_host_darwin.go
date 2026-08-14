@@ -315,7 +315,8 @@ func acquireDarwinServiceLock(ctx context.Context, executable, path string) (*os
 		_ = unix.Shutdown(int(host.Fd()), unix.SHUT_RDWR)
 		_ = helper.Process.Kill()
 		_ = helper.Wait()
-		<-result
+		got := <-result
+		closeDarwinFiles(got.file)
 		return nil, ctx.Err()
 	}
 }

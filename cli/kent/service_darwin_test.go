@@ -42,6 +42,96 @@ func TestDarwinServiceCommandsAndLaunchdPolicy(t *testing.T) {
 	}
 }
 
+func TestDarwinServiceStatusKeepsRegisteredCommandForRootMatchingWithNoChild(t *testing.T) {
+	requested := darwinTestServiceSpec(t)
+	installed := requested
+	installed.Config.PersistenceRoot = filepath.Join(t.TempDir(), "installed-root")
+	plistPath := filepath.Join(t.TempDir(), "kent.plist")
+	if err := os.WriteFile(plistPath, []byte(renderLaunchdPlist(installed)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := readLaunchdRegisteredCommand(plistPath)
+	status := serviceStatus{
+		Installed:         true,
+		Loaded:            true,
+		Running:           true,
+		Command:           serverChildCommand(requested),
+		registeredCommand: command,
+	}
+	if err := rootMismatchError(status, requested); err == nil {
+		t.Fatal("NoChild status lost the installed launchd host persistence root")
+	}
+}
+
+func TestDarwinLaunchdInspectionFailureIsNotAbsence(t *testing.T) {
+	previous := runServiceCommand
+	runServiceCommand = func(context.Context, string, ...string) (serviceCommandResult, error) {
+		result := serviceCommandResult{Code: 1, Stderr: "launchctl unavailable"}
+		return result, serviceCommandError{Name: "launchctl", Result: result}
+	}
+	t.Cleanup(func() { runServiceCommand = previous })
+	if _, err := inspectLaunchdService(context.Background()); err == nil {
+		t.Fatal("launchd inspection failure was treated as an unloaded service")
+	}
+}
+
+func TestDarwinFreshActivationLockPreflightCreatesRuntimeDirectory(t *testing.T) {
+	spec := darwinTestServiceSpec(t)
+	if _, err := darwinServiceLockAvailable(spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(darwinServiceRuntimeDir(spec.Config.PersistenceRoot)); err != nil {
+		t.Fatalf("runtime directory: %v", err)
+	}
+}
+
+func TestDarwinStatusTwoCompletesActivationWithoutReplacement(t *testing.T) {
+	decision := settleManagedChild(
+		managedChildSettlementTarget{
+			terminate: func() serviceTerminationObservation { return observedStatus(serviceNoRestartExitStatus) },
+			release:   func() {},
+			retain:    func() { t.Fatal("status 2 retained activation ownership") },
+		},
+		observedStatus(serviceNoRestartExitStatus),
+	)
+	if decision.Replace || !decision.Complete {
+		t.Fatalf("status 2 decision = %#v", decision)
+	}
+}
+
+func TestDarwinTopologyRejectsMultipleMatchingDirectChildren(t *testing.T) {
+	spec := darwinTestServiceSpec(t)
+	previous := listDarwinChildProcesses
+	listDarwinChildProcesses = func(parentPID int) ([]darwinProcessIdentity, error) {
+		command := serverChildCommand(spec)
+		return []darwinProcessIdentity{
+			{PID: 101, Parent: parentPID, Command: command},
+			{PID: 102, Parent: parentPID, Command: command},
+		}, nil
+	}
+	t.Cleanup(func() { listDarwinChildProcesses = previous })
+	_, err := resolveDarwinHostChild(spec, darwinLaunchdHost{Loaded: true, PID: 100})
+	if err == nil {
+		t.Fatal("multiple matching direct children were accepted")
+	}
+}
+
+func TestDarwinReadinessRequiresOwnedChildHealthPID(t *testing.T) {
+	topology := darwinServiceTopology{
+		Host:  darwinLaunchdHost{Loaded: true, PID: 100},
+		Child: &darwinOwnedChild{PID: 101},
+	}
+	if err := validateDarwinServiceReadiness(topology, "ok", 202); err == nil {
+		t.Fatal("readiness accepted health from an unrelated process")
+	}
+	if err := validateDarwinServiceReadiness(topology, "ok", 101); err != nil {
+		t.Fatalf("matching owned child was not ready: %v", err)
+	}
+	if err := validateDarwinServiceReadiness(darwinServiceTopology{Host: topology.Host}, "ok", 101); err == nil {
+		t.Fatal("NoChild topology was considered ready")
+	}
+}
+
 func TestDarwinServiceLockHandoffIsCancellableAndExclusive(t *testing.T) {
 	root := t.TempDir()
 	lockPath := darwinServiceLockPath(root)
@@ -178,6 +268,30 @@ func TestDarwinServiceChildWaitsForDualMatchingAcknowledgementAndCancelsOnLeaseL
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("service child did not cancel after watchdog lease loss")
+	}
+}
+
+func TestDarwinServiceChildFailsClosedWhenWatchdogDiesBeforeStartGate(t *testing.T) {
+	root, child, childDone, lease, gate := startDarwinTestServiceChild(t)
+	_ = root
+	ack := darwinServiceMessage{Kind: "armed", HostPID: os.Getpid(), ChildPID: child.Process.Pid}
+	if err := writeDarwinServiceMessage(lease, ack); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Shutdown(int(lease.Fd()), unix.SHUT_RDWR); err != nil {
+		t.Fatal(err)
+	}
+	_ = lease.Close()
+	_ = unix.Shutdown(int(gate.Fd()), unix.SHUT_RDWR)
+	_ = gate.Close()
+	select {
+	case err := <-childDone:
+		if err == nil {
+			t.Fatal("child reported success after watchdog loss before start gate")
+		}
+	case <-time.After(3 * time.Second):
+		_ = child.Process.Kill()
+		t.Fatal("child remained blocked after watchdog loss before start gate")
 	}
 }
 
@@ -352,4 +466,59 @@ func darwinTestServiceSpec(t *testing.T) serviceSpec {
 		Arguments:  []string{"serve", "--persistence-root", root},
 		Endpoint:   "http://127.0.0.1:1",
 	}
+}
+
+func startDarwinTestServiceChild(t *testing.T) (string, *exec.Cmd, <-chan error, *os.File, *os.File) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(darwinServiceRuntimeDir(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := darwinServiceLockPath(root)
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	leasePair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testLease := darwinSocketFile(leasePair[0], "test watchdog lease")
+	childLease := darwinSocketFile(leasePair[1], "child watchdog lease")
+	testGate := darwinSocketFile(gatePair[0], "test start gate")
+	childGate := darwinSocketFile(gatePair[1], "child start gate")
+	lockChildFD, err := unix.Dup(int(lock.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	childLock := os.NewFile(uintptr(lockChildFD), "child lock")
+	child := exec.Command(os.Args[0], "-test.run=TestDarwinServiceHelperProcess")
+	child.Env = append(darwinTestHelperEnvironment("service-child"),
+		"DARWIN_SERVICE_TEST_ROOT="+root,
+		darwinServiceChildMarkerEnv+"=1",
+		darwinServiceLockFDEnv+"=3",
+		darwinServiceLeaseFDEnv+"=4",
+		darwinServiceGateFDEnv+"=5",
+	)
+	child.ExtraFiles = []*os.File{childLock, childLease, childGate}
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	closeDarwinFiles(childLock, childLease, childGate)
+	_ = unix.Close(leasePair[1])
+	_ = unix.Close(gatePair[1])
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		closeDarwinFiles(lock, testLease, testGate)
+	})
+	return root, child, done, testLease, testGate
 }

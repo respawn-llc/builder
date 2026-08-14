@@ -84,30 +84,41 @@ func runDarwinWatchdog(args []string) error {
 			}
 			return fmt.Errorf("observe Darwin service activation: %w", err)
 		}
+		hostExited := false
+		childExited := false
 		for _, event := range events[:count] {
-			switch {
-			case event.Filter == unix.EVFILT_PROC && int(event.Ident) == setup.ChildPID:
-				if err := writeDarwinServiceMessage(hostLease, darwinServiceMessage{Kind: "child-exited"}); err != nil {
-					return err
-				}
-				message, err := readDarwinServiceMessage(hostLease)
-				if err != nil {
-					return err
-				}
-				if message.Kind != "settling" {
-					return errors.New("Darwin watchdog received an invalid child-settlement acknowledgement")
-				}
-				return nil
-			case event.Filter == unix.EVFILT_PROC && int(event.Ident) == setup.HostPID:
-				return watchdogSettleOrphan(setup.ChildPID, childLease)
-			case event.Filter == unix.EVFILT_READ && int(event.Ident) == hostFD:
+			hostExited = hostExited || event.Filter == unix.EVFILT_PROC && int(event.Ident) == setup.HostPID
+			childExited = childExited || event.Filter == unix.EVFILT_PROC && int(event.Ident) == setup.ChildPID
+		}
+		if childExited {
+			if err := writeDarwinServiceMessage(hostLease, darwinServiceMessage{Kind: "child-exited"}); err != nil {
+				return err
+			}
+			message, err := readDarwinServiceMessage(hostLease)
+			if err != nil {
+				return err
+			}
+			if message.Kind != "settling" {
+				return errors.New("Darwin watchdog received an invalid child-settlement acknowledgement")
+			}
+			return nil
+		}
+		if hostExited {
+			return watchdogSettleOrphan(setup.ChildPID, childLease)
+		}
+		for _, event := range events[:count] {
+			if event.Filter != unix.EVFILT_READ {
+				continue
+			}
+			switch int(event.Ident) {
+			case hostFD:
 				message, readErr := readDarwinServiceMessage(hostLease)
 				if readErr == nil && message.Kind == "settling" {
 					_ = writeDarwinServiceMessage(childLease, darwinServiceMessage{Kind: "settling"})
 					return nil
 				}
 				return errors.New("Darwin watchdog lost its host lease")
-			case event.Filter == unix.EVFILT_READ && int(event.Ident) == childFD:
+			case childFD:
 				message, readErr := readDarwinServiceMessage(childLease)
 				if readErr == nil && message.Kind == "settling" {
 					return nil

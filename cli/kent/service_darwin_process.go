@@ -24,6 +24,9 @@ type darwinProcessIdentity struct {
 	Command []string
 }
 
+var inspectDarwinProcessIdentity = inspectDarwinProcess
+var listDarwinChildProcesses = listDarwinDirectChildren
+
 func inspectDarwinProcess(pid int) (darwinProcessIdentity, error) {
 	if pid <= 0 {
 		return darwinProcessIdentity{}, fmt.Errorf("invalid process id %d", pid)

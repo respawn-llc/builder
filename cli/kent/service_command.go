@@ -363,7 +363,11 @@ func rootMismatchError(status serviceStatus, spec serviceSpec) error {
 	if !status.Installed {
 		return nil
 	}
-	installedRoot, ok := persistenceRootFromServiceCommand(status.Command)
+	command := status.Command
+	if len(status.registeredCommand) > 0 {
+		command = status.registeredCommand
+	}
+	installedRoot, ok := persistenceRootFromServiceCommand(command)
 	if !ok {
 
 		requestedIsDefault, err := config.IsDefaultPersistenceRoot(spec.Config.PersistenceRoot)
