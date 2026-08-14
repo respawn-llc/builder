@@ -14,6 +14,40 @@ type eventRecordStreamInspection struct {
 	QuestionCandidate bool
 }
 
+var errEventRecordInspectionTokenTooLarge = errors.New(
+	"event record inspected JSON token exceeds fixed size limit",
+)
+
+type eventRecordInspectionReader struct {
+	reader    io.Reader
+	remaining int64
+	bounded   bool
+}
+
+func (r *eventRecordInspectionReader) Read(buffer []byte) (int, error) {
+	if !r.bounded {
+		return r.reader.Read(buffer)
+	}
+	if r.remaining <= 0 {
+		return 0, errEventRecordInspectionTokenTooLarge
+	}
+	if int64(len(buffer)) > r.remaining {
+		buffer = buffer[:r.remaining]
+	}
+	read, err := r.reader.Read(buffer)
+	r.remaining -= int64(read)
+	return read, err
+}
+
+func (r *eventRecordInspectionReader) boundNextToken() {
+	r.remaining = eventLogScanChunkSize
+	r.bounded = true
+}
+
+func (r *eventRecordInspectionReader) allowStreamingValue() {
+	r.bounded = false
+}
+
 func inspectEventRecordStream(
 	reader io.Reader,
 	version int,
@@ -24,14 +58,18 @@ func inspectEventRecordStream(
 			version,
 		)
 	}
-	decoder := jx.Decode(reader, int(eventLogScanChunkSize))
+	inspectionReader := &eventRecordInspectionReader{reader: reader}
+	decoder := jx.Decode(inspectionReader, int(eventLogScanChunkSize))
 	var inspection eventRecordStreamInspection
 	var sequencePresent bool
 	var kindPresent bool
 	var toolName *string
 	var toolIsError *bool
 	var questionAnswerPresent bool
-	if err := decoder.Obj(func(decoder *jx.Decoder, field string) error {
+	if err := inspectEventRecordObject(decoder, inspectionReader, func(
+		decoder *jx.Decoder,
+		field string,
+	) error {
 		switch field {
 		case "seq":
 			value, err := decoder.Int64()
@@ -41,14 +79,17 @@ func inspectEventRecordStream(
 			inspection.Sequence = value
 			sequencePresent = true
 		case "kind":
-			value, err := decoder.Str()
+			value, err := inspectEventRecordString(decoder, inspectionReader)
 			if err != nil {
 				return fmt.Errorf("decode event kind: %w", err)
 			}
 			inspection.Kind = EventKind(value)
 			kindPresent = true
 		case "payload":
-			name, isError, answerPresent, err := inspectEventToolCompletionPayload(decoder)
+			name, isError, answerPresent, err := inspectEventToolCompletionPayload(
+				decoder,
+				inspectionReader,
+			)
 			if err != nil {
 				return fmt.Errorf("decode event payload: %w", err)
 			}
@@ -105,6 +146,7 @@ func inspectEventRecordStream(
 
 func inspectEventToolCompletionPayload(
 	decoder *jx.Decoder,
+	inspectionReader *eventRecordInspectionReader,
 ) (name *string, isError *bool, questionAnswerPresent bool, resultErr error) {
 	if decoder.Next() != jx.Object {
 		if err := decoder.Skip(); err != nil {
@@ -114,10 +156,13 @@ func inspectEventToolCompletionPayload(
 			"tool completion payload must be a JSON object",
 		)
 	}
-	err := decoder.Obj(func(decoder *jx.Decoder, field string) error {
+	err := inspectEventRecordObject(decoder, inspectionReader, func(
+		decoder *jx.Decoder,
+		field string,
+	) error {
 		switch field {
 		case "name":
-			value, err := decoder.Str()
+			value, err := inspectEventRecordString(decoder, inspectionReader)
 			if err != nil {
 				return err
 			}
@@ -137,4 +182,27 @@ func inspectEventToolCompletionPayload(
 		return nil
 	})
 	return name, isError, questionAnswerPresent, err
+}
+
+func inspectEventRecordObject(
+	decoder *jx.Decoder,
+	inspectionReader *eventRecordInspectionReader,
+	inspect func(decoder *jx.Decoder, field string) error,
+) error {
+	inspectionReader.boundNextToken()
+	defer inspectionReader.allowStreamingValue()
+	return decoder.Obj(func(decoder *jx.Decoder, field string) error {
+		inspectionReader.allowStreamingValue()
+		defer inspectionReader.boundNextToken()
+		return inspect(decoder, field)
+	})
+}
+
+func inspectEventRecordString(
+	decoder *jx.Decoder,
+	inspectionReader *eventRecordInspectionReader,
+) (string, error) {
+	inspectionReader.boundNextToken()
+	defer inspectionReader.allowStreamingValue()
+	return decoder.Str()
 }

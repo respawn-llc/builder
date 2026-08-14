@@ -226,6 +226,58 @@ func TestQuestionHistoryCursorLargeIgnoredScalarAllocationIsSizeIndependent(t *t
 	}
 }
 
+func TestQuestionHistoryCursorOversizedInspectedTokensFailWithSizeIndependentAllocation(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(t *testing.T, tokenBytes int) string
+	}{
+		{
+			name:  "event field name",
+			write: writeQuestionHistoryCursorOversizedFieldName,
+		},
+		{
+			name:  "tool name",
+			write: writeQuestionHistoryCursorOversizedToolName,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			smallDir := test.write(t, 1<<20)
+			largeDir := test.write(t, 8<<20)
+			allocated := func(sessionDir string) uint64 {
+				runtime.GC()
+				var before runtime.MemStats
+				var after runtime.MemStats
+				runtime.ReadMemStats(&before)
+				cursor, err := OpenQuestionHistoryCursor(sessionDir, 2)
+				if err != nil {
+					t.Fatalf("open oversized-token cursor: %v", err)
+				}
+				_, nextErr := cursor.Next()
+				closeErr := cursor.Close()
+				if nextErr == nil || closeErr != nil {
+					t.Fatalf(
+						"consume oversized token: next error=%v close error=%v",
+						nextErr,
+						closeErr,
+					)
+				}
+				runtime.ReadMemStats(&after)
+				return after.TotalAlloc - before.TotalAlloc
+			}
+			smallAllocated := allocated(smallDir)
+			largeAllocated := allocated(largeDir)
+			if largeAllocated > smallAllocated+(1<<20) {
+				t.Fatalf(
+					"large ignored token allocated %d bytes vs small %d; want size-independent bounded allocation",
+					largeAllocated,
+					smallAllocated,
+				)
+			}
+		})
+	}
+}
+
 func TestQuestionHistoryCursorRejectsSkippedV2TypedAnswerCorruption(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -374,6 +426,38 @@ func writeQuestionHistoryCursorIgnoredRecord(t *testing.T, scalarBytes int) stri
 		filepath.Join(dir, eventsFile),
 		EventLogVersionV2,
 		[][]byte{questionHistoryCursorIgnoredRecord(t, scalarBytes)},
+	)
+	return dir
+}
+
+func writeQuestionHistoryCursorOversizedFieldName(t *testing.T, tokenBytes int) string {
+	t.Helper()
+	dir := t.TempDir()
+	var line bytes.Buffer
+	line.WriteString(`{"seq":1,"kind":"message","`)
+	line.Write(bytes.Repeat([]byte{'x'}, tokenBytes))
+	line.WriteString(`":null,"payload":{"role":"user","content":[]}}`)
+	writeRawVersionedEventLog(
+		t,
+		filepath.Join(dir, eventsFile),
+		EventLogVersionV2,
+		[][]byte{line.Bytes()},
+	)
+	return dir
+}
+
+func writeQuestionHistoryCursorOversizedToolName(t *testing.T, tokenBytes int) string {
+	t.Helper()
+	dir := t.TempDir()
+	var line bytes.Buffer
+	line.WriteString(`{"seq":1,"kind":"tool_completed","payload":{"name":"`)
+	line.Write(bytes.Repeat([]byte{'x'}, tokenBytes))
+	line.WriteString(`","is_error":false}}`)
+	writeRawVersionedEventLog(
+		t,
+		filepath.Join(dir, eventsFile),
+		EventLogVersionV2,
+		[][]byte{line.Bytes()},
 	)
 	return dir
 }
