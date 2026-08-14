@@ -19,6 +19,7 @@ export type TaskInitiatingAction =
     }>
   | Readonly<{
       kind: "move";
+      actionID: SetupOperationID;
       input: TaskMoveInput;
     }>
   | Readonly<{
@@ -63,8 +64,9 @@ export function startTaskInitiatingAction(
 
 export function moveTaskInitiatingAction(
   input: TaskMoveInput,
+  actionID: SetupOperationID = newSetupOperationID(),
 ): Extract<TaskInitiatingAction, { kind: "move" }> {
-  return { kind: "move", input };
+  return { kind: "move", actionID, input };
 }
 
 export function resumeTaskInitiatingAction(
@@ -150,4 +152,8 @@ export async function executeTaskInitiatingAction(
 
 export function taskInitiatingActionTaskID(action: TaskInitiatingAction): string {
   return action.kind === "move" ? action.input.taskID : action.taskID;
+}
+
+export function taskInitiatingActionID(action: TaskInitiatingAction): SetupOperationID {
+  return action.kind === "move" ? action.actionID : action.setupOperationID;
 }

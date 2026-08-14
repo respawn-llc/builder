@@ -9,18 +9,22 @@ import (
 	"core/server/workflow"
 )
 
-// WorkflowTaskExecutionObservation is one linearizable live Workflow
-// observation. Exact executions are captured under the Authority live-state
-// lock and selected Task Quiescence is captured under the Controller lock.
+// WorkflowTaskExecutionObservation is a stale-tolerant read-model snapshot.
+// Runtime and Controller facts may come from different completed refreshes.
 type WorkflowTaskExecutionObservation struct {
 	Executions        map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot
 	ConcurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
 	Quiescence        map[workflow.TaskID]bool
 }
 
-// ObserveWorkflowTaskExecutions captures the global exact-execution map and,
-// when taskIDs are supplied, their Controller-owned Quiescence under one live
-// observation. The Authority lock is acquired before the Controller lock.
+type workflowTaskControllerReadSnapshot struct {
+	concurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
+	quiescence        map[workflow.TaskID]bool
+}
+
+// ObserveWorkflowTaskExecutions never waits for lifecycle ownership. It
+// opportunistically refreshes each owner's immutable projection and otherwise
+// returns the last completed snapshots.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
 	if c == nil {
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is required")
@@ -41,26 +45,29 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		ConcurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
 		Quiescence:        map[workflow.TaskID]bool{},
 	}
-	err := c.authority.WithWorkflowTaskExecutionSnapshots(func(executions map[workflow.TaskID]sessionruntime.TaskExecutionSnapshot) error {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.closed {
-			return errors.New("current node workflow controller is closed")
+	executions, err := c.authority.CurrentWorkflowTaskExecutionReadSnapshot()
+	if err != nil {
+		return WorkflowTaskExecutionObservation{}, err
+	}
+	observation.Executions = executions
+	if c.mu.TryLock() {
+		snapshot := &workflowTaskControllerReadSnapshot{
+			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
+			quiescence:        map[workflow.TaskID]bool{},
 		}
-		observation.Executions = executions
 		if c.agentCapacityActive >= c.agentConcurrency {
 			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
 				if entry.start.policy != currentNodeAdmissionAutomaticAgent {
 					continue
 				}
 				taskID := entry.start.reference.TaskID
-				observation.ConcurrencyQueued[taskID] = append(
-					observation.ConcurrencyQueued[taskID],
+				snapshot.concurrencyQueued[taskID] = append(
+					snapshot.concurrencyQueued[taskID],
 					entry.start.reference,
 				)
 			}
 		}
-		for taskID, references := range observation.ConcurrencyQueued {
+		for taskID, references := range snapshot.concurrencyQueued {
 			sort.Slice(references, func(i, j int) bool {
 				left := references[i]
 				right := references[j]
@@ -74,19 +81,41 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 				}
 				return leftBranch < rightBranch
 			})
-			observation.ConcurrencyQueued[taskID] = references
+			snapshot.concurrencyQueued[taskID] = references
 		}
 		for taskID := range selected {
 			quiescent, err := c.taskQuiescentLocked(taskID)
 			if err != nil {
-				return err
+				c.mu.Unlock()
+				return WorkflowTaskExecutionObservation{}, err
 			}
-			observation.Quiescence[taskID] = quiescent
+			snapshot.quiescence[taskID] = quiescent
 		}
-		return nil
-	})
-	if err != nil {
-		return WorkflowTaskExecutionObservation{}, err
+		c.mu.Unlock()
+		c.taskExecutionReads.Store(snapshot)
+	}
+	current := c.taskExecutionReads.Load()
+	if current == nil {
+		for taskID := range selected {
+			observation.Quiescence[taskID] = false
+		}
+		return observation, nil
+	}
+	observation.ConcurrencyQueued = cloneConcurrencyQueued(current.concurrencyQueued)
+	for taskID := range selected {
+		quiescent, exists := current.quiescence[taskID]
+		if !exists {
+			quiescent = false
+		}
+		observation.Quiescence[taskID] = quiescent
 	}
 	return observation, nil
+}
+
+func cloneConcurrencyQueued(source map[workflow.TaskID][]workflow.CurrentNodeReference) map[workflow.TaskID][]workflow.CurrentNodeReference {
+	cloned := make(map[workflow.TaskID][]workflow.CurrentNodeReference, len(source))
+	for taskID, references := range source {
+		cloned[taskID] = append([]workflow.CurrentNodeReference(nil), references...)
+	}
+	return cloned
 }

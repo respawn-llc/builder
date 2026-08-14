@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -831,6 +832,117 @@ func TestServiceWorkflowTaskDeleteWaitsForSameTaskMutation(t *testing.T) {
 	}
 }
 
+func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	started, err := service.store.StartTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	projector := workflowview.NewTaskProjector()
+	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("NewTaskDependencyCounter: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	service.readModels.TaskDetail, err = workflowview.NewTaskDetail(metadataStore, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	ref := sessionruntime.WorkflowExecutionRef{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  workflowID,
+		CurrentNode: started.Mutation.Created[0].Reference,
+	}
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  sessionruntime.ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = handle.Stop(context.Background())
+	})
+	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID}); err != nil {
+		t.Fatalf("prime Task read snapshot: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
+	selectionDone := make(chan error, 1)
+	go func() {
+		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(sessionruntime.WorkflowInterruptSelection) error {
+			close(entered)
+			<-release
+			return errors.New("release lifecycle selection without applying it")
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Runtime lifecycle selection did not acquire ownership")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+		readDone <- readErr
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("GetWorkflowTask while Runtime lifecycle ownership held: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetWorkflowTask waited for Runtime lifecycle ownership")
+	}
+	releaseSelection()
+	if err := <-selectionDone; err == nil {
+		t.Fatal("Runtime lifecycle selection unexpectedly committed")
+	}
+}
+
 func TestServiceTaskStartAppliesExplicitNoneSelectionAndLocksTarget(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
@@ -1191,8 +1303,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
 	}
-	if execution.resumeEligibilityCalls != 0 {
-		t.Fatalf("Resume eligibility calls = %d, want none before configured-target selection", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 1 {
+		t.Fatalf("Resume preflight calls = %d, want one before configured-target selection", execution.resumeEligibilityCalls)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1217,8 +1329,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("resume response = %+v, want applied", response)
 	}
-	if execution.resumeEligibilityCalls != 1 {
-		t.Fatalf("Resume eligibility calls = %d, want one after selected target", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 2 {
+		t.Fatalf("Resume preflight calls = %d, want one per request", execution.resumeEligibilityCalls)
 	}
 	targetContext, err = service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1279,11 +1391,14 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	}
 }
 
-func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
+func TestServiceTaskResumeNoOpsWhenTaskAlreadyResumed(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
@@ -1293,12 +1408,87 @@ func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
-	if err == nil {
-		t.Fatalf("ResumeWorkflowTask = %+v, want conflict for no interrupted Current Nodes", response)
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
-	var conflict *workflowexecution.TaskResumeConflictError
-	if !errors.As(err, &conflict) || conflict.TaskID != workflow.TaskID(task.Task.ID) {
-		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict for %s", err, err, task.Task.ID)
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		response.NoOp == nil ||
+		len(response.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("ResumeWorkflowTask = %+v, want no-op with current ready node", response)
+	}
+}
+
+func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	for _, currentNode := range currentNodes {
+		if err := service.store.InterruptCurrentNode(
+			ctx,
+			currentNode.Reference,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.NewCurrentNodeInterruptionDetail(
+				string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+				nil,
+			),
+		); err != nil {
+			t.Fatalf("InterruptCurrentNode: %v", err)
+		}
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	service.currentNodeExecution = controller
+	request := serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	}
+
+	responses := make(chan serverapi.WorkflowTaskResumeResponse, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			response, resumeErr := service.ResumeWorkflowTask(ctx, request)
+			responses <- response
+			errs <- resumeErr
+		}()
+	}
+	outcomes := map[serverapi.WorkflowExecutionTargetActionOutcome]int{}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("ResumeWorkflowTask: %v", err)
+		}
+		outcomes[(<-responses).Outcome]++
+	}
+	if outcomes[serverapi.WorkflowExecutionTargetActionOutcomeApplied] != 1 ||
+		outcomes[serverapi.WorkflowExecutionTargetActionOutcomeNoOp] != 1 {
+		t.Fatalf("concurrent Resume outcomes = %+v, want one applied and one no_op", outcomes)
 	}
 }
 
