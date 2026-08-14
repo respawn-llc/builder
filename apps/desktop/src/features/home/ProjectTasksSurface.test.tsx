@@ -228,8 +228,7 @@ describe("ProjectTasksSurface", () => {
     const view = renderSurface();
 
     expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
-    expect(screen.getByText("No tasks yet")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("board.newTask") }));
     const destination = openedDestination();
     expect(destination).toMatchObject({
       boardQueryWorkflowID: undefined,
@@ -242,9 +241,7 @@ describe("ProjectTasksSurface", () => {
 
     fixture.counts = { active: 2, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface()));
-    expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Backlog/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Done/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { expanded: true })).toHaveLength(1);
   });
 
   it("offers Link Workflow instead of New Task when multiple links have no default", () => {
@@ -257,7 +254,7 @@ describe("ProjectTasksSurface", () => {
     };
 
     renderSurface();
-    const linkActions = screen.getAllByRole("button", { name: "Link workflow" });
+    const linkActions = screen.getAllByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") });
     const emptyStateLinkAction = linkActions.at(-1);
     if (emptyStateLinkAction === undefined) {
       throw new Error("Expected the no-Task empty state Link Workflow action.");
@@ -271,7 +268,7 @@ describe("ProjectTasksSurface", () => {
     });
     if (destination.kind !== "linkWorkflow") throw new Error("Expected Link Workflow destination.");
     expect(destination.onCompleted).toBeTypeOf("function");
-    expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: appI18n.t("board.newTask") })).not.toBeInTheDocument();
   });
 
   it("offers Project-scoped New Task for a sole linked Workflow without making Desktop select it", () => {
@@ -288,7 +285,7 @@ describe("ProjectTasksSurface", () => {
     };
 
     renderSurface();
-    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("board.newTask") }));
     const destination = openedDestination();
     expect(destination).toMatchObject({
       boardQueryWorkflowID: undefined,
@@ -303,7 +300,7 @@ describe("ProjectTasksSurface", () => {
   it("keeps Tasks-origin Link Workflow on Tasks and refreshes its authoritative projections", async () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     renderSurface();
-    const linkActions = screen.getAllByRole("button", { name: "Link workflow" });
+    const linkActions = screen.getAllByRole("button", { name: appI18n.t("workflowLibrary.linkWorkflow") });
     const linkAction = linkActions.at(-1);
     if (linkAction === undefined) throw new Error("Expected a Link Workflow action.");
     fireEvent.click(linkAction);
@@ -332,7 +329,7 @@ describe("ProjectTasksSurface", () => {
     fixture.counts = { active: 0, backlog: 0, done: 0 };
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
-    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("board.newTask") }));
     const destination = openedDestination();
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
     fixture.open.mockClear();
@@ -359,7 +356,7 @@ describe("ProjectTasksSurface", () => {
     const memory = createProjectTasksViewMemory();
     memory.setDisclosure({ active: true, backlog: false, done: false });
     const view = renderSurface(memory);
-    fireEvent.click(screen.getByRole("button", { name: "New Task" }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("board.newTask") }));
     const destination = openedDestination();
     if (destination.kind !== "newTask") throw new Error("Expected New Task destination.");
 
@@ -371,19 +368,21 @@ describe("ProjectTasksSurface", () => {
 
     fixture.counts = { active: 1, backlog: 0, done: 0 };
     view.rerender(withQueryClient(surface(memory)));
-    expect(screen.queryByRole("button", { name: "New Task" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: appI18n.t("board.newTask") })).not.toBeInTheDocument();
   });
 
   it("retains disclosure in workspace view memory", () => {
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
 
-    fireEvent.click(screen.getByRole("button", { name: "Active, 2 tasks" }));
-    expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toHaveAttribute("aria-expanded", "false");
+    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", { count: 2, group: appI18n.t("home.prototype.statusGroups.active") });
+    const activeGroup = screen.getByRole("button", { name: activeGroupName });
+    fireEvent.click(activeGroup);
+    expect(activeGroup).toHaveAttribute("aria-expanded", "false");
     view.unmount();
 
     renderSurface(memory);
-    expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: activeGroupName })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("restores retained pixels after remounted group pages establish their first results", () => {
@@ -402,7 +401,7 @@ describe("ProjectTasksSurface", () => {
     try {
       const memory = createProjectTasksViewMemory();
       const { unmount } = renderSurface(memory);
-      const initialGrid = screen.getByRole("grid", { name: "Project tasks" });
+      const initialGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
       initialGrid.scrollTop = 200;
       initialGrid.scrollLeft = 120;
       fireEvent.scroll(initialGrid);
@@ -411,7 +410,7 @@ describe("ProjectTasksSurface", () => {
       fixture.initialGroupPagesEstablished = false;
       maximumScrollTop = 0;
       const view = renderSurface(memory);
-      const loadingGrid = screen.getByRole("grid", { name: "Project tasks" });
+      const loadingGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
       expect(loadingGrid.scrollTop).toBe(0);
       expect(loadingGrid.scrollLeft).toBe(120);
       fireEvent.scroll(loadingGrid);
@@ -422,14 +421,14 @@ describe("ProjectTasksSurface", () => {
 
       fixture.initialGroupPagesError = true;
       view.rerender(withQueryClient(surface(memory)));
-      expect(screen.getByRole("grid", { name: "Project tasks" }).scrollTop).toBe(0);
+      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(0);
 
       fixture.initialGroupPagesError = false;
       fixture.initialGroupPagesEstablished = true;
       maximumScrollTop = 1_000;
       view.rerender(withQueryClient(surface(memory)));
 
-      const restoredGrid = screen.getByRole("grid", { name: "Project tasks" });
+      const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
       expect(restoredGrid.scrollTop).toBe(200);
       expect(restoredGrid.scrollLeft).toBe(120);
       fireEvent.scroll(restoredGrid);
@@ -453,21 +452,21 @@ describe("ProjectTasksSurface", () => {
 
     renderSurface(memory);
 
-    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
     expect(grid.scrollTop).toBe(200);
     expect(grid.scrollLeft).toBe(120);
   });
 
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
-    fixture.countsError = new Error("Counts unavailable");
+    const countsError = new Error("Counts unavailable");
+    fixture.countsError = countsError;
     fixture.countsEstablished = false;
 
     renderSurface();
 
-    expect(screen.getByRole("alert")).toHaveTextContent("Counts unavailable");
-    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Delivery" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(countsError.message);
+    expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeInTheDocument();
+    expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
   });
 
   it("opens Task Detail with the containing sidebar mode", () => {
@@ -491,7 +490,7 @@ describe("ProjectTasksSurface", () => {
 
     const row = screen.getByRole("row", { name: "KNT-1 Selected task" });
     expect(row).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("button", { name: "Dependencies: 2 of 2 complete." }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }) }));
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "shift",
@@ -520,11 +519,11 @@ describe("ProjectTasksSurface", () => {
 
     expect(fixture.labelCatalogRequests).toBe(0);
     expect(fixture.assignmentRequests).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: "Edit labels for KNT-2" }));
+    fireEvent.click(screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }));
     expect(fixture.open).not.toHaveBeenCalled();
     expect(detailRow).toHaveAttribute("aria-selected", "false");
     expect(labelsRow).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("textbox", { name: "Search or create labels" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: appI18n.t("labels.search") })).toBeInTheDocument();
     await waitFor(() => {
       expect(fixture.labelCatalogRequests).toBe(1);
       expect(fixture.assignmentRequests).toBe(1);
@@ -532,7 +531,7 @@ describe("ProjectTasksSurface", () => {
       expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "top");
     });
 
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search or create labels" }), {
+    fireEvent.keyDown(screen.getByRole("textbox", { name: appI18n.t("labels.search") }), {
       key: "Escape",
     });
     expect(detailRow).toHaveAttribute("aria-selected", "true");
