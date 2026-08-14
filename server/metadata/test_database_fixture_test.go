@@ -76,7 +76,7 @@ func openEmptyMetadataTestDatabase(t testing.TB) *sql.DB {
 		t.Fatalf("register metadata SQLite extensions: %v", err)
 	}
 	dsn := fmt.Sprintf(
-		"file:kent-metadata-test-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)",
+		"file:kent-metadata-test-%d?mode=memory&cache=shared&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(15000)",
 		metadataTestDatabaseSequence.Add(1),
 	)
 	db, err := sql.Open("sqlite", dsn)

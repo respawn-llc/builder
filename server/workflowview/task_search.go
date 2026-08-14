@@ -60,7 +60,11 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	if req.Offset != nil {
 		offset = *req.Offset
 	}
-	snapshot, err := s.captureReadSnapshot(ctx, req)
+	observation, err := s.projection.Observe(nil)
+	if err != nil {
+		return serverapi.TaskSearchResponse{}, err
+	}
+	snapshot, err := s.captureReadSnapshot(ctx, req, observation.LiveTaskStatesJSON)
 	if err != nil {
 		if req.Mode == serverapi.TaskSearchModeFTS5 {
 			return serverapi.TaskSearchResponse{}, taskSearchFTS5OperationalError(err)
@@ -108,7 +112,11 @@ func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest
 	return response, nil
 }
 
-func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.TaskSearchRequest) (*taskSearchReadSnapshot, error) {
+func (s *TaskSearch) captureReadSnapshot(
+	ctx context.Context,
+	req serverapi.TaskSearchRequest,
+	liveTaskStatesJSON string,
+) (*taskSearchReadSnapshot, error) {
 	tx, err := s.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, fmt.Errorf("begin task search read transaction: %w", err)
@@ -124,14 +132,6 @@ func (s *TaskSearch) captureReadSnapshot(ctx context.Context, req serverapi.Task
 	if err := s.validateSchemaAndScope(ctx, queries, req); err != nil {
 		return nil, errors.Join(err, closeTransaction())
 	}
-	if _, err := queries.AnchorTaskSearchReadSnapshot(ctx); err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	observation, err := s.projection.Observe(nil)
-	if err != nil {
-		return nil, errors.Join(err, closeTransaction())
-	}
-	liveTaskStatesJSON := observation.LiveTaskStatesJSON
 	return &taskSearchReadSnapshot{
 		queries:            queries,
 		liveTaskStatesJSON: &liveTaskStatesJSON,

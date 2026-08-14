@@ -291,9 +291,9 @@ func taskStatusAttentionCount(currentNodes []workflow.CurrentNode, executions []
 	return count
 }
 
-// TaskStatusDurableSnapshot keeps all lifecycle-sensitive durable reads on
-// one read-only SQLite transaction. Its methods fail after the owning
-// TaskStatusProjection callback returns.
+// TaskStatusDurableSnapshot keeps related durable reads on one read-only
+// SQLite transaction. Live observations are loaded independently before this
+// snapshot opens. Its methods fail after the owning callback returns.
 type TaskStatusDurableSnapshot struct {
 	queries       *sqlitegen.Queries
 	workflowStore *workflowstore.Store

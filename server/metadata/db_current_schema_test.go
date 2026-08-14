@@ -3,6 +3,9 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -43,7 +46,7 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 		{pragma: "foreign_keys", want: int64(1)},
 		{pragma: "journal_mode", want: "memory"},
 		{pragma: "synchronous", want: int64(1)},
-		{pragma: "busy_timeout", want: int64(5000)},
+		{pragma: "busy_timeout", want: int64(15000)},
 	} {
 		switch want := test.want.(type) {
 		case int64:
@@ -63,6 +66,46 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 				t.Fatalf("%s = %q, want %q", test.pragma, got, want)
 			}
 		}
+	}
+}
+
+func TestMetadataSQLitePoolAcquisitionHonorsContextCancellation(t *testing.T) {
+	db := openLatestMetadataTestDatabase(t)
+	t.Cleanup(func() { _ = db.Close() })
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	connection, err := db.Conn(t.Context())
+	if err != nil {
+		t.Fatalf("acquire only pooled connection: %v", err)
+	}
+	defer func() { _ = connection.Close() }()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := db.Conn(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled pool acquisition error = %v, want context canceled", err)
+	}
+}
+
+func TestMetadataSQLiteWritableAndReadOnlyDSNsConfigureFifteenSecondBusyTimeout(t *testing.T) {
+	for name, build := range map[string]func(string) (string, error){
+		"writable":  metadataSQLiteDSN,
+		"read-only": metadataSQLiteReadOnlyDSN,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dsn, err := build("/tmp/kent-metadata.sqlite3")
+			if err != nil {
+				t.Fatalf("build DSN: %v", err)
+			}
+			parsed, err := url.Parse(dsn)
+			if err != nil {
+				t.Fatalf("parse DSN: %v", err)
+			}
+			pragmas := parsed.Query()["_pragma"]
+			if !slices.Contains(pragmas, "busy_timeout(15000)") {
+				t.Fatalf("DSN pragmas = %v, want busy_timeout(15000)", pragmas)
+			}
+		})
 	}
 }
 

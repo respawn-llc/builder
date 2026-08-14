@@ -134,14 +134,12 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		offset = *req.Offset
 	}
 	workspaceContext := boardProjectWorkspaceContext(project)
-	var definition definitionSnapshot
 	var tasks []sqlitegen.TaskRecord
 	var dependencyProgressByTaskID map[string]*serverapi.WorkflowTaskDependencyProgress
 	var projectedByTaskID map[workflow.TaskID]TaskStatusProjectionResult
 	var hasExtra bool
 	err = b.projection.WithDurableSnapshot(ctx, func(durable *TaskStatusDurableSnapshot) error {
-		var err error
-		definition, err = durable.Definition(ctx, workflowID)
+		definition, err := durable.Definition(ctx, workflowID)
 		if err != nil {
 			return err
 		}
@@ -174,15 +172,21 @@ func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNo
 		if hasExtra {
 			tasks = tasks[:pageSize]
 		}
-		taskIDs := workflowTaskIDs(taskIDs(tasks))
-		observation, err := b.projection.Observe(taskIDs)
-		if err != nil {
-			return err
-		}
-		projectedByTaskID, err = b.projection.Project(ctx, observation, durable, taskIDs)
-		return err
+		return nil
 	})
 	if err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	projectTaskIDs := workflowTaskIDs(taskIDs(tasks))
+	if err := b.projection.WithSnapshot(
+		ctx,
+		projectTaskIDs,
+		func(observation TaskStatusObservation, durable *TaskStatusDurableSnapshot) error {
+			var err error
+			projectedByTaskID, err = b.projection.Project(ctx, observation, durable, projectTaskIDs)
+			return err
+		},
+	); err != nil {
 		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
 	}
 	taskIDStrings := taskIDs(tasks)
