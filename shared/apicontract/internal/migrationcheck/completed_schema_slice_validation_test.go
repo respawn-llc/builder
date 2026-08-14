@@ -89,6 +89,34 @@ func TestProjectWorkspaceContractsRejectBlankAndNoncanonicalValues(t *testing.T)
 	}
 }
 
+func TestConnectionProjectAttachmentSelectionMatchesAttachment(t *testing.T) {
+	for name, attachment := range map[string]*connectionpb.ProjectAttachment{
+		"workspace ID": {
+			ProjectId:     "project",
+			WorkspaceId:   "workspace",
+			WorkspaceRoot: "/workspace",
+			WorkspaceSelection: &connectionpb.ProjectAttachment_SelectedById{
+				SelectedById: &connectionpb.WorkspaceIDSelection{WorkspaceId: "other-workspace"},
+			},
+		},
+		"workspace root": {
+			ProjectId:     "project",
+			WorkspaceId:   "workspace",
+			WorkspaceRoot: "/workspace",
+			WorkspaceSelection: &connectionpb.ProjectAttachment_SelectedByRoot{
+				SelectedByRoot: &connectionpb.WorkspaceRootSelection{
+					RequestedRoot: "/requested",
+					CanonicalRoot: "/other-workspace",
+				},
+			},
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(attachment); err == nil {
+			t.Fatalf("attachment with mismatched selected %s accepted", name)
+		}
+	}
+}
+
 func TestSessionDraftAndUpdateFailureRejectInvalidText(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(&sessionlaunchpb.SessionPersistInputDraftRequest{
 		SessionId: "../x",

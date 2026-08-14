@@ -131,6 +131,14 @@ message ProjectAttachment {
     WorkspaceIDSelection selected_by_id = 4;
     WorkspaceRootSelection selected_by_root = 5;
   }
+
+  option (buf.validate.message).cel = {
+    id: "kent.connection.project_attachment_selection"
+    message: "workspace selection must identify the attached workspace"
+    expression:
+      "(!has(this.selected_by_id) || this.selected_by_id.workspace_id == this.workspace_id) && "
+      "(!has(this.selected_by_root) || this.selected_by_root.canonical_root == this.workspace_root)"
+  };
 }
 
 message SessionAttachment {

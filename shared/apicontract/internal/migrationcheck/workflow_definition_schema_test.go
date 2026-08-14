@@ -8,6 +8,7 @@ import (
 	"core/shared/protoapi"
 	workflowpb "core/shared/protoapi/gen/kent/api/workflow_definition"
 	"core/shared/protocol"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -209,6 +210,7 @@ func TestWorkflowDefinitionJavaScriptVisibleInt64FieldsAreSafe(t *testing.T) {
 
 func TestWorkflowDefinitionGeneratedValidationCoversGraphAndLabelBoundaries(t *testing.T) {
 	validUUID := "123e4567-e89b-42d3-a456-426614174000"
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
 	request := &workflowpb.GraphSaveRequest{
 		WorkflowId:      validUUID,
 		ExpectedVersion: 1,
@@ -224,6 +226,11 @@ func TestWorkflowDefinitionGeneratedValidationCoversGraphAndLabelBoundaries(t *t
 	if err := protoapi.ValidateGeneratedMessage(request); err != nil {
 		t.Fatalf("valid whole-graph save request: %v", err)
 	}
+	request.WorkflowId = versionOneUUID
+	if err := protoapi.ValidateGeneratedMessage(request); err == nil {
+		t.Fatal("non-v4 graph-save workflow ID was accepted")
+	}
+	request.WorkflowId = validUUID
 	request.ExpectedVersion = -1
 	if err := protoapi.ValidateGeneratedMessage(request); err == nil {
 		t.Fatal("negative optimistic version was accepted")
@@ -236,6 +243,35 @@ func TestWorkflowDefinitionGeneratedValidationCoversGraphAndLabelBoundaries(t *t
 	label.Id = "not-a-uuid"
 	if err := protoapi.ValidateGeneratedMessage(label); err == nil {
 		t.Fatal("non-canonical label UUID was accepted")
+	}
+}
+
+func TestWorkflowDefinitionGeneratedValidationRequiresWorkflowUUIDV4AcrossPayloads(t *testing.T) {
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
+	for name, message := range map[string]proto.Message{
+		"request": &workflowpb.UpdateRequest{
+			WorkflowId: versionOneUUID,
+			Name:       "Workflow",
+		},
+		"link result": &workflowpb.ProjectWorkflowLink{
+			Id:         "link",
+			ProjectId:  "project",
+			WorkflowId: versionOneUUID,
+		},
+		"error detail": &workflowpb.WorkflowNotFoundDetails{
+			WorkflowId: versionOneUUID,
+		},
+		"event": &workflowpb.ProjectEvent{
+			WorkflowId:      stringPointer(versionOneUUID),
+			Resource:        workflowpb.ProjectEventResource_WORKFLOW_PROJECT_EVENT_RESOURCE_WORKFLOW,
+			Action:          workflowpb.ProjectEventAction_WORKFLOW_PROJECT_EVENT_ACTION_UPDATED,
+			PrimaryEntityId: versionOneUUID,
+			OccurredAt:      timestamppb.New(time.Unix(1_700_000_000, 0)),
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Fatalf("%s accepted a non-v4 workflow ID", name)
+		}
 	}
 }
 

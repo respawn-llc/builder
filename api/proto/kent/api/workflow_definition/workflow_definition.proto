@@ -823,7 +823,10 @@ message WorkflowValidationError {
     not_in: [0]
   }];
   string message = 2 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional string node_id = 4 [(buf.validate.field).string.min_len = 1];
   optional string transition_group_id = 5 [(buf.validate.field).string.min_len = 1];
   optional string edge_id = 6 [(buf.validate.field).string.min_len = 1];
@@ -893,7 +896,10 @@ message CreateAndLinkProjectRequest {
 message ProjectWorkflowLink {
   string id = 1 [(buf.validate.field).string.min_len = 1];
   string project_id = 2 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   bool default = 4;
 }
 
@@ -903,7 +909,10 @@ message CreateAndLinkProjectSuccess {
 }
 
 message UpdateRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string name = 2 [
     (buf.validate.field).string = {
       min_len: 1
@@ -930,7 +939,10 @@ message ListRequest {
   }];
   string query = 3;
   optional string project_id = 4 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 5 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ListSuccess {
@@ -940,12 +952,18 @@ message ListSuccess {
 }
 
 message GetRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message LinkProjectRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional ProjectLinkDefaultMode default_policy = 3 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -966,7 +984,10 @@ message ListProjectLinksSuccess {
 
 message SetDefaultProjectLinkRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message SetDefaultProjectLinkSuccess {
@@ -998,11 +1019,17 @@ message UnlinkProjectSuccess {
 }
 
 message DeletePreviewRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message DeleteImpact {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int64 version = 2 [(buf.validate.field).int64 = {
     gte: 0
     lte: 9007199254740991
@@ -1042,7 +1069,10 @@ message DeletePreviewSuccess {
 }
 
 message DeleteRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   bool confirmed = 2;
   int64 expected_version = 3 [(buf.validate.field).int64 = {
     gte: 0
@@ -1079,7 +1109,10 @@ message DeleteSuccess {
 }
 
 message ValidateRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional ValidationMode mode = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
@@ -1087,13 +1120,19 @@ message ValidateRequest {
 }
 
 message ScriptPathValidateRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string node_id = 2 [(buf.validate.field).string.min_len = 1];
   string script_path = 3;
 }
 
 message GraphValidateDraftRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional GraphMetadata metadata = 2;
   GraphDraft graph = 3 [(buf.validate.field).required = true];
   repeated ValidationMode modes = 4 [
@@ -1126,7 +1165,10 @@ message GraphValidateDraftSuccess {
 }
 
 message GraphDeriveWiringRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   GraphDraft graph = 2 [(buf.validate.field).required = true];
 }
 
@@ -1135,7 +1177,10 @@ message GraphDeriveWiringSuccess {
 }
 
 message GraphSavePreviewRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int64 expected_version = 2 [(buf.validate.field).int64 = {
     gte: 0
     lte: 9007199254740991
@@ -1145,7 +1190,10 @@ message GraphSavePreviewRequest {
 }
 
 message GraphSaveRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int64 expected_version = 2 [(buf.validate.field).int64 = {
     gte: 0
     lte: 9007199254740991
@@ -1334,7 +1382,10 @@ message LabelInvalidMutationDetails {
 }
 
 message WorkflowNotFoundDetails {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ReplacementDefaultInvalidDetails {
@@ -2020,7 +2071,10 @@ message ProjectSubscribeRequest {
 }
 
 message WorkflowSubscribeRequest {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message WorkflowSubscriptionStartError {
@@ -2090,7 +2144,10 @@ message ProjectEvent {
       expression: "this == this.trim()"
     }
   ];
-  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   ProjectEventResource resource = 3 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]
