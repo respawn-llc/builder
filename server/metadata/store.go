@@ -2209,6 +2209,13 @@ func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID 
 	}
 	row, err := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf(
+				"%w: %q",
+				session.ErrSessionNotFound,
+				strings.TrimSpace(sessionID),
+			)
+		}
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
 	return row, nil
