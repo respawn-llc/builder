@@ -31,7 +31,7 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 }
 
 func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	if err := validateAuthIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.AuthStatusResponse{}, err
 	}
 	state := auth.EmptyState()

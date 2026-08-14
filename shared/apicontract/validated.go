@@ -36,6 +36,11 @@ func (v Validated[T]) Value() T {
 	return v.value
 }
 
+// ValidateRequest runs canonical request validation without issuing a trusted receipt.
+func ValidateRequest[T any](value T, policy ValidationPolicy) error {
+	return validateRequest(value, policy)
+}
+
 func WithValidated[T any, R any](
 	value T,
 	policy ValidationPolicy,
@@ -45,16 +50,23 @@ func WithValidated[T any, R any](
 	if consume == nil {
 		return zero, errors.New("validated request consumer is required")
 	}
+	if err := validateRequest(value, policy); err != nil {
+		return zero, err
+	}
+	return consume(Validated[T]{value: value})
+}
+
+func validateRequest[T any](value T, policy ValidationPolicy) error {
 	if validator, ok := any(value).(interface{ ValidateRPC() error }); ok {
 		if err := validator.ValidateRPC(); err != nil {
-			return zero, requestValidationError{cause: err}
+			return requestValidationError{cause: err}
 		}
 	} else if validator, ok := any(value).(interface{ Validate() error }); ok {
 		if err := validator.Validate(); err != nil {
-			return zero, requestValidationError{cause: err}
+			return requestValidationError{cause: err}
 		}
 	} else if policy != NoSemanticValidation {
-		return zero, fmt.Errorf("%T has no semantic validator", value)
+		return fmt.Errorf("%T has no semantic validator", value)
 	}
-	return consume(Validated[T]{value: value})
+	return nil
 }

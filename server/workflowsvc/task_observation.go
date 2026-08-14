@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"core/server/workflow"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 func (s *Service) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	if err := validateWorkflowIngress(req); err != nil {
+	if err := apicontract.ValidateRequest(req, apicontract.SemanticValidationRequired); err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, err
 	}
 	sub, err := s.events.subscribe(req.ProjectID, nil)

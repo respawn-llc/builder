@@ -31,13 +31,6 @@ type Service struct {
 	workflowStore *workflowstore.Store
 }
 
-func validateProjectIngress[T any](request T) error {
-	_, err := servicecontract.WithValidated(request, servicecontract.SemanticValidationRequired, func(servicecontract.Validated[T]) (struct{}, error) {
-		return struct{}{}, nil
-	})
-	return err
-}
-
 // ErrSessionArtifactEscapesRoot is returned when a session artifact path
 // resolves outside its project sessions root. Callers and tests match this with
 // errors.Is rather than comparing rendered message text.
@@ -89,7 +82,7 @@ func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListReque
 }
 
 func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectHomeListResponse{}, err
 	}
 	if s == nil {
@@ -123,7 +116,7 @@ func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHome
 }
 
 func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
 	return s.resolveProjectPath(ctx, req.Path)
@@ -147,7 +140,7 @@ func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverap
 }
 
 func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectBindingPlanResponse{}, err
 	}
 	resolved, err := s.resolveProjectPath(ctx, req.Path)
@@ -219,7 +212,7 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 }
 
 func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectCreateResponse{}, err
 	}
 	if s == nil {
@@ -241,7 +234,7 @@ func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreate
 }
 
 func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectUpdateResponse{}, err
 	}
 	if s == nil {
@@ -266,7 +259,7 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 }
 
 func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectEditGetResponse{}, err
 	}
 	if s == nil {
@@ -284,7 +277,7 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 }
 
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectDeleteResponse{}, err
 	}
 	if s == nil {
@@ -538,7 +531,7 @@ func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (serverapi
 }
 
 func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectWorkspaceListResponse{}, err
 	}
 	if s == nil {
@@ -569,7 +562,7 @@ func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.Proje
 }
 
 func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectWorkspaceGetResponse{}, err
 	}
 	if s == nil {
@@ -598,7 +591,7 @@ func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.Project
 }
 
 func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, err
 	}
 	if s == nil {
@@ -623,7 +616,7 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 }
 
 func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, err
 	}
 	if s == nil {
@@ -647,7 +640,7 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 }
 
 func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.ProjectGetOverviewResponse{}, err
 	}
 	if s == nil {
@@ -661,7 +654,7 @@ func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectG
 }
 
 func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	if err := validateProjectIngress(req); err != nil {
+	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
 		return serverapi.SessionPageResponse{}, err
 	}
 	if s == nil {

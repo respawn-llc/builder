@@ -42,7 +42,7 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if err := req.ValidateRPC(); err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
-	return l.ReadTasks(ctx, req, workflowOffsetWindowFromValidated(req.Offset, req.Limit))
+	return l.ReadTasks(ctx, req, serverapi.OffsetWindowFromValidated(req.Offset, req.Limit))
 }
 
 func (l *TaskList) ReadTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskListResponse, error) {

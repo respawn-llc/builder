@@ -64,9 +64,7 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 }
 
 func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	if _, err := apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(apicontract.Validated[serverapi.UpdateStatusRequest]) (struct{}, error) {
-		return struct{}{}, nil
-	}); err != nil {
+	if err := apicontract.ValidateRequest(req, apicontract.SemanticValidationRequired); err != nil {
 		return serverapi.UpdateStatusResponse{}, err
 	}
 	if s == nil || s.updates == nil {

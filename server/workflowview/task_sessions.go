@@ -45,7 +45,7 @@ func (s *TaskSessions) List(ctx context.Context, req serverapi.WorkflowTaskOffse
 	if err := req.Validate(); err != nil {
 		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
-	return s.ReadSessions(ctx, req.TaskID, workflowOffsetWindowFromValidated(req.Offset, req.Limit))
+	return s.ReadSessions(ctx, req.TaskID, serverapi.OffsetWindowFromValidated(req.Offset, req.Limit))
 }
 
 func (s *TaskSessions) ReadSessions(ctx context.Context, taskID string, window serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskSessionListResponse, error) {

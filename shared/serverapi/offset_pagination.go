@@ -19,7 +19,6 @@ func (e *offsetWindowError) Error() string {
 }
 
 func ResolveOffsetWindow(offset *int, limit *int) (OffsetWindow, error) {
-	resolvedOffset := 0
 	if offset != nil {
 		if *offset < 0 {
 			return OffsetWindow{}, &offsetWindowError{
@@ -27,9 +26,7 @@ func ResolveOffsetWindow(offset *int, limit *int) (OffsetWindow, error) {
 				Message: "offset must be non-negative",
 			}
 		}
-		resolvedOffset = *offset
 	}
-	resolvedLimit := OffsetPaginationMaxLimit
 	if limit != nil {
 		if *limit < 1 || *limit > OffsetPaginationMaxLimit {
 			return OffsetWindow{}, &offsetWindowError{
@@ -37,9 +34,20 @@ func ResolveOffsetWindow(offset *int, limit *int) (OffsetWindow, error) {
 				Message: fmt.Sprintf("limit must be between 1 and %d", OffsetPaginationMaxLimit),
 			}
 		}
-		resolvedLimit = *limit
 	}
-	return OffsetWindow{Offset: resolvedOffset, Limit: resolvedLimit}, nil
+	return OffsetWindowFromValidated(offset, limit), nil
+}
+
+// OffsetWindowFromValidated materializes defaults after request validation accepts the bounds.
+func OffsetWindowFromValidated(offset *int, limit *int) OffsetWindow {
+	window := OffsetWindow{Limit: OffsetPaginationMaxLimit}
+	if offset != nil {
+		window.Offset = *offset
+	}
+	if limit != nil {
+		window.Limit = *limit
+	}
+	return window
 }
 
 func TrimOffsetLookahead[T any](window OffsetWindow, items []T) ([]T, *int) {

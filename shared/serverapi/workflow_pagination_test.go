@@ -48,6 +48,17 @@ func TestResolveOffsetWindowDefaultsAndValidatesBounds(t *testing.T) {
 	}
 }
 
+func TestOffsetWindowFromValidatedMaterializesCanonicalWindow(t *testing.T) {
+	offset := 7
+	limit := 12
+	if got := OffsetWindowFromValidated(nil, nil); got != (OffsetWindow{Limit: OffsetPaginationMaxLimit}) {
+		t.Fatalf("default window = %+v", got)
+	}
+	if got := OffsetWindowFromValidated(&offset, &limit); got != (OffsetWindow{Offset: offset, Limit: limit}) {
+		t.Fatalf("explicit window = %+v", got)
+	}
+}
+
 func TestResolveWorkflowOffsetWindowPreservesWorkflowErrors(t *testing.T) {
 	negativeOffset := -1
 	_, err := ResolveWorkflowOffsetWindow(&negativeOffset, nil)

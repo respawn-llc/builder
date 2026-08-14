@@ -37,13 +37,6 @@ type Service struct {
 	homeDir     string
 }
 
-func validateCapabilityIngress[T any](request T) error {
-	_, err := apicontract.WithValidated(request, apicontract.SemanticValidationRequired, func(apicontract.Validated[T]) (struct{}, error) {
-		return struct{}{}, nil
-	})
-	return err
-}
-
 func NewService(opts Options) *Service {
 	return &Service{
 		cfg:         opts.Config,
@@ -53,7 +46,7 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	if err := validateCapabilityIngress(req); err != nil {
+	if err := apicontract.ValidateRequest(req, apicontract.SemanticValidationRequired); err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
 	currentProvider, err := s.currentProviderFacts(ctx)
