@@ -63,7 +63,10 @@ message Question {
     }
   }];
   optional int32 recommended_option_index = 6 [(buf.validate.field).int32.gte = 1];
-  google.protobuf.Timestamp created_at = 7 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp created_at = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
 
   option (buf.validate.message).cel = {
     id: "kent.prompt.question_recommendation"
@@ -113,7 +116,10 @@ message Approval {
     min_items: 1
     items: {required: true}
   }];
-  google.protobuf.Timestamp created_at = 6 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp created_at = 6 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
 }
 
 message ListPendingRequest {

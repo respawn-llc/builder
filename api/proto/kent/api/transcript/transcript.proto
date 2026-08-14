@@ -203,7 +203,10 @@ message CommittedRowLocator {
 }
 
 message UserRow {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string text = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -235,8 +238,14 @@ message UserRow {
 }
 
 message AssistantRow {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  optional string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional string stream_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional int64 committed_at_unix_ms = 4 [(buf.validate.field).int64 = {
     gte: -8640000000000000
@@ -245,14 +254,20 @@ message AssistantRow {
 }
 
 message ToolRow {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
   string tool_name = 3 [(buf.validate.field).string.min_len = 1];
   bool is_error = 4;
 }
 
 message ReasoningTraceRow {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional int64 duration_millis = 2 [(buf.validate.field).int64 = {
     gte: 0
     lte: 9007199254740991
@@ -260,14 +275,26 @@ message ReasoningTraceRow {
 }
 
 message ReviewerFeedbackRow {
-  string id = 1 [(buf.validate.field).string.uuid = true];
-  string step_id = 2 [(buf.validate.field).string.uuid = true];
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int32 suggestion_count = 3 [(buf.validate.field).int32.gte = 1];
 }
 
 message ReviewerErrorRow {
-  string id = 1 [(buf.validate.field).string.uuid = true];
-  string step_id = 2 [(buf.validate.field).string.uuid = true];
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message CacheWarning {
@@ -293,7 +320,10 @@ message ProviderModelMismatch {
 }
 
 message BackgroundNoticeIdentity {
-  string activity_id = 1 [(buf.validate.field).string.uuid = true];
+  string activity_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string process_id = 2 [(buf.validate.field).string.min_len = 1];
   optional int32 exit_code = 3;
 }
@@ -306,7 +336,10 @@ message WorktreeContext {
 }
 
 message NoticeRow {
-  optional string step_id = 1 [(buf.validate.field).string.uuid = true];
+  optional string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   NoticeReason reason = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   NoticeSeverity severity = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional NoticeMessageType message_type = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
@@ -448,27 +481,52 @@ message AssistantStreamAbort {
 }
 
 message ThinkingStatusUpdate {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  string text = 2 [(buf.validate.field).string.min_len = 1];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string text = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.thinking_status_text_nonblank"
+      message: "thinking status text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ReasoningTraceUpdate {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  optional string kent_trace_id = 2 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional string kent_trace_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ReasoningTraceReset {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ToolStart {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
   string tool_name = 3 [(buf.validate.field).string.min_len = 1];
 }
 
 message ToolAbort {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
   ToolAbortReason reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional Diagnostic diagnostic = 4;
@@ -480,7 +538,10 @@ message ToolAbort {
 }
 
 message UserMessageFlushed {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   repeated string queue_item_ids = 2 [(buf.validate.field).repeated = {
     min_items: 1
     unique: true
@@ -489,7 +550,10 @@ message UserMessageFlushed {
 }
 
 message QueuedMessageState {
-  string queue_item_id = 1 [(buf.validate.field).string.uuid = true];
+  string queue_item_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   QueuedMessageStatus status = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional QueuedMessageFailureReason failure_reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional string text = 4 [(buf.validate.field).string.min_len = 1];
@@ -523,12 +587,18 @@ message StepState {
 }
 
 message ReviewerStatus {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   ReviewerState state = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
 }
 
 message CompactionStatus {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   CompactionState state = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   string mode = 3 [(buf.validate.field).string.min_len = 1];
   int32 count = 4 [(buf.validate.field).int32.gte = 0];
@@ -578,10 +648,19 @@ message GoalStatus {
 }
 
 message BackgroundActivity {
-  string activity_id = 1 [(buf.validate.field).string.uuid = true];
+  string activity_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string process_id = 2 [(buf.validate.field).string.min_len = 1];
-  string owner_run_id = 3 [(buf.validate.field).string.uuid = true];
-  string owner_step_id = 4 [(buf.validate.field).string.uuid = true];
+  string owner_run_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string owner_step_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   BackgroundLifecycle lifecycle = 5 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   string command = 6 [(buf.validate.field).string.min_len = 1];
   string workdir = 7 [(buf.validate.field).string.min_len = 1];
@@ -619,7 +698,10 @@ message Prompt {
 }
 
 message WorktreeTransitionOutcome {
-  string operation_id = 1 [(buf.validate.field).string.uuid = true];
+  string operation_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   kent.api.worktree.TransitionKind transition = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   kent.api.worktree.TransitionState state = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional Diagnostic failure = 4;
@@ -640,7 +722,10 @@ message WorktreeTransitionOutcome {
 
 message OperationalDiagnostic {
   OperationalDiagnosticCode code = 1 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  optional string step_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string detail = 3;
   option (buf.validate.message).cel = {
     id: "kent.transcript.operational_diagnostic_detail"
@@ -665,8 +750,14 @@ message LiveRunFinished {
       expression: "this.trim() != ''"
     }
   ];
-  google.protobuf.Timestamp started_at = 7 [(buf.validate.field).required = true];
-  google.protobuf.Timestamp finished_at = 8 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp started_at = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  google.protobuf.Timestamp finished_at = 8 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
   option (buf.validate.message).cel = {
     id: "kent.transcript.live_run_result"
     message: "live-run final-answer presence must match result kind"
@@ -698,6 +789,11 @@ message Hydration {
   repeated BackgroundActivity background_activities = 14 [(buf.validate.field).repeated.items.required = true];
   optional ContextUsage context_usage = 15;
   optional GoalStatus goal_status = 16;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.hydration_goal_status"
+    message: "hydration requires goal availability"
+    expression: "has(this.goal_status) && has(this.goal_status.availability)"
+  };
   option (buf.validate.message).cel = {
     id: "kent.transcript.hydration_active_state"
     message: "hydrated active facts must be active"
