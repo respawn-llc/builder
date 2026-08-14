@@ -342,10 +342,38 @@ message SelectorCandidate {
     defined_only: true
     not_in: [0]
   }];
-  string selector = 2 [(buf.validate.field).string.min_len = 1];
-  optional string branch_name = 3 [(buf.validate.field).string.min_len = 1];
-  optional string display_name = 4 [(buf.validate.field).string.min_len = 1];
-  string fallback_identity = 5 [(buf.validate.field).string.min_len = 1];
+  string selector = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.selector_candidate_selector_nonblank"
+      message: "selector must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string branch_name = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.selector_candidate_branch_nonblank"
+      message: "branch_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string display_name = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.selector_candidate_display_name_nonblank"
+      message: "display_name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string fallback_identity = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.selector_candidate_fallback_identity_nonblank"
+      message: "fallback_identity must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message SelectorErrorDetails {
@@ -858,9 +886,30 @@ message SetupExecutionTargetSelection {
 }
 
 message SetupStarted {
-  string source_workspace_root = 1 [(buf.validate.field).string.min_len = 1];
-  string worktree_root = 2 [(buf.validate.field).string.min_len = 1];
-  string script_path = 3 [(buf.validate.field).string.min_len = 1];
+  string source_workspace_root = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.setup_source_root_nonblank"
+      message: "source_workspace_root must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string worktree_root = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.setup_worktree_root_nonblank"
+      message: "worktree_root must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string script_path = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.worktree.setup_script_path_nonblank"
+      message: "script_path must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message SetupCompleted {

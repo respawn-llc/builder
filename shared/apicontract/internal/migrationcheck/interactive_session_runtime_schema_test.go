@@ -210,6 +210,18 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 		"blank user turn text": &runtimepb.UserTurnInput{
 			Input: &runtimepb.UserTurnInput_Text{Text: " "},
 		},
+		"blank submit session ID": &runtimepb.SubmitUserTurnRequest{
+			SessionId: " ",
+			Input: &runtimepb.UserTurnInput{
+				Input: &runtimepb.UserTurnInput_Text{Text: "message"},
+			},
+		},
+		"unknown status compaction mode": &runtimepb.Status{
+			ReviewerFrequency: "off",
+			ThinkingLevel:     "medium",
+			CompactionMode:    "bogus",
+			ContextUsage:      &runtimepb.ContextUsage{WindowTokens: 1},
+		},
 		"blank assistant final": &runtimepb.SubmitUserTurnAssistantFinal{Message: " "},
 		"blank goal ID": &runtimepb.Goal{
 			Id:        " ",

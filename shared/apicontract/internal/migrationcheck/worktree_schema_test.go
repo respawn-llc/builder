@@ -242,6 +242,16 @@ func TestWorktreeRequestsRejectBlankSelectors(t *testing.T) {
 			t.Errorf("%s accepted blank selector", name)
 		}
 	}
+	for name, candidate := range map[string]*worktreepb.SelectorCandidate{
+		"selector":          {Variant: worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_REGISTERED, Selector: " ", FallbackIdentity: "fallback"},
+		"branch name":       {Variant: worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_REGISTERED, Selector: "selector", BranchName: stringPointer(" "), FallbackIdentity: "fallback"},
+		"display name":      {Variant: worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_REGISTERED, Selector: "selector", DisplayName: stringPointer(" "), FallbackIdentity: "fallback"},
+		"fallback identity": {Variant: worktreepb.TopologyVariant_WORKTREE_TOPOLOGY_VARIANT_REGISTERED, Selector: "selector", FallbackIdentity: " "},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(candidate); err == nil {
+			t.Errorf("selector candidate accepted blank %s", name)
+		}
+	}
 }
 
 func validTransitionHeader() *worktreepb.TransitionHeader {
@@ -296,6 +306,15 @@ func TestWorktreeSetupPreAcknowledgementFailureAndEventValidation(t *testing.T) 
 	event.GetFailed().Cause.Cause = &worktreepb.SetupFailureCause_Timeout{Timeout: &worktreepb.SetupTimeout{}}
 	if err := protoapi.ValidateGeneratedMessage(event); err == nil {
 		t.Fatal("setup event accepted mismatched cause kind and payload")
+	}
+	for name, started := range map[string]*worktreepb.SetupStarted{
+		"source root":   {SourceWorkspaceRoot: " ", WorktreeRoot: "/worktree", ScriptPath: "/script"},
+		"worktree root": {SourceWorkspaceRoot: "/source", WorktreeRoot: " ", ScriptPath: "/script"},
+		"script path":   {SourceWorkspaceRoot: "/source", WorktreeRoot: "/worktree", ScriptPath: " "},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(started); err == nil {
+			t.Errorf("setup started accepted blank %s", name)
+		}
 	}
 }
 

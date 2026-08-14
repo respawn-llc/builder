@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 import "kent/api/prompt/prompt.proto";
 import "kent/api/runtime/runtime.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 import "kent/api/worktree/worktree.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/transcript;transcriptpb";
@@ -375,7 +376,9 @@ message SessionStatus {
   bool fast_mode_available = 5;
   bool fast_mode_enabled = 6;
   string thinking_level = 7 [(buf.validate.field).string.min_len = 1];
-  string compaction_mode = 8 [(buf.validate.field).string.min_len = 1];
+  string compaction_mode = 8 [
+    (buf.validate.field).string = {in: ["native", "local", "none"]}
+  ];
   int32 compaction_count = 9 [(buf.validate.field).int32.gte = 0];
   optional string previous_session_id = 10 [(buf.validate.field).string.min_len = 1];
   optional string parent_agent_session_id = 11 [(buf.validate.field).string.min_len = 1];
@@ -469,8 +472,14 @@ message QueuedMessageState {
 }
 
 message StepState {
-  string run_id = 1 [(buf.validate.field).string.uuid = true];
-  string step_id = 2 [(buf.validate.field).string.uuid = true];
+  string run_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string step_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   StepLifecycle lifecycle = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   kent.api.runtime.ActivityActiveKind active_kind = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   RunStatus status = 5 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];

@@ -169,7 +169,9 @@ message Status {
   optional string navigation_target_session_id = 10 [(buf.validate.field).string.min_len = 1];
   optional string last_committed_assistant_final_answer = 11;
   string thinking_level = 12 [(buf.validate.field).string.min_len = 1];
-  string compaction_mode = 13 [(buf.validate.field).string.min_len = 1];
+  string compaction_mode = 13 [
+    (buf.validate.field).string = {in: ["native", "local", "none"]}
+  ];
   ContextUsage context_usage = 14 [(buf.validate.field).required = true];
   int32 compaction_count = 15 [(buf.validate.field).int32.gte = 0];
   optional GoalView goal = 16;
@@ -277,7 +279,14 @@ message UserTurnInput {
 }
 
 message SubmitUserTurnRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.submit_user_turn_session_id_nonblank"
+      message: "session_id must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   UserTurnInput input = 2 [(buf.validate.field).required = true];
 }
 

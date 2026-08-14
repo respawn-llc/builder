@@ -142,6 +142,23 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 			t.Fatalf("accepted user row with blank %s", name)
 		}
 	}
+	if err := protoapi.ValidateGeneratedMessage(&transcriptpb.SessionStatus{
+		ReviewerFrequency: "off",
+		ThinkingLevel:     "medium",
+		CompactionMode:    "bogus",
+	}); err == nil {
+		t.Fatal("accepted transcript status with unknown compaction mode")
+	}
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
+	if err := protoapi.ValidateGeneratedMessage(&transcriptpb.StepState{
+		RunId:      versionOneUUID,
+		StepId:     validUUID,
+		Lifecycle:  transcriptpb.StepLifecycle_STEP_LIFECYCLE_STARTED,
+		ActiveKind: runtimepb.ActivityActiveKind_RUNTIME_ACTIVITY_ACTIVE_KIND_USER_TURN,
+		Status:     transcriptpb.RunStatus_RUN_STATUS_RUNNING,
+	}); err == nil {
+		t.Fatal("accepted transcript step state with non-v4 Run ID")
+	}
 
 	attention := &attentionpb.Notification{
 		Id: &attentionpb.NotificationID{
