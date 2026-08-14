@@ -43,6 +43,33 @@ func TestProjectWorkflowLinkMutationsTranslateSQLiteRelations(t *testing.T) {
 	})
 }
 
+func TestLinkWorkflowWithDefaultPolicyReturnsExistingDefaultState(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	first, err := store.LinkWorkflowWithDefaultPolicy(ctx, binding.ProjectID, workflowID, WorkflowLinkDefaultAlways)
+	if err != nil {
+		t.Fatalf("default LinkWorkflowWithDefaultPolicy: %v", err)
+	}
+	if !first.IsDefault {
+		t.Fatalf("first link = %+v, want default", first)
+	}
+
+	for _, policy := range []WorkflowLinkDefaultPolicy{
+		WorkflowLinkDefaultNever,
+		WorkflowLinkDefaultIfProjectHasNone,
+	} {
+		t.Run(string(policy), func(t *testing.T) {
+			existing, err := store.LinkWorkflowWithDefaultPolicy(ctx, binding.ProjectID, workflowID, policy)
+			if err != nil {
+				t.Fatalf("idempotent LinkWorkflowWithDefaultPolicy: %v", err)
+			}
+			if existing.ID != first.ID || !existing.IsDefault {
+				t.Fatalf("existing link = %+v, want default link %q", existing, first.ID)
+			}
+		})
+	}
+}
+
 func TestUnlinkProjectWorkflowTranslatesInvalidReplacementRelation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	first := linkWorkflow(t, ctx, store, binding.ProjectID, createValidWorkflow(t, ctx, store), true)

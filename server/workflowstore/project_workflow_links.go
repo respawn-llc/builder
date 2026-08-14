@@ -52,19 +52,22 @@ func (s *Store) linkWorkflowInTx(ctx context.Context, q *sqlitegen.Queries, now 
 	if err != nil {
 		return ProjectWorkflowLinkRecord{}, translateProjectWorkflowLinkInsertError(ctx, q, projectID, workflowID, err)
 	}
+	isDefault := shouldDefault
 	if inserted == 0 {
 		existing, err := q.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: projectID, WorkflowID: workflowID})
 		if err != nil {
 			return ProjectWorkflowLinkRecord{}, fmt.Errorf("get existing project workflow link: %w", err)
 		}
 		linkID = existing.ID
+		isDefault = existing.IsDefault != 0
 	}
 	if shouldDefault {
 		if err := setProjectDefaultWorkflowLink(ctx, q, now, projectID, linkID); err != nil {
 			return ProjectWorkflowLinkRecord{}, err
 		}
+		isDefault = true
 	}
-	return ProjectWorkflowLinkRecord{ID: linkID, ProjectID: projectID, WorkflowID: workflowID, IsDefault: shouldDefault}, nil
+	return ProjectWorkflowLinkRecord{ID: linkID, ProjectID: projectID, WorkflowID: workflowID, IsDefault: isDefault}, nil
 }
 
 func translateProjectWorkflowLinkInsertError(ctx context.Context, q *sqlitegen.Queries, projectID string, workflowID runtimeids.WorkflowID, err error) error {
