@@ -263,7 +263,7 @@ func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsR
 		Agent:   draft.Agent,
 		Settings: session.ChatSettings{
 			Supervisor:     draft.Supervisor,
-			Thinking:       draft.Thinking,
+			Thinking:       resolved.PersistedThinking,
 			Fast:           draft.Fast,
 			Questions:      draft.Questions,
 			AutoCompaction: draft.AutoCompaction,

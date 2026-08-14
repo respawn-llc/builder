@@ -189,7 +189,6 @@ type PreparedRunPromptOverrides struct {
 	AgentRole                  serverapi.RunPromptAgentRoleOverride
 	BaseTarget                 *PreparedBaseTarget
 	NamedTarget                *PreparedSubagentTarget
-	ProviderCapabilities       llm.ProviderCapabilities
 	FastAvailable              bool
 	ProviderReadinessValidated bool
 }
@@ -572,14 +571,14 @@ func persistedRoleProviderID(settings config.Settings) string {
 	if providerID := strings.TrimSpace(settings.ProviderCapabilities.ProviderID); providerID != "" {
 		return providerID
 	}
+	if providerOverride := strings.TrimSpace(settings.ProviderOverride); providerOverride != "" {
+		return providerOverride
+	}
 	if baseURL := strings.TrimSpace(settings.OpenAIBaseURL); baseURL != "" {
 		if llm.IsOpenAIFirstPartyBaseURL(baseURL) {
 			return "openai"
 		}
 		return "openai-compatible"
-	}
-	if providerOverride := strings.TrimSpace(settings.ProviderOverride); providerOverride != "" {
-		return providerOverride
 	}
 	provider, err := llm.InferProviderFromModel(settings.Model)
 	if err != nil {
@@ -725,7 +724,7 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	if overrides.HasConfigOverrides() {
 		overrideConfig, err = config.ApplyLoadOptionsToSnapshot(app, runPromptLoadOptions(overrides))
 		if err != nil {
-			return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, err)
+			return PreparedRunPromptOverrides{}, err
 		}
 	}
 	prepared := PreparedRunPromptOverrides{
@@ -736,19 +735,19 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		if !roleOverride.Present && preparation.OmittedTarget != nil {
 			target, targetErr := preparePreparedBaseTarget(*preparation.OmittedTarget, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
+				return PreparedRunPromptOverrides{}, targetErr
 			}
 			prepared.BaseTarget = &target
 		} else if preparation.SkipProviderReadinessValidation {
 			target, targetErr := prepareBaseTargetWithoutProviderReadiness(app, preparation.ModelLock, preparation.ToolLock)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
+				return PreparedRunPromptOverrides{}, targetErr
 			}
 			prepared.BaseTarget = &target
 		} else {
 			target, targetErr := prepareBaseTarget(app, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
-				return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, targetErr)
+				return PreparedRunPromptOverrides{}, targetErr
 			}
 			prepared.BaseTarget = &target
 		}
@@ -758,7 +757,6 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 				return PreparedRunPromptOverrides{}, capabilityErr
 			}
 			prepared.FastAvailable = llm.SupportsFastModeProvider(capabilities)
-			prepared.ProviderCapabilities = capabilities
 			prepared.ProviderReadinessValidated = true
 		}
 		return prepared, nil
@@ -774,12 +772,17 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.ProviderOverride = overrideConfig.Settings.ProviderOverride
 	providerSettings.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
 	providerSettings.Subagents = nil
-	providerSettings = config.OverlaySubagentRoleSettings(
-		providerSettings,
-		lookup.Role,
-		preparation.ModelLock == nil,
-	)
+	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	providerID := persistedRoleProviderID(providerSettings)
+	fastAvailable := false
+	if !preparation.SkipProviderReadinessValidation {
+		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
+		if err != nil {
+			return PreparedRunPromptOverrides{}, err
+		}
+		providerID = strings.TrimSpace(providerCaps.ProviderID)
+		fastAvailable = llm.SupportsFastModeProvider(providerCaps)
+	}
 	target, err := prepareNamedTarget(
 		app,
 		overrideConfig,
@@ -793,16 +796,11 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		applyBudget,
 	)
 	if err != nil {
-		return PreparedRunPromptOverrides{}, fmt.Errorf("%w: %w", errInvalidPreparedConfiguration, err)
+		return PreparedRunPromptOverrides{}, err
 	}
 	prepared.NamedTarget = &target
 	if !preparation.SkipProviderReadinessValidation {
-		providerCapabilities, capabilityErr := llm.ProviderCapabilitiesForSettings(authState, target.Settings)
-		if capabilityErr != nil {
-			return PreparedRunPromptOverrides{}, capabilityErr
-		}
-		prepared.FastAvailable = llm.SupportsFastModeProvider(providerCapabilities)
-		prepared.ProviderCapabilities = providerCapabilities
+		prepared.FastAvailable = fastAvailable
 		prepared.ProviderReadinessValidated = true
 	}
 	return prepared, nil

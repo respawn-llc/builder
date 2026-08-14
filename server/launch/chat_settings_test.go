@@ -2,7 +2,6 @@ package launch
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"testing"
 
@@ -186,36 +185,6 @@ func TestPrepareChatAgentCatalogUsesFinalNamedAgentProviderCapabilities(t *testi
 	}
 }
 
-func TestPrepareRunPromptFastRoleUsesCustomOpenAITransportContract(t *testing.T) {
-	settings := chatAgentCatalogSettings()
-	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
-	settings.OpenAIBaseURL = "http://127.0.0.1:8080/v1"
-	role := config.BuiltInSubagentRoleFast
-
-	prepared, err := PrepareRunPromptOverridesWithContext(
-		config.App{Settings: settings},
-		serverapi.RunPromptOverrides{AgentRole: &role},
-		auth.EmptyState(),
-		RunPromptPreparationContext{},
-	)
-	if err != nil {
-		t.Fatalf("PrepareRunPromptOverridesWithContext: %v", err)
-	}
-	if prepared.NamedTarget == nil {
-		t.Fatal("fast named target is missing")
-	}
-	if prepared.ProviderCapabilities.ProviderID != "openai-compatible" ||
-		prepared.FastAvailable ||
-		prepared.NamedTarget.Settings.PriorityRequestMode {
-		t.Fatalf(
-			"prepared fast target = provider %+v Fast=%t priority=%t",
-			prepared.ProviderCapabilities,
-			prepared.FastAvailable,
-			prepared.NamedTarget.Settings.PriorityRequestMode,
-		)
-	}
-}
-
 func TestPrepareChatAgentCatalogClassifiesAgentPreparationFailures(t *testing.T) {
 	settings := chatAgentCatalogSettings()
 	settings.Subagents = map[string]config.SubagentRole{
@@ -241,9 +210,6 @@ func TestPrepareChatAgentCatalogClassifiesAgentPreparationFailures(t *testing.T)
 	providerSelection := &llm.ProviderSelectionError{Model: "custom"}
 	if got := classifyChatAgentPreparationError(errors.Join(llm.ErrUnsupportedProvider, providerSelection)); got != serverapi.ChatSettingsAgentProviderUnavailable {
 		t.Fatalf("provider category = %q", got)
-	}
-	if got := classifyChatAgentPreparationError(fmt.Errorf("%w: invalid model", errInvalidPreparedConfiguration)); got != serverapi.ChatSettingsAgentInvalidConfiguration {
-		t.Fatalf("configuration category = %q", got)
 	}
 	if got := classifyChatAgentPreparationError(ErrPatchEditToolsConflict); got != serverapi.ChatSettingsAgentInvalidConfiguration {
 		t.Fatalf("tool category = %q", got)

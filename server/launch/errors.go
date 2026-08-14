@@ -20,8 +20,6 @@ var (
 	// resolve to a usable subagent role.
 	errInvalidAgentRole = errors.New("invalid agent role")
 
-	errInvalidPreparedConfiguration = errors.New("invalid prepared configuration")
-
 	// ErrLockedAgentRoleChange is returned when a resumed session with a locked
 	// model request shape is explicitly reopened with a different agent role.
 	ErrLockedAgentRoleChange = errors.New("locked session agent role cannot be changed")

@@ -33,6 +33,7 @@ type WorkspaceChatDraftResolution struct {
 	Baselines                map[string]WorkspaceChatDraft
 	GoalAvailability         session.GoalAvailability
 	PersistedQuestionsPolicy bool
+	PersistedThinking        string
 	CompactionMode           config.CompactionMode
 	Catalog                  launch.PreparedChatAgentCatalog
 	limits                   map[string]workspaceChatDraftLimits
@@ -212,6 +213,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 		return workspaceChatDraftResolution(
 			defaults.draft,
 			defaults.draft.Questions,
+			defaults.draft.Thinking,
 			input.Settings.CompactionMode,
 			baselines,
 			catalog,
@@ -224,16 +226,19 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	}
 	draft.Agent = normalizeWorkspaceChatDraftAgent(draft.Agent)
 	persistedQuestions := draft.Questions
+	persistedThinking := strings.TrimSpace(draft.Thinking)
 	limit, ok := limits[draft.Agent]
 	if !ok {
 		message := draft.Message
 		draft = defaults.draft
 		draft.Message = message
 		persistedQuestions = draft.Questions
+		persistedThinking = draft.Thinking
 	} else {
-		draft.Thinking = strings.TrimSpace(draft.Thinking)
-		if draft.Thinking == "" {
+		if _, ok := limit.thinking[persistedThinking]; !ok {
 			draft.Thinking = limit.draft.Thinking
+		} else {
+			draft.Thinking = persistedThinking
 		}
 		if draft.Fast && !limit.fast {
 			draft.Fast = false
@@ -245,6 +250,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	return workspaceChatDraftResolution(
 		draft,
 		persistedQuestions,
+		persistedThinking,
 		input.Settings.CompactionMode,
 		baselines,
 		catalog,
@@ -255,6 +261,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 func workspaceChatDraftResolution(
 	draft WorkspaceChatDraft,
 	persistedQuestions bool,
+	persistedThinking string,
 	compactionMode config.CompactionMode,
 	baselines map[string]WorkspaceChatDraft,
 	catalog launch.PreparedChatAgentCatalog,
@@ -273,6 +280,7 @@ func workspaceChatDraftResolution(
 		Baselines:                baselines,
 		GoalAvailability:         availability,
 		PersistedQuestionsPolicy: persistedQuestions,
+		PersistedThinking:        persistedThinking,
 		CompactionMode:           compactionMode,
 		Catalog:                  catalog,
 		limits:                   limits,

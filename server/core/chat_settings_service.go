@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 
 	"core/server/sessionlaunch"
 	"core/shared/apicontract"
@@ -60,31 +61,42 @@ func (s chatSettingsService) materializedService(
 	if s.core == nil || s.core.safeBundles().Persistence.metadataStore == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	scope, err := s.core.safeBundles().Persistence.metadataStore.ResolveSessionChatSettingsScope(
+	record, err := s.core.safeBundles().Persistence.metadataStore.ResolvePersistedSession(
 		ctx,
 		sessionID,
 	)
 	if err != nil {
 		return nil, err
 	}
-	projectCfg, err := s.core.configForWorkspace(scope.EffectiveRoot)
+	if record.Meta == nil {
+		return nil, errors.New("persisted Session metadata is required")
+	}
+	boundary, err := s.core.safeBundles().Persistence.metadataStore.ResolveSessionProjectWorkspaceBoundary(
+		ctx,
+		sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	effectiveRoot := strings.TrimSpace(record.Meta.WorkspaceRoot)
+	if effectiveRoot == "" {
+		return nil, errors.New("session effective workspace root is required")
+	}
+	projectCfg, err := s.core.configForWorkspace(effectiveRoot)
 	if err != nil {
 		return nil, err
 	}
 	projectCtx := projectContext{
 		config:         projectCfg,
-		projectID:      scope.ProjectID,
-		projectRoot:    scope.EffectiveRoot,
-		projectSession: filepath.Join(projectCfg.PersistenceRoot, "projects", scope.ProjectID, "sessions"),
+		projectID:      boundary.ProjectID,
+		projectRoot:    effectiveRoot,
+		projectSession: filepath.Join(projectCfg.PersistenceRoot, "projects", boundary.ProjectID, "sessions"),
 	}
 	return s.core.detachedChatSettingsService(projectCtx), nil
 }
 
 func (s *Core) detachedChatSettingsService(projectCtx projectContext) *sessionlaunch.Service {
-	return s.sessionLaunchServiceForScope(sessionLaunchServiceScope{
-		kind:    sessionLaunchServiceDetachedScope,
-		project: projectCtx,
-	})
+	return s.newSessionLaunchService(projectCtx)
 }
 
 var _ apicontract.ChatSettingsService = chatSettingsService{}

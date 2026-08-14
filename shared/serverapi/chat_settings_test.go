@@ -70,7 +70,6 @@ func TestChatSettingsReadTargetRejectsContradictoryAndMalformedJSON(t *testing.T
 		`{"kind":"session","session_id":" session-1 "}`,
 		`{"kind":"session","session_id":"../escape"}`,
 		`{"kind":"session","session_id":"session-1","project_id":"project-1"}`,
-		`{"kind":"session","session_id":"session-1","unknown":true}`,
 		`{"kind":"session","session_id":"session-1"}{"kind":"session","session_id":"session-2"}`,
 	} {
 		t.Run(raw, func(t *testing.T) {
@@ -102,7 +101,7 @@ func TestChatSettingsReadTargetPreservesSupportedSessionIdentifiers(t *testing.T
 	}
 }
 
-func TestChatSettingsReadRequestRoundTripsStrictTarget(t *testing.T) {
+func TestChatSettingsReadRequestRoundTripsTarget(t *testing.T) {
 	request := ChatSettingsReadRequest{
 		Target: LazyChatSettingsTarget("project-1", "workspace-1"),
 	}
@@ -117,14 +116,9 @@ func TestChatSettingsReadRequestRoundTripsStrictTarget(t *testing.T) {
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	for _, raw := range []string{
-		`{}`,
-		`{"target":{"kind":"lazy","project_id":"project-1","workspace_id":"workspace-1"},"unknown":true}`,
-	} {
-		var invalid ChatSettingsReadRequest
-		if err := json.Unmarshal([]byte(raw), &invalid); err == nil {
-			t.Fatalf("Unmarshal(%s) unexpectedly succeeded", raw)
-		}
+	var invalid ChatSettingsReadRequest
+	if err := json.Unmarshal([]byte(`{}`), &invalid); err == nil {
+		t.Fatal("Unmarshal empty request unexpectedly succeeded")
 	}
 }
 
@@ -561,9 +555,8 @@ func TestChatSettingsBlockerMatrix(t *testing.T) {
 	}
 }
 
-func TestChatSettingsReadResponseRejectsUnknownNestedFieldsAndEnums(t *testing.T) {
+func TestChatSettingsReadResponseRejectsUnknownEnums(t *testing.T) {
 	for _, raw := range []string{
-		`{"settings":{"selected_agent":{"role":"default","model":"gpt-5","thinking":"medium","label":"Default"},"agent_choices":[{"role":"default","model":"gpt-5","thinking":"medium","tools":[],"custom_system_prompt":false,"custom_capabilities":false,"agent_callable":true}],"agent_editability":"editable","supervisor":{"value":"off","editability":"editable"},"questions":{"capable":false,"enabled":true,"editability":"editable"},"auto_compaction":{"policy":"optional","stored":true,"effective":true,"editability":"editable"},"agent_locked":false,"workflow_locked":false,"caching_locked":false}}`,
 		`{"settings":{"selected_agent":{"role":"default","model":"gpt-5","thinking":"medium"},"agent_choices":[{"role":"default","model":"gpt-5","thinking":"medium","tools":[],"custom_system_prompt":false,"custom_capabilities":false,"agent_callable":true}],"agent_editability":"editable","supervisor":{"value":"sometimes","editability":"editable"},"questions":{"capable":false,"enabled":true,"editability":"editable"},"auto_compaction":{"policy":"optional","stored":true,"effective":true,"editability":"editable"},"agent_locked":false,"workflow_locked":false,"caching_locked":false}}`,
 		`{"settings":{"selected_agent":{"role":"default","model":"gpt-5","thinking":"medium"},"agent_choices":[{"role":"default","model":"gpt-5","thinking":"medium","tools":[],"custom_system_prompt":false,"custom_capabilities":false,"agent_callable":true}],"agent_editability":"editable","supervisor":{"value":"off","editability":"editable"},"thinking":{"kind":"future","value":"medium","baseline_value":"medium","editability":"editable"},"questions":{"capable":false,"enabled":true,"editability":"editable"},"auto_compaction":{"policy":"optional","stored":true,"effective":true,"editability":"editable"},"agent_locked":false,"workflow_locked":false,"caching_locked":false}}`,
 		`{"settings":{"selected_agent":{"role":"default","model":"gpt-5","thinking":"medium"},"agent_choices":[{"role":"default","model":"gpt-5","thinking":"medium","tools":[],"custom_system_prompt":false,"custom_capabilities":false,"agent_callable":true}],"agent_editability":"editable","supervisor":{"value":"off","editability":"editable"},"questions":{"capable":false,"enabled":true,"editability":"editable"},"auto_compaction":{"policy":"future","stored":true,"effective":true,"editability":"editable"},"agent_locked":false,"workflow_locked":false,"caching_locked":false}}`,

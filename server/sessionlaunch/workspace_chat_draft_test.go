@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -47,8 +46,8 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	}
 	stored = &WorkspaceChatDraft{Message: "preserve", Agent: "worker", Supervisor: "off", Thinking: "bad", Fast: true, Questions: true}
 	got, err = ResolveWorkspaceChatDraft(draftInput(base), stored)
-	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "bad" || got.Draft.Fast {
-		t.Fatalf("custom Thinking=%+v err=%v", got.Draft, err)
+	if err != nil || got.Draft.Message != "preserve" || got.Draft.Thinking != "high" || got.Draft.Fast {
+		t.Fatalf("repair=%+v err=%v", got.Draft, err)
 	}
 }
 
@@ -108,25 +107,6 @@ func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *te
 	if projected.Questions.Capable || !projected.Questions.Enabled ||
 		projected.Questions.Editability != serverapi.ChatSettingsEditable {
 		t.Fatalf("Questions projection = %+v", projected.Questions)
-	}
-}
-
-func TestWorkspaceChatDraftTransformRejectsNewUnsupportedThinking(t *testing.T) {
-	settings := draftSettings("gpt-5.6-sol", "medium")
-	persistence := &draftPersistence{}
-	service := NewService(launch.Planner{Config: config.App{Settings: settings}}).
-		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(persistence), "workspace-1")
-
-	_, err := service.TransformWorkspaceChatDraftAggregate(
-		t.Context(),
-		func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
-			next := current.Draft
-			next.Thinking = "provider-specific-depth"
-			return next, nil
-		},
-	)
-	if err == nil {
-		t.Fatal("TransformWorkspaceChatDraftAggregate accepted unsupported Thinking change")
 	}
 }
 

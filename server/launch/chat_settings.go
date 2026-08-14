@@ -162,7 +162,14 @@ func prepareChatAgentCatalogEntry(
 				serverapi.ChatSettingsAgentInternalPreparation,
 			)
 		}
-		capabilities = prepared.ProviderCapabilities
+		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, target.Settings)
+		if err != nil {
+			return PreparedChatAgentCatalogEntry{}, chatAgentPreparationError(
+				selector,
+				classifyChatAgentPreparationError(err),
+			)
+		}
+		fastAvailable = llm.SupportsFastModeProvider(capabilities)
 	}
 	settings, err := PrepareChatSettingsForPreparedTarget(*target, fastAvailable)
 	if err != nil {
@@ -211,8 +218,7 @@ func classifyChatAgentPreparationError(err error) serverapi.ChatSettingsAgentPre
 		return serverapi.ChatSettingsAgentProviderUnavailable
 	}
 	if errors.Is(err, errInvalidAgentRole) ||
-		errors.Is(err, ErrPatchEditToolsConflict) ||
-		errors.Is(err, errInvalidPreparedConfiguration) {
+		errors.Is(err, ErrPatchEditToolsConflict) {
 		return serverapi.ChatSettingsAgentInvalidConfiguration
 	}
 	return serverapi.ChatSettingsAgentInternalPreparation

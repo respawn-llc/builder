@@ -117,7 +117,7 @@ func (t *ChatSettingsReadTarget) UnmarshalJSON(data []byte) error {
 		WorkspaceID *string                    `json:"workspace_id"`
 		SessionID   *runtimeids.SessionID      `json:"session_id"`
 	}
-	if err := protocol.DecodeStrictJSON(data, &wire); err != nil {
+	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
 	decoded := ChatSettingsReadTarget{
@@ -145,7 +145,7 @@ func (r *ChatSettingsReadRequest) UnmarshalJSON(data []byte) error {
 	var decoded struct {
 		Target ChatSettingsReadTarget `json:"target"`
 	}
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 	request := ChatSettingsReadRequest{Target: decoded.Target}
@@ -385,7 +385,7 @@ func (r ChatSettingsReadResponse) MarshalJSON() ([]byte, error) {
 func (r *ChatSettingsReadResponse) UnmarshalJSON(data []byte) error {
 	type wire ChatSettingsReadResponse
 	var decoded wire
-	if err := protocol.DecodeStrictJSON(data, &decoded); err != nil {
+	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
 	response := ChatSettingsReadResponse(decoded)
