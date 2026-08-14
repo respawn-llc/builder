@@ -49,6 +49,7 @@ interface TestState {
   loggerAppend: ReturnType<typeof vi.fn>;
   resetQueries: ReturnType<typeof vi.fn>;
   searchResults: readonly TaskSearchResult[];
+  statusDismiss: ReturnType<typeof vi.fn>;
   statusPush: ReturnType<typeof vi.fn>;
 }
 
@@ -83,6 +84,7 @@ const state = vi.hoisted((): TestState => ({
   loggerAppend: vi.fn(async () => undefined),
   resetQueries: vi.fn(async () => undefined),
   searchResults: [],
+  statusDismiss: vi.fn(),
   statusPush: vi.fn(),
 }));
 
@@ -102,7 +104,7 @@ vi.mock("@/app-facade", () => ({
   useDebouncedText: (value: string) => value,
   useAppServices: () => ({ api: {}, logger: { append: state.loggerAppend } }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
-  useStatusController: () => ({ dismiss: state.statusPush, push: state.statusPush }),
+  useStatusController: () => ({ dismiss: state.statusDismiss, push: state.statusPush }),
   useTaskSearch: () => ({
     displayedQuery: null,
     normalizedTooShort: false,
@@ -233,6 +235,7 @@ describe("New Task Workspace catalog integration", () => {
     state.loggerAppend.mockClear();
     state.resetQueries.mockClear();
     state.searchResults = [];
+    state.statusDismiss.mockClear();
     state.statusPush.mockClear();
     state.select = undefined;
   });
@@ -422,7 +425,6 @@ describe("New Task Workspace catalog integration", () => {
     expect(screen.getByText("task.dependencies")).toBeInTheDocument();
     expect(screen.queryByTestId(/^dependency-row-/)).not.toBeInTheDocument();
     view.unmount();
-
     const navigator = createTestSidebarNavigator();
     render(
       <NewTaskForm
@@ -567,7 +569,6 @@ describe("New Task Workspace catalog integration", () => {
       target: { value: "Child" },
     });
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-
     await vi.waitFor(() => {
       expect(navigator.back).toHaveBeenCalledWith({
         kind: "newTaskCreated",
@@ -605,7 +606,6 @@ describe("New Task Workspace catalog integration", () => {
       target: { value: "Keep me" },
     });
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-
     await vi.waitFor(() => {
       expect(state.statusPush).toHaveBeenCalledOnce();
     });
@@ -658,7 +658,7 @@ describe("New Task Workspace catalog integration", () => {
     await user.click(removeDependency);
     fireEvent.submit(addDependency);
     await vi.waitFor(() => {
-      expect(state.statusPush).toHaveBeenLastCalledWith("new-task-create-error");
+      expect(state.statusDismiss).toHaveBeenCalledTimes(2);
     });
   });
 });

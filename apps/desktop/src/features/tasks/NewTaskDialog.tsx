@@ -269,6 +269,7 @@ function NewTaskFormContent({
       throw new Error("New Task submission requires a source Workspace.");
     }
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
+    dismiss("new-task-create-error");
     try {
       const createdTask = await createTask.mutateAsync({
         projectID,
@@ -282,7 +283,6 @@ function NewTaskFormContent({
           newTaskRole: dependency.direction === "blocked-by" ? "blocked" : "blocker",
         })),
       });
-      dismiss("new-task-create-error");
       navigator.back(
         parentReturnDirection === undefined
           ? undefined
