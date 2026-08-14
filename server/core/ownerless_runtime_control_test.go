@@ -12,6 +12,7 @@ import (
 	"core/server/auth"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/metadata"
+	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -114,7 +115,12 @@ func runSecondClientLiveControlsActiveRun(t *testing.T, wantCurrentResult string
 	}
 	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
 
-	appCore, err := New(resolved.Config, authSupport, runtimeSupport)
+	appCore, err := NewWithContextOptions(t.Context(), resolved.Config, authSupport, runtimeSupport, Options{
+		WorkspaceConfigLoadOptions: config.LoadOptions{
+			Model:         "gpt-5",
+			OpenAIBaseURL: server.URL,
+		},
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

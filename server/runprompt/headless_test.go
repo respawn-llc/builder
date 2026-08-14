@@ -1656,9 +1656,10 @@ func TestInProcessRunPromptClientRejectsSelectedSessionWithGoal(t *testing.T) {
 		PersistenceRoot: root,
 		Settings:        config.Settings{Model: "gpt-5"},
 	}
-	authority := newTestHeadlessRuntimeAuthority(root, nil, nil, persistence.Options()...)
+	authManager := auth.NewManager(auth.NewMemoryStore(auth.EmptyState()), nil, time.Now)
+	authority := newTestHeadlessRuntimeAuthority(root, authManager, nil, persistence.Options()...)
 	client := NewInProcessRunPromptClient(HeadlessBootstrap{
-		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, nil, authority, persistence),
+		SessionLaunch:    newTestHeadlessSessionLaunch(cfg, containerDir, authManager, authority, persistence),
 		RuntimeAuthority: authority,
 	})
 

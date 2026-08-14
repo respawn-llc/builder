@@ -26,6 +26,7 @@ type storeOptions struct {
 	observer           PersistenceObserver
 	reconciler         EventLogReconciliationObserver
 	resolver           PersistedSessionResolver
+	contextFactWriter  SessionContextFactWriter
 	durabilityObserver DurabilityObserver
 	now                func() time.Time
 }
@@ -42,6 +43,12 @@ func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption {
 	return func(options *storeOptions) {
 		options.resolver = resolver
+	}
+}
+
+func WithSessionContextFactWriter(writer SessionContextFactWriter) StoreOption {
+	return func(options *storeOptions) {
+		options.contextFactWriter = writer
 	}
 }
 

@@ -121,6 +121,30 @@ func (c *Remote) SubscribeSessionTranscript(ctx context.Context, req serverapi.T
 	}), nil
 }
 
+func (c *Remote) SubscribeQuestionHistory(ctx context.Context, req serverapi.QuestionHistorySubscribeRequest) (serverapi.QuestionHistorySubscription, error) {
+	conn, route, err := c.subscribeRPC(ctx, protocol.MethodSessionQuestionHistorySubscribe, "subscribe-question-history", req, req.SessionID, true)
+	if err != nil {
+		return nil, err
+	}
+	return newRemoteSubscriptionWithError(conn, route, func(params protocol.SessionQuestionHistoryEventParams) (serverapi.QuestionHistoryEvent, error) {
+		event := serverapi.QuestionHistoryEvent{
+			Kind:           serverapi.QuestionHistoryEventKind(params.Event.Kind),
+			LargeHistory:   params.Event.LargeHistory,
+			HistoryOmitted: params.Event.HistoryOmitted,
+		}
+		if params.Event.Question != nil {
+			event.Question = &serverapi.QuestionHistoryQuestion{
+				Question:             params.Event.Question.Question,
+				Answer:               params.Event.Question.Answer,
+				SelectedOptionNumber: params.Event.Question.SelectedOptionNumber,
+				Commentary:           params.Event.Question.Commentary,
+				At:                   params.Event.Question.At,
+			}
+		}
+		return event, event.Validate()
+	}), nil
+}
+
 func (c *Remote) SubscribeWorkflowProject(ctx context.Context, req serverapi.WorkflowProjectSubscribeRequest) (serverapi.WorkflowProjectSubscription, error) {
 	conn, route, err := c.subscribeRPC(ctx, protocol.MethodWorkflowSubscribeProject, "subscribe-workflow-project", req, "", false)
 	if err != nil {

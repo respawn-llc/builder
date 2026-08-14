@@ -248,6 +248,7 @@ func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
 	return []session.StoreOption{
 		session.WithPersistenceObserver(sessionObserver{store: s}),
 		session.WithPersistedSessionResolver(s),
+		session.WithSessionContextFactWriter(s),
 	}
 }
 
@@ -261,6 +262,7 @@ func (s *Store) WorkspaceChatMaterializationStoreOptions(workspaceID string) []s
 			workspaceID: strings.TrimSpace(workspaceID),
 		}),
 		session.WithPersistedSessionResolver(s),
+		session.WithSessionContextFactWriter(s),
 	}
 }
 
@@ -2211,6 +2213,13 @@ func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID 
 	}
 	row, err := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf(
+				"%w: %q",
+				session.ErrSessionNotFound,
+				strings.TrimSpace(sessionID),
+			)
+		}
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
 	return row, nil
@@ -2238,7 +2247,83 @@ func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (
 	return session.PersistedSessionRecord{
 		SessionDir: sessionDir,
 		Meta:       &meta,
+		ContextFacts: session.SessionContextFacts{
+			CompletedCompactionCount: optionalContextFactInt(row.CompletedCompactionCount),
+			ManualCompactEligible:    optionalContextFactBool(row.ManualCompactEligible),
+		},
 	}, nil
+}
+
+func (s *Store) WriteSessionContextFacts(
+	ctx context.Context,
+	sessionID string,
+	facts session.SessionContextFacts,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	if facts.CompletedCompactionCount == nil || facts.ManualCompactEligible == nil {
+		return errors.New("complete Session Context facts are required")
+	}
+	rows, err := s.queries.UpdateSessionContextFacts(ctx, sqlitegen.UpdateSessionContextFactsParams{
+		CompletedCompactionCount: sql.NullInt64{Int64: int64(*facts.CompletedCompactionCount), Valid: true},
+		ManualCompactEligible:    sql.NullInt64{Int64: boolToInt64(*facts.ManualCompactEligible), Valid: true},
+		SessionID:                strings.TrimSpace(sessionID),
+	})
+	if err != nil {
+		return fmt.Errorf("update Session Context facts: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func (s *Store) WriteManualCompactEligibility(
+	ctx context.Context,
+	sessionID string,
+	eligible bool,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	rows, err := s.queries.UpdateSessionManualCompactEligibility(
+		ctx,
+		sqlitegen.UpdateSessionManualCompactEligibilityParams{
+			ManualCompactEligible: sql.NullInt64{Int64: boolToInt64(eligible), Valid: true},
+			SessionID:             strings.TrimSpace(sessionID),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("update Session manual-Compact eligibility: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func optionalContextFactInt(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	resolved := int(value.Int64)
+	return &resolved
+}
+
+func optionalContextFactBool(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	resolved := value.Int64 != 0
+	return &resolved
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) ImportSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
@@ -2510,31 +2595,47 @@ func (s *Store) upsertSessionSnapshotWithQueries(
 		launchVisible = 1
 	}
 	if err := q.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
-		ID:                   snapshot.Meta.SessionID,
-		ProjectID:            binding.ProjectID,
-		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
-		WorktreeID:           worktreeID,
-		ArtifactRelpath:      relpath,
-		Name:                 snapshot.Meta.Name,
-		FirstPromptPreview:   snapshot.Meta.FirstPromptPreview,
-		InputDraft:           snapshot.Meta.InputDraft,
-		PreviousSessionID:    nullableSessionID(snapshot.Meta.PreviousSessionID),
-		ParentAgentSessionID: nullableSessionID(snapshot.Meta.ParentAgentSessionID),
-		Category:             category,
-		CreatedAtUnixMs:      snapshot.Meta.CreatedAt.UTC().UnixMilli(),
-		UpdatedAtUnixMs:      snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
-		LastSequence:         snapshot.Meta.LastSequence,
-		ModelRequestCount:    snapshot.Meta.ModelRequestCount,
-		LaunchVisible:        launchVisible,
-		CwdRelpath:           cwdRelpath,
-		ContinuationJson:     continuationJSON,
-		LockedJson:           lockedJSON,
-		UsageStateJson:       usageStateJSON,
-		MetadataJson:         metadataJSON,
+		ID:                       snapshot.Meta.SessionID,
+		ProjectID:                binding.ProjectID,
+		WorkspaceID:              sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
+		WorktreeID:               worktreeID,
+		ArtifactRelpath:          relpath,
+		Name:                     snapshot.Meta.Name,
+		FirstPromptPreview:       snapshot.Meta.FirstPromptPreview,
+		InputDraft:               snapshot.Meta.InputDraft,
+		PreviousSessionID:        nullableSessionID(snapshot.Meta.PreviousSessionID),
+		ParentAgentSessionID:     nullableSessionID(snapshot.Meta.ParentAgentSessionID),
+		Category:                 category,
+		CreatedAtUnixMs:          snapshot.Meta.CreatedAt.UTC().UnixMilli(),
+		UpdatedAtUnixMs:          snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
+		LastSequence:             snapshot.Meta.LastSequence,
+		ModelRequestCount:        snapshot.Meta.ModelRequestCount,
+		LaunchVisible:            launchVisible,
+		CwdRelpath:               cwdRelpath,
+		ContinuationJson:         continuationJSON,
+		LockedJson:               lockedJSON,
+		UsageStateJson:           usageStateJSON,
+		MetadataJson:             metadataJSON,
+		CompletedCompactionCount: nullableContextFactInt(snapshot.ContextFacts.CompletedCompactionCount),
+		ManualCompactEligible:    nullableContextFactBool(snapshot.ContextFacts.ManualCompactEligible),
 	}); err != nil {
 		return fmt.Errorf("upsert session snapshot: %w", err)
 	}
 	return nil
+}
+
+func nullableContextFactInt(value *int) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*value), Valid: true}
+}
+
+func nullableContextFactBool(value *bool) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: boolToInt64(*value), Valid: true}
 }
 
 func canonicalWorkspaceRootsEqual(left string, right string) (bool, error) {

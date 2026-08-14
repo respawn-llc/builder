@@ -31,6 +31,10 @@ type CapabilityFactsService interface {
 	GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
 }
 
+type ChatContextService interface {
+	GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error)
+}
+
 type PromptCommandCatalogService interface {
 	GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error)
 }
@@ -148,6 +152,7 @@ type SessionViewService interface {
 	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
 	GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 	GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error)
+	SubscribeQuestionHistory(ctx context.Context, req serverapi.QuestionHistorySubscribeRequest) (serverapi.QuestionHistorySubscription, error)
 }
 
 type WorktreeService interface {

@@ -19,6 +19,7 @@ var forbiddenAPICapabilityDeclarations = map[string]map[string]struct{}{
 		"DependencyAuthBootstrap":         {},
 		"DependencyAuthStatus":            {},
 		"DependencyCapabilityFacts":       {},
+		"DependencyChatContext":           {},
 		"DependencyPromptCommandCatalog":  {},
 		"DependencyOnboardingFinalize":    {},
 		"DependencyProjectView":           {},

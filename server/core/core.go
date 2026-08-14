@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/runprompt"
@@ -117,6 +118,22 @@ func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, proje
 		return nil, err
 	}
 	return s.sessionLaunchClientForProjectContext(projectCtx), nil
+}
+
+func (s *Core) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
+	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
+	if err != nil {
+		return nil, err
+	}
+	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
+}
+
+func (s *Core) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
+	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
 }
 
 func (s *Core) RunPromptClientForProject(ctx context.Context, projectID string) (apicontract.RunPromptService, error) {
@@ -245,12 +262,14 @@ func (s *Core) configForWorkspace(workspaceRoot string) (config.App, error) {
 			return projectCfg, nil
 		}
 	}
-	projectCfg, err := config.Load(workspaceRoot, config.LoadOptions{})
-	if err != nil {
-		return config.App{}, err
+	return s.reloadWorkspaceConfig(workspaceRoot)
+}
+
+func (s *Core) reloadWorkspaceConfig(workspaceRoot string) (config.App, error) {
+	if s == nil {
+		return config.App{}, errors.New("core is required")
 	}
-	projectCfg.PersistenceRoot = s.safeBundles().Projects.cfg.PersistenceRoot
-	return projectCfg, nil
+	return s.safeBundles().Projects.freshWorkspace.Resolve(workspaceRoot)
 }
 
 func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) apicontract.SessionLaunchService {
@@ -299,7 +318,7 @@ func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
 		ReloadConfig: func() (config.App, error) {
-			return s.configForWorkspace(projectCtx.projectRoot)
+			return s.reloadWorkspaceConfig(projectCtx.projectRoot)
 		},
 	}).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
@@ -394,6 +413,13 @@ func (s *Core) SessionViewClient() apicontract.SessionViewService {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionViews
+}
+
+func (s *Core) SessionChatContextOwner() chatcontext.SessionOwner {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Sessions.sessionContextOwner
 }
 
 func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {

@@ -138,6 +138,11 @@ func TestCheckNoAPICapabilityNegotiationRejectsFormerServerMechanism(t *testing.
 			content: "package apicontract\nconst DependencyProtocol = \"protocol\"\n",
 		},
 		{
+			name:    "chat context route dependency constant",
+			path:    "shared/apicontract/rpc_routes.go",
+			content: "package apicontract\nconst DependencyChatContext = \"chat_context\"\n",
+		},
+		{
 			name:    "route dependency field",
 			path:    "shared/apicontract/rpc_routes.go",
 			content: "package apicontract\ntype Route struct { Dependency string }\n",
