@@ -48,7 +48,7 @@ type requestCacheLineage struct {
 	lastResponseHadReuse   bool
 	lastCachedInputTokens  int
 	hasResponse            bool
-	pendingCause           transcript.CacheWarningReason
+	pendingCause           *transcript.CacheWarningReason
 	suppressNextNonPostfix bool
 }
 
@@ -105,8 +105,8 @@ func (t *requestCacheTracker) Prepare(req llm.Request) (preparedCacheRequestObse
 	observation.hasPreviousResponse = previous.hasResponse
 	if !previous.suppressNextNonPostfix && !shape.HasPrefix(previous.request.ChunkCount, previous.request.TerminalHash) {
 		reason := transcript.CacheWarningReasonNonPostfix
-		if strings.TrimSpace(string(previous.pendingCause)) != "" {
-			reason = previous.pendingCause
+		if previous.pendingCause != nil {
+			reason = *previous.pendingCause
 		}
 		warning := transcript.CacheWarning{
 			Scope: request.Scope, Reason: reason,
@@ -128,7 +128,8 @@ func (t *requestCacheTracker) RecordInvalidation(cacheKey string, reason transcr
 	if !ok {
 		return
 	}
-	state.pendingCause = reason
+	cause := reason
+	state.pendingCause = &cause
 	t.lineage[cacheKey] = state
 }
 
@@ -158,7 +159,7 @@ func (t *requestCacheTracker) ResetAfterHistoryReplacement(cacheKey string) {
 		CacheKey:      cacheKey,
 		Scope:         state.request.Scope,
 	}
-	state.pendingCause = ""
+	state.pendingCause = nil
 	state.suppressNextNonPostfix = true
 	t.lineage[cacheKey] = state
 }
@@ -200,7 +201,7 @@ func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObse
 	state.lastResponseHadReuse = hadReuse
 	state.lastCachedInputTokens = cachedInputTokens
 	state.hasResponse = true
-	state.pendingCause = ""
+	state.pendingCause = nil
 	state.suppressNextNonPostfix = false
 	t.lineage[cacheKey] = state
 }
