@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -20,11 +21,23 @@ type WorkflowTaskExecutionObservation struct {
 type workflowTaskControllerReadSnapshot struct {
 	concurrencyQueued map[workflow.TaskID][]workflow.CurrentNodeReference
 	quiescence        map[workflow.TaskID]bool
+	closed            bool
 }
 
-// ObserveWorkflowTaskExecutions never waits for lifecycle ownership. It
-// opportunistically refreshes each owner's immutable projection and otherwise
-// returns the last completed snapshots.
+type currentNodeControllerMutex struct {
+	sync.Mutex
+	owner *CurrentNodeController
+}
+
+func (m *currentNodeControllerMutex) Unlock() {
+	if m.owner != nil {
+		m.owner.publishTaskExecutionReadSnapshotLocked()
+	}
+	m.Mutex.Unlock()
+}
+
+// ObserveWorkflowTaskExecutions never waits for lifecycle ownership. It loads
+// each owner's latest completed immutable projection.
 func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow.TaskID) (WorkflowTaskExecutionObservation, error) {
 	if c == nil {
 		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is required")
@@ -50,66 +63,110 @@ func (c *CurrentNodeController) ObserveWorkflowTaskExecutions(taskIDs []workflow
 		return WorkflowTaskExecutionObservation{}, err
 	}
 	observation.Executions = executions
-	if c.mu.TryLock() {
-		snapshot := &workflowTaskControllerReadSnapshot{
-			concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
-			quiescence:        map[workflow.TaskID]bool{},
-		}
-		if c.agentCapacityActive >= c.agentConcurrency {
-			for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
-				if entry.start.policy != currentNodeAdmissionAutomaticAgent {
-					continue
-				}
-				taskID := entry.start.reference.TaskID
-				snapshot.concurrencyQueued[taskID] = append(
-					snapshot.concurrencyQueued[taskID],
-					entry.start.reference,
-				)
-			}
-		}
-		for taskID, references := range snapshot.concurrencyQueued {
-			sort.Slice(references, func(i, j int) bool {
-				left := references[i]
-				right := references[j]
-				if left.NodeID != right.NodeID {
-					return left.NodeID < right.NodeID
-				}
-				leftBranch, leftScoped := left.TransitionBranchKey()
-				rightBranch, rightScoped := right.TransitionBranchKey()
-				if leftScoped != rightScoped {
-					return !leftScoped
-				}
-				return leftBranch < rightBranch
-			})
-			snapshot.concurrencyQueued[taskID] = references
-		}
-		for taskID := range selected {
-			quiescent, err := c.taskQuiescentLocked(taskID)
-			if err != nil {
-				c.mu.Unlock()
-				return WorkflowTaskExecutionObservation{}, err
-			}
-			snapshot.quiescence[taskID] = quiescent
-		}
-		c.mu.Unlock()
-		c.taskExecutionReads.Store(snapshot)
-	}
 	current := c.taskExecutionReads.Load()
 	if current == nil {
 		for taskID := range selected {
-			observation.Quiescence[taskID] = false
+			observation.Quiescence[taskID] = true
 		}
 		return observation, nil
+	}
+	if current.closed {
+		return WorkflowTaskExecutionObservation{}, errors.New("current node workflow controller is closed")
 	}
 	observation.ConcurrencyQueued = cloneConcurrencyQueued(current.concurrencyQueued)
 	for taskID := range selected {
 		quiescent, exists := current.quiescence[taskID]
 		if !exists {
-			quiescent = false
+			quiescent = true
 		}
 		observation.Quiescence[taskID] = quiescent
 	}
 	return observation, nil
+}
+
+func (c *CurrentNodeController) publishTaskExecutionReadSnapshotLocked() {
+	snapshot := &workflowTaskControllerReadSnapshot{
+		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{},
+		quiescence:        map[workflow.TaskID]bool{},
+		closed:            c.closed,
+	}
+	if c.agentCapacityActive >= c.agentConcurrency {
+		for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+			if entry.start.policy != currentNodeAdmissionAutomaticAgent {
+				continue
+			}
+			taskID := entry.start.reference.TaskID
+			snapshot.concurrencyQueued[taskID] = append(
+				snapshot.concurrencyQueued[taskID],
+				entry.start.reference,
+			)
+		}
+	}
+	for taskID, references := range snapshot.concurrencyQueued {
+		sort.Slice(references, func(i, j int) bool {
+			left := references[i]
+			right := references[j]
+			if left.NodeID != right.NodeID {
+				return left.NodeID < right.NodeID
+			}
+			leftBranch, leftScoped := left.TransitionBranchKey()
+			rightBranch, rightScoped := right.TransitionBranchKey()
+			if leftScoped != rightScoped {
+				return !leftScoped
+			}
+			return leftBranch < rightBranch
+		})
+		snapshot.concurrencyQueued[taskID] = references
+	}
+	for taskID := range c.nonQuiescentTaskIDsLocked() {
+		snapshot.quiescence[taskID] = false
+	}
+	c.taskExecutionReads.Store(snapshot)
+}
+
+func (c *CurrentNodeController) nonQuiescentTaskIDsLocked() map[workflow.TaskID]struct{} {
+	taskIDs := make(map[workflow.TaskID]struct{})
+	add := func(taskID workflow.TaskID) {
+		if taskID != "" {
+			taskIDs[taskID] = struct{}{}
+		}
+	}
+	for _, taskID := range c.interrupts.taskIDs() {
+		add(taskID)
+	}
+	for _, batch := range c.preparationQueue {
+		add(batch.taskID)
+	}
+	for _, batch := range c.preparationRunning {
+		add(batch.taskID)
+	}
+	for _, gate := range c.gates {
+		add(gate.reference.TaskID)
+	}
+	for _, live := range c.live {
+		add(live.reference.TaskID)
+	}
+	for entry := c.automaticQueue.first; entry != nil; entry = entry.globalNext {
+		add(entry.start.reference.TaskID)
+	}
+	for _, start := range c.automaticReservations {
+		add(start.reference.TaskID)
+	}
+	for _, start := range c.explicitQueue {
+		add(start.reference.TaskID)
+	}
+	for _, start := range c.explicitReservations {
+		add(start.reference.TaskID)
+	}
+	for _, start := range c.admissionWorkers {
+		add(start.reference.TaskID)
+	}
+	for _, starts := range c.heldStarts {
+		for _, start := range starts {
+			add(start.reference.TaskID)
+		}
+	}
+	return taskIDs
 }
 
 func cloneConcurrencyQueued(source map[workflow.TaskID][]workflow.CurrentNodeReference) map[workflow.TaskID][]workflow.CurrentNodeReference {

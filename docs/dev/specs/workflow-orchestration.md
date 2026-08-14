@@ -5,7 +5,8 @@
 - Workflow orchestration lets users define reusable, Project-scoped processes for Tasks.
 - A Workflow contains Nodes and Transitions.
 - Tasks can move through agent work, scripts, review loops, parallel branches, Joins, and terminal states.
-- Every Kent client presents the same authoritative Workflow and Task behavior.
+- Every Kent client presents the same server-owned Workflow and Task behavior.
+- Data-only Workflow and Task requests independently load the latest completed durable and live projections available to them. Responses may be stale or combine facts from different completed moments, while mutations revalidate their safety-critical facts.
 - Every incompatible Workflow contract cutover increments the client/server protocol version. Incompatible clients fail with a clear compatibility error, and Kent does not emulate an older Workflow contract.
 
 ## Domain Model
@@ -688,7 +689,7 @@
 - Each Task belongs to one Project through one Project Workflow Link.
 - A Project's default Workflow link and primary workspace must belong to that Project.
 - Kent derives workspace and worktree display facts from their authoritative roots and Project choices. It does not maintain duplicate editable copies.
-- After reconnect or a live-update error, clients refresh authoritative Workflow and Task information.
+- After reconnect or a live-update error, clients reissue Workflow and Task reads and subscriptions. The resulting projections retain the stale-tolerant read contract.
 - A Workflow deletion preview reports counts only.
 - Workflow deletion requires Quiescence across every affected Task. It also requires a replacement when deleting the Project's default Workflow would leave an invalid default state.
 - Confirmed Workflow deletion removes the Workflow, its Project Workflow Links, its Tasks, and its graph as one atomic change.

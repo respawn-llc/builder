@@ -46,23 +46,11 @@ type workflowTaskExecutionReadSnapshot struct {
 	executions map[workflow.TaskID]TaskExecutionSnapshot
 }
 
-// CurrentWorkflowTaskExecutionReadSnapshot returns a stale-tolerant immutable
-// read projection. It opportunistically refreshes without waiting for live
-// runtime ownership; when runtime state is busy, the last completed projection
-// remains available to read models.
+// CurrentWorkflowTaskExecutionReadSnapshot returns the latest completed
+// immutable read projection without entering live runtime ownership.
 func (a *Authority) CurrentWorkflowTaskExecutionReadSnapshot() (map[workflow.TaskID]TaskExecutionSnapshot, error) {
 	if a == nil {
 		return nil, errors.New("session runtime authority is required")
-	}
-	if a.mu.TryLock() {
-		snapshots, complete, err := a.tryWorkflowTaskExecutionSnapshotsLocked()
-		a.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		if complete {
-			a.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{executions: snapshots})
-		}
 	}
 	current := a.workflowTaskReads.Load()
 	if current == nil {
@@ -87,23 +75,18 @@ func (a *Authority) workflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]
 	return snapshots, nil
 }
 
-func (a *Authority) tryWorkflowTaskExecutionSnapshotsLocked() (map[workflow.TaskID]TaskExecutionSnapshot, bool, error) {
-	snapshots := map[workflow.TaskID]TaskExecutionSnapshot{}
-	complete := true
-	var snapshotErr error
-	a.forEachWorkflowExecutionLocked(func(execution *execution) {
-		if snapshotErr != nil || !complete {
-			return
-		}
-		var appended bool
-		appended, snapshotErr = tryAppendTaskExecutionSnapshot(snapshots, execution)
-		complete = appended
-	})
-	if snapshotErr != nil || !complete {
-		return nil, complete, snapshotErr
+func (a *Authority) publishWorkflowTaskExecutionReadSnapshot() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.publishWorkflowTaskExecutionReadSnapshotLocked()
+}
+
+func (a *Authority) publishWorkflowTaskExecutionReadSnapshotLocked() {
+	snapshots, err := a.workflowTaskExecutionSnapshotsLocked()
+	if err != nil {
+		panic(fmt.Sprintf("publish workflow Task execution read snapshot: %v", err))
 	}
-	sortTaskExecutionSnapshots(snapshots)
-	return snapshots, true, nil
+	a.workflowTaskReads.Store(&workflowTaskExecutionReadSnapshot{executions: snapshots})
 }
 
 type WorkflowTaskExecutionState struct {
@@ -276,17 +259,6 @@ func appendTaskExecutionSnapshot(snapshots map[workflow.TaskID]TaskExecutionSnap
 		return err
 	}
 	return appendTaskExecutionSnapshotWithPrompts(snapshots, execution, pendingPrompts)
-}
-
-func tryAppendTaskExecutionSnapshot(
-	snapshots map[workflow.TaskID]TaskExecutionSnapshot,
-	execution *execution,
-) (bool, error) {
-	pendingPrompts, acquired, err := execution.prompts.tryPendingReferences()
-	if err != nil || !acquired {
-		return acquired, err
-	}
-	return true, appendTaskExecutionSnapshotWithPrompts(snapshots, execution, pendingPrompts)
 }
 
 func appendTaskExecutionSnapshotWithPrompts(

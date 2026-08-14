@@ -366,6 +366,40 @@ func TestObserveWorkflowTaskExecutionsDoesNotWaitForControllerLifecycleLock(t *t
 	unlock()
 }
 
+func TestObserveWorkflowTaskExecutionsDoesNotAliasPublishedCollections(t *testing.T) {
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := &CurrentNodeController{authority: authority}
+	t.Cleanup(func() {
+		_ = authority.Close(context.Background())
+	})
+	taskID := workflow.TaskID("task-status-alias")
+	reference := currentNodeReferenceForControllerTest(t, string(taskID), "node-status-alias")
+	controller.taskExecutionReads.Store(&workflowTaskControllerReadSnapshot{
+		concurrencyQueued: map[workflow.TaskID][]workflow.CurrentNodeReference{
+			taskID: {reference},
+		},
+		quiescence: map[workflow.TaskID]bool{taskID: false},
+	})
+
+	first, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("first observation: %v", err)
+	}
+	delete(first.ConcurrencyQueued, taskID)
+	first.Quiescence[taskID] = true
+
+	second, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID})
+	if err != nil {
+		t.Fatalf("second observation: %v", err)
+	}
+	if references := second.ConcurrencyQueued[taskID]; len(references) != 1 || !references[0].Equal(reference) {
+		t.Fatalf("published concurrency queue was aliased: %+v", references)
+	}
+	if second.Quiescence[taskID] {
+		t.Fatalf("published quiescence was aliased: %+v", second.Quiescence)
+	}
+}
+
 func TestCurrentNodeControllerCompletesRetainedSessionAfterScopeRetires(t *testing.T) {
 	sessionID := runtimeids.NewSessionID()
 	source := currentNodeReferenceForControllerTest(t, "task-retained-session-completion", "node-source")

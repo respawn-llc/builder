@@ -9,13 +9,11 @@ import (
 
 func TestGatewayExclusiveScheduleHasExactOperationSet(t *testing.T) {
 	exclusive := map[string]struct{}{
-		protocol.MethodHandshake:              {},
-		protocol.MethodAuthGetBootstrapStatus: {},
-		protocol.MethodAuthCompleteBootstrap:  {},
-		protocol.MethodAuthAcknowledgeNoAuth:  {},
-		protocol.MethodAuthGetStatus:          {},
-		protocol.MethodAttachProject:          {},
-		protocol.MethodAttachSession:          {},
+		protocol.MethodHandshake:             {},
+		protocol.MethodAuthCompleteBootstrap: {},
+		protocol.MethodAuthAcknowledgeNoAuth: {},
+		protocol.MethodAttachProject:         {},
+		protocol.MethodAttachSession:         {},
 	}
 	seen := make(map[string]struct{}, len(exclusive))
 	for _, route := range apicontract.Routes() {

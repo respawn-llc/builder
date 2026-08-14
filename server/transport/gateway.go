@@ -302,26 +302,31 @@ func (g *Gateway) handleConn(ctx context.Context, conn rpcwire.Conn) {
 			continue
 		}
 
-		select {
-		case admission <- struct{}{}:
-		case <-connCtx.Done():
-			return
-		}
-
 		req, err := receiveRequest(connCtx, conn)
 		if err != nil {
-			<-admission
 			return
 		}
 		schedule := gatewayRequestScheduleFor(req)
-		if schedule.kind != gatewayRequestScheduleOrdinary {
-			<-admission
+		if schedule.kind == gatewayRequestScheduleExclusive {
 			ordinary.Wait()
 			if !g.serveGatewayRequest(conn, connCtx, state, req, schedule) {
 				stop()
 				return
 			}
 			continue
+		}
+		if schedule.kind == gatewayRequestScheduleProgress || schedule.kind == gatewayRequestScheduleSubscription {
+			if !g.serveGatewayRequest(conn, connCtx, state, req, schedule) {
+				stop()
+				return
+			}
+			continue
+		}
+
+		select {
+		case admission <- struct{}{}:
+		case <-connCtx.Done():
+			return
 		}
 
 		ordinary.Add(1)
@@ -373,10 +378,8 @@ func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Con
 func isGatewayExclusiveRequest(req protocol.Request) bool {
 	switch req.Method {
 	case protocol.MethodHandshake,
-		protocol.MethodAuthGetBootstrapStatus,
 		protocol.MethodAuthCompleteBootstrap,
-		protocol.MethodAuthAcknowledgeNoAuth,
-		protocol.MethodAuthGetStatus:
+		protocol.MethodAuthAcknowledgeNoAuth:
 		return true
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)
