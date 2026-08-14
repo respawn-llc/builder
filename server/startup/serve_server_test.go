@@ -20,6 +20,7 @@ import (
 	serverbootstrap "core/server/bootstrap"
 	corepkg "core/server/core"
 	"core/server/metadata"
+	"core/server/serverstatus"
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
@@ -597,7 +598,17 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		t.Fatalf("write import skill: %v", err)
 	}
 
-	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, nil)
+	server := startServeTestServer(
+		t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
+		envAuthHandler{lookupEnv: func(key string) string {
+			if key == "OPENAI_API_KEY" {
+				return "startup-key"
+			}
+			return ""
+		}},
+		nil,
+	)
 	finalizer, ok := server.deps.finalizer.(startupFinalizeService)
 	if !ok {
 		t.Fatalf("startup finalizer = %T, want startupFinalizeService", server.deps.finalizer)
@@ -732,6 +743,23 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	ready, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
 	if err != nil || !ready.Ready {
 		t.Fatalf("readiness after activation = %+v, %v", ready, err)
+	}
+	if ready.AuthReady {
+		t.Fatalf("readiness after provider change = %+v, want provider-independent auth unavailable", ready)
+	}
+	readyResp := requireServeResponse(
+		t,
+		http.DefaultClient,
+		config.ServerHTTPBaseURL(server.Config())+protocol.ReadinessPath,
+		http.StatusOK,
+	)
+	defer func() { _ = readyResp.Body.Close() }()
+	var readyBody map[string]any
+	if err := json.NewDecoder(readyResp.Body).Decode(&readyBody); err != nil {
+		t.Fatalf("decode HTTP readiness after activation: %v", err)
+	}
+	if readyBody["auth_ready"] != false {
+		t.Fatalf("HTTP readiness after provider change = %+v, want auth_ready=false", readyBody)
 	}
 	facts, err := reader.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
 	if err != nil {
@@ -969,10 +997,11 @@ func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
 
 func TestStartupReadinessReturnsPublishedNotReadyTuple(t *testing.T) {
 	reason := serverapi.ServerNotReadyOnboardingRequired
+	cfg := config.App{Settings: config.Settings{
+		Model: "gpt-5",
+	}}
 	service := startupServerStatusService{
-		cfg: config.App{Settings: config.Settings{
-			Model: "gpt-5",
-		}},
+		base:      serverstatus.NewServerStatusService(nil, cfg, nil),
 		readiness: startupReadinessState{Reason: &reason},
 	}
 
@@ -986,7 +1015,7 @@ func TestStartupReadinessReturnsPublishedNotReadyTuple(t *testing.T) {
 	}
 }
 
-func TestStartupReadinessUsesPublishedAuthAfterCorePublication(t *testing.T) {
+func TestStartupReadinessUsesRequestOwnedAuthAfterCorePublication(t *testing.T) {
 	loadStarted := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -1015,10 +1044,7 @@ func TestStartupReadinessUsesPublishedAuthAfterCorePublication(t *testing.T) {
 	)
 	snapshot := deps.loadSnapshot()
 	deps.mu.Lock()
-	deps.publishSnapshotLocked(startupReadinessState{
-		Ready:     true,
-		AuthReady: snapshot.readiness.AuthReady,
-	}, nil)
+	deps.publishSnapshotLocked(startupReadinessState{Ready: true}, snapshot.core)
 	deps.mu.Unlock()
 	store.block = true
 
@@ -1036,17 +1062,20 @@ func TestStartupReadinessUsesPublishedAuthAfterCorePublication(t *testing.T) {
 	select {
 	case <-loadStarted:
 		releaseLoad()
-		t.Fatal("ready startup snapshot consulted the live auth store")
+	case <-time.After(time.Second):
+		releaseLoad()
+		t.Fatal("ready startup snapshot did not consult the request-owned auth store")
+	}
+	select {
 	case got := <-result:
 		if got.err != nil {
 			t.Fatalf("GetServerReadiness: %v", got.err)
 		}
 		if !got.response.Ready || !got.response.AuthReady || !got.response.AuthRequired {
-			t.Fatalf("startup readiness = %+v, want published ready tuple", got.response)
+			t.Fatalf("startup readiness = %+v, want request-owned auth facts", got.response)
 		}
 	case <-time.After(time.Second):
-		releaseLoad()
-		t.Fatal("ready startup snapshot did not complete")
+		t.Fatal("ready startup snapshot did not complete after auth load")
 	}
 }
 
@@ -1191,14 +1220,13 @@ func TestMissingConfigFinalizeActivationFailureIsTypedAndRetryConflicts(t *testi
 	if !errors.Is(competingErr, corepkg.ErrPersistenceRootBusy) {
 		t.Fatalf("root ownership after activation failure = %v, want ErrPersistenceRootBusy", competingErr)
 	}
-	if state := server.deps.ServerReadinessState(); state.Ready || state.Reason == nil || *state.Reason != serverapi.ServerNotReadyActivationFailed || state.Diagnostic == nil || *state.Diagnostic == "" {
-		t.Fatalf("readiness = %+v, want activation_failed diagnostic", state)
-	}
 	readiness, statusErr := server.deps.ServerStatusClient().GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
 	if statusErr != nil {
 		t.Fatalf("GetServerReadiness after activation failure: %v", statusErr)
 	}
-	if readiness.Ready || len(readiness.Causes) == 0 || readiness.Causes[0].DiagnosticID == "" {
+	if readiness.Ready || len(readiness.Causes) == 0 ||
+		readiness.Causes[0].Code != string(serverapi.ServerNotReadyActivationFailed) ||
+		readiness.Causes[0].DiagnosticID == "" {
 		t.Fatalf("readiness response after activation failure = %+v", readiness)
 	}
 	_, retryErr := server.deps.OnboardingFinalizeClient().FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{})
