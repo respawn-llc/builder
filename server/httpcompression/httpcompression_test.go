@@ -191,26 +191,26 @@ func TestRequestMiddlewareCompressesOnlyReplayableBodiesAtOrAboveThreshold(t *te
 		},
 		{
 			name:           "below threshold",
-			length:         MinimumRequestBodySize - 1,
-			getBody:        replayBody(bytes.Repeat([]byte("x"), MinimumRequestBodySize-1)),
+			length:         minimumRequestBodySize - 1,
+			getBody:        replayBody(bytes.Repeat([]byte("x"), minimumRequestBodySize-1)),
 			wantCompressed: false,
 		},
 		{
 			name:           "at threshold",
-			length:         MinimumRequestBodySize,
-			getBody:        replayBody(bytes.Repeat([]byte("x"), MinimumRequestBodySize)),
+			length:         minimumRequestBodySize,
+			getBody:        replayBody(bytes.Repeat([]byte("x"), minimumRequestBodySize)),
 			wantEncoding:   "zstd",
 			wantCompressed: true,
 		},
 		{
 			name:           "unknown length",
 			length:         -1,
-			getBody:        replayBody(bytes.Repeat([]byte("x"), MinimumRequestBodySize)),
+			getBody:        replayBody(bytes.Repeat([]byte("x"), minimumRequestBodySize)),
 			wantCompressed: false,
 		},
 		{
 			name:           "not replayable",
-			length:         MinimumRequestBodySize,
+			length:         minimumRequestBodySize,
 			wantCompressed: false,
 		},
 	}

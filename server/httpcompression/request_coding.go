@@ -1,5 +1,13 @@
 package httpcompression
 
+import (
+	"compress/gzip"
+	"fmt"
+	"io"
+
+	"github.com/klauspost/compress/zstd"
+)
+
 type RequestContentCoding uint8
 
 const (
@@ -8,13 +16,28 @@ const (
 	ContentCodingZstd
 )
 
-func contentCodingHeader(coding RequestContentCoding) string {
+type requestEncoder struct {
+	header    string
+	newWriter func(io.Writer) (io.WriteCloser, error)
+}
+
+func newRequestEncoder(coding RequestContentCoding) (requestEncoder, error) {
 	switch coding {
 	case ContentCodingGzip:
-		return "gzip"
+		return requestEncoder{
+			header: "gzip",
+			newWriter: func(destination io.Writer) (io.WriteCloser, error) {
+				return gzip.NewWriter(destination), nil
+			},
+		}, nil
 	case ContentCodingZstd:
-		return "zstd"
+		return requestEncoder{
+			header: "zstd",
+			newWriter: func(destination io.Writer) (io.WriteCloser, error) {
+				return zstd.NewWriter(destination, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(3)))
+			},
+		}, nil
 	default:
-		return ""
+		return requestEncoder{}, fmt.Errorf("unsupported request content coding %q", coding)
 	}
 }
