@@ -79,6 +79,7 @@ type metaContextBuildResult struct {
 	HeadlessExit           []llm.Message
 	ActiveGoalContinuation []llm.Message
 	Workflow               []llm.Message
+	WorkflowExit           []llm.Message
 	Worktree               []llm.Message
 	WorktreeExit           []llm.Message
 	sessionMode            metaContextSessionMode
@@ -89,6 +90,7 @@ const (
 	metaContextSessionModeOrdinary metaContextSessionMode = iota
 	metaContextSessionModeGoal
 	metaContextSessionModeWorkflow
+	metaContextSessionModeWorkflowExit
 )
 
 type metaContextProjection struct {
@@ -109,7 +111,7 @@ func (p metaContextProjection) Messages() []llm.Message {
 	return out
 }
 func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
-	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
+	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.WorkflowExit)+len(r.Worktree)+len(r.WorktreeExit))
 	out = append(out, r.Headless...)
 	out = append(out, r.HeadlessExit...)
 	out = append(out, r.Subagents...)
@@ -122,6 +124,8 @@ func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 		out = append(out, r.ActiveGoalContinuation...)
 	case metaContextSessionModeWorkflow:
 		out = append(out, r.Workflow...)
+	case metaContextSessionModeWorkflowExit:
+		out = append(out, r.WorkflowExit...)
 	case metaContextSessionModeOrdinary:
 	default:
 		panic("project meta context: invalid session mode")
@@ -293,15 +297,18 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 
 	result := collector.result()
 	switch opts.SessionMode {
-	case metaContextSessionModeOrdinary, metaContextSessionModeGoal, metaContextSessionModeWorkflow:
+	case metaContextSessionModeOrdinary, metaContextSessionModeGoal, metaContextSessionModeWorkflow, metaContextSessionModeWorkflowExit:
 	default:
 		return metaContextBuildResult{}, errors.New("meta context has an invalid session mode")
 	}
 	result.sessionMode = opts.SessionMode
 	switch {
 	case opts.IncludeWorkflow:
-		if opts.SessionMode == metaContextSessionModeGoal {
+		switch opts.SessionMode {
+		case metaContextSessionModeGoal:
 			return metaContextBuildResult{}, errors.New("meta context cannot select Goal and Workflow modes together")
+		case metaContextSessionModeWorkflowExit:
+			return metaContextBuildResult{}, errors.New("meta context cannot select Workflow and Workflow exit modes together")
 		}
 		result.sessionMode = metaContextSessionModeWorkflow
 	case opts.ActiveGoal != nil:
@@ -325,6 +332,8 @@ func metaContextSessionModeForMessages(messages []llm.Message) (metaContextSessi
 			mode = metaContextSessionModeGoal
 		case metaContextKindWorkflow:
 			mode = metaContextSessionModeWorkflow
+		case metaContextKindWorkflowExit:
+			mode = metaContextSessionModeWorkflowExit
 		}
 	}
 	return mode, nil
@@ -699,6 +708,7 @@ type metaContextCollector struct {
 	headlessExit           *llm.Message
 	activeGoalContinuation *llm.Message
 	workflow               *llm.Message
+	workflowExit           *llm.Message
 	worktree               *llm.Message
 	worktreeExit           *llm.Message
 	warnings               []string
@@ -779,6 +789,8 @@ func (c *metaContextCollector) slot(kind metaContextKind) **llm.Message {
 		return &c.activeGoalContinuation
 	case metaContextKindWorkflow:
 		return &c.workflow
+	case metaContextKindWorkflowExit:
+		return &c.workflowExit
 	case metaContextKindWorktree:
 		return &c.worktree
 	case metaContextKindWorktreeExit:
@@ -822,6 +834,9 @@ func (c *metaContextCollector) result() metaContextBuildResult {
 	}
 	if c.workflow != nil {
 		result.Workflow = []llm.Message{*c.workflow}
+	}
+	if c.workflowExit != nil {
+		result.WorkflowExit = []llm.Message{*c.workflowExit}
 	}
 	if c.worktree != nil {
 		result.Worktree = []llm.Message{*c.worktree}

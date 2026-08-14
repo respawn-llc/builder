@@ -297,6 +297,64 @@ func TestReviewerReconstructionUsesLatestMetaContextMode(t *testing.T) {
 	}
 }
 
+func TestReviewerReconstructionPreservesLatestWorkflowExit(t *testing.T) {
+	t.Parallel()
+	rebuilt, err := buildReviewerRequestMessagesWithBuilder(
+		[]llm.Message{
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeWorkflowMode),
+				SourcePath:  textutil.Value("discarded-node"),
+				Content:     textutil.Value("discarded workflow"),
+			},
+			{
+				Role:        llm.RoleDeveloper,
+				MessageType: textutil.Value(llm.MessageTypeWorkflowModeExit),
+				Content:     textutil.Value("the discarded workflow assignment was rolled back"),
+			},
+			{Role: llm.RoleUser, Content: textutil.Value("request")},
+		},
+		newMetaContextBuilder(t.TempDir(), "model", "", config.SkillPolicy{}, time.Unix(0, 0)),
+		false,
+	)
+	if err != nil {
+		t.Fatalf("build reviewer request: %v", err)
+	}
+	boundaryIndex := -1
+	for index, message := range rebuilt {
+		if message.Role == llm.RoleDeveloper && message.MessageType == nil {
+			boundaryIndex = index
+			break
+		}
+	}
+	if boundaryIndex < 0 {
+		t.Fatalf("reviewer projection omitted its transcript boundary: %+v", rebuilt)
+	}
+	metaTypes := metaContextMessageTypes(rebuilt[:boundaryIndex])
+	exitIndex := -1
+	environmentIndex := -1
+	for index, messageType := range metaTypes {
+		switch messageType {
+		case llm.MessageTypeWorkflowModeExit:
+			exitIndex = index
+		case llm.MessageTypeEnvironment:
+			environmentIndex = index
+		}
+	}
+	if exitIndex < 0 || environmentIndex < 0 || exitIndex >= environmentIndex {
+		t.Fatalf("reviewer Workflow exit/environment order = %+v, want exit before environment", metaTypes)
+	}
+	counts := make(map[llm.MessageType]int)
+	for _, message := range rebuilt[:boundaryIndex] {
+		if message.MessageType != nil {
+			counts[*message.MessageType]++
+		}
+	}
+	if counts[llm.MessageTypeWorkflowMode] != 0 || counts[llm.MessageTypeWorkflowModeExit] != 1 {
+		t.Fatalf("reviewer Workflow mode counts = %+v, want exit only", counts)
+	}
+}
+
 func TestActiveGoalContinuationProjectsAsDetailDeveloperContext(t *testing.T) {
 	t.Parallel()
 	entries := VisibleChatEntriesFromMessage(llm.Message{
