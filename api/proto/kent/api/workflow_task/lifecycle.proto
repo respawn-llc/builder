@@ -7,6 +7,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "kent/api/prompt/prompt.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 import "kent/api/workflow_definition/workflow_definition.proto";
 import "kent/api/workflow_task/attention.proto";
 import "kent/api/workflow_task/read.proto";
@@ -224,7 +225,10 @@ message DependencyConfirmationRequired {
 message StartRequest {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
-  string setup_operation_id = 3 [(buf.validate.field).string.uuid = true];
+  string setup_operation_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional ExecutionTargetSelection execution_target = 4;
   optional string branch_name = 5 [(buf.validate.field).string.min_len = 1];
   bool proceed_despite_dependencies = 6;
@@ -253,7 +257,10 @@ message InterruptRequest {
 message ResumeRequest {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
   optional string invoking_session_id = 2 [(buf.validate.field).string.min_len = 1];
-  string setup_operation_id = 3 [(buf.validate.field).string.uuid = true];
+  string setup_operation_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional ExecutionTargetSelection execution_target = 4;
   optional string branch_name = 5 [(buf.validate.field).string.min_len = 1];
 }

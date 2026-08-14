@@ -557,7 +557,14 @@ message GoalMutationRequest {
 
 message GoalSetRequest {
   string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  string objective = 2 [(buf.validate.field).string.min_len = 1];
+  string objective = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.goal_set_objective_nonblank"
+      message: "goal objective must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   string actor = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {

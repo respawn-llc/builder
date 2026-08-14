@@ -253,6 +253,13 @@ func TestWorkflowTaskLifecycleGeneratedValidationPreservesMutationPredicates(t *
 	setStringField(t, selection, "custom_ref", "feature/task")
 	assertDynamicValid(t, selection)
 
+	for _, messageName := range []string{"StartRequest", "ResumeRequest"} {
+		request := dynamicMessage(t, files, protoreflect.FullName("kent.api.workflow_task."+messageName))
+		setStringField(t, request, "task_id", "task-1")
+		setStringField(t, request, "setup_operation_id", "123e4567-e89b-12d3-a456-426614174000")
+		assertDynamicInvalid(t, request)
+	}
+
 	labels := dynamicMessage(t, files, "kent.api.workflow_task.LabelsUpdateRequest")
 	setStringField(t, labels, "task_id", "task-1")
 	labelID := "123e4567-e89b-42d3-a456-426614174000"
@@ -336,6 +343,7 @@ func TestWorkflowTaskLifecycleUsesExistingDomainSchemasWithoutDynamicPayloads(t 
 		"kent/api/worktree/worktree.proto",
 		"kent/api/prompt/prompt.proto",
 		"kent/api/shared/foundation.proto",
+		"kent/api/shared/validation.proto",
 	} {
 		if !imports[required] {
 			t.Errorf("lifecycle.proto does not reuse %s", required)

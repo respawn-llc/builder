@@ -484,6 +484,18 @@ func TestSessionAttentionAndTranscriptGeneratedValidationMatchesDomainValues(t *
 		"blank subscription session ID": &attentionpb.SubscribeRequest{
 			SessionId: " ",
 		},
+		"blank transcript page session ID": &transcriptpb.PageRequest{
+			SessionId: " ",
+		},
+		"blank latest-answer session ID": &transcriptpb.LatestFinalAnswerRequest{
+			SessionId: " ",
+		},
+		"blank transcript subscription session ID": &transcriptpb.SubscribeRequest{
+			SessionId: " ",
+		},
+		"blank append-entry session ID": &transcriptpb.AppendCommittedEntryRequest{
+			SessionId: " ",
+		},
 		"zero pending event timestamp": &attentionpb.Notification{
 			Id: &attentionpb.NotificationID{
 				Kind: attentionpb.Kind_ATTENTION_KIND_APPROVAL,
