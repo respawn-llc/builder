@@ -2201,25 +2201,8 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	}
 }
 
-func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
-	responseStarted := make(chan struct{})
-	responseRelease := make(chan struct{})
-	var releaseResponse sync.Once
-	t.Cleanup(func() {
-		releaseResponse.Do(func() { close(responseRelease) })
-	})
-	f := newCurrentNodeRunnerFixture(t, ScriptedRuntimeStep{
-		BeforeResponse: func(ctx context.Context) error {
-			close(responseStarted)
-			select {
-			case <-responseRelease:
-				return nil
-			case <-ctx.Done():
-				return context.Cause(ctx)
-			}
-		},
-		Response: ScriptedFinalAnswer(`{"commentary":"done"}`).Response,
-	})
+func TestResumeInterruptsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(t)
 	workflowID := createCurrentNodeAgentWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
 	if err := f.store.LockTaskExecutionTarget(context.Background(), task.ID, &workflowstore.ExecutionTargetCandidate{
@@ -2254,23 +2237,22 @@ func TestResumeAssignsAgentCurrentNodeStrandedBeforeSessionPreparation(t *testin
 	if _, err := f.controller.ResumeTask(context.Background(), task.ID); err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
-	f.waitForModelRequests(t, 1)
-	f.waitForWorkflowExecution(t, currentNode.Reference)
-	select {
-	case <-responseStarted:
-	case <-time.After(currentNodeRunnerWait):
-		t.Fatal("resumed Agent did not begin its model response")
-	}
-	resumed := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+	interrupted := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
 		return len(nodes) == 1 &&
 			nodes[0].Reference.Equal(currentNode.Reference) &&
-			nodes[0].SessionID != nil
+			nodes[0].Scheduling != nil &&
+			nodes[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted &&
+			nodes[0].Scheduling.Interruption != nil
 	})
-	if resumed[0].Scheduling != nil &&
-		resumed[0].Scheduling.State == workflow.CurrentNodeSchedulingInterrupted {
-		t.Fatalf("resumed Current Node remained interrupted: %+v", resumed[0].Scheduling)
+	if requests := f.client.Requests(); len(requests) != 0 {
+		t.Fatalf("model requests = %d, want none for missing Resume assignment", len(requests))
 	}
-	releaseResponse.Do(func() { close(responseRelease) })
+	if interrupted[0].SessionID != nil {
+		if count := f.workflowAssignmentRecordCount(t, *interrupted[0].SessionID); count != 0 {
+			t.Fatalf("workflow assignment records = %d, want none from Resume", count)
+		}
+	}
+	f.waitForTaskQuiescence(t, task.ID)
 }
 
 func requestAdvertisesTool(request llm.Request, id toolspec.ID) bool {
