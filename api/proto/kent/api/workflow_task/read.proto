@@ -499,7 +499,10 @@ message WorkflowPickerItem {
 }
 
 message BoardGroup {
-  string group_id = 1 [(buf.validate.field).string.uuid = true];
+  string group_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string key = 2 [(buf.validate.field).string.min_len = 1];
   string display_name = 3 [(buf.validate.field).string.min_len = 1];
   int32 sort_order = 4;
@@ -521,7 +524,10 @@ message BoardNodeSummary {
 
 message BoardColumn {
   BoardNodeSummary node = 1 [(buf.validate.field).required = true];
-  optional string group_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string group_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int32 sort_order = 3;
   bool is_backlog = 4;
   bool is_done = 5;

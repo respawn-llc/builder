@@ -232,6 +232,15 @@ test("workflow task generated validation matches key, identity, and live-session
   request.workflowId = "123e4567-e89b-12d3-a456-426614174000";
   assert.throws(() => validateGeneratedMessage(workflowTaskRead.ListRequestSchema, request));
 
+  const group = create(workflowTaskRead.BoardGroupSchema, {
+    groupId: "123e4567-e89b-42d3-a456-426614174000",
+    key: "group",
+    displayName: "Group",
+  });
+  validateGeneratedMessage(workflowTaskRead.BoardGroupSchema, group);
+  group.groupId = "123e4567-e89b-12d3-a456-426614174000";
+  assert.throws(() => validateGeneratedMessage(workflowTaskRead.BoardGroupSchema, group));
+
   const detail = validWorkflowTaskDetail();
   validateGeneratedMessage(workflowTaskRead.TaskDetailSchema, detail);
   detail.liveSessions[1].sessionId = "session-a";

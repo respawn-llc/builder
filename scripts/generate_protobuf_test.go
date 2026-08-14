@@ -236,6 +236,9 @@ if [[ -z "$target" || -z "$output" ]]; then
 	echo "missing target or output" >&2
 	exit 2
 fi
+if [[ "$target" == "ts" ]]; then
+	protoc-gen-es
+fi
 mkdir -p "$KENT_PROTOBUF_TEST_STATE_ROOT"
 count_file="$KENT_PROTOBUF_TEST_STATE_ROOT/${target}-count"
 count=0
@@ -262,10 +265,6 @@ printf '%s\n' "$content" > "$path"
 `
 	writeFixtureFile(t, binRoot, "go", []byte(fakeGo))
 	if err := os.Chmod(filepath.Join(binRoot, "go"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFixtureFile(t, binRoot, "protoc-gen-es", []byte("#!/usr/bin/env bash\nexit 0\n"))
-	if err := os.Chmod(filepath.Join(binRoot, "protoc-gen-es"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	const fakePnpm = `#!/usr/bin/env bash

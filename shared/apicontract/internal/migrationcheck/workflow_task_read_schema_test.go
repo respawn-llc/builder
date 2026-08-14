@@ -374,6 +374,34 @@ func TestWorkflowTaskReadGeneratedValidationRequiresWorkflowUUIDV4(t *testing.T)
 	assertDynamicInvalid(t, request)
 }
 
+func TestWorkflowTaskReadGeneratedValidationRequiresBoardGroupUUIDV4(t *testing.T) {
+	set := buildWorkflowTaskReadDescriptorSet(t)
+	files, err := protodesc.NewFiles(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	group := dynamicMessage(t, files, "kent.api.workflow_task.BoardGroup")
+	setStringField(t, group, "group_id", validWorkflowTaskReadUUID)
+	setStringField(t, group, "key", "group")
+	setStringField(t, group, "display_name", "Group")
+	assertDynamicValid(t, group)
+	setStringField(t, group, "group_id", "123e4567-e89b-12d3-a456-426614174000")
+	assertDynamicInvalid(t, group)
+
+	node := dynamicMessage(t, files, "kent.api.workflow_task.BoardNodeSummary")
+	setStringField(t, node, "node_id", "node-1")
+	setStringField(t, node, "key", "node")
+	setEnumField(t, node, "kind", 1)
+	setStringField(t, node, "display_name", "Node")
+	column := dynamicMessage(t, files, "kent.api.workflow_task.BoardColumn")
+	setMessageField(t, column, "node", node)
+	setStringField(t, column, "group_id", validWorkflowTaskReadUUID)
+	assertDynamicValid(t, column)
+	setStringField(t, column, "group_id", "123e4567-e89b-12d3-a456-426614174000")
+	assertDynamicInvalid(t, column)
+}
+
 func TestWorkflowTaskReadGeneratedValidationRequiresSortedUniqueLiveSessions(t *testing.T) {
 	set := buildWorkflowTaskReadDescriptorSet(t)
 	files, err := protodesc.NewFiles(set)

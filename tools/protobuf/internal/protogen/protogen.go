@@ -245,6 +245,9 @@ func (m *Manager) generate(target Target, destination string) error {
 		"--output", destination,
 	)
 	command.Dir = filepath.Join(m.RepositoryRoot, "tools", "protobuf")
+	if target.Name == "ts" {
+		command.Env = prependPath(os.Environ(), m.typeScriptGeneratorBinDir())
+	}
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
 	return command.Run()
@@ -259,7 +262,7 @@ func (m *Manager) ensureTypeScriptGenerator() error {
 		return err
 	}
 	metadataPath := filepath.Join(m.RepositoryRoot, ".generated", "protobuf", typeScriptGeneratorFingerprint)
-	executable := filepath.Join(m.RepositoryRoot, "tools", "protobuf", "node_modules", ".bin", "protoc-gen-es")
+	executable := filepath.Join(m.typeScriptGeneratorBinDir(), "protoc-gen-es")
 	installedFingerprint, readErr := os.ReadFile(metadataPath)
 	if readErr == nil && strings.TrimSpace(string(installedFingerprint)) == inputFingerprint {
 		return ensureExecutable(executable)
@@ -284,14 +287,27 @@ func (m *Manager) ensureTypeScriptGenerator() error {
 }
 
 func ensureExecutable(path string) error {
-	info, err := os.Stat(path)
+	_, err := exec.LookPath(path)
 	if err != nil {
-		return err
-	}
-	if info.Mode()&0o111 == 0 {
-		return fmt.Errorf("%s is not executable", path)
+		return fmt.Errorf("resolve executable %s: %w", path, err)
 	}
 	return nil
+}
+
+func (m *Manager) typeScriptGeneratorBinDir() string {
+	return filepath.Join(m.RepositoryRoot, "tools", "protobuf", "node_modules", ".bin")
+}
+
+func prependPath(environment []string, directory string) []string {
+	updated := append([]string(nil), environment...)
+	for index, variable := range updated {
+		key, value, found := strings.Cut(variable, "=")
+		if found && strings.EqualFold(key, "PATH") {
+			updated[index] = key + "=" + directory + string(os.PathListSeparator) + value
+			return updated
+		}
+	}
+	return append(updated, "PATH="+directory)
 }
 
 func (m *Manager) inputFingerprint(target Target) (string, error) {
