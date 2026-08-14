@@ -68,18 +68,21 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		return 1
 	}
-	defer func() { _ = server.Close() }()
 	_, _ = fmt.Fprintln(stderr, "Server started, Ctrl+C to stop")
-	if err := server.Serve(ctx); err != nil {
+	serveErr := server.Serve(ctx)
+	if serveErr != nil {
 		var critical *serverstartup.CriticalInfrastructureTermination
-		if errors.As(err, &critical) {
+		if errors.As(serveErr, &critical) {
 			fmt.Fprintln(stderr, critical)
 			return 2
 		}
-		if errors.Is(err, context.Canceled) {
-			return 130
-		}
-		fmt.Fprintln(stderr, err)
+	}
+	_ = server.Close()
+	if errors.Is(serveErr, context.Canceled) {
+		return 130
+	}
+	if serveErr != nil {
+		fmt.Fprintln(stderr, serveErr)
 		return 1
 	}
 	return 0

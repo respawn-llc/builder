@@ -16,6 +16,7 @@ type workspaceOverlaySnapshot struct {
 	configRoot       string
 	configRootSource string
 	homeSettingsPath string
+	homePathIdentity string
 	homeSettingsInfo os.FileInfo
 	homeExists       bool
 }
@@ -161,8 +162,13 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 	globalState := cloneSettingsState(state)
 	globalSources := cloneSourceMapOrDefault(sources)
 	var homeSettingsInfo os.FileInfo
+	var homePathIdentity string
 	if homeSettingsExists {
 		homeSettingsInfo, err = os.Stat(homeSettingsPath)
+		if err != nil {
+			return loadedConfig{}, err
+		}
+		homePathIdentity, err = CanonicalPathIdentity(homeSettingsPath)
 		if err != nil {
 			return loadedConfig{}, err
 		}
@@ -231,6 +237,7 @@ func loadAll(workspaceRoot string, includeWorkspaceLayer bool, opts LoadOptions)
 		configRoot:       configRoot,
 		configRootSource: configRootSource,
 		homeSettingsPath: homeSettingsPath,
+		homePathIdentity: homePathIdentity,
 		homeSettingsInfo: homeSettingsInfo,
 		homeExists:       homeSettingsExists,
 	}
@@ -271,11 +278,18 @@ func loadWorkspaceOverlay(global App, workspaceRoot string) (loadedConfig, error
 	snapshot := global.workspaceOverlay
 	workspaceEnabled := true
 	if snapshot.homeExists && workspaceExists {
-		workspaceInfo, statErr := os.Stat(workspacePath)
-		if statErr != nil {
-			return loadedConfig{}, statErr
+		workspaceIdentity, identityErr := CanonicalPathIdentity(workspacePath)
+		if identityErr != nil {
+			return loadedConfig{}, identityErr
 		}
-		workspaceEnabled = !os.SameFile(snapshot.homeSettingsInfo, workspaceInfo)
+		workspaceEnabled = workspaceIdentity != snapshot.homePathIdentity
+		if workspaceEnabled {
+			workspaceInfo, statErr := os.Stat(workspacePath)
+			if statErr != nil {
+				return loadedConfig{}, statErr
+			}
+			workspaceEnabled = !os.SameFile(snapshot.homeSettingsInfo, workspaceInfo)
+		}
 	}
 	workspaceFile := settingsFile{}
 	if workspaceEnabled && workspaceExists {

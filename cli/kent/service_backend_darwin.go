@@ -374,16 +374,8 @@ func waitForCapturedDarwinTopologyShutdown(ctx context.Context, topology darwinS
 		}
 		if time.Now().After(deadline) {
 			if childAlive && topology.Child != nil {
-				if err := signalLaunchdServiceProcess(topology.Child.PID); err != nil {
+				if err := terminateCapturedDarwinChild(ctx, topology); err != nil {
 					return err
-				}
-				if err := waitForLaunchdServiceProcessExit(ctx, topology.Child.PID); err != nil {
-					if err := killLaunchdServiceProcess(topology.Child.PID); err != nil {
-						return err
-					}
-					if err := waitForLaunchdServiceProcessExit(ctx, topology.Child.PID); err != nil {
-						return err
-					}
 				}
 			}
 			if hostAlive {
@@ -402,6 +394,43 @@ func waitForCapturedDarwinTopologyShutdown(ctx context.Context, topology darwinS
 		case <-timer.C:
 		}
 	}
+}
+
+func terminateCapturedDarwinChild(ctx context.Context, topology darwinServiceTopology) error {
+	owned, err := capturedDarwinChildStillOwned(topology)
+	if err != nil || !owned {
+		return err
+	}
+	if err := signalLaunchdServiceProcess(topology.Child.PID); err != nil {
+		return err
+	}
+	if err := waitForLaunchdServiceProcessExit(ctx, topology.Child.PID); err == nil {
+		return nil
+	}
+	owned, err = capturedDarwinChildStillOwned(topology)
+	if err != nil || !owned {
+		return err
+	}
+	if err := killLaunchdServiceProcess(topology.Child.PID); err != nil {
+		return err
+	}
+	return waitForLaunchdServiceProcessExit(ctx, topology.Child.PID)
+}
+
+func capturedDarwinChildStillOwned(topology darwinServiceTopology) (bool, error) {
+	if topology.Child == nil {
+		return false, nil
+	}
+	identity, err := inspectDarwinProcessIdentity(topology.Child.PID)
+	if err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return false, nil
+		}
+		return false, fmt.Errorf("revalidate captured server child %d: %w", topology.Child.PID, err)
+	}
+	return identity.PID == topology.Child.PID &&
+		identity.Parent == topology.Host.PID &&
+		commandArgsEqual(identity.Command, topology.Child.Command), nil
 }
 
 func bootstrapLaunchdService(ctx context.Context, spec serviceSpec, path string) error {

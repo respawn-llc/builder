@@ -184,7 +184,6 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		return errContextRequired
 	}
 	if fatal := s.metadataFatalTermination(); fatal != nil {
-		_ = s.Close()
 		return fatal
 	}
 	if err := ctx.Err(); err != nil {
@@ -196,7 +195,6 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	rpc, err := s.startRPC()
 	if err != nil {
 		if fatal := s.metadataFatalTermination(); fatal != nil {
-			_ = s.Close()
 			return fatal
 		}
 		return err
@@ -208,6 +206,9 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	}
 	select {
 	case <-ctx.Done():
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		rpc.shutdown()
 		rpc.wait()
 		if fatal := s.metadataFatalTermination(); fatal != nil {
@@ -215,6 +216,9 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		}
 		return ctx.Err()
 	case serveErr := <-rpc.errCh:
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		rpc.shutdown()
 		rpc.waitRemaining()
 		if fatal := s.metadataFatalTermination(); fatal != nil {
@@ -222,9 +226,6 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		}
 		return serveErr
 	case <-metadataFatal:
-		rpc.shutdown()
-		rpc.wait()
-		_ = s.Close()
 		return s.metadataFatalTermination()
 	}
 }

@@ -472,6 +472,48 @@ func TestLoadWorkspaceOverlayReadsWorkspaceOncePerOperation(t *testing.T) {
 	}
 }
 
+func TestLoadWorkspaceOverlayPreservesSharedGlobalSymlinkAfterAtomicReplacement(t *testing.T) {
+	home, workspace := newConfigTestEnv(t)
+	globalDir := filepath.Join(home, ConfigDirName)
+	if err := os.MkdirAll(globalDir, 0o755); err != nil {
+		t.Fatalf("create global config directory: %v", err)
+	}
+	globalPath := filepath.Join(globalDir, "config.toml")
+	if err := os.WriteFile(globalPath, []byte("model = \"startup-model\"\n"), 0o644); err != nil {
+		t.Fatalf("write startup global config: %v", err)
+	}
+	workspaceDir := filepath.Join(workspace, ConfigDirName)
+	if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+		t.Fatalf("create workspace config directory: %v", err)
+	}
+	workspacePath := filepath.Join(workspaceDir, "config.toml")
+	if err := os.Symlink(globalPath, workspacePath); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	global, err := LoadGlobal(LoadOptions{ConfigRoot: globalDir})
+	if err != nil {
+		t.Fatalf("load global: %v", err)
+	}
+	replacementPath := filepath.Join(globalDir, "replacement.toml")
+	if err := os.WriteFile(replacementPath, []byte("model = \"replacement-model\"\n"), 0o644); err != nil {
+		t.Fatalf("write replacement global config: %v", err)
+	}
+	if err := os.Rename(replacementPath, globalPath); err != nil {
+		t.Fatalf("replace global config: %v", err)
+	}
+
+	cfg, err := LoadWorkspaceOverlay(global, workspace)
+	if err != nil {
+		t.Fatalf("load workspace overlay: %v", err)
+	}
+	if cfg.Source.WorkspaceSettingsLayerEnabled {
+		t.Fatal("shared global symlink became a Workspace settings layer after global replacement")
+	}
+	if cfg.Settings.Model != "startup-model" {
+		t.Fatalf("model = %q, want captured startup model", cfg.Settings.Model)
+	}
+}
+
 func TestLoadGlobalRejectsModelContextWindowBelowMinimum(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

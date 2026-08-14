@@ -12,10 +12,14 @@ import (
 )
 
 type serveCommandServerStub struct {
-	err error
+	err    error
+	closes *int
 }
 
 func (s serveCommandServerStub) Close() error {
+	if s.closes != nil {
+		*s.closes = *s.closes + 1
+	}
 	return nil
 }
 
@@ -70,13 +74,14 @@ func TestServeSubcommandMapsOnlyCriticalInfrastructureTerminationToStatusTwo(t *
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			closes := 0
 			startServeServer = func(
 				context.Context,
 				serverstartup.Request,
 				serverstartup.AuthHandler,
 				serverstartup.OnboardingHandler,
 			) (serveCommandServer, error) {
-				return serveCommandServerStub{err: tt.serveErr}, nil
+				return serveCommandServerStub{err: tt.serveErr, closes: &closes}, nil
 			}
 			var stderr strings.Builder
 			if got := serveSubcommand(nil, io.Discard, &stderr); got != tt.wantStatus {
@@ -84,6 +89,14 @@ func TestServeSubcommandMapsOnlyCriticalInfrastructureTerminationToStatusTwo(t *
 			}
 			if stderr.Len() == 0 {
 				t.Fatal("serve did not emit a diagnostic")
+			}
+			wantCloses := 1
+			var critical *serverstartup.CriticalInfrastructureTermination
+			if errors.As(tt.serveErr, &critical) {
+				wantCloses = 0
+			}
+			if closes != wantCloses {
+				t.Fatalf("server closes = %d, want %d", closes, wantCloses)
 			}
 		})
 	}

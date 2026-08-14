@@ -134,6 +134,106 @@ func TestDarwinReadinessRequiresOwnedChildHealthPID(t *testing.T) {
 	}
 }
 
+func TestDarwinShutdownDoesNotSignalReusedChildPID(t *testing.T) {
+	topology := darwinServiceTopology{
+		Host: darwinLaunchdHost{PID: 100},
+		Child: &darwinOwnedChild{
+			PID:     101,
+			Command: []string{"kent", "serve"},
+		},
+	}
+	previousTimeout := launchdServiceShutdownTimeout
+	previousAlive := launchdServiceProcessAlive
+	previousInspect := inspectDarwinProcessIdentity
+	previousSignal := signalLaunchdServiceProcess
+	previousKill := killLaunchdServiceProcess
+	launchdServiceShutdownTimeout = time.Nanosecond
+	launchdServiceProcessAlive = func(pid int) (bool, error) {
+		return pid == topology.Child.PID, nil
+	}
+	inspectDarwinProcessIdentity = func(pid int) (darwinProcessIdentity, error) {
+		return darwinProcessIdentity{
+			PID:     pid,
+			Parent:  999,
+			Command: append([]string(nil), topology.Child.Command...),
+		}, nil
+	}
+	signalLaunchdServiceProcess = func(int) error {
+		t.Fatal("SIGTERM sent to reused child PID")
+		return nil
+	}
+	killLaunchdServiceProcess = func(int) error {
+		t.Fatal("SIGKILL sent to reused child PID")
+		return nil
+	}
+	t.Cleanup(func() {
+		launchdServiceShutdownTimeout = previousTimeout
+		launchdServiceProcessAlive = previousAlive
+		inspectDarwinProcessIdentity = previousInspect
+		signalLaunchdServiceProcess = previousSignal
+		killLaunchdServiceProcess = previousKill
+	})
+
+	if err := waitForCapturedDarwinTopologyShutdown(context.Background(), topology, false); err != nil {
+		t.Fatalf("wait for captured topology shutdown: %v", err)
+	}
+}
+
+func TestDarwinShutdownRevalidatesChildAgainBeforeSIGKILL(t *testing.T) {
+	topology := darwinServiceTopology{
+		Host: darwinLaunchdHost{PID: 100},
+		Child: &darwinOwnedChild{
+			PID:     101,
+			Command: []string{"kent", "serve"},
+		},
+	}
+	previousTimeout := launchdServiceShutdownTimeout
+	previousAlive := launchdServiceProcessAlive
+	previousInspect := inspectDarwinProcessIdentity
+	previousSignal := signalLaunchdServiceProcess
+	previousKill := killLaunchdServiceProcess
+	launchdServiceShutdownTimeout = time.Nanosecond
+	launchdServiceProcessAlive = func(pid int) (bool, error) {
+		return pid == topology.Child.PID, nil
+	}
+	inspections := 0
+	inspectDarwinProcessIdentity = func(pid int) (darwinProcessIdentity, error) {
+		inspections++
+		parent := topology.Host.PID
+		if inspections > 1 {
+			parent = 999
+		}
+		return darwinProcessIdentity{
+			PID:     pid,
+			Parent:  parent,
+			Command: append([]string(nil), topology.Child.Command...),
+		}, nil
+	}
+	signals := 0
+	signalLaunchdServiceProcess = func(int) error {
+		signals++
+		return nil
+	}
+	killLaunchdServiceProcess = func(int) error {
+		t.Fatal("SIGKILL sent after child PID identity changed")
+		return nil
+	}
+	t.Cleanup(func() {
+		launchdServiceShutdownTimeout = previousTimeout
+		launchdServiceProcessAlive = previousAlive
+		inspectDarwinProcessIdentity = previousInspect
+		signalLaunchdServiceProcess = previousSignal
+		killLaunchdServiceProcess = previousKill
+	})
+
+	if err := waitForCapturedDarwinTopologyShutdown(context.Background(), topology, false); err != nil {
+		t.Fatalf("wait for captured topology shutdown: %v", err)
+	}
+	if signals != 1 {
+		t.Fatalf("SIGTERM count = %d, want 1", signals)
+	}
+}
+
 func TestDarwinServiceLockHandoffIsCancellableAndExclusive(t *testing.T) {
 	root := t.TempDir()
 	lockPath := darwinServiceLockPath(root)
