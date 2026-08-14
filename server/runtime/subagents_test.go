@@ -658,7 +658,7 @@ func renderableSubagentRolesContain(roles []renderedSubagentRole, name string) b
 	return false
 }
 
-func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
+func TestReviewerPromptIncludesSubagentsMetaContext(t *testing.T) {
 	t.Parallel()
 	messages := []llm.Message{
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("Available subagent roles:\n- worker: specialist")},
@@ -668,9 +668,7 @@ func TestReviewerPromptFiltersSubagentsMetaContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildReviewerRequestMessagesWithBuilder: %v", err)
 	}
-	for _, message := range got {
-		if (message.MessageType != nil && *message.MessageType == llm.MessageTypeSubagents) || strings.Contains(messageContent(message), "Available subagent roles") {
-			t.Fatalf("reviewer messages leaked subagent context: %+v", got)
-		}
+	if !hasSubagentMetaMessage(got) {
+		t.Fatalf("reviewer messages omitted shared subagent context: %+v", got)
 	}
 }

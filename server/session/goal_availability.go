@@ -47,10 +47,10 @@ func GoalAvailabilityFromMeta(meta Meta) (GoalAvailability, error) {
 }
 
 func malformedGoalContract(meta Meta, cause error) error {
-	err := fmt.Errorf("session %q locked contract generation %d is malformed: %w", meta.SessionID, meta.PromptCacheLineageGeneration, cause)
+	err := fmt.Errorf("session %q locked contract is malformed: %w", meta.SessionID, cause)
 	d := invariant.FailureDiagnostic(invariant.ScopeSessionPersistence, "goal_availability", err)
 	d.Fields[invariant.FieldSessionID] = meta.SessionID
-	d.Fields[invariant.FieldResolverInputs] = fmt.Sprintf("prompt_cache_lineage_generation=%d", meta.PromptCacheLineageGeneration)
+	d.Fields[invariant.FieldResolverInputs] = "locked_contract"
 	invariant.NewPolicy().Check(false, d)
 	return err
 }

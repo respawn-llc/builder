@@ -80,27 +80,68 @@ type metaContextBuildResult struct {
 	Workflow               []llm.Message
 	Worktree               []llm.Message
 	WorktreeExit           []llm.Message
+	sessionMode            metaContextSessionMode
+}
+
+type metaContextSessionMode uint8
+
+const (
+	metaContextSessionModeUnspecified metaContextSessionMode = iota
+	metaContextSessionModeGoal
+	metaContextSessionModeWorkflow
+)
+
+type metaContextProjection struct {
+	StablePrefix []llm.Message
+	Environment  []llm.Message
+}
+
+func (r metaContextBuildResult) Projection() metaContextProjection {
+	return metaContextProjection{
+		StablePrefix: r.StablePrefixMessages(),
+		Environment:  append([]llm.Message(nil), r.Environment...),
+	}
+}
+
+func (p metaContextProjection) Messages() []llm.Message {
+	out := make([]llm.Message, 0, len(p.StablePrefix)+len(p.Environment))
+	out = append(out, p.StablePrefix...)
+	out = append(out, p.Environment...)
+	return out
 }
 
 func (r metaContextBuildResult) OrderedMetaMessages() []llm.Message {
-	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Environment)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
-	out = append(out, r.OrderedBaseMessages()...)
+	return r.Projection().Messages()
+}
+
+func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
+	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
 	out = append(out, r.Headless...)
 	out = append(out, r.HeadlessExit...)
-	out = append(out, r.ActiveGoalContinuation...)
-	out = append(out, r.Workflow...)
+	out = append(out, r.Subagents...)
+	out = append(out, r.Skills...)
 	out = append(out, r.Worktree...)
 	out = append(out, r.WorktreeExit...)
+	out = append(out, r.Agents...)
+	// Goal continuation and Workflow are alternative Session modes. The
+	// selected mode is the only one emitted into the stable prefix.
+	switch r.sessionMode {
+	case metaContextSessionModeGoal:
+		out = append(out, r.ActiveGoalContinuation...)
+	case metaContextSessionModeWorkflow:
+		out = append(out, r.Workflow...)
+	default:
+		if len(r.Workflow) > 0 {
+			out = append(out, r.Workflow...)
+		} else {
+			out = append(out, r.ActiveGoalContinuation...)
+		}
+	}
 	return out
 }
 
 func (r metaContextBuildResult) OrderedBaseMessages() []llm.Message {
-	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Environment))
-	out = append(out, r.Environment...)
-	out = append(out, r.Skills...)
-	out = append(out, r.Subagents...)
-	out = append(out, r.Agents...)
-	return out
+	return r.Projection().Messages()
 }
 
 type metaContextBuilder struct {
@@ -265,7 +306,14 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 		}
 	}
 
-	return collector.result(), nil
+	result := collector.result()
+	switch {
+	case opts.IncludeWorkflow:
+		result.sessionMode = metaContextSessionModeWorkflow
+	case opts.ActiveGoal != nil:
+		result.sessionMode = metaContextSessionModeGoal
+	}
+	return result, nil
 }
 
 func activeGoalContinuationMetaMessage(goal session.GoalState) (llm.Message, bool) {

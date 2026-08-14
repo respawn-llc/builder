@@ -174,6 +174,10 @@ Per-Transition-Branch policy deciding which Session supplies context for continu
 
 Post-completion compaction of a retained Workflow Session before it becomes dormant. Kent performs Workflow Pre-Compaction when future Workflow execution can reuse that Session and its context usage reaches the configured threshold. Guaranteed future `compact_and_continue_session` reuse also uses this boundary regardless of context usage.
 
+### Eager Compaction
+
+Automatic post-turn compaction of an eligible non-Workflow Session at 88% of its actual model context window. Eager Compaction runs after any successfully completed non-Workflow agent/model turn with a nonblank final answer and follows the Session's ordinary automatic-compaction setting.
+
 ### Exact Execution Scope
 
 The immutable identity of one live agent or Script execution for a Task's Current Node and, when applicable, its parallel branch. Resume creates a new Exact Execution Scope only after the previous scope stops. Only a matching Exact Execution Scope proves that execution is live. Saved Task state, transcript entries, timestamps, Goals, and client state do not prove liveness.

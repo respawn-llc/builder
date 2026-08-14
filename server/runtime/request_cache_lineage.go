@@ -141,6 +141,18 @@ func (t *requestCacheTracker) Clear(cacheKey string) {
 	delete(t.lineage, cacheKey)
 }
 
+func (e *Engine) resetPromptCacheObservationBaselines() {
+	if e == nil {
+		return
+	}
+	cache := e.modelRequests().RequestCache()
+	if cache == nil {
+		return
+	}
+	cache.Clear(e.conversationPromptCacheKey(e.SessionID()))
+	cache.Clear(e.conversationPromptCacheKey(reviewerSessionID(e.SessionID())))
+}
+
 func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObserved) {
 	cacheKey := strings.TrimSpace(response.CacheKey)
 	if cacheKey == "" {

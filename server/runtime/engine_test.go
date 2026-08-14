@@ -932,8 +932,8 @@ func TestSystemPromptSnapshotRefreshesAfterCompaction(t *testing.T) {
 	if got := client.calls[3].SystemPrompt; got != "prompt B" {
 		t.Fatalf("post-compaction system prompt = %q, want prompt B", got)
 	}
-	if got := client.calls[3].PromptCacheKey; got == "" || got == firstCacheKey {
-		t.Fatalf("post-compaction cache key = %q, want rotated from %q", got, firstCacheKey)
+	if got := client.calls[3].PromptCacheKey; got != firstCacheKey {
+		t.Fatalf("post-compaction cache key = %q, want stable key %q", got, firstCacheKey)
 	}
 	if locked := store.Meta().Locked; locked == nil || !locked.HasSystemPrompt || locked.SystemPrompt != "prompt B" {
 		t.Fatalf("locked prompt after refresh = %+v, want prompt B", locked)
@@ -1032,7 +1032,7 @@ func TestPendingSystemPromptRefreshRunsAfterReopen(t *testing.T) {
 	if got := reopenedClient.calls[0].SystemPrompt; got != "prompt B" {
 		t.Fatalf("reopened system prompt = %q, want prompt B", got)
 	}
-	if got, want := reopenedClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reopened.SessionID(), 1); got != want {
+	if got, want := reopenedClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reopened.SessionID()); got != want {
 		t.Fatalf("reopened cache key = %q, want %q", got, want)
 	}
 }

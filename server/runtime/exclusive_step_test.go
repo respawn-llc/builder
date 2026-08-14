@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	"core/server/session/sessiontest"
 	"core/server/tools"
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -66,6 +67,378 @@ func (s *callbackStepLifecycleSink) seen(transition StepLifecycleTransition) boo
 		}
 	}
 	return false
+}
+
+func TestExclusiveStepLifecycleEagerCompactsAfterSuccessfulFinalAtConsumedThreshold(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 2_000),
+		},
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_900,
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+				steeringPriorityNormal,
+				steeringMessageEventNone,
+				true,
+				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+			)); err != nil {
+				return err
+			}
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			})
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("run exclusive step: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 1 {
+		t.Fatalf("eager compaction calls = %d, want 1", got)
+	}
+}
+
+func TestExclusiveStepLifecycleEagerCompactsEligibleAgentKinds(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []ActiveKind{ActiveKindGoalLoop, ActiveKindBackground} {
+		t.Run(string(kind), func(t *testing.T) {
+			client := &fakeCompactionClient{
+				compactionResponses: []llm.CompactionResponse{
+					remoteCompactionReplacement(100, 10, 2_000),
+				},
+			}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+				Model:                 "gpt-5",
+				ContextWindowTokens:   2_000,
+				AutoCompactTokenLimit: 1_900,
+			})
+			lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+			if err := lifecycle.Run(
+				context.Background(),
+				exclusiveStepOptions{EmitRunState: true, ActiveKind: kind},
+				func(_ context.Context, stepID string) error {
+					if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+						steeringPriorityNormal,
+						steeringMessageEventNone,
+						true,
+						[]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value("input")}},
+					)); err != nil {
+						return err
+					}
+					engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+					engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+						Role:    llm.RoleAssistant,
+						Phase:   textutil.Value(llm.MessagePhaseFinal),
+						Content: textutil.Value("final"),
+					})
+					return nil
+				},
+			); err != nil {
+				t.Fatalf("run exclusive step: %v", err)
+			}
+			waitEngineLifecycleTasks(t, engine)
+			if got := len(client.compactionCalls); got != 1 {
+				t.Fatalf("eager compaction calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+func TestSubmitUserMessageEagerCompactsAfterSuccessfulFinal(t *testing.T) {
+	t.Parallel()
+	client := &fakeCompactionClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			},
+			Usage: llm.Usage{InputTokens: 8_800, WindowTokens: 10_000},
+		}},
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 10_000),
+		},
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   10_000,
+		AutoCompactTokenLimit: 9_500,
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "input"); err != nil {
+		t.Fatalf("submit user message: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 1 {
+		t.Fatalf("eager compaction calls = %d, want 1", got)
+	}
+}
+
+func TestSubmitAgentSteerEagerCompactsAfterSuccessfulFinal(t *testing.T) {
+	t.Parallel()
+	sourceID := runtimeids.NewSessionID()
+	steer, err := NewAgentSteer(sourceID, "continue")
+	if err != nil {
+		t.Fatalf("new agent steer: %v", err)
+	}
+	client := &fakeCompactionClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			},
+			Usage: llm.Usage{InputTokens: 8_800, WindowTokens: 10_000},
+		}},
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 10_000),
+		},
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   10_000,
+		AutoCompactTokenLimit: 9_500,
+	})
+	if _, err := engine.SubmitAgentSteerWithHooks(context.Background(), steer, nil, nil); err != nil {
+		t.Fatalf("submit agent steer: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 1 {
+		t.Fatalf("eager compaction calls = %d, want 1", got)
+	}
+}
+
+func TestExclusiveStepLifecycleEagerCompactionExcludesIneligibleResults(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		kind ActiveKind
+	}{
+		{name: "workflow", kind: ActiveKindWorkflowTurn},
+		{name: "user shell", kind: ActiveKindUserShell},
+		{name: "compaction", kind: ActiveKindCompaction},
+		{name: "runtime maintenance", kind: ActiveKindRuntimeMaintenance},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeCompactionClient{
+				compactionResponses: []llm.CompactionResponse{
+					remoteCompactionReplacement(100, 10, 2_000),
+				},
+			}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+				Model:                 "gpt-5",
+				ContextWindowTokens:   2_000,
+				AutoCompactTokenLimit: 1_900,
+			})
+			lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+			if err := lifecycle.Run(
+				context.Background(),
+				exclusiveStepOptions{EmitRunState: true, ActiveKind: test.kind},
+				func(_ context.Context, stepID string) error {
+					engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+					engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+						Role:    llm.RoleAssistant,
+						Phase:   textutil.Value(llm.MessagePhaseFinal),
+						Content: textutil.Value("final"),
+					})
+					return nil
+				},
+			); err != nil {
+				t.Fatalf("run exclusive step: %v", err)
+			}
+			waitEngineLifecycleTasks(t, engine)
+			if got := len(client.compactionCalls); got != 0 {
+				t.Fatalf("eager compaction calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestExclusiveStepLifecycleEagerCompactionExcludesNoFinalAndInterruptedSteps(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		final     llm.Message
+		stepError error
+	}{
+		{name: "no final"},
+		{
+			name: "blank final",
+			final: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value(" "),
+			},
+		},
+		{name: "interrupted", final: llm.Message{
+			Role:    llm.RoleAssistant,
+			Phase:   textutil.Value(llm.MessagePhaseFinal),
+			Content: textutil.Value("final"),
+		}, stepError: context.Canceled},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeCompactionClient{
+				compactionResponses: []llm.CompactionResponse{
+					remoteCompactionReplacement(100, 10, 2_000),
+				},
+			}
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+				Model:                 "gpt-5",
+				ContextWindowTokens:   2_000,
+				AutoCompactTokenLimit: 1_900,
+			})
+			lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+			if err := lifecycle.Run(
+				context.Background(),
+				exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+				func(_ context.Context, stepID string) error {
+					engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+					if test.final.Role != "" {
+						engine.recordLiveRunAssistantFinalAnswer(stepID, test.final)
+					}
+					return test.stepError
+				},
+			); !errors.Is(err, test.stepError) {
+				t.Fatalf("run exclusive step error = %v, want %v", err, test.stepError)
+			}
+			waitEngineLifecycleTasks(t, engine)
+			if got := len(client.compactionCalls); got != 0 {
+				t.Fatalf("eager compaction calls = %d, want 0", got)
+			}
+		})
+	}
+}
+
+func TestExclusiveStepLifecycleEagerCompactionDoesNotReserveAfterTerminalCleanupFailure(t *testing.T) {
+	t.Parallel()
+	cleanupErr := errors.New("finish cleanup failed")
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 2_000),
+		},
+	}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_900,
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			})
+			return cleanupErr
+		},
+	); !errors.Is(err, cleanupErr) {
+		t.Fatalf("run exclusive step error = %v, want cleanup error", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 0 {
+		t.Fatalf("eager compaction calls = %d, want 0", got)
+	}
+}
+
+func TestExclusiveStepLifecycleEagerCompactionDoesNotReserveWhenPendingRecoveryClearFails(t *testing.T) {
+	t.Parallel()
+	clearErr := errors.New("pending recovery clear failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	client := &fakeCompactionClient{
+		compactionResponses: []llm.CompactionResponse{
+			remoteCompactionReplacement(100, 10, 2_000),
+		},
+	}
+	sink := &finishFailureLifecycleSink{gate: gate, failure: clearErr}
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_900,
+		StepLifecycle:         sink,
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			})
+			if err := engine.markProviderVisibleModelRecovery(stepID); err != nil {
+				return err
+			}
+			return nil
+		},
+	)
+	if !errors.Is(err, errPendingModelRecoveryClear) || !errors.Is(err, clearErr) {
+		t.Fatalf("run exclusive step error = %v, want pending recovery and clear errors", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 0 {
+		t.Fatalf("eager compaction calls = %d, want 0", got)
+	}
+}
+
+func TestExclusiveStepLifecycleFailedEagerCompactionDoesNotRetry(t *testing.T) {
+	t.Parallel()
+	compactionErr := llm.ErrInvalidRequest
+	client := &fakeCompactionClient{compactionErrors: []error{compactionErr}}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+		Model:                 "gpt-5",
+		ContextWindowTokens:   2_000,
+		AutoCompactTokenLimit: 1_900,
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
+	if err := lifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{EmitRunState: true, ActiveKind: ActiveKindUserTurn},
+		func(_ context.Context, stepID string) error {
+			if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(
+				steeringPriorityNormal,
+				steeringMessageEventNone,
+				true,
+				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
+			)); err != nil {
+				return err
+			}
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.recordLiveRunAssistantFinalAnswer(stepID, llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("final"),
+			})
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("run exclusive step: %v", err)
+	}
+	waitEngineLifecycleTasks(t, engine)
+	if got := len(client.compactionCalls); got != 1 {
+		t.Fatalf("eager compaction calls = %d, want one attempt", got)
+	}
 }
 
 func (s *stubBackgroundNoticeScheduler) HandleBackgroundShellUpdate(BackgroundShellEvent, bool) {}

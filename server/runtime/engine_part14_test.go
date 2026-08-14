@@ -162,23 +162,23 @@ func TestManualLocalCompactionRebuildsCanonicalContextOrder(t *testing.T) {
 	if len(messages) < 6 {
 		t.Fatalf("expected canonical post-compaction messages, got %+v", messages)
 	}
-	if messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeCompactionSummary {
-		t.Fatalf("expected compaction summary first, got %+v", messages[0])
+	if messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeSkills {
+		t.Fatalf("expected skills stable context first, got %+v", messages[0])
 	}
-	if messages[1].MessageType == nil || *messages[1].MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment second, got %+v", messages[1])
+	if messages[1].MessageType == nil || *messages[1].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(messages[1]), "source: "+globalPath) {
+		t.Fatalf("expected global AGENTS after skills, got %+v", messages[1])
 	}
-	if messages[2].MessageType == nil || *messages[2].MessageType != llm.MessageTypeSkills {
-		t.Fatalf("expected skills third, got %+v", messages[2])
+	if messages[2].MessageType == nil || *messages[2].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(messages[2]), "source: "+workspacePath) {
+		t.Fatalf("expected workspace AGENTS after global AGENTS, got %+v", messages[2])
 	}
-	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(messages[3]), "source: "+globalPath) {
-		t.Fatalf("expected global AGENTS after skills, got %+v", messages[3])
+	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeCompactionSummary {
+		t.Fatalf("expected compaction summary after stable context, got %+v", messages[3])
 	}
-	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeAgentsMD || !strings.Contains(messageContent(messages[4]), "source: "+workspacePath) {
-		t.Fatalf("expected workspace AGENTS after global AGENTS, got %+v", messages[4])
+	if messages[4].MessageType == nil || *messages[4].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[4]), "please keep tests green") {
+		t.Fatalf("expected compaction-preserved user message after compaction output, got %+v", messages[4])
 	}
-	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeCompactionPreservedUserMessage || !strings.Contains(messageContent(messages[5]), "please keep tests green") {
-		t.Fatalf("expected compaction-preserved user message after reinjected base context, got %+v", messages[5])
+	if messages[5].MessageType == nil || *messages[5].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("expected environment after manual carryover, got %+v", messages[5])
 	}
 }
 
@@ -222,9 +222,7 @@ func TestHandoffCompactionPlacesAtomicHeadlessContextBeforeFutureMessage(t *test
 		case llm.MessageTypeHandoffFutureMessage:
 			futureIdx = idx
 		case llm.MessageTypeHeadlessMode:
-			if idx > 0 {
-				headlessIdx = idx
-			}
+			headlessIdx = idx
 		case llm.MessageTypeActiveGoalContinuation:
 			goalIdx = idx
 			goalCount++

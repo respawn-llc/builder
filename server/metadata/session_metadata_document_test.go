@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,7 +16,6 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 		WorkspaceRoot:                   "/workspace",
 		WorkspaceContainer:              "workspace",
 		ConversationEstablished:         true,
-		PromptCacheLineageGeneration:    7,
 		HeadlessActive:                  true,
 		CompactionSoonReminderIssued:    true,
 		GeneratedRecoveredWarningIssued: true,
@@ -41,6 +41,20 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 	encoded, err := marshalJSON(document)
 	if err != nil {
 		t.Fatalf("marshalJSON: %v", err)
+	}
+	if strings.Contains(string(encoded), "prompt_cache_lineage_generation") {
+		t.Fatalf("encoded metadata retained obsolete prompt cache lineage generation: %s", encoded)
+	}
+	var legacyDecoded sessionMetadataDocument
+	if err := unmarshalStoredJSON(`{"workspace_root":"/workspace","prompt_cache_lineage_generation":7}`, &legacyDecoded); err != nil {
+		t.Fatalf("unmarshalStoredJSON legacy metadata: %v", err)
+	}
+	legacyEncoded, err := marshalJSON(legacyDecoded)
+	if err != nil {
+		t.Fatalf("marshalJSON legacy metadata: %v", err)
+	}
+	if strings.Contains(string(legacyEncoded), "prompt_cache_lineage_generation") {
+		t.Fatalf("rewritten metadata retained obsolete prompt cache lineage generation: %s", legacyEncoded)
 	}
 	var decoded sessionMetadataDocument
 	if err := unmarshalStoredJSON(encoded, &decoded); err != nil {

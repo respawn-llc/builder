@@ -47,7 +47,6 @@ func persistedMetaFromMetadata(metadata session.Meta) session.Meta {
 		CreatedAt:                       metadata.CreatedAt,
 		UpdatedAt:                       metadata.UpdatedAt,
 		ModelRequestCount:               metadata.ModelRequestCount,
-		PromptCacheLineageGeneration:    metadata.PromptCacheLineageGeneration,
 		HeadlessActive:                  metadata.HeadlessActive,
 		CompactionSoonReminderIssued:    metadata.CompactionSoonReminderIssued,
 		GeneratedRecoveredWarningIssued: metadata.GeneratedRecoveredWarningIssued,

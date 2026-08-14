@@ -70,9 +70,9 @@ func TestInjectsGlobalAndWorkspaceAgentsBeforeFirstUserMessage(t *testing.T) {
 		t.Fatalf("expected environment, AGENTS, and user messages, got %+v", firstMessages)
 	}
 	for index, want := range []llm.Message{
-		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment)},
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeAgentsMD), SourcePath: textutil.Value(globalPath)},
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeAgentsMD), SourcePath: textutil.Value(workspacePath)},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment)},
 		{Role: llm.RoleUser, Content: textutil.Value("first")},
 	} {
 		got := firstMessages[index]
@@ -154,17 +154,17 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	if len(messages) < 5 {
 		t.Fatalf("expected environment, AGENTS, and user messages, got %+v", messages)
 	}
-	if messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeEnvironment {
-		t.Fatalf("expected environment reinjected first, got %+v", messages[0])
+	if messages[0].MessageType == nil || *messages[0].MessageType != llm.MessageTypeSkills || !strings.Contains(messageContent(messages[0]), "workspace-skill") {
+		t.Fatalf("expected skills reinjected first, got %+v", messages[0])
 	}
-	if messages[1].MessageType == nil || *messages[1].MessageType != llm.MessageTypeSkills || !strings.Contains(messageContent(messages[1]), "workspace-skill") {
-		t.Fatalf("expected skills reinjected after environment, got %+v", messages[1])
+	if messages[1].MessageType == nil || *messages[1].MessageType != llm.MessageTypeAgentsMD || messages[1].SourcePath == nil || *messages[1].SourcePath != globalPath {
+		t.Fatalf("expected global AGENTS reinjected after skills, got %+v", messages[1])
 	}
-	if messages[2].MessageType == nil || *messages[2].MessageType != llm.MessageTypeAgentsMD || messages[2].SourcePath == nil || *messages[2].SourcePath != globalPath {
-		t.Fatalf("expected global AGENTS reinjected, got %+v", messages[2])
+	if messages[2].MessageType == nil || *messages[2].MessageType != llm.MessageTypeAgentsMD || messages[2].SourcePath == nil || *messages[2].SourcePath != workspacePath {
+		t.Fatalf("expected workspace AGENTS reinjected after global AGENTS, got %+v", messages[2])
 	}
-	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeAgentsMD || messages[3].SourcePath == nil || *messages[3].SourcePath != workspacePath {
-		t.Fatalf("expected workspace AGENTS reinjected, got %+v", messages[3])
+	if messages[3].MessageType == nil || *messages[3].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("expected environment reinjected after stable context, got %+v", messages[3])
 	}
 	if messages[4].Role != llm.RoleUser || messageContent(messages[4]) != "first child turn" {
 		t.Fatalf("expected user message after reinjected context, got %+v", messages[4])
@@ -223,8 +223,8 @@ func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
 	if userIdx < 0 {
 		t.Fatalf("expected first user message in first request, messages=%+v", firstMessages)
 	}
-	if !(envIdx < skillsIdx && skillsIdx < userIdx) {
-		t.Fatalf("expected environment -> skills -> user ordering, got env=%d skills=%d user=%d", envIdx, skillsIdx, userIdx)
+	if !(skillsIdx < envIdx && envIdx < userIdx) {
+		t.Fatalf("expected stable skills -> environment -> user ordering, got skills=%d env=%d user=%d", skillsIdx, envIdx, userIdx)
 	}
 
 	skillsInjectedCount := 0

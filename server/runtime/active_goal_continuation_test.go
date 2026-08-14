@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -32,7 +34,6 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 				Content:     textutil.Value("duplicate continuation"),
 			},
 			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorktreeMode), Content: textutil.Value("worktree")},
-			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value("workflow")},
 			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value("headless")},
 			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
 		},
@@ -51,11 +52,10 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 	}
 
 	want := []llm.MessageType{
-		llm.MessageTypeEnvironment,
 		llm.MessageTypeHeadlessMode,
-		llm.MessageTypeActiveGoalContinuation,
-		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeEnvironment,
 	}
 	got := metaContextMessageTypes(result.OrderedMetaMessages())
 	if len(got) != len(want) {
@@ -65,6 +65,125 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 		if got[index] != messageType {
 			t.Fatalf("ordered meta type[%d] = %q, want %q", index, got[index], messageType)
 		}
+	}
+}
+
+func TestMetaContextProjectionSelectsWorkflowOverActiveGoal(t *testing.T) {
+	t.Parallel()
+	result, err := newMetaContextBuilder(
+		t.TempDir(),
+		"",
+		"",
+		config.SkillPolicy{},
+		time.Unix(0, 0),
+	).Build(metaContextBuildOptions{
+		ExistingMessages: []llm.Message{
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation), Content: textutil.Value("goal")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value("workflow")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
+		},
+		IncludeWorkflow: true,
+	})
+	if err != nil {
+		t.Fatalf("build meta context: %v", err)
+	}
+	assertMetaContextTypes(t, result.OrderedMetaMessages(), []llm.MessageType{
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeEnvironment,
+	})
+
+	goal, err := newMetaContextBuilder(
+		t.TempDir(),
+		"",
+		"",
+		config.SkillPolicy{},
+		time.Unix(0, 0),
+	).Build(metaContextBuildOptions{
+		ExistingMessages: []llm.Message{
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation), Content: textutil.Value("goal")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value("workflow")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
+		},
+		ActiveGoal: &session.GoalState{Objective: "goal", Status: session.GoalStatusActive},
+	})
+	if err != nil {
+		t.Fatalf("build goal meta context: %v", err)
+	}
+	assertMetaContextTypes(t, goal.OrderedMetaMessages(), []llm.MessageType{
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeEnvironment,
+	})
+}
+
+func TestMetaContextProjectionUsesCanonicalStablePrefixAcrossEmissionOrders(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	builder := newMetaContextBuilder(workspace, "model", "", config.SkillPolicy{}, time.Unix(0, 0)).
+		withGlobalConfigDir(filepath.Join(workspace, "global"))
+	base := []llm.Message{
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeAgentsMD), SourcePath: textutil.Value(filepath.Join(workspace, "AGENTS.md")), Content: textutil.Value("agents")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSkills), Content: textutil.Value("skills")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeSubagents), Content: textutil.Value("subagents")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment snapshot")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeHeadlessMode), Content: textutil.Value("headless")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorktreeMode), Content: textutil.Value("worktree")},
+		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation), Content: textutil.Value("goal")},
+	}
+	forward, err := builder.Build(metaContextBuildOptions{ExistingMessages: base})
+	if err != nil {
+		t.Fatalf("build forward projection: %v", err)
+	}
+	reverseInput := append([]llm.Message(nil), base...)
+	for left, right := 0, len(reverseInput)-1; left < right; left, right = left+1, right-1 {
+		reverseInput[left], reverseInput[right] = reverseInput[right], reverseInput[left]
+	}
+	reverse, err := builder.Build(metaContextBuildOptions{ExistingMessages: reverseInput})
+	if err != nil {
+		t.Fatalf("build reverse projection: %v", err)
+	}
+
+	want := []llm.MessageType{
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeSubagents,
+		llm.MessageTypeSkills,
+		llm.MessageTypeWorktreeMode,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeActiveGoalContinuation,
+		llm.MessageTypeEnvironment,
+	}
+	assertMetaContextTypes(t, forward.OrderedMetaMessages(), want)
+	assertMetaContextTypes(t, reverse.OrderedMetaMessages(), want)
+	if got, want := metaContextMessageTypes(forward.OrderedMetaMessages()), metaContextMessageTypes(reverse.OrderedMetaMessages()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("canonical projection changed with emission order: forward=%+v reverse=%+v", got, want)
+	}
+
+	reviewer, err := buildReviewerRequestMessagesWithBuilder(base, builder, false)
+	if err != nil {
+		t.Fatalf("build reviewer projection: %v", err)
+	}
+	boundaryIndex := -1
+	for index, message := range reviewer {
+		if message.Role == llm.RoleDeveloper && message.MessageType == nil {
+			boundaryIndex = index
+			break
+		}
+	}
+	if boundaryIndex < 0 {
+		t.Fatalf("reviewer projection omitted its transcript boundary: %+v", reviewer)
+	}
+	reviewerMeta := reviewer[:boundaryIndex]
+	assertMetaContextTypes(t, reviewerMeta, want)
+}
+
+func assertMetaContextTypes(t *testing.T, messages []llm.Message, want []llm.MessageType) {
+	t.Helper()
+	got := metaContextMessageTypes(messages)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("meta context order = %+v, want %+v", got, want)
+	}
+	if len(messages) == 0 || messages[len(messages)-1].MessageType == nil ||
+		*messages[len(messages)-1].MessageType != llm.MessageTypeEnvironment {
+		t.Fatalf("environment must be outside stable prefix: %+v", messages)
 	}
 }
 

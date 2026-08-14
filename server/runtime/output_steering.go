@@ -287,13 +287,12 @@ func steerReviewerErrorIntent(detail string) steeringIntent {
 	return steeringIntent{priority: steeringPriorityNormal, items: []steeringItem{{reviewerError: &steeringReviewerError{detail: detail}}}}
 }
 
-func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, pendingHandoffFutureMessage string, lastCommittedAssistantFinalAnswer *string, items []llm.ResponseItem) steeringIntent {
+func steerHistoryReplacementIntent(engine string, mode compactionMode, compactionNumber int, lastCommittedAssistantFinalAnswer *string, items []llm.ResponseItem) steeringIntent {
 	preparedItems := llm.PrepareOpenAIInputItems(items)
 	payload := historyReplacementPayload{
 		Engine:                            normalizeHistoryReplacementEngine(engine),
 		Mode:                              string(mode),
 		CompactionNumber:                  textutil.Value(compactionNumber),
-		PendingHandoffFutureMessage:       textutil.OptionalExactString(pendingHandoffFutureMessage),
 		LastCommittedAssistantFinalAnswer: textutil.Pointer(lastCommittedAssistantFinalAnswer),
 		Items:                             llm.CloneResponseItems(preparedItems),
 	}
@@ -1083,6 +1082,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if appendErr != nil && !receipt.Committed {
 		return receipt, appendErr
 	}
+	e.resetPromptCacheObservationBaselines()
 	provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
 	if provenanceErr != nil {
 		return receipt, errors.Join(appendErr, provenanceErr)
