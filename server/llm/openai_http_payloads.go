@@ -27,6 +27,14 @@ type openAIPayloadToolControls struct {
 	choice responses.ToolChoiceOptions
 }
 
+func effectiveServiceTier(fastMode bool, capabilities ProviderCapabilities) *responses.ResponseNewParamsServiceTier {
+	if fastMode && SupportsFastModeProvider(capabilities) {
+		tier := responses.ResponseNewParamsServiceTierPriority
+		return &tier
+	}
+	return nil
+}
+
 func newOpenAIRequestPayloadBuilder(store bool, modelVerbosity string, capabilities ProviderCapabilities) openAIRequestPayloadBuilder {
 	return openAIRequestPayloadBuilder{store: store, modelVerbosity: strings.ToLower(strings.TrimSpace(modelVerbosity)), capabilities: capabilities}
 }
@@ -36,9 +44,18 @@ func (t *HTTPTransport) buildPayload(request OpenAIRequest, mode OpenAIAuthMode,
 	return builder.BuildResponse(request, mode)
 }
 
-func (t *HTTPTransport) buildInputTokenCountParams(request OpenAIRequest, capabilities ProviderCapabilities) (responses.InputTokenCountParams, error) {
-	builder := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, capabilities)
-	return builder.BuildInputTokenCount(request)
+func (t *HTTPTransport) buildDispatchPayload(
+	request OpenAIRequest,
+	mode OpenAIAuthMode,
+	capabilities ProviderCapabilities,
+	projection *codexDispatchProjection,
+) (responses.ResponseNewParams, error) {
+	payload, err := t.buildPayload(request, mode, capabilities)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	applyCodexClientMetadata(&payload, projection)
+	return payload, nil
 }
 
 func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode OpenAIAuthMode) (responses.ResponseNewParams, error) {
@@ -87,45 +104,6 @@ func (b openAIRequestPayloadBuilder) BuildResponse(request OpenAIRequest, mode O
 	textConfig, ok, err := buildResponseTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
 	if err != nil {
 		return responses.ResponseNewParams{}, err
-	}
-	if ok {
-		out.Text = textConfig
-	}
-	return out, nil
-}
-
-func (b openAIRequestPayloadBuilder) BuildInputTokenCount(request OpenAIRequest) (responses.InputTokenCountParams, error) {
-	input, err := buildResponsesInput(request.Items)
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
-	}
-	toolControls, err := b.prepareToolControls(request)
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
-	}
-
-	out := responses.InputTokenCountParams{
-		Model: param.NewOpt(strings.TrimSpace(request.Model)),
-		ToolChoice: responses.InputTokenCountParamsToolChoiceUnion{
-			OfToolChoiceMode: openai.Opt(toolControls.choice),
-		},
-	}
-	if len(input) > 0 {
-		out.Input = responses.InputTokenCountParamsInputUnion{OfResponseInputItemArray: input}
-	}
-	if instructions := strings.TrimSpace(request.SystemPrompt); instructions != "" {
-		out.Instructions = param.NewOpt(instructions)
-	}
-	if len(toolControls.tools) > 0 {
-		out.Tools = toolControls.tools
-		out.ParallelToolCalls = param.NewOpt(true)
-	}
-	if shouldApplyReasoningEffort(request.SupportsReasoningEffort, request.Model, request.ReasoningEffort) {
-		out.Reasoning = buildReasoningParam(request.Model, request.ReasoningEffort)
-	}
-	textConfig, ok, err := buildInputTokenCountTextConfig(request.StructuredOutput, configuredTextVerbosity(request.Model, b.modelVerbosity, b.capabilities))
-	if err != nil {
-		return responses.InputTokenCountParams{}, err
 	}
 	if ok {
 		out.Text = textConfig
@@ -187,7 +165,21 @@ func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequ
 	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
 		out.Instructions = openai.String(instructions)
 	}
+	if serviceTier := effectiveServiceTier(request.FastMode, b.capabilities); serviceTier != nil {
+		out.ServiceTier = *serviceTier
+	}
 	return out, nil
+}
+
+func applyCodexClientMetadata(payload *responses.ResponseNewParams, projection *codexDispatchProjection) {
+	if projection == nil {
+		return
+	}
+	payload.SetExtraFields(map[string]any{
+		"client_metadata": map[string]string{
+			"x-codex-turn-metadata": projection.TurnMetadataJSON,
+		},
+	})
 }
 
 func (b openAIRequestPayloadBuilder) buildTools(requestTools []Tool, enableNativeWebSearch bool) ([]responses.ToolUnionParam, error) {
@@ -272,25 +264,6 @@ func buildResponseTextConfig(output *StructuredOutput, verbosity string) (respon
 	format, err := buildStructuredOutputFormat(output)
 	if err != nil {
 		return responses.ResponseTextConfigParam{}, false, err
-	}
-	text.Format = format
-	return text, true, nil
-}
-
-func buildInputTokenCountTextConfig(output *StructuredOutput, verbosity string) (responses.InputTokenCountParamsText, bool, error) {
-	text := responses.InputTokenCountParamsText{}
-	if verbosity != "" {
-		text.Verbosity = verbosity
-	}
-	if output == nil {
-		return text, text.Verbosity != "", nil
-	}
-	if !output.Schema.Prepared() {
-		return responses.InputTokenCountParamsText{}, false, errors.New("structured output schema is not prepared")
-	}
-	format, err := buildStructuredOutputFormat(output)
-	if err != nil {
-		return responses.InputTokenCountParamsText{}, false, err
 	}
 	text.Format = format
 	return text, true, nil

@@ -262,7 +262,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
 	executedToolCall := false
-	patchEditsApplied := false
+	patchEditsApplied, mismatchWarningCommitted := false, false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
@@ -282,18 +282,14 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		var reasoningSteerErr error
-		resp, err := e.generateWithMissingToolOutputRepair(
+		candidate, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
 			func() (llm.Request, error) {
-				if err := s.commitPendingUserSteer(stepID, options); err != nil {
+				if err := s.commitPendingUserSteer(stepID, options, &mismatchWarningCommitted); err != nil {
 					return llm.Request{}, err
 				}
-				requestPlan, buildErr := e.buildRequestPlanWithExtraItems(ctx, stepID, nil, true)
-				if buildErr != nil {
-					return llm.Request{}, buildErr
-				}
-				return requestPlan.Request, nil
+				return e.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
 			},
 			func(delta llm.AssistantDelta) {
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
@@ -313,9 +309,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if reasoningSteerErr != nil {
 			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
-		if _, err := e.recordLastUsage(resp.Usage); err != nil {
-			return stepLoopResult{}, err
-		}
+		resp := candidate.response
 
 		prepared, err := s.prepareCompletedResponse(ctx, stepID, resp)
 		if err != nil {
@@ -354,9 +348,17 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
+			_, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
+			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
 		}
@@ -396,7 +398,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 				return stepLoopResult{ExecutedToolCall: true}, nil
 			}
-			if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+			if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -431,7 +433,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 
 		if len(localToolCalls) == 0 {
 			if phaseTurn.MissingAssistantPhase {
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
@@ -440,12 +442,12 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if err := e.steer(stepID, steerMessagesWithPersistenceIntent(steeringPriorityNormal, steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeErrorFeedback), Content: textutil.Value(commentaryWithoutToolCallsWarning)}})); err != nil {
 					return stepLoopResult{}, err
 				}
-				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
+				if _, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted); err != nil {
 					return stepLoopResult{}, err
 				}
 				continue
 			}
-			flushed, err := s.flushPendingUserInjections(stepID, options)
+			flushed, err := s.flushPendingUserInjections(stepID, options, &mismatchWarningCommitted)
 			if err != nil {
 				return stepLoopResult{}, err
 			}
@@ -587,7 +589,7 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycle(stepID string, status
 	return err
 }
 
-func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions) (int, error) {
+func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) (int, error) {
 	result, err := s.messages.FlushPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
@@ -596,10 +598,13 @@ func (s *defaultStepExecutor) flushPendingUserInjections(stepID string, options 
 	if result.disposition == userInjectionFlushStopped {
 		return 0, &queuedUserFlushStoppedError{}
 	}
+	if result.startedStep {
+		*mismatchWarningCommitted = false
+	}
 	return result.flushed, nil
 }
 
-func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions) error {
+func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options stepLoopOptions, mismatchWarningCommitted *bool) error {
 	result, err := s.messages.CommitPendingUserInjections(stepID, steerUserInjections(s.engine.queuedUserAutoDrainIDSnapshot()))
 	observeQueuedUserFlushCommit(options, result.receipt)
 	if err != nil {
@@ -607,6 +612,9 @@ func (s *defaultStepExecutor) commitPendingUserSteer(stepID string, options step
 	}
 	if result.disposition == userInjectionFlushStopped {
 		return &queuedUserFlushStoppedError{}
+	}
+	if result.startedStep {
+		*mismatchWarningCommitted = false
 	}
 	return nil
 }
@@ -929,6 +937,9 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	}
 	completed, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, parsed)
 	if completeErr != nil && !completed.IsApplied() {
+		if isWorkflowCompletionOperationalError(completeErr) {
+			return true, true, completeErr
+		}
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}

@@ -20,13 +20,22 @@ import (
 )
 
 func RunCommand(ctx context.Context, spec CommandSpec) (analyzer.Capture, error) {
+	if spec.Timeout > maxCommandTimeout {
+		return analyzer.Capture{}, fmt.Errorf(
+			"PTY command timeout %s exceeds PTY command timeout cap %s",
+			spec.Timeout,
+			maxCommandTimeout,
+		)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if spec.Timeout > 0 {
-		var timeoutCancel context.CancelFunc
-		ctx, timeoutCancel = context.WithTimeout(ctx, spec.Timeout)
-		defer timeoutCancel()
+	commandTimeout := spec.Timeout
+	if commandTimeout == 0 {
+		commandTimeout = maxCommandTimeout
 	}
+	var timeoutCancel context.CancelFunc
+	ctx, timeoutCancel = context.WithTimeout(ctx, commandTimeout)
+	defer timeoutCancel()
 	if _, err := analyzer.NewDimensions(spec.Dimensions.Rows, spec.Dimensions.Cols); err != nil {
 		return analyzer.Capture{}, err
 	}

@@ -19,7 +19,8 @@ type OpenAIRequest struct {
 	EnableNativeWebSearch   bool
 	SystemPrompt            string
 	PromptCacheKey          string
-	SessionID               string
+	SessionID               *string
+	CodexDispatch           *CodexDispatchContext
 	Items                   []ResponseItem
 	Tools                   []Tool
 	ToolChoiceMode          ToolChoiceMode
@@ -47,6 +48,7 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 		SystemPrompt:            request.SystemPrompt,
 		PromptCacheKey:          request.PromptCacheKey,
 		SessionID:               request.SessionID,
+		CodexDispatch:           request.CodexDispatch,
 		Items:                   CloneResponseItems(request.Items),
 		Tools:                   append([]Tool(nil), request.Tools...),
 		ToolChoiceMode:          request.ToolChoiceMode,
@@ -55,20 +57,24 @@ func RequestAsOpenAI(request Request) OpenAIRequest {
 }
 
 type OpenAIResponse struct {
-	AssistantText  *string
-	ProviderPhase  *ProviderPhase
-	ToolCalls      []ToolCall
-	Reasoning      []ReasoningEntry
-	ReasoningItems []ReasoningItem
-	OutputItems    []ResponseItem
-	Usage          Usage
+	AssistantText     *string
+	ProviderPhase     *ProviderPhase
+	ServedModel       *string
+	ReasoningIncluded bool
+	ToolCalls         []ToolCall
+	Reasoning         []ReasoningEntry
+	ReasoningItems    []ReasoningItem
+	OutputItems       []ResponseItem
+	Usage             Usage
 }
 
 type OpenAICompactionRequest struct {
 	Model          string
 	Instructions   string
 	PromptCacheKey string
-	SessionID      string
+	SessionID      *string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext
 	InputItems     []ResponseItem
 }
 
@@ -81,14 +87,6 @@ type OpenAICompactionResponse struct {
 type OpenAITransport interface {
 	Generate(ctx context.Context, request OpenAIRequest) (OpenAIResponse, error)
 	Compact(ctx context.Context, request OpenAICompactionRequest) (OpenAICompactionResponse, error)
-}
-
-type OpenAIInputTokenCountTransport interface {
-	CountRequestInputTokens(ctx context.Context, request OpenAIRequest) (int, error)
-}
-
-type OpenAIInputTokenCountSupportTransport interface {
-	SupportsRequestInputTokenCount(ctx context.Context) (bool, error)
 }
 
 type OpenAIModelContextWindowTransport interface {
@@ -150,12 +148,14 @@ func responseFromOpenAI(providerResp OpenAIResponse) (Response, error) {
 			ToolCalls:      append([]ToolCall(nil), providerResp.ToolCalls...),
 			ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
 		},
-		ProviderPhase:  providerResp.ProviderPhase,
-		ToolCalls:      providerResp.ToolCalls,
-		Reasoning:      append([]ReasoningEntry(nil), providerResp.Reasoning...),
-		ReasoningItems: append([]ReasoningItem(nil), providerResp.ReasoningItems...),
-		OutputItems:    CloneResponseItems(providerResp.OutputItems),
-		Usage:          providerResp.Usage,
+		ProviderPhase:     providerResp.ProviderPhase,
+		ServedModel:       textutil.Pointer(providerResp.ServedModel),
+		ReasoningIncluded: providerResp.ReasoningIncluded,
+		ToolCalls:         providerResp.ToolCalls,
+		Reasoning:         append([]ReasoningEntry(nil), providerResp.Reasoning...),
+		ReasoningItems:    append([]ReasoningItem(nil), providerResp.ReasoningItems...),
+		OutputItems:       CloneResponseItems(providerResp.OutputItems),
+		Usage:             providerResp.Usage,
 	}, nil
 }
 
@@ -237,12 +237,17 @@ func (c *OpenAIClient) Compact(ctx context.Context, request CompactionRequest) (
 	if request.Model == "" {
 		return CompactionResponse{}, fmt.Errorf("%w: compaction model is required", ErrInvalidRequest)
 	}
+	if err := validateSessionDispatchPairing(request.SessionID, request.CodexDispatch); err != nil {
+		return CompactionResponse{}, err
+	}
 
 	providerReq := OpenAICompactionRequest{
 		Model:          request.Model,
 		Instructions:   request.Instructions,
 		PromptCacheKey: request.PromptCacheKey,
 		SessionID:      request.SessionID,
+		FastMode:       request.FastMode,
+		CodexDispatch:  request.CodexDispatch,
 		InputItems:     CloneResponseItems(request.InputItems),
 	}
 	providerResp, err := c.transport.Compact(ctx, providerReq)
@@ -264,42 +269,6 @@ func (c *OpenAIClient) ProviderCapabilities(ctx context.Context) (ProviderCapabi
 		return transport.ProviderCapabilities(ctx)
 	}
 	return ProviderCapabilities{}, fmt.Errorf("openai provider capabilities are not supported by transport %T", c.transport)
-}
-
-func (c *OpenAIClient) CountRequestInputTokens(ctx context.Context, request Request) (int, error) {
-	if c == nil || c.transport == nil {
-		return 0, ErrMissingTransport
-	}
-	if err := request.Validate(); err != nil {
-		return 0, err
-	}
-	counter, ok := c.transport.(OpenAIInputTokenCountTransport)
-	if !ok {
-		return 0, fmt.Errorf("openai request token counting is not supported by transport")
-	}
-
-	providerReq := RequestAsOpenAI(request)
-
-	count, err := counter.CountRequestInputTokens(ctx, providerReq)
-	if err != nil {
-		return 0, fmt.Errorf("openai request token counting failed: %w", err)
-	}
-	if count < 0 {
-		return 0, nil
-	}
-	return count, nil
-}
-
-func (c *OpenAIClient) SupportsRequestInputTokenCount(ctx context.Context) (bool, error) {
-	if c == nil || c.transport == nil {
-		return false, ErrMissingTransport
-	}
-	support, ok := c.transport.(OpenAIInputTokenCountSupportTransport)
-	if !ok {
-		_, counterSupported := c.transport.(OpenAIInputTokenCountTransport)
-		return counterSupported, nil
-	}
-	return support.SupportsRequestInputTokenCount(ctx)
 }
 
 func (c *OpenAIClient) ResolveModelContextWindow(ctx context.Context, model string) (int, error) {

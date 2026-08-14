@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"core/shared/transcript"
 )
 
 type recordAppendOutcome struct {
@@ -14,8 +16,10 @@ type recordAppendOutcome struct {
 }
 
 type EventRecordAppendInput struct {
-	StepID  *string
-	Payload EventRecordPayload
+	StepID              *string
+	Payload             EventRecordPayload
+	committedAtUnixMs   *transcript.CommittedAtUnixMs
+	preserveCommittedAt bool
 }
 
 type recordMetadataTransition func(*Meta) (bool, error)
@@ -94,8 +98,10 @@ func (c MaterializedEventLog) appendReplayRecords(
 			)
 		}
 		inputs[index] = EventRecordAppendInput{
-			StepID:  record.StepID(),
-			Payload: payload,
+			StepID:              record.StepID(),
+			Payload:             payload,
+			committedAtUnixMs:   record.CommittedAtUnixMs(),
+			preserveCommittedAt: true,
 		}
 	}
 	outcome, err := c.appendRecordInputsAtomic(inputs, nil)
@@ -229,9 +235,35 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	records := make([]EventRecord, 0, len(inputs))
 	sequence := log.lastSequence
+	appendNow := storeTimestamp(s.options)
+	appendTimeUnixMs, err := transcript.NewCommittedAtUnixMs(appendNow.UnixMilli())
+	if err != nil {
+		s.mu.Unlock()
+		return recordAppendOutcome{}, fmt.Errorf("store clock committed time: %w", err)
+	}
 	for index, input := range inputs {
 		sequence++
-		record, err := NewEventRecord(sequence, input.StepID, input.Payload)
+		committedAtUnixMs := input.committedAtUnixMs
+		if !input.preserveCommittedAt {
+			eligible, err := eventPayloadEligibleForCommittedTime(input.Payload)
+			if err != nil {
+				s.mu.Unlock()
+				return recordAppendOutcome{}, fmt.Errorf(
+					"evaluate committed time eligibility for event record %d: %w",
+					index,
+					err,
+				)
+			}
+			if eligible {
+				committedAtUnixMs = &appendTimeUnixMs
+			}
+		}
+		record, err := newEventRecord(
+			sequence,
+			input.StepID,
+			input.Payload,
+			committedAtUnixMs,
+		)
 		if err != nil {
 			s.mu.Unlock()
 			return recordAppendOutcome{}, fmt.Errorf(
@@ -251,6 +283,12 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	}
 	if err := s.advanceConversationFreshnessFromRecordsLocked(records); err != nil {
 		s.meta = previousMeta
+		s.mu.Unlock()
+		return recordAppendOutcome{records: records}, err
+	}
+	if err := advanceActiveWorkflowAssignmentFromRecords(&s.meta, records); err != nil {
+		s.meta = previousMeta
+		s.conversationFreshness = previousFreshness
 		s.mu.Unlock()
 		return recordAppendOutcome{records: records}, err
 	}
@@ -278,7 +316,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 
 	postMeta := cloneMeta(s.meta)
 	postMeta.LastSequence = records[len(records)-1].Seq()
-	postMeta.UpdatedAt = s.options.now()
+	postMeta.UpdatedAt = appendNow
 	endOffset, err := s.appendCurrentRecordsLocked(log, records, previousMeta, postMeta)
 	if err != nil {
 		s.meta = previousMeta
@@ -305,6 +343,58 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		endByteCursor: endByteCursor,
 	}
 	return outcome, s.observePersistenceAndClearAppendRecovery(observation)
+}
+
+func advanceActiveWorkflowAssignmentFromRecords(meta *Meta, records []EventRecord) error {
+	for _, record := range records {
+		payload, err := record.Payload()
+		if err != nil {
+			return err
+		}
+		switch value := payload.(type) {
+		case MessageRecord:
+			if value.MessageType == nil {
+				continue
+			}
+			switch *value.MessageType {
+			case MessageTypeWorkflowMode:
+				meta.ActiveWorkflowAssignment = cloneMessageRecord(&value)
+				meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			case MessageTypeWorkflowModeExit:
+				meta.ActiveWorkflowAssignment = nil
+				meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			}
+		case HistoryReplacementRecord:
+			meta.ActiveWorkflowAssignment = nil
+			meta.ActiveWorkflowAssignmentState = &ActiveWorkflowAssignmentState{}
+			for _, item := range value.Items {
+				if item.Type != ProviderHistoryItemTypeMessage ||
+					item.Role == nil ||
+					*item.Role != MessageRoleDeveloper ||
+					item.MessageType == nil {
+					continue
+				}
+				switch *item.MessageType {
+				case MessageTypeWorkflowMode:
+					message, err := normalizeMessageRecord(MessageRecord{
+						Role:            *item.Role,
+						MessageType:     item.MessageType,
+						SourcePath:      item.SourcePath,
+						WorktreeContext: item.WorktreeContext,
+						Content:         item.Content,
+						CompactContent:  item.CompactContent,
+					})
+					if err != nil {
+						return err
+					}
+					meta.ActiveWorkflowAssignment = &message
+				case MessageTypeWorkflowModeExit:
+					meta.ActiveWorkflowAssignment = nil
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) appendCurrentRecordsLocked(log *currentEventLog, records []EventRecord, preMeta Meta, postMeta Meta) (int64, error) {

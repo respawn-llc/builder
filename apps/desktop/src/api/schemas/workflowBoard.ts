@@ -230,6 +230,20 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
 
 export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
   appliedCurrentNodesResponseSchema,
+  z
+    .object({
+      outcome: z.literal("no_op"),
+      no_op: z
+        .object({
+          current_nodes: z.array(currentNodeSchema).min(1),
+        })
+        .strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      noOp: { currentNodes: value.no_op.current_nodes },
+    })),
   selectionRequiredResponseSchema,
 ]);
 

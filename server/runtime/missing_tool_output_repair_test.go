@@ -23,8 +23,9 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	client := &fakeClient{
 		errors: []error{&llm.APIStatusError{StatusCode: 400, Body: "tool call without output"}},
 		responses: []llm.Response{{
-			Assistant: llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("repaired")},
-			Usage:     llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+			Assistant:   llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("repaired")},
+			Usage:       llm.Usage{InputTokens: 10, OutputTokens: 2, WindowTokens: 100},
+			ServedModel: textutil.Value("served-model"),
 		}},
 	}
 	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
@@ -52,6 +53,7 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 	}
 	var completion *storedToolCompletion
 	var warning *storedLocalEntry
+	modelMismatchWarnings := 0
 	for _, record := range window.Records {
 		switch payload := mustSessionEventPayload(record).(type) {
 		case session.ToolCompletionRecord:
@@ -70,6 +72,9 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 			if got.Role == string(transcript.EntryRoleDeveloperErrorFeedback) {
 				warning = &got
 			}
+			if got.ProviderModelMismatch != nil {
+				modelMismatchWarnings++
+			}
 		}
 	}
 	if completion == nil || !completion.IsError {
@@ -84,6 +89,13 @@ func TestMissingToolOutputRepairAppendsSyntheticOutputAndRetries(t *testing.T) {
 		warning.ToolOutputRepair.Count != 1 ||
 		warning.Text != "" {
 		t.Fatalf("operator repair warning facts = %+v", warning)
+	}
+	if modelMismatchWarnings != 1 {
+		t.Fatalf("provider-model mismatch warnings = %d, want only the accepted repaired attempt", modelMismatchWarnings)
+	}
+	if usage := store.Meta().UsageState; usage == nil ||
+		usage.EstimatedProviderTokens != estimateItemsTokens(client.calls[1].Items) {
+		t.Fatalf("usage state = %+v, want baseline from exact successful repaired request", usage)
 	}
 }
 
@@ -383,16 +395,17 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  store.Meta().SessionID,
 		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
 	}
+	dispatchFactory := mustTestDispatchRequestFactory(t, store.Meta().SessionID, "run-compaction", llm.CodexRequestKindCompaction)
 
-	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request); err != nil {
+	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request, dispatchFactory); err != nil {
 		t.Fatalf("compact with repair retry: %v", err)
 	}
 	if len(client.compactionCalls) != 2 {
 		t.Fatalf("compaction calls = %d, want initial 400 plus repaired retry", len(client.compactionCalls))
 	}
+	assertFreshCompactionDispatchesWithSameMetadata(t, client.compactionCalls, llm.CodexRequestKindCompaction)
 	if !repairRequestHasToolCall(client.compactionCalls[1].InputItems, "missing") ||
 		!repairRequestHasToolOutput(client.compactionCalls[1].InputItems, "missing") {
 		t.Fatal("repaired compaction retry did not preserve the call with its synthetic output")
@@ -401,6 +414,50 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	if !bytes.Equal(completion.Output, missingToolOutputInterruptedOutput) {
 		t.Fatalf("live compaction repair selected the wrong typed disposition: %s", completion.Output)
 	}
+}
+
+func TestGenerationMissingToolOutputRebuildKeepsIdentityAndAllocatesFreshState(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	client := &fakeClient{
+		errors: []error{&llm.APIStatusError{StatusCode: 400}, nil},
+		responses: []llm.Response{{
+			Assistant: llm.Message{
+				Role:    llm.RoleAssistant,
+				Phase:   textutil.Value(llm.MessagePhaseFinal),
+				Content: textutil.Value("repaired"),
+			},
+		}},
+	}
+	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{
+		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`),
+	})
+
+	err := engine.stepLifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
+		func(ctx context.Context, stepID string) error {
+			_, generateErr := engine.generateWithMissingToolOutputRepair(
+				ctx,
+				stepID,
+				func() (llm.Request, error) {
+					return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
+				},
+				nil,
+				nil,
+				nil,
+			)
+			return generateErr
+		},
+	)
+	if err != nil {
+		t.Fatalf("generation missing-output repair: %v", err)
+	}
+	if len(client.calls) != 2 {
+		t.Fatalf("generation calls = %d, want initial 400 plus repaired rebuild", len(client.calls))
+	}
+	assertFreshGenerationDispatchesWithSameMetadata(t, client.calls, llm.CodexRequestKindTurn)
 }
 
 func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
@@ -457,16 +514,29 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 	}
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  store.Meta().SessionID,
 		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
 	}
+	dispatchFactory := mustTestDispatchRequestFactory(t, store.Meta().SessionID, "run-compaction", llm.CodexRequestKindCompaction)
 
 	defer func() {
 		if recovered := recover(); recovered == nil {
 			t.Fatal("expected a missing-output provider error after collapse to violate the invariant")
 		}
 	}()
-	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), "step", client, request)
+	_, _, _, _ = eng.compactWithContextRepairRetry(context.Background(), "step", client, request, dispatchFactory)
+}
+
+func mustTestDispatchRequestFactory(t *testing.T, sessionID string, runID string, requestKind llm.CodexRequestKind) dispatchRequestFactory {
+	t.Helper()
+	factory, err := newDispatchRequestFactory(dispatchRequestIdentity{
+		SessionID:   sessionID,
+		RunID:       runID,
+		RequestKind: requestKind.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("new dispatch request factory: %v", err)
+	}
+	return factory
 }
 
 func repairRequestHasToolCall(items []llm.ResponseItem, callID string) bool {

@@ -444,7 +444,7 @@ func TestCompactErrorPath_ReturnsProviderAPIErrorForOpenAIV2(t *testing.T) {
 
 	_, err := transport.Compact(context.Background(), OpenAICompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  "s1",
+		SessionID:  textutil.Value("s1"),
 		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err == nil {
@@ -698,15 +698,15 @@ func TestBuildRequestOptions_OAuthAddsCodexHeaders(t *testing.T) {
 	opts := transport.buildRequestOptions("Bearer x", OpenAIAuthMode{
 		IsOAuth:   true,
 		AccountID: "acc-1",
-	}, "session-1")
+	}, openaiTestOptionalString("session-1"), &codexDispatchProjection{RoutingHint: "model=gpt-5"}, nil)
 
-	if len(opts) != 5 {
-		t.Fatalf("expected 5 request options, got %d", len(opts))
+	if len(opts) != 6 {
+		t.Fatalf("expected 6 request options, got %d", len(opts))
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "session-1")) != 4 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, openaiTestOptionalString("session-1"), nil, nil)) != 4 {
 		t.Fatal("expected non-oauth options to include auth/session/caching headers")
 	}
-	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, "")) != 3 {
+	if len(transport.buildRequestOptions("Bearer x", OpenAIAuthMode{}, nil, nil, nil)) != 3 {
 		t.Fatal("expected non-oauth options to include auth/caching headers")
 	}
 }
@@ -715,13 +715,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	requestHeaders := make(chan http.Header, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestHeaders <- r.Header.Clone()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_identity_1",
-			"object":"response",
-			"output":[],
-			"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
-		}`))
+		writeCompletedResponseJSON(w)
 	}))
 	defer server.Close()
 
@@ -730,7 +724,7 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	transport.Client = server.Client()
 	transport.ProviderIdentifier = "acme_agent"
 
-	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5"}); err != nil {
+	if _, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic, Model: "gpt-5", SessionID: textutil.Value("session-1")}); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	headers := <-requestHeaders
@@ -739,6 +733,9 @@ func TestGenerateSendsConfiguredProviderIdentityHeaders(t *testing.T) {
 	}
 	if got, want := headers.Get("User-Agent"), "acme_agent/"+config.Version; got != want {
 		t.Fatalf("User-Agent = %q, want %q", got, want)
+	}
+	if got := headers.Get("session-id"); got != "session-1" {
+		t.Fatalf("session-id = %q, want session-1", got)
 	}
 }
 
@@ -756,15 +753,19 @@ func TestNewOpenAIProviderContractErrorPreservesMissingResponseStatus(t *testing
 
 func TestBuildRequestOptions_OmitsAuthorizationHeaderWhenAuthHeaderEmpty(t *testing.T) {
 	transport := NewHTTPTransport(staticAuth{})
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, nil, nil, nil)) != 2 {
 		t.Fatal("expected empty auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, "")) != 2 {
+	if len(transport.buildRequestOptions("   ", OpenAIAuthMode{}, nil, nil, nil)) != 2 {
 		t.Fatal("expected whitespace auth header to omit Authorization request option")
 	}
-	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, "session-1")) != 3 {
+	if len(transport.buildRequestOptions("", OpenAIAuthMode{}, openaiTestOptionalString("session-1"), nil, nil)) != 3 {
 		t.Fatal("expected session header to remain when Authorization is omitted")
 	}
+}
+
+func openaiTestOptionalString(value string) *string {
+	return &value
 }
 
 func TestResolveAuth_AllowsAnonymousWhenBaseURLExplicitAndAuthNotConfigured(t *testing.T) {
@@ -786,7 +787,9 @@ func TestResolveAuth_AllowsAnonymousWhenBaseURLExplicitAndAuthNotConfigured(t *t
 
 func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	authHeaderErrs := make(chan error, 1)
+	var capturedHeaders http.Header
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedHeaders = r.Header.Clone()
 		if r.URL.Path != "/v1/responses" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -797,20 +800,7 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_anon_1",
-			"object":"response",
-			"output":[
-				{
-					"type":"message",
-					"id":"msg_anon_1",
-					"role":"assistant",
-					"status":"completed",
-					"content":[{"type":"output_text","text":"hello from anonymous compatible server"}]
-				}
-			],
-			"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}
-		}`))
+		_, _ = w.Write([]byte(`{"id":"resp_anon_1","object":"response","output":[{"type":"message","id":"msg_anon_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello from anonymous compatible server"}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`))
 	}))
 	defer server.Close()
 	targetURL, err := url.Parse(server.URL)
@@ -837,8 +827,9 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	}
 
 	resp, err := transport.Generate(context.Background(), OpenAIRequest{ToolChoiceMode: ToolChoiceModeAutomatic,
-		Model: "vendor-custom-model",
-		Items: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
+		Model:     "vendor-custom-model",
+		SessionID: textutil.Value("session-1"),
+		Items:     PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value("hello")}}),
 	})
 	if err != nil {
 		t.Fatalf("generate: %v", err)
@@ -850,6 +841,9 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	}
 	if optionalStringValue(resp.AssistantText) != "hello from anonymous compatible server" {
 		t.Fatalf("assistant text = %q", optionalStringValue(resp.AssistantText))
+	}
+	if originator, userAgent, sessionID := capturedHeaders.Get("originator"), capturedHeaders.Get("User-Agent"), capturedHeaders.Get("session-id"); originator != transport.ProviderIdentifier || userAgent != transport.providerUserAgent() || sessionID != "session-1" {
+		t.Fatalf("common identity headers = (%q, %q, %q), want originator, User-Agent, and session-1", originator, userAgent, sessionID)
 	}
 }
 
@@ -1162,4 +1156,10 @@ func TestPrepareOpenAIInputItemsPreservesReasoningPresentationBytes(t *testing.T
 	if len(prepared) != 1 || string(prepared[0].Raw) != string(raw) {
 		t.Fatalf("prepared reasoning bytes = %q, want %q", prepared[0].Raw, raw)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }

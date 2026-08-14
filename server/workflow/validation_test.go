@@ -562,6 +562,145 @@ func TestFanoutJoinTopology(t *testing.T) {
 	}
 }
 
+func TestRetainedTargetRequiresExactActiveContinuationSource(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*workflow.Definition)
+		valid bool
+	}{
+		{
+			name: "equal join sources",
+			setup: func(def *workflow.Definition) {
+				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
+					edge := edgeByIDForValidationTest(t, def, edgeID)
+					edge.ContextMode = workflow.ContextModeContinueSession
+					edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+				}
+			},
+			valid: true,
+		},
+		{name: "divergent join sources", setup: func(*workflow.Definition) {}},
+		{
+			name: "same Agent target on sibling branches creates distinct Sessions",
+			setup: func(def *workflow.Definition) {
+				edgeByIDForValidationTest(t, def, "edge_split_b").TargetNodeID =
+					edgeByIDForValidationTest(t, def, "edge_split_a").TargetNodeID
+			},
+		},
+		{
+			name: "script branches select divergent sources",
+			setup: func(def *workflow.Definition) {
+				for _, nodeKey := range []workflow.ModelKey{"impl_a", "impl_b"} {
+					updateNodeByKeyForValidationTest(t, def, nodeKey, func(_ *workflow.NodeIdentity, kind *workflow.NodeKind, fields *workflow.NodeFields) {
+						*kind = workflow.NodeKindScript
+						fields.SubagentRole = ""
+						fields.ScriptPath = workflow.MustPresentScriptPath("./branch.sh")
+					})
+				}
+				edgeByIDForValidationTest(t, def, "edge_split_a").ContextMode = workflow.ContextModeContinueSession
+				edgeByIDForValidationTest(t, def, "edge_split_a").ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "plan"}
+				edgeByIDForValidationTest(t, def, "edge_split_b").ContextMode = workflow.ContextModeContinueSession
+				edgeByIDForValidationTest(t, def, "edge_split_b").ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "review"}
+			},
+		},
+		{
+			name: "alternate branch route diverges before join",
+			setup: func(def *workflow.Definition) {
+				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
+					edge := edgeByIDForValidationTest(t, def, edgeID)
+					edge.ContextMode = workflow.ContextModeContinueSession
+					edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+				}
+				def.Nodes = append(def.Nodes, testAgentNode(def.ID, "node_alt", "alt", "Alternate", workflow.NodeFields{SubagentRole: "coder"}))
+				def.TransitionGroups = append(def.TransitionGroups,
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_impl_a_alt", SourceNodeID: "node_impl_a", TransitionID: "alternate", DisplayName: "Alternate"},
+					workflow.TransitionGroup{WorkflowID: def.ID, ID: "group_alt_join", SourceNodeID: "node_alt", TransitionID: "join", DisplayName: "Join"},
+				)
+				def.Edges = append(def.Edges,
+					workflow.Edge{WorkflowID: def.ID, ID: "edge_impl_a_alt", Key: "alternate", TransitionGroupID: "group_impl_a_alt", TargetNodeID: "node_alt", ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Alternate."},
+					workflow.Edge{WorkflowID: def.ID, ID: "edge_alt_join", Key: "join", TransitionGroupID: "group_alt_join", TargetNodeID: "node_join", ContextMode: workflow.ContextModeNewSession},
+				)
+			},
+		},
+		{
+			name: "alternate serial routes remain separate",
+			setup: func(def *workflow.Definition) {
+				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
+					edge := edgeByIDForValidationTest(t, def, edgeID)
+					edge.ContextMode = workflow.ContextModeContinueSession
+					edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+				}
+			},
+			valid: true,
+		},
+		{
+			name: "source reset loop is rejected",
+			setup: func(def *workflow.Definition) {
+				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
+					WorkflowID: def.ID, ID: "group_review_plan",
+					SourceNodeID: "node_review", TransitionID: "reset", DisplayName: "Reset",
+				})
+				def.Edges = append(def.Edges, workflow.Edge{
+					WorkflowID: def.ID, ID: "edge_review_plan", Key: "reset",
+					TransitionGroupID: "group_review_plan", TargetNodeID: "node_plan",
+					ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan again.",
+				})
+			},
+		},
+		{
+			name: "cross invocation separation",
+			setup: func(def *workflow.Definition) {
+				for _, edgeID := range []workflow.EdgeID{"edge_split_a", "edge_split_b"} {
+					edge := edgeByIDForValidationTest(t, def, edgeID)
+					edge.ContextMode = workflow.ContextModeContinueSession
+					edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+				}
+				def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
+					WorkflowID: def.ID, ID: "group_review_plan",
+					SourceNodeID: "node_review", TransitionID: "repeat", DisplayName: "Repeat",
+				})
+				def.Edges = append(def.Edges, workflow.Edge{
+					WorkflowID: def.ID, ID: "edge_review_plan", Key: "plan",
+					TransitionGroupID: "group_review_plan", TargetNodeID: "node_plan",
+					ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Plan again.",
+				})
+			},
+			valid: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			def := fanoutWorkflow(t)
+			def.Nodes = append(def.Nodes,
+				testAgentNode(def.ID, "node_review", "review", "Review", workflow.NodeFields{SubagentRole: "coder"}),
+			)
+			test.setup(&def)
+			target := edgeByIDForValidationTest(t, &def, "edge_join_done")
+			target.TargetNodeID = "node_review"
+			target.ContextMode = workflow.ContextModeContinueSession
+			target.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
+			target.PromptTemplate = "Review."
+			def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
+				WorkflowID: def.ID, ID: "group_review_done",
+				SourceNodeID: "node_review", TransitionID: "finish", DisplayName: "Done",
+			})
+			def.Edges = append(def.Edges, workflow.Edge{
+				WorkflowID: def.ID, ID: "edge_review_done", Key: "done",
+				TransitionGroupID: "group_review_done", TargetNodeID: "node_done",
+				ContextMode: workflow.ContextModeNewSession,
+			})
+			def = normalizeWorkflowEdgeShape(def)
+
+			result := validateForTask(def)
+			if test.valid {
+				assertNoCode(t, result, workflow.CodeInvalidContextSource)
+			} else {
+				assertHasCodes(t, result, workflow.CodeInvalidContextSource)
+			}
+		})
+	}
+}
+
 func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
 	def := fanoutWorkflow(t)
 	edgeByIDForValidationTest(t, &def, "edge_join_done").RequiresApproval = true
@@ -569,6 +708,36 @@ func TestJoinOutgoingApprovalIsUnsupported(t *testing.T) {
 	result := validateForTask(def)
 
 	assertHasCodes(t, result, workflow.CodeUnsupportedApprovalExecution)
+}
+
+func TestFanoutJoinRejectsDivergentSourceCarriedIntoScript(t *testing.T) {
+	def := fanoutWorkflow(t)
+	script := testNode(
+		def.ID,
+		"node_script",
+		"script",
+		"Script",
+		workflow.NodeKindScript,
+		workflow.NodeFields{ScriptPath: workflow.MustPresentScriptPath("./script.sh")},
+	)
+	def.Nodes = append(def.Nodes, script)
+	joinEdge := edgeByIDForValidationTest(t, &def, "edge_join_done")
+	joinEdge.TargetNodeID = workflow.NodeIDOf(script)
+	joinEdge.ContextMode = workflow.ContextModeNewSession
+	def.TransitionGroups = append(def.TransitionGroups, workflow.TransitionGroup{
+		WorkflowID: def.ID, ID: "group_script_done",
+		SourceNodeID: workflow.NodeIDOf(script), TransitionID: "done", DisplayName: "Done",
+	})
+	def.Edges = append(def.Edges, workflow.Edge{
+		WorkflowID: def.ID, ID: "edge_script_done", Key: "done",
+		TransitionGroupID: "group_script_done", TargetNodeID: "node_done",
+		ContextMode: workflow.ContextModeNewSession,
+	})
+	def = normalizeWorkflowEdgeShape(def)
+
+	result := validateForTask(def)
+
+	assertHasCodes(t, result, workflow.CodeInvalidContextSource)
 }
 
 func TestContextSourceValidation(t *testing.T) {

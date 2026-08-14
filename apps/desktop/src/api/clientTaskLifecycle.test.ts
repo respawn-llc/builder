@@ -3,6 +3,7 @@ import {
   taskApproveResponseSchema,
   taskMovePreviewResponseSchema,
   taskMoveResponseSchema,
+  taskResumeResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -140,6 +141,20 @@ describe("task lifecycle client", () => {
     ).toEqual({
       outcome: "selection_required",
       selectionRequired: { reason: "policy_requires_selection" },
+    });
+  });
+
+  it("maps an already-resumed Task response as a no-op", () => {
+    expect(
+      taskResumeResponseSchema.parse({
+        outcome: "no_op",
+        no_op: {
+          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: "session-1" }],
+        },
+      }),
+    ).toMatchObject({
+      outcome: "no_op",
+      noOp: { currentNodes: [{ nodeID: "node-1", sessionID: "session-1" }] },
     });
   });
 

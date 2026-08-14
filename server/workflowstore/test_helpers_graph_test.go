@@ -204,6 +204,99 @@ func createTestSession(t *testing.T, ctx context.Context, store *Store, binding 
 	return sessionStore.Meta().SessionID
 }
 
+func applyManualMoveForStoreTest(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (ManualMoveResult, error) {
+	t.Helper()
+	return applyManualMoveForStoreTestWithPreparation(t, ctx, store, prepared, executionTarget, nil)
+}
+
+func applyManualMoveForStoreTestWithPreparation(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+	observe func([]CurrentNodeStartContext),
+) (ManualMoveResult, error) {
+	t.Helper()
+	return store.ApplyManualMoveWithTargetAssignments(
+		ctx,
+		prepared,
+		executionTarget,
+		func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			if observe != nil {
+				observe(inputs)
+			}
+			return prepareManualMoveTargetAssignments(inputs, func(input CurrentNodeStartContext) (runtimeids.SessionID, error) {
+				sessionID := input.CurrentNode.SessionID
+				if sessionID != nil {
+					return *sessionID, nil
+				}
+				cfg := config.App{
+					PersistenceRoot: store.metadata.PersistenceRoot(),
+					WorkspaceRoot:   input.ExecutionRoot.SourceWorkspaceRoot,
+				}
+				freshSessionID, err := runtimeids.ParseSessionID(createTestSession(
+					t,
+					ctx,
+					store,
+					metadata.Binding{
+						ProjectID:     input.Task.ProjectID,
+						WorkspaceID:   input.ExecutionRoot.SourceWorkspaceID,
+						CanonicalRoot: input.ExecutionRoot.SourceWorkspaceRoot,
+					},
+					cfg,
+				))
+				if err != nil {
+					return runtimeids.SessionID{}, err
+				}
+				return freshSessionID, nil
+			})
+		},
+	)
+}
+
+func prepareManualMoveTargetAssignments(
+	inputs []CurrentNodeStartContext,
+	sessionFor func(CurrentNodeStartContext) (runtimeids.SessionID, error),
+) (ManualMoveTargetAssignmentPreparation, error) {
+	assignments := make([]ManualMoveTargetAssignment, 0, len(inputs))
+	for _, input := range inputs {
+		if input.CurrentNode.AgentExecutionSelection == nil {
+			if input.Node.Kind != workflow.NodeKindScript {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+			}
+			continue
+		}
+		if input.Node.Kind != workflow.NodeKindAgent {
+			return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+		}
+		sessionID, err := sessionFor(input)
+		if err != nil {
+			return ManualMoveTargetAssignmentPreparation{}, err
+		}
+		assignments = append(assignments, ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   sessionID,
+		})
+	}
+	return ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+}
+
+func manualMoveTargetAssignmentsForSession(
+	inputs []CurrentNodeStartContext,
+	sessionID runtimeids.SessionID,
+) (ManualMoveTargetAssignmentPreparation, error) {
+	return prepareManualMoveTargetAssignments(inputs, func(CurrentNodeStartContext) (runtimeids.SessionID, error) {
+		return sessionID, nil
+	})
+}
+
 func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID runtimeids.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
 	t.Helper()
 	link, err := store.LinkWorkflow(ctx, projectID, workflowID, isDefault)
@@ -282,7 +375,7 @@ func createApprovalWorkflow(t *testing.T, ctx context.Context, store *Store) run
 		start := nodeByKind(t, def, workflow.NodeKindStart)
 		done := nodeByKind(t, def, workflow.NodeKindTerminal)
 		req.Nodes = append(req.Nodes, NodeRecord{
-			ID: workflow.NodeID(agentID), WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
+			ID: agentID, WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent,
 			DisplayName: "Agent", SubagentRole: "coder",
 		})
 		req.TransitionGroups = append(req.TransitionGroups,
@@ -344,6 +437,51 @@ func createFanoutJoinWorkflow(t *testing.T, ctx context.Context, store *Store) r
 			EdgeRecord{ID: joinBEdgeID, WorkflowID: workflowID, TransitionGroupID: joinBGroup, Key: "join_b", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 			EdgeRecord{ID: testEdgeID("edge-join-synth-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: synthGroup, Key: "synth", TargetNodeID: synthID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Synthesize {{.Params.joined}}."},
 			EdgeRecord{ID: testEdgeID("edge-synth-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+		)
+	})
+	return workflowID
+}
+
+func createMixedExecutableFanoutWorkflow(t *testing.T, ctx context.Context, store *Store) runtimeids.WorkflowID {
+	t.Helper()
+	created, err := store.CreateWorkflow(ctx, CreateWorkflowRequest{Name: "Mixed Executable Fanout Workflow"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	workflowID := created.ID
+	sourceID := testNodeID("node-source-" + workflowID.String())
+	scriptID := testNodeID("node-script-" + workflowID.String())
+	agentID := testNodeID("node-agent-" + workflowID.String())
+	joinID := testNodeID("node-join-" + workflowID.String())
+	scriptJoinEdgeID := testEdgeID("edge-script-join-" + workflowID.String())
+	startGroup := testTransitionGroupID("group-start-" + workflowID.String())
+	splitGroup := testTransitionGroupID("group-split-" + workflowID.String())
+	scriptJoinGroup := testTransitionGroupID("group-script-join-" + workflowID.String())
+	agentJoinGroup := testTransitionGroupID("group-agent-join-" + workflowID.String())
+	doneGroup := testTransitionGroupID("group-done-" + workflowID.String())
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
+		start := nodeByKind(t, def, workflow.NodeKindStart)
+		done := nodeByKind(t, def, workflow.NodeKindTerminal)
+		req.Nodes = append(req.Nodes,
+			NodeRecord{ID: sourceID, WorkflowID: workflowID, Key: "source", Kind: workflow.NodeKindAgent, DisplayName: "Source", SubagentRole: "coder"},
+			NodeRecord{ID: scriptID, WorkflowID: workflowID, Key: "script", Kind: workflow.NodeKindScript, DisplayName: "Script", ScriptPath: "/usr/bin/true"},
+			NodeRecord{ID: agentID, WorkflowID: workflowID, Key: "agent", Kind: workflow.NodeKindAgent, DisplayName: "Agent", SubagentRole: "coder"},
+			NodeRecord{ID: joinID, WorkflowID: workflowID, Key: "join", Kind: workflow.NodeKindJoin, DisplayName: "Join", JoinInputProviders: []workflow.JoinInputProvider{{InputName: "joined", ProviderEdgeID: scriptJoinEdgeID}}},
+		)
+		req.TransitionGroups = append(req.TransitionGroups,
+			TransitionGroupRecord{ID: startGroup, WorkflowID: workflowID, SourceNodeID: workflow.NodeIDOf(start), TransitionID: "start", DisplayName: "Start"},
+			TransitionGroupRecord{ID: splitGroup, WorkflowID: workflowID, SourceNodeID: sourceID, TransitionID: "split", DisplayName: "Split"},
+			TransitionGroupRecord{ID: scriptJoinGroup, WorkflowID: workflowID, SourceNodeID: scriptID, TransitionID: "script_done", DisplayName: "Join"},
+			TransitionGroupRecord{ID: agentJoinGroup, WorkflowID: workflowID, SourceNodeID: agentID, TransitionID: "agent_done", DisplayName: "Join"},
+			TransitionGroupRecord{ID: doneGroup, WorkflowID: workflowID, SourceNodeID: joinID, TransitionID: "done", DisplayName: "Done"},
+		)
+		req.Edges = append(req.Edges,
+			EdgeRecord{ID: testEdgeID("edge-start-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: startGroup, Key: "start", TargetNodeID: sourceID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Start."},
+			EdgeRecord{ID: testEdgeID("edge-script-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "script", TargetNodeID: scriptID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-agent-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: splitGroup, Key: "agent", TargetNodeID: agentID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, PromptTemplate: "Agent."},
+			EdgeRecord{ID: scriptJoinEdgeID, WorkflowID: workflowID, TransitionGroupID: scriptJoinGroup, Key: "script_done", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession, Parameters: []workflow.Parameter{{Key: "joined", Description: "Joined output.", Purpose: workflow.ParameterPurposeOrdinary}}},
+			EdgeRecord{ID: testEdgeID("edge-agent-join-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: agentJoinGroup, Key: "agent_done", TargetNodeID: joinID, AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
+			EdgeRecord{ID: testEdgeID("edge-done-" + workflowID.String()), WorkflowID: workflowID, TransitionGroupID: doneGroup, Key: "done", TargetNodeID: workflow.NodeIDOf(done), AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured, ContextMode: workflow.ContextModeNewSession},
 		)
 	})
 	return workflowID

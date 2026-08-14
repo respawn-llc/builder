@@ -304,7 +304,7 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	}
 	blockReviewer = true
 
-	_, err := eng.runStepLoop(context.Background(), "step-1")
+	_, err := runStepLoopInActiveTestRun(t, context.Background(), eng)
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")
 	}

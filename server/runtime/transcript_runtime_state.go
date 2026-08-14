@@ -484,7 +484,7 @@ func (s *transcriptRuntimeState) AppendCommittedEntryWithVisibility(role, text s
 	s.chatProjection().appendLocalEntryRecord(ChatEntry{Visibility: visibility, Role: role, Text: text}, nil, provenances...)
 }
 
-func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) (*AssistantStreamMetadata, *uuid.UUID) {
+func (s *transcriptRuntimeState) AppendStreamingDelta(stepID string, baseRevision int64, baseCommittedEntryCount int, delta string, phase llm.MessagePhase) assistantStreamingAppend {
 	return s.chatProjection().appendStreamingDelta(stepID, baseRevision, baseCommittedEntryCount, delta, phase)
 }
 

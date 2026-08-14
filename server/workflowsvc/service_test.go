@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -349,7 +350,7 @@ func TestServiceTaskStartRequiresSelectionWithoutApplyingAction(t *testing.T) {
 }
 
 func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
@@ -359,6 +360,7 @@ func TestServiceManualMoveExecutableSelectsTargetThenStartsCurrentNode(t *testin
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "plan")
 	execution := newManualMoveExecutionStub(service)
+	execution.manualMoveAssignments = workflowServiceTestManualMoveAssignments(t, metadataStore)
 	service.currentNodeExecution = execution
 
 	selectionRequired, err := service.MoveWorkflowTask(ctx, serverapi.WorkflowTaskMoveRequest{
@@ -587,7 +589,7 @@ func TestServiceManualMoveStaleFinalRevalidationReturnsNoOpWithoutSideEffects(t 
 }
 
 func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
-	ctx, service, binding := newWorkflowServiceTestContext(t)
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
 	requireWorkflowServiceEdgeApproval(t, ctx, service, workflowID, "next")
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
@@ -598,6 +600,7 @@ func TestServiceManualMoveApprovalAppliesImmediately(t *testing.T) {
 	}
 	targetNodeID := workflowServiceNodeIDByKey(t, definition.Definition, "implement")
 	execution := newManualMoveExecutionStub(service)
+	execution.manualMoveAssignments = workflowServiceTestManualMoveAssignments(t, metadataStore)
 	service.currentNodeExecution = execution
 	startWorkflowServiceTask(t, ctx, service, task.Task.ID)
 	execution.started = nil
@@ -796,49 +799,29 @@ func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	}
 }
 
-func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *testing.T) {
-	t.Run("graph save", func(t *testing.T) {
-		ctx, service, binding := newWorkflowServiceTestContext(t)
-		workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-		linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-		createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
-		definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-		if err != nil {
-			t.Fatalf("GetWorkflow: %v", err)
-		}
-		waitForWorkflowMutationPermit(t, service, func() error {
-			_, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
-				WorkflowID:      workflowID,
-				ExpectedVersion: definition.Definition.Workflow.Version,
-				Graph:           serverapi.WorkflowGraphDraftFromDefinition(definition.Definition),
-			})
-			return err
-		}, nil)
-	})
-	t.Run("workflow delete", func(t *testing.T) {
-		ctx, service, _, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
-		preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
-		if err != nil {
-			t.Fatalf("PreviewWorkflowDelete: %v", err)
-		}
-		waitForWorkflowMutationPermit(t, service, func() error {
-			_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
-				WorkflowID:           workflowID,
-				Confirmed:            true,
-				ExpectedVersion:      preview.Impact.Version,
-				ExpectedProjectCount: preview.Impact.ProjectCount,
-				ExpectedLinkCount:    preview.Impact.LinkCount,
-				ExpectedTaskCount:    preview.Impact.TaskCount,
-			})
-			return err
-		}, nil)
-	})
+func TestServiceWorkflowDeleteWaitsForAffectedTaskMutation(t *testing.T) {
+	ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
+	preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("PreviewWorkflowDelete: %v", err)
+	}
+	waitForTaskMutation(t, service, workflow.TaskID(taskID), func() error {
+		_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
+			WorkflowID:           workflowID,
+			Confirmed:            true,
+			ExpectedVersion:      preview.Impact.Version,
+			ExpectedProjectCount: preview.Impact.ProjectCount,
+			ExpectedLinkCount:    preview.Impact.LinkCount,
+			ExpectedTaskCount:    preview.Impact.TaskCount,
+		})
+		return err
+	}, nil)
 }
 
-func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+func TestServiceWorkflowTaskDeleteWaitsForSameTaskMutation(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
-	waitForWorkflowMutationPermit(t, service, func() error {
+	waitForTaskMutation(t, service, workflow.TaskID(taskID), func() error {
 		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
 	}, func() {
 		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
@@ -847,7 +830,118 @@ func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.
 	})
 
 	if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err == nil {
-		t.Fatal("deleted workflow task remains readable after permit release")
+		t.Fatal("deleted workflow task remains readable after Task ownership release")
+	}
+}
+
+func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	ctx, service, binding, metadataStore := newWorkflowServiceTestContextWithMetadata(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	started, err := service.store.StartTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	projector := workflowview.NewTaskProjector()
+	projection, err := workflowview.NewTaskStatusProjection(metadataStore, service.store, projector, controller)
+	if err != nil {
+		t.Fatalf("NewTaskStatusProjection: %v", err)
+	}
+	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
+	if err != nil {
+		t.Fatalf("NewTaskDependencyCounter: %v", err)
+	}
+	dependencies, err := workflowview.NewTaskDependencies(metadataStore, projection, dependencyCounter)
+	if err != nil {
+		t.Fatalf("NewTaskDependencies: %v", err)
+	}
+	service.readModels.TaskDetail, err = workflowview.NewTaskDetail(metadataStore, projection, dependencies)
+	if err != nil {
+		t.Fatalf("NewTaskDetail: %v", err)
+	}
+	ref := sessionruntime.WorkflowExecutionRef{
+		ProjectID:   binding.ProjectID,
+		WorkflowID:  workflowID,
+		CurrentNode: started.Mutation.Created[0].Reference,
+	}
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  sessionruntime.ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = handle.Stop(context.Background())
+	})
+	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID}); err != nil {
+		t.Fatalf("prime Task read snapshot: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
+	selectionDone := make(chan error, 1)
+	go func() {
+		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(sessionruntime.WorkflowInterruptSelection) error {
+			close(entered)
+			<-release
+			return errors.New("release lifecycle selection without applying it")
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Runtime lifecycle selection did not acquire ownership")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: task.Task.ID})
+		readDone <- readErr
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("GetWorkflowTask while Runtime lifecycle ownership held: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetWorkflowTask waited for Runtime lifecycle ownership")
+	}
+	releaseSelection()
+	if err := <-selectionDone; err == nil {
+		t.Fatal("Runtime lifecycle selection unexpectedly committed")
 	}
 }
 
@@ -1211,8 +1305,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
 	}
-	if execution.resumeEligibilityCalls != 0 {
-		t.Fatalf("Resume eligibility calls = %d, want none before configured-target selection", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 1 {
+		t.Fatalf("Resume preflight calls = %d, want one before configured-target selection", execution.resumeEligibilityCalls)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1237,8 +1331,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("resume response = %+v, want applied", response)
 	}
-	if execution.resumeEligibilityCalls != 1 {
-		t.Fatalf("Resume eligibility calls = %d, want one after selected target", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 2 {
+		t.Fatalf("Resume preflight calls = %d, want one per request", execution.resumeEligibilityCalls)
 	}
 	targetContext, err = service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1299,11 +1393,14 @@ func TestServiceTaskResumePreservesConfiguredSelectionAfterMaterializationFailur
 	}
 }
 
-func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
+func TestServiceTaskResumeNoOpsWhenTaskAlreadyResumed(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
 	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
 	service.currentNodeExecution = &currentNodeCompletionExecutionStub{store: service.store}
 
 	response, err := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
@@ -1313,12 +1410,87 @@ func TestServiceTaskResumeRejectsEmptyAppliedResult(t *testing.T) {
 			Mode: serverapi.WorkflowExecutionTargetModeNone,
 		},
 	})
-	if err == nil {
-		t.Fatalf("ResumeWorkflowTask = %+v, want conflict for no interrupted Current Nodes", response)
+	if err != nil {
+		t.Fatalf("ResumeWorkflowTask: %v", err)
 	}
-	var conflict *workflowexecution.TaskResumeConflictError
-	if !errors.As(err, &conflict) || conflict.TaskID != workflow.TaskID(task.Task.ID) {
-		t.Fatalf("ResumeWorkflowTask error = %T %v, want typed conflict for %s", err, err, task.Task.ID)
+	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp ||
+		response.NoOp == nil ||
+		len(response.NoOp.CurrentNodes) != 1 {
+		t.Fatalf("ResumeWorkflowTask = %+v, want no-op with current ready node", response)
+	}
+}
+
+func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	for _, currentNode := range currentNodes {
+		if err := service.store.InterruptCurrentNode(
+			ctx,
+			currentNode.Reference,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.NewCurrentNodeInterruptionDetail(
+				string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+				nil,
+			),
+		); err != nil {
+			t.Fatalf("InterruptCurrentNode: %v", err)
+		}
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	service.currentNodeExecution = controller
+	request := serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	}
+
+	responses := make(chan serverapi.WorkflowTaskResumeResponse, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			response, resumeErr := service.ResumeWorkflowTask(ctx, request)
+			responses <- response
+			errs <- resumeErr
+		}()
+	}
+	outcomes := map[serverapi.WorkflowExecutionTargetActionOutcome]int{}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("ResumeWorkflowTask: %v", err)
+		}
+		outcomes[(<-responses).Outcome]++
+	}
+	if outcomes[serverapi.WorkflowExecutionTargetActionOutcomeApplied] != 1 ||
+		outcomes[serverapi.WorkflowExecutionTargetActionOutcomeNoOp] != 1 {
+		t.Fatalf("concurrent Resume outcomes = %+v, want one applied and one no_op", outcomes)
 	}
 }
 
@@ -1914,7 +2086,10 @@ func (r *workflowAttentionRecorder) resolvedApprovalIDs() []workflow.ApprovalID 
 
 func newManualMoveExecutionStub(service *Service) *manualMoveExecutionStub {
 	return &manualMoveExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+		},
 	}
 }
 
@@ -1995,13 +2170,13 @@ func (s *manualMoveExecutionStub) InterruptForManualMove(_ context.Context, task
 	return s.interruptErr
 }
 
-func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation func() error, whileBlocked func()) {
+func waitForTaskMutation(t *testing.T, service *Service, taskID workflow.TaskID, operation func() error, whileBlocked func()) {
 	t.Helper()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	held := make(chan error, 1)
 	go func() {
-		held <- service.mutationPermit.Run(context.Background(), func(context.Context) error {
+		held <- service.taskMutations.Run(context.Background(), taskID, func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
@@ -2014,7 +2189,7 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}()
 	select {
 	case err := <-finished:
-		t.Fatalf("workflow mutation escaped the shared permit: %v", err)
+		t.Fatalf("Task mutation escaped Task ownership: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	if whileBlocked != nil {
@@ -2022,10 +2197,10 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}
 	close(release)
 	if err := <-held; err != nil {
-		t.Fatalf("hold workflow mutation permit: %v", err)
+		t.Fatalf("hold Task mutation: %v", err)
 	}
 	if err := <-finished; err != nil {
-		t.Fatalf("workflow mutation after permit release: %v", err)
+		t.Fatalf("Task mutation after ownership release: %v", err)
 	}
 }
 
@@ -2923,7 +3098,7 @@ func TestServiceWorkflowGraphSaveRejectsAdditionIdentityOwnedByCurrentEntityOfAn
 	}
 }
 
-func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *testing.T) {
+func TestServiceWorkflowGraphSaveUsesStoreVersionOrdering(t *testing.T) {
 	ctx, service, _ := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
@@ -2931,17 +3106,47 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 		t.Fatalf("GetWorkflow current: %v", err)
 	}
 
-	permitStarted := make(chan struct{})
-	releasePermit := make(chan struct{})
-	permitDone := make(chan error, 1)
+	if err := service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", ""); err != nil {
+		t.Fatalf("UpdateWorkflowInfo: %v", err)
+	}
+	outcome, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
+		WorkflowID:      workflowID,
+		ExpectedVersion: current.Definition.Workflow.Version,
+		Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
+			ID:             "node-prefixed",
+			Kind:           string(serverapi.WorkflowNodeKindAgent),
+			CompletionMode: "tool",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", err)
+	}
+	if outcome.Saved ||
+		outcome.CurrentVersion != current.Definition.Workflow.Version+1 ||
+		!workflowServiceHasGraphSaveBlocker(outcome.Blockers, "version_changed") {
+		t.Fatalf("save = %+v, want current-version blocker", outcome)
+	}
+}
+
+func TestServiceWorkflowGraphSaveDoesNotWaitForTaskMutation(t *testing.T) {
+	ctx, service, _ := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
+	if err != nil {
+		t.Fatalf("GetWorkflow current: %v", err)
+	}
+
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	mutationDone := make(chan error, 1)
 	go func() {
-		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
-			close(permitStarted)
-			<-releasePermit
-			return service.store.UpdateWorkflowInfo(ctx, workflowID, "Concurrent update", "")
+		mutationDone <- service.taskMutations.Run(ctx, workflow.TaskID("task-unrelated"), func(context.Context) error {
+			close(mutationStarted)
+			<-releaseMutation
+			return nil
 		})
 	}()
-	<-permitStarted
+	<-mutationStarted
 
 	saveDone := make(chan struct {
 		response serverapi.WorkflowGraphSaveResponse
@@ -2951,11 +3156,7 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 		response, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 			WorkflowID:      workflowID,
 			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph: serverapi.WorkflowGraphDraft{Nodes: []serverapi.WorkflowGraphDraftNode{{
-				ID:             "node-prefixed",
-				Kind:           string(serverapi.WorkflowNodeKindAgent),
-				CompletionMode: "tool",
-			}}},
+			Graph:           serverapi.WorkflowGraphDraftFromDefinition(current.Definition),
 		})
 		saveDone <- struct {
 			response serverapi.WorkflowGraphSaveResponse
@@ -2965,76 +3166,16 @@ func TestServiceWorkflowGraphSaveOrdersVersionGateBeforeIdentityValidation(t *te
 
 	select {
 	case outcome := <-saveDone:
-		t.Fatalf("SaveWorkflowGraph bypassed mutation ordering: response=%+v error=%v", outcome.response, outcome.err)
-	case <-time.After(25 * time.Millisecond):
-	}
-
-	close(releasePermit)
-	if err := <-permitDone; err != nil {
-		t.Fatalf("concurrent workflow mutation: %v", err)
-	}
-	outcome := <-saveDone
-	if outcome.err != nil {
-		t.Fatalf("SaveWorkflowGraph stale malformed Draft: %v", outcome.err)
-	}
-	if outcome.response.Saved ||
-		outcome.response.CurrentVersion != current.Definition.Workflow.Version+1 ||
-		!workflowServiceHasGraphSaveBlocker(outcome.response.Blockers, "version_changed") {
-		t.Fatalf("save = %+v, want current-version blocker", outcome.response)
-	}
-}
-
-func TestServiceWorkflowGraphPreviewDoesNotWaitForUnrelatedMutation(t *testing.T) {
-	ctx, service, _ := newWorkflowServiceTestContext(t)
-	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
-	current, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
-	if err != nil {
-		t.Fatalf("GetWorkflow current: %v", err)
-	}
-
-	permitStarted := make(chan struct{})
-	releasePermit := make(chan struct{})
-	permitDone := make(chan error, 1)
-	go func() {
-		permitDone <- service.mutationPermit.Run(ctx, func(context.Context) error {
-			close(permitStarted)
-			<-releasePermit
-			return nil
-		})
-	}()
-	<-permitStarted
-
-	previewDone := make(chan struct {
-		response serverapi.WorkflowGraphSavePreviewResponse
-		err      error
-	}, 1)
-	go func() {
-		response, err := service.PreviewWorkflowGraphSave(ctx, serverapi.WorkflowGraphSavePreviewRequest{
-			WorkflowID:      workflowID,
-			ExpectedVersion: current.Definition.Workflow.Version,
-			Graph:           serverapi.WorkflowGraphDraftFromDefinition(current.Definition),
-		})
-		previewDone <- struct {
-			response serverapi.WorkflowGraphSavePreviewResponse
-			err      error
-		}{response: response, err: err}
-	}()
-
-	select {
-	case outcome := <-previewDone:
 		if outcome.err != nil {
-			t.Fatalf("PreviewWorkflowGraphSave: %v", outcome.err)
-		}
-		if outcome.response.Changed {
-			t.Fatalf("preview = %+v, want unchanged", outcome.response)
+			t.Fatalf("SaveWorkflowGraph: %v", outcome.err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("PreviewWorkflowGraphSave waited for the global mutation permit")
+		t.Fatal("Workflow graph save waited for unrelated Task mutation")
 	}
 
-	close(releasePermit)
-	if err := <-permitDone; err != nil {
-		t.Fatalf("release workflow mutation permit: %v", err)
+	close(releaseMutation)
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("release Task mutation: %v", err)
 	}
 }
 
@@ -3419,7 +3560,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewTaskMutationCoordinator()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -3453,7 +3594,11 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	baseExecution := &currentNodeCompletionExecutionStub{
+		store:                 store,
+		manualMoveAssignments: workflowServiceTestManualMoveAssignments(t, metadataStore),
+	}
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(baseExecution))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

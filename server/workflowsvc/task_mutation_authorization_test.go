@@ -429,7 +429,19 @@ type taskMutationAuthorizationExecutionStub struct {
 
 func newTaskMutationAuthorizationExecutionStub(service *Service) *taskMutationAuthorizationExecutionStub {
 	return &taskMutationAuthorizationExecutionStub{
-		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{store: service.store},
+		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
+			store:                 service.store,
+			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+			resumePreflight: workflowexecution.TaskResumePreflight{
+				Outcome: workflowexecution.TaskResumePreflightResumable,
+				CurrentNodes: []workflow.CurrentNode{{
+					Reference: workflow.CurrentNodeReference{
+						TaskID: workflow.TaskID("authorization-preflight"),
+						NodeID: workflow.NodeID("authorization-preflight"),
+					},
+				}},
+			},
+		},
 	}
 }
 
@@ -438,14 +450,17 @@ func (s *taskMutationAuthorizationExecutionStub) Interrupt(_ context.Context, se
 	return nil
 }
 
-func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) (workflowexecution.TaskResumeResult, error) {
 	s.resumedTaskIDs = append(s.resumedTaskIDs, taskID)
-	return []workflow.CurrentNode{{
-		Reference: workflow.CurrentNodeReference{
-			TaskID: taskID,
-			NodeID: workflow.NodeID("authorized-resume"),
-		},
-	}}, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome: workflowexecution.TaskResumeApplied,
+		CurrentNodes: []workflow.CurrentNode{{
+			Reference: workflow.CurrentNodeReference{
+				TaskID: taskID,
+				NodeID: workflow.NodeID("authorized-resume"),
+			},
+		}},
+	}, nil
 }
 
 func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
@@ -453,7 +468,7 @@ func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	_ workflowexecution.TaskStartPreparation,
 	_ workflowexecution.TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (workflowexecution.TaskResumeResult, error) {
 	return s.ResumeTask(context.Background(), taskID)
 }
 
@@ -468,12 +483,12 @@ func bindWorkflowServiceSessionToTask(
 	t.Helper()
 	sessionID := createPersistedWorkflowServiceSession(t, metadataStore, binding)
 	reference := workflowServiceCurrentNodeReference(t, taskID, currentNode)
-	if _, err := service.store.AssociateTaskSession(t.Context(), workflowstore.TaskSessionAssociationRequest{
-		SessionID:    sessionID,
-		CurrentNode:  reference,
-		AssociatedAt: time.Now().UTC(),
+	if _, err := service.store.BindSessionToCurrentNode(t.Context(), workflowstore.CurrentNodeSessionBindingRequest{
+		Association: workflowstore.TaskSessionAssociationRequest{
+			SessionID: sessionID, CurrentNode: reference, AssociatedAt: time.Now().UTC(),
+		},
 	}); err != nil {
-		t.Fatalf("AssociateTaskSession: %v", err)
+		t.Fatalf("BindSessionToCurrentNode: %v", err)
 	}
 	return sessionID
 }

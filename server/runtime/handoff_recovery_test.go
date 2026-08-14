@@ -275,8 +275,17 @@ func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWith
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
 	blockFutureAppend = true
-	if _, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step"); err == nil {
+	var applied bool
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var applyErr error
+		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
+	if err == nil {
 		t.Fatal("handoff future-message append unexpectedly succeeded")
+	}
+	if applied {
+		t.Fatal("handoff future-message append unexpectedly reported compaction")
 	}
 	if blockErr != nil || blocker == nil {
 		t.Fatalf("block future-message append: blocker=%v error=%v", blocker, blockErr)
@@ -327,7 +336,12 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 	engine.handoffRuntimeState().QueueFutureMessage("continue")
 	gate.FailNext(observerErr)
 
-	applied, err := engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	var applied bool
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var applyErr error
+		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
 	if applied || !errors.Is(err, observerErr) {
 		t.Fatalf("future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -335,7 +349,11 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 		t.Fatalf("committed handoff future-message records = %d, want 1", futureMessages)
 	}
 
-	applied, err = engine.applyPendingHandoffIfNeeded(context.Background(), "step")
+	err = withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var applyErr error
+		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
 	if applied || err != nil {
 		t.Fatalf("second future-message append outcome = applied:%v error:%v", applied, err)
 	}
@@ -364,7 +382,12 @@ func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLing
 	persistSuccessfulTriggerHandoff(t, engine, "reopened-handoff-call")
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
-	compacted, err := engine.applyPendingHandoffIfNeeded(context.Background(), "handoff")
+	var compacted bool
+	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var applyErr error
+		compacted, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
 	if err != nil || !compacted {
 		t.Fatalf("apply pending handoff = compacted:%v error:%v", compacted, err)
 	}

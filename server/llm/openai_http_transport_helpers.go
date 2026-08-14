@@ -30,7 +30,7 @@ func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 	return base
 }
 
-func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID string) []option.RequestOption {
+func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMode, sessionID *string, projection *codexDispatchProjection, dispatch *CodexDispatchContext) []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithHeader("originator", t.ProviderIdentifier),
 		option.WithHeader("User-Agent", t.providerUserAgent()),
@@ -38,13 +38,50 @@ func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMo
 	if strings.TrimSpace(authHeader) != "" {
 		opts = append([]option.RequestOption{option.WithHeader("Authorization", authHeader)}, opts...)
 	}
-	if strings.TrimSpace(sessionID) != "" {
-		opts = append(opts, option.WithHeader("session_id", sessionID))
+	if sessionID != nil {
+		opts = append(opts, option.WithHeader("session-id", *sessionID))
 	}
 	if mode.IsOAuth && mode.AccountID != "" {
 		opts = append(opts, option.WithHeader("ChatGPT-Account-Id", mode.AccountID))
 	}
+	if mode.IsOAuth && projection != nil {
+		opts = append(opts, option.WithHeader("x-codex-routing-hint", projection.RoutingHint))
+	}
+	if turnState, present := dispatch.turnStateForRetry(); mode.IsOAuth && present {
+		opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
+	}
 	return opts
+}
+
+func servedModelMetadata(rawResp *http.Response, standardModel string) *string {
+	if model := strings.TrimSpace(standardModel); model != "" {
+		return textutil.Value(model)
+	}
+	if rawResp == nil {
+		return nil
+	}
+	for _, headerName := range []string{"openai-model", "x-openai-model"} {
+		for _, value := range rawResp.Header.Values(headerName) {
+			if model := strings.TrimSpace(value); model != "" {
+				return textutil.Value(model)
+			}
+		}
+	}
+	return nil
+}
+
+func observeStandardServedModel(target **string, model string) {
+	model = strings.TrimSpace(model)
+	if target != nil && *target == nil && model != "" {
+		*target = textutil.Value(model)
+	}
+}
+
+func reasoningIncludedMetadata(rawResp *http.Response) bool {
+	if rawResp == nil {
+		return false
+	}
+	return strings.TrimSpace(rawResp.Header.Get("x-reasoning-included")) == "true"
 }
 
 func (t *HTTPTransport) resolveContextWindowFallback(ctx context.Context, model string) int {

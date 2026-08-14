@@ -46,7 +46,7 @@ func newCurrentNodeControllerWithAttentionForTest(
 	attention CurrentNodeAttentionLifecycle,
 ) *CurrentNodeController {
 	t.Helper()
-	controller, err := NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err := NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  concurrency,
 		Attention:         attention,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
@@ -63,6 +63,47 @@ func (noOpCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(context.Conte
 	return completedCurrentNodeAssignmentSteer{
 		receipt: session.CommitReceipt{Committed: true},
 	}, nil
+}
+
+func (noOpCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	_ context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+	error,
+) {
+	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+	steers := make(map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, len(inputs))
+	for _, input := range inputs {
+		if input.Node.Kind != workflow.NodeKindAgent {
+			continue
+		}
+		key, err := input.CurrentNode.Reference.Key()
+		if err != nil {
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
+		}
+		sessionID := runtimeids.NewSessionID()
+		assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   sessionID,
+		})
+		steers[key] = completedCurrentNodeAssignmentSteer{
+			receipt: session.CommitReceipt{Committed: true},
+		}
+	}
+	return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, steers, nil
+}
+
+func prepareNoOpManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+	error,
+) {
+	return noOpCurrentNodeAssignmentSteerer{}.PrepareManualMoveAssignments(ctx, inputs)
 }
 
 type completedCurrentNodeAssignmentSteer struct {
@@ -89,6 +130,13 @@ func (s deadlineRecordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignmen
 		}, nil
 	}
 	return &deadlineRecordingCurrentNodeAssignmentSteer{deadline: s.deadline}, nil
+}
+
+func (deadlineRecordingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 type deadlineRecordingCurrentNodeAssignmentSteer struct {
@@ -135,6 +183,13 @@ func (s lateCommitCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 		receipt: s.receipt,
 		err:     s.err,
 	}, nil
+}
+
+func (lateCommitCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 type lateCommitCurrentNodeAssignmentSteer struct {
@@ -198,6 +253,13 @@ func (s *blockingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(
 	}, nil
 }
 
+func (*blockingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
+}
+
 type recordingCurrentNodeAssignmentSteerer struct {
 	mu          sync.Mutex
 	steered     []workflow.CurrentNodeReference
@@ -248,6 +310,13 @@ func (s *recordingCurrentNodeAssignmentSteerer) SteerCurrentNodeAssignment(_ con
 		receipt.Committed = true
 	}
 	return completedCurrentNodeAssignmentSteer{receipt: receipt, err: s.waitErr}, nil
+}
+
+func (*recordingCurrentNodeAssignmentSteerer) PrepareManualMoveAssignments(
+	ctx context.Context,
+	inputs []workflowstore.CurrentNodeStartContext,
+) (workflowstore.ManualMoveTargetAssignmentPreparation, map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer, error) {
+	return prepareNoOpManualMoveAssignments(ctx, inputs)
 }
 
 func (s *recordingCurrentNodeAssignmentSteerer) references() []workflow.CurrentNodeReference {
@@ -356,6 +425,7 @@ type currentNodeControllerStore struct {
 	mu                        sync.Mutex
 	started                   workflowstore.StartTaskResult
 	interrupted               []workflow.CurrentNode
+	currentNodes              []workflow.CurrentNode
 	pendingApproval           workflow.PendingApproval
 	approvalApplied           workflowstore.PendingApprovalApplyResult
 	manualMoved               workflowstore.ManualMoveResult
@@ -387,6 +457,7 @@ type currentNodeControllerStore struct {
 	interruptRelease          chan struct{}
 	interruptOnce             sync.Once
 	idleResolved              *workflow.CurrentNode
+	idleResolvedSequence      []workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {
@@ -450,6 +521,13 @@ func (s *currentNodeControllerStore) InterruptedExecutableCurrentNodes(context.C
 	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
 }
 
+func (s *currentNodeControllerStore) ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error) {
+	if s.currentNodes != nil {
+		return append([]workflow.CurrentNode(nil), s.currentNodes...), nil
+	}
+	return append([]workflow.CurrentNode(nil), s.interrupted...), nil
+}
+
 func (s *currentNodeControllerStore) PreflightTaskResume(_ context.Context, _ workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error) {
 	s.preflightResumeCalls++
 	if len(s.resumeClassifications) > 0 {
@@ -480,6 +558,32 @@ func (s *currentNodeControllerStore) ApplyPendingApproval(context.Context, workf
 }
 
 func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error) {
+	return s.manualMoved, nil
+}
+
+func (s *currentNodeControllerStore) ApplyManualMoveWithTargetAssignments(
+	ctx context.Context,
+	_ workflowstore.ManualMovePreparation,
+	_ *workflowstore.ExecutionTargetCandidate,
+	prepareAssignments workflowstore.ManualMoveTargetAssignmentPreparer,
+) (workflowstore.ManualMoveResult, error) {
+	if prepareAssignments == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("Manual Move assignment preparer is required")
+	}
+	contexts := make([]workflowstore.CurrentNodeStartContext, 0, len(s.manualMoved.Mutation.Created))
+	for _, currentNode := range s.manualMoved.Mutation.Created {
+		kind := workflow.NodeKindScript
+		if currentNode.AgentExecutionSelection != nil {
+			kind = workflow.NodeKindAgent
+		}
+		contexts = append(contexts, workflowstore.CurrentNodeStartContext{
+			Node:        workflowstore.NodeRecord{Kind: kind},
+			CurrentNode: currentNode,
+		})
+	}
+	if _, err := prepareAssignments(ctx, contexts); err != nil {
+		return workflowstore.ManualMoveResult{}, err
+	}
 	return s.manualMoved, nil
 }
 
@@ -640,6 +744,11 @@ func (s *currentNodeControllerStore) RecoverExecutableCurrentNodes(context.Conte
 }
 
 func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error) {
+	if len(s.idleResolvedSequence) != 0 {
+		resolved := s.idleResolvedSequence[0]
+		s.idleResolvedSequence = s.idleResolvedSequence[1:]
+		return resolved, nil
+	}
 	if s.idleResolved == nil {
 		return workflow.CurrentNode{}, sql.ErrNoRows
 	}

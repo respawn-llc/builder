@@ -201,7 +201,6 @@ func (e *Engine) applyCommittedStoredToolCompletion(
 	hasBackgroundSession bool,
 	provenance *TranscriptCommittedRowProvenance,
 ) {
-	e.markCurrentRequestShapeDirtyForSignificantMutation()
 	e.transcriptRuntimeState().RecordStoredToolCompletion(payload, provenance)
 	if hasBackgroundSession {
 		e.ensureOrchestrationCollaborators()
@@ -323,11 +322,14 @@ func normalizeStoredLocalEntry(entry storedLocalEntry) (storedLocalEntry, error)
 	if entry.Role == "" {
 		return storedLocalEntry{}, errors.New("role is required")
 	}
-	if entry.Text == "" && entry.ToolOutputRepair == nil {
-		return storedLocalEntry{}, errors.New("text or tool-output repair facts are required")
+	if entry.Text == "" && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil {
+		return storedLocalEntry{}, errors.New("text or typed notice facts are required")
 	}
 	if entry.ToolOutputRepair != nil && !entry.ToolOutputRepair.Valid() {
 		return storedLocalEntry{}, errors.New("tool-output repair facts are invalid")
+	}
+	if entry.ProviderModelMismatch != nil && !entry.ProviderModelMismatch.Valid() {
+		return storedLocalEntry{}, errors.New("provider-model mismatch facts are invalid")
 	}
 	return entry, nil
 }
@@ -336,13 +338,14 @@ func localEntryChatEntry(entry storedLocalEntry) *ChatEntry {
 	condensedText, _ := textutil.OptionalExact(entry.CondensedText)
 	noticeID, _ := textutil.OptionalExact(entry.NoticeID)
 	return &ChatEntry{
-		Visibility:       normalizeRuntimeEntryVisibility(entry.Visibility),
-		Role:             strings.TrimSpace(entry.Role),
-		Text:             strings.TrimSpace(entry.Text),
-		DurationMs:       textutil.Pointer(entry.DurationMs),
-		CondensedText:    condensedText,
-		NoticeID:         noticeID,
-		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+		Visibility:            normalizeRuntimeEntryVisibility(entry.Visibility),
+		Role:                  strings.TrimSpace(entry.Role),
+		Text:                  strings.TrimSpace(entry.Text),
+		DurationMs:            textutil.Pointer(entry.DurationMs),
+		CondensedText:         condensedText,
+		NoticeID:              noticeID,
+		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
 }
 
@@ -380,9 +383,8 @@ func (e *Engine) diagnosticDedupeStore() *diagnosticDedupeStore {
 }
 
 type preparedMessageProjection struct {
-	message  llm.Message
-	record   session.MessageRecord
-	mutation tokenUsageMutation
+	message llm.Message
+	record  session.MessageRecord
 }
 
 func (e *Engine) prepareMessageProjection(stepID string, msg llm.Message) (preparedMessageProjection, error) {
@@ -398,15 +400,10 @@ func (e *Engine) prepareMessageProjection(stepID string, msg llm.Message) (prepa
 	if err != nil {
 		return preparedMessageProjection{}, fmt.Errorf("adapt message record: %w", err)
 	}
-	return preparedMessageProjection{message: msg, record: record, mutation: tokenUsageMutationForMessage(msg)}, nil
+	return preparedMessageProjection{message: msg, record: record}, nil
 }
 
 func (e *Engine) applyPreparedMessageProjection(stepID string, prepared preparedMessageProjection, provenance *TranscriptCommittedRowProvenance) error {
-	if prepared.mutation == tokenUsageMutationSignificant {
-		e.markCurrentRequestShapeDirtyForSignificantMutation()
-	} else {
-		e.markCurrentRequestShapeDirty()
-	}
 	return e.transcriptRuntimeState().AppendMessage(stepID, prepared.message, provenance)
 }
 

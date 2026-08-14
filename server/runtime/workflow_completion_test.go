@@ -818,7 +818,8 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 				Raw:  json.RawMessage(`{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"kent cli"}}`),
 			},
 		},
-		Usage: llm.Usage{WindowTokens: 200000},
+		Usage:       llm.Usage{WindowTokens: 200000},
+		ServedModel: textutil.Value("served-model"),
 	}}}
 	eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, config.WorkflowCompletionModeTool), Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolExecCommand, toolspec.ToolWebSearch},
@@ -836,7 +837,14 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	hostedCallPersisted := false
 	hostedResultPersisted := false
+	modelMismatchWarnings := 0
 	for _, evt := range events {
+		if evt.Kind == "local_entry" {
+			if persistedLocalEntryForTest(t, evt).ProviderModelMismatch != nil {
+				modelMismatchWarnings++
+			}
+			continue
+		}
 		if evt.Kind != "message" {
 			continue
 		}
@@ -854,6 +862,12 @@ func TestWorkflowTerminalCompleteNodePersistsHostedToolResults(t *testing.T) {
 	}
 	if !hostedCallPersisted || !hostedResultPersisted {
 		t.Fatalf("hosted call/result persisted = %v/%v, want both", hostedCallPersisted, hostedResultPersisted)
+	}
+	if modelMismatchWarnings != 1 {
+		t.Fatalf("provider-model mismatch warnings = %d, want one for terminal accepted response", modelMismatchWarnings)
+	}
+	if store.Meta().UsageState == nil {
+		t.Fatal("terminal accepted response did not persist usage")
 	}
 }
 
@@ -977,6 +991,71 @@ func TestWorkflowUnstructuredFinalAnswerCompletesRun(t *testing.T) {
 		t.Fatalf("terminal state = %+v, want unstructured completion", terminal)
 	}
 	assertWorkflowCompletionOperatorDiagnostic(t, events, diagnostic)
+}
+
+func TestWorkflowOperationalCompletionErrorDoesNotConsumeProtocolBudget(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name            string
+		mode            config.WorkflowCompletionMode
+		response        llm.Response
+		wantSubmitError bool
+	}{
+		{
+			name:            "structured output",
+			mode:            config.WorkflowCompletionModeStructuredOutput,
+			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+			wantSubmitError: true,
+		},
+		{
+			name:            "unstructured output",
+			mode:            config.WorkflowCompletionModeUnstructured,
+			response:        structuredFinalResponse(`{"commentary":"complete","summary":"done"}`),
+			wantSubmitError: true,
+		},
+		{
+			name: "complete node tool",
+			mode: config.WorkflowCompletionModeTool,
+			response: commentaryResponse(
+				"complete",
+				completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+			),
+			wantSubmitError: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			source, err := workflow.NewCurrentNodeReference("task-legacy", "node-source", nil)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeReference: %v", err)
+			}
+			operationalErr := workflow.LegacyContinuationSourceUnresolvedError{
+				Source:       source,
+				TargetNodeID: "node-target",
+				EdgeID:       "edge-target",
+				Scope:        workflow.LegacyContinuationSourceCurrentNode,
+			}
+			controller := &fakeWorkflowController{completeErr: operationalErr}
+			client := &fakeClient{responses: []llm.Response{tt.response}}
+			eng := mustNewWorkflowTestEngine(t, store, client, testWorkflowConfig(controller, tt.mode), Config{})
+
+			_, submitErr := eng.SubmitUserMessage(context.Background(), "run")
+			if tt.wantSubmitError {
+				if !errors.As(submitErr, &operationalErr) {
+					t.Fatalf("submit error = %v, want LegacyContinuationSourceUnresolvedError", submitErr)
+				}
+			} else if submitErr != nil {
+				t.Fatalf("submit: %v", submitErr)
+			}
+			if got := controller.violations.Load(); got != 0 {
+				t.Fatalf("protocol violations = %d, want 0", got)
+			}
+			if got := controller.maxHits.Load(); got != 0 {
+				t.Fatalf("protocol budget max hits = %d, want 0", got)
+			}
+		})
+	}
 }
 
 func TestCompatibleProviderPhaseAbsentWorkflowOutputCompletes(t *testing.T) {

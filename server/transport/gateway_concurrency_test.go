@@ -92,6 +92,17 @@ func (s gatewayAutomaticFatalSteerer) SteerCurrentNodeAssignment(
 	return nil, s.cause
 }
 
+func (gatewayAutomaticFatalSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
 type gatewayFailingRunner struct {
 	cause error
 }
@@ -114,6 +125,17 @@ func (gatewayCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
 	workflow.CurrentNodeReference,
 ) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	return gatewayCommittedAssignment{}, nil
+}
+
+func (gatewayCommittedAssignmentSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
 }
 
 type gatewayCommittedAssignment struct{}
@@ -464,7 +486,7 @@ func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
 			workflowStore,
 			gatewayFailingRunner{cause: errors.New("automatic fatal test runner must not start")},
 			authority,
-			workflowexecution.NewMutationPermit(),
+			workflowexecution.NewTaskMutationCoordinator(),
 			workflowexecution.CurrentNodeControllerConfig{
 				AgentConcurrency: 1,
 				AssignmentSteerer: gatewayAutomaticFatalSteerer{
@@ -578,7 +600,7 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 				workflowStore,
 				runner,
 				authority,
-				workflowexecution.NewMutationPermit(),
+				workflowexecution.NewTaskMutationCoordinator(),
 				workflowexecution.CurrentNodeControllerConfig{
 					AgentConcurrency:  1,
 					AssignmentSteerer: steerer,
@@ -616,14 +638,14 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 				},
 				resumeWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 					resumed, resumeErr := controller.ResumeTask(ctx, taskID)
-					if len(resumed) == 0 {
+					if len(resumed.CurrentNodes) == 0 {
 						return serverapi.WorkflowTaskResumeResponse{}, resumeErr
 					}
 					response := serverapi.WorkflowTaskResumeResponse{
 						Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 						Applied: &serverapi.WorkflowTaskResumeApplied{
 							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
-								NodeID: string(resumed[0].Reference.NodeID),
+								NodeID: string(resumed.CurrentNodes[0].Reference.NodeID),
 							}},
 						},
 					}

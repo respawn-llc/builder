@@ -198,11 +198,7 @@ WHERE task_id = 'task-1'`)
 
 func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testing.T) {
 	t.Parallel()
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, t.TempDir())
 
 	for _, table := range []string{
 		"task_current_nodes",
@@ -218,10 +214,13 @@ func TestTaskCurrentNodeSchemaUsesNaturalReferencesAndLeanFanoutStorage(t *testi
 		"task_id": {},
 	})
 	assertExactTableColumns(t, store.db, "task_active_fanout_branches", map[string]struct{}{
-		"task_id":               {},
-		"transition_branch_key": {},
-		"arrival_state":         {},
-		"arrival_values_json":   {},
+		"task_id":                        {},
+		"transition_branch_key":          {},
+		"arrival_state":                  {},
+		"arrival_values_json":            {},
+		"continuation_source_kind":       {},
+		"continuation_source_session_id": {},
+		"legacy_materialized":            {},
 	})
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"core/server/workflowstore"
 	"core/server/worktree"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(t *testing.T) {
@@ -34,7 +36,7 @@ func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.mutationPermit,
+		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -79,6 +81,123 @@ func TestServiceTaskResumeEligibilityRejectsExplicitBranchBeforePendingMutation(
 	}
 }
 
+func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	setWorkflowServiceExecutionTargetPolicy(t, ctx, service, workflowID, serverapi.WorkflowExecutionTargetConfiguration{
+		Mode: serverapi.WorkflowExecutionTargetModeHead,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	taskID := workflow.TaskID(task.Task.ID)
+	started, err := service.store.StartTask(ctx, taskID)
+	if err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	if err := service.store.InterruptCurrentNode(
+		ctx,
+		started.Mutation.Created[0].Reference,
+		workflow.CurrentNodeInterruptionReason("test_resume"),
+		workflow.CurrentNodeInterruptionDetail{Code: "test_resume"},
+	); err != nil {
+		t.Fatalf("InterruptCurrentNode: %v", err)
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close CurrentNodeController: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close session runtime authority: %v", err)
+		}
+	})
+	service.currentNodeExecution = controller
+	firstBranch := "feature/first-resume"
+	secondBranch := "feature/stale-resume"
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var releaseOnce sync.Once
+	releaseMaterialization := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(releaseMaterialization)
+	service.executionTargets = &recordingExecutionTargetInfrastructure{
+		resolution: workflowstore.ExecutionTargetSnapshot{
+			Mode:         workflow.ExecutionTargetModeHead,
+			RequestedRef: textutil.Value("HEAD"),
+			CommitOID:    textutil.Value(strings.Repeat("7", 40)),
+			Provenance:   workflowstore.ExecutionTargetProvenanceResolved,
+		},
+		materialize: func(workflow.TaskID) (ExecutionTargetMaterialization, error) {
+			once.Do(func() { close(entered) })
+			<-release
+			return ExecutionTargetMaterialization{}, nil
+		},
+	}
+	firstResponse := make(chan serverapi.WorkflowTaskResumeResponse, 1)
+	firstErr := make(chan error, 1)
+	go func() {
+		response, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+			TaskID:           task.Task.ID,
+			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			BranchName:       &firstBranch,
+		})
+		firstResponse <- response
+		firstErr <- resumeErr
+	}()
+	<-entered
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first ResumeWorkflowTask: %v", err)
+	}
+	if response := <-firstResponse; response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied {
+		t.Fatalf("first ResumeWorkflowTask = %+v, want applied", response)
+	}
+	secondResponse := make(chan serverapi.WorkflowTaskResumeResponse, 1)
+	secondErr := make(chan error, 1)
+	go func() {
+		response, resumeErr := service.ResumeWorkflowTask(ctx, serverapi.WorkflowTaskResumeRequest{
+			TaskID:           task.Task.ID,
+			SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+			BranchName:       &secondBranch,
+		})
+		secondResponse <- response
+		secondErr <- resumeErr
+	}()
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second ResumeWorkflowTask: %v", err)
+	}
+	if response := <-secondResponse; response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeNoOp {
+		t.Fatalf("second ResumeWorkflowTask = %+v, want no-op", response)
+	}
+	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, taskID)
+	if err != nil {
+		t.Fatalf("GetTaskExecutionTargetContext: %v", err)
+	}
+	if targetContext.Task.PendingInitialManagedBranchName == nil ||
+		*targetContext.Task.PendingInitialManagedBranchName != firstBranch {
+		t.Fatalf(
+			"pending branch after concurrent Resume = %v, want first branch %q",
+			targetContext.Task.PendingInitialManagedBranchName,
+			firstBranch,
+		)
+	}
+	releaseMaterialization()
+}
+
 func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurrentNode(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
@@ -106,7 +225,7 @@ func TestServiceTaskResumeReturnsAppliedBeforeFinalBranchCollisionInterruptsCurr
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.mutationPermit,
+		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -247,7 +366,7 @@ func TestServiceTaskResumePreflightsLockedBranchBeforeAsynchronousRestoration(t 
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.mutationPermit,
+		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},

@@ -170,7 +170,7 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 		},
 		started: make(chan workflow.CurrentNodeReference, 2),
 	}
-	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			waitErr: errors.New("assignment preparation failed"),
@@ -437,7 +437,7 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
-	controller, err = NewCurrentNodeController(store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: steerer,
 	})

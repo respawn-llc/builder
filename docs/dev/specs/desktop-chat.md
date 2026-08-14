@@ -77,6 +77,13 @@
 - Malformed user, assistant, tool, or notice items are contract failures, not display variants: development builds fail immediately; production uses the transcript contract-failure recovery path. Chat never substitutes placeholder content or roles.
 - Each committed transcript row has one stable Kent-provided identity across pagination, hydration, and live updates. The identity is a Session-scoped locator composed of the durable event sequence and a one-based ordinal among committed rows projected from that event, after filtering, in deterministic projection order.
 - Both locator components are positive and required on every committed row. Provisional and other non-committed row shapes omit the whole locator. Desktop does not infer row identity from display text, role, position, or transport order.
+- Kent assigns committed time to newly created user or assistant transcript content when the server commits its ordinary Session event.
+- Newly timestamped events committed together share one committed time. History copied into another Session preserves its source committed times instead of receiving the replay operation's time.
+- Kent persists committed time as an absolute instant with each new event that commits user or assistant message rows.
+- Persisted and client/server transcript contracts represent a present committed time as Unix epoch milliseconds. Valid values range inclusively from `-8640000000000000` through `8640000000000000`; zero and pre-epoch values are valid, and only omission represents absence. An invalid present value is a transcript contract failure; Kent does not repair it or treat it as absent.
+- A compaction history-replacement event has one committed time when it projects at least one eligible user or assistant message row. Every user or assistant message row projected from that timestamped event shares its compaction commit time; Kent does not retain each row's pre-compaction time.
+- Only committed user and assistant message rows expose and display committed time. Tools, Reasoning Traces, notices, Reviewer rows, hidden items, provisional rows, and transient controls do not.
+- Committed time is informational. The committed-row locator remains the sole identity and transcript-order authority. Kent never uses committed time for sorting, cursors, deduplication, or reconciliation.
 - Duplicate locators are contract failures within one bounded page and within one continuous subscription generation after applying hydration and live committed rows. After hydration, live committed rows advance by durable event sequence; rows from one event are contiguous and use gapless one-based ordinals in deterministic projection order. Regression, repetition, an ordinal gap, or a live event sequence that is not newer than the greatest hydrated event sequence is a contract failure.
 - The locator-order contract applies only to committed rows in one subscription generation. The same locator may recur across independent reads, page responses, replacement hydration generations, reconnects, and separate clients or surfaces.
 - Opening, reopening, and transcript recovery hydrate mutable Session facts from their authoritative server owners. Cached feed-ordering state never replaces fresher Session identity, execution-target, runtime, or transcript facts.
@@ -98,6 +105,10 @@
 ## Transcript History And Live Output
 
 - Transcript history uses server-authoritative infinite scroll. The desktop never loads or retains the complete transcript.
+- Bounded transcript pages, initial hydration, and live committed delivery carry the same committed time from its Session event on eligible user and assistant message rows. They do not derive, look up, sort by, or reconcile through time.
+- Historical Session events without committed time remain readable. Kent does not synthesize or migrate their missing time.
+- New eligible message events written to an existing historical Session include committed time; earlier events remain unchanged. Committed time is an optional fact only because those earlier events may lack it.
+- The client/server protocol introduces committed time as a hard version cutover. Mismatched older clients are rejected through the existing protocol handshake; Kent provides no timestamp capability negotiation or fallback.
 - The visible transcript retains the newest segment and at most one adjacent segment. Loading an adjacent segment occurs at that transcript edge without replacing visible content or the viewport. Failure replaces only that boundary row with an actionable Retry for the same opaque cursor. At the oldest edge, no start-of-session marker is shown.
 - Every Chat entry opens at the newest transcript content and composer, never at a specific message, Question, Approval, tool, or workflow event. Reopening a Chat begins at the newest content; Chat has no durable read state or saved scroll position.
 - When the operator has scrolled away from the tail, incoming content preserves the viewport. A `Jump to latest` control appears when a newer server segment exists or when the viewport is more than 80px from the end of the loaded newest segment. The control has no unseen count. Activating it fetches the newest segment in one request when necessary and never walks intermediate segments.
@@ -117,6 +128,11 @@
 - Thinking Status is the sole non-message exception that may imitate an assistant island. It remains transient and never becomes transcript history.
 - User messages longer than 10 rendered lines begin collapsed to 10 lines with a fade and accessible Expand action. Expansion is one-way until the row leaves the viewport. Assistant messages stay expanded.
 - Each committed message has an always-visible footer aligned and width-matched with the message. Footer actions are icon-only controls with accessible names and explanatory hover or focus text. Eligible user messages offer Copy and Edit; assistant messages offer Copy. Copy uses the original Markdown source. Edit is the only fork action.
+- A committed user or assistant message with committed time shows the client machine's locale-formatted hour and minute in its footer.
+- Timestamp presentation uses the client machine's local time zone and 12-hour or 24-hour convention.
+- Hover, focus, and assistive technology expose the full locale-formatted local date and time, including seconds.
+- Desktop does not show relative age or refresh timestamp labels on a timer.
+- A committed message without committed time omits the timestamp without a placeholder or warning.
 - A live assistant message has no footer. The committed message receives Copy when it resolves.
 - Consecutive user or assistant messages use tighter spacing and a compact adjacent corner on their matching side. Messages remain separate islands.
 - Tools, diagnostics, context, and notices use flat transcript rows rather than message islands. Transcript content opens no duplicate detail surfaces; its full content is available through expansion.
@@ -129,6 +145,7 @@
 - Edit follows the TUI admission boundary. It is unavailable while authoritative runtime input is blocked or while the ordinary composer draft is nonblank. The server enforces active-work admission; the client does not become the sole blocker.
 - Activating Edit immediately resolves the ordinary fork/rollback transition. It does not wait for the edited text to be submitted.
 - The server creates one durable main child Session whose copied history ends immediately before the selected user message. The selected message and all later parent history are absent from the child, and the parent Session remains unchanged.
+- Copied history preserves each source event's committed time. Source history without committed time remains without it, and copied compaction replacement history retains its compaction time. Only messages newly committed in the child receive a new committed time.
 - The child inherits the TUI fork contract: execution context, locked contract, continuation context, worktree-reminder state, previous-Session lineage, and parent-agent ancestry. Goal inheritance follows the Rollback Picker contract.
 - The server owns the child name using its existing `<parent name or Session ID> → edit u<N>` convention. Desktop adds no naming field.
 - After creation, Chat navigates to the child Session at latest, places the selected original user-message text in its ordinary composer draft, and focuses the composer. Editing and submission then use the normal child-Session composer flow.

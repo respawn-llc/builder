@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -34,11 +33,7 @@ var workflowSeedPlacementSQL string
 
 func TestOpenCreatesWorkflowSchemaAndForeignKeys(t *testing.T) {
 	t.Parallel()
-	store, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := openInMemoryMetadataTestStore(t, t.TempDir())
 
 	for _, table := range []string{
 		"workflows",
@@ -209,84 +204,6 @@ WHERE name = 'ordinal'`).Scan(&ordinalNotNull); err != nil {
 	}
 }
 
-func TestProjectLabelsOrderMigrationBackfillsExistingCatalog(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "db", "main.sqlite3")
-	db, err := openDatabaseAtVersionForTest(t, root, dbPath, 69)
-	if err != nil {
-		t.Fatalf("open version 69 metadata database: %v", err)
-	}
-	now := int64(1)
-	execSeed(t, db, "project", `
-INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
-VALUES ('project-label-order-migration', 'Project', ?, ?, '{}')`, now, now)
-	execSeed(t, db, "labels", `
-INSERT INTO project_labels (id, project_id, name, created_at_unix_ms, updated_at_unix_ms)
-VALUES
-    ('label-zulu', 'project-label-order-migration', 'Zulu', ?, ?),
-    ('label-alpha', 'project-label-order-migration', 'alpha', ?, ?),
-    ('label-beta', 'project-label-order-migration', 'Beta', ?, ?)`,
-		now, now, now, now, now, now,
-	)
-	if err := db.Close(); err != nil {
-		t.Fatalf("close version 69 database: %v", err)
-	}
-
-	store, err := Open(root)
-	if err != nil {
-		t.Fatalf("open migrated metadata store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-
-	rows, err := store.db.Query(`
-SELECT id, ordinal
-FROM project_labels
-WHERE project_id = 'project-label-order-migration'
-ORDER BY ordinal ASC`)
-	if err != nil {
-		t.Fatalf("query migrated label ordinals: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
-	var got []struct {
-		id      string
-		ordinal int64
-	}
-	for rows.Next() {
-		var row struct {
-			id      string
-			ordinal int64
-		}
-		if err := rows.Scan(&row.id, &row.ordinal); err != nil {
-			t.Fatalf("scan migrated label ordinal: %v", err)
-		}
-		got = append(got, row)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate migrated label ordinals: %v", err)
-	}
-	if len(got) != 3 {
-		t.Fatalf("migrated label rows = %+v, want 3 rows", got)
-	}
-	remaining := map[string]struct{}{
-		"label-zulu":  {},
-		"label-alpha": {},
-		"label-beta":  {},
-	}
-	for index, row := range got {
-		if row.ordinal != int64(index+1) {
-			t.Fatalf("migrated row %d ordinal = %d, want %d", index, row.ordinal, index+1)
-		}
-		if _, ok := remaining[row.id]; !ok {
-			t.Fatalf("migrated row %d has unexpected or duplicate ID %q", index, row.id)
-		}
-		delete(remaining, row.id)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("migration lost legacy labels: %+v", remaining)
-	}
-}
-
 func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T) {
 	t.Parallel()
 	store, cfg, binding := newMetadataTestStore(t)
@@ -301,16 +218,23 @@ func TestTaskSessionAssociationSchemaUsesDirectOwnerAndNaturalKeys(t *testing.T)
 	seedWorkflowGraphForProject(t, store.db, other.ProjectID, now, "2")
 	seedWorkflowTaskWithID(t, store, "task-2", "link-2", 2, "OTH-1", "placement-start-2", "node-start-2")
 	sessionID := createMetadataTestSession(t, store, cfg, binding).Meta().SessionID
+	agentNodeID := workflowGraphSeedID(t, store.db, "node-agent")
+	otherAgentNodeID := workflowGraphSeedID(t, store.db, "node-agent-2")
 
 	assertExactTableColumns(t, store.db, "session_workflow_node_associations", map[string]struct{}{
+		"task_id":               {},
 		"session_id":            {},
 		"node_id":               {},
 		"transition_branch_key": {},
+		"association_status":    {},
+		"source_session_id":     {},
 		"associated_at_unix_ms": {},
 	})
 	for _, index := range []string{
 		"session_workflow_node_associations_serial_unique_idx",
 		"session_workflow_node_associations_branch_unique_idx",
+		"session_workflow_node_associations_current_serial_unique_idx",
+		"session_workflow_node_associations_current_branch_unique_idx",
 		"session_workflow_node_associations_session_recency_idx",
 	} {
 		if !indexExists(t, store.db, index) {
@@ -344,8 +268,8 @@ WHERE "from" = 'node_id'
 	}
 
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, 'node-agent', NULL, ?)`, sessionID, now)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `UPDATE sessions
 SET task_id = 'task-2'
 WHERE id = ?`, sessionID)
@@ -355,51 +279,26 @@ WHERE id = ?`, sessionID); err != nil {
 		t.Fatalf("bind session to direct task owner: %v", err)
 	}
 	if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now); err != nil {
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now); err != nil {
 		t.Fatalf("insert serial association: %v", err)
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now+1)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, agentNodeID, now+1)
 	for _, branch := range []string{"branch-a", "branch-b"} {
 		if _, err := store.db.Exec(`INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), ?, ?)`, sessionID, branch, now); err != nil {
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, ?, 'historical', NULL, ?)`, sessionID, agentNodeID, branch, now); err != nil {
 			t.Fatalf("insert branch association %q: %v", branch, err)
 		}
 	}
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_UNIQUE, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-1' AND node.node_key = 'agent'
-), 'branch-a', ?)`, sessionID, now+1)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, 'branch-a', 'historical', NULL, ?)`, sessionID, agentNodeID, now+1)
 	assertSQLiteConstraint(t, store.db, sqlite3.SQLITE_CONSTRAINT_TRIGGER, `INSERT INTO session_workflow_node_associations (
-    session_id, node_id, transition_branch_key, associated_at_unix_ms
-) VALUES (?, (
-    SELECT node.id
-    FROM workflow_nodes node
-    JOIN task_records task ON task.workflow_id = node.workflow_id
-    WHERE task.id = 'task-2' AND node.node_key = 'agent'
-), NULL, ?)`, sessionID, now)
+    task_id, session_id, node_id, transition_branch_key, association_status, source_session_id, associated_at_unix_ms
+) VALUES ('task-1', ?, ?, NULL, 'historical', NULL, ?)`, sessionID, otherAgentNodeID, now)
 
 	if _, err := store.db.Exec(`UPDATE sessions
 SET task_id = NULL

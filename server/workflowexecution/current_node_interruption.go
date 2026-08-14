@@ -11,6 +11,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 const interruptCleanupTimeout = 300 * time.Second
@@ -21,6 +22,7 @@ type currentNodeAdmissionWait struct {
 }
 
 type currentNodeInterruptCleanupState struct {
+	taskID         workflow.TaskID
 	stopHandles    []sessionruntime.ExecutionHandle
 	waitHandles    []sessionruntime.ExecutionHandle
 	references     []workflow.CurrentNodeReference
@@ -56,7 +58,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		handle.RequestStop()
 	}
 	var interrupted []workflow.CurrentNodeReference
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.runTaskMutation(cleanupCtx, state.taskID, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
 		var err error
 		interrupted, err = interruptCurrentNodeReferences(
@@ -88,7 +90,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
-	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+	verifyErr := c.runTaskMutation(cleanupCtx, state.taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, handle := range state.waitHandles {
@@ -129,7 +131,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, selector.TaskID, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			selected := append([]sessionruntime.ExecutionHandle(nil), selection.Interruptible...)
 			if selector.SessionID == nil {
@@ -213,6 +215,13 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 			)
 		})
 		if errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+			currentNodes, durableErr := c.store.ListCurrentNodes(ctx, selector.TaskID)
+			if durableErr != nil {
+				return durableErr
+			}
+			if interruptSelectorAlreadyInterrupted(currentNodes, selector.SessionID) {
+				return nil
+			}
 			return ErrNoInterruptibleExecution
 		}
 		if err != nil {
@@ -223,6 +232,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		return err
 	}
 	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		taskID:         selector.TaskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
@@ -230,6 +240,25 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
 	})
+}
+
+func interruptSelectorAlreadyInterrupted(
+	currentNodes []workflow.CurrentNode,
+	sessionID *runtimeids.SessionID,
+) bool {
+	selected := false
+	for _, currentNode := range currentNodes {
+		if sessionID != nil &&
+			(currentNode.SessionID == nil || *currentNode.SessionID != *sessionID) {
+			continue
+		}
+		selected = true
+		if currentNode.Scheduling == nil ||
+			currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
+			return false
+		}
+	}
+	return selected
 }
 
 // InterruptForManualMove atomically revalidates the mutation, then fences all
@@ -255,7 +284,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
 		if beforeSelection != nil {
 			if err := beforeSelection(); err != nil {
 				return err
@@ -382,6 +411,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		return err
 	}
 	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		taskID:         taskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,

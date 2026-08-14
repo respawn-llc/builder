@@ -112,7 +112,7 @@ func TestCompactionReplacementPayloadEmbedsReinjectedBaseMetaAndPreservedUserMes
 		t.Fatalf("append seed message: %v", err)
 	}
 
-	if _, _, err := eng.compactNow(context.Background(), "step-1", compactionModeManual, compactionInstructionsInput{}, true); err != nil {
+	if _, _, err := compactNowInActiveTestRun(t, eng, compactionModeManual, compactionInstructionsInput{}, true); err != nil {
 		t.Fatalf("compactNow: %v", err)
 	}
 
@@ -211,13 +211,11 @@ func newCommittedCompactionFixture(t *testing.T, observer session.PersistenceObs
 		t.Fatalf("lock prompt snapshots: %v", err)
 	}
 	client := &fakeCompactionClient{
-		inputTokenCount: 2_000,
 		caps: llm.ProviderCapabilities{
-			ProviderID:                     "openai",
-			SupportsResponsesAPI:           true,
-			SupportsResponsesCompact:       true,
-			SupportsRequestInputTokenCount: true,
-			IsOpenAIFirstParty:             true,
+			ProviderID:               "openai",
+			SupportsResponsesAPI:     true,
+			SupportsResponsesCompact: true,
+			IsOpenAIFirstParty:       true,
 		},
 		compactionResponses: []llm.CompactionResponse{{
 			OutputItems: []llm.ResponseItem{

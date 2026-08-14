@@ -70,26 +70,12 @@ func (s *ResponsesStub) serveScripted(
 			"id": request.PathValue("model"), "object": "model", "created": 0,
 			"owned_by": "kent", "context_window": window,
 		})
-	case RouteInputTokens:
-		llmRequest, _, err := decodeScriptedRequest(body)
-		if err != nil {
-			return scriptedllm.RequestNotAdmitted, err
-		}
-		count, err := s.scripted.client.CountRequestInputTokens(ctx, llmRequest)
-		if err != nil {
-			return scriptedllm.RequestNotAdmitted, err
-		}
-		return scriptedllm.RequestNotAdmitted, writeJSON(
-			writer,
-			http.StatusOK,
-			map[string]any{"object": "response.input_tokens", "input_tokens": count},
-		)
 	case RouteResponses:
 	default:
 		return scriptedllm.RequestNotAdmitted, fmt.Errorf("unsupported scripted Responses route %q", route)
 	}
 
-	lineage, err := parseScriptedLineage(request.Header.Get("session_id"))
+	lineage, err := parseScriptedLineage(request.Header.Get("session-id"))
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}
@@ -97,7 +83,7 @@ func (s *ResponsesStub) serveScripted(
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
 	}
-	llmRequest.SessionID = lineage.sessionID
+	llmRequest.SessionID = textutil.Value(lineage.sessionID)
 	enriched, state, err := s.beginScriptedLineage(lineage, canonical)
 	if err != nil {
 		return scriptedllm.RequestNotAdmitted, err
@@ -136,7 +122,11 @@ func (s *ResponsesStub) serveScripted(
 			s.writeResponseOutputItem(writer, index, item)
 		}
 	}
-	if !s.writeResponseCompleted(writer, llmRequest.Model, output, outcome.Response.Usage) || !s.writeResponseDone(writer) {
+	servedModel := llmRequest.Model
+	if outcome.Response.ServedModel != nil && strings.TrimSpace(*outcome.Response.ServedModel) != "" {
+		servedModel = strings.TrimSpace(*outcome.Response.ServedModel)
+	}
+	if !s.writeResponseCompleted(writer, servedModel, output, outcome.Response.Usage) || !s.writeResponseDone(writer) {
 		return outcome.Admission, errors.New("write scripted Responses stream")
 	}
 	return outcome.Admission, nil

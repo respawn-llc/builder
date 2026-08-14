@@ -86,6 +86,7 @@ type currentNodeAgentCapacityLease struct {
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
+	requiresAssignment bool
 	assignment         *CurrentNodeClassifiedAssignment
 	assignmentWait     CurrentNodeAssignmentSteer
 	holdFor            *runtimeids.ExecutionScopeID
@@ -182,7 +183,7 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 
 	var lease sessionruntime.WorkflowExecutionLease
 retryAdmission:
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.mutations.Run(ctx, reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -279,7 +280,7 @@ retryAdmission:
 			admitted: true,
 		}
 	}
-	if err := c.permit.Run(ctx, func(context.Context) error {
+	if err := c.mutations.Run(ctx, reference.TaskID, func(context.Context) error {
 		handle, ok := c.authority.ExecutionByScope(lease.ScopeID())
 		if !ok {
 			return errors.New("current node runner returned without its exact live scope")
@@ -732,6 +733,12 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		c.releaseReservation(key, start.policy, start.agentCapacityLease)
 		c.finishAdmissionWorker(start)
 	}()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
 	if start.assignmentWait != nil {
 		decision := classifyCurrentNodeAssignment(
 			c.workerContext,
@@ -742,7 +749,8 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		key := start.referenceKey()
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(key)
-		if decision.diagnostic != nil {
+		canceled := context.Cause(c.workerContext) != nil
+		if decision.diagnostic != nil && !canceled {
 			c.workerDiagnostics = errors.Join(
 				c.workerDiagnostics,
 				fmt.Errorf(
@@ -758,13 +766,13 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 				c.replaceTransferredUserInterruption(start, decision.diagnostic)
 				return
 			}
-			if context.Cause(c.workerContext) != nil {
+			if canceled {
 				return
 			}
 			c.handleAdmissionFailure(start, false, decision.diagnostic)
 			return
 		}
-		if interrupted || context.Cause(c.workerContext) != nil {
+		if interrupted || canceled {
 			return
 		}
 		start.assignment = decision.assignment
@@ -780,6 +788,14 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			return
 		}
 		start.holdFor = nil
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed = c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return
 	}
 	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
 		c.mu.Lock()
@@ -854,7 +870,7 @@ func (c *CurrentNodeController) replaceTransferredUserInterruption(
 	defer cancel()
 	var committed bool
 	var diagnostic error
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		committed, diagnostic = classifyCurrentNodeInterruption(
 			c.store.ReplaceUserInterruptionWithAssignmentFailure(ctx, start.reference, detail),
 		)
@@ -1101,7 +1117,7 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailure(
 		detail = preparationErr.InterruptionDetail()
 	}
 	var committed bool
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.mutations.Run(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		var diagnostic error
 		committed, diagnostic = classifyCurrentNodeInterruption(interrupt(
 			ctx,
@@ -1190,6 +1206,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			requiresAssignment: currentNode.AgentExecutionSelection != nil,
 		})
 	}
 	return starts, nil

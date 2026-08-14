@@ -107,8 +107,7 @@ func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) 
 		requestEncoding = r.Header.Get("Content-Encoding")
 		acceptEncoding = r.Header.Get("Accept-Encoding")
 		_, _ = io.Copy(io.Discard, r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		writeCompletedResponseSSE(w)
 	}))
 	defer server.Close()
 
@@ -120,8 +119,11 @@ func TestNewProviderClient_OpenAIClientPathCompressesCodexRequest(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewProviderClient: %v", err)
 	}
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 	if _, err := client.Generate(context.Background(), Request{
 		Model:          "gpt-5.6-sol",
+		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}); err != nil {
@@ -142,8 +144,7 @@ func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing
 		requestEncoding = r.Header.Get("Content-Encoding")
 		acceptEncoding = r.Header.Get("Accept-Encoding")
 		_, _ = io.Copy(io.Discard, r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"response-1","object":"response","output":[{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`))
+		writeCompletedResponseSSE(w)
 	}))
 	defer server.Close()
 
@@ -161,8 +162,11 @@ func TestNewProviderClient_AuthManagerOAuthPathCompressesCodexRequest(t *testing
 	if err != nil {
 		t.Fatalf("NewProviderClient: %v", err)
 	}
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 	if _, err := client.Generate(context.Background(), Request{
 		Model:          "gpt-5.6-sol",
+		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}); err != nil {
@@ -255,9 +259,6 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsCustomModelFamily(
 	}
 	if providerCaps.SupportsResponsesCompact || providerCaps.SupportsNativeWebSearch || providerCaps.IsOpenAIFirstParty {
 		t.Fatalf("expected conservative remote provider capabilities, got %+v", providerCaps)
-	}
-	if providerCaps.SupportsRequestInputTokenCount {
-		t.Fatalf("expected generic openai-compatible provider to disable exact input-token counting, got %+v", providerCaps)
 	}
 }
 

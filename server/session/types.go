@@ -103,18 +103,16 @@ type LockedModelCapabilities struct {
 }
 
 type LockedProviderCapabilities struct {
-	ProviderID                        string `json:"provider_id,omitempty"`
-	SupportsResponsesAPI              bool   `json:"supports_responses_api,omitempty"`
-	SupportsResponsesCompact          bool   `json:"supports_responses_compact,omitempty"`
-	SupportsRequestInputTokenCount    bool   `json:"supports_request_input_token_count,omitempty"`
-	HasSupportsRequestInputTokenCount bool   `json:"has_supports_request_input_token_count,omitempty"`
-	SupportsPromptCacheKey            bool   `json:"supports_prompt_cache_key,omitempty"`
-	HasSupportsPromptCacheKey         bool   `json:"has_supports_prompt_cache_key,omitempty"`
-	SupportsNativeWebSearch           bool   `json:"supports_native_web_search,omitempty"`
-	SupportsReasoningEncrypted        bool   `json:"supports_reasoning_encrypted,omitempty"`
-	SupportsServerSideContextEdit     bool   `json:"supports_server_side_context_edit,omitempty"`
-	SupportsProviderVerbosity         *bool  `json:"supports_provider_verbosity,omitempty"`
-	IsOpenAIFirstParty                bool   `json:"is_openai_first_party,omitempty"`
+	ProviderID                    string `json:"provider_id,omitempty"`
+	SupportsResponsesAPI          bool   `json:"supports_responses_api,omitempty"`
+	SupportsResponsesCompact      bool   `json:"supports_responses_compact,omitempty"`
+	SupportsPromptCacheKey        bool   `json:"supports_prompt_cache_key,omitempty"`
+	HasSupportsPromptCacheKey     bool   `json:"has_supports_prompt_cache_key,omitempty"`
+	SupportsNativeWebSearch       bool   `json:"supports_native_web_search,omitempty"`
+	SupportsReasoningEncrypted    bool   `json:"supports_reasoning_encrypted,omitempty"`
+	SupportsServerSideContextEdit bool   `json:"supports_server_side_context_edit,omitempty"`
+	SupportsProviderVerbosity     *bool  `json:"supports_provider_verbosity,omitempty"`
+	IsOpenAIFirstParty            bool   `json:"is_openai_first_party,omitempty"`
 }
 
 type ContinuationContext struct {
@@ -218,6 +216,25 @@ type Meta struct {
 	UsageState                      *UsageState                      `json:"usage_state,omitempty"`
 	Goal                            *GoalState                       `json:"goal,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
+	ActiveWorkflowAssignment        *MessageRecord                   `json:"active_workflow_assignment,omitempty"`
+	ActiveWorkflowAssignmentState   *ActiveWorkflowAssignmentState   `json:"active_workflow_assignment_state,omitempty"`
+}
+
+// ActiveWorkflowAssignmentState marks an authoritative projection, including
+// the valid state where no executable Workflow assignment is active.
+type ActiveWorkflowAssignmentState struct{}
+
+// PromptFacingMetadataSnapshot captures metadata that Session planning may
+// change before a Workflow assignment commits.
+type PromptFacingMetadataSnapshot struct {
+	Name                          string
+	FirstPromptPreview            string
+	Continuation                  *ContinuationContext
+	ChatSettings                  *ChatSettingsOverrides
+	PromptCacheLineageGeneration  int
+	Locked                        *LockedContract
+	ActiveWorkflowAssignment      *MessageRecord
+	ActiveWorkflowAssignmentState *ActiveWorkflowAssignmentState
 }
 
 type PendingModelRecovery struct {

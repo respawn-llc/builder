@@ -54,7 +54,7 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.Background() == nil {
 		t.Fatal("expected background manager")
 	}
-	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
+	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
 		t.Fatal("expected core clients to be wired")
 	}
 	if appCore.CapabilityFactsClient() == nil {
@@ -815,9 +815,6 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	t.Setenv("HOME", home)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if modelstub.HandleInputTokenCount(w, r, 1) {
-			return
-		}
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %q", r.URL.Path)
 		}

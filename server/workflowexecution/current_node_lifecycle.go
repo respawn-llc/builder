@@ -81,13 +81,11 @@ func (c *CurrentNodeController) Recover(ctx context.Context) (int64, error) {
 	if c == nil {
 		return 0, errors.New("current node workflow controller is required")
 	}
-	recovered, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNodeReference, error) {
-		return c.store.RecoverExecutableCurrentNodes(
-			ctx,
-			ReasonCurrentNodeStartupRecovery,
-			workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
-		)
-	})
+	recovered, err := c.store.RecoverExecutableCurrentNodes(
+		ctx,
+		ReasonCurrentNodeStartupRecovery,
+		workflow.NewCurrentNodeInterruptionDetail(string(ReasonCurrentNodeStartupRecovery), nil),
+	)
 	committed, diagnostic := classifyCurrentNodeInterruption(err)
 	if err != nil && !committed {
 		return 0, err
@@ -118,7 +116,7 @@ func (c *CurrentNodeController) StartTask(
 	if finalizer == nil {
 		return workflowstore.StartTaskResult{}, errors.New("task start preparation finalizer is required")
 	}
-	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.StartTaskResult, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
 			c.mu.Unlock()
@@ -151,7 +149,31 @@ func (c *CurrentNodeController) StartTask(
 	})
 }
 
-func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+type TaskResumeOutcome string
+
+const (
+	TaskResumeApplied TaskResumeOutcome = "applied"
+	TaskResumeNoOp    TaskResumeOutcome = "no_op"
+)
+
+type TaskResumeResult struct {
+	Outcome      TaskResumeOutcome
+	CurrentNodes []workflow.CurrentNode
+}
+
+type TaskResumePreflightOutcome string
+
+const (
+	TaskResumePreflightResumable TaskResumePreflightOutcome = "resumable"
+	TaskResumePreflightNoOp      TaskResumePreflightOutcome = "no_op"
+)
+
+type TaskResumePreflight struct {
+	Outcome      TaskResumePreflightOutcome
+	CurrentNodes []workflow.CurrentNode
+}
+
+func (c *CurrentNodeController) ResumeTask(ctx context.Context, taskID workflow.TaskID) (TaskResumeResult, error) {
 	return c.resumeTask(ctx, taskID, nil, nil)
 }
 
@@ -169,7 +191,7 @@ func (c *CurrentNodeController) PromoteConcurrencyQueuedTask(
 		return nil, false, errors.New("workflow task id is required")
 	}
 	var promoted []workflow.CurrentNode
-	err := c.permit.Run(ctx, func(context.Context) error {
+	err := c.runTaskMutation(ctx, taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.closed {
@@ -204,12 +226,12 @@ func (c *CurrentNodeController) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	preparation TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (TaskResumeResult, error) {
 	if err := preparation.validate(); err != nil {
-		return nil, err
+		return TaskResumeResult{}, err
 	}
 	if finalizer == nil {
-		return nil, errors.New("task resume preparation finalizer is required")
+		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
 	return c.resumeTask(ctx, taskID, &preparation, finalizer)
 }
@@ -222,25 +244,38 @@ func (e *TaskResumeConflictError) Error() string {
 	return fmt.Sprintf("task %q has no interrupted executable Current Nodes to resume", e.TaskID)
 }
 
-func (c *CurrentNodeController) EnsureTaskResumeEligible(
+func (c *CurrentNodeController) PreflightTaskResume(
 	ctx context.Context,
 	taskID workflow.TaskID,
-) error {
+) (TaskResumePreflight, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return TaskResumePreflight{}, errors.New("current node workflow controller is required")
 	}
-	return c.permit.Run(ctx, func(ctx context.Context) error {
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumePreflight, error) {
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
-			return err
+			return TaskResumePreflight{}, err
 		}
-		return classification.eligibilityError()
+		if len(classification.alreadyResumed) != 0 {
+			return TaskResumePreflight{
+				Outcome:      TaskResumePreflightNoOp,
+				CurrentNodes: classification.alreadyResumed,
+			}, nil
+		}
+		if err := classification.eligibilityError(); err != nil {
+			return TaskResumePreflight{}, err
+		}
+		return TaskResumePreflight{
+			Outcome:      TaskResumePreflightResumable,
+			CurrentNodes: classification.resumable,
+		}, nil
 	})
 }
 
 type taskResumeClassification struct {
-	resumable     []workflow.CurrentNode
-	validationErr error
+	resumable      []workflow.CurrentNode
+	alreadyResumed []workflow.CurrentNode
+	validationErr  error
 }
 
 func (c *CurrentNodeController) classifyTaskResume(
@@ -258,6 +293,19 @@ func (c *CurrentNodeController) classifyTaskResume(
 		return taskResumeClassification{}, err
 	}
 	if len(classifications) == 0 {
+		currentNodes, err := c.store.ListCurrentNodes(ctx, taskID)
+		if err != nil {
+			return taskResumeClassification{}, err
+		}
+		for _, currentNode := range currentNodes {
+			if currentNode.Scheduling == nil {
+				continue
+			}
+			switch currentNode.Scheduling.State {
+			case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+				return taskResumeClassification{alreadyResumed: currentNodes}, nil
+			}
+		}
 		return taskResumeClassification{}, &TaskResumeConflictError{TaskID: taskID}
 	}
 	result := taskResumeClassification{
@@ -287,18 +335,24 @@ func (c *CurrentNodeController) resumeTask(
 	taskID workflow.TaskID,
 	preparation *TaskStartPreparation,
 	finalizer TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (TaskResumeResult, error) {
 	if c == nil {
-		return nil, errors.New("current node workflow controller is required")
+		return TaskResumeResult{}, errors.New("current node workflow controller is required")
 	}
 	if preparation != nil && finalizer == nil {
-		return nil, errors.New("task resume preparation finalizer is required")
+		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
-	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+	result, err := runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
-			return nil, err
+			return TaskResumeResult{}, err
+		}
+		if len(classification.alreadyResumed) != 0 {
+			return TaskResumeResult{
+				Outcome:      TaskResumeNoOp,
+				CurrentNodes: classification.alreadyResumed,
+			}, nil
 		}
 		var resumeErrs []error
 		if classification.validationErr != nil {
@@ -342,13 +396,13 @@ func (c *CurrentNodeController) resumeTask(
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(taskID); err != nil {
 			c.mu.Unlock()
-			return nil, errors.Join(errors.Join(resumeErrs...), err)
+			return TaskResumeResult{}, errors.Join(errors.Join(resumeErrs...), err)
 		}
 		for _, start := range eligibleStarts {
 			key, _ := start.reference.Key()
 			if c.currentNodeOwnedLocked(key) {
 				c.mu.Unlock()
-				return nil, errors.Join(
+				return TaskResumeResult{}, errors.Join(
 					errors.Join(resumeErrs...),
 					fmt.Errorf("current node %v cannot resume while controller ownership remains: %w", start.reference, ErrTaskExecutionNotQuiescent),
 				)
@@ -396,9 +450,12 @@ func (c *CurrentNodeController) resumeTask(
 			}
 		}
 		c.mu.Unlock()
-		return resumed, errors.Join(resumeErrs...)
+		return TaskResumeResult{
+			Outcome:      TaskResumeApplied,
+			CurrentNodes: resumed,
+		}, errors.Join(resumeErrs...)
 	})
-	return resumed, err
+	return result, err
 }
 
 func (c *CurrentNodeController) ApplyPendingApproval(
@@ -408,7 +465,11 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 	if c == nil {
 		return workflowstore.PendingApprovalApplyResult{}, errors.New("current node workflow controller is required")
 	}
-	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
+	initial, err := c.store.PendingApproval(ctx, approvalID)
+	if err != nil {
+		return workflowstore.PendingApprovalApplyResult{}, err
+	}
+	return runCurrentNodeTaskMutation(ctx, c, initial.Source.TaskID, func(ctx context.Context) (workflowstore.PendingApprovalApplyResult, error) {
 		approval, err := c.store.PendingApproval(ctx, approvalID)
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
@@ -490,15 +551,47 @@ func (c *CurrentNodeController) ApplyManualMove(
 	if c == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("current node workflow controller is required")
 	}
-	return RunMutation(ctx, c.permit, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
-		taskID := prepared.TaskID()
+	taskID := prepared.TaskID()
+	return runCurrentNodeTaskMutation(ctx, c, taskID, func(ctx context.Context) (workflowstore.ManualMoveResult, error) {
 		c.mu.Lock()
 		if err := c.ensureTaskQuiescentLocked(taskID); err != nil {
 			c.mu.Unlock()
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
+		var (
+			preparedAssignments  map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer
+			assignmentDiagnostic error
+		)
+		moved, err := c.store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			prepared,
+			candidate,
+			func(
+				ctx context.Context,
+				contexts []workflowstore.CurrentNodeStartContext,
+			) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
+				preparation, steers, err := c.steerer.PrepareManualMoveAssignments(ctx, contexts)
+				if err != nil {
+					return preparation, err
+				}
+				for _, input := range contexts {
+					if input.CurrentNode.AgentExecutionSelection == nil {
+						continue
+					}
+					key, keyErr := input.CurrentNode.Reference.Key()
+					if keyErr != nil {
+						return preparation, keyErr
+					}
+					if steers[key] == nil {
+						return preparation, fmt.Errorf("manual move target %v has no prepared assignment steer", input.CurrentNode.Reference)
+					}
+				}
+				preparedAssignments = steers
+				assignmentDiagnostic = preparation.Diagnostic
+				return preparation, nil
+			},
+		)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
@@ -509,15 +602,29 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
-		return moved, assignmentErr
+		for index := range starts {
+			if !starts[index].requiresAssignment {
+				continue
+			}
+			key, err := starts[index].reference.Key()
+			if err != nil {
+				return moved, err
+			}
+			steer := preparedAssignments[key]
+			if steer == nil {
+				return moved, fmt.Errorf("Manual Move target %v has no prepared assignment", starts[index].reference)
+			}
+			starts[index].assignment = newCurrentNodeClassifiedAssignment(starts[index].reference, steer)
+		}
+		c.deliverClassifiedStarts(starts, nil)
+		return moved, assignmentDiagnostic
 	})
 }
 
 // EnsureTaskQuiescent rejects Task-wide state replacement while the
 // controller owns live, admitted, or automatic work for the Task. Callers
-// hold the shared mutation permit while invoking it and applying the durable
-// replacement.
+// hold the Task's mutation ownership while invoking it and applying the
+// durable replacement.
 func (c *CurrentNodeController) EnsureTaskQuiescent(taskID workflow.TaskID) error {
 	if c == nil {
 		return errors.New("current node workflow controller is required")

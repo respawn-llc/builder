@@ -347,7 +347,6 @@ func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags 
 		RuntimeControl:         hasDependency(apicontract.DependencyRuntimeControl),
 		RuntimeLiveControl:     hasDependency(apicontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
 		PromptControl:          hasDependency(apicontract.DependencyPromptControl),
-		ProcessOutput:          hasDependency(apicontract.DependencyProcessOutput),
 		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
 		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
 		PromptCommands: hasDependency(apicontract.DependencyPromptCommandCatalog) &&
@@ -817,12 +816,6 @@ func (d *startupGatewayDependencies) ProcessViewClient() apicontract.ProcessView
 func (d *startupGatewayDependencies) ProcessControlClient() apicontract.ProcessControlService {
 	if c := d.activeCore(); c != nil {
 		return c.ProcessControlClient()
-	}
-	return nil
-}
-func (d *startupGatewayDependencies) ProcessOutputClient() apicontract.ProcessOutputService {
-	if c := d.activeCore(); c != nil {
-		return c.ProcessOutputClient()
 	}
 	return nil
 }

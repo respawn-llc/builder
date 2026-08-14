@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
+	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
 	"core/server/workflow"
@@ -17,6 +19,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/sessioncontract"
 )
 
 func TestCompleteWorkflowTaskConsumesCommittedResultBeforeReturningDiagnostic(t *testing.T) {
@@ -79,7 +82,7 @@ func TestApproveWorkflowTaskStartupFailureProjectsInterruptedResumeAcrossRestart
 			service.store,
 			initialBranchControllerRunner{},
 			runtimeAuthority,
-			service.mutationPermit,
+			service.taskMutations,
 			workflowexecution.CurrentNodeControllerConfig{
 				AgentConcurrency:  1,
 				AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},
@@ -219,7 +222,7 @@ WHERE session_id = ? AND node_id = ? AND transition_branch_key IS NULL`,
 		service.store,
 		runner,
 		authority,
-		workflowexecution.NewMutationPermit(),
+		workflowexecution.NewTaskMutationCoordinator(),
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: workflowServiceCommittedAssignmentSteerer{},
@@ -353,6 +356,17 @@ func (workflowServiceCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
 	return workflowServiceCommittedAssignment{}, nil
 }
 
+func (workflowServiceCommittedAssignmentSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
 type workflowServiceCommittedAssignment struct{}
 
 func (workflowServiceCommittedAssignment) Wait(context.Context) (session.CommitReceipt, error) {
@@ -434,6 +448,7 @@ type currentNodeCompletionExecutionStub struct {
 	promoted               []workflow.CurrentNode
 	promotionHandled       bool
 	promotionErr           error
+	resumePreflight        workflowexecution.TaskResumePreflight
 	resumeEligibilityErr   error
 	resumeEligibilityCalls int
 	startPreparations      chan<- workflowexecution.TaskStartPreparation
@@ -446,6 +461,21 @@ type currentNodeCompletionExecutionStub struct {
 	idleErr                error
 	approvalResult         workflowstore.PendingApprovalApplyResult
 	approvalErr            error
+	manualMoveAssignments  workflowstore.ManualMoveTargetAssignmentPreparer
+}
+
+func (s *currentNodeCompletionExecutionStub) configuredResumePreflight(
+	taskID workflow.TaskID,
+) (workflowexecution.TaskResumePreflight, bool) {
+	if s.resumePreflight.Outcome == "" && s.resumePreflight.CurrentNodes == nil {
+		return workflowexecution.TaskResumePreflight{}, false
+	}
+	preflight := s.resumePreflight
+	preflight.CurrentNodes = append([]workflow.CurrentNode(nil), preflight.CurrentNodes...)
+	for index := range preflight.CurrentNodes {
+		preflight.CurrentNodes[index].Reference.TaskID = taskID
+	}
+	return preflight, true
 }
 
 func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
@@ -455,9 +485,44 @@ func (s *currentNodeCompletionExecutionStub) PromoteConcurrencyQueuedTask(
 	return append([]workflow.CurrentNode(nil), s.promoted...), s.promotionHandled, s.promotionErr
 }
 
-func (s *currentNodeCompletionExecutionStub) EnsureTaskResumeEligible(context.Context, workflow.TaskID) error {
+func (s *currentNodeCompletionExecutionStub) PreflightTaskResume(
+	ctx context.Context,
+	taskID workflow.TaskID,
+) (workflowexecution.TaskResumePreflight, error) {
 	s.resumeEligibilityCalls++
-	return s.resumeEligibilityErr
+	if s.resumeEligibilityErr != nil {
+		return workflowexecution.TaskResumePreflight{}, s.resumeEligibilityErr
+	}
+	if preflight, configured := s.configuredResumePreflight(taskID); configured {
+		return preflight, nil
+	}
+	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
+	if err != nil {
+		return workflowexecution.TaskResumePreflight{}, err
+	}
+	if len(selected) != 0 {
+		return workflowexecution.TaskResumePreflight{
+			Outcome:      workflowexecution.TaskResumePreflightResumable,
+			CurrentNodes: selected,
+		}, nil
+	}
+	currentNodes, err := s.store.ListCurrentNodes(ctx, taskID)
+	if err != nil {
+		return workflowexecution.TaskResumePreflight{}, err
+	}
+	for _, currentNode := range currentNodes {
+		if currentNode.Scheduling == nil {
+			continue
+		}
+		switch currentNode.Scheduling.State {
+		case workflow.CurrentNodeSchedulingReady, workflow.CurrentNodeSchedulingAdmitted:
+			return workflowexecution.TaskResumePreflight{
+				Outcome:      workflowexecution.TaskResumePreflightNoOp,
+				CurrentNodes: currentNodes,
+			}, nil
+		}
+	}
+	return workflowexecution.TaskResumePreflight{}, &workflowexecution.TaskResumeConflictError{TaskID: taskID}
 }
 
 func (s *currentNodeCompletionExecutionStub) StartTask(
@@ -498,20 +563,23 @@ func (s *currentNodeCompletionExecutionStub) StartTask(
 	return started, nil
 }
 
-func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *currentNodeCompletionExecutionStub) ResumeTask(ctx context.Context, taskID workflow.TaskID) (workflowexecution.TaskResumeResult, error) {
 	if s.store == nil {
-		return nil, errors.New("workflow store is required")
+		return workflowexecution.TaskResumeResult{}, errors.New("workflow store is required")
 	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	for _, currentNode := range selected {
 		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
-			return nil, err
+			return workflowexecution.TaskResumeResult{}, err
 		}
 	}
-	return selected, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome:      workflowexecution.TaskResumeApplied,
+		CurrentNodes: selected,
+	}, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
@@ -519,35 +587,38 @@ func (s *currentNodeCompletionExecutionStub) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	preparation workflowexecution.TaskStartPreparation,
 	finalizer workflowexecution.TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (workflowexecution.TaskResumeResult, error) {
 	if s.store == nil {
-		return nil, errors.New("workflow store is required")
+		return workflowexecution.TaskResumeResult{}, errors.New("workflow store is required")
 	}
 	selected, err := s.store.InterruptedExecutableCurrentNodes(ctx, taskID)
 	if err != nil {
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	if err := preparation.Prepare(ctx); err != nil {
 		finalizer(workflowexecution.TaskPreparationFinalization{
 			Kind:  workflowexecution.TaskPreparationFailed,
 			Cause: err,
 		})
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	if err := preparation.Commit(ctx); err != nil {
 		finalizer(workflowexecution.TaskPreparationFinalization{
 			Kind:  workflowexecution.TaskPreparationFailed,
 			Cause: err,
 		})
-		return nil, err
+		return workflowexecution.TaskResumeResult{}, err
 	}
 	for _, currentNode := range selected {
 		if _, _, err := s.store.ResumeCurrentNode(ctx, currentNode.Reference); err != nil {
-			return nil, err
+			return workflowexecution.TaskResumeResult{}, err
 		}
 	}
 	finalizer(workflowexecution.TaskPreparationFinalization{Kind: workflowexecution.TaskPreparationHandedOff})
-	return selected, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome:      workflowexecution.TaskResumeApplied,
+		CurrentNodes: selected,
+	}, nil
 }
 
 func (s *currentNodeCompletionExecutionStub) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error) {
@@ -568,7 +639,67 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
+	if s.manualMoveAssignments == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("Manual Move assignment preparer is required")
+	}
+	return s.store.ApplyManualMoveWithTargetAssignments(ctx, prepared, candidate, s.manualMoveAssignments)
+}
+
+func workflowServiceTestManualMoveAssignments(
+	t *testing.T,
+	metadataStore *metadata.Store,
+) workflowstore.ManualMoveTargetAssignmentPreparer {
+	if t != nil {
+		t.Helper()
+	}
+	return func(
+		_ context.Context,
+		inputs []workflowstore.CurrentNodeStartContext,
+	) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
+		assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
+		for _, input := range inputs {
+			if input.Node.Kind != workflow.NodeKindAgent {
+				continue
+			}
+			if input.CurrentNode.SessionID != nil {
+				assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+					CurrentNode: input.CurrentNode.Reference,
+					SessionID:   *input.CurrentNode.SessionID,
+				})
+				continue
+			}
+			sessionStore, err := session.Create(
+				filepath.Join(metadataStore.PersistenceRoot(), "projects", input.Task.ProjectID, "sessions"),
+				filepath.Base(input.ExecutionRoot.SourceWorkspaceRoot),
+				input.ExecutionRoot.SourceWorkspaceRoot,
+				sessioncontract.SessionCategoryMain,
+				metadataStore.AuthoritativeSessionStoreOptions()...,
+			)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			if err := sessionStore.EnsureDurable(); err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			sessionID, err := runtimeids.ParseSessionID(sessionStore.Meta().SessionID)
+			if err != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, err
+			}
+			assignments = append(assignments, workflowstore.ManualMoveTargetAssignment{
+				CurrentNode: input.CurrentNode.Reference,
+				SessionID:   sessionID,
+			})
+		}
+		return workflowstore.ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+	}
+}
+
+func workflowServiceManualMoveAssignments(service *Service) workflowstore.ManualMoveTargetAssignmentPreparer {
+	execution, ok := service.currentNodeExecution.(*currentNodeCompletionExecutionStub)
+	if !ok || execution.manualMoveAssignments == nil {
+		panic("workflow service test Manual Move assignment preparer is required")
+	}
+	return execution.manualMoveAssignments
 }
 
 func (*currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

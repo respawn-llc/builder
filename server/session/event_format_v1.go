@@ -82,12 +82,22 @@ type EventRecordPayload interface {
 }
 
 type EventRecord struct {
-	seq     int64
-	stepID  *string
-	payload EventRecordPayload
+	seq               int64
+	stepID            *string
+	payload           EventRecordPayload
+	committedAtUnixMs *transcript.CommittedAtUnixMs
 }
 
 func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (EventRecord, error) {
+	return newEventRecord(seq, stepID, payload, nil)
+}
+
+func newEventRecord(
+	seq int64,
+	stepID *string,
+	payload EventRecordPayload,
+	committedAtUnixMs *transcript.CommittedAtUnixMs,
+) (EventRecord, error) {
 	if seq <= 0 {
 		return EventRecord{}, fmt.Errorf("event sequence must be positive: %d", seq)
 	}
@@ -124,6 +134,19 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 	}
 	if err := payload.validate(); err != nil {
 		return EventRecord{}, fmt.Errorf("%s payload: %w", payload.eventKind(), err)
+	}
+	if err := transcript.ValidateCommittedAtUnixMs(committedAtUnixMs); err != nil {
+		return EventRecord{}, err
+	}
+	eligible, err := eventPayloadEligibleForCommittedTime(payload)
+	if err != nil {
+		return EventRecord{}, fmt.Errorf("evaluate committed time eligibility: %w", err)
+	}
+	if committedAtUnixMs != nil && !eligible {
+		return EventRecord{}, fmt.Errorf(
+			"committed time is not allowed for ineligible %s payload",
+			payload.eventKind(),
+		)
 	}
 	switch typed := payload.(type) {
 	case MessageRecord:
@@ -168,6 +191,12 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 			repair := *typed.ToolOutputRepair
 			typed.ToolOutputRepair = &repair
 		}
+		if typed.ProviderModelMismatch != nil {
+			mismatch := *typed.ProviderModelMismatch
+			mismatch.RequestedModel = strings.TrimSpace(mismatch.RequestedModel)
+			mismatch.ServedModel = strings.TrimSpace(mismatch.ServedModel)
+			typed.ProviderModelMismatch = &mismatch
+		}
 		payload = typed
 	case ReviewerFeedbackRecord:
 		typed.Suggestions = append([]string(nil), typed.Suggestions...)
@@ -204,11 +233,17 @@ func NewEventRecord(seq int64, stepID *string, payload EventRecordPayload) (Even
 		}
 		payload = typed
 	}
-	return EventRecord{
-		seq:     seq,
-		stepID:  normalizedStepID,
-		payload: payload,
-	}, nil
+	record := EventRecord{
+		seq:               seq,
+		stepID:            normalizedStepID,
+		payload:           payload,
+		committedAtUnixMs: committedAtUnixMs,
+	}
+	if record.committedAtUnixMs != nil {
+		value := *record.committedAtUnixMs
+		record.committedAtUnixMs = &value
+	}
+	return record, nil
 }
 
 func (r EventRecord) Seq() int64 {
@@ -221,6 +256,14 @@ func (r EventRecord) StepID() *string {
 	}
 	stepID := *r.stepID
 	return &stepID
+}
+
+func (r EventRecord) CommittedAtUnixMs() *transcript.CommittedAtUnixMs {
+	if r.committedAtUnixMs == nil {
+		return nil
+	}
+	value := *r.committedAtUnixMs
+	return &value
 }
 
 func (r EventRecord) Kind() (EventKind, error) {
@@ -260,15 +303,16 @@ const (
 )
 
 type LocalEntryRecord struct {
-	Visibility       EntryVisibility                    `json:"visibility"`
-	Role             string                             `json:"role"`
-	Text             *string                            `json:"text"`
-	DurationMs       *int64                             `json:"duration_ms,omitempty"`
-	CondensedText    *string                            `json:"condensed_text,omitempty"`
-	DiagnosticKey    *string                            `json:"diagnostic_key,omitempty"`
-	NoticeID         *string                            `json:"notice_id,omitempty"`
-	AfterToolCallID  *string                            `json:"after_tool_call_id,omitempty"`
-	ToolOutputRepair *transcript.ToolOutputRepairNotice `json:"tool_output_repair,omitempty"`
+	Visibility            EntryVisibility                         `json:"visibility"`
+	Role                  string                                  `json:"role"`
+	Text                  *string                                 `json:"text"`
+	DurationMs            *int64                                  `json:"duration_ms,omitempty"`
+	CondensedText         *string                                 `json:"condensed_text,omitempty"`
+	DiagnosticKey         *string                                 `json:"diagnostic_key,omitempty"`
+	NoticeID              *string                                 `json:"notice_id,omitempty"`
+	AfterToolCallID       *string                                 `json:"after_tool_call_id,omitempty"`
+	ToolOutputRepair      *transcript.ToolOutputRepairNotice      `json:"tool_output_repair,omitempty"`
+	ProviderModelMismatch *transcript.ProviderModelMismatchNotice `json:"provider_model_mismatch,omitempty"`
 }
 
 type ReviewerFeedbackRecord struct {
@@ -423,14 +467,20 @@ func (r LocalEntryRecord) validate() error {
 	if strings.TrimSpace(r.Role) == "" {
 		return fmt.Errorf("role is required")
 	}
-	if r.Text == nil && r.ToolOutputRepair == nil {
-		return fmt.Errorf("text or tool-output repair facts are required")
+	if r.Text == nil && r.ToolOutputRepair == nil && r.ProviderModelMismatch == nil {
+		return fmt.Errorf("text or typed notice facts are required")
 	}
 	if r.Text != nil && strings.TrimSpace(*r.Text) == "" {
 		return fmt.Errorf("text must be non-empty when present")
 	}
 	if r.ToolOutputRepair != nil && !r.ToolOutputRepair.Valid() {
 		return fmt.Errorf("tool-output repair facts are invalid")
+	}
+	if r.ProviderModelMismatch != nil && !r.ProviderModelMismatch.Valid() {
+		return fmt.Errorf("provider-model mismatch facts are invalid")
+	}
+	if r.ToolOutputRepair != nil && r.ProviderModelMismatch != nil {
+		return fmt.Errorf("local entry cannot carry multiple typed notice facts")
 	}
 	if r.DurationMs != nil && *r.DurationMs < 0 {
 		return fmt.Errorf("duration_ms must not be negative")
@@ -477,14 +527,33 @@ func (r ReviewerErrorRecord) validate() error {
 }
 
 type eventRecordV1Envelope struct {
-	Seq     int64           `json:"seq"`
-	Kind    EventKind       `json:"kind"`
-	StepID  *string         `json:"step_id,omitempty"`
-	Payload json.RawMessage `json:"payload"`
+	Seq               int64                         `json:"seq"`
+	Kind              EventKind                     `json:"kind"`
+	StepID            *string                       `json:"step_id,omitempty"`
+	CommittedAtUnixMs *transcript.CommittedAtUnixMs `json:"committed_at_unix_ms,omitempty"`
+	Payload           json.RawMessage               `json:"payload"`
+}
+
+func (e *eventRecordV1Envelope) UnmarshalJSON(data []byte) error {
+	type envelopeAlias eventRecordV1Envelope
+	var decoded envelopeAlias
+	if _, _, err := transcript.DecodeCommittedAtUnixMsField(data, "committed_at_unix_ms"); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*e = eventRecordV1Envelope(decoded)
+	return nil
 }
 
 func encodeEventRecordV1(record EventRecord) ([]byte, error) {
-	normalized, err := NewEventRecord(record.seq, record.stepID, record.payload)
+	normalized, err := newEventRecord(
+		record.seq,
+		record.stepID,
+		record.payload,
+		record.committedAtUnixMs,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -518,6 +587,16 @@ func encodeEventRecordV1(record EventRecord) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if normalized.committedAtUnixMs != nil {
+		if err := writeMarshaledJSONField(
+			&buffer,
+			"committed_at_unix_ms",
+			normalized.committedAtUnixMs,
+			true,
+		); err != nil {
+			return nil, err
+		}
+	}
 	if err := writeJSONField(&buffer, "payload", payload, true); err != nil {
 		return nil, err
 	}
@@ -539,7 +618,12 @@ func decodeEventRecordV1(line []byte) (EventRecord, error) {
 	if err != nil {
 		return EventRecord{}, err
 	}
-	return NewEventRecord(envelope.Seq, envelope.StepID, payload)
+	return newEventRecord(
+		envelope.Seq,
+		envelope.StepID,
+		payload,
+		envelope.CommittedAtUnixMs,
+	)
 }
 
 func decodeEventRecordPayloadV1(

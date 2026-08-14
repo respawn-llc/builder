@@ -23,7 +23,7 @@ import (
 type Service struct {
 	metadata          *metadata.Store
 	runtimeAuthority  *sessionruntime.Authority
-	mutationPermit    *workflowexecution.MutationPermit
+	taskMutations     *workflowexecution.TaskMutationCoordinator
 	workflowExecution interface {
 		EnsureTaskQuiescent(workflow.TaskID) error
 	}
@@ -57,13 +57,13 @@ func (s *Service) WithRuntimeAuthority(authority *sessionruntime.Authority) *Ser
 	return s
 }
 
-func (s *Service) WithWorkflowExecution(permit *workflowexecution.MutationPermit, execution interface {
+func (s *Service) WithWorkflowExecution(taskMutations *workflowexecution.TaskMutationCoordinator, execution interface {
 	EnsureTaskQuiescent(workflow.TaskID) error
 }, store *workflowstore.Store) *Service {
 	if s == nil {
 		return nil
 	}
-	s.mutationPermit = permit
+	s.taskMutations = taskMutations
 	s.workflowExecution = execution
 	s.workflowStore = store
 	return s
@@ -263,15 +263,15 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
-	if s.mutationPermit == nil || s.workflowExecution == nil {
+	if s.taskMutations == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
+	}
+	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
 	}
 
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
-		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
 		for _, taskID := range taskIDs {
 			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
 				return nil, err
@@ -296,6 +296,13 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		if err != nil || len(runtimeBlockers) > 0 {
 			return runtimeBlockers, err
 		}
+		currentTaskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if !metadata.StringSetsEqual(taskIDs, currentTaskIDs) {
+			return nil, workflowstore.ErrProjectDeletePreparationInvalidated
+		}
 		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
 			ProjectID:          projectID,
 			ExpectedSessionIDs: sessionIDs,
@@ -308,8 +315,12 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		}
 		return nil, nil
 	}
+	workflowTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		workflowTaskIDs = append(workflowTaskIDs, workflow.TaskID(taskID))
+	}
 	var blockers []serverapi.ProjectDeleteBlocker
-	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	err = s.taskMutations.RunMany(ctx, workflowTaskIDs, func(ctx context.Context) error {
 		var runErr error
 		blockers, runErr = deleteProject(ctx)
 		return runErr

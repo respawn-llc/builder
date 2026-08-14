@@ -1,7 +1,6 @@
 package runtime
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,9 +66,9 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
-	_, receipt, err := engine.compactNow(
-		context.Background(),
-		"compact",
+	_, receipt, err := compactNowInActiveTestRun(
+		t,
+		engine,
 		compactionModeManual,
 		compactionInstructionsInput{},
 		false,

@@ -102,7 +102,9 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 			execution.beginWorkflowFinalization()
 			var finalizeErr error
 			if req.Finalize != nil {
-				finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
+				finalizeErr = a.runExecutionCallback("script_finalizer", execution.scope, func() error {
+					return req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, ScriptResult{}, startErr)
+				})
 			}
 			execution.finish(ExecutionResult{}, errors.Join(startErr, finalizeErr), nil)
 			return
@@ -114,7 +116,9 @@ func (a *Authority) StartScriptExecution(ctx context.Context, req ScriptExecutio
 		execution.beginWorkflowFinalization()
 		var finalizeErr error
 		if req.Finalize != nil {
-			finalizeErr = req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
+			finalizeErr = a.runExecutionCallback("script_finalizer", execution.scope, func() error {
+				return req.Finalize(context.WithoutCancel(execution.ctx), execution.scope, result.clone(), runErr)
+			})
 		}
 		execution.finish(ExecutionResult{Script: &result}, errors.Join(runErr, finalizeErr), stopErr)
 	}()

@@ -9,19 +9,23 @@ import (
 
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
 
 type currentNodeFanoutTarget struct {
-	BranchKey   workflow.TransitionBranchKey
-	CurrentNode workflow.CurrentNode
-	Node        workflow.Node
-	NodeKind    workflow.NodeKind
+	BranchKey      workflow.TransitionBranchKey
+	CurrentNode    workflow.CurrentNode
+	Node           workflow.Node
+	NodeKind       workflow.NodeKind
+	Invariant      *workflow.RetainedTargetInvariantDetail
+	LegacyFallback *legacyContinuationSourceFallbackDetail
 }
 
 func completeCurrentNodeFanout(
 	ctx context.Context,
 	q *sqlitegen.Queries,
+	policy invariant.Policy,
 	definition workflow.Definition,
 	source workflow.Node,
 	currentSource workflow.CurrentNode,
@@ -45,9 +49,10 @@ func completeCurrentNodeFanout(
 		if branchKey == "" {
 			return CurrentNodeCompletionResult{}, errors.New("fan-out transition branch key is required")
 		}
-		targetCurrentNode, err := materializeCompletionTargetCurrentNode(
+		materializedTarget, err := materializeCompletionTargetCurrentNode(
 			ctx,
 			q,
+			policy,
 			definition,
 			target.Edge,
 			source,
@@ -62,11 +67,24 @@ func completeCurrentNodeFanout(
 		if err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
+		targetCurrentNode := materializedTarget.CurrentNode
+		if materializedTarget.Invariant != nil {
+			checkRetainedTargetInvariantBeforeMutation(policy, *materializedTarget.Invariant)
+		}
+		if materializedTarget.LegacyFallback != nil {
+			checkLegacyContinuationSourceBeforeMutation(policy, *materializedTarget.LegacyFallback)
+		}
 		preparedTargets = append(preparedTargets, currentNodeFanoutTarget{
-			BranchKey:   branchKey,
-			CurrentNode: targetCurrentNode,
-			Node:        target.Node,
+			BranchKey:      branchKey,
+			CurrentNode:    targetCurrentNode,
+			Node:           target.Node,
+			Invariant:      materializedTarget.Invariant,
+			LegacyFallback: materializedTarget.LegacyFallback,
 		})
+		contextResolution, err := pendingApprovalContextSourceResolution(target.Node.Kind(), targetCurrentNode)
+		if err != nil {
+			return CurrentNodeCompletionResult{}, err
+		}
 		approvalBranches = append(approvalBranches, workflow.PendingApprovalBranch{
 			TransitionBranchKey: branchKey,
 			Target: workflow.PendingApprovalTarget{
@@ -74,10 +92,8 @@ func completeCurrentNodeFanout(
 				DisplayName: workflow.NodeDisplayName(target.Node),
 				NodeKind:    target.Node.Kind(),
 			},
-			EffectiveEdge: target.Edge,
-			ContextSourceResolution: workflow.PendingApprovalContextSourceResolution{
-				SessionID: clonePendingApprovalSessionID(targetCurrentNode.SessionID),
-			},
+			EffectiveEdge:           target.Edge,
+			ContextSourceResolution: contextResolution,
 		})
 		requiresApproval = requiresApproval || target.Edge.RequiresApproval
 	}
@@ -98,7 +114,16 @@ func completeCurrentNodeFanout(
 		if err := insertPendingApproval(ctx, q, approval); err != nil {
 			return CurrentNodeCompletionResult{}, err
 		}
-		return CurrentNodeCompletionResult{PendingApproval: &approval}, nil
+		result := CurrentNodeCompletionResult{PendingApproval: &approval}
+		for _, target := range preparedTargets {
+			if target.Invariant != nil {
+				result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
+			}
+			if target.LegacyFallback != nil {
+				result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
+			}
+		}
+		return result, nil
 	}
 	if err := replaceCurrentNodeWithFanout(ctx, q, currentSource.Reference, preparedTargets, createdAt); err != nil {
 		return CurrentNodeCompletionResult{}, err
@@ -112,6 +137,14 @@ func completeCurrentNodeFanout(
 			Removed: []workflow.CurrentNodeReference{currentSource.Reference},
 			Created: created,
 		},
+	}
+	for _, target := range preparedTargets {
+		if target.Invariant != nil {
+			result.retainedTargetInvariants = append(result.retainedTargetInvariants, *target.Invariant)
+		}
+		if target.LegacyFallback != nil {
+			result.legacyFallbacks = append(result.legacyFallbacks, *target.LegacyFallback)
+		}
 	}
 	for _, target := range preparedTargets {
 		if target.CurrentNode.Scheduling != nil && executableNodeKind(target.Node.Kind()) {
@@ -152,6 +185,33 @@ func replaceCurrentNodeWithFanout(
 	return insertFrozenTaskFanoutTargets(ctx, q, source.TaskID, targets, associatedAt)
 }
 
+func updateActiveFanoutBranchContinuationSource(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	source workflow.CurrentNodeReference,
+	continuationSource workflow.MaterializedContinuationSource,
+) error {
+	branchKey := currentNodeReferenceBranchKey(source)
+	if branchKey == nil {
+		return nil
+	}
+	sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(continuationSource)
+	if err != nil {
+		return err
+	}
+	updated, err := q.UpdateTaskActiveFanoutBranchContinuationSource(ctx, sqlitegen.UpdateTaskActiveFanoutBranchContinuationSourceParams{
+		TaskID: string(source.TaskID), TransitionBranchKey: string(*branchKey),
+		ContinuationSourceKind: sourceKind, ContinuationSourceSessionID: sourceSessionID, LegacyMaterialized: legacyMaterialized,
+	})
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return errors.New("active fan-out branch is no longer pending")
+	}
+	return nil
+}
+
 func validateFanoutTargets(taskID workflow.TaskID, targets []workflow.CurrentNode) error {
 	if len(targets) < 2 {
 		return errors.New("fan-out requires multiple target branches")
@@ -188,9 +248,16 @@ func insertTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.Reference.TransitionBranchKey()
+		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.ContinuationSource)
+		if err != nil {
+			return err
+		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:              string(taskID),
-			TransitionBranchKey: string(branchKey),
+			TaskID:                      string(taskID),
+			TransitionBranchKey:         string(branchKey),
+			ContinuationSourceKind:      sourceKind,
+			ContinuationSourceSessionID: sourceSessionID,
+			LegacyMaterialized:          legacyMaterialized,
 		}); err != nil {
 			return err
 		}
@@ -220,9 +287,16 @@ func insertFrozenTaskFanoutTargets(
 	}
 	for _, target := range targets {
 		branchKey, _ := target.CurrentNode.Reference.TransitionBranchKey()
+		sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(target.CurrentNode.ContinuationSource)
+		if err != nil {
+			return err
+		}
 		if err := q.InsertTaskActiveFanoutBranch(ctx, sqlitegen.InsertTaskActiveFanoutBranchParams{
-			TaskID:              string(taskID),
-			TransitionBranchKey: string(branchKey),
+			TaskID:                      string(taskID),
+			TransitionBranchKey:         string(branchKey),
+			ContinuationSourceKind:      sourceKind,
+			ContinuationSourceSessionID: sourceSessionID,
+			LegacyMaterialized:          legacyMaterialized,
 		}); err != nil {
 			return err
 		}

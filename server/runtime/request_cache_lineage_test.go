@@ -420,8 +420,8 @@ func TestBuildRequest_UsesBasePromptCacheKeyBeforeFirstCompactionWhenProviderSup
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if got, want := req.SessionID, eng.SessionID(); got != want {
-		t.Fatalf("SessionID = %q, want %q", got, want)
+	if req.SessionID != nil || req.CodexDispatch != nil {
+		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
@@ -441,8 +441,8 @@ func TestBuildRequest_RotatesPromptCacheKeyWithRequestSessionIDAfterCompaction(t
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if got, want := req.SessionID, eng.SessionID(); got != want {
-		t.Fatalf("SessionID = %q, want %q", got, want)
+	if req.SessionID != nil || req.CodexDispatch != nil {
+		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
@@ -470,8 +470,8 @@ func TestBuildRequest_RotatesPromptCacheKeyFromPersistedCompactionOnReopen(t *te
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	if got, want := req.SessionID, eng.SessionID(); got != want {
-		t.Fatalf("SessionID = %q, want %q", got, want)
+	if req.SessionID != nil || req.CodexDispatch != nil {
+		t.Fatalf("context-free request carries dispatch identity: %+v", req)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
@@ -492,7 +492,15 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("build compaction instructions input: %v", err)
 	}
-	if _, err := eng.localCompactionSummary(context.Background(), input, compactionInstructions(instructionsInput), compactionModeManual); err != nil {
+	err = eng.stepLifecycle.Run(
+		context.Background(),
+		exclusiveStepOptions{ActiveKind: ActiveKindCompaction},
+		func(ctx context.Context, _ string) error {
+			_, summaryErr := eng.localCompactionSummary(ctx, input, compactionInstructions(instructionsInput), compactionModeManual)
+			return summaryErr
+		},
+	)
+	if err != nil {
 		t.Fatalf("local compaction summary: %v", err)
 	}
 	if len(client.calls) != 1 {
@@ -503,8 +511,8 @@ func TestLocalCompactionSummary_UsesMainConversationRequestIdentityAndPrompt(t *
 	if err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
-	if got, want := req.SessionID, eng.SessionID(); got != want {
-		t.Fatalf("SessionID = %q, want %q", got, want)
+	if got, want := req.SessionID, eng.SessionID(); got == nil || *got != want {
+		t.Fatalf("SessionID = %v, want %q", got, want)
 	}
 	if got, want := req.PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("PromptCacheKey = %q, want %q", got, want)
@@ -549,7 +557,7 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		}
 		captured := capturedRequest{
 			path:      r.URL.Path,
-			sessionID: r.Header.Get("session_id"),
+			sessionID: r.Header.Get("session-id"),
 			payload:   payload,
 		}
 		capturedRequests = append(capturedRequests, captured)
@@ -586,53 +594,41 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		return llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(text)}})
 	}
 
-	mainBeforeReq, err := eng.buildRequestWithExtraItems(context.Background(), "", userExtra("before"), true)
-	if err != nil {
-		t.Fatalf("build main before request: %v", err)
-	}
+	mainBeforeReq := buildActiveTurnRequestForTest(t, eng, userExtra("before"), true)
 	mainBefore := send(mainBeforeReq)
 	if got, want := mainBefore.path, "/v1/responses"; got != want {
 		t.Fatalf("main before path = %q, want %q", got, want)
 	}
 	if got, want := mainBefore.sessionID, store.Meta().SessionID; got != want {
-		t.Fatalf("main before session_id header = %q, want %q", got, want)
+		t.Fatalf("main before session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(mainBefore.payload["prompt_cache_key"]), conversationPromptCacheKey(store.Meta().SessionID, 0); got != want {
 		t.Fatalf("main before prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerBeforeReq, err := eng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reviewer before request: %v", err)
-	}
+	reviewerBeforeReq := buildReviewerDispatchRequestForTest(t, eng, engineClient)
 	reviewerBefore := send(reviewerBeforeReq)
 	if got, want := reviewerBefore.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer before session_id header = %q, want %q", got, want)
+		t.Fatalf("reviewer before session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(reviewerBefore.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), 0); got != want {
 		t.Fatalf("reviewer before prompt_cache_key = %q, want %q", got, want)
 	}
 
 	eng.compactionRuntimeState().SetCount(1)
-	mainAfterReq, err := eng.buildRequestWithExtraItems(context.Background(), "", userExtra("after"), true)
-	if err != nil {
-		t.Fatalf("build main after request: %v", err)
-	}
+	mainAfterReq := buildActiveTurnRequestForTest(t, eng, userExtra("after"), true)
 	mainAfter := send(mainAfterReq)
 	if got, want := mainAfter.sessionID, store.Meta().SessionID; got != want {
-		t.Fatalf("main after session_id header = %q, want %q", got, want)
+		t.Fatalf("main after session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(mainAfter.payload["prompt_cache_key"]), conversationPromptCacheKey(store.Meta().SessionID, 1); got != want {
 		t.Fatalf("main after prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reviewerAfterReq, err := eng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reviewer after request: %v", err)
-	}
+	reviewerAfterReq := buildReviewerDispatchRequestForTest(t, eng, engineClient)
 	reviewerAfter := send(reviewerAfterReq)
 	if got, want := reviewerAfter.sessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer after session_id header = %q, want %q", got, want)
+		t.Fatalf("reviewer after session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(reviewerAfter.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), 1); got != want {
 		t.Fatalf("reviewer after prompt_cache_key = %q, want %q", got, want)
@@ -650,25 +646,19 @@ func TestOpenAITransport_UsesExpectedSessionHeadersAndPromptCacheKeysAcrossConve
 		t.Fatalf("reopen store: %v", err)
 	}
 	reopenedEng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	reopenedMainReq, err := reopenedEng.buildRequestWithExtraItems(context.Background(), "", userExtra("reopened"), true)
-	if err != nil {
-		t.Fatalf("build reopened main request: %v", err)
-	}
+	reopenedMainReq := buildActiveTurnRequestForTest(t, reopenedEng, userExtra("reopened"), true)
 	reopenedMain := send(reopenedMainReq)
 	if got, want := reopenedMain.sessionID, reopened.Meta().SessionID; got != want {
-		t.Fatalf("reopened main session_id header = %q, want %q", got, want)
+		t.Fatalf("reopened main session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(reopenedMain.payload["prompt_cache_key"]), conversationPromptCacheKey(reopened.Meta().SessionID, reopenedEng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reopened main prompt_cache_key = %q, want %q", got, want)
 	}
 
-	reopenedReviewerReq, err := reopenedEng.buildReviewerRequest(context.Background(), engineClient)
-	if err != nil {
-		t.Fatalf("build reopened reviewer request: %v", err)
-	}
+	reopenedReviewerReq := buildReviewerDispatchRequestForTest(t, reopenedEng, engineClient)
 	reopenedReviewer := send(reopenedReviewerReq)
 	if got, want := reopenedReviewer.sessionID, reviewerSessionID(reopened.Meta().SessionID); got != want {
-		t.Fatalf("reopened reviewer session_id header = %q, want %q", got, want)
+		t.Fatalf("reopened reviewer session-id header = %q, want %q", got, want)
 	}
 	if got, want := stringValue(reopenedReviewer.payload["prompt_cache_key"]), conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID), reopenedEng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reopened reviewer prompt_cache_key = %q, want %q", got, want)
@@ -681,14 +671,14 @@ func TestReviewerSuggestions_SkipsPromptCacheKeyForUnsupportedProvider(t *testin
 	engineClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, SupportsPromptCacheKey: true, IsOpenAIFirstParty: true}}
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}}}
 	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
+	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if reviewerClient.calls[0].PromptCacheKey != "" {
 		t.Fatalf("reviewer PromptCacheKey = %q, want empty", reviewerClient.calls[0].PromptCacheKey)
@@ -708,14 +698,14 @@ func TestReviewerSuggestions_UsesReviewerClientPromptCacheCapability(t *testing.
 	}
 	eng := mustNewTestEngine(t, store, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
 	eng.compactionRuntimeState().SetCount(1)
-	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
+	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(store.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(store.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)
@@ -746,14 +736,14 @@ func TestReviewerSuggestions_PromptCacheKeyStaysOnReviewerSessionAfterConversati
 		responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)}}},
 	}
 	eng := mustNewTestEngine(t, reopened, engineClient, newTestToolRegistry(t), Config{Model: "gpt-5", Reviewer: ReviewerConfig{Model: "gpt-5"}})
-	if _, err := eng.runReviewerSuggestions(context.Background(), "step-1", reviewerClient); err != nil {
+	if _, err := runReviewerSuggestionsInActiveTestRun(t, eng, reviewerClient); err != nil {
 		t.Fatalf("run reviewer suggestions: %v", err)
 	}
 	if len(reviewerClient.calls) != 1 {
 		t.Fatalf("reviewer client calls = %d, want 1", len(reviewerClient.calls))
 	}
-	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(reopened.Meta().SessionID); got != want {
-		t.Fatalf("reviewer SessionID = %q, want %q", got, want)
+	if got, want := reviewerClient.calls[0].SessionID, reviewerSessionID(reopened.Meta().SessionID); got == nil || *got != want {
+		t.Fatalf("reviewer SessionID = %v, want %q", got, want)
 	}
 	if got, want := reviewerClient.calls[0].PromptCacheKey, conversationPromptCacheKey(reviewerSessionID(reopened.Meta().SessionID), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("reviewer PromptCacheKey = %q, want %q", got, want)
