@@ -133,7 +133,7 @@ WHERE id = 'edge-start'`, version71CutoverPrompt); err != nil {
 	if len(validation.Errors) != 0 {
 		t.Fatalf("loaded migrated definition validation = %+v", validation.Errors)
 	}
-	edge := findWorkflowEdge(t, loaded, "edge-agent-script")
+	edge := findWorkflowEdgeByKey(t, loaded, "to_script")
 	if len(edge.Parameters) != 1 || edge.Parameters[0].Key != "summary" {
 		t.Fatalf("loaded Transition Parameters = %+v, want preserved summary Parameter", edge.Parameters)
 	}
@@ -147,34 +147,21 @@ WHERE name IN ('prompt_template', 'input_fields_json', 'output_fields_json')`).S
 	if legacyNodeColumns != 0 {
 		t.Fatalf("legacy Node contract columns remaining = %d, want none", legacyNodeColumns)
 	}
-	var role, completionMode, scriptPath, joinProviders string
-	if err := metadataStore.DB().QueryRowContext(ctx, `
-SELECT subagent_role, completion_mode, COALESCE(script_path, ''), join_input_providers_json
-FROM workflow_nodes
-WHERE id = 'node-agent'`).Scan(&role, &completionMode, &scriptPath, &joinProviders); err != nil {
-		t.Fatalf("query preserved Agent configuration: %v", err)
+	agentNode, ok := findWorkflowNodeByKey(t, loaded, "agent").(workflow.AgentNode)
+	if !ok || agentNode.SubagentRole != "default" || agentNode.CompletionMode != "tool" {
+		t.Fatalf("preserved Agent configuration = %#v", agentNode)
 	}
-	if role != "default" || completionMode != "tool" || scriptPath != "" || joinProviders != "[]" {
-		t.Fatalf("preserved Agent configuration = role=%q completion=%q script=%q joins=%q",
-			role, completionMode, scriptPath, joinProviders)
+	scriptNode, ok := findWorkflowNodeByKey(t, loaded, "script").(workflow.ScriptNode)
+	if !ok || scriptNode.ScriptPath.String() != "scripts/run" {
+		t.Fatalf("preserved Script configuration = %#v", scriptNode)
 	}
-	var scriptKind, preservedScriptPath, joinKind, preservedJoinProviders string
-	if err := metadataStore.DB().QueryRowContext(ctx, `
-SELECT kind, COALESCE(script_path, '')
-FROM workflow_nodes
-WHERE id = 'node-script'`).Scan(&scriptKind, &preservedScriptPath); err != nil {
-		t.Fatalf("query preserved Script configuration: %v", err)
-	}
-	if err := metadataStore.DB().QueryRowContext(ctx, `
-SELECT kind, join_input_providers_json
-FROM workflow_nodes
-WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
-		t.Fatalf("query preserved Join configuration: %v", err)
-	}
-	if scriptKind != "script" || preservedScriptPath != "scripts/run" ||
-		joinKind != "join" || preservedJoinProviders != `[{"input_name":"summary","provider_edge_id":"edge-agent-join"}]` {
-		t.Fatalf("preserved Script/Join configuration = script=(%q,%q) join=(%q,%q)",
-			scriptKind, preservedScriptPath, joinKind, preservedJoinProviders)
+	joinNode, ok := findWorkflowNodeByKey(t, loaded, "join").(workflow.JoinNode)
+	providerEdge := findWorkflowEdgeByKey(t, loaded, "to_join")
+	if !ok ||
+		len(joinNode.JoinInputProviders) != 1 ||
+		joinNode.JoinInputProviders[0].InputName != "summary" ||
+		joinNode.JoinInputProviders[0].ProviderEdgeID != providerEdge.ID {
+		t.Fatalf("preserved Join configuration = %#v, provider edge = %#v", joinNode, providerEdge)
 	}
 	var foreignKeyViolations int
 	if err := metadataStore.DB().QueryRowContext(ctx, `SELECT count(*) FROM pragma_foreign_key_check`).Scan(&foreignKeyViolations); err != nil {
@@ -197,9 +184,10 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	if err != nil {
 		t.Fatalf("StartTask: %v", err)
 	}
+	startEdge := findWorkflowEdgeByKey(t, loaded, "start")
 	if len(started.Mutation.Created) != 1 ||
 		started.Mutation.Created[0].EnteredByEdgeID == nil ||
-		*started.Mutation.Created[0].EnteredByEdgeID != "edge-start" {
+		*started.Mutation.Created[0].EnteredByEdgeID != startEdge.ID {
 		t.Fatalf("started migrated Task mutation = %+v, want actual Transition-owned start path", started.Mutation)
 	}
 	startContext, err := store.ResolveCurrentNodeStartContext(ctx, started.Mutation.Created[0].Reference)
@@ -220,7 +208,7 @@ WHERE id = 'node-join'`).Scan(&joinKind, &preservedJoinProviders); err != nil {
 	var scriptCurrentNode *workflow.CurrentNode
 	for index := range completed.Mutation.Created {
 		currentNode := &completed.Mutation.Created[index]
-		if currentNode.Reference.NodeID == "node-script" {
+		if currentNode.Reference.NodeID == scriptNode.ID {
 			scriptCurrentNode = currentNode
 			break
 		}
@@ -256,13 +244,24 @@ func (cutoverRoleResolver) ExplicitCallableRoles() []workflow.TargetAgentRole {
 	}
 }
 
-func findWorkflowEdge(t *testing.T, definition workflow.Definition, id workflow.EdgeID) workflow.Edge {
+func findWorkflowEdgeByKey(t *testing.T, definition workflow.Definition, key workflow.ModelKey) workflow.Edge {
 	t.Helper()
 	for _, edge := range definition.Edges {
-		if edge.ID == id {
+		if edge.Key == key {
 			return edge
 		}
 	}
-	t.Fatalf("workflow edge %q not found", id)
+	t.Fatalf("workflow edge key %q not found", key)
 	return workflow.Edge{}
+}
+
+func findWorkflowNodeByKey(t *testing.T, definition workflow.Definition, key workflow.ModelKey) workflow.Node {
+	t.Helper()
+	for _, node := range definition.Nodes {
+		if node.Identity().Key == key {
+			return node
+		}
+	}
+	t.Fatalf("workflow node key %q not found", key)
+	return nil
 }

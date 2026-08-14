@@ -23,6 +23,9 @@ const migrationPriorParametersFunction = "kent_migration_prior_transition_parame
 const migrationPriorNodeValuesFunction = "kent_migration_prior_node_values_v1"
 const migrationWorkflowIDBlobFunction = "kent_migration_workflow_id_blob_v1"
 const migrationWorkflowIDTextFunction = "kent_migration_workflow_id_text_v1"
+const migrationGraphEntityIDBlobFunction = "kent_migration_graph_entity_id_blob_v1"
+const graphEntityIDBlobFunction = "kent_graph_entity_id_blob_v1"
+const graphEntityIDTextFunction = "kent_graph_entity_id_text_v1"
 const migrationWorkflowRunHistoryCutoverIrreversibleFunction = "kent_workflow_run_history_cutover_is_irreversible"
 const migrationCurrentNodePriorValuesIrreversibleFunction = "kent_current_node_prior_transition_parameters_are_irreversible"
 const migrationWorkflowSessionAgentRoleIrreversibleFunction = "kent_workflow_session_agent_role_backfill_is_irreversible"
@@ -103,6 +106,30 @@ func registerMetadataSQLiteFunctions() error {
 		if registerMetadataSQLiteFunctionsErr != nil {
 			return
 		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterScalarFunction(
+			migrationGraphEntityIDBlobFunction,
+			2,
+			migrationGraphEntityIDBlob,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			graphEntityIDBlobFunction,
+			1,
+			graphEntityIDBlob,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
+		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
+			graphEntityIDTextFunction,
+			1,
+			graphEntityIDText,
+		)
+		if registerMetadataSQLiteFunctionsErr != nil {
+			return
+		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
 			migrationCurrentNodeAgentExecutionFunction,
 			6,
@@ -146,6 +173,68 @@ func registerMetadataSQLiteFunctions() error {
 		return fmt.Errorf("register metadata SQLite migration functions: %w", registerMetadataSQLiteFunctionsErr)
 	}
 	return nil
+}
+
+func migrationGraphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 2 {
+		return nil, fmt.Errorf("%s requires 2 arguments", migrationGraphEntityIDBlobFunction)
+	}
+	raw, err := migrationStringArgument(args[0], "graph entity ID")
+	if err != nil {
+		return nil, err
+	}
+	location, err := migrationStringArgument(args[1], "graph identity location")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(location) == "" {
+		return nil, errors.New("graph identity migration location is required")
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("graph identity migration failure at %s: graph entity ID must not be blank", location)
+	}
+	if parsed, parseErr := uuid.Parse(raw); parseErr == nil {
+		if parsed == uuid.Nil {
+			return nil, fmt.Errorf("graph identity migration failure at %s: graph entity ID must not be zero", location)
+		}
+		if parsed.String() == raw && parsed.Version() == 4 && parsed.Variant() == uuid.RFC4122 {
+			return append([]byte(nil), parsed[:]...), nil
+		}
+	}
+	generated := uuid.New()
+	return append([]byte(nil), generated[:]...), nil
+}
+
+func graphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("%s requires 1 argument", graphEntityIDBlobFunction)
+	}
+	raw, err := migrationStringArgument(args[0], "graph entity ID")
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := uuid.Parse(raw)
+	if err != nil || parsed == uuid.Nil || parsed.String() != raw ||
+		parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
+		return nil, errors.New("graph entity ID must be canonical UUIDv4 text")
+	}
+	return append([]byte(nil), parsed[:]...), nil
+}
+
+func graphEntityIDText(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("%s requires 1 argument", graphEntityIDTextFunction)
+	}
+	raw, ok := args[0].([]byte)
+	if !ok || len(raw) != 16 {
+		return nil, errors.New("graph entity ID must be a 16-byte UUIDv4 BLOB")
+	}
+	parsed, err := uuid.FromBytes(raw)
+	if err != nil || parsed == uuid.Nil ||
+		parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
+		return nil, errors.New("graph entity ID must be a non-zero UUIDv4 BLOB")
+	}
+	return parsed.String(), nil
 }
 
 func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
