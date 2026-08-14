@@ -9,7 +9,7 @@
 - A Runtime in Workflow control-only admission accepts passive controls that require no model activation, including permitted Goal mutations, settings, and valid Worktree operations.
 - In that posture, a user Goal mutation that requires starting new ordinary Goal execution fails before Steering acceptance through ordinary Goal mutation error feedback.
 - In that posture, ordinary Send/Steer and post-turn Queue submission fail before acceptance with the existing Runtime-unavailable guidance to Resume. Kent creates no Queue Item, retains no hidden input, and starts no ordinary Agent execution.
-- Accepting a Workflow assignment changes that Runtime from Workflow control-only admission to ordinary start-preparing admission before winner preparation begins. Human Send/Steer, settings, and other ordinary Steering are accepted in that posture, but post-turn Queue submission remains unavailable because no Agent Turn has begun. No provider request is eligible until assignment preparation and application succeed and the Steering drain becomes empty. A later Workflow Resume or assignment remains Workflow-owned. KENT-345 does not make retained-Session input activate model work.
+- Accepting a Workflow assignment changes that Runtime from Workflow control-only admission to ordinary start-preparing admission. Human Send/Steer, settings, and other ordinary Steering are accepted in that posture, but post-turn Queue submission remains unavailable because no Agent Turn has begun. No provider request is eligible until assignment preparation and application succeed and earlier accepted Steering has applied. A later Workflow Resume or assignment remains Workflow-owned. KENT-345 does not make retained-Session input activate model work.
 - Each Active Session Runtime owns one process-local typed FIFO Steering Queue and is the sole authority for its mutable model/transcript state. Client state is derived from Runtime and durable Session state.
 - Steering acceptance establishes FIFO order. Kent promises no order between concurrent producers before one is accepted and gives no producer family priority.
 - Accepted work belongs to the Active Session Runtime, not to one client connection. Caller cancellation after acceptance stops only that caller's wait.
@@ -58,41 +58,29 @@
 
 ## Workflow Start At A Step Boundary
 
-- Accepting a Workflow assignment atomically reserves the Active Session Runtime's one Workflow-start position before Kent appends the assignment to Steering.
-- The first accepted Workflow assignment wins that position. A concurrent or later unrelated competing assignment receives a typed Workflow-start-unavailable result before transcript or context mutation and does not change the winning assignment.
-- Assignment acceptance atomically changes Workflow control-only admission to ordinary start-preparing admission. Human Send/Steer, settings, and other Steering may be accepted behind the preparing assignment. Post-turn Queue submission remains unavailable before allocation until the first Agent Turn begins.
-- Before acceptance, Kent may only read and validate the information required to address the target Runtime. It does not clone a Session, change Session metadata or Current Node binding, or allocate a provider for a competing assignment.
-- Session preparation begins only for the accepted winner. Preparation and prepared-payload validation happen before Kent attempts a required durable Session mutation. If either fails, Kent records one recoverable start failure, continues draining Steering accepted behind the assignment while the reserved position remains transition-occupying, and clears that position when the tail is empty and Workflow control-only admission returns.
-- Once Kent attempts the required durable assignment mutation, ordinary Session mutation certainty applies. A committed mutation remains authoritative. A definitely uncommitted mutation closes the Runtime fatally and disposes accepted pending work through the common fatal contract. An indeterminate commit terminates the backend. Kent does not classify these persistence outcomes as recoverable preparation failure.
-- Kent does not deduplicate or replay a repeated assignment. It competes for the same position as any other assignment.
-- Applying the reserved Workflow assignment makes that assigned Workflow execution eligible for the later empty-drain start decision. It does not perform a second admission-policy transition.
-- The Runtime continues draining Steering after applying the assignment. Every item accepted before the empty-drain decision applies before the first provider request for that Workflow execution.
-- Assignment acknowledgement reports only that the assignment mutation applied.
-- Only the empty-drain decision may release start readiness for that prepared execution. The Workflow owner may admit and start exact execution only after it observes that readiness.
-- A prepared Workflow start blocks Runtime retirement until the start succeeds or the Workflow lifecycle resolves its failure or cancellation.
-- Before exact publication, the reserved start owns first-winner exclusivity. Successful publication transfers that exclusivity without a gap to the matching canonical Agent exact association and leaves ordinary admission active for the live execution.
-- A competing Workflow assignment is unavailable while either the reserved start or that Agent exact association exists. The exact association retains exclusivity until exact retirement and the resulting admission transition. A successor may compete after retirement.
-- If an authoritative Workflow lifecycle operation creates an Agent successor targeting the same Runtime generation before the old reserved start publishes, the initiating request makes one ordinary assignment attempt immediately after committing that successor.
-- The request does not wait for old-result delivery or position clear.
-- If cancellation, disconnection, or orderly controller close is observed before admission begins, ordinary start-failure handling interrupts that exact Current Node once instead of submitting it.
-- Otherwise the immediate admission call runs to its typed result even if caller cancellation arrives during that call.
-- An occupied old position returns Workflow-start-unavailable and ordinary start-failure handling interrupts that exact Current Node once.
-- After Runtime accepts the assignment, caller cancellation does not revoke the accepted Runtime-owned work.
-- Abrupt process death may occur before that disposition. On the next startup, the existing Workflow restart owner marks the affected executable Current Node interrupted.
-- Existing explicit Resume durably requeues the interrupted Current Node and queues its fresh explicit start.
-- Kent adds no post-clear submission promise, clear wait, notification, listener, polling, caller-independent continuation, cleanup worker, retry, replay, second position, transferred exclusivity, or ready-Current-Node resubmit operation.
-- An unrelated same-Runtime assignment remains unavailable until the old position clears and may win after clear.
-- A queued Agent Exact Execution Scope does not authorize standalone Task Interrupt.
-- Agent exact-execution preparation creates no live Exact Execution Scope and does not make the Current Node running, interruptible, or visible as active work. Kent uses one short non-interruptible publication operation to revalidate the expected Current Node, target Runtime generation, reserved Workflow start, and absence of conflicting live execution before it admits the Current Node and makes the exact execution visible together. If another Workflow lifecycle operation changed the expected Current Node first, Kent discards the prepared start, records one typed unavailable or conflict result, preserves the winning Workflow state, and performs no interruption. If another publication precondition fails while the Current Node still matches, Kent discards the prepared start and applies ordinary durable start-failure interruption. A committed interruption records the failure. A definitely uncommitted interruption leaves the Current Node ready for retry and surfaces the error. An indeterminate Workflow Store result follows the fatal commit-certainty policy. A committed admission makes the exact execution fully visible before the publication operation ends. A definitely uncommitted admission makes no exact execution visible and leaves the Current Node ready for retry. Manual Move and Task Interrupt that arrive during publication wait until the operation reports running execution, interrupted failure, ready retryable failure, or a stale start that preserved an earlier lifecycle winner. Provider execution begins only after publication finishes.
-- After successful publication, Manual Move or an authorized Task Interrupt uses the ordinary running exact lifecycle. Kent adds no queued-start lifecycle disposition or special never-running cleanup.
-- Start success transfers the reserved position to the matching exact association.
-- Start failure, stale Current Node conflict, or loss of the target Runtime generation records one concrete outcome in the reserved position and removes start eligibility.
-- A recorded non-success position remains transition-occupying until accepted ordinary Steering drains.
-- One empty-drain decision clears the recorded position and delivers its result exactly once.
-- Publication records the result but does not separately clear the position or deliver the result.
-- A stale Current Node conflict preserves the lifecycle-selected Workflow state and successor behavior. Kent does not replay or transfer the old start to another Runtime.
-- When no exact execution or prepared Workflow start remains but Workflow control still retains the Runtime, the Runtime drains work accepted under ordinary admission before changing to Workflow control-only admission. Input submitted after that change follows the control-only rejection contract and creates no Queue Item or Pending Work.
-- Previously accepted input that was committed before a Workflow start failure remains ordinary Session transcript state. It is not a hidden pending command or a replay record.
+- The Workflow owner may prepare the target Session, execution target, provider, assignment, and detached Agent execution before it attempts durable Current Node admission.
+- Competing preparations may change Session-side facts before Kent knows which Current Node start wins. Kent does not roll back or compensate those accepted preparation effects.
+- With an Active Session Runtime, the Workflow assignment enters Steering as one typed FIFO mutation. Without an Active Session Runtime, the dormant Session Store remains authoritative.
+- Runtime acceptance and application establish assignment ordering only. They do not reserve the Workflow start, select the winning Current Node, or own a readiness signal or start-result registry.
+- Assignment acceptance changes Workflow control-only admission to ordinary start-preparing admission. Human Send/Steer, settings, and other Steering may be accepted behind the assignment. Post-turn Queue submission remains unavailable until the first Agent Turn begins.
+- Once Kent attempts the required durable assignment mutation, ordinary Session mutation certainty applies. A committed mutation remains authoritative. A definitely uncommitted mutation closes the Runtime fatally and disposes accepted pending work through the common fatal contract. An indeterminate commit terminates the backend.
+- Kent does not deduplicate or replay a repeated assignment.
+- The Runtime applies the assignment between protected Agent Steps in accepted FIFO order. Earlier accepted Steering applies before the provider starts.
+- The first committed durable Current Node admission wins among competing starts.
+- Agent preparation creates no live Exact Execution Scope and does not make the Current Node running, interruptible, or visible as active work.
+- Before publication begins, caller cancellation consumes the detached Agent execution and releases its resources without invoking the provider.
+- Publication is one short non-interruptible Workflow-owned operation. It revalidates the Current Node, target Runtime generation, and absence of conflicting live execution, then durably admits the Current Node and makes the exact execution visible before releasing Workflow mutation ownership.
+- Cancellation that arrives after publication begins does not interrupt durable admission or split committed admission from exact publication.
+- If another Workflow lifecycle operation changed the Current Node first, Kent discards the detached execution, preserves the winning Workflow state and successor behavior, and publishes no live Exact Execution Scope.
+- A definitely uncommitted admission publishes no Exact Execution Scope and leaves the Current Node ready for explicit recovery. An indeterminate admission terminates the backend.
+- The Workflow owner invokes the provider only after publication releases Workflow mutation ownership. Cancellation after publication but before provider invocation finalizes the published execution without invoking the provider.
+- After successful publication, Authority owns exact start exclusion through retirement. Manual Move and an authorized Task Interrupt use the ordinary running exact lifecycle.
+- A stale or rejected preparation may leave already-accepted Session facts. It does not gain exact liveness or authorize Interrupt.
+- Existing explicit Resume is the recovery path for an interrupted Current Node.
+- Process death may occur before start disposition. On the next startup, the existing Workflow restart owner marks affected executable Current Nodes interrupted.
+- Kent adds no retry, replay, compensation, rollback, clear wait, notification, listener, polling, caller-independent continuation, cleanup worker, or second admission attempt.
+- When no exact execution remains but Workflow control retains the Runtime, the Runtime drains work accepted under ordinary admission before changing to Workflow control-only admission. Input submitted after that change follows the control-only rejection contract and creates no Queue Item or Pending Work.
+- Previously accepted input that was committed before a Workflow start failure remains ordinary Session transcript state. It is not hidden pending input or a replay record.
 
 ## Exact-Start Transition Window
 
@@ -133,11 +121,11 @@
 | Worktree enter/leave without an Active Session Runtime | Worktree and durable Session owners. |
 | Worktree delete | Worktree owner applies the Active-Runtime and process blockers below. |
 | Live Workflow completion | Exact Workflow execution with Scope + Run + Step provenance. |
-| Workflow successor preparation | Workflow owner; assignment Steers an existing Runtime or uses the existing dormant Session path. An applied live assignment becomes a prepared start whose readiness only the Runtime's empty-drain decision may release. |
+| Workflow successor preparation | Workflow owner; assignment Steers an existing Runtime or uses the existing dormant Session path. Runtime acceptance orders the assignment but does not reserve or decide the winning Current Node start. |
 | Live Goal mutation | Steering. During live Workflow exact execution, Goal continuation remains passive. A retained Workflow control-only Runtime accepts a no-op or mutation that does not require new ordinary Goal execution and rejects a mutation that requires such execution before acceptance. |
 | Exact agent-origin Goal set/complete | One exact admission validates Scope + Run + Step and accepts Steering atomically. Step-end-first rejects without an entry; admission-first returns the scheduled Goal projection, and application waits for the Step Boundary while the shell command does not. Terminal Workflow completion earlier in the same Step does not revoke that admission. |
 | Dormant Goal mutation | Durable Goal/Session owner without Runtime creation. |
-| Runtime retirement | Session Runtime lifecycle; pending accepted work, a prepared Workflow start, and retained Workflow control block retirement. |
+| Runtime retirement | Session Runtime lifecycle; pending accepted work and retained Workflow control block retirement. |
 
 ## Workflow Completion And Human Input
 
