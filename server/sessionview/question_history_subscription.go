@@ -30,6 +30,9 @@ func (s *questionHistorySubscription) Next(ctx context.Context) (serverapi.Quest
 		return event, event.Validate()
 	}
 	for !s.completed {
+		if err := ctx.Err(); err != nil {
+			return serverapi.QuestionHistoryEvent{}, err
+		}
 		record, err := s.cursor.Next()
 		if err != nil {
 			return serverapi.QuestionHistoryEvent{}, err

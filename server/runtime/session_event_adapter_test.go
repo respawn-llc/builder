@@ -271,6 +271,35 @@ func TestSessionQuestionCompletionAdapterCarriesTypedAnswer(t *testing.T) {
 	})
 }
 
+func TestChatStoreRestoresTypedQuestionAnswer(t *testing.T) {
+	t.Parallel()
+	answer := &session.QuestionAnswerRecord{
+		SelectedOptionNumber: textutil.Value(2),
+		Freeform:             textutil.Value("keep the split"),
+	}
+	record := session.ToolCompletionRecord{
+		CallID:         "call-question",
+		Name:           "ask_question",
+		OutputKind:     session.ToolOutputKindFunction,
+		Output:         json.RawMessage(`"flattened"`),
+		Presentation:   transcript.EncodeToolCallMeta(*questionCompletionPresentation()),
+		QuestionAnswer: answer,
+	}
+	store := newChatStore()
+	if err := store.restoreToolCompletionRecord(record); err != nil {
+		t.Fatalf("restore typed Question completion into chat store: %v", err)
+	}
+	restored, ok := store.toolCompletions[record.CallID]
+	if !ok || restored.QuestionAnswer == nil ||
+		!textutil.EqualOptional(
+			restored.QuestionAnswer.SelectedOptionNumber,
+			answer.SelectedOptionNumber,
+		) ||
+		!textutil.EqualOptional(restored.QuestionAnswer.Freeform, answer.Freeform) {
+		t.Fatalf("chat-store Question answer = %#v", restored.QuestionAnswer)
+	}
+}
+
 func questionCompletionPresentation() *transcript.ToolCallMeta {
 	return &transcript.ToolCallMeta{
 		ToolName:               string(toolspec.ToolAskQuestion),

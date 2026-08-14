@@ -178,34 +178,3 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 	c.done = true
 	return nil, nil
 }
-
-func previousCurrentEventLineRange(
-	fp *os.File,
-	endOffset int64,
-	firstEventOffset int64,
-) (startOffset int64, lineEnd int64, terminated bool, err error) {
-	if endOffset <= firstEventOffset {
-		return firstEventOffset, firstEventOffset, false, nil
-	}
-	lineEnd = endOffset
-	lastByte := [1]byte{}
-	if _, err := fp.ReadAt(lastByte[:], endOffset-1); err != nil {
-		return 0, 0, false, fmt.Errorf("read current event line end: %w", err)
-	}
-	if lastByte[0] == '\n' {
-		lineEnd--
-		terminated = true
-	}
-	if lineEnd <= firstEventOffset {
-		return firstEventOffset, firstEventOffset, terminated, nil
-	}
-	previousNewline, err := lastNewlineOffset(fp, lineEnd)
-	if err != nil {
-		return 0, 0, false, err
-	}
-	startOffset = previousNewline + 1
-	if startOffset < firstEventOffset {
-		startOffset = firstEventOffset
-	}
-	return startOffset, lineEnd, terminated, nil
-}

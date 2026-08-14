@@ -881,28 +881,16 @@ func readPreviousCurrentEventLine(
 	endOffset int64,
 	firstEventOffset int64,
 ) (line []byte, startOffset int64, terminated bool, err error) {
-	if endOffset <= firstEventOffset {
-		return nil, firstEventOffset, false, nil
-	}
-	lineEnd := endOffset
-	lastByte := [1]byte{}
-	if _, err := fp.ReadAt(lastByte[:], endOffset-1); err != nil {
-		return nil, 0, false, fmt.Errorf("read current event line end: %w", err)
-	}
-	if lastByte[0] == '\n' {
-		lineEnd--
-		terminated = true
-	}
-	if lineEnd <= firstEventOffset {
-		return nil, firstEventOffset, terminated, nil
-	}
-	previousNewline, err := lastNewlineOffset(fp, lineEnd)
+	startOffset, lineEnd, terminated, err := previousCurrentEventLineRange(
+		fp,
+		endOffset,
+		firstEventOffset,
+	)
 	if err != nil {
 		return nil, 0, false, err
 	}
-	startOffset = previousNewline + 1
-	if startOffset < firstEventOffset {
-		startOffset = firstEventOffset
+	if lineEnd <= startOffset {
+		return nil, startOffset, terminated, nil
 	}
 	line = make([]byte, lineEnd-startOffset)
 	if _, err := fp.ReadAt(line, startOffset); err != nil {

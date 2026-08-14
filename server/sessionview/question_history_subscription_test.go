@@ -3,6 +3,7 @@ package sessionview
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"testing"
 
@@ -142,33 +143,65 @@ func TestQuestionHistorySubscriptionUsesOnlyPersistedResolver(t *testing.T) {
 }
 
 func TestQuestionHistorySubscriptionPreservesMultilinePresentedText(t *testing.T) {
-	record, err := session.NewEventRecord(
-		1,
-		nil,
-		session.ToolCompletionRecord{
-			CallID:     "call",
-			Name:       "ask_question",
-			OutputKind: session.ToolOutputKindFunction,
-			Output:     json.RawMessage(`"flattened"`),
-			Presentation: transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
-				ToolName:    "ask_question",
-				Question:    "  question\nbody  ",
-				Suggestions: []string{"  first\nline  "},
-			}),
-			QuestionAnswer: &session.QuestionAnswerRecord{
-				SelectedOptionNumber: sessionViewIntPointer(1),
-				Freeform:             sessionViewStringPointer("comment\nline"),
-			},
+	answers := []*session.QuestionAnswerRecord{
+		{
+			SelectedOptionNumber: sessionViewIntPointer(1),
+			Freeform:             sessionViewStringPointer("comment\nline"),
 		},
-	)
+		{Freeform: sessionViewStringPointer("freeform\nanswer")},
+	}
+	for _, answer := range answers {
+		record, err := session.NewEventRecord(
+			1,
+			nil,
+			session.ToolCompletionRecord{
+				CallID:     "call",
+				Name:       "ask_question",
+				OutputKind: session.ToolOutputKindFunction,
+				Output:     json.RawMessage(`"flattened"`),
+				Presentation: transcript.EncodeToolCallMeta(transcript.ToolCallMeta{
+					ToolName:    "ask_question",
+					Question:    "  question\nbody  ",
+					Suggestions: []string{"  first\nline  "},
+				}),
+				QuestionAnswer: answer,
+			},
+		)
+		if err != nil {
+			t.Fatalf("create multiline Question: %v", err)
+		}
+		projected, err := projectQuestionHistoryRecord(record, session.EventLogVersionV2)
+		if err == nil {
+			t.Fatal("untimestamped v2 projection unexpectedly succeeded")
+		}
+		_ = projected
+	}
+}
+
+func TestQuestionHistorySubscriptionChecksCancellationWhileSkippingRecords(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	appendSessionViewRecord(t, store, "step-1", session.ToolCompletionRecord{
+		CallID:     "call-ignored",
+		Name:       "ask_question",
+		OutputKind: session.ToolOutputKindFunction,
+		Output:     json.RawMessage(`"flattened"`),
+		QuestionAnswer: &session.QuestionAnswerRecord{
+			Freeform: sessionViewStringPointer("ignored"),
+		},
+	})
+	sub, err := NewService(newTestSessionResolver(store), nil, nil, nil).
+		SubscribeQuestionHistory(t.Context(), serverapi.QuestionHistorySubscribeRequest{
+			SessionID: store.Meta().SessionID, MaxHandoffs: 1,
+		})
 	if err != nil {
-		t.Fatalf("create multiline Question: %v", err)
+		t.Fatalf("subscribe Question history: %v", err)
 	}
-	projected, err := projectQuestionHistoryRecord(record, session.EventLogVersionV2)
-	if err == nil {
-		t.Fatal("untimestamped v2 projection unexpectedly succeeded")
+	defer func() { _ = sub.Close() }()
+	_ = nextQuestionHistoryEvent(t, sub)
+	ctx := &cancelAfterSkippedRecordContext{Context: t.Context()}
+	if _, err := sub.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Next after skipped record error = %v, want context canceled", err)
 	}
-	_ = projected
 }
 
 func TestQuestionHistorySubscriptionPullsThroughLargeSingleWindow(t *testing.T) {
@@ -270,4 +303,17 @@ func nextQuestionHistoryEvent(
 		t.Fatalf("Next Question-history event: %v", err)
 	}
 	return event
+}
+
+type cancelAfterSkippedRecordContext struct {
+	context.Context
+	errCalls int
+}
+
+func (c *cancelAfterSkippedRecordContext) Err() error {
+	c.errCalls++
+	if c.errCalls >= 3 {
+		return context.Canceled
+	}
+	return nil
 }

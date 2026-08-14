@@ -480,6 +480,11 @@ func TestMaterializeEventLogLeavesMalformedLegacySourceUntouched(t *testing.T) {
 	}
 	if _, err := store.MaterializeEventLog(); err == nil {
 		t.Fatal("second malformed legacy materialization recovered an uncommitted stage")
+	} else {
+		var materializationErr *EventLogMaterializationError
+		if !errors.As(err, &materializationErr) || materializationErr.Committed {
+			t.Fatalf("retry materialization error = %v, want uncommitted typed error", err)
+		}
 	}
 	afterRetry, err := os.ReadFile(eventsPath)
 	if err != nil {

@@ -353,13 +353,14 @@ func (s *chatStore) restoreToolCompletionRecord(record session.ToolCompletionRec
 		return fmt.Errorf("restore session tool completion record: %w", err)
 	}
 	s.recordToolCompletionWithProviderItems(tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        completion.Output,
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
+		CallID:         completion.CallID,
+		Name:           toolspec.ID(completion.Name),
+		IsError:        completion.IsError,
+		Output:         completion.Output,
+		Summary:        completion.Summary,
+		CondensedText:  completion.CondensedText,
+		Presentation:   completion.Presentation,
+		QuestionAnswer: completion.QuestionAnswer,
 	}, completion.ProviderItems, provenances...)
 	return nil
 }

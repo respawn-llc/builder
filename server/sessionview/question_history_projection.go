@@ -56,6 +56,12 @@ func projectQuestionHistoryRecord(
 			Question: question,
 			At:       record.CommittedAtUnixMs(),
 		}
+		if projected.At == nil {
+			return nil, fmt.Errorf(
+				"event sequence %d successful ask_question completion is missing committed timestamp",
+				record.Seq(),
+			)
+		}
 		if answer.SelectedOptionNumber == nil {
 			if answer.Freeform == nil {
 				return nil, fmt.Errorf(
@@ -76,12 +82,6 @@ func projectQuestionHistoryRecord(
 		if answer.Freeform != nil {
 			commentary := *answer.Freeform
 			projected.Commentary = &commentary
-		}
-		if projected.At == nil {
-			return nil, fmt.Errorf(
-				"event sequence %d successful ask_question completion is missing committed timestamp",
-				record.Seq(),
-			)
 		}
 		return projected, nil
 	default:

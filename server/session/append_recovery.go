@@ -222,9 +222,24 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 		return size == events.EndOffset, nil
 	}
 	hash := sha256.New()
-	header, _, err := readCurrentEventLogHeader(fp)
+	classification, err := classifyEventLogSource(path)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("classify append recovery event log: %w", err)
+	}
+	decode := decodeEventRecordV1
+	if classification.source == eventLogSourceCurrent {
+		if classification.foundVersion == nil {
+			return false, errors.New("current append recovery event log version is required")
+		}
+		version := *classification.foundVersion
+		decode = func(encoded []byte) (EventRecord, error) {
+			return decodeEventRecordForVersion(version, encoded)
+		}
+	} else if classification.source != eventLogSourceLegacy {
+		return false, fmt.Errorf(
+			"append recovery event log source %d is unsupported",
+			classification.source,
+		)
 	}
 	decoder := json.NewDecoder(io.TeeReader(
 		io.NewSectionReader(fp, events.StartOffset, events.EndOffset-events.StartOffset),
@@ -242,7 +257,7 @@ func inspectAppendRecoverySuffix(path string, events appendRecoveryEvents, phase
 		if err != nil {
 			return false, fmt.Errorf("parse committed event suffix: %w", err)
 		}
-		event, err := decodeEventRecordForVersion(header.Version, encoded)
+		event, err := decode(encoded)
 		if err != nil {
 			return false, fmt.Errorf("parse committed typed event suffix: %w", err)
 		}

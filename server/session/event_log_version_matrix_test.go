@@ -563,7 +563,7 @@ func writeVersionedEventLog(
 	t.Helper()
 	lines := make([][]byte, 0, len(records))
 	for _, record := range records {
-		line, err := encodeEventRecordV1(record)
+		line, err := encodeEventRecordForVersion(version, record)
 		if err != nil {
 			t.Fatalf("encode v%d fixture record: %v", version, err)
 		}

@@ -63,9 +63,29 @@ func TestQuestionHistoryProjectionSkipsMalformedCompletionPresentation(t *testin
 					SelectedOptionNumber: test.selected,
 				}
 			}
-			record, err := session.NewEventRecord(1, nil, completion)
-			if err != nil {
-				t.Fatalf("create malformed projection fixture: %v", err)
+			var record session.EventRecord
+			if test.version == session.EventLogVersionV2 {
+				store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+				log, err := store.MaterializeEventLog()
+				if err != nil {
+					t.Fatalf("materialize v2 projection fixture: %v", err)
+				}
+				records, receipt, err := log.AppendRecordsAtomic(nil, []session.EventRecordPayload{completion})
+				if err != nil || !receipt.Committed || len(records) != 1 {
+					t.Fatalf(
+						"append v2 projection fixture: records=%d receipt=%+v error=%v",
+						len(records),
+						receipt,
+						err,
+					)
+				}
+				record = records[0]
+			} else {
+				var err error
+				record, err = session.NewEventRecord(1, nil, completion)
+				if err != nil {
+					t.Fatalf("create malformed projection fixture: %v", err)
+				}
 			}
 			projected, err := projectQuestionHistoryRecord(record, test.version)
 			if err != nil {
