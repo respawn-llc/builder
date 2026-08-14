@@ -117,9 +117,9 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 		ResourceLifecycle: runtimeRegistry,
 		StepLifecycle:     authorityStepLifecycle{registry: runtimeRegistry},
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
 			if workflowController != nil {
-				workflowController.ExecutionFinalized(scope)
+				workflowController.WorkflowExecutionRetired(outcome)
 			}
 		}),
 	})

@@ -3,6 +3,7 @@ package runtime
 import (
 	"testing"
 
+	"core/server/session"
 	"core/server/tools"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
@@ -125,5 +126,66 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 	}
 	if state, err := engine.WorkflowSessionState(); err != nil || state != nil {
 		t.Fatalf("completed Workflow Session state = %+v error=%v, want absent", state, err)
+	}
+}
+
+func TestWorkflowCompactionBoundaryResetsPersistedAndActiveLockedContract(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir())
+	locked := session.LockedContract{Model: "locked-model"}
+	if err := store.MarkModelDispatchLocked(locked); err != nil {
+		t.Fatalf("lock Session contract: %v", err)
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	engine.lockedContractState().Set(locked)
+
+	if err := engine.ResetLockedContractForWorkflowCompactionBoundary(); err != nil {
+		t.Fatalf("reset Workflow compaction boundary: %v", err)
+	}
+	if store.Meta().Locked != nil {
+		t.Fatalf("persisted locked contract = %+v, want absent", store.Meta().Locked)
+	}
+	if active, ok := engine.lockedContractState().Snapshot(); ok {
+		t.Fatalf("active locked contract = %+v, want absent", active)
+	}
+}
+
+func TestWorkflowCompactionBoundaryRejectsActiveCurrentNodeExecution(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSessionAt(t, t.TempDir())
+	locked := session.LockedContract{Model: "locked-model"}
+	if err := store.MarkModelDispatchLocked(locked); err != nil {
+		t.Fatalf("lock Session contract: %v", err)
+	}
+	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
+	engine.lockedContractState().Set(locked)
+	publication, err := engine.PrepareCurrentNodeExecutionPublication(&workflowruntime.CurrentNodeExecutionConfig{
+		ScopeID: runtimeids.NewExecutionScopeID(),
+		Instructions: workflowruntime.TaskInstructions{
+			CurrentNode: mustTestCurrentNodeReference(t, "task-active-boundary", "node-active-boundary", nil),
+			WorkflowID:  runtimeids.NewWorkflowID(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("prepare Current Node execution: %v", err)
+	}
+	if err := publication.Begin(); err != nil {
+		t.Fatalf("begin Current Node execution: %v", err)
+	}
+	binding := publication.Commit()
+	t.Cleanup(func() {
+		if err := binding.Close(); err != nil {
+			t.Errorf("close Current Node execution: %v", err)
+		}
+	})
+
+	if err := engine.ResetLockedContractForWorkflowCompactionBoundary(); err == nil {
+		t.Fatal("reset accepted an active Current Node execution")
+	}
+	if store.Meta().Locked == nil {
+		t.Fatal("active Current Node reset cleared the persisted locked contract")
+	}
+	if _, ok := engine.lockedContractState().Snapshot(); !ok {
+		t.Fatal("active Current Node reset cleared the active locked contract")
 	}
 }

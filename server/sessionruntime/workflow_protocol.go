@@ -3,25 +3,26 @@ package sessionruntime
 import (
 	"errors"
 
+	"core/server/workflow"
 	"core/shared/runtimeids"
 )
 
 func (a *Authority) RecordWorkflowProtocolViolation(
 	scopeID runtimeids.ExecutionScopeID,
 	maxCount int,
-) (int64, WorkflowOperationRef, bool, error) {
+) (int64, workflow.CurrentNodeOperationRef, bool, error) {
 	if a == nil {
-		return 0, WorkflowOperationRef{}, false, errors.New("session runtime authority is required")
+		return 0, workflow.CurrentNodeOperationRef{}, false, errors.New("session runtime authority is required")
 	}
 	if scopeID.IsZero() {
-		return 0, WorkflowOperationRef{}, false, errors.New("workflow exact execution scope id is required")
+		return 0, workflow.CurrentNodeOperationRef{}, false, errors.New("workflow exact execution scope id is required")
 	}
 	if maxCount <= 0 {
-		return 0, WorkflowOperationRef{}, false, errors.New("workflow protocol violation cap must be positive")
+		return 0, workflow.CurrentNodeOperationRef{}, false, errors.New("workflow protocol violation cap must be positive")
 	}
 	handle, live := a.ExecutionByScope(scopeID)
 	if !live {
-		return 0, WorkflowOperationRef{}, false, ErrExecutionNoLongerLive
+		return 0, workflow.CurrentNodeOperationRef{}, false, ErrExecutionNoLongerLive
 	}
 	exact := handle.(executionHandle).execution
 	exact.exactMu.Lock()
@@ -29,11 +30,11 @@ func (a *Authority) RecordWorkflowProtocolViolation(
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.byScope[scopeID] != exact {
-		return 0, WorkflowOperationRef{}, false, ErrExecutionNoLongerLive
+		return 0, workflow.CurrentNodeOperationRef{}, false, ErrExecutionNoLongerLive
 	}
 	workflowRef, workflowScoped := exact.scope.Workflow()
 	if !workflowScoped {
-		return 0, WorkflowOperationRef{}, false, ErrExecutionNoLongerLive
+		return 0, workflow.CurrentNodeOperationRef{}, false, ErrExecutionNoLongerLive
 	}
 	exact.protocolViolations++
 	return exact.protocolViolations, workflowRef.Operation(), exact.protocolViolations >= int64(maxCount), nil

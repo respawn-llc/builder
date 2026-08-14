@@ -82,16 +82,6 @@ type RuntimeOpenRequest struct {
 	Runtime   *AgentRuntimePlan
 }
 
-type PersistedWorkflowRuntimeOpenRequest struct {
-	SessionID runtimeids.SessionID
-	OwnerID   string
-	Runtime   *AgentRuntimePlan
-}
-
-type PersistedWorkflowRuntimeOpen struct {
-	Attachment RuntimeAttachment
-}
-
 type RuntimeReleasePolicy uint8
 
 const (
@@ -808,97 +798,6 @@ func (a *Authority) OpenRuntime(ctx context.Context, request RuntimeOpenRequest)
 		return RuntimeAttachment{}, err
 	}
 	return RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID}, nil
-}
-
-func (a *Authority) OpenPersistedWorkflowRuntime(
-	ctx context.Context,
-	request PersistedWorkflowRuntimeOpenRequest,
-) (PersistedWorkflowRuntimeOpen, error) {
-	if a == nil {
-		return PersistedWorkflowRuntimeOpen{}, errors.New("session runtime authority is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := context.Cause(ctx); err != nil {
-		return PersistedWorkflowRuntimeOpen{}, err
-	}
-	if request.SessionID.IsZero() {
-		return PersistedWorkflowRuntimeOpen{}, errors.New("session id is required")
-	}
-	if request.Runtime == nil {
-		return PersistedWorkflowRuntimeOpen{}, errors.New("agent runtime plan is required")
-	}
-	ownerID := strings.TrimSpace(request.OwnerID)
-	if ownerID == "" {
-		return PersistedWorkflowRuntimeOpen{}, errors.New("runtime owner id is required")
-	}
-	gate := a.gateFor(request.SessionID)
-	gate.lock.Lock()
-	defer gate.lock.Unlock()
-	if len(gate.blocks) != 0 {
-		return PersistedWorkflowRuntimeOpen{}, sessionStartsBlockedError(request.SessionID)
-	}
-	descriptor, err := session.NewOpenSessionDescriptor(request.SessionID)
-	if err != nil {
-		return PersistedWorkflowRuntimeOpen{}, err
-	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, ErrAuthorityClosed
-	}
-	if a.resources[request.SessionID] != nil {
-		a.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, errors.Join(
-			serverapi.ErrRuntimeUnavailable,
-			fmt.Errorf("session %s already has a registered runtime", request.SessionID),
-		)
-	}
-	a.mu.Unlock()
-	resource, err := a.buildAgentResource(ctx, descriptor, request.Runtime)
-	if err != nil {
-		return PersistedWorkflowRuntimeOpen{}, err
-	}
-	a.mu.Lock()
-	if a.closed {
-		a.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, errors.Join(ErrAuthorityClosed, resource.closeResource(ctx))
-	}
-	if a.resources[request.SessionID] != nil {
-		a.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, errors.Join(
-			serverapi.ErrRuntimeUnavailable,
-			fmt.Errorf("session %s gained a registered runtime during Workflow open", request.SessionID),
-			resource.closeResource(ctx),
-		)
-	}
-	a.resources[request.SessionID] = resource
-	a.mu.Unlock()
-
-	if err := resource.publishReady(ctx); err != nil {
-		a.mu.Lock()
-		if a.resources[request.SessionID] == resource {
-			delete(a.resources, request.SessionID)
-		}
-		a.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, errors.Join(err, resource.closeResource(ctx))
-	}
-	resource.mu.Lock()
-	if resource.state != AgentResourceReady {
-		resource.mu.Unlock()
-		return PersistedWorkflowRuntimeOpen{}, fmt.Errorf("session %s runtime is not ready", request.SessionID)
-	}
-	resource.owners[ownerID] = struct{}{}
-	resource.ownerlessDisposition = agentResourceRemainAvailable
-	resource.signalLocked()
-	resource.mu.Unlock()
-	if a.options.background != nil {
-		a.options.background.RetryTerminalEvents(request.SessionID.String())
-	}
-	return PersistedWorkflowRuntimeOpen{
-		Attachment: RuntimeAttachment{authority: a, resource: resource.ref, ownerID: ownerID},
-	}, nil
 }
 
 func (a *Authority) ReleaseRuntime(ctx context.Context, request RuntimeReleaseRequest) (RuntimeReleaseResult, error) {

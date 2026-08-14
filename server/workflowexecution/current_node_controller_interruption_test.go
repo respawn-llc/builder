@@ -28,8 +28,8 @@ func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T)
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -93,12 +93,12 @@ func TestCurrentNodeControllerTaskInterruptFenceRejectsLifecycleMutationsUntilRe
 	var finalizedOnce sync.Once
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
 			finalizedOnce.Do(func() {
 				close(finalized)
 			})
 			<-releaseFinalization
-			controller.ExecutionFinalized(scope)
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -170,8 +170,8 @@ func TestCurrentNodeControllerTaskInterruptPreservesSiblingPreparation(t *testin
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -291,8 +291,8 @@ func TestCurrentNodeControllerTaskInterruptDoesNotCoordinateFinalizingSibling(t 
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &runningAndFinalizingScriptRunner{
@@ -373,11 +373,6 @@ func TestCurrentNodeControllerTaskInterruptDoesNotCoordinateFinalizingSibling(t 
 	if calls := store.completionCount(); calls != 1 {
 		t.Fatalf("finalizing sibling durable completions = %d, want 1", calls)
 	}
-	select {
-	case <-runner.successorStarted:
-	default:
-		t.Fatal("finalizing sibling did not release its successor")
-	}
 }
 
 func TestCurrentNodeControllerTaskInterruptDoesNotOverrideFinalizingScopeFailure(t *testing.T) {
@@ -397,8 +392,8 @@ func TestCurrentNodeControllerTaskInterruptDoesNotOverrideFinalizingScopeFailure
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &runningAndFinalizingScriptRunner{
@@ -566,8 +561,8 @@ func TestCurrentNodeControllerTaskInterruptDrainsReservationOnlyAlongsideLiveSco
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -636,8 +631,8 @@ func TestCurrentNodeControllerInterruptingScriptDoesNotReleaseAgentCapacity(t *t
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -727,8 +722,8 @@ func TestCurrentNodeControllerTaskInterruptDrainsConcurrencyQueuedWorkAlongsideR
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &runningAndQueuedGateRunner{
@@ -929,8 +924,8 @@ func TestCurrentNodeControllerProtocolViolationCapStopsAndInterruptsLiveScope(t 
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{

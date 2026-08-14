@@ -32,8 +32,8 @@ func TestCurrentNodeControllerAdmitsScriptBeforeDetachedPublication(t *testing.T
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &controlledScriptRunner{
@@ -124,8 +124,8 @@ func TestCurrentNodeControllerCloseDoesNotCancelStartedDurableAdmission(t *testi
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -277,8 +277,8 @@ func TestCurrentNodeControllerFinalizedWithoutOutcomeInterruptsAdmittedCurrentNo
 	attention := &currentNodeAttentionRecorder{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &finalizerFailureScriptRunner{
@@ -360,8 +360,8 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 	}}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &parallelExplicitRunner{
@@ -578,8 +578,8 @@ func TestCurrentNodeControllerReservesAutomaticCapacityBeforeLaunchingAdmission(
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &firstAdmissionBlockingScriptRunner{
@@ -726,8 +726,8 @@ func TestCurrentNodeControllerStartsScriptsWhileAgentCapacityIsSaturated(t *test
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -819,8 +819,8 @@ func TestCurrentNodeControllerCloseBroadcastsScriptStopsBeforeJoining(t *testing
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -1239,7 +1239,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 					t.Fatalf("reference key: %v", err)
 				}
 				controller.operations[key] = &currentNodeOperation{
-					ref: sessionruntime.WorkflowOperationRef{
+					ref: workflow.CurrentNodeOperationRef{
 						OperationID: runtimeids.NewCurrentNodeOperationID(),
 						CurrentNode: reference,
 					},
@@ -1255,7 +1255,7 @@ func TestCurrentNodeControllerTaskQuiescenceRejectsEveryControllerOwnedWorkState
 					t.Fatalf("reference key: %v", err)
 				}
 				controller.operations[key] = &currentNodeOperation{
-					ref: sessionruntime.WorkflowOperationRef{
+					ref: workflow.CurrentNodeOperationRef{
 						OperationID: runtimeids.NewCurrentNodeOperationID(),
 						CurrentNode: reference,
 					},

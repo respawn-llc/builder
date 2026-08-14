@@ -516,19 +516,18 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 
 	predecessor := workflowExecutionRefForTest(t, workflow.TaskID(uuid.NewString()), workflow.NodeID(uuid.NewString()), nil)
 	successor := predecessor
+	successor.OperationID = runtimeids.NewCurrentNodeOperationID()
 	type startResult struct {
 		handle ExecutionHandle
 		err    error
 	}
 	successorStarted := make(chan startResult, 1)
 	successorCancellationGrace := 50 * time.Millisecond
-	var predecessorScopeID runtimeids.ExecutionScopeID
-
 	var authority *Authority
 	authority = NewAuthority(AuthorityOptions{
-		ExecutionFinalized: ExecutionFinalizedFunc(func(finalized ExecutionScope) {
-			finalizedRef, ok := finalized.Workflow()
-			if !ok || !finalizedRef.CurrentNode.Equal(predecessor.CurrentNode) || finalized.ID() != predecessorScopeID {
+		WorkflowExecutionRetired: WorkflowExecutionRetiredFunc(func(outcome WorkflowRetirementOutcome) {
+			if outcome.Operation.OperationID != predecessor.OperationID ||
+				!outcome.Operation.CurrentNode.Equal(predecessor.CurrentNode) {
 				return
 			}
 			handle, startErr := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
@@ -554,11 +553,6 @@ func TestStalePredecessorFinalizationCannotRemoveResumedSuccessor(t *testing.T) 
 	if err != nil {
 		t.Fatalf("prepare predecessor: %v", err)
 	}
-	predecessorScope, err := predecessorDetached.Scope()
-	if err != nil {
-		t.Fatalf("detached predecessor Scope: %v", err)
-	}
-	predecessorScopeID = predecessorScope.ID()
 	predecessorHandle, launchPredecessor, err := predecessorDetached.Publish(context.Background(), func() error { return nil }, nil)
 	if err != nil {
 		t.Fatalf("publish predecessor: %v", err)

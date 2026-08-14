@@ -101,13 +101,16 @@ type currentNodePostTurnFinalization struct {
 }
 
 type currentNodeOperation struct {
-	ref                  sessionruntime.WorkflowOperationRef
-	workflow             *sessionruntime.WorkflowExecutionRef
-	policy               currentNodeAdmissionPolicy
-	agentCapacityLease   *currentNodeAgentCapacityLease
-	completion           *workflowstore.CurrentNodeCompletionResult
-	postTurnFinalization *currentNodePostTurnFinalization
-	heldStarts           []currentNodeQueuedStart
+	ref                   workflow.CurrentNodeOperationRef
+	workflow              *sessionruntime.WorkflowExecutionRef
+	policy                currentNodeAdmissionPolicy
+	agentCapacityLease    *currentNodeAgentCapacityLease
+	completion            *workflowstore.CurrentNodeCompletionResult
+	postTurnFinalization  *currentNodePostTurnFinalization
+	postTurnSettlement    *workflowruntime.PostTurnSettlement
+	heldStarts            []currentNodeQueuedStart
+	authorityRetired      bool
+	retirementDisposition sessionruntime.WorkflowRetirementDisposition
 }
 
 // CurrentNodeController is the sole workflowruntime.Controller. Its mutex,
@@ -243,13 +246,14 @@ func (c *CurrentNodeController) CompleteAgentCurrentNode(
 	ctx context.Context,
 	req workflowruntime.AgentCompletionRequest,
 ) (workflowruntime.CompletionResult, error) {
-	_, err := c.completeAgentCurrentNode(ctx, req)
+	_, operation, err := c.completeAgentCurrentNode(ctx, req)
 	if err != nil {
 		return workflowruntime.CompletionResult{}, err
 	}
 	return workflowruntime.CompletionResult{
 		TransitionID: workflow.TransitionID(req.TransitionID),
 		State:        "applied",
+		Operation:    operation,
 	}, nil
 }
 
@@ -260,7 +264,7 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 	if req.ScopeID.IsZero() {
 		return workflowruntime.CompletionResult{}, errors.New("Script completion requires an Exact Execution Scope")
 	}
-	_, err := c.completeLiveCurrentNode(
+	_, operation, err := c.completeLiveCurrentNode(
 		ctx,
 		req.ScopeID,
 		nil,
@@ -277,6 +281,7 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 	return workflowruntime.CompletionResult{
 		TransitionID: workflow.TransitionID(req.TransitionID),
 		State:        "applied",
+		Operation:    operation,
 	}, nil
 }
 
@@ -299,7 +304,7 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	if !live || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent {
 		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
 	}
-	return c.completeAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
+	completed, _, err := c.completeAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
 		Provenance: workflowruntime.AgentCompletionProvenance{
 			ScopeID: handle.Scope().ID(),
 			RunID:   runID,
@@ -310,23 +315,24 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 		OutputValues: outputValues,
 		Commentary:   commentary,
 	})
+	return completed, err
 }
 
 func (c *CurrentNodeController) completeAgentCurrentNode(
 	ctx context.Context,
 	req workflowruntime.AgentCompletionRequest,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error) {
 	if c == nil {
-		return workflowstore.CurrentNodeCompletionResult{}, errors.New("current node workflow controller is required")
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, errors.New("current node workflow controller is required")
 	}
 	if req.Provenance.ScopeID.IsZero() || req.Provenance.RunID.IsZero() ||
 		req.Provenance.StepID.IsZero() || req.SessionID.IsZero() {
-		return workflowstore.CurrentNodeCompletionResult{}, errors.New("Agent completion requires Scope, Session, Run, and Step provenance")
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, errors.New("Agent completion requires Scope, Session, Run, and Step provenance")
 	}
 	handle, live := c.authority.SessionExecution(req.SessionID)
 	if !live || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent ||
 		handle.Scope().ID() != req.Provenance.ScopeID {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	return c.completeLiveCurrentNode(
 		ctx,
@@ -355,18 +361,18 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	outputValues map[string]string,
 	commentary string,
 	validateAndCommit func(func() error) error,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error) {
 	handle, live := c.authority.ExecutionByScope(scopeID)
 	if !live {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	workflowRef, workflowScoped := handle.Scope().Workflow()
 	if !workflowScoped {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
 	}
 	key, err := workflowRef.CurrentNode.Key()
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, err
 	}
 	var completed workflowstore.CurrentNodeCompletionResult
 	var starts []currentNodeQueuedStart
@@ -418,6 +424,13 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 			}
 			completion := completed
 			exact.completion = &completion
+			if !completed.PostCompletionEligible {
+				settlement := workflowruntime.PostTurnSettlement{
+					Kind:            workflowruntime.PostTurnSettlementSucceeded,
+					DiagnosticOwner: workflowruntime.DiagnosticOwnerScriptRunner,
+				}
+				exact.postTurnSettlement = &settlement
+			}
 			c.mu.Unlock()
 			if completed.PostCompletionEligible {
 				analysis := workflow.SessionReuseAnalysisInput{}
@@ -468,9 +481,9 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, err
 	}
-	return completed, nil
+	return completed, workflowRef.Operation(), nil
 }
 
 func (c *CurrentNodeController) loadSessionReuseAssociations(
@@ -499,60 +512,70 @@ func (c *CurrentNodeController) loadSessionReuseAssociations(
 
 func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 	ctx context.Context,
-	scopeID runtimeids.ExecutionScopeID,
+	operationRef workflow.CurrentNodeOperationRef,
 	sessionID runtimeids.SessionID,
 	runtimeState workflowruntime.PostCompletionRuntime,
-) error {
+) (workflowruntime.PostTurnSettlement, error) {
 	if c == nil {
-		return errors.New("current node workflow controller is required")
+		return workflowruntime.PostTurnSettlement{}, errors.New("current node workflow controller is required")
 	}
-	if scopeID.IsZero() || sessionID.IsZero() {
-		return errors.New("workflow post-turn finalization identities are required")
+	if err := operationRef.Validate(); err != nil {
+		return workflowruntime.PostTurnSettlement{}, err
 	}
-	handle, live := c.authority.ExecutionByScope(scopeID)
-	if !live {
-		return nil
+	if sessionID.IsZero() {
+		return workflowruntime.PostTurnSettlement{}, errors.New("workflow post-turn Session is required")
 	}
-	workflowRef, workflowScoped := handle.Scope().Workflow()
-	if !workflowScoped {
-		return sessionruntime.ErrExecutionNoLongerLive
-	}
-	key, err := workflowRef.CurrentNode.Key()
+	key, err := operationRef.CurrentNode.Key()
 	if err != nil {
-		return err
+		return workflowruntime.PostTurnSettlement{}, err
 	}
 	var phase currentNodePostTurnFinalization
-	var phaseExists bool
-	if err := c.permit.Run(ctx, func(context.Context) error {
+	shutdown := false
+	if err := c.permit.Run(context.WithoutCancel(ctx), func(context.Context) error {
 		c.mu.Lock()
-		operation := c.operations[key]
-		if operation == nil || operation.ref.OperationID != workflowRef.OperationID ||
-			operation.postTurnFinalization == nil {
-			c.mu.Unlock()
+		defer c.mu.Unlock()
+		if c.closed || c.closing {
+			shutdown = true
 			return nil
+		}
+		operation := c.operations[key]
+		if operation == nil || operation.ref.OperationID != operationRef.OperationID {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if operation.postTurnSettlement != nil {
+			return nil
+		}
+		if operation.postTurnFinalization == nil {
+			return errors.New("workflow operation has no pending post-turn finalization")
 		}
 		current := *operation.postTurnFinalization
 		if current.sessionID == nil || *current.sessionID != sessionID {
-			c.mu.Unlock()
 			return fmt.Errorf("workflow post-turn Session %s does not match source Session", sessionID)
 		}
 		phase = current
-		phaseExists = true
-		c.mu.Unlock()
 		return nil
 	}); err != nil {
-		return err
+		return workflowruntime.PostTurnSettlement{}, err
+	}
+	if shutdown {
+		return workflowruntime.PostTurnSettlement{
+			Kind:            workflowruntime.PostTurnSettlementShutdownDisposed,
+			DiagnosticOwner: workflowruntime.DiagnosticOwnerControllerShutdown,
+		}, nil
 	}
 
-	if !phaseExists {
-		return nil
+	settlement := workflowruntime.PostTurnSettlement{
+		Kind:            workflowruntime.PostTurnSettlementSucceeded,
+		DiagnosticOwner: workflowruntime.DiagnosticOwnerAgentRunner,
 	}
 	if phase.classification == workflow.SessionReuseThresholdPossibleReuse &&
 		runtimeState.CompactionMode != "none" &&
 		runtimeState.PreCompactionTokens <= 0 {
-		return errors.New("workflow pre-compaction token limit must be positive")
+		settlement.Kind = workflowruntime.PostTurnSettlementAborted
+		settlement.Diagnostic = errors.New("workflow pre-compaction token limit must be positive")
 	}
 	shouldCompact := runtimeState.Compact != nil &&
+		settlement.Kind == workflowruntime.PostTurnSettlementSucceeded &&
 		runtimeState.CompactionMode != "none" &&
 		((phase.classification == workflow.SessionReuseGuaranteedCACReuse) ||
 			(phase.classification == workflow.SessionReuseThresholdPossibleReuse &&
@@ -560,44 +583,62 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 				runtimeState.UsedTokens >= runtimeState.PreCompactionTokens))
 	if shouldCompact {
 		result := runtimeState.Compact(ctx)
-		if cause := context.Cause(ctx); cause != nil {
-			if result.Diagnostic != nil {
-				return errors.Join(cause, result.Diagnostic)
-			}
-			return cause
+		settlement.CommitReceipt = result.CommitReceipt
+		cause := context.Cause(ctx)
+		diagnostic := errors.Join(cause, result.Diagnostic)
+		switch {
+		case result.CommitReceipt.Committed && diagnostic != nil:
+			settlement.Kind = workflowruntime.PostTurnSettlementCompletedWithDiagnostic
+			settlement.Diagnostic = diagnostic
+		case result.CommitReceipt.Committed:
+		case cause != nil || errors.Is(result.Diagnostic, context.Canceled):
+			settlement.Kind = workflowruntime.PostTurnSettlementAborted
+			settlement.Diagnostic = diagnostic
+		case result.Diagnostic != nil:
+			settlement.Kind = workflowruntime.PostTurnSettlementCompletedWithDiagnostic
+			settlement.Diagnostic = result.Diagnostic
 		}
-		if result.Diagnostic != nil {
-			if errors.Is(result.Diagnostic, context.Canceled) ||
-				context.Cause(ctx) != nil {
-				return result.Diagnostic
-			}
-			slog.Warn(
-				"workflow post-turn compaction diagnostic",
-				"task_id", phase.reference.TaskID,
-				"node_id", phase.reference.NodeID,
-				"session_id", sessionID,
-				"receipt_committed", result.CommitReceipt.Committed,
-				"error", result.Diagnostic,
-			)
-		}
+	} else if cause := context.Cause(ctx); cause != nil &&
+		settlement.Kind == workflowruntime.PostTurnSettlementSucceeded {
+		settlement.Kind = workflowruntime.PostTurnSettlementAborted
+		settlement.Diagnostic = cause
 	}
 
-	return c.permit.Run(ctx, func(context.Context) error {
-		if _, live := c.authority.ExecutionByWorkflow(workflowRef); !live {
-			return sessionruntime.ErrExecutionNoLongerLive
-		}
+	settleCtx := context.WithoutCancel(ctx)
+	var starts []currentNodeQueuedStart
+	if err := c.permit.Run(settleCtx, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		operation := c.operations[key]
-		if operation == nil || operation.ref.OperationID != workflowRef.OperationID ||
-			operation.postTurnFinalization == nil ||
+		if c.closed || c.closing {
+			settlement = workflowruntime.PostTurnSettlement{
+				Kind:            workflowruntime.PostTurnSettlementShutdownDisposed,
+				DiagnosticOwner: workflowruntime.DiagnosticOwnerControllerShutdown,
+			}
+			return nil
+		}
+		if operation == nil || operation.ref.OperationID != operationRef.OperationID {
+			return sessionruntime.ErrExecutionNoLongerLive
+		}
+		if operation.postTurnSettlement != nil {
+			settlement = *operation.postTurnSettlement
+			return nil
+		}
+		if operation.postTurnFinalization == nil ||
 			!operation.postTurnFinalization.reference.Equal(phase.reference) {
 			return sessionruntime.ErrExecutionNoLongerLive
 		}
 		operation.heldStarts = append([]currentNodeQueuedStart(nil), phase.starts...)
 		operation.postTurnFinalization = nil
+		applied := settlement
+		operation.postTurnSettlement = &applied
+		starts = c.takeSettledOperationLocked(key, operation)
 		return nil
-	})
+	}); err != nil {
+		return workflowruntime.PostTurnSettlement{}, err
+	}
+	c.releaseSettledCurrentNodeStarts(starts)
+	return settlement, nil
 }
 
 var _ workflowruntime.PostTurnFinalizer = (*CurrentNodeController)(nil)
@@ -688,44 +729,80 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 	return nil
 }
 
-func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.ExecutionScope) {
-	ref, ok := scope.Workflow()
-	if !ok || c == nil {
+func (c *CurrentNodeController) WorkflowExecutionRetired(outcome sessionruntime.WorkflowRetirementOutcome) {
+	if c == nil {
 		return
 	}
-	key, err := ref.CurrentNode.Key()
+	if err := outcome.Operation.Validate(); err != nil {
+		panic(fmt.Sprintf("workflow execution retired invalid operation: %v", err))
+	}
+	if outcome.Kind != sessionruntime.ExecutionScopeAgent &&
+		outcome.Kind != sessionruntime.ExecutionScopeScript {
+		panic(fmt.Sprintf("workflow execution retired invalid kind %d", outcome.Kind))
+	}
+	if outcome.Disposition != sessionruntime.WorkflowRetirementCompleted &&
+		outcome.Disposition != sessionruntime.WorkflowRetirementOutcomeLess {
+		panic(fmt.Sprintf("workflow execution retired invalid disposition %d", outcome.Disposition))
+	}
+	key, err := outcome.Operation.CurrentNode.Key()
 	if err != nil {
-		panic(fmt.Sprintf("workflow execution finalized invalid current node: %v", err))
+		panic(fmt.Sprintf("workflow execution retired invalid current node: %v", err))
 	}
 	c.mu.Lock()
 	operation := c.operations[key]
-	if operation == nil || operation.ref.OperationID != ref.OperationID {
+	if operation == nil || operation.ref.OperationID != outcome.Operation.OperationID {
 		c.mu.Unlock()
 		return
 	}
 	c.releaseAgentCapacityLocked(operation.agentCapacityLease)
-	delete(c.operations, key)
-	completed := operation.completion != nil
-	starts := append([]currentNodeQueuedStart(nil), operation.heldStarts...)
-	interrupted := c.interrupts.operationFenced(ref.OperationID)
-	c.interrupts.finishOperation(ref.OperationID)
+	operation.authorityRetired = true
+	operation.retirementDisposition = outcome.Disposition
+	interrupted := c.interrupts.operationFenced(outcome.Operation.OperationID)
+	c.interrupts.finishOperation(outcome.Operation.OperationID)
 	closed := c.closed || c.closing
+	var starts []currentNodeQueuedStart
+	outcomeLess := outcome.Disposition == sessionruntime.WorkflowRetirementOutcomeLess
+	if interrupted || closed || outcomeLess {
+		delete(c.operations, key)
+	} else {
+		starts = c.takeSettledOperationLocked(key, operation)
+	}
 	c.mu.Unlock()
 	if !closed {
 		c.wakeAdmissionWorker()
 	}
 	if interrupted || closed {
-		if !closed {
-			c.wakeAdmissionWorker()
-		}
 		return
 	}
-	if !completed {
-		if err := c.interruptOutcomeLessFinalization(ref.CurrentNode); err != nil {
+	if outcomeLess {
+		if err := c.interruptOutcomeLessFinalization(outcome.Operation.CurrentNode); err != nil {
 			c.mu.Lock()
 			c.workerErr = errors.Join(c.workerErr, err)
 			c.mu.Unlock()
 		}
+		return
+	}
+	c.releaseSettledCurrentNodeStarts(starts)
+}
+
+func (c *CurrentNodeController) takeSettledOperationLocked(
+	key workflow.CurrentNodeReferenceKey,
+	operation *currentNodeOperation,
+) []currentNodeQueuedStart {
+	if operation == nil ||
+		!operation.authorityRetired ||
+		operation.retirementDisposition != sessionruntime.WorkflowRetirementCompleted ||
+		operation.completion == nil ||
+		operation.postTurnSettlement == nil {
+		return nil
+	}
+	starts := append([]currentNodeQueuedStart(nil), operation.heldStarts...)
+	delete(c.operations, key)
+	return starts
+}
+
+func (c *CurrentNodeController) releaseSettledCurrentNodeStarts(starts []currentNodeQueuedStart) {
+	if c == nil {
 		return
 	}
 	waitCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
@@ -825,12 +902,13 @@ func (c *CurrentNodeController) Close() error {
 		c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
 		workflowExecutions = make([]sessionruntime.WorkflowExecutionRef, 0, len(c.operations))
 		for _, operation := range c.operations {
-			operation.heldStarts = nil
-			operation.postTurnFinalization = nil
+			c.releaseAgentCapacityLocked(operation.agentCapacityLease)
+			c.interrupts.finishOperation(operation.ref.OperationID)
 			if operation.workflow != nil {
 				workflowExecutions = append(workflowExecutions, *operation.workflow)
 			}
 		}
+		c.operations = make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation)
 		for _, batch := range queuedPreparations {
 			closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
 		}
@@ -886,4 +964,4 @@ func (c *CurrentNodeController) requireLiveScope(scopeID runtimeids.ExecutionSco
 }
 
 var _ workflowruntime.Controller = (*CurrentNodeController)(nil)
-var _ sessionruntime.ExecutionFinalized = (*CurrentNodeController)(nil)
+var _ sessionruntime.WorkflowExecutionRetired = (*CurrentNodeController)(nil)

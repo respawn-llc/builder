@@ -161,6 +161,7 @@ type ScriptCompletionRequest struct {
 type CompletionResult struct {
 	TransitionID workflow.TransitionID
 	State        string
+	Operation    workflow.CurrentNodeOperationRef
 }
 
 // PostCompletionCompactionResult preserves a durable history-replacement
@@ -179,10 +180,39 @@ type PostCompletionRuntime struct {
 	Compact             func(context.Context) PostCompletionCompactionResult
 }
 
+type DiagnosticOwner string
+
+const (
+	DiagnosticOwnerAgentRunner        DiagnosticOwner = "agent_runner"
+	DiagnosticOwnerScriptRunner       DiagnosticOwner = "script_runner"
+	DiagnosticOwnerControllerShutdown DiagnosticOwner = "controller_shutdown"
+)
+
+type PostTurnSettlementKind string
+
+const (
+	PostTurnSettlementSucceeded               PostTurnSettlementKind = "succeeded"
+	PostTurnSettlementCompletedWithDiagnostic PostTurnSettlementKind = "completed_with_diagnostic"
+	PostTurnSettlementAborted                 PostTurnSettlementKind = "aborted"
+	PostTurnSettlementShutdownDisposed        PostTurnSettlementKind = "shutdown_disposed"
+)
+
+type PostTurnSettlement struct {
+	Kind            PostTurnSettlementKind
+	DiagnosticOwner DiagnosticOwner
+	Diagnostic      error
+	CommitReceipt   session.CommitReceipt
+}
+
 // PostTurnFinalizer owns the process-local completion fence and releases held
 // successors only after post-turn finalization has completed.
 type PostTurnFinalizer interface {
-	FinalizeCurrentNodePostTurn(context.Context, runtimeids.ExecutionScopeID, runtimeids.SessionID, PostCompletionRuntime) error
+	FinalizeCurrentNodePostTurn(
+		context.Context,
+		workflow.CurrentNodeOperationRef,
+		runtimeids.SessionID,
+		PostCompletionRuntime,
+	) (PostTurnSettlement, error)
 }
 
 type ViolationKind string

@@ -291,7 +291,7 @@ func startLiveTestWorkflowScript(
 		controller.mu.Lock()
 		workflowRef, _ := published.Scope().Workflow()
 		controller.operations[key] = &currentNodeOperation{
-			ref: sessionruntime.WorkflowOperationRef{
+			ref: workflow.CurrentNodeOperationRef{
 				OperationID: operationID,
 				CurrentNode: reference,
 			},
@@ -326,7 +326,7 @@ func completeCurrentNodeLifecycleForTest(
 	sessionID *runtimeids.SessionID,
 	transitionID string,
 ) (workflowstore.CurrentNodeCompletionResult, error) {
-	return controller.completeLiveCurrentNode(
+	result, _, err := controller.completeLiveCurrentNode(
 		ctx,
 		scopeID,
 		sessionID,
@@ -335,6 +335,24 @@ func completeCurrentNodeLifecycleForTest(
 		"",
 		func(commit func() error) error { return commit() },
 	)
+	return result, err
+}
+
+func workflowOperationForScopeForTest(
+	t *testing.T,
+	authority *sessionruntime.Authority,
+	scopeID runtimeids.ExecutionScopeID,
+) workflow.CurrentNodeOperationRef {
+	t.Helper()
+	handle, live := authority.ExecutionByScope(scopeID)
+	if !live {
+		t.Fatalf("Workflow scope %s is not live", scopeID)
+	}
+	ref, workflowScoped := handle.Scope().Workflow()
+	if !workflowScoped {
+		t.Fatalf("scope %s has no Workflow metadata", scopeID)
+	}
+	return ref.Operation()
 }
 
 func (s completedCurrentNodeAssignmentSteer) Wait(context.Context) (session.CommitReceipt, error) {
@@ -960,9 +978,9 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
 			if controller != nil {
-				controller.ExecutionFinalized(scope)
+				controller.WorkflowExecutionRetired(outcome)
 			}
 		}),
 		PersistenceRoot: appCfg.PersistenceRoot,

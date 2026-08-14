@@ -214,8 +214,8 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 	fixture.authority = sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		PersistenceRoot: cfg.PersistenceRoot,
 		StoreOptions:    storeOptions,
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 		PromptFeed: fixture.runtimes,
 		EventFeed: func(resource runtimeids.SessionResourceRef, event agentruntime.Event) {
@@ -1331,21 +1331,27 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("open workflow Session descriptor: %v", err)
 	}
-	deadline := time.Now().Add(currentNodeRunnerWait)
-	for {
-		admission, clearErr := f.authority.WithDormantSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
-			return store.SetContinuationContext(session.ContinuationContext{})
-		})
-		if clearErr != nil {
-			t.Fatalf("clear legacy workflow Session role: %v", clearErr)
-		}
-		if !admission.RuntimeAvailable {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("workflow Session runtime remained available after execution finalized")
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := f.authority.WithRetainedWorkflowRuntime(context.Background(), sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
+		engine.ExitRetainedWorkflowControl()
+		return nil
+	}); err != nil {
+		t.Fatalf("release retained Workflow control before attaching runtime: %v", err)
+	}
+	retired, err := f.authority.RetireIdleRuntime(context.Background(), sessionID.String())
+	if err != nil {
+		t.Fatalf("retire ownerless Workflow runtime: %v", err)
+	}
+	if !retired {
+		t.Fatal("ownerless Workflow runtime remained active after retained control released")
+	}
+	admission, err := f.authority.WithDormantSessionStore(context.Background(), descriptor, func(_ context.Context, store *session.Store) error {
+		return store.SetContinuationContext(session.ContinuationContext{})
+	})
+	if err != nil {
+		t.Fatalf("clear legacy workflow Session role: %v", err)
+	}
+	if admission.RuntimeAvailable {
+		t.Fatal("retired Workflow runtime remained available")
 	}
 	initialRuntime := f.runtimeRequests()[0]
 	siblingWorkspace := t.TempDir()

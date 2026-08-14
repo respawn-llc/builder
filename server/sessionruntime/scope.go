@@ -18,21 +18,6 @@ type WorkflowExecutionRef struct {
 	CurrentNode workflow.CurrentNodeReference
 }
 
-type WorkflowOperationRef struct {
-	OperationID runtimeids.CurrentNodeOperationID
-	CurrentNode workflow.CurrentNodeReference
-}
-
-func (r WorkflowOperationRef) Validate() error {
-	if r.OperationID.IsZero() {
-		return errors.New("current node operation id is required")
-	}
-	if err := r.CurrentNode.Validate(); err != nil {
-		return fmt.Errorf("workflow current node: %w", err)
-	}
-	return nil
-}
-
 func (r WorkflowExecutionRef) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("workflow project id is required")
@@ -46,8 +31,8 @@ func (r WorkflowExecutionRef) Validate() error {
 	return nil
 }
 
-func (r WorkflowExecutionRef) Operation() WorkflowOperationRef {
-	return WorkflowOperationRef{
+func (r WorkflowExecutionRef) Operation() workflow.CurrentNodeOperationRef {
+	return workflow.CurrentNodeOperationRef{
 		OperationID: r.OperationID,
 		CurrentNode: r.CurrentNode,
 	}

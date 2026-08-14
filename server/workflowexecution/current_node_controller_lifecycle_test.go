@@ -82,7 +82,7 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 
 func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
-	controller, scopeID, sessionID := newPostTurnFinalizationControllerForReferenceTest(
+	controller, operationRef, sessionID := newPostTurnFinalizationControllerForReferenceTest(
 		t,
 		source,
 		workflow.SessionReuseGuaranteedCACReuse,
@@ -95,7 +95,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 
 	finalizationDone := make(chan error, 1)
 	go func() {
-		finalizationDone <- controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+		_, err := controller.FinalizeCurrentNodePostTurn(context.Background(), operationRef, sessionID, workflowruntime.PostCompletionRuntime{
 			CompactionMode: "local",
 			Compact: func(context.Context) workflowruntime.PostCompletionCompactionResult {
 				close(entered)
@@ -103,6 +103,7 @@ func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *t
 				return workflowruntime.PostCompletionCompactionResult{}
 			},
 		})
+		finalizationDone <- err
 	}()
 	select {
 	case <-entered:
@@ -169,12 +170,12 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+			controller, operationRef, sessionID := newPostTurnFinalizationControllerForTest(
 				t,
 				workflow.SessionReuseClassification(test.classification),
 			)
 			compactions := 0
-			err := controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+			settlement, err := controller.FinalizeCurrentNodePostTurn(context.Background(), operationRef, sessionID, workflowruntime.PostCompletionRuntime{
 				UsedTokens:          test.usedTokens,
 				PreCompactionTokens: test.preCompaction,
 				CompactionMode:      test.compactionMode,
@@ -188,10 +189,13 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FinalizeCurrentNodePostTurn: %v", err)
 			}
+			if settlement.Kind != workflowruntime.PostTurnSettlementSucceeded {
+				t.Fatalf("settlement = %+v, want succeeded", settlement)
+			}
 			if compactions != test.wantCompactions {
 				t.Fatalf("compactions = %d, want %d", compactions, test.wantCompactions)
 			}
-			if postTurnFinalizationPendingForTest(t, controller, scopeID) {
+			if postTurnFinalizationPendingForTest(t, controller, operationRef) {
 				t.Fatal("post-turn finalization fence remained after finalization")
 			}
 		})
@@ -200,32 +204,39 @@ func TestPostTurnFinalizationCompactionEligibilityMatrix(t *testing.T) {
 
 func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.T) {
 	t.Run("invalid threshold", func(t *testing.T) {
-		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+		controller, operationRef, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseThresholdPossibleReuse,
 		)
-		err := controller.FinalizeCurrentNodePostTurn(context.Background(), scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+		settlement, err := controller.FinalizeCurrentNodePostTurn(context.Background(), operationRef, sessionID, workflowruntime.PostCompletionRuntime{
 			CompactionMode: "local",
 		})
-		if err == nil {
-			t.Fatal("invalid pre-compaction threshold returned nil")
+		if err != nil {
+			t.Fatalf("invalid pre-compaction threshold: %v", err)
 		}
-		if !postTurnFinalizationPendingForTest(t, controller, scopeID) {
-			t.Fatal("invalid threshold cleared the finalization fence")
+		if settlement.Kind != workflowruntime.PostTurnSettlementAborted || settlement.Diagnostic == nil {
+			t.Fatalf("invalid threshold settlement = %+v, want aborted diagnostic", settlement)
+		}
+		if postTurnFinalizationPendingForTest(t, controller, operationRef) {
+			t.Fatal("invalid threshold left the finalization fence")
 		}
 	})
 
-	t.Run("cancellation is fatal", func(t *testing.T) {
-		controller, scopeID, sessionID := newPostTurnFinalizationControllerForTest(
+	t.Run("cancellation settles as aborted", func(t *testing.T) {
+		controller, operationRef, sessionID := newPostTurnFinalizationControllerForTest(
 			t,
 			workflow.SessionReuseGuaranteedCACReuse,
 		)
 		entered := make(chan struct{})
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		done := make(chan error, 1)
+		type finalizationResult struct {
+			settlement workflowruntime.PostTurnSettlement
+			err        error
+		}
+		done := make(chan finalizationResult, 1)
 		go func() {
-			done <- controller.FinalizeCurrentNodePostTurn(ctx, scopeID, sessionID, workflowruntime.PostCompletionRuntime{
+			settlement, err := controller.FinalizeCurrentNodePostTurn(ctx, operationRef, sessionID, workflowruntime.PostCompletionRuntime{
 				CompactionMode: "local",
 				Compact: func(compactionCtx context.Context) workflowruntime.PostCompletionCompactionResult {
 					close(entered)
@@ -233,6 +244,7 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 					return workflowruntime.PostCompletionCompactionResult{Diagnostic: context.Cause(compactionCtx)}
 				},
 			})
+			done <- finalizationResult{settlement: settlement, err: err}
 		}()
 		select {
 		case <-entered:
@@ -241,9 +253,13 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 		}
 		cancel()
 		select {
-		case err := <-done:
-			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("canceled finalization error = %v, want context canceled", err)
+		case result := <-done:
+			if result.err != nil {
+				t.Fatalf("canceled finalization error = %v", result.err)
+			}
+			if result.settlement.Kind != workflowruntime.PostTurnSettlementAborted ||
+				!errors.Is(result.settlement.Diagnostic, context.Canceled) {
+				t.Fatalf("canceled finalization settlement = %+v, want aborted context cancellation", result.settlement)
 			}
 		case <-time.After(time.Second):
 			t.Fatal("canceled post-turn finalization did not return")
@@ -251,10 +267,40 @@ func TestPostTurnFinalizationSurfacesInvalidThresholdAndCancellation(t *testing.
 	})
 }
 
+func TestPostTurnFinalizationReturnsCompletedDiagnosticSettlement(t *testing.T) {
+	controller, operationRef, sessionID := newPostTurnFinalizationControllerForTest(
+		t,
+		workflow.SessionReuseGuaranteedCACReuse,
+	)
+	diagnostic := errors.New("compaction observer unavailable")
+	settlement, err := controller.FinalizeCurrentNodePostTurn(
+		context.Background(),
+		operationRef,
+		sessionID,
+		workflowruntime.PostCompletionRuntime{
+			CompactionMode: "local",
+			Compact: func(context.Context) workflowruntime.PostCompletionCompactionResult {
+				return workflowruntime.PostCompletionCompactionResult{Diagnostic: diagnostic}
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("FinalizeCurrentNodePostTurn: %v", err)
+	}
+	if settlement.Kind != workflowruntime.PostTurnSettlementCompletedWithDiagnostic ||
+		!errors.Is(settlement.Diagnostic, diagnostic) ||
+		settlement.DiagnosticOwner != workflowruntime.DiagnosticOwnerAgentRunner {
+		t.Fatalf("diagnostic settlement = %+v", settlement)
+	}
+	if postTurnFinalizationPendingForTest(t, controller, operationRef) {
+		t.Fatal("diagnostic settlement left the finalization fence")
+	}
+}
+
 func newPostTurnFinalizationControllerForTest(
 	t *testing.T,
 	classification workflow.SessionReuseClassification,
-) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+) (*CurrentNodeController, workflow.CurrentNodeOperationRef, runtimeids.SessionID) {
 	t.Helper()
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-matrix", "node-source")
 	return newPostTurnFinalizationControllerForReferenceTest(t, source, classification)
@@ -264,7 +310,7 @@ func newPostTurnFinalizationControllerForReferenceTest(
 	t *testing.T,
 	source workflow.CurrentNodeReference,
 	classification workflow.SessionReuseClassification,
-) (*CurrentNodeController, runtimeids.ExecutionScopeID, runtimeids.SessionID) {
+) (*CurrentNodeController, workflow.CurrentNodeOperationRef, runtimeids.SessionID) {
 	t.Helper()
 	sessionID := runtimeids.NewSessionID()
 	key, err := source.Key()
@@ -315,24 +361,16 @@ func newPostTurnFinalizationControllerForReferenceTest(
 		_ = handle.Stop(stopCtx)
 		_ = authority.Close(context.Background())
 	})
-	return controller, handle.Scope().ID(), sessionID
+	return controller, workflowRef.Operation(), sessionID
 }
 
 func postTurnFinalizationPendingForTest(
 	t *testing.T,
 	controller *CurrentNodeController,
-	scopeID runtimeids.ExecutionScopeID,
+	operationRef workflow.CurrentNodeOperationRef,
 ) bool {
 	t.Helper()
-	handle, live := controller.authority.ExecutionByScope(scopeID)
-	if !live {
-		t.Fatal("post-turn test execution is not live")
-	}
-	ref, ok := handle.Scope().Workflow()
-	if !ok {
-		t.Fatal("post-turn test execution has no Workflow metadata")
-	}
-	key, err := ref.CurrentNode.Key()
+	key, err := operationRef.CurrentNode.Key()
 	if err != nil {
 		t.Fatalf("post-turn Current Node key: %v", err)
 	}
@@ -340,7 +378,7 @@ func postTurnFinalizationPendingForTest(
 	defer controller.mu.Unlock()
 	operation := controller.operations[key]
 	return operation != nil &&
-		operation.ref.OperationID == ref.OperationID &&
+		operation.ref.OperationID == operationRef.OperationID &&
 		operation.postTurnFinalization != nil
 }
 
@@ -648,8 +686,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -692,8 +730,8 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	); err != nil {
 		t.Fatalf("complete approval source: %v", err)
 	}
-	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
-		t.Fatalf("ApplyPendingApproval: %v", err)
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
+		t.Fatalf("ApplyPendingApproval before source retirement = %v, want %v", err, ErrTaskExecutionNotQuiescent)
 	}
 	select {
 	case started := <-runner.started:
@@ -704,8 +742,13 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	if !live {
 		t.Fatal("completed approval source scope retired before stop")
 	}
-	if err := sourceHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop approval source: %v", err)
+	sourceOperation := workflowOperationForScopeForTest(t, authority, sourceScope)
+	controller.WorkflowExecutionRetired(sessionruntime.WorkflowRetirementOutcome{
+		Operation: sourceOperation, Kind: sessionruntime.ExecutionScopeAgent,
+		Disposition: sessionruntime.WorkflowRetirementCompleted,
+	})
+	if _, err := controller.ApplyPendingApproval(context.Background(), approval.ID); err != nil {
+		t.Fatalf("ApplyPendingApproval after source retirement: %v", err)
 	}
 	targetStarted := false
 	for !targetStarted {
@@ -725,6 +768,9 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	}
 	waitForRunningCurrentNode(t, authority, target)
 	waitForRunningCurrentNode(t, authority, queuedAgent)
+	if err := sourceHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop approval source: %v", err)
+	}
 }
 
 func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T) {
@@ -749,8 +795,8 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -798,7 +844,8 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		t.Fatalf("successor %v started before source retirement", started)
 	case <-time.After(50 * time.Millisecond):
 	}
-	if err := controller.FinalizeCurrentNodePostTurn(context.Background(), sourceScope, sessionID, workflowruntime.PostCompletionRuntime{
+	sourceOperation := workflowOperationForScopeForTest(t, authority, sourceScope)
+	if _, err := controller.FinalizeCurrentNodePostTurn(context.Background(), sourceOperation, sessionID, workflowruntime.PostCompletionRuntime{
 		CompactionMode: "none",
 	}); err != nil {
 		t.Fatalf("finalize source post-turn: %v", err)
@@ -813,9 +860,11 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	if !ok {
 		t.Fatal("source scope disappeared before it was stopped")
 	}
-	if err := sourceHandle.Stop(context.Background()); err != nil {
-		t.Fatalf("stop source: %v", err)
-	}
+	controller.WorkflowExecutionRetired(sessionruntime.WorkflowRetirementOutcome{
+		Operation:   sourceOperation,
+		Kind:        sessionruntime.ExecutionScopeAgent,
+		Disposition: sessionruntime.WorkflowRetirementCompleted,
+	})
 	select {
 	case deadline := <-assignmentDeadline:
 		remaining := time.Until(deadline)
@@ -832,6 +881,9 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("successor did not start after source retirement")
+	}
+	if err := sourceHandle.Stop(context.Background()); err != nil {
+		t.Fatalf("stop source: %v", err)
 	}
 }
 
@@ -851,8 +903,8 @@ func TestCurrentNodeControllerCompletionAndTaskInterruptDoNotDeadlockOrReleaseSu
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -938,8 +990,8 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &completingScriptRunner{

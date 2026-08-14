@@ -296,7 +296,7 @@ func (c *CurrentNodeController) admitPreparedScript(
 			}
 			c.mu.Lock()
 			c.operations[key] = &currentNodeOperation{
-				ref: sessionruntime.WorkflowOperationRef{
+				ref: workflow.CurrentNodeOperationRef{
 					OperationID: operationID,
 					CurrentNode: start.reference,
 				},
@@ -394,7 +394,7 @@ func (c *CurrentNodeController) admitPreparedAgent(
 			}
 			c.mu.Lock()
 			c.operations[key] = &currentNodeOperation{
-				ref: sessionruntime.WorkflowOperationRef{
+				ref: workflow.CurrentNodeOperationRef{
 					OperationID: operationID,
 					CurrentNode: start.reference,
 				},

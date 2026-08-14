@@ -242,6 +242,20 @@ func (s *Starter) PrepareAgentPublication(
 	if s == nil || s.closed.Load() {
 		return nil, errors.New("workflow runtime starter closed")
 	}
+	if assignmentSteer == nil && taskPromptDelivery == workflowruntime.TaskPromptDeliveryResume {
+		input, err := s.store.ResolveCurrentNodeStartContext(ctx, reference)
+		if err != nil {
+			return nil, err
+		}
+		prepared, err := s.prepareCurrentNodeAgentSession(ctx, input, false, true)
+		if err != nil {
+			return nil, err
+		}
+		return &currentNodeAgentPublication{
+			starter: s, input: input, prepared: prepared, operationID: operationID,
+			taskPromptDelivery: taskPromptDelivery, controller: controller,
+		}, nil
+	}
 	assignment, ok := assignmentSteer.(*currentNodeAgentAssignmentSteer)
 	if !ok || assignment == nil || assignment.starter != s || !assignment.reference.Equal(reference) {
 		return nil, fmt.Errorf("current node %v received incompatible assignment %T", reference, assignmentSteer)
@@ -275,28 +289,26 @@ func (s *Starter) publishCurrentNodeAgent(
 		return nil, nil, prepared.cleanup(err)
 	}
 	resource := sessionruntime.AgentResourceSelection(sessionruntime.CurrentAgentResource{})
-	err = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(context.Context, *runtime.Engine) error { return nil })
-	if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+	var replacementPlan *sessionruntime.AgentRuntimePlan
+	if prepared.replaceResource {
 		runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
 		if planErr != nil {
 			return nil, nil, prepared.cleanup(planErr)
 		}
-		opened, openErr := s.runtimeAuthority.OpenPersistedWorkflowRuntime(
-			ctx,
-			sessionruntime.PersistedWorkflowRuntimeOpenRequest{
-				SessionID: prepared.plan.Descriptor.SessionID(),
-				OwnerID:   fmt.Sprintf("workflow-start/%s/%s", reference.TaskID, reference.NodeID),
-				Runtime:   &runtimePlan,
-			},
-		)
-		if openErr != nil {
-			return nil, nil, prepared.cleanup(openErr)
+		resource = sessionruntime.ReplaceAgentResource{}
+		replacementPlan = &runtimePlan
+	} else {
+		err = s.runtimeAuthority.WithCurrentRuntime(ctx, prepared.plan.Descriptor.SessionID(), func(context.Context, *runtime.Engine) error { return nil })
+		if errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			runtimePlan, planErr := s.buildCurrentNodeAgentRuntimePlan(input, prepared)
+			if planErr != nil {
+				return nil, nil, prepared.cleanup(planErr)
+			}
+			resource = sessionruntime.OpenAgentResource{}
+			replacementPlan = &runtimePlan
+		} else if err != nil {
+			return nil, nil, prepared.cleanup(err)
 		}
-		if _, releaseErr := opened.Attachment.Release(ctx, sessionruntime.RuntimeReleaseDetach); releaseErr != nil {
-			return nil, nil, prepared.cleanup(releaseErr)
-		}
-	} else if err != nil {
-		return nil, nil, prepared.cleanup(err)
 	}
 	runtimeConfig, err := BuildCurrentNodeRuntimeConfig(
 		input,
@@ -315,6 +327,7 @@ func (s *Starter) publishCurrentNodeAgent(
 		ctx,
 		sessionruntime.DetachedAgentExecutionRequest{
 			Descriptor: prepared.plan.Descriptor,
+			Runtime:    replacementPlan,
 			Workflow: sessionruntime.WorkflowExecutionRef{
 				ProjectID:   input.Task.ProjectID,
 				WorkflowID:  input.Workflow.ID,
@@ -383,11 +396,12 @@ func currentNodeActiveRuntimeTarget(input workflowstore.CurrentNodeStartContext)
 }
 
 type preparedCurrentNodeAgentSession struct {
-	root    workflowstore.ExecutionRoot
-	plan    launch.SessionPlan
-	client  llm.Client
-	mode    workflowruntime.CompletionMode
-	cleanup func(error) error
+	root            workflowstore.ExecutionRoot
+	plan            launch.SessionPlan
+	client          llm.Client
+	mode            workflowruntime.CompletionMode
+	replaceResource bool
+	cleanup         func(error) error
 }
 
 func (s *Starter) prepareCurrentNodeAgentSession(
@@ -465,13 +479,22 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 		}
 		sessionBound = true
 	}
-	return preparedCurrentNodeAgentSession{
-		root:    root,
-		plan:    plan,
-		client:  client,
-		mode:    mode,
-		cleanup: cleanup,
-	}, nil
+	prepared := preparedCurrentNodeAgentSession{
+		root: root, plan: plan, client: client, mode: mode, cleanup: cleanup,
+	}
+	runtimeErr := s.runtimeAuthority.WithCurrentRuntime(
+		ctx,
+		plan.Descriptor.SessionID(),
+		func(_ context.Context, engine *runtime.Engine) error {
+			prepared.replaceResource =
+				engine.CompactionMode() != string(plan.ActiveSettings.CompactionMode)
+			return nil
+		},
+	)
+	if runtimeErr != nil && !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+		return preparedCurrentNodeAgentSession{}, cleanup(runtimeErr)
+	}
+	return prepared, nil
 }
 
 func (s *Starter) buildCurrentNodeAgentRuntimePlan(
@@ -531,7 +554,11 @@ func (s *Starter) currentNodeAgentRunner(
 				if err != nil {
 					return err
 				}
-				turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, scope.ID(), sessionID, workflowruntime.PostCompletionRuntime{
+				workflowRef, workflowScoped := scope.Workflow()
+				if !workflowScoped {
+					return errors.New("Workflow Agent execution has no operation correlation")
+				}
+				_, turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, workflowRef.Operation(), sessionID, workflowruntime.PostCompletionRuntime{
 					UsedTokens:          turnEngine.ContextUsage().UsedTokens,
 					PreCompactionTokens: preCompactionTokens,
 					CompactionMode:      turnEngine.CompactionMode(),
@@ -590,15 +617,29 @@ func (s *Starter) planCurrentNodeSession(
 	if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error { return store.EnsureDurable() }); err != nil {
 		return launch.SessionPlan{}, disposable, err
 	}
-	if input.ContextMode == workflow.ContextModeCompactAndContinueSession && !sessionPrepared {
-		if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-			return store.ResetLockedContractForCompactionBoundary()
-		}); err != nil {
-			return launch.SessionPlan{}, disposable, err
+	if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
+		runtimeErr := s.runtimeAuthority.WithCurrentRuntime(
+			ctx,
+			plan.Descriptor.SessionID(),
+			func(_ context.Context, engine *runtime.Engine) error {
+				return engine.ResetLockedContractForWorkflowCompactionBoundary()
+			},
+		)
+		switch {
+		case runtimeErr == nil:
+		case errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable):
+			if err := s.withSessionStore(ctx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
+				return store.ResetLockedContractForCompactionBoundary()
+			}); err != nil {
+				return launch.SessionPlan{}, disposable, err
+			}
+		default:
+			return launch.SessionPlan{}, disposable, runtimeErr
 		}
 		plan, err = planner.PlanSession(ctx, launch.SessionRequest{
-			Mode:   launch.ModeHeadless,
-			Intent: serverapi.OpenExistingSessionLaunchIntent(plan.Descriptor.SessionID()),
+			Mode:                                launch.ModeHeadless,
+			Intent:                              serverapi.OpenExistingSessionLaunchIntent(plan.Descriptor.SessionID()),
+			SkipContinuationAgentRoleValidation: sessionPrepared,
 		})
 		if err != nil {
 			return launch.SessionPlan{}, disposable, err

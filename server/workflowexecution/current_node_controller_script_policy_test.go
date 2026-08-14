@@ -54,7 +54,7 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			name: "admitted",
 			apply: func(controller *CurrentNodeController, key workflow.CurrentNodeReferenceKey) {
 				controller.operations[key] = &currentNodeOperation{
-					ref: sessionruntime.WorkflowOperationRef{
+					ref: workflow.CurrentNodeOperationRef{
 						OperationID: runtimeids.NewCurrentNodeOperationID(),
 						CurrentNode: script,
 					},
@@ -89,7 +89,7 @@ func TestCurrentNodeControllerScriptPolicyMatrixDoesNotUseAgentCapacity(t *testi
 			controller.mu.Lock()
 			occupyingKey, _ := occupyingAgent.Key()
 			controller.operations[occupyingKey] = &currentNodeOperation{
-				ref: sessionruntime.WorkflowOperationRef{
+				ref: workflow.CurrentNodeOperationRef{
 					OperationID: runtimeids.NewCurrentNodeOperationID(),
 					CurrentNode: occupyingAgent,
 				},
@@ -131,8 +131,8 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &selectiveScriptFailureRunner{
@@ -202,8 +202,8 @@ func TestCurrentNodeControllerFailedReservationReleasesAgentCapacity(t *testing.
 	store := &currentNodeControllerStore{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{
@@ -335,8 +335,8 @@ func TestCurrentNodeControllerFinalizedGateReleasesAgentCapacity(t *testing.T) {
 	finalized := make(chan struct{})
 	var finalizedOnce sync.Once
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 			finalizedOnce.Do(func() { close(finalized) })
 		}),
 	})
@@ -396,8 +396,8 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
-		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
-			controller.ExecutionFinalized(scope)
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
 		}),
 	})
 	runner := &recordingScriptRunner{

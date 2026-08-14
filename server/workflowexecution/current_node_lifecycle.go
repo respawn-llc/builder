@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
@@ -469,23 +468,8 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 		}
 		sourceOperation := c.operations[sourceKey]
 		if sourceOperation != nil {
-			if sourceOperation.completion == nil {
-				c.mu.Unlock()
-				return workflowstore.PendingApprovalApplyResult{}, errors.New("pending approval source operation has not completed")
-			}
-			if sourceOperation.postTurnFinalization != nil {
-				c.mu.Unlock()
-				return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
-			}
-			if sourceOperation.workflow == nil {
-				c.mu.Unlock()
-				return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
-			}
-		}
-		sourceLive := sourceOperation != nil
-		var sourceWorkflow sessionruntime.WorkflowExecutionRef
-		if sourceLive {
-			sourceWorkflow = *sourceOperation.workflow
+			c.mu.Unlock()
+			return workflowstore.PendingApprovalApplyResult{}, ErrTaskExecutionNotQuiescent
 		}
 		c.mu.Unlock()
 
@@ -500,52 +484,22 @@ func (c *CurrentNodeController) ApplyPendingApproval(
 			}
 			return applied, starts, nil
 		}
-		if !sourceLive {
-			applied, starts, err := apply()
-			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
-			if err != nil {
-				return workflowstore.PendingApprovalApplyResult{}, err
-			}
-			c.mu.Lock()
-			defer c.mu.Unlock()
-			for _, start := range starts {
-				if err := c.queueExplicitStartLocked(start); err != nil {
-					return workflowstore.PendingApprovalApplyResult{}, err
-				}
-			}
-			return applied, nil
-		}
-		handle, live := c.authority.ExecutionByWorkflow(sourceWorkflow)
-		if !live {
-			return workflowstore.PendingApprovalApplyResult{}, sessionruntime.ErrExecutionNoLongerLive
-		}
-		var applied workflowstore.PendingApprovalApplyResult
-		var starts []currentNodeQueuedStart
-		var pending []*pendingCurrentNodeAssignmentSteer
-		err = c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
-			var applyErr error
-			applied, starts, applyErr = apply()
-			if applyErr != nil {
-				return applyErr
-			}
-			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
-			c.mu.Lock()
-			current := c.operations[sourceKey]
-			if current == nil || current.ref.OperationID != sourceWorkflow.OperationID {
-				c.mu.Unlock()
-				return sessionruntime.ErrExecutionNoLongerLive
-			}
-			current.heldStarts = append(current.heldStarts, starts...)
-			c.mu.Unlock()
-			return applyErr
-		})
+		applied, starts, err := apply()
 		if err != nil {
 			return workflowstore.PendingApprovalApplyResult{}, err
 		}
-		return applied, c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
+		starts, err = c.steerAndWaitStarts(ctx, starts, recoverCommittedCurrentNodeStarts)
+		if err != nil {
+			return workflowstore.PendingApprovalApplyResult{}, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, start := range starts {
+			if err := c.queueExplicitStartLocked(start); err != nil {
+				return workflowstore.PendingApprovalApplyResult{}, err
+			}
+		}
+		return applied, nil
 	})
 }
 

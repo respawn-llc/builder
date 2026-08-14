@@ -21,7 +21,7 @@ type WorkflowInterruptSelection struct {
 
 type WorkflowExecutionSelection struct {
 	Handle    ExecutionHandle
-	Operation WorkflowOperationRef
+	Operation workflow.CurrentNodeOperationRef
 }
 
 var (
@@ -69,10 +69,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	for _, execution := range executions {
 		switch execution.phase {
 		case executionPhaseRunning:
-			ref, _ := execution.scope.Workflow()
-			selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
-				Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
-			})
+			if !execution.completed {
+				ref, _ := execution.scope.Workflow()
+				selection.Interruptible = append(selection.Interruptible, WorkflowExecutionSelection{
+					Handle: executionHandle{execution: execution}, Operation: ref.Operation(),
+				})
+			}
 		case executionPhaseQueued:
 			ref, _ := execution.scope.Workflow()
 			selection.Queued = append(selection.Queued, WorkflowExecutionSelection{
@@ -214,7 +216,7 @@ func (a *Authority) WithWorkflowInterruptSelection(
 				selection.Queued = append(selection.Queued, selected)
 			}
 		case executionPhaseRunning:
-			if len(execution.prompts.pending) == 0 {
+			if !execution.completed && len(execution.prompts.pending) == 0 {
 				selection.Interruptible = append(selection.Interruptible, selected)
 			}
 		case executionPhaseFinalizing:

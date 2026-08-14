@@ -21,63 +21,76 @@ import (
 var ErrAuthorityClosed = errors.New("session runtime authority is closed")
 var ErrExecutionNoLongerLive = errors.New("exact execution scope is no longer live")
 
-type ExecutionFinalized interface {
-	ExecutionFinalized(ExecutionScope)
+type WorkflowRetirementDisposition uint8
+
+const (
+	WorkflowRetirementCompleted WorkflowRetirementDisposition = iota + 1
+	WorkflowRetirementOutcomeLess
+)
+
+type WorkflowRetirementOutcome struct {
+	Operation   workflow.CurrentNodeOperationRef
+	Kind        ExecutionScopeKind
+	Disposition WorkflowRetirementDisposition
 }
 
-type ExecutionFinalizedFunc func(ExecutionScope)
+type WorkflowExecutionRetired interface {
+	WorkflowExecutionRetired(WorkflowRetirementOutcome)
+}
 
-func (f ExecutionFinalizedFunc) ExecutionFinalized(scope ExecutionScope) {
+type WorkflowExecutionRetiredFunc func(WorkflowRetirementOutcome)
+
+func (f WorkflowExecutionRetiredFunc) WorkflowExecutionRetired(outcome WorkflowRetirementOutcome) {
 	if f != nil {
-		f(scope)
+		f(outcome)
 	}
 }
 
 type AuthorityOptions struct {
-	Debug              bool
-	ExecutionFinalized ExecutionFinalized
-	PersistenceRoot    string
-	AuthManager        *auth.Manager
-	Background         *shelltool.Manager
-	StoreOptions       []session.StoreOption
-	EventFeed          AgentResourceEventFeed
-	ResourceLifecycle  AgentResourceLifecycle
-	StepLifecycle      AgentResourceStepLifecycle
-	PromptFeed         ExecutionPromptFeed
+	Debug                    bool
+	WorkflowExecutionRetired WorkflowExecutionRetired
+	PersistenceRoot          string
+	AuthManager              *auth.Manager
+	Background               *shelltool.Manager
+	StoreOptions             []session.StoreOption
+	EventFeed                AgentResourceEventFeed
+	ResourceLifecycle        AgentResourceLifecycle
+	StepLifecycle            AgentResourceStepLifecycle
+	PromptFeed               ExecutionPromptFeed
 }
 
 type Authority struct {
-	mu                 sync.Mutex
-	closed             bool
-	lifecycleCtx       context.Context
-	lifecycleCancel    context.CancelFunc
-	lifecycleWG        sync.WaitGroup
-	nextExecution      ExecutionGeneration
-	nextResource       runtimeids.ResourceGeneration
-	byScope            map[runtimeids.ExecutionScopeID]*execution
-	workflowExecutions map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
-	resources          map[runtimeids.SessionID]*agentResource
-	gates              map[runtimeids.SessionID]*sessionAdmissionGate
-	executionFinalized ExecutionFinalized
-	promptFeed         ExecutionPromptFeed
-	options            authorityRuntimeOptions
-	invariantPolicy    invariant.Policy
-	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
+	mu                       sync.Mutex
+	closed                   bool
+	lifecycleCtx             context.Context
+	lifecycleCancel          context.CancelFunc
+	lifecycleWG              sync.WaitGroup
+	nextExecution            ExecutionGeneration
+	nextResource             runtimeids.ResourceGeneration
+	byScope                  map[runtimeids.ExecutionScopeID]*execution
+	workflowExecutions       map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution
+	resources                map[runtimeids.SessionID]*agentResource
+	gates                    map[runtimeids.SessionID]*sessionAdmissionGate
+	workflowExecutionRetired WorkflowExecutionRetired
+	promptFeed               ExecutionPromptFeed
+	options                  authorityRuntimeOptions
+	invariantPolicy          invariant.Policy
+	workflowTaskReads        atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	authority := &Authority{
-		byScope:            make(map[runtimeids.ExecutionScopeID]*execution),
-		workflowExecutions: make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
-		resources:          make(map[runtimeids.SessionID]*agentResource),
-		gates:              make(map[runtimeids.SessionID]*sessionAdmissionGate),
-		lifecycleCtx:       lifecycleCtx,
-		lifecycleCancel:    lifecycleCancel,
-		executionFinalized: options.ExecutionFinalized,
-		promptFeed:         options.PromptFeed,
-		options:            newAuthorityRuntimeOptions(options),
-		invariantPolicy:    invariant.OperationalPolicy(options.Debug),
+		byScope:                  make(map[runtimeids.ExecutionScopeID]*execution),
+		workflowExecutions:       make(map[string]map[runtimeids.WorkflowID]map[workflow.TaskID]map[workflow.CurrentNodeReferenceKey]*execution),
+		resources:                make(map[runtimeids.SessionID]*agentResource),
+		gates:                    make(map[runtimeids.SessionID]*sessionAdmissionGate),
+		lifecycleCtx:             lifecycleCtx,
+		lifecycleCancel:          lifecycleCancel,
+		workflowExecutionRetired: options.WorkflowExecutionRetired,
+		promptFeed:               options.PromptFeed,
+		options:                  newAuthorityRuntimeOptions(options),
+		invariantPolicy:          invariant.OperationalPolicy(options.Debug),
 	}
 	if authority.options.background != nil {
 		authority.options.background.SetEventHandler(authority.routeBackgroundEvent)
@@ -356,13 +369,17 @@ func (a *Authority) CompleteAgentStep(
 			exact.resource == nil {
 			return ErrExecutionNoLongerLive
 		}
-		return exact.resource.withEngine(
+		err := exact.resource.withEngine(
 			ctx,
 			exact.resource.ref,
 			func(_ context.Context, engine *runtime.Engine) error {
 				return engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, operation)
 			},
 		)
+		if err == nil {
+			exact.completed = true
+		}
+		return err
 	})
 }
 
@@ -420,7 +437,11 @@ func (a *Authority) CompleteFinalizingScript(
 			exact.phase != executionPhaseFinalizing {
 			return ErrExecutionNoLongerLive
 		}
-		return operation()
+		if err := operation(); err != nil {
+			return err
+		}
+		exact.completed = true
+		return nil
 	})
 }
 

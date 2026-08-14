@@ -66,6 +66,7 @@ type execution struct {
 	phase executionPhase
 
 	protocolViolations int64
+	completed          bool
 
 	closeResource bool
 }
@@ -105,7 +106,7 @@ func (e *execution) requestStop() (bool, error) {
 	defer e.exactMu.Unlock()
 	e.authority.mu.Lock()
 	defer e.authority.mu.Unlock()
-	if e.authority.byScope[e.scope.ID()] != e || e.phase != executionPhaseRunning {
+	if e.authority.byScope[e.scope.ID()] != e || e.phase != executionPhaseRunning || e.completed {
 		return false, nil
 	}
 	if e.scope.Kind() == ExecutionScopeAgent {
@@ -247,8 +248,14 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	e.runErr = finalErr
 	e.stopErr = errors.Join(stopErr, cleanupErr, closeErr, abortErr)
 	e.resultMu.Unlock()
-	if _, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.executionFinalized != nil {
-		authority.executionFinalized.ExecutionFinalized(e.scope)
+	if workflowRef, hasWorkflow := e.scope.Workflow(); hasWorkflow && authority.workflowExecutionRetired != nil {
+		disposition := WorkflowRetirementOutcomeLess
+		if e.completed {
+			disposition = WorkflowRetirementCompleted
+		}
+		authority.workflowExecutionRetired.WorkflowExecutionRetired(WorkflowRetirementOutcome{
+			Operation: workflowRef.Operation(), Kind: e.scope.Kind(), Disposition: disposition,
+		})
 	}
 	close(e.done)
 }
