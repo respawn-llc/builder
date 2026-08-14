@@ -219,6 +219,7 @@ func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEv
 	service := NewService(
 		registry.NewGlobalPersistenceSessionResolver(
 			persistenceRoot,
+			metadataStore,
 			metadataStore.AuthoritativeSessionStoreOptions()...,
 		),
 		nil,

@@ -125,6 +125,33 @@ func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx cont
 	})
 }
 
+func (g *Gateway) serveQuestionHistorySubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(
+		conn,
+		ctx,
+		route,
+		req,
+		g.deps.SessionViewClient().SubscribeQuestionHistory,
+		func(event serverapi.QuestionHistoryEvent) protocol.SessionQuestionHistoryEventParams {
+			wire := protocol.SessionQuestionHistoryEvent{
+				Kind:           string(event.Kind),
+				LargeHistory:   event.LargeHistory,
+				HistoryOmitted: event.HistoryOmitted,
+			}
+			if event.Question != nil {
+				wire.Question = &protocol.SessionQuestionHistoryQuestion{
+					Question:             event.Question.Question,
+					Answer:               event.Question.Answer,
+					SelectedOptionNumber: event.Question.SelectedOptionNumber,
+					Commentary:           event.Question.Commentary,
+					At:                   event.Question.At,
+				}
+			}
+			return protocol.SessionQuestionHistoryEventParams{Event: wire}
+		},
+	)
+}
+
 type legacyTranscriptSubscription struct {
 	inner      serverapi.TranscriptSubscription
 	suppressed uint64

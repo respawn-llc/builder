@@ -13,8 +13,8 @@ type AskQuestionResolution interface {
 }
 
 type AskQuestionAnswer struct {
-	SelectedOptionNumber *int
-	Freeform             *string
+	SelectedOptionNumber *int    `json:"selected_option_number,omitempty"`
+	Freeform             *string `json:"freeform,omitempty"`
 }
 
 func (AskQuestionAnswer) askQuestionResolution() {}

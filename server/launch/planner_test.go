@@ -909,8 +909,10 @@ func TestPlannerNewChildSessionRollsBackDurableChildWhenExecutionTargetCopyFails
 	if strings.TrimSpace(failingStore.updatedSessionID) == "" {
 		t.Fatal("expected child execution target update to be attempted")
 	}
-	if _, err := metadataStore.ResolveSessionExecutionTarget(ctx, failingStore.updatedSessionID); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("ResolveSessionExecutionTarget child after rollback error = %v, want sql.ErrNoRows", err)
+	if _, err := metadataStore.ResolveSessionExecutionTarget(ctx, failingStore.updatedSessionID); !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("ResolveSessionExecutionTarget child after rollback error = %v, want ErrSessionNotFound", err)
+	} else if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("ResolveSessionExecutionTarget child after rollback leaked sql.ErrNoRows: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(containerDir, failingStore.updatedSessionID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("child session dir stat after rollback error = %v, want not exist", err)
