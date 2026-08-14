@@ -53,6 +53,36 @@ func TestCompleteWorkflowTaskReturnsPendingApprovalWithoutReplacingCurrentNode(t
 	}
 }
 
+func TestCompleteWorkflowTaskReturnsAcceptedCompletionDespitePostCommitDiagnostic(t *testing.T) {
+	source := currentNodeCompletionReference(t, "task-accepted-diagnostic", "node-agent")
+	publicationErr := errors.New("completion event publication failed")
+	execution := &currentNodeCompletionExecutionStub{
+		sessionResult: workflowstore.CurrentNodeCompletionResult{
+			PendingApproval: &workflow.PendingApproval{
+				ID:     workflow.NewApprovalID(),
+				Source: source,
+			},
+		},
+		sessionDiagnostic: publicationErr,
+	}
+	response, err := currentNodeCompletionService(execution).CompleteWorkflowTask(
+		context.Background(),
+		serverapi.WorkflowTaskCompleteRequest{
+			ActorKind:      serverapi.WorkflowTaskCompleteActorAgent,
+			AgentSessionID: runtimeids.NewSessionID().String(),
+			RunID:          "11111111-1111-4111-8111-111111111111",
+			StepID:         "22222222-2222-4222-8222-222222222222",
+			TransitionID:   "done",
+		},
+	)
+	if err != nil {
+		t.Fatalf("CompleteWorkflowTask: %v", err)
+	}
+	if response.TaskID != string(source.TaskID) {
+		t.Fatalf("accepted completion response = %+v, want Task %s", response, source.TaskID)
+	}
+}
+
 func TestCompleteWorkflowTaskForceComposesInterruptThenManualMove(t *testing.T) {
 	ctx, service, binding := newWorkflowServiceTestContext(t)
 	workflowID := createWorkflowServiceChainedWorkflow(t, ctx, service)
@@ -170,6 +200,7 @@ type currentNodeCompletionExecutionStub struct {
 	startFinalizers        chan<- workflowexecution.TaskPreparationFinalizer
 	sessionID              runtimeids.SessionID
 	sessionResult          workflowstore.CurrentNodeCompletionResult
+	sessionDiagnostic      error
 	sessionErr             error
 }
 
@@ -378,6 +409,7 @@ func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(
 		return workflowruntime.RejectedCompletionOutcome(s.sessionErr), s.sessionErr
 	}
 	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
-		Result: workflowruntime.CompletionResult{CommittedResult: s.sessionResult},
+		Result:     workflowruntime.CompletionResult{CommittedResult: s.sessionResult},
+		Diagnostic: s.sessionDiagnostic,
 	}), nil
 }

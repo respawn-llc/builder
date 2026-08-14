@@ -1243,6 +1243,135 @@ func TestStructuredCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSucces
 	)
 }
 
+func TestServerCompletionReturnsBeforeStepClosureAndRunnerFinalization(t *testing.T) {
+	triggerCompletion := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-releaseProvider:
+		default:
+			close(releaseProvider)
+		}
+	})
+	var (
+		f         *currentNodeRunnerFixture
+		sessionID runtimeids.SessionID
+	)
+	rpcReturned := make(chan error, 1)
+	f = newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				select {
+				case <-triggerCompletion:
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+				var runID runtimeids.RunID
+				var stepID runtimeids.StepID
+				if err := f.authority.WithCurrentRuntime(ctx, sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
+					run := engine.ActiveRun()
+					if run == nil {
+						return errors.New("server completion has no active Workflow turn")
+					}
+					var err error
+					runID, err = runtimeids.ParseRunID(run.RunID)
+					if err != nil {
+						return err
+					}
+					stepID, err = runtimeids.ParseStepID(run.StepID)
+					return err
+				}); err != nil {
+					rpcReturned <- err
+					return err
+				}
+				_, err := f.controller.CompleteSessionCurrentNode(
+					context.Background(),
+					sessionID,
+					runID,
+					stepID,
+					"next",
+					nil,
+					"completed by server command",
+				)
+				rpcReturned <- err
+				select {
+				case <-releaseProvider:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: ScriptedFinalAnswer("ignored after synchronous completion").Response,
+		},
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	f.starter.cfg.Settings.Workflow.CompletionMode = config.WorkflowCompletionModeShellCommand
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Synchronous server completion",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete source."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review successor."},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	sourceNodes := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Reference.Equal(source) && nodes[0].SessionID != nil
+	})
+	sessionID = *sourceNodes[0].SessionID
+	publicationErr := errors.New("completion event publication failed")
+	f.store.SetWorkflowEventPublisher(failingCompletionEventPublisher{err: publicationErr})
+	close(triggerCompletion)
+	select {
+	case err := <-rpcReturned:
+		if err != nil {
+			t.Fatalf("synchronous server completion: %v", err)
+		}
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("synchronous server completion did not return")
+	}
+	if diagnostics := f.diagnostics.snapshot(); len(diagnostics) != 0 {
+		t.Fatalf("diagnostics published before Workflow turn closed: %+v", diagnostics)
+	}
+	if err := f.authority.WithCurrentRuntime(context.Background(), sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
+		if engine.ActiveRun() == nil {
+			return errors.New("protected Workflow Step closed before server completion returned")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("inspect active Workflow Step: %v", err)
+	}
+	target := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.Equal(source)
+	})[0].Reference
+	if owned, err := f.workflowExecutionOwned(target); err != nil {
+		t.Fatalf("inspect successor execution: %v", err)
+	} else if owned {
+		t.Fatal("successor launched before the source Workflow Step closed")
+	}
+
+	close(releaseProvider)
+	f.waitForTaskQuiescence(t, task.ID)
+	diagnostics := f.diagnostics.snapshot()
+	if len(diagnostics) != 1 || !errors.Is(diagnostics[0].Diagnostic, publicationErr) {
+		t.Fatalf("post-turn diagnostics = %+v, want one completion diagnostic", diagnostics)
+	}
+	if requests := f.waitForModelRequests(t, 2); len(requests) != 2 {
+		t.Fatalf("model requests = %d, want source and one successor", len(requests))
+	}
+	interrupted, err := f.store.InterruptedExecutableCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list interrupted Current Nodes: %v", err)
+	}
+	for _, node := range interrupted {
+		if node.Reference.Equal(source) {
+			t.Fatalf("accepted server completion interrupted source %v", source)
+		}
+	}
+}
+
 func testCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(
 	t *testing.T,
 	completionMode config.WorkflowCompletionMode,
