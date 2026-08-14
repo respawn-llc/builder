@@ -146,7 +146,6 @@ func newProtobufGenerationFixture(t *testing.T) protobufGenerationFixture {
 		"PATH="+testPath,
 		"KENT_PROTOBUF_TEST_STATE_ROOT="+fixture.stateRoot,
 		"KENT_PROTOBUF_REAL_GO="+realGoPath,
-		"KENT_PROTOBUF_TS_GENERATOR="+filepath.Join(fixture.fakeBinRoot, "protoc-gen-es"),
 	)
 	return fixture
 }
@@ -267,6 +266,20 @@ printf '%s\n' "$content" > "$path"
 	}
 	writeFixtureFile(t, binRoot, "protoc-gen-es", []byte("#!/usr/bin/env bash\nexit 0\n"))
 	if err := os.Chmod(filepath.Join(binRoot, "protoc-gen-es"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const fakePnpm = `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" != "install" || "${2:-}" != "--frozen-lockfile" ]]; then
+	echo "unexpected fake pnpm invocation: $*" >&2
+	exit 2
+fi
+mkdir -p node_modules/.bin
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > node_modules/.bin/protoc-gen-es
+chmod +x node_modules/.bin/protoc-gen-es
+`
+	writeFixtureFile(t, binRoot, "pnpm", []byte(fakePnpm))
+	if err := os.Chmod(filepath.Join(binRoot, "pnpm"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

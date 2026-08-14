@@ -1,13 +1,10 @@
 export {
-  activeOperationName,
   descriptorPaths,
   file,
   files,
   operationByName,
   operationFromDescriptor,
   operations,
-  pascalCaseToLowerSnake,
-  validatePackageName,
   validateKentMethodOptions,
 } from "./policy.js";
 export {

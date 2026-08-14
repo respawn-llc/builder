@@ -72,9 +72,39 @@ func writeRegistry(
 	}
 	output.P("}")
 	output.P()
+	output.P("var activeOperationNames = map[", protogen.GoIdent{
+		GoName:       "FullName",
+		GoImportPath: "google.golang.org/protobuf/reflect/protoreflect",
+	}, "]string{")
+	for _, file := range files {
+		services := file.Services
+		for _, service := range services {
+			for _, method := range service.Methods {
+				activeName, err := registrygen.ActiveOperationName(
+					string(file.Desc.Package()),
+					string(service.Desc.Name()),
+					string(method.Desc.Name()),
+				)
+				if err != nil {
+					panic(err)
+				}
+				output.P(fmt.Sprintf("%q", method.Desc.FullName()), ": ", fmt.Sprintf("%q", activeName), ",")
+			}
+		}
+	}
+	output.P("}")
+	output.P()
 	output.P("func File(path string) (", fileDescriptorType, ", bool) {")
 	output.P("descriptor, exists := filesByPath[path]")
 	output.P("return descriptor, exists")
+	output.P("}")
+	output.P()
+	output.P("func ActiveOperationName(declaration ", protogen.GoIdent{
+		GoName:       "FullName",
+		GoImportPath: "google.golang.org/protobuf/reflect/protoreflect",
+	}, ") (string, bool) {")
+	output.P("name, exists := activeOperationNames[declaration]")
+	output.P("return name, exists")
 	output.P("}")
 	output.P()
 	output.P("func Files(yield func(", fileDescriptorType, ") bool) {")

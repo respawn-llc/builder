@@ -111,13 +111,9 @@ func OperationFromDescriptor(
 	if err := ValidateKentMethodOptions(options); err != nil {
 		return Operation{}, fmt.Errorf("%s: %w", descriptor.FullName(), err)
 	}
-	activeName, err := ActiveOperationName(
-		string(descriptor.ParentFile().Package()),
-		string(descriptor.Parent().Name()),
-		string(descriptor.Name()),
-	)
-	if err != nil {
-		return Operation{}, fmt.Errorf("%s: %w", descriptor.FullName(), err)
+	activeName, exists := registry.ActiveOperationName(descriptor.FullName())
+	if !exists {
+		return Operation{}, fmt.Errorf("%s has no generated active operation name", descriptor.FullName())
 	}
 	var legacyWireName *string
 	if options.LegacyWireName != nil {
@@ -256,13 +252,9 @@ func resolveAssociation(
 	if !exists {
 		return nil, fmt.Errorf("method declaration %q does not exist", fullName)
 	}
-	activeName, err := ActiveOperationName(
-		string(descriptor.ParentFile().Package()),
-		string(descriptor.Parent().Name()),
-		string(descriptor.Name()),
-	)
-	if err != nil {
-		return nil, err
+	activeName, exists := registry.ActiveOperationName(descriptor.FullName())
+	if !exists {
+		return nil, fmt.Errorf("%s has no generated active operation name", descriptor.FullName())
 	}
 	return &OperationAssociation{ActiveName: activeName, Descriptor: descriptor}, nil
 }

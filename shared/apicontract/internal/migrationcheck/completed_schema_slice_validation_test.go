@@ -10,6 +10,7 @@ import (
 	onboardingpb "core/shared/protoapi/gen/kent/api/onboarding"
 	projectpb "core/shared/protoapi/gen/kent/api/project"
 	promptcommandpb "core/shared/protoapi/gen/kent/api/prompt_command"
+	serverpb "core/shared/protoapi/gen/kent/api/server"
 	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -85,6 +86,19 @@ func TestProjectWorkspaceContractsRejectBlankAndNoncanonicalValues(t *testing.T)
 		RootPath:    "/",
 	}); err != nil {
 		t.Fatalf("filesystem root without display name: %v", err)
+	}
+}
+
+func TestSessionDraftAndUpdateFailureRejectInvalidText(t *testing.T) {
+	if err := protoapi.ValidateGeneratedMessage(&sessionlaunchpb.SessionPersistInputDraftRequest{
+		SessionId: "../x",
+	}); err == nil {
+		t.Fatal("draft persistence accepted a traversal session ID")
+	}
+	if err := protoapi.ValidateGeneratedMessage(&serverpb.UpdateCheckFailed{
+		Cause: " ",
+	}); err == nil {
+		t.Fatal("update failure accepted a blank cause")
 	}
 }
 

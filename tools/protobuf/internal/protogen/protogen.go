@@ -251,9 +251,6 @@ func (m *Manager) generate(target Target, destination string) error {
 }
 
 func (m *Manager) ensureTypeScriptGenerator() error {
-	if executable := os.Getenv("KENT_PROTOBUF_TS_GENERATOR"); executable != "" {
-		return ensureExecutable(executable)
-	}
 	inputFingerprint, err := hashInputs(m.RepositoryRoot,
 		"tools/protobuf/package.json",
 		"tools/protobuf/pnpm-lock.yaml",

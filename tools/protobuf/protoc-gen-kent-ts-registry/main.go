@@ -68,6 +68,24 @@ func writeRegistry(output *protogen.GeneratedFile, files []*protogen.File) {
 	output.P("export const descriptorPaths: readonly string[] = fileDescriptors.map(")
 	output.P("  (descriptor) => `${descriptor.name}.proto`,")
 	output.P(");")
+	output.P()
+	output.P("export const activeOperationNames: ReadonlyMap<string, string> = new Map([")
+	for _, file := range files {
+		for _, service := range file.Services {
+			for _, method := range service.Methods {
+				activeName, err := registrygen.ActiveOperationName(
+					string(file.Desc.Package()),
+					string(service.Desc.Name()),
+					string(method.Desc.Name()),
+				)
+				if err != nil {
+					panic(err)
+				}
+				output.P(`  ["`, method.Desc.FullName(), `", "`, activeName, `"],`)
+			}
+		}
+	}
+	output.P("]);")
 }
 
 func generatedFiles(files []*protogen.File) []*protogen.File {

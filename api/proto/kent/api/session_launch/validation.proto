@@ -1,0 +1,18 @@
+syntax = "proto2";
+
+package kent.api.session_launch;
+
+import "buf/validate/validate.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
+
+extend buf.validate.StringRules {
+  optional bool scoped_session_id = 50001 [(buf.validate.predefined).cel = {
+    id: "kent.session_launch.scoped_session_id"
+    message: "must be a single session ID"
+    expression:
+      "!rule || ("
+      "this.trim() != '' && this.trim() != '.' && this.trim() != '..' && "
+      "!this.trim().contains('/') && !this.trim().contains('\\\\'))"
+  }];
+}

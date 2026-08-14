@@ -14,7 +14,6 @@ import { createValidator } from "@bufbuild/protovalidate";
 
 import * as publicContract from "../dist/index.js";
 import {
-  activeOperationName,
   classifyOperationResult,
   descriptorPaths,
   decodeGeneratedMessage,
@@ -27,10 +26,8 @@ import {
   operationByName,
   operationFromDescriptor,
   operations,
-  pascalCaseToLowerSnake,
   unmarshalEnvelope,
   validateGeneratedMessage,
-  validatePackageName,
   validateKentMethodOptions,
 } from "../dist/index.js";
 import {
@@ -390,41 +387,6 @@ test("generated message codec executes Protovalidate constraints", () => {
   assert.throws(() =>
     validateGeneratedMessage(SchemaConventionsFixtureSchema, message),
   );
-});
-
-test("operation names use the locked state machine", () => {
-  const fixtures = new Map([
-    ["APIStatus", "api_status"],
-    ["UUID", "uuid"],
-    ["HTTP2Server", "http2_server"],
-    ["MaterializeWorkspaceChat", "materialize_workspace_chat"],
-    ["CreateTarget", "create_target"],
-  ]);
-  for (const [input, expected] of fixtures) {
-    assert.equal(pascalCaseToLowerSnake(input), expected);
-  }
-  assert.equal(
-    activeOperationName("workflow.task", "HTTP2Service", "MaterializeWorkspaceChat"),
-    "workflow.task.http2_service.materialize_workspace_chat",
-  );
-});
-
-test("operation names reject invalid packages and identifiers", () => {
-  for (const packageName of [
-    "",
-    "Workflow",
-    "workflow.Task",
-    "workflow.2task",
-    "workflow.-task",
-    "workflow..task",
-    "workflow.",
-    "workfløw",
-  ]) {
-    assert.throws(() => validatePackageName(packageName));
-  }
-  for (const identifier of ["", "workflow", "Work_flow", "Work-Flow", "Wørkflow"]) {
-    assert.throws(() => pascalCaseToLowerSnake(identifier));
-  }
 });
 
 test("the operation index reads typed method options", () => {

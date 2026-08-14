@@ -6,12 +6,15 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "kent/api/project/project.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/session_launch/validation.proto";
 import "kent/api/session_launch/session_launch.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
 
 message SessionInitialInputRequest {
-  optional string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string session_id = 1 [
+    (buf.validate.field).string.(scoped_session_id) = true
+  ];
   string transition_input = 2;
   bool override_stored_draft = 3;
 }
@@ -45,7 +48,9 @@ message SessionInitialInputResult {
 }
 
 message SessionPersistInputDraftRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.(scoped_session_id) = true
+  ];
   string input = 2;
 }
 
@@ -75,14 +80,7 @@ message SessionPersistInputDraftResult {
 
 message SessionRetargetWorkspaceRequest {
   string session_id = 1 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.session_launch.retarget_session_id_scoped"
-      message: "session_id must be a single session ID"
-      expression:
-        "this.trim() != '' && this.trim() != '.' && this.trim() != '..' && "
-        "!this.trim().contains('/') && !this.trim().contains('\\\\')"
-    }
+    (buf.validate.field).string.(scoped_session_id) = true
   ];
   string workspace_root = 2 [
     (buf.validate.field).string.min_len = 1,

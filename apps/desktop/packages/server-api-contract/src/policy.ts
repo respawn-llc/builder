@@ -13,6 +13,7 @@ import {
   UnaryConnection,
 } from "./gen/kent/api/shared/foundation_pb.js";
 import {
+  activeOperationNames,
   descriptorPaths as generatedDescriptorPaths,
   fileDescriptors,
 } from "./gen/registry/registry.js";
@@ -33,103 +34,6 @@ export type Operation = Readonly<{
   event?: OperationAssociation;
   completion?: OperationAssociation;
 }>;
-
-function isAsciiUpper(code: number): boolean {
-  return code >= 65 && code <= 90;
-}
-
-function isAsciiLower(code: number): boolean {
-  return code >= 97 && code <= 122;
-}
-
-function isAsciiDigit(code: number): boolean {
-  return code >= 48 && code <= 57;
-}
-
-export function validatePackageName(packageName: string): void {
-  if (packageName.length === 0) {
-    throw new Error("package is empty");
-  }
-  let atSegmentStart = true;
-  for (let index = 0; index < packageName.length; index += 1) {
-    const code = packageName.charCodeAt(index);
-    if (code === 46) {
-      if (atSegmentStart) {
-        throw new Error(`package segment at code unit ${String(index)} is empty`);
-      }
-      atSegmentStart = true;
-      continue;
-    }
-    if (atSegmentStart) {
-      if (!isAsciiLower(code)) {
-        throw new Error(
-          `package segment at code unit ${String(index)} must start with an ASCII lowercase letter`,
-        );
-      }
-      atSegmentStart = false;
-      continue;
-    }
-    if (!isAsciiLower(code) && !isAsciiDigit(code) && code !== 95) {
-      throw new Error(`invalid package character at code unit ${String(index)}`);
-    }
-  }
-  if (atSegmentStart) {
-    throw new Error("package has an empty trailing segment");
-  }
-}
-
-export function pascalCaseToLowerSnake(identifier: string): string {
-  if (identifier.length === 0) {
-    throw new Error("identifier is empty");
-  }
-  if (!isAsciiUpper(identifier.charCodeAt(0))) {
-    throw new Error("identifier must start with an ASCII uppercase letter");
-  }
-  const result: string[] = [];
-  for (let index = 0; index < identifier.length; index += 1) {
-    const code = identifier.charCodeAt(index);
-    validateIdentifierCode(code, index);
-    appendIdentifierBoundary(result, identifier, index, code);
-    result.push(String.fromCharCode(isAsciiUpper(code) ? code + 32 : code));
-  }
-  return result.join("");
-}
-
-function validateIdentifierCode(code: number, index: number): void {
-  if (!isAsciiUpper(code) && !isAsciiLower(code) && !isAsciiDigit(code)) {
-    throw new Error(`invalid identifier character at code unit ${String(index)}`);
-  }
-}
-
-function appendIdentifierBoundary(
-  result: string[],
-  identifier: string,
-  index: number,
-  code: number,
-): void {
-  if (!isAsciiUpper(code) || index === 0) {
-    return;
-  }
-  const previous = identifier.charCodeAt(index - 1);
-  const hasFollowingLower =
-    index + 1 < identifier.length && isAsciiLower(identifier.charCodeAt(index + 1));
-  if (
-    isAsciiLower(previous) ||
-    isAsciiDigit(previous) ||
-    (isAsciiUpper(previous) && hasFollowingLower)
-  ) {
-    result.push("_");
-  }
-}
-
-export function activeOperationName(
-  packageName: string,
-  service: string,
-  method: string,
-): string {
-  validatePackageName(packageName);
-  return `${packageName}.${pascalCaseToLowerSnake(service)}.${pascalCaseToLowerSnake(method)}`;
-}
 
 export function validateKentMethodOptions(options: KentMethodOptions): void {
   validateAuthenticationStage(options.authenticationStage);
@@ -262,11 +166,7 @@ export function operationFromDescriptor(
     throw new Error(`${descriptor.toString()} method options are required`);
   }
   validateKentMethodOptions(options);
-  const activeName = activeOperationName(
-    descriptor.parent.file.proto.package,
-    descriptor.parent.name,
-    descriptor.name,
-  );
+  const activeName = requiredActiveOperationName(descriptor);
   const legacyWireName =
     options.legacyWireName === undefined
       ? undefined
@@ -330,22 +230,23 @@ function resolveAssociation(
   declaration: OperationAssociationOption,
   descriptors: ReadonlyMap<string, DescMethod>,
 ): OperationAssociation {
-  validatePackageName(declaration.package);
-  pascalCaseToLowerSnake(declaration.service);
-  pascalCaseToLowerSnake(declaration.method);
   const declarationName = `${declaration.package}.${declaration.service}.${declaration.method}`;
   const descriptor = descriptors.get(declarationName);
   if (descriptor === undefined) {
     throw new Error(`method declaration ${declarationName} does not exist`);
   }
   return {
-    activeName: activeOperationName(
-      descriptor.parent.file.proto.package,
-      descriptor.parent.name,
-      descriptor.name,
-    ),
+    activeName: requiredActiveOperationName(descriptor),
     descriptor,
   };
+}
+
+function requiredActiveOperationName(descriptor: DescMethod): string {
+  const activeName = activeOperationNames.get(methodDeclarationName(descriptor));
+  if (activeName === undefined) {
+    throw new Error(`${descriptor.toString()} has no generated active operation name`);
+  }
+  return activeName;
 }
 
 function methodDeclarationName(descriptor: DescMethod): string {

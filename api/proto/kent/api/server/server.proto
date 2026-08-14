@@ -108,7 +108,14 @@ message UpdateVersions {
 }
 
 message UpdateCheckFailed {
-  string cause = 1 [(buf.validate.field).string.min_len = 1];
+  string cause = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.server.update_check_failure_cause_nonblank"
+      message: "cause must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message UpdateStatus {
