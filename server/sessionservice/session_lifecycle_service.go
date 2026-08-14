@@ -117,38 +117,45 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 		return serverapi.SessionInitialInputResponse{}, errors.New("persisted Session resolver is required")
 	}
 	sessionID := strings.TrimSpace(req.SessionID)
-	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
-	if err != nil {
-		return serverapi.SessionInitialInputResponse{}, err
-	}
-	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
-		expectedDir, err := session.ResolveScopedSessionDir(containerDir, sessionID)
-		if err != nil {
-			return serverapi.SessionInitialInputResponse{}, err
-		}
-		expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
-		if err != nil {
-			return serverapi.SessionInitialInputResponse{}, err
-		}
-		recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
-		if err != nil {
-			return serverapi.SessionInitialInputResponse{}, err
-		}
-		if recordIdentity != expectedIdentity {
-			return serverapi.SessionInitialInputResponse{}, fmt.Errorf(
-				"session %q is outside workspace container: %w",
-				req.SessionID,
-				session.ErrOutsideWorkspaceContainer,
-			)
-		}
-	}
-	view, err := session.OpenPersistedSessionView(sessionID, record)
+	view, err := s.resolvePersistedSessionView(ctx, sessionID)
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
 	return serverapi.SessionInitialInputResponse{
 		Input: initialSessionInput(view.Meta(), req.TransitionInput),
 	}, nil
+}
+
+func (s *SessionLifecycleService) resolvePersistedSessionView(ctx context.Context, sessionID string) (*session.PersistedSessionView, error) {
+	if s == nil || s.persisted == nil {
+		return nil, errors.New("persisted Session resolver is required")
+	}
+	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
+		expectedDir, err := session.ResolveScopedSessionDir(containerDir, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
+		if err != nil {
+			return nil, err
+		}
+		recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
+		if err != nil {
+			return nil, err
+		}
+		if recordIdentity != expectedIdentity {
+			return nil, fmt.Errorf(
+				"session %q is outside workspace container: %w",
+				sessionID,
+				session.ErrOutsideWorkspaceContainer,
+			)
+		}
+	}
+	return session.OpenPersistedSessionView(sessionID, record)
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {
@@ -241,15 +248,31 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 			),
 		), nil
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback ||
-		req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+	if req.Transition.Action == serverapi.SessionTransitionActionForkRollback {
 		var resolved serverapi.SessionResolveTransitionResponse
 		err := s.withStore(ctx, req.SessionID, func(runCtx context.Context, store *session.Store) error {
 			var err error
-			resolved, err = s.resolveStoreTransition(runCtx, req, store)
+			resolved, err = s.resolveForkRollbackTransition(runCtx, req, store)
 			return err
 		})
 		return resolved, err
+	}
+	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
+		view, err := s.resolvePersistedSessionView(ctx, strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		resolved, err := resolveSessionTransition(ctx, sessionTransitionResolveRequest{
+			Transition: sessionTransition{
+				Action:          req.Transition.Action,
+				InitialInput:    textutil.Pointer(req.Transition.InitialInput),
+				TargetSessionID: req.Transition.TargetSessionID,
+			},
+		})
+		if err != nil {
+			return serverapi.SessionResolveTransitionResponse{}, err
+		}
+		return s.authorizeNavigationTransition(ctx, view.Meta(), resolved)
 	}
 	return resolveSessionTransition(ctx, sessionTransitionResolveRequest{
 		Transition: sessionTransition{
@@ -263,7 +286,7 @@ func (s *SessionLifecycleService) resolveTransitionOnce(ctx context.Context, req
 	})
 }
 
-func (s *SessionLifecycleService) resolveStoreTransition(
+func (s *SessionLifecycleService) resolveForkRollbackTransition(
 	ctx context.Context,
 	req serverapi.SessionResolveTransitionRequest,
 	store *session.Store,
@@ -290,9 +313,6 @@ func (s *SessionLifecycleService) resolveStoreTransition(
 	if err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
-	if req.Transition.Action == serverapi.SessionTransitionActionOpenSession {
-		return s.authorizeNavigationTransition(ctx, store, resolved)
-	}
 	intent, ok := resolved.LaunchIntent()
 	if !ok {
 		return serverapi.SessionResolveTransitionResponse{}, errors.New("rollback transition did not resolve to a launch intent")
@@ -307,10 +327,7 @@ func (s *SessionLifecycleService) resolveStoreTransition(
 	return resolved, nil
 }
 
-func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Context, current *session.Store, resolved serverapi.SessionDirective) (serverapi.SessionDirective, error) {
-	if current == nil {
-		return serverapi.SessionDirective{}, errors.New("current session is required for session navigation")
-	}
+func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Context, current session.Meta, resolved serverapi.SessionDirective) (serverapi.SessionDirective, error) {
 	intent, present := resolved.LaunchIntent()
 	if !present {
 		return serverapi.SessionDirective{}, errors.New("session navigation did not resolve to a launch intent")
@@ -319,7 +336,7 @@ func (s *SessionLifecycleService) authorizeNavigationTransition(ctx context.Cont
 	if !present {
 		return serverapi.SessionDirective{}, errors.New("session navigation launch intent omitted target session id")
 	}
-	authorizedTarget := session.NavigationTargetSessionID(current.Meta())
+	authorizedTarget := session.NavigationTargetSessionID(current)
 	if authorizedTarget == nil || *authorizedTarget != requestedTarget {
 		return serverapi.SessionDirective{}, errors.New("session navigation target does not match current session provenance")
 	}
