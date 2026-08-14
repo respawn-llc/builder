@@ -28,11 +28,6 @@ func (r *RuntimeRegistry) WithWorkflowAttentionNotificationSnapshot(source Workf
 	return r
 }
 
-type attentionNotificationStreamResult struct {
-	event clientui.AttentionNotificationEvent
-	err   error
-}
-
 type workflowAttentionNotificationSnapshotResult struct {
 	notification clientui.AttentionNotification
 	acknowledged chan struct{}
@@ -48,16 +43,12 @@ type workflowAttentionNotificationSubscription struct {
 	start       sync.Once
 	close       sync.Once
 	workers     sync.WaitGroup
-	liveOut     chan attentionNotificationStreamResult
 	snapshotOut chan workflowAttentionNotificationSnapshotResult
 	closeErr    error
 
-	pendingLive         *attentionNotificationStreamResult
-	pendingSnapshot     *workflowAttentionNotificationSnapshotResult
-	snapshotDone        bool
-	snapshotErr         error
-	liveAheadOfSnapshot bool
-	sequence            uint64
+	snapshotDone bool
+	snapshotErr  error
+	sequence     uint64
 }
 
 func newWorkflowAttentionNotificationSubscription(
@@ -74,7 +65,6 @@ func newWorkflowAttentionNotificationSubscription(
 		worker:      worker,
 		cancel:      cancel,
 		closed:      make(chan struct{}),
-		liveOut:     make(chan attentionNotificationStreamResult, 1),
 		snapshotOut: make(chan workflowAttentionNotificationSnapshotResult, 1),
 	}
 }
@@ -88,39 +78,41 @@ func (s *workflowAttentionNotificationSubscription) Next(ctx context.Context) (c
 		return clientui.AttentionNotificationEvent{}, io.EOF
 	default:
 	}
-	s.start.Do(s.startWorkers)
-	for {
-		s.collectReady()
+	s.start.Do(s.startSnapshotWorker)
+	for !s.snapshotDone {
 		if s.snapshotErr != nil {
 			return s.stopWithError(s.snapshotErr)
 		}
-		if s.pendingLive != nil && s.pendingSnapshot != nil {
-			snapshotFirst, discardLive := snapshotMustPrecedeLive(
-				s.pendingSnapshot.notification,
-				s.pendingLive.event,
-			)
-			if snapshotFirst {
-				if discardLive {
-					s.pendingLive = nil
+		select {
+		case <-ctx.Done():
+			return clientui.AttentionNotificationEvent{}, ctx.Err()
+		case <-s.closed:
+			return clientui.AttentionNotificationEvent{}, io.EOF
+		case result := <-s.snapshotOut:
+			if result.err != nil {
+				if errors.Is(result.err, io.EOF) {
+					s.snapshotDone = true
+					continue
 				}
-				return s.emitSnapshot()
+				if errors.Is(result.err, context.Canceled) && s.worker.Err() != nil {
+					return clientui.AttentionNotificationEvent{}, io.EOF
+				}
+				return s.stopWithError(result.err)
 			}
-			if s.liveAheadOfSnapshot {
-				return s.emitSnapshot()
-			}
-			s.liveAheadOfSnapshot = true
-			return s.emitLive()
-		}
-		if s.pendingLive != nil {
-			return s.emitLive()
-		}
-		if s.pendingSnapshot != nil {
-			return s.emitSnapshot()
-		}
-		if err := s.waitForReady(ctx); err != nil {
-			return clientui.AttentionNotificationEvent{}, err
+			close(result.acknowledged)
+			notification := result.notification
+			return s.withLocalSequence(clientui.AttentionNotificationEvent{
+				Source:  clientui.AttentionNotificationSourceSnapshot,
+				Type:    clientui.AttentionNotificationEventPending,
+				Pending: &notification,
+			})
 		}
 	}
+	event, err := s.live.Next(ctx)
+	if err != nil {
+		return clientui.AttentionNotificationEvent{}, err
+	}
+	return s.withLocalSequence(event)
 }
 
 func (s *workflowAttentionNotificationSubscription) Close() error {
@@ -138,7 +130,7 @@ func (s *workflowAttentionNotificationSubscription) Close() error {
 	return closeErr
 }
 
-func (s *workflowAttentionNotificationSubscription) startWorkers() {
+func (s *workflowAttentionNotificationSubscription) startSnapshotWorker() {
 	snapshot, err := s.source.OpenSnapshot(workflowAttentionNotificationSnapshotPageSize)
 	if err != nil {
 		s.snapshotErr = err
@@ -148,25 +140,8 @@ func (s *workflowAttentionNotificationSubscription) startWorkers() {
 		s.snapshotErr = errors.New("workflow attention notification snapshot is required")
 		return
 	}
-	s.workers.Add(2)
-	go s.pumpLive()
+	s.workers.Add(1)
 	go s.pumpSnapshot(snapshot)
-}
-
-func (s *workflowAttentionNotificationSubscription) pumpLive() {
-	defer s.workers.Done()
-	for {
-		event, err := s.live.Next(s.worker)
-		result := attentionNotificationStreamResult{event: event, err: err}
-		select {
-		case s.liveOut <- result:
-		case <-s.worker.Done():
-			return
-		}
-		if err != nil {
-			return
-		}
-	}
 }
 
 func (s *workflowAttentionNotificationSubscription) pumpSnapshot(snapshot WorkflowAttentionNotificationSnapshot) {
@@ -213,87 +188,6 @@ func (s *workflowAttentionNotificationSubscription) pumpSnapshot(snapshot Workfl
 	}
 }
 
-func (s *workflowAttentionNotificationSubscription) collectReady() {
-	if s.pendingSnapshot == nil && !s.snapshotDone && s.snapshotErr == nil {
-		select {
-		case result := <-s.snapshotOut:
-			s.acceptSnapshotResult(result)
-		default:
-		}
-	}
-	if s.pendingLive == nil {
-		select {
-		case result := <-s.liveOut:
-			s.pendingLive = &result
-		default:
-		}
-	}
-}
-
-func (s *workflowAttentionNotificationSubscription) waitForReady(ctx context.Context) error {
-	if s.snapshotDone {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-s.closed:
-			return io.EOF
-		case result := <-s.liveOut:
-			s.pendingLive = &result
-			return nil
-		}
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-s.closed:
-		return io.EOF
-	case result := <-s.liveOut:
-		s.pendingLive = &result
-		return nil
-	case result := <-s.snapshotOut:
-		s.acceptSnapshotResult(result)
-		return nil
-	}
-}
-
-func (s *workflowAttentionNotificationSubscription) acceptSnapshotResult(result workflowAttentionNotificationSnapshotResult) {
-	if result.err == nil {
-		s.pendingSnapshot = &result
-		return
-	}
-	if errors.Is(result.err, io.EOF) {
-		s.snapshotDone = true
-		return
-	}
-	if errors.Is(result.err, context.Canceled) && s.worker.Err() != nil {
-		s.snapshotDone = true
-		return
-	}
-	s.snapshotErr = result.err
-}
-
-func (s *workflowAttentionNotificationSubscription) emitLive() (clientui.AttentionNotificationEvent, error) {
-	result := *s.pendingLive
-	s.pendingLive = nil
-	if result.err != nil {
-		return s.stopWithError(result.err)
-	}
-	return s.withLocalSequence(result.event)
-}
-
-func (s *workflowAttentionNotificationSubscription) emitSnapshot() (clientui.AttentionNotificationEvent, error) {
-	result := *s.pendingSnapshot
-	s.pendingSnapshot = nil
-	s.liveAheadOfSnapshot = false
-	close(result.acknowledged)
-	notification := result.notification
-	return s.withLocalSequence(clientui.AttentionNotificationEvent{
-		Source:  clientui.AttentionNotificationSourceSnapshot,
-		Type:    clientui.AttentionNotificationEventPending,
-		Pending: &notification,
-	})
-}
-
 func (s *workflowAttentionNotificationSubscription) stopWithError(err error) (clientui.AttentionNotificationEvent, error) {
 	_ = s.Close()
 	return clientui.AttentionNotificationEvent{}, err
@@ -306,23 +200,6 @@ func (s *workflowAttentionNotificationSubscription) withLocalSequence(event clie
 		return s.stopWithError(err)
 	}
 	return event, nil
-}
-
-func snapshotMustPrecedeLive(
-	snapshot clientui.AttentionNotification,
-	live clientui.AttentionNotificationEvent,
-) (precede bool, discardLive bool) {
-	switch live.Type {
-	case clientui.AttentionNotificationEventResolved:
-		return live.ID != nil && *live.ID == snapshot.ID, false
-	case clientui.AttentionNotificationEventPending:
-		if live.Pending == nil || live.Pending.ID != snapshot.ID {
-			return false, false
-		}
-		return true, live.Pending.Revision <= snapshot.Revision
-	default:
-		return false, false
-	}
 }
 
 var _ serverapi.AttentionNotificationSubscription = (*workflowAttentionNotificationSubscription)(nil)
