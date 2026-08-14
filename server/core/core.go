@@ -21,9 +21,17 @@ import (
 )
 
 type Core struct {
-	bundles   *Bundles
-	closeOnce sync.Once
-	closeErr  error
+	bundles       *Bundles
+	metadataFatal *MetadataFatalAuthority
+	closeOnce     sync.Once
+	closeErr      error
+}
+
+func (s *Core) MetadataFatalAuthority() *MetadataFatalAuthority {
+	if s == nil {
+		return nil
+	}
+	return s.metadataFatal
 }
 
 type unregisteredSessionLaunchClient struct{}
@@ -277,6 +285,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		PersistedSessions:        s.safeBundles().Persistence.metadataStore,
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
+		MetadataStore:            s.safeBundles().Persistence.metadataStore,
 	}).
 		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
 		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).

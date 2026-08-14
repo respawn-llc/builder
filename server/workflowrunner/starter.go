@@ -541,7 +541,7 @@ func (s *Starter) planCurrentNodeSession(
 			return launch.SessionPlan{}, false, err
 		}
 	}
-	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, ProjectWorkspaceBoundary: s.metadata, MetadataStoreOpener: func(string) (launch.MetadataExecutionTargetStore, error) { return s.metadata, nil }}
+	planner := launch.Planner{Config: cfg, ContainerDir: containerDir, StoreOptions: s.storeOptions, PersistedSessions: s.metadata, ExecutionTargets: s.metadata, ProjectWorkspaceBoundary: s.metadata, MetadataStore: s.metadata}
 	plan, err := planner.PlanSession(ctx, launch.SessionRequest{
 		Mode:                                launch.ModeHeadless,
 		Intent:                              intent,

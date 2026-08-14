@@ -11,6 +11,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -26,6 +27,7 @@ type SessionLifecycleService struct {
 	retargeter      sessionWorkspaceRetargeter
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
+	metadata        sessionExecutionTargetStore
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
 }
@@ -46,6 +48,11 @@ type sessionWorkspaceRetargeter interface {
 
 type sessionNavigationTargetResolver interface {
 	ResolveSessionNavigationBinding(ctx context.Context, sessionID string) (serverapi.SessionNavigationBinding, error)
+}
+
+type sessionExecutionTargetStore interface {
+	ResolveSessionExecutionTarget(context.Context, string) (clientui.SessionExecutionTarget, error)
+	UpdateSessionExecutionTarget(context.Context, metadata.SessionExecutionTargetUpdate) error
 }
 
 func NewSessionLifecycleService(persistenceRoot string, authority *sessionruntime.Authority, authManager *auth.Manager) *SessionLifecycleService {
@@ -88,6 +95,13 @@ func (s *SessionLifecycleService) WithNavigationTargetResolver(resolver sessionN
 		return nil
 	}
 	s.navigation = resolver
+	return s
+}
+
+func (s *SessionLifecycleService) WithExecutionTargetStore(store sessionExecutionTargetStore) *SessionLifecycleService {
+	if s != nil {
+		s.metadata = store
+	}
 	return s
 }
 
@@ -329,19 +343,17 @@ func (s *SessionLifecycleService) preserveForkExecutionTarget(ctx context.Contex
 	if strings.TrimSpace(s.persistenceRoot) == "" {
 		return nil
 	}
-	metadataStore, err := metadata.Open(s.persistenceRoot)
-	if err != nil {
-		return err
+	if s.metadata == nil {
+		return errors.New("metadata execution target store is required")
 	}
-	defer func() { _ = metadataStore.Close() }()
-	target, err := metadataStore.ResolveSessionExecutionTarget(ctx, trimmedParentID)
+	target, err := s.metadata.ResolveSessionExecutionTarget(ctx, trimmedParentID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, session.ErrSessionNotFound) {
 			return nil
 		}
 		return err
 	}
-	return metadataStore.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
+	return s.metadata.UpdateSessionExecutionTarget(ctx, metadata.SessionExecutionTargetUpdateFromReadModel(trimmedChildID, target))
 }
 
 func (s *SessionLifecycleService) withStore(

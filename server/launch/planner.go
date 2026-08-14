@@ -54,9 +54,6 @@ type MetadataExecutionTargetStore interface {
 	Close() error
 }
 
-// MetadataExecutionTargetStoreOpener opens metadata storage for launch planning.
-type MetadataExecutionTargetStoreOpener func(persistenceRoot string) (MetadataExecutionTargetStore, error)
-
 type Planner struct {
 	Config                   config.App
 	GlobalConfig             config.App
@@ -65,7 +62,7 @@ type Planner struct {
 	PersistedSessions        session.PersistedSessionResolver
 	ExecutionTargets         SessionExecutionTargetResolver
 	ProjectWorkspaceBoundary SessionProjectWorkspaceBoundaryResolver
-	MetadataStoreOpener      MetadataExecutionTargetStoreOpener
+	MetadataStore            MetadataExecutionTargetStore
 }
 
 type SessionRequest struct {
@@ -1397,10 +1394,18 @@ func (p Planner) openPersistedSession(ctx context.Context, sessionID runtimeids.
 }
 
 func (p Planner) openMetadataStore() (MetadataExecutionTargetStore, error) {
-	if p.MetadataStoreOpener != nil {
-		return p.MetadataStoreOpener(p.Config.PersistenceRoot)
+	if p.MetadataStore != nil {
+		return nonClosingMetadataExecutionTargetStore{MetadataExecutionTargetStore: p.MetadataStore}, nil
 	}
 	return metadata.Open(p.Config.PersistenceRoot)
+}
+
+type nonClosingMetadataExecutionTargetStore struct {
+	MetadataExecutionTargetStore
+}
+
+func (nonClosingMetadataExecutionTargetStore) Close() error {
+	return nil
 }
 
 func (p Planner) resolveParentExecutionTarget(ctx context.Context, parentSessionID string) (clientui.SessionExecutionTarget, bool, error) {

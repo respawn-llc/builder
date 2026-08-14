@@ -3,6 +3,9 @@ package metadata
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -67,7 +70,7 @@ func requireInMemoryMetadataSQLitePragmas(t testing.TB, queryer metadataSQLitePr
 }
 
 func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
-	dsn, err := metadataSQLiteDSN(`C:\Users\Nek\kent db\main ? #.sqlite3`)
+	dsn, err := metadataSQLiteDSN(`C:\Users\Nek\kent db\main ? #.sqlite3`, false)
 	if err != nil {
 		t.Fatalf("metadataSQLiteDSN: %v", err)
 	}
@@ -77,4 +80,50 @@ func TestMetadataSQLiteDSNNormalizesWindowsPaths(t *testing.T) {
 	if !strings.Contains(dsn, "_pragma=foreign_keys%281%29") {
 		t.Fatalf("dsn = %q, want pragma query values preserved", dsn)
 	}
+}
+
+func TestActivatedMetadataSQLiteDSNRequiresExistingFile(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "missing.sqlite3")
+	dsn, err := metadataSQLiteDSN(databasePath, true)
+	if err != nil {
+		t.Fatalf("metadataSQLiteDSN: %v", err)
+	}
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Ping(); err == nil {
+		t.Fatal("activated metadata connection unexpectedly created a missing database")
+	}
+	if _, err := os.Stat(databasePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing database stat error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestMetadataStartupCreatesThenActivatesExistingFileOnlyPool(t *testing.T) {
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "db", "main.sqlite3")
+	db, err := openDatabaseAtPath(root, databasePath)
+	if err != nil {
+		t.Fatalf("openDatabaseAtPath fresh startup: %v", err)
+	}
+	if _, err := os.Stat(databasePath); err != nil {
+		_ = db.Close()
+		t.Fatalf("fresh startup database stat: %v", err)
+	}
+	db.SetMaxIdleConns(0)
+	if err := os.Remove(databasePath); err != nil {
+		_ = db.Close()
+		t.Fatalf("remove activated database: %v", err)
+	}
+	if err := db.Ping(); err == nil {
+		_ = db.Close()
+		t.Fatal("activated pool unexpectedly reopened a missing database")
+	}
+	if _, err := os.Stat(databasePath); !errors.Is(err, os.ErrNotExist) {
+		_ = db.Close()
+		t.Fatalf("activated pool recreated database; stat error = %v", err)
+	}
+	_ = db.Close()
 }

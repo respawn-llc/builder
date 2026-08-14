@@ -64,6 +64,11 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		if errors.Is(err, context.Canceled) {
 			return 130
 		}
+		var critical *serverstartup.CriticalInfrastructureTermination
+		if errors.As(err, &critical) {
+			fmt.Fprintln(stderr, critical)
+			return 2
+		}
 		fmt.Fprintln(stderr, err)
 		return 1
 	}

@@ -84,7 +84,7 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 	if err := registerMetadataSQLiteCollations(); err != nil {
 		return nil, fmt.Errorf("register metadata SQLite extensions: %w", err)
 	}
-	dsn, err := metadataSQLiteDSN(trimmedDatabasePath)
+	dsn, err := metadataSQLiteDSN(trimmedDatabasePath, false)
 	if err != nil {
 		return nil, fmt.Errorf("build metadata db DSN: %w", err)
 	}
@@ -96,8 +96,23 @@ func openDatabaseAtPath(persistenceRoot string, databasePath string) (*sql.DB, e
 		_ = db.Close()
 		return nil, err
 	}
+	if err := db.Close(); err != nil {
+		return nil, fmt.Errorf("close metadata db after startup migration: %w", err)
+	}
+	dsn, err = metadataSQLiteDSN(trimmedDatabasePath, true)
+	if err != nil {
+		return nil, fmt.Errorf("build activated metadata db DSN: %w", err)
+	}
+	db, err = sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open activated metadata db: %w", err)
+	}
 	db.SetMaxOpenConns(metadataSQLiteConnectionPoolSize)
 	db.SetMaxIdleConns(metadataSQLiteConnectionPoolSize)
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("activate existing metadata db: %w", err)
+	}
 	return db, nil
 }
 
@@ -158,12 +173,15 @@ func readMetadataVersion(db *sql.DB) (int64, error) {
 	return version, nil
 }
 
-func metadataSQLiteDSN(databasePath string) (string, error) {
+func metadataSQLiteDSN(databasePath string, existingFileOnly bool) (string, error) {
 	u, ok := config.LocalFileURL(databasePath)
 	if !ok {
 		return "", fmt.Errorf("metadata database path %q is not absolute", databasePath)
 	}
 	q := url.Values{}
+	if existingFileOnly {
+		q.Add("mode", "rw")
+	}
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "journal_mode(WAL)")
 	q.Add("_pragma", "synchronous(NORMAL)")

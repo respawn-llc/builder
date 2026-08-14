@@ -80,7 +80,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("persistence bundle: generated support: %w", err)
 	}
 	runtimeSupport.Generated = generatedSupport
-	metadataStore, err := metadata.Open(cfg.PersistenceRoot)
+	metadataFatal := NewMetadataFatalAuthority()
+	metadataStore, err := metadata.OpenWithFatalReporter(cfg.PersistenceRoot, metadataFatal)
 	if err != nil {
 		closeRootLeaseOnFailure()
 		return nil, fmt.Errorf("persistence bundle: metadata store: %w", err)
@@ -212,7 +213,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
-		WithNavigationTargetResolver(metadataStore)
+		WithNavigationTargetResolver(metadataStore).
+		WithExecutionTargetStore(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter
 	cleanupNewFailure := func() {
 		sleepManager.Close()
@@ -358,7 +360,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
-	core := &Core{bundles: composeBundles(bundleCompositionInput{
+	core := &Core{metadataFatal: metadataFatal, bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,

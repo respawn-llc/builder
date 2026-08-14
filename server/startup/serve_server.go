@@ -33,6 +33,24 @@ type ServeServer struct {
 	cfg  config.App
 }
 
+type CriticalInfrastructureTermination struct {
+	Cause *metadata.ClassifiedFailure
+}
+
+func (e *CriticalInfrastructureTermination) Error() string {
+	if e == nil || e.Cause == nil {
+		return "critical infrastructure failure"
+	}
+	return e.Cause.Error()
+}
+
+func (e *CriticalInfrastructureTermination) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 func (s *ServeServer) Config() config.App {
 	if s == nil {
 		return config.App{}
@@ -175,6 +193,10 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		return err
 	}
 	defer s.close()
+	var metadataFatal <-chan struct{}
+	if s.Core != nil && s.Core.MetadataFatalAuthority() != nil {
+		metadataFatal = s.Core.MetadataFatalAuthority().Done()
+	}
 	select {
 	case <-ctx.Done():
 		rpc.shutdown()
@@ -184,6 +206,13 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 		rpc.shutdown()
 		rpc.waitRemaining()
 		return serveErr
+	case <-metadataFatal:
+		rpc.shutdown()
+		rpc.wait()
+		_ = s.Close()
+		return &CriticalInfrastructureTermination{
+			Cause: s.Core.MetadataFatalAuthority().MetadataFatal(),
+		}
 	}
 }
 

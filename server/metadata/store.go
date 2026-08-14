@@ -60,8 +60,10 @@ type WorktreeSessionBlocker struct {
 
 type Store struct {
 	persistenceRoot string
+	databasePath    string
 	db              *sql.DB
 	queries         *sqlitegen.Queries
+	fatalReporter   FatalReporter
 }
 
 type sessionMetadataDocument struct {
@@ -182,14 +184,30 @@ var insertWorkspaceBindingAfterProjectUpsertHook func()
 var rebindWorkspaceBeforeUpdateHook func()
 
 func Open(persistenceRoot string) (*Store, error) {
+	return OpenWithFatalReporter(persistenceRoot, nil)
+}
+
+func OpenWithFatalReporter(persistenceRoot string, fatalReporter FatalReporter) (*Store, error) {
 	trimmedRoot := strings.TrimSpace(persistenceRoot)
 	if trimmedRoot == "" {
 		return nil, errors.New("persistence root is required")
 	}
-	return OpenAtPath(trimmedRoot, filepath.Join(trimmedRoot, "db", "main.sqlite3"))
+	return OpenAtPathWithFatalReporter(
+		trimmedRoot,
+		filepath.Join(trimmedRoot, "db", "main.sqlite3"),
+		fatalReporter,
+	)
 }
 
 func OpenAtPath(persistenceRoot string, databasePath string) (*Store, error) {
+	return OpenAtPathWithFatalReporter(persistenceRoot, databasePath, nil)
+}
+
+func OpenAtPathWithFatalReporter(
+	persistenceRoot string,
+	databasePath string,
+	fatalReporter FatalReporter,
+) (*Store, error) {
 	trimmedRoot := strings.TrimSpace(persistenceRoot)
 	trimmedDatabasePath := strings.TrimSpace(databasePath)
 	if trimmedRoot == "" {
@@ -204,8 +222,10 @@ func OpenAtPath(persistenceRoot string, databasePath string) (*Store, error) {
 	}
 	store := &Store{
 		persistenceRoot: trimmedRoot,
+		databasePath:    trimmedDatabasePath,
 		db:              db,
 		queries:         sqlitegen.New(db),
+		fatalReporter:   fatalReporter,
 	}
 	if err := store.BackfillProjectKeys(context.Background()); err != nil {
 		_ = db.Close()
