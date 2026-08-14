@@ -219,8 +219,8 @@ func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.Wo
 			return 1
 		}
 		fmt.Fprintf(stdout, "%s: %s.\nStatus: %s\n", row.Item.ShortID, row.Item.Title, statusText)
-		if row.ShowWorkflow {
-			fmt.Fprintf(stdout, "Workflow: %s\n", row.WorkflowName)
+		if row.WorkflowName != nil {
+			fmt.Fprintf(stdout, "Workflow: %s\n", *row.WorkflowName)
 		}
 		if row.ShowColumns {
 			fmt.Fprintf(stdout, "Columns: %s\n", taskListColumnKeysText(*row.Item.ColumnKeys))

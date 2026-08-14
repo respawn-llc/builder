@@ -36,9 +36,8 @@ type taskListProjection struct {
 
 type taskListRenderItem struct {
 	Item         taskListItem
-	WorkflowName string
+	WorkflowName *string
 	LabelNames   []string
-	ShowWorkflow bool
 	ShowColumns  bool
 }
 
@@ -136,12 +135,13 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		} else if task.ColumnKeys != nil {
 			return taskListProjection{}, fmt.Errorf("project-wide task list response task %q contains workflow-relative columns", task.TaskID)
 		}
-		workflowName := ""
+		var workflowName *string
 		if showWorkflow {
 			if task.WorkflowName == nil || strings.TrimSpace(*task.WorkflowName) == "" || strings.TrimSpace(*task.WorkflowName) != *task.WorkflowName {
 				return taskListProjection{}, fmt.Errorf("task list response task %q is missing an exact workflow_name for multiple-workflow rendering", task.TaskID)
 			}
-			workflowName = *task.WorkflowName
+			value := *task.WorkflowName
+			workflowName = &value
 		}
 		labelIDs := make([]string, len(task.Labels))
 		labelNames := make([]string, len(task.Labels))
@@ -164,7 +164,6 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			Item:         item,
 			WorkflowName: workflowName,
 			LabelNames:   labelNames,
-			ShowWorkflow: showWorkflow,
 			ShowColumns:  showColumns,
 		})
 	}

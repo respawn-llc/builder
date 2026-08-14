@@ -285,8 +285,7 @@ func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testi
 		t.Fatalf("project Task-list projection: %v", err)
 	}
 	if len(projection.Rows) != 1 ||
-		projection.Rows[0].ShowWorkflow ||
-		projection.Rows[0].WorkflowName != "" ||
+		projection.Rows[0].WorkflowName != nil ||
 		!slices.Equal(projection.Rows[0].LabelNames, []string{"Priority"}) {
 		t.Fatalf("one-Workflow row = %+v", projection.Rows)
 	}

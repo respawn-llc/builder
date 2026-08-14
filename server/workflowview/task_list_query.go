@@ -86,11 +86,11 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
 	}
-	statusKindsJSON, err := workflowTaskStatusKindsJSON(req.statusKinds)
+	statusKindsJSON, err := workflowTaskKindsJSON(req.statusKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	attentionKindsJSON, err := workflowTaskAttentionKindsJSON(req.attentionKinds)
+	attentionKindsJSON, err := workflowTaskKindsJSON(req.attentionKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
@@ -203,24 +203,8 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 	return result, nil
 }
 
-func workflowTaskStatusKindsJSON(kinds []serverapi.WorkflowTaskStatusKind) (string, error) {
-	values := make([]string, 0, len(kinds))
-	for _, kind := range kinds {
-		values = append(values, string(kind))
-	}
-	encoded, err := json.Marshal(values)
-	if err != nil {
-		return "", err
-	}
-	return string(encoded), nil
-}
-
-func workflowTaskAttentionKindsJSON(kinds []serverapi.WorkflowTaskAttentionKind) (string, error) {
-	values := make([]string, 0, len(kinds))
-	for _, kind := range kinds {
-		values = append(values, string(kind))
-	}
-	encoded, err := json.Marshal(values)
+func workflowTaskKindsJSON[T ~string](kinds []T) (string, error) {
+	encoded, err := json.Marshal(kinds)
 	if err != nil {
 		return "", err
 	}
