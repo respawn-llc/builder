@@ -178,6 +178,120 @@ test("new schema slice executes generated validation in TypeScript", () => {
     create(prompt.ListPendingRequestSchema, { sessionId: " " }),
   ));
   validateGeneratedMessage(
+    AttentionNotificationIDSchema,
+    create(AttentionNotificationIDSchema, {
+      kind: AttentionKind.ATTENTION_KIND_QUESTION,
+      uuid: "call_provider_owned_1",
+    }),
+  );
+  assert.throws(() => validateGeneratedMessage(
+    AttentionNotificationIDSchema,
+    create(AttentionNotificationIDSchema, {
+      kind: AttentionKind.ATTENTION_KIND_QUESTION,
+      uuid: " ",
+    }),
+  ));
+  const answerBatchEntry = (promptId, answer) => create(prompt.AnswerBatchEntrySchema, {
+    promptId,
+    answer,
+  });
+  validateGeneratedMessage(prompt.AnswerBatchRequestSchema, create(prompt.AnswerBatchRequestSchema, {
+    sessionId: validUUID,
+    stepId: validUUID,
+    entries: [answerBatchEntry("prompt-1", {
+      case: "declined",
+      value: create(prompt.DeclinedSchema),
+    })],
+  }));
+  assert.throws(() => validateGeneratedMessage(
+    prompt.AnswerBatchRequestSchema,
+    create(prompt.AnswerBatchRequestSchema, {
+      sessionId: "session-1",
+      stepId: validUUID,
+      entries: [answerBatchEntry("prompt-1", {
+        case: "declined",
+        value: create(prompt.DeclinedSchema),
+      })],
+    }),
+  ));
+  assert.throws(() => validateGeneratedMessage(
+    prompt.AnswerBatchRequestSchema,
+    create(prompt.AnswerBatchRequestSchema, {
+      sessionId: validUUID,
+      stepId: validUUID,
+      entries: [
+        answerBatchEntry("prompt-1", {
+          case: "declined",
+          value: create(prompt.DeclinedSchema),
+        }),
+        answerBatchEntry("prompt-1", {
+          case: "approvalAnswer",
+          value: create(prompt.ApprovalAnswerSchema, {
+            decision: prompt.ApprovalDecision.DENY,
+          }),
+        }),
+      ],
+    }),
+  ));
+  assert.throws(() => validateGeneratedMessage(
+    prompt.AnswerBatchSuccessSchema,
+    create(prompt.AnswerBatchSuccessSchema, {
+      results: [
+        create(prompt.AnswerBatchEntryResultSchema, {
+          promptId: "prompt-1",
+          outcome: prompt.AnswerBatchOutcome.RESOLVED,
+        }),
+        create(prompt.AnswerBatchEntryResultSchema, {
+          promptId: "prompt-1",
+          outcome: prompt.AnswerBatchOutcome.SKIPPED,
+        }),
+      ],
+    }),
+  ));
+  assert.throws(() => validateGeneratedMessage(
+    prompt.FollowUpWatchRequestSchema,
+    create(prompt.FollowUpWatchRequestSchema, {
+      sessionId: "session-1",
+      stepId: validUUID,
+      promptId: "prompt-1",
+    }),
+  ));
+  for (const [schema, message] of [
+    [runtime.SetSessionNameRequestSchema, create(runtime.SetSessionNameRequestSchema, { sessionId: " " })],
+    [runtime.SetThinkingLevelRequestSchema, create(runtime.SetThinkingLevelRequestSchema, {
+      sessionId: " ",
+      level: "medium",
+    })],
+    [runtime.ToggleRequestSchema, create(runtime.ToggleRequestSchema, { sessionId: " " })],
+    [runtime.ShouldCompactRequestSchema, create(runtime.ShouldCompactRequestSchema, { sessionId: " " })],
+    [runtime.ShellCommandRequestSchema, create(runtime.ShellCommandRequestSchema, {
+      sessionId: " ",
+      command: "pwd",
+    })],
+    [runtime.CompactContextRequestSchema, create(runtime.CompactContextRequestSchema, { sessionId: " " })],
+    [runtime.InterruptRequestSchema, create(runtime.InterruptRequestSchema, { sessionId: " " })],
+    [runtime.DiscardQueuedUserMessageRequestSchema, create(runtime.DiscardQueuedUserMessageRequestSchema, {
+      sessionId: " ",
+      queueItemId: "queue-1",
+    })],
+    [runtime.GoalShowRequestSchema, create(runtime.GoalShowRequestSchema, { sessionId: " " })],
+    [runtime.GoalMutationRequestSchema, create(runtime.GoalMutationRequestSchema, {
+      sessionId: " ",
+      actor: "user",
+    })],
+    [runtime.GoalSetRequestSchema, create(runtime.GoalSetRequestSchema, {
+      sessionId: " ",
+      objective: "goal",
+      actor: "user",
+    })],
+    [runtime.GoalClearRequestSchema, create(runtime.GoalClearRequestSchema, {
+      sessionId: " ",
+      actor: "user",
+    })],
+  ]) {
+    assert.throws(() => validateGeneratedMessage(schema, message));
+  }
+  validateGeneratedMessage(
     project.ProjectHomeListRequestSchema,
     create(project.ProjectHomeListRequestSchema),
   );

@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/attention;attentionpb";
 
@@ -26,10 +27,10 @@ message NotificationID {
     defined_only: true
     not_in: [0]
   }];
-  string uuid = 2 [(buf.validate.field).string = {
-    uuid: true
-    min_len: 1
-  }];
+  string uuid = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
 }
 
 message QuestionState {

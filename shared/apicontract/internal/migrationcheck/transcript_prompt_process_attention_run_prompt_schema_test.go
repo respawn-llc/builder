@@ -194,6 +194,65 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(attention); err == nil {
 		t.Fatal("accepted attention id kind that mismatches its state")
 	}
+	if err := protoapi.ValidateGeneratedMessage(&attentionpb.NotificationID{
+		Kind: attentionpb.Kind_ATTENTION_KIND_QUESTION,
+		Uuid: "call_provider_owned_1",
+	}); err != nil {
+		t.Fatalf("provider-owned attention ID: %v", err)
+	}
+	if err := protoapi.ValidateGeneratedMessage(&attentionpb.NotificationID{
+		Kind: attentionpb.Kind_ATTENTION_KIND_QUESTION,
+		Uuid: " ",
+	}); err == nil {
+		t.Fatal("accepted blank provider-owned attention ID")
+	}
+
+	validAnswerBatch := &promptpb.AnswerBatchRequest{
+		SessionId: validUUID,
+		StepId:    validUUID,
+		Entries: []*promptpb.AnswerBatchEntry{
+			{
+				PromptId: "prompt-1",
+				Answer: &promptpb.AnswerBatchEntry_Declined{
+					Declined: &promptpb.Declined{},
+				},
+			},
+		},
+	}
+	if err := protoapi.ValidateGeneratedMessage(validAnswerBatch); err != nil {
+		t.Fatalf("valid answer batch: %v", err)
+	}
+	validAnswerBatch.SessionId = "session-1"
+	if err := protoapi.ValidateGeneratedMessage(validAnswerBatch); err == nil {
+		t.Fatal("accepted non-UUIDv4 answer-batch session ID")
+	}
+	validAnswerBatch.SessionId = validUUID
+	validAnswerBatch.Entries = append(validAnswerBatch.Entries, &promptpb.AnswerBatchEntry{
+		PromptId: "prompt-1",
+		Answer: &promptpb.AnswerBatchEntry_ApprovalAnswer{
+			ApprovalAnswer: &promptpb.ApprovalAnswer{
+				Decision: promptpb.ApprovalDecision_APPROVAL_DECISION_DENY,
+			},
+		},
+	})
+	if err := protoapi.ValidateGeneratedMessage(validAnswerBatch); err == nil {
+		t.Fatal("accepted duplicate answer-batch prompt IDs")
+	}
+	if err := protoapi.ValidateGeneratedMessage(&promptpb.AnswerBatchSuccess{
+		Results: []*promptpb.AnswerBatchEntryResult{
+			{PromptId: "prompt-1", Outcome: promptpb.AnswerBatchOutcome_ANSWER_BATCH_OUTCOME_RESOLVED},
+			{PromptId: "prompt-1", Outcome: promptpb.AnswerBatchOutcome_ANSWER_BATCH_OUTCOME_SKIPPED},
+		},
+	}); err == nil {
+		t.Fatal("accepted duplicate answer-result prompt IDs")
+	}
+	if err := protoapi.ValidateGeneratedMessage(&promptpb.FollowUpWatchRequest{
+		SessionId: "session-1",
+		StepId:    validUUID,
+		PromptId:  "prompt-1",
+	}); err == nil {
+		t.Fatal("accepted non-UUIDv4 follow-up session ID")
+	}
 
 	runProgress := &runpromptpb.ProgressEvent{
 		Payload: &runpromptpb.ProgressEvent_SessionStarted{

@@ -219,17 +219,26 @@ message RuntimeCommandNotAcceptedDetails {
 message ManualCompactionDetails {}
 
 message SetSessionNameRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string name = 2;
 }
 
 message SetThinkingLevelRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string level = 2 [(buf.validate.field).string.min_len = 1];
 }
 
 message ToggleRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   bool enabled = 2;
 }
 
@@ -248,7 +257,10 @@ message EffectiveToggleSuccess {
 }
 
 message ShouldCompactRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string text = 2;
 }
 
@@ -337,7 +349,10 @@ message SubmitUserTurnSuccess {
 }
 
 message ShellCommandRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string command = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -349,12 +364,18 @@ message ShellCommandRequest {
 }
 
 message CompactContextRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string args = 2;
 }
 
 message InterruptRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
 }
 
 message InterruptSuccess {
@@ -490,7 +511,10 @@ message LiveWaitSuccess {
 }
 
 message DiscardQueuedUserMessageRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string queue_item_id = 2 [(buf.validate.field).string.min_len = 1];
 }
 
@@ -538,11 +562,17 @@ message GoalPreview {
 }
 
 message GoalShowRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
 }
 
 message GoalMutationRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string actor = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -556,7 +586,10 @@ message GoalMutationRequest {
 }
 
 message GoalSetRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string objective = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -578,7 +611,10 @@ message GoalSetRequest {
 }
 
 message GoalClearRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string actor = 2 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {

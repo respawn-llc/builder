@@ -222,6 +222,49 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 		"blank execution-environment session ID": &sessionpb.ExecutionEnvironmentRequest{
 			SessionId: " ",
 		},
+		"blank set-session-name session ID": &runtimepb.SetSessionNameRequest{
+			SessionId: " ",
+		},
+		"blank set-thinking-level session ID": &runtimepb.SetThinkingLevelRequest{
+			SessionId: " ",
+			Level:     "medium",
+		},
+		"blank toggle session ID": &runtimepb.ToggleRequest{
+			SessionId: " ",
+		},
+		"blank should-compact session ID": &runtimepb.ShouldCompactRequest{
+			SessionId: " ",
+		},
+		"blank shell-command session ID": &runtimepb.ShellCommandRequest{
+			SessionId: " ",
+			Command:   "pwd",
+		},
+		"blank compact-context session ID": &runtimepb.CompactContextRequest{
+			SessionId: " ",
+		},
+		"blank interrupt session ID": &runtimepb.InterruptRequest{
+			SessionId: " ",
+		},
+		"blank discard-queued session ID": &runtimepb.DiscardQueuedUserMessageRequest{
+			SessionId:   " ",
+			QueueItemId: "queue-1",
+		},
+		"blank goal-show session ID": &runtimepb.GoalShowRequest{
+			SessionId: " ",
+		},
+		"blank goal-mutation session ID": &runtimepb.GoalMutationRequest{
+			SessionId: " ",
+			Actor:     "user",
+		},
+		"blank goal-set session ID": &runtimepb.GoalSetRequest{
+			SessionId: " ",
+			Objective: "goal",
+			Actor:     "user",
+		},
+		"blank goal-clear session ID": &runtimepb.GoalClearRequest{
+			SessionId: " ",
+			Actor:     "user",
+		},
 		"unknown status compaction mode": &runtimepb.Status{
 			ReviewerFrequency: "off",
 			ThinkingLevel:     "medium",

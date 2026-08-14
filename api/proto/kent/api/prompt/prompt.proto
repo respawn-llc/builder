@@ -237,16 +237,24 @@ message AnswerBatchEntry {
 }
 
 message AnswerBatchRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string step_id = 2 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   repeated AnswerBatchEntry entries = 3 [(buf.validate.field).repeated = {
     min_items: 1
-    unique: true
     items: {required: true}
   }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.prompt.answer_batch_prompt_ids_unique"
+    message: "answer batch prompt IDs must be unique"
+    expression: "this.entries.map(entry, entry.prompt_id).unique()"
+  };
 }
 
 message AnswerBatchEntryResult {
@@ -267,9 +275,14 @@ message AnswerBatchEntryResult {
 message AnswerBatchSuccess {
   repeated AnswerBatchEntryResult results = 1 [(buf.validate.field).repeated = {
     min_items: 1
-    unique: true
     items: {required: true}
   }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.prompt.answer_result_prompt_ids_unique"
+    message: "answer result prompt IDs must be unique"
+    expression: "this.results.map(result, result.prompt_id).unique()"
+  };
 }
 
 message AnswerBatchError {
@@ -294,7 +307,10 @@ message AnswerBatchResult {
 }
 
 message FollowUpWatchRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string step_id = 2 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
