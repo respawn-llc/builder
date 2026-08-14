@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestSessionCommandAuthorityCutoverUpgradesReleasedSchema(t *testing.T) {
 	execSeed(t, db, "project", `
 INSERT INTO projects (id, display_name, created_at_unix_ms, updated_at_unix_ms, metadata_json)
 VALUES ('project-session-command-cutover', 'Project', ?, ?, '{}')`, now, now)
-	seedLegacyWorkflowSession(
+	seedSessionCommandAuthorityLegacyWorkflowSession(
 		t,
 		db,
 		"project-session-command-cutover",
@@ -178,4 +179,30 @@ WHERE session_id = 'session-session-command-cutover'`).Scan(&promptText); err !=
 	if foreignKeyViolations != 0 {
 		t.Fatalf("foreign-key violations after authority cutover = %d", foreignKeyViolations)
 	}
+}
+
+func seedSessionCommandAuthorityLegacyWorkflowSession(
+	t *testing.T,
+	db *sql.DB,
+	projectID string,
+	workspaceID string,
+	sessionID string,
+	now int64,
+) {
+	t.Helper()
+	execSeed(t, db, "workspace", `
+INSERT INTO workspaces (
+    id, project_id, canonical_root_path, git_metadata_json, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, '{}', ?, ?)`, workspaceID, projectID, "/"+workspaceID, now, now)
+	execSeed(t, db, "session", `
+INSERT INTO sessions (
+    id, project_id, workspace_id, artifact_relpath, created_at_unix_ms, updated_at_unix_ms
+) VALUES (?, ?, ?, ?, ?, ?)`,
+		sessionID,
+		projectID,
+		workspaceID,
+		"sessions/"+sessionID,
+		now,
+		now,
+	)
 }

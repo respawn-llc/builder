@@ -113,7 +113,7 @@ func TestQuestionBarrierCommitsReadyHostedSiblingBeforeInteraction(t *testing.T)
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolAskQuestion,
 			Handler: tools.NewAskQuestionTool(broker, func() bool { return true }),
 		}),
@@ -190,7 +190,7 @@ func TestApprovalBarrierUsesRuntimeFlushBeforeNestedApprovalVisibility(t *testin
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: approvalBarrierProbe{broker: broker},
 		}),

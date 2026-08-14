@@ -323,7 +323,7 @@ func TestPersistedSessionGroupCommitPrecedesNextProviderAndStepCompletion(t *tes
 		t,
 		store,
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -442,7 +442,7 @@ func runPersistedEffectRecoveryCase(
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolID,
 			Handler: fixture.handler,
 		}),

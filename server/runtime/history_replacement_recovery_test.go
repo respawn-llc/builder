@@ -669,12 +669,13 @@ func TestCompactNowInvalidatesPromptSnapshotsWhenStaleMetadataObserverFails(t *t
 		fixture.store.Meta().PromptCacheLineageGeneration,
 		0,
 	)
-	if request.SessionID != fixture.store.Meta().SessionID ||
+	if request.SessionID == nil ||
+		*request.SessionID != fixture.store.Meta().SessionID ||
 		request.PromptCacheKey != expectedCacheKey ||
 		request.PromptCacheKey == preCompactionCacheKey ||
 		request.PromptCacheScope != transcript.CacheWarningScopeConversation {
 		t.Fatalf(
-			"post-compaction request identity = session:%q cache-key:%q scope:%q",
+			"post-compaction request identity = session:%v cache-key:%q scope:%q",
 			request.SessionID,
 			request.PromptCacheKey,
 			request.PromptCacheScope,

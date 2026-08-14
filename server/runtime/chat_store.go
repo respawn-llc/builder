@@ -19,30 +19,31 @@ import (
 )
 
 type ChatEntry struct {
-	StepID               *string
-	Visibility           transcript.EntryVisibility
-	RollbackTargetID     *string
-	Role                 string
-	Text                 string
-	DurationMs           *int64
-	CondensedText        string
-	Phase                llm.MessagePhase
-	MessageType          llm.MessageType
-	CompactionNumber     *int
-	SourcePath           string
-	WorktreeContext      *session.WorktreeContext
-	CompactLabel         string
-	ToolResultSummary    string
-	ToolCallID           string
-	NoticeID             string
-	BackgroundActivityID string
-	BackgroundProcessID  string
-	BackgroundExitCode   *int
-	ToolOutputRepair     *transcript.ToolOutputRepairNotice
-	ToolCall             *transcript.ToolCallMeta
-	CommittedProvenance  *TranscriptCommittedRowProvenance
-	ReviewerFeedback     *ReviewerFeedbackChatEntry
-	ReviewerError        *ReviewerErrorChatEntry
+	StepID                *string
+	Visibility            transcript.EntryVisibility
+	RollbackTargetID      *string
+	Role                  string
+	Text                  string
+	DurationMs            *int64
+	CondensedText         string
+	Phase                 llm.MessagePhase
+	MessageType           llm.MessageType
+	CompactionNumber      *int
+	SourcePath            string
+	WorktreeContext       *session.WorktreeContext
+	CompactLabel          string
+	ToolResultSummary     string
+	ToolCallID            string
+	NoticeID              string
+	BackgroundActivityID  string
+	BackgroundProcessID   string
+	BackgroundExitCode    *int
+	ToolOutputRepair      *transcript.ToolOutputRepairNotice
+	ProviderModelMismatch *transcript.ProviderModelMismatchNotice
+	ToolCall              *transcript.ToolCallMeta
+	CommittedProvenance   *TranscriptCommittedRowProvenance
+	ReviewerFeedback      *ReviewerFeedbackChatEntry
+	ReviewerError         *ReviewerErrorChatEntry
 }
 
 type ReviewerFeedbackChatEntry struct {
@@ -510,12 +511,14 @@ func cloneTranscriptStreamID(streamID *uuid.UUID) *uuid.UUID {
 }
 
 func (s *chatStore) appendLocalEntryRecord(entry ChatEntry, afterToolCallID *string, provenances ...*TranscriptCommittedRowProvenance) {
-	if strings.TrimSpace(entry.Text) == "" && entry.ToolOutputRepair == nil && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
+	if strings.TrimSpace(entry.Text) == "" && entry.ToolOutputRepair == nil && entry.ProviderModelMismatch == nil && entry.ReviewerFeedback == nil && entry.ReviewerError == nil {
 		return
 	}
 	entry.Visibility = normalizeRuntimeEntryVisibility(entry.Visibility)
 	entry.CondensedText = strings.TrimSpace(entry.CondensedText)
 	entry.NoticeID = strings.TrimSpace(entry.NoticeID)
+	entry.ToolOutputRepair = textutil.Pointer(entry.ToolOutputRepair)
+	entry.ProviderModelMismatch = textutil.Pointer(entry.ProviderModelMismatch)
 	if entry.ReviewerFeedback != nil {
 		feedback := *entry.ReviewerFeedback
 		feedback.Suggestions = append([]string(nil), entry.ReviewerFeedback.Suggestions...)

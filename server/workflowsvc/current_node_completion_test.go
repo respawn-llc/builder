@@ -202,6 +202,7 @@ type currentNodeCompletionExecutionStub struct {
 	sessionResult          workflowstore.CurrentNodeCompletionResult
 	sessionDiagnostic      error
 	sessionErr             error
+	manualMoveAssignments  workflowstore.ManualMoveTargetAssignmentPreparer
 }
 
 func (s *currentNodeCompletionExecutionStub) configuredResumePreflight(
@@ -376,7 +377,10 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return applyManualMoveForWorkflowServiceTest(ctx, s.store, prepared, candidate)
+	if s.manualMoveAssignments != nil {
+		return s.store.ApplyManualMoveWithTargetAssignments(ctx, prepared, candidate, s.manualMoveAssignments)
+	}
+	return s.store.ApplyManualMove(ctx, prepared, candidate)
 }
 
 func (s *currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

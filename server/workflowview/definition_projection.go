@@ -9,6 +9,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type DefinitionProjection struct {
@@ -117,9 +118,9 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			})
 		}
 		nodeID := string(identity.ID)
-		groupID := ""
+		groupKey := ""
 		if identity.GroupID != nil {
-			groupID = *identity.GroupID
+			groupKey = groupKeyByID[*identity.GroupID]
 		}
 		api.Nodes = append(api.Nodes, serverapi.WorkflowNode{
 			ID:                 nodeID,
@@ -127,8 +128,8 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			Key:                string(identity.Key),
 			Kind:               string(node.Kind()),
 			DisplayName:        identity.DisplayName,
-			GroupID:            groupID,
-			GroupKey:           groupKeyByID[groupID],
+			GroupID:            textutil.Pointer(identity.GroupID),
+			GroupKey:           groupKey,
 			SubagentRole:       workflow.NodeSubagentRole(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),
 			ScriptPath:         scriptPath,

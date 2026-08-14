@@ -240,7 +240,7 @@ func runSemanticCloseFailurePostJoinCase(
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),

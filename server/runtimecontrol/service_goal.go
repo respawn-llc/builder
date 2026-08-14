@@ -131,19 +131,19 @@ func (s *Service) mutateGoal(
 		return serverapi.RuntimeGoalShowResponse{}, err
 	}
 	var dormant runtime.GoalCommandResult
+	var dormantErr error
 	admission, err := s.authority.WithDormantSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
-		var applyErr error
-		dormant, applyErr = applyDormantGoalMutation(store, mutation)
+		dormant, dormantErr = applyDormantGoalMutation(store, mutation)
 		if goalResultAccepted(dormant) {
 			return nil
 		}
-		return applyErr
+		return dormantErr
 	})
 	if err != nil {
 		return serverapi.RuntimeGoalShowResponse{}, goalMutationError(err)
 	}
 	if !admission.RuntimeAvailable {
-		return goalResponseFromRuntimeResult(dormant, nil)
+		return goalResponseFromRuntimeResult(dormant, goalMutationError(dormantErr))
 	}
 	result, err := s.applyLiveGoalMutation(ctx, sessionID, mutation)
 	return goalResponseFromRuntimeResult(result, goalMutationError(err))

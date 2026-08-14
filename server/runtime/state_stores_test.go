@@ -3,10 +3,8 @@ package runtime
 import (
 	"testing"
 
-	"core/server/chatcontext"
 	"core/server/llm"
 	compaction "core/shared/config"
-	"core/shared/serverapi"
 )
 
 func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
@@ -14,17 +12,15 @@ func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
 	planner := newCompactionPlanner()
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         true,
+		compactionMode:                "bogus",
 		preSubmitCompactionLeadTokens: 35_000,
-		policy: chatcontext.Policy{
-			ContextWindowTokens:      1_000_000,
-			AutomaticThresholdTokens: 900_000,
-			CompactionMode:           serverapi.ChatContextCompactionModeProviderNative,
-		},
-		maxOutputTokens:       4_000,
-		lockedMaxOutputTokens: 8_000,
+		contextWindowTokens:           1_000_000,
+		effectiveContextWindowPercent: 90,
+		maxOutputTokens:               4_000,
+		lockedMaxOutputTokens:         8_000,
 	}
 
-	if got := planner.mode(snapshot.policy); got != "native" {
+	if got := planner.mode(snapshot.compactionMode); got != "native" {
 		t.Fatalf("mode()=%q, want native", got)
 	}
 	if !planner.autoCompactionAvailable(snapshot) {
@@ -32,6 +28,9 @@ func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
 	}
 	if got := planner.contextWindowTokens(snapshot); got != 1_000_000 {
 		t.Fatalf("contextWindowTokens()=%d, want 1000000", got)
+	}
+	if got := planner.effectiveContextTokenLimit(snapshot); got != 900_000 {
+		t.Fatalf("effectiveContextTokenLimit()=%d, want 900000", got)
 	}
 	if got := planner.autoCompactTokenLimit(snapshot); got != 900_000 {
 		t.Fatalf("autoCompactTokenLimit()=%d, want 900000", got)
@@ -59,7 +58,7 @@ func TestCompactionPlannerDerivesThresholdsAndRunway(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			runway := compactionPlanningSnapshot{
-				policy:                chatcontext.Policy{AutomaticThresholdTokens: 900_000},
+				autoCompactTokenLimit: 900_000,
 				lockedMaxOutputTokens: test.reservedOutput,
 				currentUsedTokens:     test.currentUsedTokens,
 			}
@@ -89,7 +88,7 @@ func TestCompactionPlannerPanicsAtForcedLimit(t *testing.T) {
 				}
 			}()
 			planner.estimatedToolCallsUntilForcedHandoff(compactionPlanningSnapshot{
-				policy:                chatcontext.Policy{AutomaticThresholdTokens: 900_000},
+				autoCompactTokenLimit: 900_000,
 				lockedMaxOutputTokens: test.reservedOutput,
 				currentUsedTokens:     test.currentUsedTokens,
 			})
@@ -102,12 +101,10 @@ func TestCompactionPlannerAppliesFallbacksAndSelectsEngine(t *testing.T) {
 	planner := newCompactionPlanner()
 	snapshot := compactionPlanningSnapshot{
 		autoCompactionEnabled:         true,
+		compactionMode:                "none",
 		preSubmitCompactionLeadTokens: -1,
-		policy: chatcontext.Policy{
-			ContextWindowTokens:      2_000,
-			AutomaticThresholdTokens: 1_900,
-			CompactionMode:           serverapi.ChatContextCompactionModeDisabled,
-		},
+		effectiveContextWindowPercent: 101,
+		lastUsage:                     llm.Usage{WindowTokens: 2_000},
 	}
 
 	if planner.autoCompactionAvailable(snapshot) {
@@ -116,16 +113,19 @@ func TestCompactionPlannerAppliesFallbacksAndSelectsEngine(t *testing.T) {
 	if got := planner.contextWindowTokens(snapshot); got != 2_000 {
 		t.Fatalf("contextWindowTokens()=%d, want last usage window", got)
 	}
+	if got := planner.effectiveContextTokenLimit(snapshot); got != 1_900 {
+		t.Fatalf("effectiveContextTokenLimit()=%d, want fallback 95%% limit", got)
+	}
 	if got := planner.preSubmitTokenLimit(snapshot); got != compaction.EffectivePreSubmitThresholdTokens(1_900, compaction.DefaultPreSubmitRunwayTokens) {
 		t.Fatalf("preSubmitTokenLimit()=%d, want default runway threshold", got)
 	}
-	if got := planner.soonReminderLimit(compactionPlanningSnapshot{policy: chatcontext.Policy{AutomaticThresholdTokens: 1}}); got != 1 {
+	if got := planner.soonReminderLimit(compactionPlanningSnapshot{autoCompactTokenLimit: 1}); got != 1 {
 		t.Fatalf("soonReminderLimit()=%d, want minimum 1", got)
 	}
 
 	disabled := snapshot
 	disabled.autoCompactionEnabled = false
-	disabled.policy.CompactionMode = serverapi.ChatContextCompactionModeProviderNative
+	disabled.compactionMode = "native"
 	if planner.autoCompactionAvailable(disabled) {
 		t.Fatal("explicit auto compaction disable should make auto compaction unavailable")
 	}
@@ -148,16 +148,7 @@ func TestCompactionPlannerAppliesFallbacksAndSelectsEngine(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			policyMode := serverapi.ChatContextCompactionModeLocal
-			switch test.mode {
-			case "none":
-				policyMode = serverapi.ChatContextCompactionModeDisabled
-			case "native":
-				if test.caps.SupportsResponsesCompact {
-					policyMode = serverapi.ChatContextCompactionModeProviderNative
-				}
-			}
-			if got := planner.enginePlan(compactionPlanningSnapshot{policy: chatcontext.Policy{CompactionMode: policyMode}}); got != test.want {
+			if got := planner.enginePlan(compactionPlanningSnapshot{compactionMode: test.mode}, test.caps); got != test.want {
 				t.Fatalf("enginePlan()=%+v, want %+v", got, test.want)
 			}
 		})

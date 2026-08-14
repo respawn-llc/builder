@@ -69,9 +69,8 @@ func TestGatewayStartupPreflightProtectsEveryInboundOperationKind(t *testing.T) 
 					ID:      "progress",
 					Method:  protocol.MethodRunPrompt,
 					Params: mustJSON(t, serverapi.RunPromptRequest{
-						ClientRequestID: "run-prompt",
-						Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
-						Prompt:          "test",
+						Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+						Prompt: "test",
 					}),
 				})
 				return conn.frames[0].Response()

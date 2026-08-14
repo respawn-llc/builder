@@ -367,7 +367,7 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 	steerDanglingToolCall(t, eng, "step", llm.ToolCall{ID: "missing", Name: "exec_command", Input: json.RawMessage(`{}`)})
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  store.Meta().SessionID,
+		SessionID:  textutil.Value(store.Meta().SessionID),
 		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
 	}
 
@@ -437,7 +437,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 	}
 	request := llm.CompactionRequest{
 		Model:      "gpt-5",
-		SessionID:  store.Meta().SessionID,
+		SessionID:  textutil.Value(store.Meta().SessionID),
 		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
 	}
 

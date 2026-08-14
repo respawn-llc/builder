@@ -24,7 +24,7 @@ func TestExecuteToolCallsPropagatesContextCancellation(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand,
 			Handler: cancellationAwareTool{
 				started: started,
@@ -70,7 +70,7 @@ func TestExecuteToolCallsClosesCompletedAndInterruptedResultsInRosterOrder(t *te
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: handler,
 		}),

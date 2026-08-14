@@ -170,7 +170,7 @@ func TestExecuteToolCallsCommitsCompletionDiagnosticInResultGroup(t *testing.T) 
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: mismatchedDeletionTool{},
 		}),

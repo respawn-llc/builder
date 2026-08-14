@@ -276,7 +276,7 @@ func TestWorkflowRejectsDuplicateCompletionBeforeExecutingMixedToolCalls(t *test
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: sideEffect,
 		}),
@@ -377,7 +377,7 @@ func TestStructuredWorkflowCompletionStopsAfterSingleProviderDispatch(t *testing
 	if len(client.calls) != 1 {
 		t.Fatalf("structured workflow provider calls = %d, want one", len(client.calls))
 	}
-	if request := client.calls[0]; request.StructuredOutput == nil || !request.StructuredOutput.Strict {
+	if request := client.calls[0]; request.StructuredOutput == nil || !request.StructuredOutput.Schema.Strict() {
 		t.Fatalf("structured workflow request output = %+v, want strict structured output", request.StructuredOutput)
 	}
 	if got := controller.completions.Load(); got != 1 {
@@ -538,7 +538,7 @@ func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
 		t,
 		store,
 		&fakeClient{caps: activeCapabilities},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolPatch,
 			Handler: fakeTool{name: toolspec.ToolPatch},
 		}),
@@ -563,7 +563,7 @@ func TestRequestToolsUseActiveProviderCapabilitiesForPatchShape(t *testing.T) {
 	if patchTool.Custom != nil {
 		t.Fatalf("patch tool custom format = %+v, want schema format", patchTool.Custom)
 	}
-	if len(patchTool.Schema) == 0 {
+	if !patchTool.Schema.Prepared() {
 		t.Fatalf("patch tool schema is empty")
 	}
 }

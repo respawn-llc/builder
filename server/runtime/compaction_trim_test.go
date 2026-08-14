@@ -27,7 +27,7 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	t.Parallel()
 	seedContent := "seed \x1b[31mansi\x1b[0m"
 	store := mustCreateTestSession(t)
-	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
 	if err := runTestActiveStep(eng, "seed-step", func() error {
@@ -116,7 +116,7 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 			Usage: llm.Usage{InputTokens: 1000, OutputTokens: 10, WindowTokens: 2500},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
 	if err := runTestActiveStep(eng, "seed-step", func() error {
@@ -221,7 +221,7 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 			nil,
 		},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
 	if err := runTestActiveStep(eng, "seed-step", func() error {
@@ -282,7 +282,7 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 			nil,
 		},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
 	if err := runTestActiveStep(eng, "seed-step", func() error {
@@ -322,7 +322,7 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 			Usage: llm.Usage{CachedInputTokens: textutil.Value(123), InputTokens: 1000, WindowTokens: 200000},
 		}},
 	}
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
 	restoreStep := setTestActiveStep(eng, "seed-step")

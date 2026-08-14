@@ -12,6 +12,7 @@ import (
 	"core/server/llm"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )

@@ -1000,9 +1000,16 @@ func TestServiceLiveSteerAgentCallerUsesOneWrappedDeveloperMessage(t *testing.T)
 	<-submitDone
 }
 
-func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
+func TestServiceLiveSteerReportsAdmittedPromptHistoryErrorDiagnostically(t *testing.T) {
 	client := newCancelObservingRuntimeControlClient()
-	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{})
+	diagnostics := make(chan runtime.Event, 1)
+	store, _, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+		OnEvent: func(event runtime.Event) {
+			if event.Kind == runtime.EventPromptHistoryPersistFailed {
+				diagnostics <- event
+			}
+		},
+	})
 	submitDone := make(chan error, 1)
 	go func() {
 		_, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "keep-running", "keep running"))
@@ -1015,15 +1022,23 @@ func TestServiceLiveSteerPreservesAdmittedPromptHistoryError(t *testing.T) {
 	}
 	historyErr := errors.New("prompt history failed")
 	runtimeControlPromptHistoryStoresLoad(t, store.Meta().SessionID).SetRecordError(historyErr)
-	_, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
+	resp, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 		SessionID: store.Meta().SessionID,
 		Text:      "steer live",
 	})
-	if !errors.Is(err, historyErr) {
-		t.Fatalf("LiveSteer error = %v, want prompt history failure", err)
+	if err != nil {
+		t.Fatalf("LiveSteer after accepted prompt-history failure: %v", err)
 	}
-	if errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		t.Fatalf("LiveSteer mapped prompt history failure to no-active: %v", err)
+	if resp.QueueItemID == "" || resp.Text != "steer live" {
+		t.Fatalf("LiveSteer response = %+v, want accepted Queue item", resp)
+	}
+	select {
+	case diagnostic := <-diagnostics:
+		if diagnostic.Error != historyErr.Error() {
+			t.Fatalf("prompt-history diagnostic = %q, want %q", diagnostic.Error, historyErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("LiveSteer did not report prompt-history failure diagnostically")
 	}
 	_, _ = service.LiveStop(context.Background(), serverapi.RuntimeLiveStopRequest{
 		SessionID: store.Meta().SessionID,
@@ -1788,7 +1803,7 @@ func TestServiceSubmitUserTurnRecordsCommittedAtFlushBeforeAssistantCompletion(t
 }
 
 func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
-	store, _, service := newRuntimeControlTestService(t, nil, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
+	store, _, service := newRuntimeControlTestService(t, nil, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeShellHandler{}}), runtime.Config{})
 	req := runtimeControlShellCommandRequest(store, "req-1", "pwd")
 
 	if err := service.SubmitUserShellCommand(context.Background(), req); err != nil {
@@ -1806,7 +1821,7 @@ func TestServiceSubmitUserShellCommandDoesNotRecordPromptHistory(t *testing.T) {
 func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
@@ -1869,7 +1884,7 @@ func TestServiceQueuedSteeringDrainsAtNextSafeBoundary(t *testing.T) {
 func TestServiceSubmitUserTurnPromptCommandResolvesBeforeActiveRunQueueAdmission(t *testing.T) {
 	client := newSteeringDrainRuntimeControlClient()
 	queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 4)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})
@@ -1950,7 +1965,7 @@ func TestServiceSubmitUserTurnPromptResolutionFailureDuringActiveRunReturnsWitho
 		t.Run(string(kind), func(t *testing.T) {
 			client := newSteeringDrainRuntimeControlClient()
 			queuedStatuses := make(chan runtime.QueuedUserMessageStatusEvent, 1)
-			registry := tools.NewRegistry(tools.HandlerRegistration{
+			registry := newTestToolRegistry(t, tools.HandlerRegistration{
 				ID:      toolspec.ToolExecCommand,
 				Handler: fakeShellHandler{},
 			})
@@ -2105,7 +2120,7 @@ func TestServiceInterruptDiscardsPendingSteeringBeforeStoppingActiveRun(t *testi
 	client := newSteeringDrainRuntimeControlClient()
 	defer close(client.releaseFirst)
 	defer close(client.releaseSecond)
-	registry := tools.NewRegistry(tools.HandlerRegistration{
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeShellHandler{},
 	})

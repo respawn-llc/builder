@@ -87,8 +87,8 @@ func TestQueuedAgentSteerStartsNewMismatchWarningStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAgentSteer: %v", err)
 	}
-	if _, accepted, err := engine.QueueAgentSteerForActiveRun(context.Background(), steer, liveRunTestRequestID(t), nil); err != nil || !accepted {
-		t.Fatalf("queue Agent Steer accepted=%t err=%v", accepted, err)
+	if _, err := engine.AcceptAgentSteering(steer, nil); err != nil {
+		t.Fatalf("accept Agent Steering: %v", err)
 	}
 	release()
 	if err := <-done; err != nil {

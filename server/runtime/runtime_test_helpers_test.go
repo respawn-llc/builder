@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/internal/testharness/filemode"
+	"core/internal/testharness/toolfixture"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -18,12 +19,36 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
 )
+
+func newTestToolRegistry(t testing.TB, registrations ...tools.HandlerRegistration) *tools.Registry {
+	t.Helper()
+	return toolfixture.NewRegistry(t, registrations...)
+}
+
+func mustReviewerSuggestionsContract(t testing.TB) jsoncontract.Structured {
+	t.Helper()
+	contract, err := prepareReviewerSuggestionsContract(jsoncontract.NewPreparer(false))
+	if err != nil {
+		t.Fatalf("prepare reviewer suggestions contract: %v", err)
+	}
+	return contract
+}
+
+func mustTestFunctionSchema(t testing.TB) jsoncontract.Function {
+	t.Helper()
+	contract, err := jsoncontract.NewPreparer(false).Function("runtime test function", struct{}{})
+	if err != nil {
+		t.Fatalf("prepare runtime test function schema: %v", err)
+	}
+	return contract
+}
 
 type testPersistedEvent struct {
 	Kind   string
@@ -299,6 +324,18 @@ func runReviewerSuggestionsTestActiveStep(
 	return engine.runReviewerSuggestions(ctx, stepID, client)
 }
 
+func runStepLoopInActiveTestRun(
+	t *testing.T,
+	ctx context.Context,
+	engine *Engine,
+) (llm.Message, error) {
+	t.Helper()
+	const stepID = "test-step"
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.runStepLoop(ctx, stepID)
+}
+
 func mustMaterializeTestEventLog(
 	t *testing.T,
 	store *session.Store,
@@ -509,7 +546,7 @@ func mustNewFakeToolEngine(t *testing.T, store *session.Store, client llm.Client
 	for _, id := range toolIDs {
 		handlers = append(handlers, tools.HandlerRegistration{ID: id, Handler: fakeTool{name: id}})
 	}
-	return mustNewTestEngine(t, store, client, tools.NewRegistry(handlers...), cfg)
+	return mustNewTestEngine(t, store, client, newTestToolRegistry(t, handlers...), cfg)
 }
 
 func mustNewExecTestEngine(t *testing.T, store *session.Store, client llm.Client, cfg Config) *Engine {

@@ -205,7 +205,7 @@ func (f *kent345Fixture) supersedeImplementation(t *testing.T) (runtimeids.Sessi
 	implementationB := associateAndBindCurrentNodeSessionForTest(
 		t, f.ctx, f.store, f.binding, f.cfg, f.implementation.Reference,
 	)
-	if _, err := f.store.CurrentTaskSessionForNode(f.ctx, f.firstReview.Reference); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := f.store.LatestTaskSessionForNode(f.ctx, f.firstReview.Reference); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("stale Review remains current: %v", err)
 	}
 	return f.implementationA, implementationB

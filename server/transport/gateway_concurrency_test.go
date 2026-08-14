@@ -4,9 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -23,6 +20,7 @@ import (
 	"core/server/workflowstore"
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"golang.org/x/net/websocket"
@@ -107,15 +105,43 @@ type gatewayFailingRunner struct {
 	cause error
 }
 
-func (r gatewayFailingRunner) StartCurrentNode(
+func (r gatewayFailingRunner) PrepareAgentPublication(
 	context.Context,
 	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
 	workflowruntime.TaskPromptDelivery,
-	*workflowexecution.CurrentNodeClassifiedAssignment,
-	sessionruntime.WorkflowExecutionLease,
+	workflowexecution.CurrentNodeAssignmentSteer,
 	workflowruntime.Controller,
-) error {
-	return r.cause
+) (workflowexecution.CurrentNodeAgentPublication, error) {
+	return gatewayFailingAgentPublication{cause: r.cause}, nil
+}
+
+func (gatewayFailingRunner) PrepareScriptPublication(
+	context.Context,
+	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
+	workflowruntime.Controller,
+) (workflowexecution.CurrentNodeScriptPublication, error) {
+	return nil, nil
+}
+
+type gatewayFailingAgentPublication struct {
+	cause error
+}
+
+func (p gatewayFailingAgentPublication) Publish(
+	_ context.Context,
+	admit func() error,
+	_ func(sessionruntime.ExecutionHandle),
+) (sessionruntime.ExecutionHandle, func(), error) {
+	if err := admit(); err != nil {
+		return nil, nil, err
+	}
+	return nil, nil, p.cause
+}
+
+func (gatewayFailingAgentPublication) Cancel() error {
+	return nil
 }
 
 type gatewayCommittedAssignmentSteerer struct{}
@@ -398,98 +424,6 @@ func TestGatewayOrdinaryHandlerPanicPropagates(t *testing.T) {
 	}, func() {
 		stopped = true
 	})
-}
-
-func TestGatewayAutomaticSuccessorFatalTerminatesProcess(t *testing.T) {
-	const childEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_CHILD"
-	const addressEnv = "KENT_GATEWAY_AUTOMATIC_FATAL_ADDRESS"
-	addressPath := os.Getenv(addressEnv)
-	if addressPath == "" {
-		addressPath = filepath.Join(t.TempDir(), "gateway-address")
-	}
-	if os.Getenv(childEnv) == "1" {
-		appCore, _ := newGatewayTestCore(t, true, true)
-		defer func() { _ = appCore.Close() }()
-		task := createGatewaySearchableTask(t, appCore)
-		taskID := workflow.TaskID(task.ID)
-		workflowStore := gatewayWorkflowStore(t, appCore)
-		if _, err := workflowStore.StartTask(context.Background(), taskID); err != nil {
-			t.Fatalf("StartTask: %v", err)
-		}
-		installCurrentNodeInterruptionFailure(t, appCore)
-		authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
-		controller, err := workflowexecution.NewCurrentNodeController(
-			workflowStore,
-			gatewayFailingRunner{cause: errors.New("automatic fatal test runner must not start")},
-			authority,
-			workflowexecution.NewTaskMutationCoordinator(),
-			workflowexecution.CurrentNodeControllerConfig{
-				AgentConcurrency: 1,
-				AssignmentSteerer: gatewayAutomaticFatalSteerer{
-					cause: errors.New("automatic successor assignment failed"),
-				},
-			},
-		)
-		if err != nil {
-			t.Fatalf("NewCurrentNodeController: %v", err)
-		}
-		workflowClient := &gatewayConcurrencyWorkflowService{
-			WorkflowService: appCore.WorkflowClient(),
-			completeWorkflowTask: func(ctx context.Context, req serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error) {
-				_, completeErr := controller.CompleteIdleCurrentNode(
-					ctx,
-					workflowstore.IdleCurrentNodeSelector{TaskID: &taskID},
-					req.TransitionID,
-					req.OutputValues,
-					req.Commentary,
-				)
-				return serverapi.WorkflowTaskCompleteResponse{}, completeErr
-			},
-		}
-		gateway, err := NewGateway(
-			&gatewayConcurrencyDependencies{GatewayDependencies: appCore, workflow: workflowClient},
-			protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
-		)
-		if err != nil {
-			t.Fatalf("NewGateway: %v", err)
-		}
-		server := httptest.NewServer(gateway.Handler())
-		if err := os.WriteFile(addressPath, []byte(server.URL), 0o600); err != nil {
-			t.Fatalf("write Gateway address: %v", err)
-		}
-		conn := dialGateway(t, server)
-		handshakeGateway(t, conn)
-		sendGatewayRequest(t, conn, "fatal", protocol.MethodWorkflowTaskComplete, serverapi.WorkflowTaskCompleteRequest{
-			TaskID:       task.ID,
-			TransitionID: "done",
-			ActorKind:    serverapi.WorkflowTaskCompleteActorUser,
-			Force:        true,
-		})
-		select {}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestGatewayAutomaticSuccessorFatalTerminatesProcess$", "-test.timeout=20s")
-	cmd.Env = append(os.Environ(), childEnv+"=1", addressEnv+"="+addressPath)
-	output, err := cmd.CombinedOutput()
-	if ctx.Err() != nil {
-		t.Fatalf("automatic successor fatal child did not terminate\n%s", output)
-	}
-	if err == nil {
-		t.Fatalf("automatic successor fatal child exited successfully\n%s", output)
-	}
-	rawAddress, readErr := os.ReadFile(addressPath)
-	if readErr != nil {
-		t.Fatalf("read Gateway address after child exit: %v\n%s", readErr, output)
-	}
-	if _, dialErr := websocket.Dial(
-		"ws"+string(rawAddress[len("http"):]),
-		"",
-		string(rawAddress),
-	); dialErr == nil {
-		t.Fatal("Gateway accepted a subsequent connection after process-fatal panic")
-	}
 }
 
 func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t *testing.T) {

@@ -5,8 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"testing"
 
 	"core/server/auth"
@@ -15,9 +13,6 @@ import (
 	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
-	"core/shared/protocol"
-	"core/shared/runtimeids"
-	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 )
 
@@ -47,7 +42,7 @@ func TestNewBuildsReusableServerCore(t *testing.T) {
 	if appCore.Background() == nil {
 		t.Fatal("expected background manager")
 	}
-	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.ProcessOutputClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
+	if appCore.ProjectViewClient() == nil || appCore.ProcessViewClient() == nil || appCore.SessionLaunchClient() == nil || appCore.SessionViewClient() == nil || appCore.SessionLifecycleClient() == nil || appCore.SessionTranscriptClient() == nil || appCore.RunPromptClient() == nil {
 		t.Fatal("expected core clients to be wired")
 	}
 	if appCore.CapabilityFactsClient() == nil {

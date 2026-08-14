@@ -200,26 +200,26 @@ func TestMetadataServicePaginatesProjectWorkspacesForGUI(t *testing.T) {
 	second := attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	page1, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, PageSize: 2})
+	page1, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, Limit: 2})
 	if err != nil {
 		t.Fatalf("ListProjectWorkspaces page1: %v", err)
 	}
-	if got := workspaceIDs(page1.Workspaces); len(got) != 2 || got[0] != binding.WorkspaceID || got[1] != second.WorkspaceID {
+	if got := workspaceCatalogIDs(page1.Workspaces); len(got) != 2 || got[0] != binding.WorkspaceID || got[1] != second.WorkspaceID {
 		t.Fatalf("page1 workspace ids = %+v, want [%s %s]", got, binding.WorkspaceID, second.WorkspaceID)
 	}
-	if page1.NextPageToken == "" {
-		t.Fatalf("page1 next token empty: %+v", page1)
+	if page1.NextOffset == nil || *page1.NextOffset != 2 {
+		t.Fatalf("page1 next offset = %v, want 2", page1.NextOffset)
 	}
 
-	page2, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, PageSize: 2, PageToken: page1.NextPageToken})
+	page2, err := svc.ListProjectWorkspaces(context.Background(), serverapi.ProjectWorkspaceListRequest{ProjectID: binding.ProjectID, Offset: *page1.NextOffset, Limit: 2})
 	if err != nil {
 		t.Fatalf("ListProjectWorkspaces page2: %v", err)
 	}
-	if got := workspaceIDs(page2.Workspaces); len(got) != 1 || got[0] != first.WorkspaceID {
+	if got := workspaceCatalogIDs(page2.Workspaces); len(got) != 1 || got[0] != first.WorkspaceID {
 		t.Fatalf("page2 workspace ids = %+v, want [%s]", got, first.WorkspaceID)
 	}
-	if page2.NextPageToken != "" {
-		t.Fatalf("page2 next token = %q, want empty", page2.NextPageToken)
+	if page2.NextOffset != nil {
+		t.Fatalf("page2 next offset = %v, want absent", page2.NextOffset)
 	}
 }
 
@@ -915,4 +915,12 @@ func workspaceIDs(workspaces []serverapi.ProjectWorkspaceSummary) []string {
 		out = append(out, workspace.WorkspaceID)
 	}
 	return out
+}
+
+func workspaceCatalogIDs(workspaces []serverapi.ProjectWorkspaceCatalogRow) []string {
+	ids := make([]string, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		ids = append(ids, workspace.WorkspaceID)
+	}
+	return ids
 }

@@ -60,16 +60,16 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 		if err != nil {
 			return err
 		}
-		if s != nil && s.promptStore != nil {
-			if _, err := s.recordPromptHistory(callbackCtx, sessionID.String(), queueText); err != nil {
-				return err
-			}
-		}
 		displayText, displayErr := item.DisplayText()
 		if displayErr != nil {
 			return displayErr
 		}
 		resp = serverapi.RuntimeLiveSteerResponse{QueueItemID: item.ID, Text: displayText}
+		if s != nil && s.promptStore != nil {
+			if _, err := s.recordPromptHistory(callbackCtx, sessionID.String(), queueText); err != nil {
+				engine.ReportPromptHistoryPersistError(err.Error())
+			}
+		}
 		return nil
 	})
 	return resp, err

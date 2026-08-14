@@ -167,13 +167,13 @@ func TestBusyEnterDispatchesCompact(t *testing.T) {
 	testSetMainInput(model, "/compact now")
 	next, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated := next.(*uiModel)
-	if cmd == nil || testMainInput(updated) != "" || len(updated.queued) != 0 || updated.isCompacting() {
+	if cmd == nil || testMainInput(updated) != "" || len(updated.queued) != 0 || !updated.isCompacting() {
 		t.Fatalf("compact dispatch = cmd %v, input %q, queued %+v, compacting %t", cmd, testMainInput(updated), updated.queued, updated.isCompacting())
 	}
 	testSetMainInput(updated, "/compact again")
 	next, repeatCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if repeatCmd == nil || updated.isCompacting() || len(updated.queued) != 0 || len(updated.injectedQueue) != 0 {
+	if repeatCmd != nil || !updated.isCompacting() || len(updated.queued) != 0 || len(updated.injectedQueue) != 0 {
 		t.Fatalf("repeat compact = cmd %v compacting %t queued %+v injected %+v", repeatCmd, updated.isCompacting(), updated.queued, updated.injectedQueue)
 	}
 }
@@ -253,26 +253,20 @@ func TestBusyQueuedCompactStartsCompactionAfterTurnDrains(t *testing.T) {
 
 	next, cmd := updated.Update(submitDoneMsg{message: "done"})
 	updated = next.(*uiModel)
-	if cmd == nil || updated.isCompacting() || updated.postTurnCompactionsInFlight != 1 || len(updated.queued) != 0 {
-		t.Fatalf(
-			"compact drain = cmd %v, compacting %t, blockers %d, queued %+v",
-			cmd,
-			updated.isCompacting(),
-			updated.postTurnCompactionsInFlight,
-			updated.queued,
-		)
+	if cmd == nil || !updated.isBusy() || !updated.isCompacting() || len(updated.queued) != 0 {
+		t.Fatalf("compact drain = cmd %v, busy %t, compacting %t, queued %+v", cmd, updated.isBusy(), updated.isCompacting(), updated.queued)
 	}
 }
 
-func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *testing.T) {
-	client := &runtimeControlFakeClient{}
+func TestCompactionKeepsInputEditableAndQueuesSteering(t *testing.T) {
+	client := &runtimeControlFakeClient{submitQueuedID: "server-queue-1"}
 	model := newProjectedTestUIModel(client)
 	model.startupCmds = nil
 
-	if cmd := model.inputController().startCompactionWithOrigin("/compact", "", uiCompactionOriginManual); cmd == nil {
+	if cmd := model.inputController().startCompactionWithOrigin("", uiCompactionOriginManual); cmd == nil {
 		t.Fatal("expected compaction command")
 	}
-	if model.isCompacting() || model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
+	if !model.isCompacting() || !model.blocksRuntimeInput() || model.layout().mainInputPrefix() != "› " {
 		t.Fatalf("compaction state = compacting %t, blocked %t, prefix %q", model.isCompacting(), model.blocksRuntimeInput(), model.layout().mainInputPrefix())
 	}
 
@@ -280,16 +274,8 @@ func TestCompactionDispatchKeepsInputEditableWithoutLocalRuntimeBlocking(t *test
 	updated := next.(*uiModel)
 	next, queueCmd := updated.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	updated = next.(*uiModel)
-	if queueCmd == nil || testMainInput(updated) != "" || len(updated.injectedQueue) != 0 ||
-		updated.activeSubmit.text != "steer during compaction" || updated.isCompacting() {
-		t.Fatalf(
-			"submission = cmd %v, input %q, active %+v, injected %+v, compacting %t",
-			queueCmd,
-			testMainInput(updated),
-			updated.activeSubmit,
-			updated.injectedQueue,
-			updated.isCompacting(),
-		)
+	if queueCmd == nil || testMainInput(updated) != "" || len(updated.injectedQueue) != 1 || updated.injectedQueue[0].Text != "steer during compaction" || !updated.isCompacting() {
+		t.Fatalf("queued steering = cmd %v, input %q, injected %+v, compacting %t", queueCmd, testMainInput(updated), updated.injectedQueue, updated.isCompacting())
 	}
 }
 

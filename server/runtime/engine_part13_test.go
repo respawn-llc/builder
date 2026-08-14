@@ -767,7 +767,7 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 	}
 
 	var eng *Engine
-	registry := tools.NewRegistry(
+	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolTriggerHandoff, Handler: triggerhandofftool.NewTriggerHandoffTool(func() triggerhandofftool.TriggerHandoffController { return eng })},
 	)
@@ -792,8 +792,8 @@ func TestRunStepLoopTriggerHandoffOmitsCallAndOutputFromFollowUpRequestAndKeepsF
 	if len(client.calls) != 3 {
 		t.Fatalf("expected tool call, local compaction summary, and follow-up requests, got %d", len(client.calls))
 	}
-	if got, want := client.calls[2].SessionID, eng.SessionID(); got != want {
-		t.Fatalf("expected follow-up request session id to stay on the main conversation after handoff compaction, got %q want %q", got, want)
+	if got, want := client.calls[2].SessionID, eng.SessionID(); got == nil || *got != want {
+		t.Fatalf("expected follow-up request session id to stay on the main conversation after handoff compaction, got %v want %q", got, want)
 	}
 	if got, want := client.calls[2].PromptCacheKey, conversationPromptCacheKey(eng.SessionID(), eng.compactionRuntimeState().Count()); got != want {
 		t.Fatalf("expected follow-up request prompt cache key to rotate after handoff compaction, got %q want %q", got, want)
@@ -847,7 +847,7 @@ func TestRunStepLoopInjectsReminderBeforeTriggerHandoff(t *testing.T) {
 	}
 
 	var eng *Engine
-	registry := tools.NewRegistry(
+	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}},
 		tools.HandlerRegistration{ID: toolspec.ToolTriggerHandoff, Handler: triggerhandofftool.NewTriggerHandoffTool(func() triggerhandofftool.TriggerHandoffController { return eng })},
 	)

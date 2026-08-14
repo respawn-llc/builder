@@ -1290,6 +1290,38 @@ type countingCurrentNodeRunner struct {
 	deliveries []workflowruntime.TaskPromptDelivery
 }
 
+func (r *countingCurrentNodeRunner) PrepareAgentPublication(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
+	delivery workflowruntime.TaskPromptDelivery,
+	assignment CurrentNodeAssignmentSteer,
+	controller workflowruntime.Controller,
+) (CurrentNodeAgentPublication, error) {
+	return currentNodeTestPublicationRunner{runner: r}.PrepareAgentPublication(
+		ctx,
+		reference,
+		operationID,
+		delivery,
+		assignment,
+		controller,
+	)
+}
+
+func (r *countingCurrentNodeRunner) PrepareScriptPublication(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	operationID runtimeids.CurrentNodeOperationID,
+	controller workflowruntime.Controller,
+) (CurrentNodeScriptPublication, error) {
+	return currentNodeTestPublicationRunner{runner: r}.PrepareScriptPublication(
+		ctx,
+		reference,
+		operationID,
+		controller,
+	)
+}
+
 func (r *countingCurrentNodeRunner) PublishCurrentNode(_ context.Context, _ workflow.CurrentNodeReference, delivery workflowruntime.TaskPromptDelivery, _ CurrentNodeAssignmentSteer, _ workflowExecutionStart, _ workflowruntime.Controller) error {
 	return nil
 }

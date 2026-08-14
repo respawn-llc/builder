@@ -621,7 +621,7 @@ func TestServiceResolveTransitionForkRollbackActivatesChildInPreservedWorktree(t
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	runtimeService := sessionruntime.NewAPI(metadataStore, nil, runtimeAuthority, sessionruntime.APIOptions{})
+	runtimeService := sessionruntime.NewAPI(metadataStore, runtimeAuthority, sessionruntime.APIOptions{})
 	activateSettings := cfg.Settings
 	activateSettings.Model = "gpt-5.4"
 	activateSettings.OpenAIBaseURL = "http://127.0.0.1:1/v1"

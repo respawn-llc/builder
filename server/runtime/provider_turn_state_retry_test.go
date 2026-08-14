@@ -105,12 +105,12 @@ func TestGenerationMissingOutputRebuildDoesNotReplayProviderTurnState(t *testing
 	client := nonStreamingClient{client: llm.NewOpenAIClient(transport)}
 	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{Model: "gpt-5"})
 	steerDanglingToolCall(t, engine, "seed", llm.ToolCall{ID: "missing", Name: "exec_command", Input: []byte(`{}`)})
-	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
-		_, err := engine.generateWithMissingToolOutputRepair(ctx, stepID, func() (llm.Request, error) {
-			return engine.buildActiveTurnDispatchRequest(ctx, stepID, nil, true)
-		}, nil, nil, nil)
-		return err
-	})
+	const stepID = "generation-repair"
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
+	_, err := engine.generateWithMissingToolOutputRepair(t.Context(), stepID, func() (llm.Request, error) {
+		return engine.buildRequest(t.Context(), stepID, true)
+	}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("generation repair: %v", err)
 	}

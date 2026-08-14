@@ -99,7 +99,7 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 				t,
 				reopened,
 				&fakeClient{},
-				tools.NewRegistry(tools.HandlerRegistration{ID: test.tool, Handler: probe}),
+				newTestToolRegistry(t, tools.HandlerRegistration{ID: test.tool, Handler: probe}),
 				Config{Model: "gpt-5"},
 			)
 			if calls := probe.calls.Load(); calls != 0 {

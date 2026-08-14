@@ -104,7 +104,7 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),
@@ -196,7 +196,7 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 		t,
 		mustCreateTestSession(t),
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: fakeTool{name: toolspec.ToolExecCommand},
 		}),

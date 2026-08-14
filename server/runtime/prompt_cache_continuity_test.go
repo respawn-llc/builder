@@ -80,7 +80,7 @@ func TestHeadlessToInteractiveReopenPreservesPromptCachePrefix(t *testing.T) {
 	}()
 
 	store := mustCreateTestSession(t)
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}})
 	headlessResponse := finalOutputItemResponse("headless-ok")
 	headlessResponse.Usage.CachedInputTokens = textutil.Value(4096)
 	headlessClient := &fakeClient{responses: []llm.Response{headlessResponse}}
@@ -313,7 +313,7 @@ func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) 
 		},
 		finalOutputItemResponse("done"),
 	}}
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stringOutputTool{name: toolspec.ToolExecCommand}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: stringOutputTool{name: toolspec.ToolExecCommand}})
 	engine := mustNewTestEngine(t, store, client, registry, Config{
 		EnabledTools:  []toolspec.ID{toolspec.ToolExecCommand},
 		ToolPreambles: false,
@@ -340,8 +340,8 @@ func TestBuildRequest_ReopenPreservesShellStringToolOutputPayload(t *testing.T) 
 }
 
 func TestPromptCacheReplayPreservesMultiToolHTMLUnescapeShape(t *testing.T) {
-	liveReq := seq21To28ShapeRequest(json.RawMessage(`{"cmd":"git diff --cached && git diff","workdir":"/workspace","max_output_tokens":20000}`))
-	replayedReq := seq21To28ShapeRequest(json.RawMessage(`{"cmd":"git diff --cached \u0026\u0026 git diff","workdir":"/workspace","max_output_tokens":20000}`))
+	liveReq := seq21To28ShapeRequest(t, json.RawMessage(`{"cmd":"git diff --cached && git diff","workdir":"/workspace","max_output_tokens":20000}`))
+	replayedReq := seq21To28ShapeRequest(t, json.RawMessage(`{"cmd":"git diff --cached \u0026\u0026 git diff","workdir":"/workspace","max_output_tokens":20000}`))
 
 	liveShape, err := summarizePromptCacheRequest(liveReq)
 	if err != nil {
@@ -407,7 +407,7 @@ func newPromptCacheContinuityFixture(t *testing.T) *promptCacheContinuityFixture
 	}
 	client := &fakeClient{caps: clientCaps}
 	reviewerClient := &fakeClient{caps: clientCaps}
-	registry := tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}, tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: fakeTool{name: toolspec.ToolAskQuestion}})
+	registry := newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}, tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: fakeTool{name: toolspec.ToolAskQuestion}})
 	cfg := Config{
 		Model:         "gpt-5",
 		ThinkingLevel: "medium",
@@ -738,7 +738,7 @@ func skillMessageContent(messages []llm.Message) (string, bool) {
 	return "", false
 }
 
-func seq21To28ShapeRequest(thirdCallInput json.RawMessage) llm.Request {
+func seq21To28ShapeRequest(t testing.TB, thirdCallInput json.RawMessage) llm.Request {
 	return llm.Request{ToolChoiceMode: llm.ToolChoiceModeAutomatic,
 		Model:        "gpt-5",
 		SystemPrompt: "system",
@@ -757,7 +757,7 @@ func seq21To28ShapeRequest(thirdCallInput json.RawMessage) llm.Request {
 			{Role: llm.RoleTool, ToolCallID: textutil.Value("call-search"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`"docs/dev/specs/README.md:1:# Product Specs"`)},
 			{Role: llm.RoleTool, ToolCallID: textutil.Value("call-status"), Name: textutil.Value(string(toolspec.ToolExecCommand)), Content: textutil.Value(`"M\tdocs/dev/specs/README.md"`)},
 		}),
-		Tools: []llm.Tool{{Name: string(toolspec.ToolExecCommand), Description: "execute command", Schema: json.RawMessage(`{"type":"object"}`)}},
+		Tools: []llm.Tool{{Name: string(toolspec.ToolExecCommand), Description: "execute command", Schema: mustTestFunctionSchema(t)}},
 	}
 }
 

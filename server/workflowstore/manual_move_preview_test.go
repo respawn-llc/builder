@@ -1,6 +1,7 @@
 package workflowstore
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -8,9 +9,52 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/workflow"
-	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
+
+func replaceSerialCurrentNodeBindingFixture(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	template workflow.CurrentNode,
+	nodeID workflow.NodeID,
+	sessionID *runtimeids.SessionID,
+	source workflow.MaterializedContinuationSource,
+) workflow.CurrentNodeReference {
+	t.Helper()
+	sourceSessionID, exact := source.ExactSessionID()
+	var persistedSessionID sql.NullString
+	if sessionID != nil {
+		persistedSessionID = sql.NullString{String: sessionID.String(), Valid: true}
+	}
+	var persistedSourceSessionID sql.NullString
+	if exact {
+		persistedSourceSessionID = sql.NullString{String: sourceSessionID.String(), Valid: true}
+	}
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE task_current_nodes
+SET
+    node_id = ?,
+    session_id = ?,
+    continuation_source_kind = ?,
+    continuation_source_session_id = ?,
+    legacy_materialized = 0
+WHERE task_id = ?
+  AND transition_branch_key IS NULL`,
+		testGraphEntityBlob(t, string(nodeID)),
+		persistedSessionID,
+		string(source.Kind()),
+		persistedSourceSessionID,
+		string(template.Reference.TaskID),
+	); err != nil {
+		t.Fatalf("replace serial Current Node binding fixture: %v", err)
+	}
+	reference, err := workflow.NewCurrentNodeReference(template.Reference.TaskID, nodeID, nil)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeReference: %v", err)
+	}
+	return reference
+}
 
 func TestManualMovePreviewReturnsNoOpForAnAlreadyCurrentDestination(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
@@ -652,8 +696,8 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	sessionID := associateAndBindCurrentNodeSessionForTest(
 		t, ctx, store, binding, cfg, started.Mutation.Created[0].Reference,
 	)
-	if _, err := store.CurrentTaskSessionForNode(ctx, started.Mutation.Created[0].Reference); err != nil {
-		t.Fatalf("CurrentTaskSessionForNode before move to done: %v", err)
+	if _, err := store.LatestTaskSessionForNode(ctx, started.Mutation.Created[0].Reference); err != nil {
+		t.Fatalf("LatestTaskSessionForNode before move to done: %v", err)
 	}
 	definition, _, err := store.GetDefinition(ctx, workflowID)
 	if err != nil {
@@ -663,8 +707,8 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	if _, err := store.ManualMoveTask(ctx, ManualMoveRequest{TaskID: task.ID, TargetNodeID: workflow.NodeIDOf(done)}); err != nil {
 		t.Fatalf("move to done: %v", err)
 	}
-	if _, err := store.CurrentTaskSessionForNode(ctx, started.Mutation.Created[0].Reference); err != nil {
-		t.Fatalf("CurrentTaskSessionForNode after move to done: %v", err)
+	if _, err := store.LatestTaskSessionForNode(ctx, started.Mutation.Created[0].Reference); err != nil {
+		t.Fatalf("LatestTaskSessionForNode after move to done: %v", err)
 	}
 
 	target := nodeByKey(t, definition, "implement")
@@ -752,10 +796,6 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	if implementationB.SessionID == nil {
 		t.Fatalf("assigned Implementation B = %+v, want fresh Session", implementationB)
 	}
-	if _, err := store.CurrentTaskSessionForNode(ctx, firstReview.Reference); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("CurrentTaskSessionForNode Review after B binds = %v, want sql.ErrNoRows", err)
-	}
-
 	transitionKey := workflow.TransitionID("rework")
 	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
 		TaskID:        task.ID,
@@ -1409,32 +1449,6 @@ func TestManualMovePreviewPrefillsAndOverridesPendingApprovalValues(t *testing.T
 	if !errors.Is(err, ErrManualMoveValuesInvalid) {
 		t.Fatalf("oversized nested value error = %v, want values-invalid", err)
 	}
-}
-
-func TestPreviewManualMoveFailsFastForUnresolvedLegacySourceInDebug(t *testing.T) {
-	fixture := newReworkContextCompletionFixture(t, workflow.ContextSourcePreviousTarget)
-	fixture.store.invariantPolicy = invariant.NewPolicy(invariant.WithMode(invariant.ModePanic))
-	markCurrentNodeContinuationSourceLegacy(t, fixture)
-	definition, _, err := fixture.store.GetDefinition(fixture.ctx, fixture.workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	review := nodeByKey(t, definition, "review")
-	transitionKey := workflow.TransitionID("rework")
-
-	defer func() {
-		if recovered := recover(); recovered == nil {
-			t.Fatal("PreviewManualMove did not panic for unresolved legacy source in debug")
-		}
-	}()
-	_, _ = fixture.store.PreviewManualMove(fixture.ctx, ManualMoveRequest{
-		TaskID:        fixture.audit.Reference.TaskID,
-		TargetNodeID:  workflow.NodeIDOf(review),
-		TransitionKey: &transitionKey,
-		Values: map[workflow.ModelKey]map[string]string{
-			"audit": {"summary": "review again"},
-		},
-	})
 }
 
 func TestManualMovePreviewPrefillsPartiallyArrivedFanoutValuesBySourceNode(t *testing.T) {

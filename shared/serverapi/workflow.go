@@ -95,7 +95,7 @@ type WorkflowNode struct {
 	Key                string                      `json:"key"`
 	Kind               string                      `json:"kind"`
 	DisplayName        string                      `json:"display_name"`
-	GroupID            string                      `json:"group_id,omitempty"`
+	GroupID            *string                     `json:"group_id"`
 	GroupKey           string                      `json:"group_key,omitempty"`
 	SubagentRole       string                      `json:"subagent_role,omitempty"`
 	CompletionMode     string                      `json:"completion_mode,omitempty"`
@@ -339,7 +339,7 @@ func WorkflowGraphDraftFromDefinition(definition WorkflowDefinition) WorkflowGra
 	for _, node := range definition.Nodes {
 		graph.Nodes = append(graph.Nodes, WorkflowGraphDraftNode{
 			ID: node.ID, Key: node.Key, Kind: node.Kind, DisplayName: node.DisplayName,
-			GroupID: textutil.OptionalExactString(node.GroupID), GroupKey: node.GroupKey,
+			GroupID: textutil.Pointer(node.GroupID), GroupKey: node.GroupKey,
 			SubagentRole: node.SubagentRole, CompletionMode: node.CompletionMode,
 			ScriptPath:         textutil.Pointer(node.ScriptPath),
 			JoinInputProviders: slices.Clone(node.JoinInputProviders),
@@ -1501,7 +1501,7 @@ type WorkflowBoardGroup struct {
 
 type WorkflowBoardColumn struct {
 	Node      WorkflowBoardNodeSummary `json:"node"`
-	GroupID   string                   `json:"group_id,omitempty"`
+	GroupID   *string                  `json:"group_id"`
 	SortOrder int                      `json:"sort_order"`
 	IsBacklog bool                     `json:"is_backlog"`
 	IsDone    bool                     `json:"is_done"`
@@ -2149,7 +2149,10 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 	if r.ExpectedVersion < 0 {
 		return workflowRequestError(WorkflowRequestErrorInvalidValue, "expected_version", "expected_version must be non-negative")
 	}
-	return validateWorkflowGraphDraftEnvelope(r.Graph)
+	if err := validateWorkflowGraphDraftEnvelope(r.Graph); err != nil {
+		return err
+	}
+	return validateWorkflowGraphEntityIDs(r.Graph)
 }
 
 func (r WorkflowGraphSaveRequest) Validate() error {
@@ -2383,6 +2386,60 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	for _, group := range graph.TransitionGroups {
 		if len([]rune(group.Description)) > 1000 {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
+		}
+	}
+	return nil
+}
+
+func validateGraphEntityID(field, value string) error {
+	if _, err := runtimeids.GraphEntityIDBlob(value); err != nil {
+		return workflowRequestError(
+			WorkflowRequestErrorInvalidValue,
+			field,
+			field+" must be canonical UUIDv4 text",
+		)
+	}
+	return nil
+}
+
+func validateWorkflowGraphEntityIDs(graph WorkflowGraphDraft) error {
+	for _, group := range graph.NodeGroups {
+		if err := validateGraphEntityID("graph.node_groups.id", group.ID); err != nil {
+			return err
+		}
+	}
+	for _, node := range graph.Nodes {
+		if err := validateGraphEntityID("graph.nodes.id", node.ID); err != nil {
+			return err
+		}
+		if node.GroupID != nil {
+			if err := validateGraphEntityID("graph.nodes.group_id", *node.GroupID); err != nil {
+				return err
+			}
+		}
+		for _, provider := range node.JoinInputProviders {
+			if err := validateGraphEntityID("graph.nodes.join_input_providers.provider_edge_id", provider.ProviderEdgeID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, group := range graph.TransitionGroups {
+		if err := validateGraphEntityID("graph.transition_groups.id", group.ID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID("graph.transition_groups.source_node_id", group.SourceNodeID); err != nil {
+			return err
+		}
+	}
+	for _, edge := range graph.Edges {
+		for _, field := range []struct{ name, value string }{
+			{"graph.edges.id", edge.ID},
+			{"graph.edges.transition_group_id", edge.TransitionGroupID},
+			{"graph.edges.target_node_id", edge.TargetNodeID},
+		} {
+			if err := validateGraphEntityID(field.name, field.value); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

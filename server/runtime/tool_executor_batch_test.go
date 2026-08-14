@@ -23,7 +23,7 @@ func TestExecuteToolCallsRejectsMissingProviderCallIDBeforeToolExecution(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: probe,
 		}),
@@ -167,7 +167,7 @@ func TestLocalToolHandlerStartsAfterAcceptedIntentIsDurable(t *testing.T) {
 		t,
 		store,
 		client,
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID: toolspec.ToolExecCommand,
 			Handler: durableIntentToolHandler{
 				store:    store,
@@ -195,7 +195,7 @@ func TestExecuteToolCallsCommitsHandlerErrorAsHonestResult(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: failingToolHandler{err: handlerErr},
 		}),
@@ -239,7 +239,7 @@ func TestToolExecutionDurabilityObservationBaseline(t *testing.T) {
 				t,
 				store,
 				&fakeClient{},
-				tools.NewRegistry(tools.HandlerRegistration{
+				newTestToolRegistry(t, tools.HandlerRegistration{
 					ID:      toolspec.ToolExecCommand,
 					Handler: durabilityToolHandler{},
 				}),
@@ -317,7 +317,7 @@ func TestExecuteToolCallsCommitsSuccessfulResultsAsOneGroup(t *testing.T) {
 		t,
 		store,
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: durabilityToolHandler{},
 		}),

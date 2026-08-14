@@ -23,7 +23,7 @@ func TestDeclinedQuestionProducesErrorToolCompletionWithoutSyntheticUserMessage(
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolAskQuestion,
 			Handler: tools.NewAskQuestionTool(broker, func() bool { return true }),
 		}),
@@ -86,7 +86,7 @@ func TestDeclinedQuestionAllowsPreparedSuccessorToMaterialize(t *testing.T) {
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolAskQuestion,
 			Handler: tools.NewAskQuestionTool(broker, func() bool { return true }),
 		}),

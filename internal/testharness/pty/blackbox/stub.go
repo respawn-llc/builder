@@ -532,6 +532,20 @@ func flushResponseWriter(writer http.ResponseWriter) {
 	}
 }
 
+func HandleInputTokenCount(writer http.ResponseWriter, request *http.Request, inputTokens int) bool {
+	if request.URL.Path != "/responses/input_tokens" {
+		return false
+	}
+	if request.Method != http.MethodPost {
+		writer.Header().Set("Allow", http.MethodPost)
+		writer.WriteHeader(http.StatusMethodNotAllowed)
+		return true
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	mustWriteFixtureResponse(writer, fmt.Sprintf(`{"object":"response.input_tokens","input_tokens":%d}`, inputTokens))
+	return true
+}
+
 func WriteCompletedResponseStream(writer http.ResponseWriter, assistantText string, inputTokens, outputTokens int) {
 	totalTokens := inputTokens + outputTokens
 	phase := ResponsePhaseFinal

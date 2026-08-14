@@ -86,7 +86,7 @@ func TestAppendRecoveredWarningIfNeededPersistsOnce(t *testing.T) {
 	if err := fixture.store.EnsureDurable(); err != nil {
 		t.Fatalf("EnsureDurable: %v", err)
 	}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RecoveredWarningProvider: func() (string, bool, error) { return warning, true, nil },
 	})
 	if err := appendRecoveredWarning(fixture.store, fixture.api.recoveredWarningProvider); err != nil {
@@ -175,7 +175,7 @@ func TestAppendRecoveredWarningCommitsMarkerWithEventBeforeObserverFailure(t *te
 func TestAppendRecoveredWarningIfNeededSurfacesProviderError(t *testing.T) {
 	fixture := newSessionRuntimeFixture(t)
 	providerErr := errors.New("recovered dir unreadable")
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RecoveredWarningProvider: func() (string, bool, error) {
 			return "", false, providerErr
 		},
@@ -216,7 +216,7 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 		}
 		return &sessionRuntimeTestLLMClient{responses: []llm.Response{{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("ok"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}}}}, nil
 	})
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{RuntimeClientFactory: factory})
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		SessionID: fixture.store.Meta().SessionID,
@@ -274,7 +274,7 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return client, nil
 		}),
@@ -407,7 +407,7 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200000}},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: managedBase,
 		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
@@ -496,7 +496,7 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 	}); err != nil {
 		t.Fatalf("UpdateSessionExecutionTarget: %v", err)
 	}
-	_, err = NewAPI(fixture.metadata, nil, fixture.authority, APIOptions{
+	_, err = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: t.TempDir(),
 	}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
 		SessionID: fixture.store.Meta().SessionID,
@@ -556,7 +556,7 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	fixture.api = NewAPI(fixture.metadata, nil, authority, APIOptions{
+	fixture.api = NewAPI(fixture.metadata, authority, APIOptions{
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			return client, nil
 		}),
@@ -721,6 +721,6 @@ func newSessionRuntimeFixture(t *testing.T) sessionRuntimeFixture {
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	api := NewAPI(metadataStore, nil, authority, APIOptions{})
+	api := NewAPI(metadataStore, authority, APIOptions{})
 	return sessionRuntimeFixture{config: appCfg, metadata: metadataStore, store: store, api: api, authority: authority}
 }

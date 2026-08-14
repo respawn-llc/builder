@@ -240,9 +240,6 @@ func TestGatewayScopesProcessAPIsToAttachedProject(t *testing.T) {
 	if _, err := remote.KillProcess(context.Background(), serverapi.ProcessKillRequest{ProcessID: foreignResult.SessionID}); err == nil {
 		t.Fatal("expected foreign process kill to be rejected")
 	}
-	if _, err := remote.SubscribeProcessOutput(context.Background(), serverapi.ProcessOutputSubscribeRequest{ProcessID: foreignResult.SessionID, OffsetBytes: 0}); err == nil {
-		t.Fatal("expected foreign process output subscription to be rejected")
-	}
 	if _, err := remote.GetProcess(context.Background(), serverapi.ProcessGetRequest{ProcessID: ownResult.SessionID}); err != nil {
 		t.Fatalf("expected own process get to succeed, got %v", err)
 	}
@@ -300,39 +297,4 @@ func runGatewayGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, output)
 	}
 	return string(output)
-}
-
-func TestGatewayProcessOutputSubscriptionStreamsOutputAndCompletion(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer server.Close()
-	appCore.Background().SetMinimumExecToBgTime(time.Millisecond)
-	store := createGatewayAuthoritativeSession(t, appCore)
-
-	result, err := appCore.Background().Start(context.Background(), shelltool.ExecRequest{
-		Command:        []string{"/bin/sh", "-lc", "printf 'hello\\n'; sleep 0.05"},
-		DisplayCommand: "printf 'hello\\n'; sleep 0.05",
-		OwnerSessionID: store.Meta().SessionID,
-		Workdir:        appCore.Config().WorkspaceRoot,
-		YieldTime:      time.Millisecond,
-	})
-	if err != nil {
-		t.Fatalf("start process: %v", err)
-	}
-
-	conn := dialGateway(t, server)
-	defer func() { _ = conn.Close() }()
-	handshakeGateway(t, conn)
-	callGateway(t, conn, "subscribe", protocol.MethodProcessSubscribeOutput, serverapi.ProcessOutputSubscribeRequest{ProcessID: result.SessionID, OffsetBytes: 0}, nil)
-
-	var chunk protocol.ProcessOutputEventParams
-	receiveGatewayNotification(t, conn, protocol.MethodProcessOutputEvent, "output", &chunk)
-	if chunk.Chunk.ProcessID != result.SessionID || chunk.Chunk.OffsetBytes != 0 || chunk.Chunk.Text != "hello\n" {
-		t.Fatalf("unexpected process output chunk: %+v", chunk.Chunk)
-	}
-
-	var complete protocol.StreamCompleteParams
-	receiveGatewayNotification(t, conn, protocol.MethodProcessOutputComplete, "completion", &complete)
-	if complete.Code != 0 || complete.Message != "" {
-		t.Fatalf("unexpected completion params: %+v", complete)
-	}
 }

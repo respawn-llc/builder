@@ -67,7 +67,7 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID:      toolspec.ToolExecCommand,
 		Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{

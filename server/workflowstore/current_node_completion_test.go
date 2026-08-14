@@ -511,11 +511,12 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 		t.Fatalf("approval commentary = %q, want trimmed frozen commentary", approval.Commentary)
 	}
 	branch := approval.Branches[0]
+	resolvedSessionID, reusedSession := branch.ContextSourceResolution.TargetSession.SessionID()
 	if branch.Target.CurrentNode.CurrentInputValues["summary"] != "frozen plan" ||
 		branch.Target.CurrentNode.SessionID == nil ||
 		*branch.Target.CurrentNode.SessionID != sourceSessionID ||
-		branch.ContextSourceResolution.SessionID == nil ||
-		*branch.ContextSourceResolution.SessionID != sourceSessionID {
+		!reusedSession ||
+		resolvedSessionID != sourceSessionID {
 		t.Fatalf("approval branch snapshot = %+v, want frozen immediate-source target session and values", branch)
 	}
 

@@ -22,18 +22,6 @@ func (d *gatewayOnboardingOverride) OnboardingFinalizeClient() apicontract.Onboa
 	return d.finalize
 }
 
-type gatewayOnboardingUnavailableOverride struct {
-	*core.Core
-	unavailable apicontract.Dependency
-}
-
-func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep apicontract.Dependency) error {
-	if dep == d.unavailable {
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-	}
-	return nil
-}
-
 type gatewayOnboardingService struct {
 	handler func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
 }
@@ -86,56 +74,6 @@ func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 			}
 			if decoded := serverapi.DecodeOnboardingFinalizeError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrOnboardingFinalizeInvalidRequest) {
 				t.Fatalf("decoded error = %v, want invalid_request", decoded)
-			}
-		})
-	}
-}
-
-func TestGatewayChecksDependencyAvailabilityBeforeRouteSpecificWork(t *testing.T) {
-	authReadyCore, _ := newGatewayTestCore(t, true, true)
-	t.Cleanup(func() { _ = authReadyCore.Close() })
-	authBlockedCore, _ := newGatewayTestCore(t, true, false)
-	t.Cleanup(func() { _ = authBlockedCore.Close() })
-
-	tests := []struct {
-		name       string
-		authReady  bool
-		dependency apicontract.Dependency
-		method     string
-		params     func(*core.Core) any
-	}{
-		{name: "subscription client lookup", authReady: true, dependency: apicontract.DependencyAttentionNotification, method: protocol.MethodAttentionNotificationSubscribe, params: func(*core.Core) any {
-			return serverapi.AttentionNotificationSubscribeRequest{}
-		}},
-		{name: "progress auth and preflight", dependency: apicontract.DependencyRunPrompt, method: protocol.MethodRunPrompt, params: func(*core.Core) any {
-			return serverapi.RunPromptRequest{Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()), Prompt: "test"}
-		}},
-		{name: "attach after handshake", dependency: apicontract.DependencyProtocolAttach, method: protocol.MethodAttachProject, params: func(appCore *core.Core) any {
-			return protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()}
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			appCore := authBlockedCore
-			if tt.authReady {
-				appCore = authReadyCore
-			}
-			gateway, err := NewGateway(&gatewayOnboardingUnavailableOverride{Core: appCore, unavailable: tt.dependency}, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-			if err != nil {
-				t.Fatalf("NewGateway: %v", err)
-			}
-			server := httptestServerForGateway(t, gateway)
-			defer server.Close()
-			conn := dialGateway(t, server)
-			defer func() { _ = conn.Close() }()
-			handshakeGateway(t, conn)
-
-			errResp := callGatewayExpectError(t, conn, "dependency-unavailable", tt.method, tt.params(appCore))
-			if errResp.Code != protocol.ErrCodeServerNotReady {
-				t.Fatalf("error code = %d, want server not ready", errResp.Code)
-			}
-			if decoded := serverapi.DecodeServerNotReadyError(errResp.Data, errResp.Message); !errors.Is(decoded, serverapi.ErrServerNotReadyOnboardingRequired) {
-				t.Fatalf("decoded error = %v, want onboarding_required", decoded)
 			}
 		})
 	}

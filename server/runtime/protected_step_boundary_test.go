@@ -17,7 +17,7 @@ func TestSteeringWaitsForCausedToolResultBeforeNextProviderStep(t *testing.T) {
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("checking"), Phase: textutil.Value(llm.MessagePhaseCommentary)}, ToolCalls: []llm.ToolCall{{ID: "protected-tool", Name: string(toolspec.ToolExecCommand), Input: []byte(`{"cmd":"true"}`)}}, Usage: llm.Usage{WindowTokens: 200_000}},
 		{Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done"), Phase: textutil.Value(llm.MessagePhaseFinal)}, Usage: llm.Usage{WindowTokens: 200_000}},
 	}}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, tools.NewRegistry(tools.HandlerRegistration{
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t, tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release},
 	}), Config{Model: "gpt-5"})
 	done := make(chan error, 1)

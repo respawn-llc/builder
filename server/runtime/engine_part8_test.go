@@ -41,7 +41,7 @@ func TestMultipleBackgroundShellNoticesFlushTogetherOnFirstAvailableSlot(t *test
 		mu     sync.Mutex
 		events []Event
 	)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: blockingTool{name: toolspec.ToolExecCommand, started: started, release: release}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
 			mu.Lock()
@@ -184,7 +184,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 			Usage:     llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	registry := tools.NewRegistry(
+	registry := newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: shelltool.NewExecCommandTool(store.Meta().WorkspaceRoot, 16_000, manager, store.Meta().SessionID)},
 		tools.HandlerRegistration{ID: toolspec.ToolWriteStdin, Handler: shelltool.NewWriteStdinTool(16_000, manager)},
 	)
@@ -240,7 +240,7 @@ func TestWriteStdinCompletionDoesNotQueueDuplicateBackgroundNotice(t *testing.T)
 func TestSubmitUserShellCommandPersistsDeveloperNoticeAndToolEntries(t *testing.T) {
 	store := mustCreateTestSession(t)
 
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	result, err := eng.SubmitUserShellCommand(context.Background(), "pwd")
 	if err != nil {
@@ -304,7 +304,7 @@ func TestSubmitUserShellCommandPreservesFatalCauseWhenNoResultIsReturned(t *test
 		t,
 		mustCreateTestSession(t),
 		&fakeClient{},
-		tools.NewRegistry(tools.HandlerRegistration{
+		newTestToolRegistry(t, tools.HandlerRegistration{
 			ID:      toolspec.ToolExecCommand,
 			Handler: handler,
 		}),
@@ -383,7 +383,7 @@ func TestParallelToolsReturnDeclaredOrder(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand, delay: 40 * time.Millisecond}}, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}}), Config{Model: "gpt-5", Temperature: 1})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand, delay: 40 * time.Millisecond}}, tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}}), Config{Model: "gpt-5", Temperature: 1})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "run tools"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -461,7 +461,7 @@ func TestParallelToolCompletionsStayPendingUntilResultGroupClose(t *testing.T) {
 	}
 	t.Cleanup(release)
 	toolCompleted := make(chan tools.Result, 4)
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: slow},
 		tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: fakeTool{name: toolspec.ToolPatch, delay: 1 * time.Millisecond}},
 	), Config{
@@ -549,7 +549,7 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 		secondStarted: make(chan struct{}),
 		releaseFirst:  make(chan struct{}),
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
 	restoreStep := setTestActiveStep(eng, "step")
@@ -608,7 +608,7 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 		secondStarted: make(chan struct{}),
 		releaseFirst:  make(chan struct{}),
 	}
-	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
+	eng := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t,
 		tools.HandlerRegistration{ID: toolspec.ToolPatch, Handler: sequencer},
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{
@@ -671,7 +671,7 @@ func TestPersistedAssistantToolCallsContainNoUIDisplayMarkers(t *testing.T) {
 		},
 	}}
 
-	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
+	eng := mustNewTestEngine(t, store, client, newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5"})
 
 	if _, err := eng.SubmitUserMessage(context.Background(), "run tool"); err != nil {
 		t.Fatalf("submit: %v", err)
@@ -724,7 +724,7 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 		},
 		{
 			name:     "registered tool handler",
-			registry: tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
+			registry: newTestToolRegistry(t, tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}),
 			callName: string(toolspec.ToolExecCommand),
 		},
 	}

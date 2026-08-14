@@ -32,7 +32,7 @@ func TestBlankFinalStaysHiddenAndSkipsReviewer(t *testing.T) {
 		t,
 		store,
 		mainClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
 			Reviewer: ReviewerConfig{
@@ -121,7 +121,7 @@ func TestBlankFinalWhitespaceStaysHiddenAndSkipsReviewer(t *testing.T) {
 		t,
 		store,
 		mainClient,
-		newTestToolRegistry(t),
+		tools.NewRegistry(),
 		Config{
 			Model: "gpt-5",
 			Reviewer: ReviewerConfig{
@@ -164,14 +164,18 @@ func TestBlankFinalWithAcceptedToolCallsFailsBeforeExecution(t *testing.T) {
 		}},
 		Usage: llm.Usage{WindowTokens: 200_000},
 	}}}
+	registry := tools.NewRegistry()
+	if err := registry.ReplaceHandlers(tools.HandlerRegistration{
+		ID:      toolspec.ToolPatch,
+		Handler: fakeTool{name: toolspec.ToolPatch},
+	}); err != nil {
+		t.Fatalf("register patch tool: %v", err)
+	}
 	engine := mustNewTestEngine(
 		t,
 		store,
 		client,
-		newTestToolRegistry(t, tools.HandlerRegistration{
-			ID:      toolspec.ToolPatch,
-			Handler: fakeTool{name: toolspec.ToolPatch},
-		}),
+		registry,
 		Config{
 			Model:        "gpt-5",
 			EnabledTools: []toolspec.ID{toolspec.ToolPatch},
@@ -194,7 +198,7 @@ func TestBlankFinalWithAcceptedToolCallsFailsBeforeExecution(t *testing.T) {
 func TestFormerMarkerIsOrdinaryFinal(t *testing.T) {
 	store := mustCreateTestSession(t)
 	client := &fakeClient{responses: []llm.Response{finalTextResponse("NO_OP")}}
-	engine := mustNewTestEngine(t, store, client, newTestToolRegistry(t), Config{Model: "gpt-5"})
+	engine := mustNewTestEngine(t, store, client, tools.NewRegistry(), Config{Model: "gpt-5"})
 
 	message, err := engine.SubmitUserMessage(context.Background(), "turn")
 	if err != nil {
