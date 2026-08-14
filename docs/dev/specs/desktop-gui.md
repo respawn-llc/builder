@@ -334,7 +334,7 @@
 - Reaching a direction's 50-Task limit closes its open picker and leaves the accessible disabled Add control visible.
 - The picker excludes the open Task when present and Tasks already related or prepared in the chosen direction.
 - A Task prepared in one direction remains eligible in the opposite direction; Task creation applies the ordinary reciprocal-relationship validation.
-- Successful New Task creation pops the current sidebar destination.
+- Before sending each New Task creation request, Desktop dismisses the preceding creation-error notification; successful creation only pops the current sidebar destination.
 - Back returns to the preceding sidebar destination.
 - Back is hidden at the root.
 - X closes the complete sidebar stack.
