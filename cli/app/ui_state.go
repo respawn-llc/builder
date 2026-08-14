@@ -75,6 +75,7 @@ type uiInputFeatureState struct {
 
 	injectedQueue               []injectedRuntimeQueueItem
 	injectedQueueToken          uint64
+	unownedQueuedTerminalStates map[string]clientui.TranscriptQueuedMessageState
 	pendingInputSubmissionOrder uint64
 	interruptLifecycle          uiInterruptLifecycle
 	currentRunID                string

@@ -77,24 +77,6 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 	}
 	index := m.injectedQueueIndexByAnyID(serverID)
 	if index < 0 {
-		for candidate, item := range m.injectedQueue {
-			if item.State == injectedRuntimeQueuePendingCreate {
-				index = candidate
-				break
-			}
-		}
-	}
-	if index < 0 && strings.TrimSpace(m.activeSubmit.text) != "" {
-		m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
-			LocalID:         serverID,
-			ServerID:        serverID,
-			Text:            m.activeSubmit.text,
-			State:           injectedRuntimeQueueEnqueued,
-			submissionOrder: m.activeSubmit.submissionOrder,
-		})
-		return true
-	}
-	if index < 0 {
 		return false
 	}
 	item := m.injectedQueue[index]
@@ -102,6 +84,83 @@ func (m *uiModel) registerSteeredQueuedUserMessage(queued clientui.QueuedUserMes
 	item.State = injectedRuntimeQueueEnqueued
 	m.injectedQueue[index] = item
 	return true
+}
+
+func (m *uiModel) registerSubmittedQueuedUserMessage(queued clientui.QueuedUserMessage) tea.Cmd {
+	if m.registerSteeredQueuedUserMessage(queued) {
+		cmd, _ := m.applyUnownedQueuedTerminalState(queued.ID)
+		return cmd
+	}
+	serverID := strings.TrimSpace(queued.ID)
+	if serverID == "" || strings.TrimSpace(m.activeSubmit.text) == "" {
+		return nil
+	}
+	m.injectedQueue = append(m.injectedQueue, injectedRuntimeQueueItem{
+		LocalID:         serverID,
+		ServerID:        serverID,
+		Text:            m.activeSubmit.text,
+		State:           injectedRuntimeQueueEnqueued,
+		submissionOrder: m.activeSubmit.submissionOrder,
+	})
+	cmd, _ := m.applyUnownedQueuedTerminalState(serverID)
+	return cmd
+}
+
+func (m *uiModel) hasUnresolvedQueueOwnership() bool {
+	if m == nil {
+		return false
+	}
+	if m.activeSubmit.token != 0 {
+		return true
+	}
+	for _, item := range m.injectedQueue {
+		if item.State == injectedRuntimeQueuePendingCreate {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) retainUnownedQueuedTerminalState(state clientui.TranscriptQueuedMessageState) {
+	if m == nil || !m.hasUnresolvedQueueOwnership() ||
+		state.Status == clientui.QueuedUserMessageAccepted {
+		return
+	}
+	serverID := strings.TrimSpace(state.QueueItemID.String())
+	if serverID == "" {
+		return
+	}
+	if m.unownedQueuedTerminalStates == nil {
+		m.unownedQueuedTerminalStates = make(map[string]clientui.TranscriptQueuedMessageState)
+	}
+	if state.Text != nil {
+		text := *state.Text
+		state.Text = &text
+	}
+	m.unownedQueuedTerminalStates[serverID] = state
+}
+
+func (m *uiModel) applyUnownedQueuedTerminalState(serverID string) (tea.Cmd, bool) {
+	serverID = strings.TrimSpace(serverID)
+	if m == nil || serverID == "" || len(m.unownedQueuedTerminalStates) == 0 {
+		return nil, false
+	}
+	state, ok := m.unownedQueuedTerminalStates[serverID]
+	if !ok {
+		return nil, false
+	}
+	delete(m.unownedQueuedTerminalStates, serverID)
+	cmd := m.applyTranscriptQueuedMessageState(state)
+	if !m.hasUnresolvedQueueOwnership() {
+		m.unownedQueuedTerminalStates = nil
+	}
+	return cmd, true
+}
+
+func (m *uiModel) clearUnownedQueuedTerminalStatesWithoutPendingOwnership() {
+	if m != nil && !m.hasUnresolvedQueueOwnership() {
+		m.unownedQueuedTerminalStates = nil
+	}
 }
 
 func (m *uiModel) enqueueInjectedInputWithApprovalAnswer(text string, answer *clientui.PromptAnswer) tea.Cmd {
@@ -591,6 +650,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 			statusCmd := m.sendTransientStatusWithNoticeID(detailErr, uiStatusNoticeError, transientStatusDuration, uiStatusNoticeReplace, "")
 			m.logf("queue_create.error err=%q", detailErr)
 			m.removeInjectedQueueItemAt(index)
+			m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 			m.layout().syncViewport()
 			if approvalCommentaryAnswer != nil {
 				return m, batchCmds(statusCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
@@ -598,10 +658,12 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 			return m, statusCmd
 		}
 		m.removeInjectedQueueItemAt(index)
+		m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 		return m, nil
 	}
 	if msg.completed {
 		m.removeInjectedQueueItemAt(index)
+		m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 		if item.State != injectedRuntimeQueuePendingCreate {
 			return m, nil
 		}
@@ -617,11 +679,20 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	}
 	item.ServerID = serverID
 	item.ApprovalCommentaryAnswer = nil
+	m.injectedQueue[index] = item
+	if item.State == injectedRuntimeQueuePendingCreate {
+		m.rememberPromptHistoryLocally(item.Text)
+	}
+	if deferredCmd, consumed := m.applyUnownedQueuedTerminalState(serverID); consumed {
+		if approvalCommentaryAnswer != nil {
+			deferredCmd = tea.Batch(deferredCmd, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer))
+		}
+		return m, deferredCmd
+	}
 	switch item.State {
 	case injectedRuntimeQueuePendingCreate:
 		item.State = injectedRuntimeQueueEnqueued
 		m.injectedQueue[index] = item
-		m.rememberPromptHistoryLocally(item.Text)
 		if approvalCommentaryAnswer != nil {
 			return m, m.answerQueuedApprovalCommentary(*approvalCommentaryAnswer)
 		}
@@ -634,6 +705,7 @@ func (c uiInputController) handleInjectedQueueCreateDone(msg injectedQueueCreate
 	default:
 		m.injectedQueue[index] = item
 	}
+	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 	return m, nil
 }
 

@@ -247,6 +247,7 @@ func (m *uiModel) applyTranscriptQueuedMessageState(state clientui.TranscriptQue
 	ids := []string{state.QueueItemID.String()}
 	index := m.injectedQueueIndexByAnyID(state.QueueItemID.String())
 	if index < 0 {
+		m.retainUnownedQueuedTerminalState(state)
 		return nil
 	}
 	localText := m.injectedQueue[index].Text

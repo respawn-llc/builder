@@ -141,8 +141,9 @@ func (s *Service) executeDeleteLocked(
 	if err := s.ensureDeleteFolderRemovalAuthorized(ctx, entry, req.ForceFolderRemoval); err != nil {
 		return serverapi.WorktreeDeleteCompletedResult{}, err
 	}
+	retargetCompensation := worktreeSessionRetargetCompensation{}
 	if record != nil {
-		err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
+		retargetCompensation, err = s.retargetDeleteSessions(mutationCtx, workspaceCtx, *record, currentSync)
 		if err != nil {
 			return serverapi.WorktreeDeleteCompletedResult{}, err
 		}
@@ -161,7 +162,7 @@ func (s *Service) executeDeleteLocked(
 			if errors.As(err, &recoveryError) && recoveryError.Destructive {
 				return serverapi.WorktreeDeleteCompletedResult{}, err
 			}
-			return serverapi.WorktreeDeleteCompletedResult{}, err
+			return serverapi.WorktreeDeleteCompletedResult{}, errors.Join(err, retargetCompensation.rollback(mutationCtx))
 		}
 	}
 	if record != nil && !retainRecord {
@@ -358,7 +359,7 @@ func (s *Service) retargetDeleteSessions(
 	workspaceCtx sessionWorkspaceContext,
 	record metadata.WorktreeRecord,
 	currentSync transitionTargetSync,
-) error {
+) (worktreeSessionRetargetCompensation, error) {
 	return s.retargetSessionsFromWorktree(
 		ctx,
 		workspaceCtx.workspaceID,
@@ -374,6 +375,7 @@ func (s *Service) retargetDeleteSessions(
 			) error {
 				return s.syncDeleteSession(syncCtx, workspaceCtx.sessionID, sessionID, target, reminder, currentSync)
 			},
+			rollbackOnError: true,
 		},
 	)
 }

@@ -11,6 +11,7 @@ import (
 
 	"core/cli/app/internal/runtimeattach"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -280,12 +281,11 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 			queueID := ongoingTestQueueItemID()
 			model.injectedQueue = []injectedRuntimeQueueItem{{
 				LocalID:         "local-queue-item",
+				ServerID:        queueID.String(),
 				Text:            localText,
-				State:           injectedRuntimeQueuePendingCreate,
+				State:           injectedRuntimeQueueEnqueued,
 				submissionOrder: inputSubmissionOrder{sequence: 1},
 			}}
-			model.registerSteeredQueuedUserMessage(clientui.QueuedUserMessage{
-				ID: queueID.String(), Text: serverText})
 			if test.status == clientui.QueuedUserMessageSubmitted {
 				model.queued = []queuedInputItem{{ID: "local-draft", Text: "local draft"}}
 				if cmd := model.inputController().resumeQueuedInputsAfterIdleRuntime(); cmd != nil || len(model.queued) != 1 {
@@ -315,6 +315,58 @@ func TestTranscriptQueuedStateOnlyMutatesMatchingLocalRestorationOwnership(t *te
 				t.Fatalf("local submit calls = %d, want 1", client.submitCalls)
 			}
 		})
+	}
+}
+
+func TestTranscriptQueueStateWaitsForMatchingRPCOwnership(t *testing.T) {
+	model := newProjectedTestUIModel(&runtimeControlFakeClient{})
+	secondID := runtimeids.NewQueueItemID()
+	model.injectedQueue = []injectedRuntimeQueueItem{
+		{
+			LocalID:         "first-local",
+			Text:            "first",
+			State:           injectedRuntimeQueuePendingCreate,
+			CreateToken:     1,
+			submissionOrder: inputSubmissionOrder{sequence: 1},
+		},
+		{
+			LocalID:         "second-local",
+			Text:            "second",
+			State:           injectedRuntimeQueuePendingCreate,
+			CreateToken:     2,
+			submissionOrder: inputSubmissionOrder{sequence: 2},
+		},
+	}
+
+	model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
+		QueueItemID: secondID,
+		Status:      clientui.QueuedUserMessageAccepted,
+	})
+	model.applyTranscriptQueuedMessageState(clientui.TranscriptQueuedMessageState{
+		QueueItemID: secondID,
+		Status:      clientui.QueuedUserMessageSubmitted,
+	})
+	if model.injectedQueue[0].ServerID != "" || model.injectedQueue[1].ServerID != "" {
+		t.Fatalf("transcript event guessed pending ownership: %+v", model.injectedQueue)
+	}
+
+	next, cmd := model.inputController().handleInjectedQueueCreateDone(injectedQueueCreateDoneMsg{
+		token:   2,
+		localID: "second-local",
+		item:    clientui.QueuedUserMessage{ID: secondID.String(), Text: "second"},
+	})
+	model = next.(*uiModel)
+	for _, msg := range collectCmdMessages(t, cmd) {
+		model = updateUIModel(t, model, msg)
+	}
+	if len(model.injectedQueue) != 1 ||
+		model.injectedQueue[0].LocalID != "first-local" ||
+		model.injectedQueue[0].ServerID != "" ||
+		model.injectedQueue[0].State != injectedRuntimeQueuePendingCreate {
+		t.Fatalf("terminal second submission mutated first ownership: %+v", model.injectedQueue)
+	}
+	if len(model.unownedQueuedTerminalStates) != 0 {
+		t.Fatalf("terminal state remained after matching RPC ownership: %+v", model.unownedQueuedTerminalStates)
 	}
 }
 

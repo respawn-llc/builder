@@ -1516,7 +1516,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 		}
 		forceRemoval = dirtyState.Kind != clientui.WorktreeDirtyStateClean
 	}
-	err = s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
+	retargetCompensation, err := s.retargetDeleteSessions(ctx, sessionWorkspaceContext{
 		workspaceID:   record.WorkspaceID,
 		workspaceRoot: workspaceRoot,
 	}, record, nil)
@@ -1525,7 +1525,7 @@ func (s *Service) DeleteTaskWorktree(ctx context.Context, req DeleteTaskWorktree
 	}
 	if targetFound {
 		if err := s.git.Remove(ctx, workspaceRoot, target.record.CanonicalRoot, forceRemoval); err != nil {
-			return DeleteTaskWorktreeResponse{}, err
+			return DeleteTaskWorktreeResponse{}, errors.Join(err, retargetCompensation.rollback(ctx))
 		}
 	}
 	// The worktree itself is already removed by this point, so a branch-cleanup

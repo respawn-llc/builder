@@ -254,10 +254,12 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	m.observeRuntimeRequestResult(msg.err)
 	restoreSubmittedText := msg.err != nil && (msg.token == 0 || m.shouldRestoreSubmittedTextOnSubmitError(msg.err))
 	activeQueuedID := m.activeSubmit.queuedID
+	var queuedStateCmd tea.Cmd
 	if msg.err == nil && msg.queued.ID != "" {
-		m.registerSteeredQueuedUserMessage(msg.queued)
+		queuedStateCmd = m.registerSubmittedQueuedUserMessage(msg.queued)
 	}
 	m.activeSubmit = activeSubmitState{}
+	m.clearUnownedQueuedTerminalStatesWithoutPendingOwnership()
 	c.finishRuntimeOperationAffordance(false)
 	if msg.token == 0 || !m.hasRuntimeClient() {
 		_ = m.applyRuntimeActivityProjection(clientui.RuntimeActivity{State: clientui.RuntimeActivityRegisteredIdle})
@@ -320,11 +322,11 @@ func (c uiInputController) handleSubmitDone(msg submitDoneMsg) (tea.Model, tea.C
 	if len(m.queued) > 0 {
 		next, drainCmd := c.flushQueuedInputs(queueDrainAuto)
 		c.notifyTurnQueueDrainedIfIdle()
-		return next, drainCmd
+		return next, tea.Batch(queuedStateCmd, drainCmd)
 	}
 	c.notifyTurnQueueDrainedIfIdle()
 	m.layout().syncViewport()
-	return m, nil
+	return m, queuedStateCmd
 }
 
 func (c uiInputController) handleSpinnerTick(msg spinnerTickMsg) (tea.Model, tea.Cmd) {

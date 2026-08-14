@@ -113,22 +113,6 @@ func registerMetadataSQLiteFunctions() error {
 			return
 		}
 		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
-			graphEntityIDBlobFunction,
-			1,
-			graphEntityIDBlob,
-		)
-		if registerMetadataSQLiteFunctionsErr != nil {
-			return
-		}
-		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
-			graphEntityIDTextFunction,
-			1,
-			graphEntityIDText,
-		)
-		if registerMetadataSQLiteFunctionsErr != nil {
-			return
-		}
-		registerMetadataSQLiteFunctionsErr = sqlitedriver.RegisterDeterministicScalarFunction(
 			migrationCurrentNodeAgentExecutionFunction,
 			6,
 			migrationCurrentNodeAgentExecution,
@@ -201,38 +185,6 @@ func migrationGraphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.V
 	}
 	generated := uuid.New()
 	return append([]byte(nil), generated[:]...), nil
-}
-
-func graphEntityIDBlob(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("%s requires 1 argument", graphEntityIDBlobFunction)
-	}
-	raw, err := migrationStringArgument(args[0], "graph entity ID")
-	if err != nil {
-		return nil, err
-	}
-	parsed, err := uuid.Parse(raw)
-	if err != nil || parsed == uuid.Nil || parsed.String() != raw ||
-		parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
-		return nil, errors.New("graph entity ID must be canonical UUIDv4 text")
-	}
-	return append([]byte(nil), parsed[:]...), nil
-}
-
-func graphEntityIDText(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
-	if len(args) != 1 {
-		return nil, fmt.Errorf("%s requires 1 argument", graphEntityIDTextFunction)
-	}
-	raw, ok := args[0].([]byte)
-	if !ok || len(raw) != 16 {
-		return nil, errors.New("graph entity ID must be a 16-byte UUIDv4 BLOB")
-	}
-	parsed, err := uuid.FromBytes(raw)
-	if err != nil || parsed == uuid.Nil ||
-		parsed.Version() != 4 || parsed.Variant() != uuid.RFC4122 {
-		return nil, errors.New("graph entity ID must be a non-zero UUIDv4 BLOB")
-	}
-	return parsed.String(), nil
 }
 
 func migrationCurrentNodeAgentExecution(_ *sqlitedriver.FunctionContext, args []driver.Value) (driver.Value, error) {
