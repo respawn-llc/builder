@@ -249,11 +249,7 @@ export function useManagedTaskLabelAssignment({
   });
 
   const retryLoad = useStableCallback((): void => {
-    if (!canMutateTask()) {
-      clearIfMounted();
-      return;
-    }
-    void assignment.refetch();
+    if (isMountedOwnerLive()) void assignment.refetch();
   });
 
   const selectedLabelIDs = useMemo(

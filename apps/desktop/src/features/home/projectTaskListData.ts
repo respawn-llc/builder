@@ -135,7 +135,6 @@ function useProjectTaskGroupData(
       firstPageParam === 0 ? undefined : Math.max(0, firstPageParam - projectTaskGroupPageSize),
     getNextPageParam: (lastPage) => lastPage.nextOffset ?? undefined,
     maxPages: projectTaskGroupRetainedPages,
-    gcTime: 0,
   });
   useEffect(() => {
     if (enabled) {

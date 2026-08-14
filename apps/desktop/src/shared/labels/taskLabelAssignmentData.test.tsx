@@ -493,8 +493,10 @@ describe("useManagedTaskLabelAssignment", () => {
     expect(queryClient.getQueryData(queryKeys.task(taskID))).toBeUndefined();
   });
 
-  it("keeps a mounted row owner live without a Task Detail cache entry", async () => {
-    appServiceMocks.getTaskLabels.mockResolvedValueOnce(assignment([]));
+  it("retries a mounted row owner without cached Task data", async () => {
+    appServiceMocks.getTaskLabels
+      .mockRejectedValueOnce(new Error("load failed"))
+      .mockResolvedValueOnce(assignment([]));
     appServiceMocks.updateTaskLabels.mockResolvedValueOnce(assignment([alphaID]));
     const queryClient = createQueryClient([alphaID]);
     queryClient.removeQueries({ queryKey: queryKeys.task(taskID), exact: true });
@@ -510,20 +512,19 @@ describe("useManagedTaskLabelAssignment", () => {
       { wrapper: createWrapper(queryClient) },
     );
     await waitFor(() => {
-      expect(result.current.isPending).toBe(false);
+      expect(result.current.error).not.toBeNull();
     });
-
+    act(result.current.retryLoad);
+    await waitFor(() => {
+      expect(result.current.error).toBeNull();
+    });
     act(() => {
       result.current.setSelected(alphaID, true);
     });
-
     await waitFor(() => {
-      expect(result.current.pendingLabelIDs).toEqual([]);
+      expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledWith(taskID, [alphaID], []);
     });
-    expect(appServiceMocks.updateTaskLabels).toHaveBeenCalledWith(taskID, [alphaID], []);
-    expect(queryClient.getQueryData(queryKeys.taskLabels(taskID))).toEqual(assignment([alphaID]));
   });
-
 
   it("drops queued work and late success or failure after unmount without touching caches", async () => {
     for (const succeeds of [true, false]) {

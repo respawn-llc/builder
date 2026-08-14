@@ -150,7 +150,7 @@ describe("Project Task-list data ownership", () => {
 
   it("starts at zero and exposes the current bounded window edges", async () => {
     const harness = createHarness();
-    const { result } = renderHook(
+    const { result, unmount } = renderHook(
       () =>
         useProjectTaskListData({
           projectID: "project-1",
@@ -189,7 +189,6 @@ describe("Project Task-list data ownership", () => {
       expect(result.current.active.pages).toHaveLength(3);
     });
     expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
-    expect(result.current.active.pages).toHaveLength(3);
     expect(result.current.active.nextRequestGeneration).toBe("project-1:100");
 
     await act(async () => {
@@ -200,7 +199,8 @@ describe("Project Task-list data ownership", () => {
     });
     expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75, 0]);
     expect(result.current.active.nextRequestGeneration).toBe("project-1:75");
-    expect(result.current.backlog.pages).toEqual([]);
+    unmount();
+    expect(harness.queryClient.getQueryData(queryKeys.projectTaskGroup("project-1", "active"))).toBeDefined();
   });
 
   it("evicts a collapsed group and restarts its bounded query at zero", async () => {
