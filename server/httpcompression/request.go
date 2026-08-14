@@ -66,31 +66,25 @@ func Middleware(coding RequestContentCoding) option.Middleware {
 }
 
 func encode(coding RequestContentCoding, plain io.Reader) ([]byte, error) {
+	var compressed bytes.Buffer
+	var writer io.WriteCloser
 	switch coding {
 	case ContentCodingGzip:
-		var compressed bytes.Buffer
-		writer := gzip.NewWriter(&compressed)
-		if _, err := io.Copy(writer, plain); err != nil {
-			return nil, err
-		}
-		if err := writer.Close(); err != nil {
-			return nil, err
-		}
-		return compressed.Bytes(), nil
+		writer = gzip.NewWriter(&compressed)
 	case ContentCodingZstd:
-		var compressed bytes.Buffer
-		writer, err := zstd.NewWriter(&compressed, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(3)))
+		var err error
+		writer, err = zstd.NewWriter(&compressed, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(3)))
 		if err != nil {
 			return nil, err
 		}
-		if _, err := io.Copy(writer, plain); err != nil {
-			return nil, err
-		}
-		if err := writer.Close(); err != nil {
-			return nil, err
-		}
-		return compressed.Bytes(), nil
 	default:
 		return nil, fmt.Errorf("unsupported request content coding %q", coding)
 	}
+	if _, err := io.Copy(writer, plain); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return compressed.Bytes(), nil
 }

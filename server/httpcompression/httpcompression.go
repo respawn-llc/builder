@@ -22,10 +22,6 @@ func NewClient(base *http.Client) *http.Client {
 		base = &http.Client{}
 	}
 	client := *base
-	transport := base.Transport
-	if transport == nil {
-		transport = http.DefaultTransport
-	}
-	client.Transport = Transport(transport)
+	client.Transport = Transport(base.Transport)
 	return &client
 }
