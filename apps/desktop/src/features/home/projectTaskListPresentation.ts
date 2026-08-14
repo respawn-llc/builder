@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 
-import { errorMessage } from "@/api";
+import { errorMessage, type ProjectTaskGroupCounts } from "@/api";
 import { directionalBoundary, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import {
   projectTaskGroups,
@@ -11,9 +11,9 @@ import {
 import { projectTaskColumnEntry, projectTaskEntry, type ProjectTaskListEntry } from "./ProjectTaskRow";
 
 type ProjectTaskPresentationInput = Readonly<{
-  counts: Readonly<Record<ProjectTaskGroup, number>> | undefined;
   data: ProjectTaskListData;
   disclosure: Readonly<Record<ProjectTaskGroup, boolean>>;
+  groupCounts: ProjectTaskGroupCounts | undefined;
   labelEditorTaskID: string | null;
   onLabelsActivate: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
@@ -27,22 +27,24 @@ export function projectTasksPresentation(input: ProjectTaskPresentationInput): R
   entries: readonly ProjectTaskListEntry[];
   taskCount: number | null;
 }> {
-  if (input.counts === undefined) {
-    return { entries: [projectTaskColumnEntry(input.t)], taskCount: null };
+  if (input.groupCounts === undefined) {
+    return { entries: [projectTaskColumnEntry(input.t, undefined)], taskCount: null };
   }
+  const { counts, definitions } = input.groupCounts;
   return {
-    entries: groupedEntries({ ...input, counts: input.counts }),
-    taskCount: input.counts.active + input.counts.backlog + input.counts.done,
+    entries: groupedEntries({ ...input, counts, definitions }),
+    taskCount: counts.active + counts.backlog + counts.done,
   };
 }
 
 function groupedEntries(
   input: ProjectTaskPresentationInput & {
     counts: Readonly<Record<ProjectTaskGroup, number>>;
+    definitions: ProjectTaskGroupCounts["definitions"];
   },
 ): readonly ProjectTaskListEntry[] {
   return [
-    projectTaskColumnEntry(input.t),
+    projectTaskColumnEntry(input.t, input.definitions),
     ...projectTaskGroups.flatMap((group) => groupEntries(group, input)),
   ];
 }

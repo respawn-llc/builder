@@ -221,6 +221,7 @@ export type {
   ProjectLabel,
   ProjectLabelCatalog,
   ProjectTaskGroup,
+  ProjectTaskGroupDefinition,
   ProjectTaskGroupCounts,
   TaskLabelAssignment,
   TaskLabelFilter,

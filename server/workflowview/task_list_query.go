@@ -86,19 +86,11 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		columnKeysJSON = sql.NullString{String: string(encodedColumnKeys), Valid: true}
 		columnFilterSet = len(req.narrowed.columnKeys) > 0
 	}
-	statusKinds := make([]string, 0, len(req.statusKinds))
-	for _, kind := range req.statusKinds {
-		statusKinds = append(statusKinds, string(kind))
-	}
-	statusKindsJSON, err := json.Marshal(statusKinds)
+	statusKindsJSON, err := workflowTaskStatusKindsJSON(req.statusKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
-	attentionKinds := make([]string, 0, len(req.attentionKinds))
-	for _, kind := range req.attentionKinds {
-		attentionKinds = append(attentionKinds, string(kind))
-	}
-	attentionKindsJSON, err := json.Marshal(attentionKinds)
+	attentionKindsJSON, err := workflowTaskAttentionKindsJSON(req.attentionKinds)
 	if err != nil {
 		return workflowTaskListPageResult{}, err
 	}
@@ -112,10 +104,10 @@ func (l *TaskList) queryRows(ctx context.Context, req workflowTaskListQueryReque
 		VisibleColumnsJson:   visibleColumnsJSON,
 		ColumnFilterSet:      boolInt64(columnFilterSet),
 		ColumnKeysJson:       columnKeysJSON,
-		StatusFilterSet:      boolInt64(len(statusKinds) > 0),
-		StatusKindsJson:      string(statusKindsJSON),
+		StatusFilterSet:      boolInt64(len(req.statusKinds) > 0),
+		StatusKindsJson:      statusKindsJSON,
 		AttentionFilterSet:   boolInt64(len(req.attentionKinds) > 0),
-		AttentionKindsJson:   string(attentionKindsJSON),
+		AttentionKindsJson:   attentionKindsJSON,
 		LabelFilterKind:      labelFilterArgs.kind,
 		LabelFilterMode:      labelFilterArgs.mode,
 		LabelIdsJson:         labelFilterArgs.labelIDsJSON,

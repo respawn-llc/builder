@@ -190,7 +190,8 @@ func (l *TaskList) CountGroups(ctx context.Context, req serverapi.WorkflowProjec
 		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
 	}
 	return serverapi.WorkflowProjectTaskGroupCountsResponse{
-		ProjectID: req.ProjectID,
+		ProjectID:   req.ProjectID,
+		Definitions: serverapi.WorkflowProjectTaskGroupDefinitions(),
 		Counts: serverapi.WorkflowProjectTaskGroupCounts{
 			Active:  int(counts.ActiveCount),
 			Backlog: int(counts.BacklogCount),

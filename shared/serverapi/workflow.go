@@ -1297,8 +1297,8 @@ const (
 )
 
 type WorkflowProjectTaskGroupDefinition struct {
-	Group       WorkflowProjectTaskGroup
-	StatusKinds []WorkflowTaskStatusKind
+	Group       WorkflowProjectTaskGroup `json:"group"`
+	StatusKinds []WorkflowTaskStatusKind `json:"status_kinds"`
 }
 
 func WorkflowProjectTaskGroupDefinitions() []WorkflowProjectTaskGroupDefinition {
@@ -1332,9 +1332,10 @@ type WorkflowProjectTaskGroupCounts struct {
 }
 
 type WorkflowProjectTaskGroupCountsResponse struct {
-	ProjectID         string                         `json:"project_id"`
-	Counts            WorkflowProjectTaskGroupCounts `json:"counts"`
-	GeneratedAtUnixMs int64                          `json:"generated_at_unix_ms"`
+	ProjectID         string                               `json:"project_id"`
+	Definitions       []WorkflowProjectTaskGroupDefinition `json:"definitions"`
+	Counts            WorkflowProjectTaskGroupCounts       `json:"counts"`
+	GeneratedAtUnixMs int64                                `json:"generated_at_unix_ms"`
 }
 
 type WorkflowTaskListItem struct {
@@ -2614,6 +2615,20 @@ func (r WorkflowProjectTaskGroupCountsRequest) ValidateRPC() error {
 func (r WorkflowProjectTaskGroupCountsResponse) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
+	}
+	expectedDefinitions := WorkflowProjectTaskGroupDefinitions()
+	if len(r.Definitions) != len(expectedDefinitions) {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "definitions", "definitions must contain every Project Task group")
+	}
+	for index, definition := range r.Definitions {
+		expected := expectedDefinitions[index]
+		if definition.Group != expected.Group || !slices.Equal(definition.StatusKinds, expected.StatusKinds) {
+			return workflowRequestError(
+				WorkflowRequestErrorInvalidValue,
+				fmt.Sprintf("definitions[%d]", index),
+				"Project Task group definition is invalid",
+			)
+		}
 	}
 	for _, count := range []struct {
 		field string

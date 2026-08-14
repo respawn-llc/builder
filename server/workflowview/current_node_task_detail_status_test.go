@@ -571,6 +571,9 @@ func TestProjectTaskGroupCountsObserveLiveStatusesAcrossLinkedWorkflows(t *testi
 	if counts.Counts.Active != 1 || counts.Counts.Backlog != 2 || counts.Counts.Done != 0 {
 		t.Fatalf("counts = %+v, want active=1 backlog=2 done=0", counts.Counts)
 	}
+	if !reflect.DeepEqual(counts.Definitions, serverapi.WorkflowProjectTaskGroupDefinitions()) {
+		t.Fatalf("definitions = %+v, want canonical Project Task groups", counts.Definitions)
+	}
 }
 
 func TestTaskListPreservesAllLiveAttentionThroughCanonicalStatus(t *testing.T) {

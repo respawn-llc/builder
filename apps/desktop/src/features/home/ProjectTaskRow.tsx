@@ -1,13 +1,14 @@
-import { CircleDot, GitFork } from "lucide-react";
+import { GitFork } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { useTranslation } from "react-i18next";
 
-import type { TaskListItem } from "@/api";
+import type { ProjectTaskGroupDefinition, TaskListItem } from "@/api";
 import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
+import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 
 export const projectTaskColumnCount = 6;
 
@@ -62,7 +63,10 @@ export type ProjectTaskListEntry =
       className?: string | undefined;
     }>;
 
-export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]): ProjectTaskListEntry {
+export function projectTaskColumnEntry(
+  t: ReturnType<typeof useTranslation>["t"],
+  definitions: readonly ProjectTaskGroupDefinition[] | undefined,
+): ProjectTaskListEntry {
   return {
     kind: "column-header",
     key: "columns",
@@ -70,7 +74,7 @@ export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]
       {
         key: "status",
         ariaLabel: t("task.status"),
-        content: <CircleDot aria-hidden="true" size={15} strokeWidth={1.8} />,
+        content: <ProjectTaskStatusLegend definitions={definitions} />,
         className: "grid place-items-center",
       },
       {

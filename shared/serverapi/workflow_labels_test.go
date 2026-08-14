@@ -250,7 +250,8 @@ func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t 
 		t.Fatalf("request project_id = %q, want %q", serializedProjectID, request.ProjectID)
 	}
 	response := WorkflowProjectTaskGroupCountsResponse{
-		ProjectID: "project-1",
+		ProjectID:   "project-1",
+		Definitions: WorkflowProjectTaskGroupDefinitions(),
 		Counts: WorkflowProjectTaskGroupCounts{
 			Active:  3,
 			Backlog: 2,
@@ -273,6 +274,13 @@ func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t 
 		if _, exists := responseJSON[forbiddenKey]; exists {
 			t.Fatalf("group-count response includes forbidden key %q: %s", forbiddenKey, data)
 		}
+	}
+	var serializedDefinitions []WorkflowProjectTaskGroupDefinition
+	if err := json.Unmarshal(responseJSON["definitions"], &serializedDefinitions); err != nil {
+		t.Fatalf("decode response definitions: %v", err)
+	}
+	if !reflect.DeepEqual(serializedDefinitions, response.Definitions) {
+		t.Fatalf("response definitions = %+v, want %+v", serializedDefinitions, response.Definitions)
 	}
 
 	request.ProjectID = ""

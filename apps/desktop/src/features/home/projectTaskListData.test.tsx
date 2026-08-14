@@ -6,6 +6,7 @@ import { afterEach, vi } from "vitest";
 import type * as AppFacade from "@/app-facade";
 import type {
   ProjectTaskGroupCounts,
+  ProjectTaskGroupDefinition,
   TaskListInput,
   TaskListPage,
   WorkflowProjectEvent,
@@ -17,6 +18,15 @@ import {
   useProjectTaskListData,
   useProjectTaskListEvents,
 } from "./projectTaskListData";
+
+const projectTaskGroupDefinitions: readonly ProjectTaskGroupDefinition[] = [
+  {
+    group: "active",
+    statusKinds: ["waiting_question", "waiting_approval", "interrupted", "running", "queued", "active"],
+  },
+  { group: "backlog", statusKinds: ["backlog"] },
+  { group: "done", statusKinds: ["done"] },
+];
 
 type TaskGroup = "active" | "backlog" | "done";
 
@@ -459,6 +469,7 @@ function createHarness() {
 function countsResponse(active: number): ProjectTaskGroupCounts {
   return {
     projectID: "project-1",
+    definitions: projectTaskGroupDefinitions,
     counts: { active, backlog: 1, done: 0 },
     generatedAt: 1,
   };

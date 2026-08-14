@@ -131,9 +131,9 @@ export function ProjectTasksSurface({
     [activeTaskDetailMode, open, sidebarMode],
   );
   const presentation = projectTasksPresentation({
-    counts: data.counts.data?.counts,
     data,
     disclosure,
+    groupCounts: data.counts.data,
     labelEditorTaskID,
     onLabelsActivate: (taskID) => {
       setLabelEditorTaskID((current) => (current === taskID ? null : taskID));

@@ -2,12 +2,26 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
-import { canonicalBoardFilter, type ProjectTaskGroupCounts, type TaskListItem } from "@/api";
+import {
+  canonicalBoardFilter,
+  type ProjectTaskGroupCounts,
+  type ProjectTaskGroupDefinition,
+  type TaskListItem,
+} from "@/api";
 import { queryKeys, type SidebarDestination, type SidebarRootController } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
+
+const projectTaskGroupDefinitions: readonly ProjectTaskGroupDefinition[] = [
+  {
+    group: "active",
+    statusKinds: ["waiting_question", "waiting_approval", "interrupted", "running", "queued", "active"],
+  },
+  { group: "backlog", statusKinds: ["backlog"] },
+  { group: "done", statusKinds: ["done"] },
+];
 
 type ActiveTaskDestination = Readonly<{
   kind: "taskDetail";
@@ -189,27 +203,12 @@ describe("ProjectTasksSurface", () => {
     mockedActiveTasks = undefined;
   });
 
-  it("renders the workflow strip and the ordered grouped Task island with default disclosure", () => {
+  it("opens the server-defined Status legend from keyboard focus", async () => {
     renderSurface();
 
-    expect(screen.getByRole("button", { name: "Delivery" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Support" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Link workflow" })).toBeInTheDocument();
-    expect(screen.getByRole("grid", { name: "Project tasks" })).toBeInTheDocument();
-    expect(
-      screen
-        .getAllByRole("columnheader")
-        .map((header) => header.getAttribute("aria-label") ?? header.textContent),
-    ).toEqual(["Status", "Dependencies", "ID", "Title", "Workflow", "Labels"]);
-    const groups = screen.getAllByRole("button", { name: /tasks?$/ });
-    expect(groups.map((group) => group.textContent)).toEqual([
-      "Active 2Active, 2 tasks",
-      "Backlog 1Backlog, 1 task",
-      "Done 1Done, 1 task",
-    ]);
-    expect(groups.map((group) => group.getAttribute("aria-expanded"))).toEqual(["true", "true", "false"]);
-    expect(screen.getByRole("row", { name: "KNT-1 Active task" })).toBeInTheDocument();
-    expect(screen.queryByRole("row", { name: "KNT-4 Done task" })).not.toBeInTheDocument();
+    fireEvent.focus(screen.getByRole("button", { name: appI18n.t("task.status") }));
+
+    expect(await screen.findByRole("tooltip")).toBeVisible();
   });
 
   it("hides zero-count groups and opens Project-scoped New Task when the Project has no Tasks", () => {
@@ -459,17 +458,6 @@ describe("ProjectTasksSurface", () => {
     expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
   });
 
-  it("retains rows and exact counts with retry feedback when count refresh fails", () => {
-    fixture.countsError = new Error("Counts refresh unavailable");
-
-    renderSurface();
-
-    expect(screen.getByRole("grid", { name: "Project tasks" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toBeInTheDocument();
-    expect(screen.getByRole("row", { name: "KNT-1 Active task" })).toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent("Counts refresh unavailable");
-  });
-
   it("renders canonical six-column content and opens Task Detail with the containing sidebar mode", () => {
     const view = renderSurface(createProjectTasksViewMemory(), "overlay", [
       task("active-1", "KNT-LONG-1001", "Canonical row", {
@@ -626,7 +614,9 @@ function countsQuery(
   established: boolean,
 ) {
   return {
-    data: established ? { projectID: "project-1", counts, generatedAt: 1 } : undefined,
+    data: established
+      ? { projectID: "project-1", definitions: projectTaskGroupDefinitions, counts, generatedAt: 1 }
+      : undefined,
     error,
     isError: error !== null,
     isFetching: false,

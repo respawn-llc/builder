@@ -1,8 +1,13 @@
 import { z } from "zod";
 
-import type { ProjectTaskGroupCounts, TaskListPage } from "../workflowLabels";
+import type {
+  ProjectTaskGroup,
+  ProjectTaskGroupCounts,
+  ProjectTaskGroupDefinition,
+  TaskListPage,
+} from "../workflowLabels";
 import { projectLabelSchema } from "./workflowLabels";
-import { taskStatusSchema, workflowIDSchema } from "./common";
+import { taskStatusKindSchema, taskStatusSchema, workflowIDSchema } from "./common";
 
 export const taskListPageSchema: z.ZodType<TaskListPage> = z
   .object({
@@ -71,9 +76,23 @@ export const taskListPageSchema: z.ZodType<TaskListPage> = z
     tasks: value.tasks,
   }));
 
+const projectTaskGroupSchema: z.ZodType<ProjectTaskGroup> = z.enum(["active", "backlog", "done"]);
+
+const projectTaskGroupDefinitionSchema: z.ZodType<ProjectTaskGroupDefinition> = z
+  .object({
+    group: projectTaskGroupSchema,
+    status_kinds: z.array(taskStatusKindSchema).nonempty(),
+  })
+  .strict()
+  .transform((value) => ({
+    group: value.group,
+    statusKinds: value.status_kinds,
+  }));
+
 export const projectTaskGroupCountsSchema: z.ZodType<ProjectTaskGroupCounts> = z
   .object({
     project_id: z.string().min(1),
+    definitions: z.array(projectTaskGroupDefinitionSchema).length(3),
     counts: z
       .object({
         active: z.number().int().nonnegative(),
@@ -86,6 +105,7 @@ export const projectTaskGroupCountsSchema: z.ZodType<ProjectTaskGroupCounts> = z
   .strict()
   .transform((value) => ({
     projectID: value.project_id,
+    definitions: value.definitions,
     counts: value.counts,
     generatedAt: value.generated_at_unix_ms,
   }));
