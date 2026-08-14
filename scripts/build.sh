@@ -116,8 +116,6 @@ run_server_build() {
 		ldflags+=(-X "core/shared/config.Version=${version}")
 	fi
 
-	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
-		--temp-dir .generated/protobuf/task protobuf:go
 	env CGO_ENABLED="${CGO_ENABLED:-0}" \
 		go build \
 		-trimpath \
