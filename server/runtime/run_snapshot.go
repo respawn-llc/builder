@@ -28,6 +28,7 @@ const (
 	ActiveKindWorkflowTurn ActiveKind = "workflow_turn"
 	ActiveKindGoalLoop     ActiveKind = "goal_loop"
 	ActiveKindCompaction   ActiveKind = "compaction"
+	ActiveKindInspection   ActiveKind = "inspection"
 )
 
 func (k ActiveKind) Valid() bool {
@@ -35,7 +36,8 @@ func (k ActiveKind) Valid() bool {
 	case ActiveKindUserTurn,
 		ActiveKindWorkflowTurn,
 		ActiveKindGoalLoop,
-		ActiveKindCompaction:
+		ActiveKindCompaction,
+		ActiveKindInspection:
 		return true
 	default:
 		return false

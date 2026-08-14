@@ -154,6 +154,28 @@ func (s *defaultExclusiveStepLifecycle) Run(ctx context.Context, options exclusi
 	return s.run(ctx, options, true, fn)
 }
 
+func (s *defaultExclusiveStepLifecycle) RunExactPreparation(
+	ctx context.Context,
+	fn func(stepCtx context.Context, stepID string) error,
+) error {
+	options := exclusiveStepOptions{ActiveKind: ActiveKindInspection}
+	stepCtx, stepID, err := s.begin(ctx, options)
+	if err != nil {
+		return err
+	}
+	err = fn(stepCtx, stepID)
+	finished := s.snapshotWithFinishedAt(time.Now().UTC(), statusFromRunError(err))
+	s.beginTerminalPublication()
+	if finished != nil && s.engine.cfg.StepLifecycle != nil {
+		err = errors.Join(err, s.engine.cfg.StepLifecycle.StepEnded(
+			context.Background(),
+			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished),
+		))
+	}
+	s.finishTerminalPublication()
+	return err
+}
+
 func (s *defaultExclusiveStepLifecycle) run(
 	ctx context.Context,
 	options exclusiveStepOptions,
@@ -226,8 +248,7 @@ func (s *defaultExclusiveStepLifecycle) finishStep(stepID string, options exclus
 		publishLifecycle,
 		nil,
 	)
-	resumeGoalLoop := options.EmitRunState &&
-		status == RunStatusCompleted &&
+	resumeGoalLoop := status == RunStatusCompleted &&
 		snapshot != nil &&
 		snapshot.ActiveKind == ActiveKindUserTurn
 	if resumeGoalLoop {

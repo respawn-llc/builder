@@ -27,7 +27,7 @@ var ErrInspectionExactTokenCountRequired = errors.New("offline inspection requir
 func PrepareInspectionRequest(ctx context.Context, eng *Engine, allowTools bool) (llm.Request, error) {
 	eng.ensureOrchestrationCollaborators()
 	var request llm.Request
-	err := eng.stepLifecycle.Run(ctx, exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(stepCtx context.Context, stepID string) error {
+	err := eng.stepLifecycle.RunExactPreparation(ctx, func(stepCtx context.Context, stepID string) error {
 		if err := eng.ensureMetaContextForRequest(stepCtx, stepID); err != nil {
 			return err
 		}
