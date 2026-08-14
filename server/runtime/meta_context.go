@@ -50,6 +50,7 @@ type metaContextClassification struct {
 
 type metaContextBuildOptions struct {
 	ExistingMessages          []llm.Message
+	SessionMode               metaContextSessionMode
 	IncludeAgents             bool
 	IncludeSkills             bool
 	IncludeSubagents          bool
@@ -85,7 +86,7 @@ type metaContextBuildResult struct {
 type metaContextSessionMode uint8
 
 const (
-	metaContextSessionModeUnspecified metaContextSessionMode = iota
+	metaContextSessionModeOrdinary metaContextSessionMode = iota
 	metaContextSessionModeGoal
 	metaContextSessionModeWorkflow
 )
@@ -121,12 +122,9 @@ func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 		out = append(out, r.ActiveGoalContinuation...)
 	case metaContextSessionModeWorkflow:
 		out = append(out, r.Workflow...)
+	case metaContextSessionModeOrdinary:
 	default:
-		if len(r.Workflow) > 0 {
-			out = append(out, r.Workflow...)
-		} else {
-			out = append(out, r.ActiveGoalContinuation...)
-		}
+		panic("project meta context: invalid session mode")
 	}
 	return out
 }
@@ -294,13 +292,48 @@ func (b metaContextBuilder) Build(opts metaContextBuildOptions) (metaContextBuil
 	}
 
 	result := collector.result()
+	switch opts.SessionMode {
+	case metaContextSessionModeOrdinary, metaContextSessionModeGoal, metaContextSessionModeWorkflow:
+	default:
+		return metaContextBuildResult{}, errors.New("meta context has an invalid session mode")
+	}
+	result.sessionMode = opts.SessionMode
 	switch {
 	case opts.IncludeWorkflow:
+		if opts.SessionMode == metaContextSessionModeGoal {
+			return metaContextBuildResult{}, errors.New("meta context cannot select Goal and Workflow modes together")
+		}
 		result.sessionMode = metaContextSessionModeWorkflow
 	case opts.ActiveGoal != nil:
+		if opts.SessionMode == metaContextSessionModeWorkflow {
+			return metaContextBuildResult{}, errors.New("meta context cannot select Workflow and Goal modes together")
+		}
 		result.sessionMode = metaContextSessionModeGoal
 	}
 	return result, nil
+}
+
+func metaContextSessionModeForMessages(messages []llm.Message) (metaContextSessionMode, error) {
+	mode := metaContextSessionModeOrdinary
+	for _, message := range messages {
+		classification, ok := classifyMetaContextMessage(message)
+		if !ok {
+			continue
+		}
+		switch classification.kind {
+		case metaContextKindActiveGoalContinuation:
+			if mode == metaContextSessionModeWorkflow {
+				return metaContextSessionModeOrdinary, errors.New("meta context contains both Goal and Workflow modes")
+			}
+			mode = metaContextSessionModeGoal
+		case metaContextKindWorkflow:
+			if mode == metaContextSessionModeGoal {
+				return metaContextSessionModeOrdinary, errors.New("meta context contains both Goal and Workflow modes")
+			}
+			mode = metaContextSessionModeWorkflow
+		}
+	}
+	return mode, nil
 }
 
 func activeGoalContinuationMetaMessage(goal session.GoalState) (llm.Message, bool) {

@@ -70,6 +70,26 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 
 func TestMetaContextProjectionSelectsWorkflowOverActiveGoal(t *testing.T) {
 	t.Parallel()
+	ordinary, err := newMetaContextBuilder(
+		t.TempDir(),
+		"",
+		"",
+		config.SkillPolicy{},
+		time.Unix(0, 0),
+	).Build(metaContextBuildOptions{
+		ExistingMessages: []llm.Message{
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation), Content: textutil.Value("goal")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorkflowMode), Content: textutil.Value("workflow")},
+			{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeEnvironment), Content: textutil.Value("environment")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("build ordinary meta context: %v", err)
+	}
+	assertMetaContextTypes(t, ordinary.Projection().Messages(), []llm.MessageType{
+		llm.MessageTypeEnvironment,
+	})
+
 	result, err := newMetaContextBuilder(
 		t.TempDir(),
 		"",
@@ -129,7 +149,10 @@ func TestMetaContextProjectionUsesCanonicalStablePrefixAcrossEmissionOrders(t *t
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeWorktreeMode), Content: textutil.Value("worktree")},
 		{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeActiveGoalContinuation), Content: textutil.Value("goal")},
 	}
-	forward, err := builder.Build(metaContextBuildOptions{ExistingMessages: base})
+	forward, err := builder.Build(metaContextBuildOptions{
+		ExistingMessages: base,
+		SessionMode:      metaContextSessionModeGoal,
+	})
 	if err != nil {
 		t.Fatalf("build forward projection: %v", err)
 	}
@@ -137,7 +160,10 @@ func TestMetaContextProjectionUsesCanonicalStablePrefixAcrossEmissionOrders(t *t
 	for left, right := 0, len(reverseInput)-1; left < right; left, right = left+1, right-1 {
 		reverseInput[left], reverseInput[right] = reverseInput[right], reverseInput[left]
 	}
-	reverse, err := builder.Build(metaContextBuildOptions{ExistingMessages: reverseInput})
+	reverse, err := builder.Build(metaContextBuildOptions{
+		ExistingMessages: reverseInput,
+		SessionMode:      metaContextSessionModeGoal,
+	})
 	if err != nil {
 		t.Fatalf("build reverse projection: %v", err)
 	}

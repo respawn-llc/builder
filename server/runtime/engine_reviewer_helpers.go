@@ -70,8 +70,13 @@ func sanitizeReviewerSuggestions(in []string) []string {
 
 func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder metaContextBuilder, headless bool) ([]llm.Message, error) {
 	metaMessages, transcriptSource := splitMetaContextMessages(messages)
+	sessionMode, err := metaContextSessionModeForMessages(metaMessages)
+	if err != nil {
+		return nil, err
+	}
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
+		SessionMode:               sessionMode,
 		IncludeAgents:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
@@ -90,8 +95,13 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 
 func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder metaContextBuilder, headless bool) ([]llm.ResponseItem, error) {
 	metaMessages, transcriptSource := splitMetaContextItems(items)
+	sessionMode, err := metaContextSessionModeForMessages(metaMessages)
+	if err != nil {
+		return nil, err
+	}
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
+		SessionMode:               sessionMode,
 		IncludeAgents:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
