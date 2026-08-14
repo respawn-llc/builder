@@ -523,6 +523,90 @@ func TestServiceResolveTransitionOpenSessionAuthorizesProvenanceTargetAndReturns
 	}
 }
 
+func TestServiceResolveTransitionOpenSessionDoesNotWaitForRuntimeOwnership(t *testing.T) {
+	_, containerDir, parent := createPersistedSession(t)
+	child, err := session.NewLazy(
+		containerDir,
+		"workspace-x",
+		"/tmp/work",
+		sessioncontract.SessionCategoryMain,
+		sessionServiceTestPersistence.Options()...,
+	)
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	if err := session.InitializeCreationContext(child, parent, session.SessionCreationSourcePreviousSession, session.ChildContextOptions{}); err != nil {
+		t.Fatalf("InitializeCreationContext: %v", err)
+	}
+	if err := child.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable child: %v", err)
+	}
+	resolver := &sessionNavigationTargetResolverStub{target: serverapi.SessionNavigationBinding{
+		ProjectID:   "project-target",
+		WorkspaceID: "workspace-target",
+	}}
+	service := newTestSessionLifecycleService(containerDir, nil).WithNavigationTargetResolver(resolver)
+	childID, err := runtimeids.ParseSessionID(child.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	descriptor, err := session.NewScopedOpenSessionDescriptor(childID, containerDir)
+	if err != nil {
+		t.Fatalf("NewScopedOpenSessionDescriptor: %v", err)
+	}
+	ownerStarted := make(chan struct{})
+	releaseOwner := make(chan struct{})
+	ownerDone := make(chan error, 1)
+	go func() {
+		ownerDone <- service.authority.WithSessionStore(t.Context(), descriptor, func(context.Context, *session.Store) error {
+			close(ownerStarted)
+			<-releaseOwner
+			return nil
+		})
+	}()
+	<-ownerStarted
+
+	type transitionResult struct {
+		response serverapi.SessionResolveTransitionResponse
+		err      error
+	}
+	result := make(chan transitionResult, 1)
+	go func() {
+		response, resolveErr := service.ResolveTransition(t.Context(), serverapi.SessionResolveTransitionRequest{
+			ClientRequestID: "stale-navigation",
+			SessionID:       child.Meta().SessionID,
+			Transition: serverapi.SessionTransition{
+				Action:          serverapi.SessionTransitionActionOpenSession,
+				TargetSessionID: parent.Meta().SessionID,
+			},
+		})
+		result <- transitionResult{response: response, err: resolveErr}
+	}()
+
+	select {
+	case resolved := <-result:
+		if resolved.err != nil {
+			t.Fatalf("ResolveTransition during Runtime ownership: %v", resolved.err)
+		}
+		intent, preparation := requireSessionLifecycleLaunch(t, resolved.response)
+		targetID, present := intent.SessionID()
+		if !present || targetID.String() != parent.Meta().SessionID {
+			t.Fatalf("navigation target = %q/%t, want %q", targetID.String(), present, parent.Meta().SessionID)
+		}
+		binding, present := preparation.NavigationBinding()
+		if !present || binding.ProjectID != "project-target" || binding.WorkspaceID != "workspace-target" {
+			t.Fatalf("navigation binding = %+v/%t", binding, present)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("open-Session transition planning waited for Runtime ownership")
+	}
+
+	close(releaseOwner)
+	if err := <-ownerDone; err != nil {
+		t.Fatalf("release Runtime ownership: %v", err)
+	}
+}
+
 func TestServiceResolveTransitionOpenSessionRejectsNonProvenanceTargetBeforeResolution(t *testing.T) {
 	_, containerDir, parent := createPersistedSession(t)
 	child, err := session.NewLazy(
