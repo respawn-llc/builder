@@ -707,11 +707,7 @@ func (e *Engine) enqueueOutputSteering(
 			}
 			return entry.waitOutput(context.Background())
 		}
-		reply := e.applySteeringQueueEntry(entry)
-		if err := entry.completeOutput(reply); err != nil {
-			return session.CommitReceipt{}, e.runtimeInvariant("complete exact Runtime output", err)
-		}
-		return entry.waitOutput(context.Background())
+		return e.applyExactOutputSteeringEntry(entry)
 	}
 	wake, err := e.steering.append(entry)
 	if err != nil {
@@ -719,6 +715,33 @@ func (e *Engine) enqueueOutputSteering(
 	}
 	if wake {
 		e.wakeSteeringDrain()
+	}
+	return entry.waitOutput(context.Background())
+}
+
+func (e *Engine) steerCurrentStepOrRuntime(intent steeringIntent) error {
+	return e.steerActiveStepOrRuntime(nil, intent)
+}
+
+func (e *Engine) steerActiveStepOrRuntime(expectedStepID *string, intent steeringIntent) error {
+	applied, err := e.stepLifecycle.WithActiveStep(func(stepID string) error {
+		if expectedStepID != nil && stepID != *expectedStepID {
+			return ErrActiveStepInactive
+		}
+		entry := newOutputSteeringQueueEntry(stepID, false, intent)
+		_, applyErr := e.applyExactOutputSteeringEntry(entry)
+		return applyErr
+	})
+	if applied {
+		return err
+	}
+	return e.steer("", intent)
+}
+
+func (e *Engine) applyExactOutputSteeringEntry(entry *steeringQueueEntry) (session.CommitReceipt, error) {
+	reply := e.applySteeringQueueEntry(entry)
+	if err := entry.completeOutput(reply); err != nil {
+		return session.CommitReceipt{}, e.runtimeInvariant("complete exact Runtime output", err)
 	}
 	return entry.waitOutput(context.Background())
 }

@@ -97,6 +97,8 @@ func TestCacheWarningObservationSerializesPersistProjectEmitOrder(t *testing.T) 
 		},
 	})
 	eng.ensureOrchestrationCollaborators()
+	restoreStep := setTestActiveStep(eng, "cache-step")
+	defer restoreStep()
 
 	cachePersistEntered, releaseCachePersist := gate.BlockNext()
 
@@ -173,6 +175,8 @@ func TestAssistantMessageAfterCacheWarningDoesNotOwnCacheWarningRange(t *testing
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	if err := eng.observePromptCacheResponse("step-1", preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
@@ -257,6 +261,8 @@ func TestHistoryReplacementSerializesAgainstCommittedLocalEntryAppend(t *testing
 			}
 		},
 	})
+	restoreStep := setTestActiveStep(eng, "compact-step")
+	defer restoreStep()
 
 	replaceDone := make(chan error, 1)
 	go func() {
@@ -304,6 +310,8 @@ func TestToolResultMirrorMessageDoesNotEmitGenericCommittedAdvance(t *testing.T)
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
@@ -331,6 +339,8 @@ func TestVisibleToolMessageMutationPublishesCommittedEventBeforeLocalEntry(t *te
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	toolMessage := llm.Message{
 		Role:       llm.RoleTool,
@@ -374,6 +384,8 @@ func TestFinalAnswerToolCallMaterializationPublishesToolCallRowsBeforeLocalEntry
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: eng,
 	}
@@ -439,6 +451,8 @@ func TestStepLoopPublishesCommentaryAssistantWithToolCallsBeforeReasoningAndTool
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
@@ -497,6 +511,8 @@ func TestStepLoopPersistsReasoningProgressAsDetailOnly(t *testing.T) {
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 
 	if _, err := eng.runStepLoopWithOptions(context.Background(), "step-1", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
@@ -591,6 +607,8 @@ func TestHistoryReplacementPublishesCompactionPreservedUserMessageBeforeLocalEnt
 		Model:   "gpt-5",
 		OnEvent: func(evt Event) { events = append(events, evt) },
 	})
+	restoreStep := setTestActiveStep(eng, "compact-step")
+	defer restoreStep()
 
 	carryover, ok := compactionPreservedUserMessage("keep the active requirement")
 	if !ok {

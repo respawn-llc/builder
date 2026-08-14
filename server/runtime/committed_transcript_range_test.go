@@ -28,6 +28,8 @@ func TestAssistantMessageAfterCacheWarningOwnsOnlyAssistantRange(t *testing.T) {
 			OnEvent:          func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	if err := engine.observePromptCacheResponse("step", preparedCacheRequestObservation{
 		request: persistedCacheRequestObserved{
 			DigestVersion: requestCacheDigestVersion,
@@ -111,6 +113,8 @@ func TestFinalAnswerToolMaterializationPublishesToolCallBeforeLocalEntry(t *test
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	executor := defaultStepExecutor{
 		engine: engine,
 	}
@@ -201,6 +205,8 @@ func TestStepLoopPublishesCommentaryToolEnvelopeBeforeReasoningAndToolResults(t 
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
 	}
@@ -270,6 +276,8 @@ func TestStepLoopPersistsReasoningAsDetailLocalEntry(t *testing.T) {
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 
 	if _, err := engine.runStepLoopWithOptions(context.Background(), "step", "off", nil, false); err != nil {
 		t.Fatalf("run step loop: %v", err)
@@ -425,6 +433,8 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 	}
 
 	engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(engine, "compaction")
+	defer restoreStep()
 	var hydration TranscriptHydrationSnapshot
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot TranscriptHydrationSnapshot) error {
 		hydration = snapshot
@@ -455,7 +465,7 @@ func TestReopenedCompactionPublishesVisibleTranscriptCoordinates(t *testing.T) {
 			t.Fatalf("append pre-compaction entry: %v", err)
 		}
 	}
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent(
 			"local",
@@ -526,6 +536,8 @@ func TestHistoryReplacementPublishesPreservedUserMessageBeforeFollowingLocalEntr
 			OnEvent: func(event Event) { events = append(events, event) },
 		},
 	)
+	restoreStep := setTestActiveStep(engine, "compaction")
+	defer restoreStep()
 	carryover, ok := compactionPreservedUserMessage("carryover")
 	if !ok {
 		t.Fatal("expected typed compaction-preserved user message")

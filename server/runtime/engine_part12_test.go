@@ -173,7 +173,7 @@ func TestReopenedSessionRestoresCompactionSoonReminderIssuedState(t *testing.T) 
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
-	if err := eng.steer("step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff()))}})); err != nil {
+	if err := steerTestActiveStep(eng, "step-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleDeveloper, MessageType: textutil.Value(llm.MessageTypeCompactionSoonReminder), Content: textutil.Value(prompts.RenderCompactionSoonReminderPrompt(false, eng.estimatedToolCallsUntilForcedHandoff()))}})); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -239,7 +239,9 @@ func TestForkedSessionBeforeReminderDoesNotCopyReminderIssuedState(t *testing.T)
 	if forked.compactionRuntimeState().SoonReminderIssued() {
 		t.Fatal("expected forked session before reminder to start with cleared reminder-issued state")
 	}
-	if err := newCompactionReminderCoordinator(forked).maybeAppend(context.Background(), "step-fork"); err != nil {
+	if err := runTestActiveStep(forked, "step-fork", func() error {
+		return newCompactionReminderCoordinator(forked).maybeAppend(context.Background(), "step-fork")
+	}); err != nil {
 		t.Fatalf("reminder after fork: %v", err)
 	}
 	if reminders := countCompactionSoonReminderWarnings(forked, forked.ChatSnapshot()); reminders != 1 {
@@ -382,7 +384,9 @@ func TestRunStepLoopSkipsCompactionSoonReminderWhenImmediateAutoCompactionRuns(t
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 9_990, WindowTokens: 20_000})
 
+	restoreStep := setTestActiveStep(eng, "step-1")
 	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	restoreStep()
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
@@ -428,7 +432,9 @@ func TestRunStepLoopInjectsCompactionSoonReminderBeforeFinalAnswerRequest(t *tes
 	}
 	eng.setLastUsage(llm.Usage{InputTokens: 890, WindowTokens: 2_000})
 
+	restoreStep := setTestActiveStep(eng, "step-1")
 	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	restoreStep()
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}
@@ -510,7 +516,9 @@ func TestRunStepLoopAppendsCompactionSoonReminderImmediatelyAfterToolOutputBound
 		t.Fatalf("append seed message: %v", err)
 	}
 
+	restoreStep := setTestActiveStep(eng, "step-1")
 	msg, err := eng.runStepLoop(context.Background(), "step-1")
+	restoreStep()
 	if err != nil {
 		t.Fatalf("runStepLoop: %v", err)
 	}

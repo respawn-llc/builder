@@ -451,7 +451,7 @@ func newCommittedRemoteCompactionFixture(
 			fixture.events = append(fixture.events, event)
 		},
 	})
-	if err := fixture.engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(fixture.engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {

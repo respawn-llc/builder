@@ -323,6 +323,8 @@ func repairCompletionRecord(
 
 func steerDanglingToolCall(t *testing.T, engine *Engine, stepID string, call llm.ToolCall) {
 	t.Helper()
+	restoreStep := setTestActiveStep(engine, stepID)
+	defer restoreStep()
 	if err := engine.steer(stepID, steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
@@ -365,6 +367,8 @@ func TestCompactionMissingToolOutputRepairAppendsAndRetries(t *testing.T) {
 		InputItems: eng.transcriptRuntimeState().SnapshotItems(),
 	}
 
+	restoreStep := setTestActiveStep(eng, "step")
+	defer restoreStep()
 	if _, _, _, err := eng.compactWithContextRepairRetry(context.Background(), "step", client, request); err != nil {
 		t.Fatalf("compact with repair retry: %v", err)
 	}

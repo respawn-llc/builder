@@ -60,6 +60,8 @@ func TestCriticalExactCountRefreshesAfterCommittedToolCompletion(t *testing.T) {
 		}),
 		Config{Model: "gpt-5", ContextWindowTokens: 400_000},
 	)
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 	if err := engine.steer("step", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}},
@@ -112,7 +114,7 @@ func TestShouldAutoCompactAccountsForMessagesAppendedAfterLastUsage(t *testing.T
 		AutoCompactTokenLimit: 300,
 	})
 	engine.setLastUsage(llm.Usage{InputTokens: 120, WindowTokens: 2_000})
-	if err := engine.steer("active-tail", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "active-tail", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("tail ", 320))}},
 	)); err != nil {
@@ -134,7 +136,7 @@ func TestShouldAutoCompactUsesPreciseRequestInputTokenCountWhenAvailable(t *test
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 900,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -179,7 +181,7 @@ func TestShouldCompactBeforeUserMessageUsesPromptGrowthBelowPreSubmitBand(t *tes
 		AutoCompactTokenLimit:         950,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := engine.steer("existing", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "existing", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("existing")}},
 	)); err != nil {
@@ -215,7 +217,7 @@ func TestShouldCompactBeforeUserMessageFallsBackWhenExactCountUnsupported(t *tes
 		AutoCompactTokenLimit:         950,
 		PreSubmitCompactionLeadTokens: 50,
 	})
-	if err := engine.steer("existing", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "existing", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("existing ", 300))}},
 	)); err != nil {
@@ -246,7 +248,7 @@ func TestShouldAutoCompactRechecksProviderBeforeCompactingOnLargeEstimate(t *tes
 		ContextWindowTokens:   2_000,
 		AutoCompactTokenLimit: 2,
 	})
-	if err := engine.steer("image", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "image", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:       llm.RoleTool,
@@ -282,7 +284,7 @@ func TestShouldAutoCompactPrefersConfiguredThresholdOverResolvedContextWindow(t 
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 360_000,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -310,7 +312,7 @@ func TestShouldAutoCompactAccountsForReservedOutputBudget(t *testing.T) {
 		AutoCompactTokenLimit: 900,
 		MaxTokens:             100,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -334,7 +336,7 @@ func TestShouldAutoCompactSkipsPreciseCountWhenFarBelowThreshold(t *testing.T) {
 		ContextWindowTokens:   400_000,
 		AutoCompactTokenLimit: 100_000,
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {

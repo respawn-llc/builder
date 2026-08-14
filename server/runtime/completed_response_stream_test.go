@@ -827,7 +827,7 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 	if _, err := engine.SubmitUserMessage(context.Background(), "first input"); err != nil {
 		t.Fatalf("submit pre-compaction message: %v", err)
 	}
-	if err := engine.steer(
+	if err := steerTestActiveStep(engine,
 		"compaction",
 		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, nil),
 	); err != nil {

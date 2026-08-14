@@ -25,7 +25,7 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	if _, err := engine.SetGoal("goal", session.GoalActorUser); err != nil {
 		t.Fatalf("set active goal: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -33,7 +33,9 @@ func TestAutoCompactionRecomputesUsageFromReplacementHistory(t *testing.T) {
 	}
 	engine.setLastUsage(llm.Usage{InputTokens: autoCompactLimit, WindowTokens: 200_000})
 
-	if err := engine.autoCompactIfNeeded(context.Background(), "compact", compactionModeAuto); err != nil {
+	if err := runTestActiveStep(engine, "compact", func() error {
+		return engine.autoCompactIfNeeded(context.Background(), "compact", compactionModeAuto)
+	}); err != nil {
 		t.Fatalf("auto compact: %v", err)
 	}
 	usage := engine.ContextUsage()

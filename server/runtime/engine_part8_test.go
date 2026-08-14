@@ -552,6 +552,8 @@ func TestAskQuestionToolCallsExecuteSequentiallyInDeclaredOrder(t *testing.T) {
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(
 		tools.HandlerRegistration{ID: toolspec.ToolAskQuestion, Handler: sequencer},
 	), Config{Model: "gpt-5", EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion}})
+	restoreStep := setTestActiveStep(eng, "step")
+	defer restoreStep()
 
 	done := make(chan struct {
 		results []tools.Result
@@ -614,6 +616,8 @@ func TestWorkflowPromptCapableToolCallsSerializeWithAskQuestion(t *testing.T) {
 		EnabledTools: []toolspec.ID{toolspec.ToolPatch, toolspec.ToolAskQuestion},
 	})
 	publishTestWorkflowExecution(t, eng, testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool))
+	restoreStep := setTestActiveStep(eng, "step")
+	defer restoreStep()
 
 	done := make(chan error, 1)
 	go func() {
@@ -730,6 +734,8 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			store := mustCreateTestSession(t)
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
 			mustBlockTestEventLogAppends(t, store)
+			restoreStep := setTestActiveStep(eng, "step")
+			defer restoreStep()
 
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),
@@ -749,6 +755,8 @@ func TestExecuteToolCallsAppliesToolCompletionByCommitReceipt(t *testing.T) {
 			store := mustCreateNamedTestSession(t, "ws", t.TempDir(), session.WithPersistenceObserver(gate))
 			eng := mustNewTestEngine(t, store, &fakeClient{}, tc.registry, Config{Model: "gpt-5"})
 			gate.FailNext(observerErr)
+			restoreStep := setTestActiveStep(eng, "step")
+			defer restoreStep()
 
 			_, err := eng.executeToolCalls(context.Background(), "step", []llm.ToolCall{{
 				ID: "call-1", Name: tc.callName, Input: json.RawMessage(`{}`),

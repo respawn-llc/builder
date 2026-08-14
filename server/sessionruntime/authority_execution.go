@@ -237,7 +237,10 @@ func (e *execution) finish(result ExecutionResult, runErr error, stopErr error) 
 	cleanupErr := errors.Join(invariantErr, e.cleanup())
 	cleanupErr = errors.Join(cleanupErr, e.retire())
 	authority := e.authority
-	executionErr := errors.Join(runErr, invariantErr)
+	executionErr := runErr
+	if invariantErr != nil {
+		executionErr = errors.Join(runErr, invariantErr)
+	}
 	abort, abortErr := runtimeAbortFromError(runErr)
 	if abortErr != nil {
 		executionErr = errors.Join(executionErr, abortErr)

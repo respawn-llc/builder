@@ -61,7 +61,9 @@ func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt Backg
 }
 
 func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
-	return b.engine.steer("", steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}))
+	return b.engine.steerCurrentStepOrRuntime(
+		steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}),
+	)
 }
 
 func (b *defaultBackgroundNoticeScheduler) QueueBackgroundShellContinuation(evt BackgroundShellEvent) {

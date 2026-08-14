@@ -141,7 +141,7 @@ func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
 			true,
 			[]llm.Message{message},
 		)
-		if err := engine.steer(chatStoreTestStepID, intent); err != nil {
+		if err := steerTestActiveStep(engine, chatStoreTestStepID, intent); err != nil {
 			t.Fatalf("append initial tool call: %v", err)
 		}
 		before, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
@@ -149,7 +149,7 @@ func TestConflictingAssistantToolCallStepReturnsError(t *testing.T) {
 			t.Fatalf("read records before conflict: %v", err)
 		}
 
-		if err := engine.steer(conflictingStepID, intent); err == nil {
+		if err := steerTestActiveStep(engine, conflictingStepID, intent); err == nil {
 			t.Fatal("conflicting tool-call Step identity was accepted")
 		}
 		after, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)

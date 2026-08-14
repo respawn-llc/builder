@@ -249,6 +249,32 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	return engine
 }
 
+func setTestActiveStep(engine *Engine, stepID string) func() {
+	previous := engine.stepLifecycle
+	engine.stepLifecycle = &stubExclusiveStepLifecycle{
+		activeStepID: stepID,
+		snapshot: &RunSnapshot{
+			RunID:  "11111111-1111-4111-8111-111111111111",
+			StepID: stepID,
+		},
+	}
+	return func() {
+		engine.stepLifecycle = previous
+	}
+}
+
+func steerTestActiveStep(engine *Engine, stepID string, intents ...steeringIntent) error {
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return engine.steer(stepID, intents...)
+}
+
+func runTestActiveStep(engine *Engine, stepID string, operation func() error) error {
+	restore := setTestActiveStep(engine, stepID)
+	defer restore()
+	return operation()
+}
+
 func mustMaterializeTestEventLog(
 	t *testing.T,
 	store *session.Store,

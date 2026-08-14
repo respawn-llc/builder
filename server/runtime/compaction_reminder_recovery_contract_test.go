@@ -25,7 +25,9 @@ func TestCompactionSoonReminderRemainsSingleShotAcrossAdmissionToggle(t *testing
 		t.Fatalf("append disabled reminder: %v", err)
 	}
 	engine.SetAutoCompactionEnabled(true)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "enabled"); err != nil {
+	if err := runTestActiveStep(engine, "enabled", func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "enabled")
+	}); err != nil {
 		t.Fatalf("append enabled reminder: %v", err)
 	}
 	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "duplicate"); err != nil {
@@ -45,7 +47,9 @@ func TestReopenPreservesCompactionSoonReminderAdmission(t *testing.T) {
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
 	seedReminderUsage(t, engine)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued"); err != nil {
+	if err := runTestActiveStep(engine, "issued", func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued")
+	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
 
@@ -67,7 +71,7 @@ func TestForkBeforeReminderDoesNotInheritReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -95,17 +99,19 @@ func TestForkAfterReminderPreservesReminderAdmission(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	engine := newReminderRecoveryEngine(t, store, &fakeClient{}, nil)
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "seed", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("before")}},
 	)); err != nil {
 		t.Fatalf("persist seed: %v", err)
 	}
 	seedReminderUsage(t, engine)
-	if err := newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued"); err != nil {
+	if err := runTestActiveStep(engine, "issued", func() error {
+		return newCompactionReminderCoordinator(engine).maybeAppend(context.Background(), "issued")
+	}); err != nil {
 		t.Fatalf("append reminder: %v", err)
 	}
-	if err := engine.steer("anchor", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "anchor", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("after")}},
 	)); err != nil {

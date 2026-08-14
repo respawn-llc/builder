@@ -58,13 +58,14 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 	if err := store.SetHeadlessActive(true); err != nil {
 		t.Fatalf("enable headless context: %v", err)
 	}
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
 
+	restoreStep := setTestActiveStep(engine, "compact")
 	_, receipt, err := engine.compactNow(
 		context.Background(),
 		"compact",
@@ -72,6 +73,7 @@ func TestManualRemoteCompactionRebuildsCanonicalPrefixOrder(t *testing.T) {
 		compactionInstructionsInput{},
 		false,
 	)
+	restoreStep()
 	if err != nil || !receipt.Committed {
 		t.Fatalf("compact remote context: receipt=%+v error=%v", receipt, err)
 	}

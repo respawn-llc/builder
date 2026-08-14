@@ -30,6 +30,8 @@ func TestMultiRowCompactionEmitsPerRowCommittedCounts(t *testing.T) {
 			mu.Unlock()
 		},
 	})
+	restoreStep := setTestActiveStep(eng, "step-compact")
+	defer restoreStep()
 	if _, err := newCompactionPersistence(eng).replaceHistory("step-compact", "local", compactionModeManual, llm.ItemsFromMessages([]llm.Message{
 		{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary one")},
 		{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("summary two")},
@@ -69,6 +71,8 @@ func TestCriticalExactRecountsAfterToolCompletionBeforeToolMessageAppend(t *test
 		return 100
 	}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	restoreStep := setTestActiveStep(eng, "step")
+	defer restoreStep()
 	call := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	if err := eng.steer("step", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call}}})); err != nil {
 		t.Fatalf("append assistant tool call: %v", err)
@@ -336,6 +340,8 @@ func TestRestoreMessagesPreservesRecoveredMultiToolExactTokenParity(t *testing.T
 	}
 	client := &fakeCompactionClient{inputTokenCountFn: countForRequest}
 	live := mustNewTestEngine(t, liveStore, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", ContextWindowTokens: 400_000})
+	restoreStep := setTestActiveStep(live, "step")
+	defer restoreStep()
 	call1 := llm.ToolCall{ID: "call-1", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"pwd"}`)}
 	call2 := llm.ToolCall{ID: "call-2", Name: string(toolspec.ToolExecCommand), Input: json.RawMessage(`{"command":"ls"}`)}
 	if err := live.steer("step", steerMessagesWithPersistenceIntent(steeringMessageEventNone, true, []llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{call1, call2}}})); err != nil {

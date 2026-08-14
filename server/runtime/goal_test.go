@@ -87,7 +87,6 @@ func TestExactAgentGoalSetDrainsAfterToolCompletion(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	workflowConfig := &workflowruntime.CurrentNodeExecutionConfig{ScopeID: scopeID, CompletionMode: workflowruntime.CompletionModeTool}
 	publishTestWorkflowExecution(t, engine, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 	runID := mustGoalRunID(t)
 	stepID := mustGoalStepID(t)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID.String(), snapshot: &RunSnapshot{RunID: runID.String(), StepID: stepID.String()}}
@@ -155,7 +154,6 @@ func TestExactAgentGoalCompleteSeesEarlierQueuedSet(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	workflowConfig := &workflowruntime.CurrentNodeExecutionConfig{ScopeID: scopeID, CompletionMode: workflowruntime.CompletionModeTool}
 	publishTestWorkflowExecution(t, engine, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 	runID := mustGoalRunID(t)
 	stepID := mustGoalStepID(t)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID.String(), snapshot: &RunSnapshot{RunID: runID.String(), StepID: stepID.String()}}
@@ -184,7 +182,6 @@ func TestExactAgentGoalSetRejectsEarlierProjectedActiveGoal(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	workflowConfig := &workflowruntime.CurrentNodeExecutionConfig{ScopeID: scopeID, CompletionMode: workflowruntime.CompletionModeTool}
 	publishTestWorkflowExecution(t, engine, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 	runID := mustGoalRunID(t)
 	stepID := mustGoalStepID(t)
 	engine.stepLifecycle = &stubExclusiveStepLifecycle{activeStepID: stepID.String(), snapshot: &RunSnapshot{RunID: runID.String(), StepID: stepID.String()}}
@@ -210,7 +207,6 @@ func TestExactAgentGoalSetForEndedStepIsRejected(t *testing.T) {
 	scopeID := runtimeids.NewExecutionScopeID()
 	workflowConfig := &workflowruntime.CurrentNodeExecutionConfig{ScopeID: scopeID, CompletionMode: workflowruntime.CompletionModeTool}
 	publishTestWorkflowExecution(t, engine, workflowConfig)
-	publishTestWorkflowAgentAssociation(t, engine, workflowConfig)
 	runID := mustGoalRunID(t)
 	stepID := mustGoalStepID(t)
 	otherStep, _ := runtimeids.ParseStepID("33333333-3333-4333-8333-333333333333")
@@ -343,55 +339,62 @@ func TestGoalMutationsEmitGoalStatusEventsAfterFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetGoal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 0, set.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, set.GoalState, false)
 
 	paused, err := engine.SetGoalStatus(session.GoalStatusPaused, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("pause goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 2, paused.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, paused.GoalState, false)
 
 	active, err := engine.SetGoalStatus(session.GoalStatusActive, session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("resume goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 4, active.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, active.GoalState, false)
 
 	complete, err := engine.SetGoalStatus(session.GoalStatusComplete, session.GoalActorAgent)
 	if err != nil {
 		t.Fatalf("complete goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 6, complete.GoalState, false)
+	assertGoalFeedbackThenStatusEvent(t, events, complete.GoalState, false)
 
 	cleared, err := engine.ClearGoal(session.GoalActorUser)
 	if err != nil {
 		t.Fatalf("clear goal: %v", err)
 	}
-	assertGoalFeedbackThenStatusEvent(t, events, 8, cleared.GoalState, true)
+	assertGoalFeedbackThenStatusEvent(t, events, cleared.GoalState, true)
 }
 
-func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, start int, goal session.GoalState, cleared bool) {
+func assertGoalFeedbackThenStatusEvent(t *testing.T, events []Event, goal session.GoalState, cleared bool) {
 	t.Helper()
-	if len(events) < start+2 {
-		t.Fatalf("events len = %d, want at least %d: %+v", len(events), start+2, events)
+	statusIndex := -1
+	for index := len(events) - 1; index >= 0; index-- {
+		status := events[index]
+		if status.Kind != EventGoalStatusUpdated || status.GoalStatus == nil ||
+			status.GoalStatus.Cleared != cleared {
+			continue
+		}
+		if !cleared &&
+			(status.GoalStatus.State.ID != goal.ID ||
+				status.GoalStatus.State.Objective != goal.Objective ||
+				status.GoalStatus.State.Status != goal.Status) {
+			continue
+		}
+		statusIndex = index
+		break
 	}
-	feedback := events[start]
-	if feedback.Kind != EventConversationUpdated || !feedback.CommittedTranscriptChanged {
-		t.Fatalf("event[%d] = %+v, want committed goal feedback", start, feedback)
+	if statusIndex < 0 {
+		t.Fatalf("missing matching goal status event for %+v (cleared=%t): %+v", goal, cleared, events)
 	}
-	status := events[start+1]
-	if status.Kind != EventGoalStatusUpdated || status.GoalStatus == nil {
-		t.Fatalf("event[%d] = %+v, want goal status event", start+1, status)
+	for index := statusIndex - 1; index >= 0; index-- {
+		feedback := events[index]
+		if feedback.Kind == EventConversationUpdated && feedback.CommittedTranscriptChanged &&
+			feedback.Message.MessageType != nil && *feedback.Message.MessageType == llm.MessageTypeGoal {
+			return
+		}
 	}
-	if status.GoalStatus.Cleared != cleared {
-		t.Fatalf("cleared = %t, want %t", status.GoalStatus.Cleared, cleared)
-	}
-	if cleared {
-		return
-	}
-	if status.GoalStatus.State.ID != goal.ID || status.GoalStatus.State.Objective != goal.Objective || status.GoalStatus.State.Status != goal.Status {
-		t.Fatalf("goal status state = %+v, want %+v", status.GoalStatus.State, goal)
-	}
+	t.Fatalf("goal status event at %d had no earlier committed goal feedback: %+v", statusIndex, events)
 }
 
 func TestActiveGoalRequiresAskQuestionToolVisibilityBeforeModelTurn(t *testing.T) {
@@ -700,10 +703,19 @@ func TestGoalLoopStopsAfterPauseOrClearDuringActiveTurn(t *testing.T) {
 			}
 			client.waitStarted(t, 1)
 
-			if err := tt.mutate(engine); err != nil {
-				t.Fatalf("mutate goal: %v", err)
+			mutateDone := make(chan error, 1)
+			go func() {
+				mutateDone <- tt.mutate(engine)
+			}()
+			select {
+			case err := <-mutateDone:
+				t.Fatalf("goal mutation applied during protected Step: %v", err)
+			case <-time.After(50 * time.Millisecond):
 			}
 			client.releaseCall(1)
+			if err := <-mutateDone; err != nil {
+				t.Fatalf("mutate goal: %v", err)
+			}
 			waitGoalLoopRunning(t, engine, false)
 			waitActiveLiveRunGroup(t, engine, false)
 			if got := client.callCount(); got != 1 {

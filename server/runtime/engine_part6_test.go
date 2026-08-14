@@ -211,6 +211,8 @@ func TestAppendCommittedEntryEmitsRealtimeLocalEntryEvent(t *testing.T) {
 		},
 	})
 
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 	if err := eng.steer("step-1", steerLocalEntryIntent(storedLocalEntry{Visibility: transcript.EntryVisibilityAuto, Role: "reviewer_suggestions", Text: "Supervisor suggested:\n1. Add verification notes.", CondensedText: textutil.Value("Supervisor made 1 suggestion.")})); err != nil {
 		t.Fatalf("append persisted local entry: %v", err)
 	}
@@ -237,9 +239,11 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 		Model:    "gpt-5",
 		Reviewer: ReviewerConfig{Model: "gpt-5"},
 	})
+	restorePrepStep := setTestActiveStep(eng, "prep-1")
 	if err := eng.steer("prep-1", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("first request")}})); err != nil {
 		t.Fatalf("append first message: %v", err)
 	}
+	restorePrepStep()
 
 	reviewerClient := &fakeClient{caps: llm.ProviderCapabilities{ProviderID: "openai-compatible", SupportsResponsesAPI: true}, responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add final verification notes."]}`)},
@@ -256,6 +260,8 @@ func TestRunReviewerFollowUpReturnsCompletionWhenReviewerInstructionAppendFails(
 	}
 	t.Cleanup(func() { _ = os.Chmod(eventsPath, info.Mode()) })
 
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 	_, err = eng.runReviewerFollowUp(context.Background(), "step-1", llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("original final")}, -1, false, reviewerClient)
 	if err == nil {
 		t.Fatal("expected Reviewer instruction append failure")
@@ -304,6 +310,8 @@ func TestRunStepLoopFailsWhenReviewerStatusPersistenceFailsAfterReviewerInstruct
 	}
 	blockReviewer = true
 
+	restoreStep := setTestActiveStep(eng, "step-1")
+	defer restoreStep()
 	_, err := eng.runStepLoop(context.Background(), "step-1")
 	if err == nil {
 		t.Fatal("expected runStepLoop to fail when reviewer status persistence fails")

@@ -23,6 +23,8 @@ func TestEmitCompactionStatusStillPublishesFailureEventWhenErrorPersistenceFails
 		}
 	})
 
+	restoreStep := setTestActiveStep(engine, "compaction")
+	defer restoreStep()
 	err := newCompactionPersistence(engine).emitStatus(
 		"compaction",
 		EventCompactionFailed,
@@ -57,6 +59,8 @@ func TestReplaceHistoryPublishesProjectedTranscriptEntriesBeforeCompactionStatus
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "compact")
+	defer restoreStep()
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
 		"compact",
 		"local",
@@ -102,6 +106,8 @@ func TestAutoCompactionStatusEventDoesNotPublishCommittedEntryStart(t *testing.T
 		Model:   "gpt-5",
 		OnEvent: func(event Event) { events = append(events, event) },
 	})
+	restoreStep := setTestActiveStep(engine, "compact")
+	defer restoreStep()
 	if err := newCompactionPersistence(engine).emitStatus("compact", EventCompactionCompleted, compactionModeAuto, "local", "openai", nil, 1, ""); err != nil {
 		t.Fatalf("emit auto completion status: %v", err)
 	}

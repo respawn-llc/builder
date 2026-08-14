@@ -28,6 +28,8 @@ func runReviewerPrompt(t *testing.T, eng *Engine) llm.Request {
 	if _, err := eng.ensureLocked(); err != nil {
 		t.Fatalf("ensure locked: %v", err)
 	}
+	restoreStep := setTestActiveStep(eng, "review")
+	defer restoreStep()
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":[]}`)},
 	}}}

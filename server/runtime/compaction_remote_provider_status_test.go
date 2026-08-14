@@ -34,13 +34,14 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 		CompactionMode:      "native",
 		ContextWindowTokens: 2_500,
 	})
+	restoreStep := setTestActiveStep(engine, "input")
 	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    "call-1",
@@ -50,7 +51,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	)); err != nil {
 		t.Fatalf("persist tool call: %v", err)
 	}
-	if err := engine.steer("tool", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{
 			Role:       llm.RoleTool,
@@ -61,6 +62,7 @@ func TestRemoteCompactionRetries413OverflowByCollapsingToolOutput(t *testing.T) 
 	)); err != nil {
 		t.Fatalf("persist tool output: %v", err)
 	}
+	restoreStep()
 
 	if err := engine.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact context after overflow: %v", err)
@@ -165,12 +167,14 @@ func newRemoteCompactionFixture(
 		Model:          "gpt-5",
 		CompactionMode: "native",
 	})
+	restoreStep := setTestActiveStep(engine, "input")
 	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
 		t.Fatalf("persist compaction input: %v", err)
 	}
+	restoreStep()
 	return store, client, engine
 }
 

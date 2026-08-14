@@ -30,7 +30,9 @@ func TestCompactionCacheObservationRequestBuildsExactConversationReplica(t *test
 	eng := mustNewTestEngine(t, store, &fakeCompactionClient{}, tools.NewRegistry(tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	if err := runTestActiveStep(eng, "seed-step", func() error {
+		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	for _, message := range []llm.Message{
@@ -117,7 +119,9 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	if err := runTestActiveStep(eng, "seed-step", func() error {
+		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
@@ -145,10 +149,13 @@ func TestRemoteCompactionCollapsesToolPayloadAfterOverflowAndPersistsCacheWarnin
 	if err != nil {
 		t.Fatalf("build seed request: %v", err)
 	}
-	if _, err := eng.generateWithRetryClient(context.Background(), "seed-cache", &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
-		Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
-	}}}, seedRequest, nil, nil, nil); err != nil {
+	if err := runTestActiveStep(eng, "seed-cache", func() error {
+		_, err := eng.generateWithRetryClient(context.Background(), "seed-cache", &fakeClient{responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("seeded")},
+			Usage:     llm.Usage{CachedInputTokens: textutil.Value(512)},
+		}}}, seedRequest, nil, nil, nil)
+		return err
+	}); err != nil {
 		t.Fatalf("seed cache lineage: %v", err)
 	}
 
@@ -217,7 +224,9 @@ func TestRemoteCompactionDoesNotRepairUnsupportedViewImagePayload(t *testing.T) 
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID: toolspec.ToolViewImage, Handler: fakeTool{name: toolspec.ToolViewImage},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	if err := runTestActiveStep(eng, "seed-step", func() error {
+		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
@@ -276,7 +285,9 @@ func TestRemoteCompactionFailsFastWhenOverflowHasNoCollapsibleToolPayload(t *tes
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5", ContextWindowTokens: 2500})
-	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
+	if err := runTestActiveStep(eng, "seed-step", func() error {
+		return eng.steerBaseMetaContextIfNeeded("seed-step")
+	}); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value(strings.Repeat("chat-heavy-history", 12_000))}})); err != nil {
@@ -314,12 +325,14 @@ func TestCompactionTransientRetryObservesCacheLineageOnce(t *testing.T) {
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{
 		ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand},
 	}), Config{Model: "gpt-5"})
+	restoreStep := setTestActiveStep(eng, "seed-step")
 	if err := eng.steerBaseMetaContextIfNeeded("seed-step"); err != nil {
 		t.Fatalf("inject meta context: %v", err)
 	}
 	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append user message: %v", err)
 	}
+	restoreStep()
 
 	if err := eng.CompactContext(context.Background(), ""); err != nil {
 		t.Fatalf("compact: %v", err)

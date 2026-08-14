@@ -813,7 +813,7 @@ func TestSetAutoCompactionEnabledTogglesRuntimeOnly(t *testing.T) {
 	}
 }
 
-func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurrentRun(t *testing.T) {
+func TestSetAutoCompactionDisabledDuringBusyStepAppliesAtBoundary(t *testing.T) {
 	dir := t.TempDir()
 	store := mustCreateTestSessionAt(t, dir)
 
@@ -858,14 +858,28 @@ func TestSetAutoCompactionDisabledConcurrentWithBusyStepSkipsCompactionForCurren
 	case <-time.After(runtimeTestSynchronizationTimeout):
 		t.Fatal("timed out waiting for tool call to start")
 	}
-	changed, enabled := eng.SetAutoCompactionEnabled(false)
-	if !changed || enabled {
-		t.Fatalf("expected changed=true enabled=false, got changed=%v enabled=%v", changed, enabled)
+	type settingResult struct {
+		changed bool
+		enabled bool
+	}
+	settingDone := make(chan settingResult, 1)
+	go func() {
+		changed, enabled := eng.SetAutoCompactionEnabled(false)
+		settingDone <- settingResult{changed: changed, enabled: enabled}
+	}()
+	select {
+	case result := <-settingDone:
+		t.Fatalf("setting applied during protected Step: %+v", result)
+	case <-time.After(50 * time.Millisecond):
 	}
 	close(release)
 
 	if err := <-submitDone; err != nil {
 		t.Fatalf("submit while disabling auto-compaction: %v", err)
+	}
+	result := <-settingDone
+	if !result.changed || result.enabled {
+		t.Fatalf("setting result = %+v, want changed and disabled", result)
 	}
 	if got := len(client.compactionCalls); got != 0 {
 		t.Fatalf("expected no compaction call for in-flight run after disabling auto-compaction, got %d", got)

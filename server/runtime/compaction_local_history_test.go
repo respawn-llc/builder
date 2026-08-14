@@ -28,7 +28,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 		Model:          "gpt-5",
 		CompactionMode: "local",
 	})
-	if err := engine.steer("before", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "before", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 			ID:               preBoundaryID,
@@ -37,6 +37,7 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 	)); err != nil {
 		t.Fatalf("persist pre-boundary reasoning: %v", err)
 	}
+	restoreStep := setTestActiveStep(engine, "checkpoint")
 	receipt, err := newCompactionPersistence(engine).replaceHistory(
 		"checkpoint",
 		"local",
@@ -48,10 +49,11 @@ func TestManualCompactionLocalUsesHistorySinceLastCompactionCheckpoint(t *testin
 			Content:     textutil.Value("checkpoint"),
 		}}),
 	)
+	restoreStep()
 	if err != nil || !receipt.Committed {
 		t.Fatalf("persist compaction checkpoint: receipt=%+v error=%v", receipt, err)
 	}
-	if err := engine.steer("after", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "after", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ReasoningItems: []llm.ReasoningItem{{
 			ID:               postBoundaryID,
@@ -113,7 +115,7 @@ func TestManualCompactionLocalFailsWhenModelAttemptsToolCalls(t *testing.T) {
 		}),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {
@@ -151,7 +153,7 @@ func TestManualCompactionDisabledWhenModeNone(t *testing.T) {
 		Model:          "gpt-5",
 		CompactionMode: "none",
 	})
-	if err := engine.steer("input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
+	if err := steerTestActiveStep(engine, "input", steerMessagesWithPersistenceIntent(steeringMessageEventNone,
 		true,
 		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
 	)); err != nil {

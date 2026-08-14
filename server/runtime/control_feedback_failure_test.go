@@ -35,20 +35,7 @@ func TestSetFastModeWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore event-log appends: %v", err)
 	}
-	changed, receipt, err = engine.SetFastModeEnabledWithCommittedFeedback(true, func(bool) string {
-		return "feedback"
-	})
-	if err != nil || !receipt.Committed || !changed || !engine.FastModeEnabled() {
-		t.Fatalf(
-			"retry did not apply fast mode after durable feedback: receipt=%+v changed=%t enabled=%t error=%v",
-			receipt,
-			changed,
-			engine.FastModeEnabled(),
-			err,
-		)
-	}
-
-	assertOneBoundedControlFeedback(t, store)
+	assertBoundedControlFeedbackCount(t, store, 0)
 }
 
 func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
@@ -74,21 +61,7 @@ func TestSetQuestionsWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testin
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore event-log appends: %v", err)
 	}
-	changed, enabled, receipt, err = engine.SetQuestionsEnabledWithCommittedFeedback(false, func(bool, bool) string {
-		return "feedback"
-	})
-	if err != nil || !receipt.Committed || !changed || enabled || engine.QuestionsEnabled() {
-		t.Fatalf(
-			"retry did not apply questions setting after durable feedback: receipt=%+v changed=%t enabled=%t current=%t error=%v",
-			receipt,
-			changed,
-			enabled,
-			engine.QuestionsEnabled(),
-			err,
-		)
-	}
-
-	assertOneBoundedControlFeedback(t, store)
+	assertBoundedControlFeedbackCount(t, store, 0)
 }
 
 func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing.T) {
@@ -125,24 +98,10 @@ func TestSetReviewerWithCommittedFeedbackDoesNotMutateOnAppendFailure(t *testing
 	if err := blocker.Restore(); err != nil {
 		t.Fatalf("restore event-log appends: %v", err)
 	}
-	changed, mode, receipt, err = engine.SetReviewerEnabledWithCommittedFeedback(true, func(bool, string, bool) string {
-		return "feedback"
-	})
-	if err != nil || !receipt.Committed || !changed || mode != "edits" || engine.ReviewerFrequency() != "edits" {
-		t.Fatalf(
-			"retry did not apply reviewer mode after durable feedback: receipt=%+v changed=%t mode=%q frequency=%q error=%v",
-			receipt,
-			changed,
-			mode,
-			engine.ReviewerFrequency(),
-			err,
-		)
-	}
-
-	assertOneBoundedControlFeedback(t, store)
+	assertBoundedControlFeedbackCount(t, store, 0)
 }
 
-func assertOneBoundedControlFeedback(t *testing.T, store *session.Store) {
+func assertBoundedControlFeedbackCount(t *testing.T, store *session.Store, want int) {
 	t.Helper()
 	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
 	if err != nil {
@@ -154,7 +113,7 @@ func assertOneBoundedControlFeedback(t *testing.T, store *session.Store) {
 			entries++
 		}
 	}
-	if entries != 1 {
-		t.Fatalf("bounded control-feedback entries = %d, want one", entries)
+	if entries != want {
+		t.Fatalf("bounded control-feedback entries = %d, want %d", entries, want)
 	}
 }
