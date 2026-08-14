@@ -130,6 +130,44 @@ func TestSessionDraftAndUpdateFailureRejectInvalidText(t *testing.T) {
 	}
 }
 
+func TestSessionTransitionTargetsAndNavigationBindingsMatchDomainValues(t *testing.T) {
+	for name, transition := range map[string]*sessionlaunchpb.SessionTransition{
+		"open session without target": {
+			Action: sessionlaunchpb.SessionTransitionAction_SESSION_TRANSITION_ACTION_OPEN_SESSION,
+		},
+		"rollback fork without target": {
+			Action: sessionlaunchpb.SessionTransitionAction_SESSION_TRANSITION_ACTION_FORK_ROLLBACK,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(transition); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+
+	for name, binding := range map[string]*sessionlaunchpb.SessionNavigationBinding{
+		"blank project ID": {
+			ProjectId:   " ",
+			WorkspaceId: "workspace",
+		},
+		"untrimmed project ID": {
+			ProjectId:   " project ",
+			WorkspaceId: "workspace",
+		},
+		"blank workspace ID": {
+			ProjectId:   "project",
+			WorkspaceId: " ",
+		},
+		"untrimmed workspace ID": {
+			ProjectId:   "project",
+			WorkspaceId: " workspace ",
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(binding); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}
+
 func TestSessionPlanActiveSettingsRejectInvalidZeroValues(t *testing.T) {
 	valid := validGeneratedActiveSettings()
 	if err := protoapi.ValidateGeneratedMessage(valid); err != nil {

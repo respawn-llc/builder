@@ -162,13 +162,14 @@ message CreateRequest {
   optional string body = 4;
   optional string source_url = 5 [(buf.validate.field).string.min_len = 1];
   optional string source_workspace_id = 6 [(buf.validate.field).string.min_len = 1];
-  repeated string label_ids = 7 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string label_ids = 7 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional DependencyCreateIntent dependency_intent = 8;
 }
 
@@ -595,20 +596,22 @@ message SessionListSuccess {
 
 message LabelsUpdateRequest {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
-  repeated string add_label_ids = 2 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
-  repeated string remove_label_ids = 3 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string add_label_ids = 2 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  repeated string remove_label_ids = 3 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 
   option (buf.validate.message).cel = {
     id: "kent.workflow_task.labels_update_disjoint"
@@ -736,7 +739,10 @@ message LabelErrorDetails {
   }];
   optional string project_id = 2 [(buf.validate.field).string.min_len = 1];
   optional string task_id = 3 [(buf.validate.field).string.min_len = 1];
-  optional string label_id = 4 [(buf.validate.field).string.uuid = true];
+  optional string label_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional string field = 5 [(buf.validate.field).string.min_len = 1];
   optional int32 limit = 6 [(buf.validate.field).int32.gt = 0];
 

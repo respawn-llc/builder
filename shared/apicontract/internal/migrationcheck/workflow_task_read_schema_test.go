@@ -11,7 +11,9 @@ import (
 
 	"buf.build/go/protovalidate"
 	"core/shared/apicontract"
+	"core/shared/protoapi"
 	sharedpb "core/shared/protoapi/gen/kent/api/shared"
+	workflowtaskpb "core/shared/protoapi/gen/kent/api/workflow_task"
 	"core/shared/protocol"
 	"core/shared/serverapi"
 	"google.golang.org/protobuf/proto"
@@ -347,6 +349,28 @@ func TestWorkflowTaskReadGeneratedValidationPreservesReadPredicates(t *testing.T
 	assertDynamicValid(t, dependencies)
 	setInt32Field(t, dependencies, "blocker_count", 1)
 	assertDynamicInvalid(t, dependencies)
+}
+
+func TestWorkflowTaskReadGeneratedValidationRequiresLabelUUIDV4(t *testing.T) {
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
+	for name, message := range map[string]proto.Message{
+		"named filter": &workflowtaskpb.NamedLabelFilter{
+			Mode:     workflowtaskpb.NamedLabelFilterMode_NAMED_LABEL_FILTER_MODE_ANY,
+			LabelIds: []string{versionOneUUID},
+		},
+		"assigned labels": &workflowtaskpb.AssignedLabelIds{
+			TaskId:   "task-1",
+			LabelIds: []string{versionOneUUID},
+		},
+		"missing label detail": &workflowtaskpb.LabelNotFoundDetails{
+			ProjectId: "project",
+			LabelId:   versionOneUUID,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Fatalf("%s accepted a non-v4 label ID", name)
+		}
+	}
 }
 
 const validWorkflowTaskReadUUID = "123e4567-e89b-42d3-a456-426614174000"

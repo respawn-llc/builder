@@ -267,6 +267,31 @@ func TestWorkflowTaskLifecycleGeneratedValidationPreservesMutationPredicates(t *
 	labels.Mutable(fds(t, labels, "remove_label_ids")).List().Append(protoreflect.ValueOfString(labelID))
 	assertDynamicInvalid(t, labels)
 
+	for _, fixture := range []struct {
+		message string
+		field   protoreflect.Name
+	}{
+		{message: "CreateRequest", field: "label_ids"},
+		{message: "LabelsUpdateRequest", field: "add_label_ids"},
+	} {
+		message := dynamicMessage(t, files, protoreflect.FullName("kent.api.workflow_task."+fixture.message))
+		if fixture.message == "CreateRequest" {
+			setStringField(t, message, "project_id", "project")
+			setStringField(t, message, "title", "Task")
+		} else {
+			setStringField(t, message, "task_id", "task-1")
+		}
+		message.Mutable(fds(t, message, fixture.field)).List().Append(
+			protoreflect.ValueOfString("123e4567-e89b-12d3-a456-426614174000"),
+		)
+		assertDynamicInvalid(t, message)
+	}
+
+	labelError := dynamicMessage(t, files, "kent.api.workflow_task.LabelErrorDetails")
+	setEnumField(t, labelError, "reason", 5)
+	setStringField(t, labelError, "label_id", "123e4567-e89b-12d3-a456-426614174000")
+	assertDynamicInvalid(t, labelError)
+
 	start := dynamicMessage(t, files, "kent.api.workflow_task.StartSuccess")
 	assertDynamicInvalid(t, start)
 	applied := dynamicMessage(t, files, "kent.api.workflow_task.StartApplied")

@@ -7,6 +7,7 @@ import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "kent/api/project/project.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 import "kent/api/workflow_definition/workflow_definition.proto";
 import "kent/api/workflow_task/attention.proto";
 
@@ -130,19 +131,17 @@ message NamedLabelFilter {
     (buf.validate.field).repeated = {
       max_items: 100
       unique: true
-      items: {
-        string: {uuid: true}
-      }
-    }
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   repeated string excluded_label_ids = 3 [
     (buf.validate.field).repeated = {
       max_items: 100
       unique: true
-      items: {
-        string: {uuid: true}
-      }
-    }
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 
   option (buf.validate.message).cel = {
@@ -218,13 +217,14 @@ message ListItem {
   google.protobuf.Timestamp updated_at = 7 [(buf.validate.field).required = true];
   optional ColumnKeys column_keys = 8;
   TaskStatus status = 9 [(buf.validate.field).required = true];
-  repeated string label_ids = 10 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string label_ids = 10 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ColumnKeys {
@@ -569,13 +569,14 @@ message BoardTaskCard {
   TaskSourceWorkspace source_workspace = 7 [(buf.validate.field).required = true];
   TaskStatus status = 8 [(buf.validate.field).required = true];
   TaskActions actions = 9 [(buf.validate.field).required = true];
-  repeated string label_ids = 10 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string label_ids = 10 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional DependencyProgress dependency_progress = 11;
   google.protobuf.Timestamp updated_at = 12 [(buf.validate.field).required = true];
 }
@@ -785,13 +786,14 @@ message TaskDetail {
   int32 retained_session_count = 12 [(buf.validate.field).int32.gte = 0];
   TaskStatus status = 13 [(buf.validate.field).required = true];
   TaskActions actions = 14 [(buf.validate.field).required = true];
-  repeated string label_ids = 15 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string label_ids = 15 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   int32 attention_count = 16 [(buf.validate.field).int32.gte = 0];
   TaskDependencies dependencies = 17 [(buf.validate.field).required = true];
 }
@@ -806,13 +808,14 @@ message LabelsGetRequest {
 
 message AssignedLabelIds {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
-  repeated string label_ids = 2 [(buf.validate.field).repeated = {
-    max_items: 100
-    unique: true
-    items: {
-      string: {uuid: true}
-    }
-  }];
+  repeated string label_ids = 2 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message LabelsGetSuccess {
@@ -840,12 +843,18 @@ message InvalidFilterDetails {
 
 message LabelNotFoundDetails {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string label_id = 2 [(buf.validate.field).string.uuid = true];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message WrongProjectDetails {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string label_id = 2 [(buf.validate.field).string.uuid = true];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message NormalizedTooShortDetails {}

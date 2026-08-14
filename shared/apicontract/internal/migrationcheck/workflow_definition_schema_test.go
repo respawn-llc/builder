@@ -418,6 +418,7 @@ func TestWorkflowDefinitionGeneratedValidationCoversProjectEventInvariants(t *te
 
 func TestWorkflowDefinitionGeneratedValidationCoversLabelCatalogConstraints(t *testing.T) {
 	validUUID := "123e4567-e89b-42d3-a456-426614174000"
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
 	catalog := &workflowpb.ProjectLabelCatalog{
 		ProjectId: "project-1",
 		Labels: []*workflowpb.ProjectLabel{
@@ -431,6 +432,32 @@ func TestWorkflowDefinitionGeneratedValidationCoversLabelCatalogConstraints(t *t
 	catalog.Labels = []*workflowpb.ProjectLabel{{Id: validUUID, Name: "   "}}
 	if err := protoapi.ValidateGeneratedMessage(catalog); err == nil {
 		t.Fatal("label catalog with blank label name was accepted")
+	}
+
+	for name, message := range map[string]proto.Message{
+		"rename request": &workflowpb.ProjectLabelRenameRequest{
+			ProjectId: "project",
+			LabelId:   versionOneUUID,
+			Name:      "Priority",
+		},
+		"delete request": &workflowpb.ProjectLabelDeleteRequest{
+			ProjectId: "project",
+			LabelId:   versionOneUUID,
+		},
+		"delete result": &workflowpb.ProjectLabelDeleteSuccess{
+			LabelId: versionOneUUID,
+		},
+		"reorder request": &workflowpb.ProjectLabelReorderRequest{
+			ProjectId: "project",
+			LabelIds:  []string{versionOneUUID},
+		},
+		"error detail": &workflowpb.LabelNotFoundDetails{
+			LabelId: versionOneUUID,
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+			t.Fatalf("%s accepted a non-v4 label ID", name)
+		}
 	}
 }
 

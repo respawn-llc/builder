@@ -218,6 +218,14 @@ message SessionTransition {
   string target_session_id = 5;
   string fork_rollback_target_id = 6;
   optional string previous_session_id = 7 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.transition_targets"
+    message: "open-session and rollback-fork transitions require their target IDs"
+    expression:
+      "(this.action != 6 || this.target_session_id.trim() != '') && "
+      "(this.action != 5 || this.fork_rollback_target_id.trim() != '')"
+  };
 }
 
 message SessionResolveTransitionRequest {
@@ -232,8 +240,22 @@ enum SessionAuthPreparation {
 }
 
 message SessionNavigationBinding {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workspace_id = 2 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.navigation_project_id"
+      message: "project ID must be non-blank and trimmed"
+      expression: "this.trim() != '' && this == this.trim()"
+    }
+  ];
+  string workspace_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.navigation_workspace_id"
+      message: "workspace ID must be non-blank and trimmed"
+      expression: "this.trim() != '' && this == this.trim()"
+    }
+  ];
 }
 
 message SessionInitialPromptMetadata {

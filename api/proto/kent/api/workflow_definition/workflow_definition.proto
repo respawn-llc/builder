@@ -1311,7 +1311,10 @@ message ProjectLabelCreateSuccess {
 
 message ProjectLabelRenameRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string label_id = 2 [(buf.validate.field).string.uuid = true];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string name = 3 [
     (buf.validate.field).string = {
       min_len: 1
@@ -1331,11 +1334,17 @@ message ProjectLabelRenameSuccess {
 
 message ProjectLabelDeleteRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string label_id = 2 [(buf.validate.field).string.uuid = true];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ProjectLabelDeleteSuccess {
-  string label_id = 1 [(buf.validate.field).string.uuid = true];
+  string label_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ProjectLabelReorderRequest {
@@ -1345,7 +1354,8 @@ message ProjectLabelReorderRequest {
       max_items: 100
       unique: true
     },
-    (buf.validate.field).repeated.items.string.uuid = true
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
   ];
 }
 
@@ -1373,7 +1383,10 @@ message LabelProjectNotFoundDetails {
 
 message LabelNotFoundDetails {
   optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string label_id = 2 [(buf.validate.field).string.uuid = true];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message LabelInvalidMutationDetails {
