@@ -39,12 +39,15 @@ func TestServiceRetainsWorkflowTaskAndCommentBoundaries(t *testing.T) {
 	task, err := service.CreateWorkflowTask(t.Context(), serverapi.WorkflowTaskCreateRequest{
 		ProjectID:  fixture.Binding.ProjectID,
 		WorkflowID: &created.Workflow.ID,
-		Title:      "Retained task",
+		Title:      "  Retained task  ",
 		Body:       "Initial body",
 		LabelIDs:   []string{},
 	})
 	if err != nil {
 		t.Fatalf("CreateWorkflowTask: %v", err)
+	}
+	if task.Task.Title != "Retained task" {
+		t.Fatalf("CreateWorkflowTask title = %q, want canonical title", task.Task.Title)
 	}
 	list, err := service.ListWorkflowTasks(t.Context(), serverapi.WorkflowTaskListRequest{
 		ProjectID: &fixture.Binding.ProjectID,
@@ -59,12 +62,12 @@ func TestServiceRetainsWorkflowTaskAndCommentBoundaries(t *testing.T) {
 		t.Fatalf("task list = %+v, want task %q", list.Tasks, task.Task.ID)
 	}
 
-	updatedTitle := "Updated retained task"
+	updatedTitle := "  Updated retained task  "
 	updated, err := service.UpdateWorkflowTask(t.Context(), serverapi.WorkflowTaskUpdateRequest{
 		TaskID: task.Task.ID,
 		Title:  &updatedTitle,
 	})
-	if err != nil || updated.Task.Title != updatedTitle {
+	if err != nil || updated.Task.Title != "Updated retained task" {
 		t.Fatalf("UpdateWorkflowTask = %+v, %v", updated, err)
 	}
 	comment, err := service.AddWorkflowTaskComment(t.Context(), serverapi.WorkflowTaskCommentAddRequest{

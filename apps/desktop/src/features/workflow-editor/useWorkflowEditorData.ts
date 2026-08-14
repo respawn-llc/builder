@@ -16,7 +16,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
   const { api } = useAppServices();
   const connection = useConnectionSnapshot();
   const queryClient = useQueryClient();
-  const { push } = useStatusController();
+  const { dismiss, push } = useStatusController();
   // A blank or whitespace-only project id is not a real project context (e.g. the
   // editor opened from the global workflow library). Normalizing it here keeps every
   // project-scoped query, subscription, and the link gate off, so the editor never
@@ -68,6 +68,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
     const subscriptions = [
       api.subscribeWorkflow(workflowID, {
         onOpen() {
+          dismiss("workflow-editor-workflow-subscription-failed");
           void refresh(false);
         },
         onEvent(event) {
@@ -93,6 +94,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
       subscriptions.push(
         api.subscribeProject(projectID, {
           onOpen() {
+            dismiss("workflow-editor-project-subscription-failed");
             void refresh(false);
           },
           onEvent(event) {
@@ -120,7 +122,7 @@ export function useWorkflowEditorData(rawProjectID: string, workflowID: string) 
         subscription.close();
       }
     };
-  }, [api, connection.generation, connection.phase, projectID, push, queryClient, t, workflowID]);
+  }, [api, connection.generation, connection.phase, dismiss, projectID, push, queryClient, t, workflowID]);
 
   return {
     activeLink,

@@ -663,7 +663,8 @@ func workflowGraphSaveError(err error) error {
 }
 
 func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskCreateRequest) (serverapi.WorkflowTaskCreateResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	title, err := req.PrepareRPC()
+	if err != nil {
 		return serverapi.WorkflowTaskCreateResponse{}, err
 	}
 	var workflowID *runtimeids.WorkflowID
@@ -673,7 +674,7 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 	taskRequest := workflowstore.CreateTaskRequest{
 		ProjectID:         req.ProjectID,
 		WorkflowID:        workflowID,
-		Title:             req.Title,
+		Title:             title.String(),
 		Body:              req.Body,
 		SourceURL:         req.SourceURL,
 		SourceWorkspaceID: req.SourceWorkspaceID,
@@ -839,10 +840,16 @@ func workflowTaskStartError(err error) error {
 }
 
 func (s *Service) UpdateWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskUpdateRequest) (serverapi.WorkflowTaskUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
+	preparedTitle, err := req.Prepare()
+	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}
-	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{TaskID: workflow.TaskID(req.TaskID), Title: req.Title, Body: req.Body, SourceWorkspaceID: req.SourceWorkspaceID})
+	var title *string
+	if preparedTitle != nil {
+		canonicalTitle := preparedTitle.String()
+		title = &canonicalTitle
+	}
+	task, err := s.store.UpdateTask(ctx, workflowstore.UpdateTaskRequest{TaskID: workflow.TaskID(req.TaskID), Title: title, Body: req.Body, SourceWorkspaceID: req.SourceWorkspaceID})
 	if err != nil {
 		return serverapi.WorkflowTaskUpdateResponse{}, err
 	}

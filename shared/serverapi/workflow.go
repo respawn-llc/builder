@@ -2391,14 +2391,29 @@ func validateGraphEntityID(field, value string) error {
 }
 
 func (r WorkflowTaskCreateRequest) Validate() error {
-	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
-	}
-	if _, err := workflowcontract.NewTaskTitle(r.Title); err != nil {
-		return workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
-	}
+	_, err := r.prepare(true)
+	return err
+}
+
+func (r WorkflowTaskCreateRequest) PrepareRPC() (workflowcontract.TaskTitle, error) {
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
-		return err
+		return "", workflowLabelRPCValidationError(err, r.ProjectID, "", false)
+	}
+	return r.prepare(false)
+}
+
+func (r WorkflowTaskCreateRequest) prepare(validateLabels bool) (workflowcontract.TaskTitle, error) {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return "", err
+	}
+	title, err := workflowcontract.NewTaskTitle(r.Title)
+	if err != nil {
+		return "", workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
+	}
+	if validateLabels {
+		if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
+			return "", err
+		}
 	}
 	roleCounts := map[WorkflowTaskDependencyRole]int{}
 	type dependencyIntentIdentity struct {
@@ -2409,11 +2424,11 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	for index, intent := range r.DependencyIntents {
 		field := fmt.Sprintf("dependency_intents[%d]", index)
 		if err := intent.validate(field); err != nil {
-			return err
+			return "", err
 		}
 		identity := dependencyIntentIdentity{role: intent.NewTaskRole, relatedTaskID: intent.RelatedTaskID}
 		if _, exists := seenIntents[identity]; exists {
-			return workflowRequestError(
+			return "", workflowRequestError(
 				WorkflowRequestErrorInvalidValue,
 				field+".related_task_id",
 				"dependency intent duplicates an earlier entry for the same new Task role",
@@ -2422,7 +2437,7 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 		seenIntents[identity] = struct{}{}
 		roleCounts[intent.NewTaskRole]++
 		if roleCounts[intent.NewTaskRole] > workflowcontract.MaxTaskDependencies {
-			return workflowRequestError(
+			return "", workflowRequestError(
 				WorkflowRequestErrorTooLong,
 				"dependency_intents",
 				fmt.Sprintf("dependency intents must contain at most %d entries per new Task role", workflowcontract.MaxTaskDependencies),
@@ -2430,21 +2445,30 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 		}
 	}
 	if r.WorkflowID != nil {
-		return validateRequiredWorkflowID(*r.WorkflowID)
+		if err := validateRequiredWorkflowID(*r.WorkflowID); err != nil {
+			return "", err
+		}
 	}
-	return nil
+	return title, nil
 }
 
 func (r WorkflowTaskUpdateRequest) Validate() error {
+	_, err := r.Prepare()
+	return err
+}
+
+func (r WorkflowTaskUpdateRequest) Prepare() (*workflowcontract.TaskTitle, error) {
 	if err := validateTaskID("task_id", r.TaskID); err != nil {
-		return err
+		return nil, err
 	}
 	if r.Title != nil {
-		if _, err := workflowcontract.NewTaskTitle(*r.Title); err != nil {
-			return workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
+		title, err := workflowcontract.NewTaskTitle(*r.Title)
+		if err != nil {
+			return nil, workflowRequestError(WorkflowRequestErrorRequired, "title", err.Error())
 		}
+		return &title, nil
 	}
-	return nil
+	return nil, nil
 }
 
 func (r WorkflowTaskGetResponse) Validate() error {
@@ -2533,10 +2557,8 @@ func (r WorkflowTaskListItem) Validate() error {
 }
 
 func (r WorkflowTaskCreateRequest) ValidateRPC() error {
-	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
-		return workflowLabelRPCValidationError(err, r.ProjectID, "", false)
-	}
-	return r.Validate()
+	_, err := r.PrepareRPC()
+	return err
 }
 
 func (r WorkflowTaskListResponse) Validate() error {

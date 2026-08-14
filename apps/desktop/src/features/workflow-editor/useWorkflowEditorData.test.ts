@@ -7,6 +7,7 @@ import type { WorkflowProjectEvent, WorkflowProjectEventHandler } from "@/api";
 const fixture = vi.hoisted(() => {
   const noHandler = (): WorkflowProjectEventHandler | null => null;
   return {
+    dismiss: vi.fn(),
     projectHandler: noHandler(),
     push: vi.fn(),
     translate: vi.fn((key: string) => key),
@@ -36,7 +37,7 @@ vi.mock("@/app-facade", async (importOriginal) => ({
     },
   }),
   useConnectionSnapshot: () => ({ generation: 1, phase: "connected" }),
-  useStatusController: () => ({ push: fixture.push }),
+  useStatusController: () => ({ dismiss: fixture.dismiss, push: fixture.push }),
 }));
 
 import {
@@ -62,6 +63,7 @@ function workflowEvent(
 
 describe("Workflow Editor event effects", () => {
   beforeEach(() => {
+    fixture.dismiss.mockClear();
     fixture.projectHandler = null;
     fixture.push.mockClear();
     fixture.translate.mockClear();
@@ -169,6 +171,34 @@ describe("Workflow Editor event effects", () => {
       id: "workflow-editor-workflow-subscription-failed",
       tone: "danger",
       title: "workflowEditor.subscriptionFailed",
+    });
+
+    view.unmount();
+    queryClient.clear();
+  });
+
+  it("clears a subscription failure after the transport reopens", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidation = vi.spyOn(queryClient, "invalidateQueries");
+    const view = renderHook(() => useWorkflowEditorData("project-1", "workflow-1"), {
+      wrapper: queryWrapper(queryClient),
+    });
+    await waitFor(() => {
+      expect(fixture.workflowHandler).not.toBeNull();
+    });
+    invalidation.mockClear();
+
+    act(() => {
+      fixture.workflowHandler?.onError(new Error("connection lost"));
+      fixture.workflowHandler?.onOpen?.();
+    });
+
+    expect(fixture.push).toHaveBeenCalledOnce();
+    expect(fixture.dismiss).toHaveBeenCalledWith("workflow-editor-workflow-subscription-failed");
+    await waitFor(() => {
+      expect(invalidation).toHaveBeenCalledTimes(5);
     });
 
     view.unmount();
