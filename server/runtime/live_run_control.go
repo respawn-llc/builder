@@ -94,7 +94,6 @@ type liveRunGroup struct {
 	stepAssistant    llm.Message
 	stepResultTaken  bool
 }
-
 type liveRunAdmission struct {
 	group *liveRunGroup
 }
@@ -362,7 +361,6 @@ func (e *Engine) takeLiveRunStepResult(stepID string) (LiveRunResultKind, llm.Me
 	e.ensureOrchestrationCollaborators()
 	return e.liveRun.takeStepResult(stepID)
 }
-
 func (e *Engine) completeLiveRunQueueItems(ids map[string]struct{}) {
 	if e == nil || len(ids) == 0 {
 		return

@@ -152,7 +152,6 @@ func (e *Engine) resetPromptCacheObservationBaselines() {
 	cache.Clear(e.conversationPromptCacheKey(e.SessionID()))
 	cache.Clear(e.conversationPromptCacheKey(reviewerSessionID(e.SessionID())))
 }
-
 func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObserved) {
 	cacheKey := strings.TrimSpace(response.CacheKey)
 	if cacheKey == "" {

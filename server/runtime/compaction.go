@@ -311,7 +311,6 @@ func (e *Engine) maybeReserveEagerCompaction(activeKind ActiveKind, resultKind L
 		e.stepLifecycle.ReleaseReservation(reservation)
 	}
 }
-
 func (c *defaultContextCompactor) AutoCompactIfNeeded(ctx context.Context, stepID string, mode compactionMode) error {
 	e := c.engine
 	if mode == compactionModeAuto && !e.shouldAutoCompactWithContext(ctx) {
@@ -501,9 +500,6 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 	if err != nil {
 		return compactionResult{}, session.CommitReceipt{}, compactionFailure(result, err)
 	}
-	// Reinject the stable prefix as part of the single history_replaced commit.
-	// The rebuilt active list is born with stable runtime context before the
-	// provider output and volatile Environment context at the end.
 	replacementItems := append(llm.ItemsFromMessages(postReplacementMeta.StablePrefix), llm.CloneResponseItems(result.items)...)
 	if mode == compactionModeHandoff {
 		if req := e.handoffRuntimeState().RequestSnapshot(); req != nil {

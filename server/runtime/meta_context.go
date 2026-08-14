@@ -82,7 +82,6 @@ type metaContextBuildResult struct {
 	WorktreeExit           []llm.Message
 	sessionMode            metaContextSessionMode
 }
-
 type metaContextSessionMode uint8
 
 const (
@@ -102,18 +101,15 @@ func (r metaContextBuildResult) Projection() metaContextProjection {
 		Environment:  append([]llm.Message(nil), r.Environment...),
 	}
 }
-
 func (p metaContextProjection) Messages() []llm.Message {
 	out := make([]llm.Message, 0, len(p.StablePrefix)+len(p.Environment))
 	out = append(out, p.StablePrefix...)
 	out = append(out, p.Environment...)
 	return out
 }
-
 func (r metaContextBuildResult) OrderedMetaMessages() []llm.Message {
 	return r.Projection().Messages()
 }
-
 func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
 	out = append(out, r.Headless...)
@@ -123,8 +119,6 @@ func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 	out = append(out, r.Worktree...)
 	out = append(out, r.WorktreeExit...)
 	out = append(out, r.Agents...)
-	// Goal continuation and Workflow are alternative Session modes. The
-	// selected mode is the only one emitted into the stable prefix.
 	switch r.sessionMode {
 	case metaContextSessionModeGoal:
 		out = append(out, r.ActiveGoalContinuation...)
@@ -139,7 +133,6 @@ func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 	}
 	return out
 }
-
 func (r metaContextBuildResult) OrderedBaseMessages() []llm.Message {
 	return r.Projection().Messages()
 }

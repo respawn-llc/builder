@@ -38,14 +38,22 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	options := baseMetaContextBuildOptions(true)
 	options.WorktreeReminder = session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
-
+	steer := func(options metaContextBuildOptions) error {
+		metaResult, err := builder.Build(options)
+		if err != nil {
+			return err
+		}
+		if err := e.steerMetaContextBuildResult(stepID, metaResult); err != nil {
+			return err
+		}
+		e.baseMetaInjected = true
+		return nil
+	}
 	if e.workflowPromptActive() {
-		return e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, func(resolution workflowMetaContextResolution) error {
-			resolution.apply(&options)
-			return e.steerFreshMetaContextWithOptions(stepID, builder, options)
+		return e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, options, func(resolved metaContextBuildOptions, _ bool) error {
+			return steer(resolved)
 		})
 	}
-
 	meta := e.store.Meta()
 	if e.cfg.HeadlessMode != meta.HeadlessActive {
 		if e.cfg.HeadlessMode {
@@ -57,28 +65,12 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 	if goal, ok := e.goalContinuation().activeGoal(); ok {
 		options.ActiveGoal = &goal
 	}
-	if err := e.steerFreshMetaContextWithOptions(stepID, builder, options); err != nil {
+	if err := steer(options); err != nil {
 		return err
 	}
 	if e.cfg.HeadlessMode != meta.HeadlessActive {
 		return e.store.SetHeadlessActive(e.cfg.HeadlessMode)
 	}
-	return nil
-}
-
-func (e *Engine) steerFreshMetaContextWithOptions(
-	stepID string,
-	builder metaContextBuilder,
-	options metaContextBuildOptions,
-) error {
-	metaResult, err := builder.Build(options)
-	if err != nil {
-		return err
-	}
-	if err := e.steerMetaContextBuildResult(stepID, metaResult); err != nil {
-		return err
-	}
-	e.baseMetaInjected = true
 	return nil
 }
 
@@ -181,11 +173,6 @@ const (
 	workflowTaskPromptTriggerCompaction
 )
 
-type workflowMetaContextResolution struct {
-	options      metaContextBuildOptions
-	shouldInject bool
-}
-
 type workflowMetaContextDeliveryMode uint8
 
 const (
@@ -193,23 +180,12 @@ const (
 	workflowMetaContextDeliveryConsume
 )
 
-func (r workflowMetaContextResolution) apply(options *metaContextBuildOptions) {
-	if options == nil || !r.shouldInject {
-		return
-	}
-	options.SubagentInvocationContext = r.options.SubagentInvocationContext
-	options.IncludeWorkflow = r.options.IncludeWorkflow
-	options.WorkflowCompletionMode = r.options.WorkflowCompletionMode
-	options.WorkflowPrompt = r.options.WorkflowPrompt
-	options.WorkflowTaskAwareness = r.options.WorkflowTaskAwareness
-	options.WorkflowTaskPromptKind = r.options.WorkflowTaskPromptKind
-}
-
 func (e *Engine) withResolvedWorkflowMetaContext(
 	ctx context.Context,
 	defaultTrigger workflowTaskPromptTrigger,
 	deliveryMode workflowMetaContextDeliveryMode,
-	fn func(workflowMetaContextResolution) error,
+	options metaContextBuildOptions,
+	fn func(metaContextBuildOptions, bool) error,
 ) error {
 	if !e.workflowPromptActive() {
 		return nil
@@ -219,25 +195,32 @@ func (e *Engine) withResolvedWorkflowMetaContext(
 		return errors.New("workflow prompt delivery state is unavailable")
 	}
 	resolve := func(trigger workflowTaskPromptTrigger) error {
-		resolution, err := e.resolveWorkflowMetaContext(ctx, trigger)
+		resolved, shouldInject, err := e.resolveWorkflowMetaContext(ctx, trigger)
 		if err != nil {
 			return err
 		}
-		return fn(resolution)
+		if shouldInject {
+			options.SubagentInvocationContext = resolved.SubagentInvocationContext
+			options.IncludeWorkflow = resolved.IncludeWorkflow
+			options.WorkflowCompletionMode = resolved.WorkflowCompletionMode
+			options.WorkflowPrompt = resolved.WorkflowPrompt
+			options.WorkflowTaskAwareness = resolved.WorkflowTaskAwareness
+			options.WorkflowTaskPromptKind = resolved.WorkflowTaskPromptKind
+		}
+		return fn(options, shouldInject)
 	}
 	if deliveryMode == workflowMetaContextDeliveryConsume {
 		return delivery.apply(defaultTrigger, resolve)
 	}
 	return resolve(delivery.trigger(defaultTrigger))
 }
-
 func (e *Engine) resolveWorkflowMetaContext(
 	ctx context.Context,
 	trigger workflowTaskPromptTrigger,
-) (workflowMetaContextResolution, error) {
+) (metaContextBuildOptions, bool, error) {
 	prompt, configured := e.workflowPrompt()
 	if !configured {
-		return workflowMetaContextResolution{}, errors.New("workflow prompt is unavailable")
+		return metaContextBuildOptions{}, false, errors.New("workflow prompt is unavailable")
 	}
 	kind, shouldInject, err := selectWorkflowTaskPrompt(
 		e.transcriptRuntimeState().SnapshotItems(),
@@ -245,32 +228,28 @@ func (e *Engine) resolveWorkflowMetaContext(
 		trigger,
 	)
 	if err != nil {
-		return workflowMetaContextResolution{}, err
+		return metaContextBuildOptions{}, false, err
 	}
 	if !shouldInject {
-		return workflowMetaContextResolution{}, nil
+		return metaContextBuildOptions{}, false, nil
 	}
 	mode, err := e.workflowCompletionMode(ctx)
 	if err != nil {
-		return workflowMetaContextResolution{}, err
+		return metaContextBuildOptions{}, false, err
 	}
 	awareness, err := e.currentWorkflowTaskAwareness(ctx)
 	if err != nil {
-		return workflowMetaContextResolution{}, err
+		return metaContextBuildOptions{}, false, err
 	}
-	return workflowMetaContextResolution{
-		shouldInject: true,
-		options: metaContextBuildOptions{
-			SubagentInvocationContext: config.SubagentInvocationContextWorkflow,
-			IncludeWorkflow:           true,
-			WorkflowCompletionMode:    mode,
-			WorkflowPrompt:            prompt,
-			WorkflowTaskAwareness:     awareness,
-			WorkflowTaskPromptKind:    kind,
-		},
-	}, nil
+	return metaContextBuildOptions{
+		SubagentInvocationContext: config.SubagentInvocationContextWorkflow,
+		IncludeWorkflow:           true,
+		WorkflowCompletionMode:    mode,
+		WorkflowPrompt:            prompt,
+		WorkflowTaskAwareness:     awareness,
+		WorkflowTaskPromptKind:    kind,
+	}, true, nil
 }
-
 func selectWorkflowTaskPrompt(
 	items []llm.ResponseItem,
 	currentNodeIdentity string,
@@ -391,7 +370,6 @@ func (e *Engine) steerBaseMetaContext(
 	}
 	return e.steerMetaContextBuildResult(stepID, metaResult)
 }
-
 func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaContextBuildResult) error {
 	intents := make([]steeringIntent, 0, 2)
 	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
@@ -450,11 +428,11 @@ func (e *Engine) steerWorkflowModeIfNeeded(ctx context.Context, stepID string) e
 	if !e.workflowPromptActive() {
 		return nil
 	}
-	return e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, func(resolution workflowMetaContextResolution) error {
-		if !resolution.shouldInject {
+	return e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, metaContextBuildOptions{}, func(options metaContextBuildOptions, shouldInject bool) error {
+		if !shouldInject {
 			return nil
 		}
-		metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(resolution.options)
+		metaResult, err := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy).Build(options)
 		if err != nil {
 			return err
 		}
@@ -472,7 +450,6 @@ func roleOrUser(role *llm.Role) llm.Role {
 func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
 	return e.compactionReinjectedMetaMessagesForMode(ctx, compactionModeManual)
 }
-
 func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mode compactionMode) ([]llm.Message, error) {
 	projection, err := e.compactionReinjectedMetaContextProjection(ctx, mode)
 	if err != nil {
@@ -480,7 +457,6 @@ func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mo
 	}
 	return projection.Messages(), nil
 }
-
 func (e *Engine) compactionReinjectedMetaContextProjection(ctx context.Context, mode compactionMode) (metaContextProjection, error) {
 	meta := e.store.Meta()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)
@@ -494,18 +470,16 @@ func (e *Engine) compactionReinjectedMetaContextProjection(ctx context.Context, 
 	if mode == compactionModeWorkflowPostCompletion {
 		opts.SubagentInvocationContext = config.SubagentInvocationContextWorkflow
 	} else if e.currentNodeExecutionActive() {
-		var resolution workflowMetaContextResolution
-		err := e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerCompaction, workflowMetaContextDeliveryObserve, func(resolved workflowMetaContextResolution) error {
-			resolution = resolved
+		err := e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerCompaction, workflowMetaContextDeliveryObserve, opts, func(resolved metaContextBuildOptions, shouldInject bool) error {
+			if !shouldInject {
+				panic("build compaction meta context: active workflow did not select a workflow task prompt")
+			}
+			opts = resolved
 			return nil
 		})
 		if err != nil {
 			return metaContextProjection{}, err
 		}
-		if !resolution.shouldInject {
-			panic("build compaction meta context: active workflow did not select a workflow task prompt")
-		}
-		resolution.apply(&opts)
 	} else if goal, ok := e.goalContinuation().activeGoal(); ok {
 		opts.ActiveGoal = &goal
 	}
@@ -515,7 +489,6 @@ func (e *Engine) compactionReinjectedMetaContextProjection(ctx context.Context, 
 	}
 	return metaResult.Projection(), nil
 }
-
 func (e *Engine) currentWorkflowTaskAwareness(ctx context.Context) (workflowruntime.TaskAwareness, error) {
 	execution, active := e.currentNodeExecutionConfig()
 	if !active {
