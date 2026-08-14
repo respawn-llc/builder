@@ -351,7 +351,6 @@ function NewTaskFormContent({
         selectedLabelIDs={effectiveSelectedLabelIDs}
       />
       <DependenciesArea
-        key={form.formState.submitCount}
         dependencies={preparedTaskDependenciesProjection(preparedDependencies)}
         disabled={connection.phase !== "connected"}
         excludedTaskIDs={(direction) =>

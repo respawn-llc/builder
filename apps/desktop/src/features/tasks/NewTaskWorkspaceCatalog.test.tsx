@@ -618,7 +618,7 @@ describe("New Task Workspace catalog integration", () => {
     expect(screen.queryByText("Project no longer exists")).not.toBeInTheDocument();
   });
 
-  it("presents reciprocal rejection as product copy and resets the open picker", async () => {
+  it("presents reciprocal rejection as product copy and preserves authored dependencies", async () => {
     loadCatalog();
     state.exact.data = { kind: "attached", workspace: row("source") };
     state.exact.isPending = false;
@@ -650,14 +650,12 @@ describe("New Task Workspace catalog integration", () => {
     const addDependency = screen.getByTestId("dependency-add-blocked-by");
     await user.click(addDependency);
     await user.click(screen.getByTestId("dependency-candidate-task-related"));
-    expect(addDependency).toHaveAttribute("aria-expanded", "true");
     fireEvent.submit(addDependency);
     await vi.waitFor(() => {
       expect(state.statusPush).toHaveBeenCalledOnce();
     });
     expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("error");
     expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("reason", "reciprocal_dependency");
-    expect(screen.getByTestId("dependency-add-blocked-by")).toHaveAttribute("aria-expanded", "false");
     expect(screen.getAllByTestId("dependency-row-task-related")).toHaveLength(2);
   });
 });
