@@ -1,14 +1,4 @@
-import {
-  createContext,
-  createElement,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { CreatedTaskSummary, TaskDependencyDirection, TaskStatus } from "@/api";
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
@@ -197,7 +187,10 @@ export function useOwnedSidebarRoots(): SidebarRootController {
   return value;
 }
 
-export function useSidebarBackWhen(condition: boolean, navigator: SidebarPageNavigator | undefined): void {
+export function useSidebarBackWhen(
+  condition: boolean,
+  navigator: SidebarPageNavigator | undefined,
+): void {
   useEffect(() => {
     if (condition) navigator?.back();
   }, [condition, navigator]);

@@ -1,7 +1,11 @@
 import type { AttentionNotificationEventHandler } from "./attentionNotifications";
 import { attentionNotificationRpcHandler } from "./attentionNotificationSubscription";
 import type { ApiConnectionSource, ApiService, ApiSubscription } from "./apiService";
-import { parseCatalogResponse, requireCatalogProject, sessionPageCall } from "./clientCatalog";
+import {
+  parseCatalogResponse,
+  requireCatalogProject,
+  sessionPageCall,
+} from "./clientCatalog";
 import { parseRpcResponse as parse } from "./clientParse";
 import * as taskLifecycle from "./clientTaskLifecycle";
 import * as taskDependencies from "./clientTaskDependencies";
@@ -77,7 +81,9 @@ import type {
 } from "./models";
 import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
-import { projectPageSchema } from "./schemas/project";
+import {
+  projectPageSchema,
+} from "./schemas/project";
 import { sessionPageResponseSchema } from "./schemas/catalog";
 import { CatalogContractError } from "./errors";
 import { readinessSchema } from "./schemas/status";

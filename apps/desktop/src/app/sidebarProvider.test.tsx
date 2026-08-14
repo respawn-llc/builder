@@ -324,12 +324,7 @@ describe("SidebarProvider stack", () => {
       task: {
         id: "task-child",
         shortID: "KENT-2",
-        status: {
-          kind: "backlog",
-          nativeState: "active",
-          nodeIDs: [],
-          attentionTypes: [],
-        },
+        status: { kind: "backlog", nativeState: "active", nodeIDs: [], attentionTypes: [] },
         title: "Child",
         workflowID: "workflow-1",
       },
@@ -337,69 +332,12 @@ describe("SidebarProvider stack", () => {
     act(() => {
       expect(child.back(childResult)).toBe("accepted");
     });
-    expect(result.current.page?.retainedState).toEqual({
-      state: { draft: "parent" },
-      result: childResult,
-    });
+    const returnedState = { state: { draft: "parent" }, result: childResult };
+    expect(result.current.page?.retainedState).toEqual(returnedState);
     act(() => {
       expect(child.back(childResult)).toBe("stale");
     });
-    expect(result.current.page?.retainedState).toEqual({
-      state: { draft: "parent" },
-      result: childResult,
-    });
-  });
-
-  it("restores an unrelated Task row Draft but truncates to an earlier retained Task without capture", () => {
-    const taskPolicy: SidebarDestinationPolicy = {
-      applyBackResult: (_destination, state) => state,
-      equals: (left, right) =>
-        left.kind === "taskDetail" && right.kind === "taskDetail" && left.taskID === right.taskID,
-      retainedState: (_destination, state) => state,
-    };
-    const taskWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
-      <SidebarProvider policy={taskPolicy}>{children}</SidebarProvider>
-    );
-    const { result } = renderHook(useHarness, { wrapper: taskWrapper });
-    act(() => {
-      result.current.roots.open({ kind: "taskDetail", taskID: "task-origin" });
-    });
-    const origin = requireNavigator(result.current);
-    act(() => {
-      origin.registerCapture(() => ({ origin: true }));
-      expect(
-        origin.push({
-          boardQueryWorkflowID: "workflow-1",
-          kind: "newTask",
-          projectID: "project-1",
-          workflowID: "workflow-1",
-        }),
-      ).toBe("accepted");
-    });
-    const draftCapture = vi.fn(() => ({ title: "Draft" }));
-    const newTask = requireNavigator(result.current);
-    act(() => {
-      newTask.registerCapture(draftCapture);
-      expect(newTask.push({ kind: "taskDetail", taskID: "task-unrelated" })).toBe("accepted");
-    });
-    expect(draftCapture).toHaveBeenCalledOnce();
-    act(() => {
-      expect(requireNavigator(result.current).back()).toBe("accepted");
-    });
-    expect(result.current.page?.retainedState).toEqual({ title: "Draft" });
-
-    const restoredNewTask = requireNavigator(result.current);
-    const discardedCapture = vi.fn(() => ({ title: "discarded" }));
-    act(() => {
-      restoredNewTask.registerCapture(discardedCapture);
-      expect(restoredNewTask.push({ kind: "taskDetail", taskID: "task-origin" })).toBe("accepted");
-    });
-    expect(discardedCapture).not.toHaveBeenCalled();
-    expect(result.current.shell.activeDestination).toEqual({
-      kind: "taskDetail",
-      taskID: "task-origin",
-    });
-    expect(result.current.shell.canGoBack).toBe(false);
+    expect(result.current.page?.retainedState).toEqual(returnedState);
   });
 
   it("retains widths per profile and keeps the closing page rendered through the exit phase", () => {

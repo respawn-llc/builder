@@ -1,10 +1,10 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
 import type { TaskDependencies } from "@/api";
 import type { TaskSearchResult } from "@/app-facade";
-import { TaskDependenciesArea } from "./TaskDependenciesArea";
+import { TaskDependenciesArea } from "./TaskDependenciesAreaAdapter";
 
 const searchFixture = vi.hoisted<{ results: readonly TaskSearchResult[] }>(() => ({ results: [] }));
 
@@ -218,70 +218,7 @@ describe("TaskDependenciesArea", () => {
   it("keeps the picker open across sequential selections and resets accepted IDs after close", async () => {
     const onAddExisting = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
-    searchFixture.results = [
-      {
-        key: "candidate",
-        group: {
-          projectID: "project-1",
-          projectKey: "KENT",
-          taskID: "task-9",
-          shortID: "KENT-9",
-          workflowID: "workflow-1",
-          title: "Existing candidate",
-          status: {
-            kind: "backlog",
-            nativeState: "active",
-            nodeIDs: [],
-            attentionTypes: [],
-          },
-          totalHitCount: 1,
-          hits: [
-            {
-              ordinal: 1,
-              source: { kind: "title" },
-              literal: {
-                before: "",
-                match: "Existing",
-                after: " candidate",
-                leftTruncated: false,
-                rightTruncated: false,
-              },
-            },
-          ],
-        },
-      },
-      {
-        key: "candidate-2",
-        group: {
-          projectID: "project-1",
-          projectKey: "KENT",
-          taskID: "task-10",
-          shortID: "KENT-10",
-          workflowID: "workflow-2",
-          title: "Second candidate",
-          status: {
-            kind: "backlog",
-            nativeState: "active",
-            nodeIDs: [],
-            attentionTypes: [],
-          },
-          totalHitCount: 1,
-          hits: [
-            {
-              ordinal: 1,
-              source: { kind: "title" },
-              literal: {
-                before: "",
-                match: "Second",
-                after: " candidate",
-                leftTruncated: false,
-                rightTruncated: false,
-              },
-            },
-          ],
-        },
-      },
-    ];
+    searchFixture.results = [candidate("task-9"), candidate("task-10")];
 
     render(
       <TaskDependenciesArea
@@ -309,9 +246,7 @@ describe("TaskDependenciesArea", () => {
 
     await user.click(screen.getByTestId("dependency-add-blocked-by"));
     await user.click(screen.getByTestId("dependency-candidate-task-9"));
-    await waitFor(() => {
-      expect(screen.queryByTestId("dependency-candidate-task-9")).not.toBeInTheDocument();
-    });
+    expect(screen.queryByTestId("dependency-candidate-task-9")).not.toBeInTheDocument();
     expect(screen.getByTestId("dependency-candidate-task-10")).toBeInTheDocument();
     await user.click(screen.getByTestId("dependency-candidate-task-10"));
 
@@ -331,39 +266,7 @@ describe("TaskDependenciesArea", () => {
 
   it("unmounts a populated picker when Task Detail reaches its direction limit", async () => {
     const user = userEvent.setup();
-    searchFixture.results = [
-      {
-        key: "candidate",
-        group: {
-          projectID: "project-1",
-          projectKey: "KENT",
-          taskID: "task-9",
-          shortID: "KENT-9",
-          workflowID: "workflow-1",
-          title: "Existing candidate",
-          status: {
-            kind: "backlog",
-            nativeState: "active",
-            nodeIDs: [],
-            attentionTypes: [],
-          },
-          totalHitCount: 1,
-          hits: [
-            {
-              ordinal: 1,
-              source: { kind: "title" },
-              literal: {
-                before: "",
-                match: "Existing",
-                after: " candidate",
-                leftTruncated: false,
-                rightTruncated: false,
-              },
-            },
-          ],
-        },
-      },
-    ];
+    searchFixture.results = [candidate("task-9")];
     const props = {
       disabled: false,
       navigationDisabled: false,
@@ -441,3 +344,24 @@ describe("TaskDependenciesArea", () => {
     expect(onSelectTask).not.toHaveBeenCalled();
   });
 });
+
+function candidate(taskID: string): TaskSearchResult {
+  return {
+    key: taskID,
+    group: {
+      projectID: "project-1",
+      projectKey: "KENT",
+      taskID,
+      shortID: taskID,
+      workflowID: "workflow-1",
+      title: taskID,
+      status: { kind: "backlog", nativeState: "active", nodeIDs: [], attentionTypes: [] },
+      totalHitCount: 1,
+      hits: [{
+        ordinal: 1,
+        source: { kind: "title" },
+        literal: { before: "", match: taskID, after: "", leftTruncated: false, rightTruncated: false },
+      }],
+    },
+  };
+}

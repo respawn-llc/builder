@@ -9,7 +9,6 @@ import {
   type WorkspaceCatalogPage,
   type WorkspaceCatalogRow,
 } from "@/api";
-import type { TaskSearchResult } from "@/app-facade";
 import type { PreparedTaskDependency } from "@/shared/task-dependencies";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import type { SelectFieldPaging } from "@/ui";
@@ -138,32 +137,13 @@ vi.mock("@/shared/task-dependencies", async (importOriginal) => ({
           </div>
         )),
       )}
-      {(["blocked-by", "blocks"] as const).flatMap((direction) => [
-        <button
-          data-testid={`prepared-select-${direction}-a`}
-          key={`${direction}-a`}
-          onClick={() => {
-            void props.onSelectCandidate(direction, dependencyCandidate(`${direction}-a`));
-          }}
-          type="button"
-        />,
-        <button
-          data-testid={`prepared-select-${direction}-b`}
-          key={`${direction}-b`}
-          onClick={() => {
-            void props.onSelectCandidate(direction, dependencyCandidate(`${direction}-b`));
-          }}
-          type="button"
-        />,
-        <button
-          data-testid={`prepared-create-${direction}`}
-          key={`${direction}-create`}
-          onClick={() => {
-            props.onAdd(direction);
-          }}
-          type="button"
-        />,
-      ])}
+      <button
+        data-testid="prepared-create-blocks"
+        onClick={() => {
+          props.onAdd("blocks");
+        }}
+        type="button"
+      />
     </div>
   ),
 }));
@@ -223,7 +203,6 @@ type TestDependenciesAreaProps = Readonly<{
     direction: TaskDependencyDirection,
     item: TaskDependencies["directions"][number]["items"][number],
   ) => void;
-  onSelectCandidate(direction: TaskDependencyDirection, result: TaskSearchResult): Promise<unknown>;
   onSelectTask(taskID: string): void;
 }>;
 
@@ -453,7 +432,7 @@ describe("New Task Workspace catalog integration", () => {
     });
   });
 
-  it("shows ordinary and Task Detail-originated prepared dependencies and removes the origin", () => {
+  it("shows ordinary and Task Detail-originated prepared dependencies and delegates their actions", () => {
     loadCatalog();
     state.exact.data = { kind: "attached", workspace: row("source") };
     state.exact.isPending = false;
@@ -462,33 +441,19 @@ describe("New Task Workspace catalog integration", () => {
     expect(screen.queryByTestId(/^prepared-blocked-by-/)).not.toBeInTheDocument();
     ordinary.unmount();
 
+    const navigator = createTestSidebarNavigator();
     render(
-      <NewTaskForm {...props} initialPreparedDependency={preparedDependency("blocks", "task-origin")} />,
+      <NewTaskForm
+        {...props}
+        initialPreparedDependency={preparedDependency("blocks", "task-origin")}
+        navigator={navigator}
+      />,
     );
     expect(screen.getByTestId("prepared-blocks-task-origin")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("prepared-open-blocks-task-origin"));
+    expect(navigator.push).toHaveBeenCalledWith({ kind: "taskDetail", taskID: "task-origin" });
     fireEvent.click(screen.getByTestId("prepared-remove-blocks-task-origin"));
     expect(screen.queryByTestId("prepared-blocks-task-origin")).not.toBeInTheDocument();
-  });
-
-  it("stages sequential searched Tasks in both directions and opens prepared rows through Task Detail", () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
-    const navigator = createTestSidebarNavigator();
-    render(<NewTaskForm {...props} navigator={navigator} />);
-
-    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
-    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-b"));
-    fireEvent.click(screen.getByTestId("prepared-select-blocks-a"));
-    expect(screen.getByTestId("prepared-blocked-by-blocked-by-a")).toBeInTheDocument();
-    expect(screen.getByTestId("prepared-blocked-by-blocked-by-b")).toBeInTheDocument();
-    expect(screen.getByTestId("prepared-blocks-blocks-a")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("prepared-open-blocked-by-blocked-by-a"));
-    expect(navigator.push).toHaveBeenCalledWith({
-      kind: "taskDetail",
-      taskID: "blocked-by-a",
-    });
   });
 
   it("pushes a stacked child without an unsaved-parent relationship and captures the complete Draft", () => {
@@ -503,7 +468,6 @@ describe("New Task Workspace catalog integration", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "task.body" }), {
       target: { value: "Parent body" },
     });
-    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
     fireEvent.click(screen.getByTestId("prepared-create-blocks"));
 
     expect(navigator.push).toHaveBeenCalledWith({
@@ -522,7 +486,7 @@ describe("New Task Workspace catalog integration", () => {
         sourceWorkspaceID: "source",
         title: "Parent title",
       },
-      preparedDependencies: [preparedDependency("blocked-by", "blocked-by-a")],
+      preparedDependencies: [],
       selectedLabelIDs: [],
     });
   });
@@ -554,14 +518,20 @@ describe("New Task Workspace catalog integration", () => {
     render(
       <NewTaskForm
         {...props}
-        initialPreparedDependency={preparedDependency("blocks", "task-origin")}
         navigator={navigator}
+        retainedState={{
+          formValues: { body: "", sourceWorkspaceID: "source", title: "" },
+          preparedDependencies: [
+            preparedDependency("blocks", "task-origin"),
+            preparedDependency("blocked-by", "task-blocked"),
+          ],
+          selectedLabelIDs: [],
+        }}
       />,
     );
     fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
       target: { value: "Task" },
     });
-    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
 
     await vi.waitFor(() => {
@@ -569,7 +539,7 @@ describe("New Task Workspace catalog integration", () => {
         expect.objectContaining({
           dependencyIntents: [
             { relatedTaskID: "task-origin", newTaskRole: "blocker" },
-            { relatedTaskID: "blocked-by-a", newTaskRole: "blocked" },
+            { relatedTaskID: "task-blocked", newTaskRole: "blocked" },
           ],
         }),
       );
@@ -649,40 +619,6 @@ function preparedDependency(direction: TaskDependencyDirection, taskID: string):
       nativeState: "active",
       nodeIDs: [],
       attentionTypes: [],
-    },
-  };
-}
-
-function dependencyCandidate(taskID: string): TaskSearchResult {
-  return {
-    key: taskID,
-    group: {
-      projectID: "project-1",
-      projectKey: "KENT",
-      taskID,
-      shortID: taskID,
-      workflowID: "workflow-1",
-      title: taskID,
-      status: {
-        kind: "backlog",
-        nativeState: "active",
-        nodeIDs: [],
-        attentionTypes: [],
-      },
-      totalHitCount: 1,
-      hits: [
-        {
-          ordinal: 1,
-          source: { kind: "title" },
-          literal: {
-            before: "",
-            match: taskID,
-            after: "",
-            leftTruncated: false,
-            rightTruncated: false,
-          },
-        },
-      ],
     },
   };
 }
