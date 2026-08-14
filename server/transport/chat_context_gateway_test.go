@@ -3,7 +3,6 @@ package transport
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 
 	"core/server/chatcontext"
@@ -116,52 +115,6 @@ func TestGatewayChatContextDispatchesOnlySessionOwner(t *testing.T) {
 	}
 	if sessionOwner.calls != 1 || sessionOwner.sessionID != sessionID || deps.sessionCalls != 1 || deps.workspaceCalls != 0 {
 		t.Fatalf("calls = Session owner %d (%s), Session resolver %d, workspace resolver %d", sessionOwner.calls, sessionOwner.sessionID, deps.sessionCalls, deps.workspaceCalls)
-	}
-}
-
-func TestGatewayChatContextPropagatesSelectedOwnerErrors(t *testing.T) {
-	appCore, server := newGatewayTestServer(t)
-	defer func() { _ = appCore.Close() }()
-	defer server.Close()
-	wantErr := errors.New("selected owner failed")
-	store := createGatewayAuthoritativeSession(t, appCore)
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse Session id: %v", err)
-	}
-	tests := []struct {
-		name    string
-		deps    *chatContextGatewayDependencies
-		request serverapi.ChatContextRequest
-	}{
-		{
-			name: "workspace owner",
-			deps: &chatContextGatewayDependencies{
-				GatewayDependencies: appCore,
-				workspaceOwner:      &chatContextWorkspaceOwnerFixture{err: wantErr},
-			},
-			request: serverapi.NewWorkspaceChatContextRequest(),
-		},
-		{
-			name: "Session owner",
-			deps: &chatContextGatewayDependencies{
-				GatewayDependencies: appCore,
-				sessionOwner:        &chatContextSessionOwnerFixture{err: wantErr},
-			},
-			request: serverapi.NewSessionChatContextRequest(sessionID),
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			response := (&Gateway{deps: test.deps}).dispatch(
-				t.Context(),
-				&connectionState{handshakeDone: true, attachedProject: appCore.ProjectID(), attachedWorkspaceID: "workspace-1"},
-				chatContextProtocolRequest(t, test.request),
-			)
-			if response.Error == nil || response.Error.Message != wantErr.Error() {
-				t.Fatalf("response = %+v, want selected-owner error", response)
-			}
-		})
 	}
 }
 

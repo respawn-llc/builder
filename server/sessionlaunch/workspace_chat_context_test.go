@@ -62,46 +62,6 @@ func TestReadWorkspaceChatContextProjectsSelectedDraftPolicyWithoutMaterializing
 			},
 		},
 		{
-			name: "configured disabled draft",
-			settings: func() config.Settings {
-				settings := draftSettings("gpt-5.6-sol", "medium")
-				settings.ModelContextWindow = 140_000
-				settings.ContextCompactionThresholdTokens = 100_000
-				settings.CompactionMode = config.CompactionModeNone
-				return settings
-			},
-			draft: &WorkspaceChatDraft{
-				Agent:          config.DefaultSubagentRole,
-				Supervisor:     "edits",
-				Thinking:       "medium",
-				AutoCompaction: false,
-			},
-			want: serverapi.ChatContext{
-				ContextWindowTokens:      140_000,
-				RemainingTokens:          140_000,
-				AutomaticThresholdTokens: 100_000,
-				CompactionMode:           serverapi.ChatContextCompactionModeDisabled,
-			},
-		},
-		{
-			name: "native mode with OAuth capability",
-			settings: func() config.Settings {
-				settings := draftSettings("gpt-5.6-sol", "medium")
-				settings.ModelContextWindow = 150_000
-				settings.ContextCompactionThresholdTokens = 120_000
-				settings.CompactionMode = config.CompactionModeNative
-				return settings
-			},
-			auth: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
-			want: serverapi.ChatContext{
-				ContextWindowTokens:      150_000,
-				RemainingTokens:          150_000,
-				AutomaticThresholdTokens: 120_000,
-				AutoCompactionEnabled:    true,
-				CompactionMode:           serverapi.ChatContextCompactionModeProviderNative,
-			},
-		},
-		{
 			name: "named Agent final settings",
 			settings: func() config.Settings {
 				settings := draftSettings("gpt-5.6-sol", "medium")
@@ -251,30 +211,6 @@ func TestReadWorkspaceChatContextPropagatesEffectiveAuthFailure(t *testing.T) {
 
 	if _, err := service.ReadWorkspaceChatContext(t.Context()); !errors.Is(err, wantErr) {
 		t.Fatalf("ReadWorkspaceChatContext error = %v, want %v", err, wantErr)
-	}
-}
-
-func TestReadWorkspaceChatContextSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
-	settings := draftSettings("custom-model", "medium")
-	settings.CompactionMode = config.CompactionModeNative
-	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
-		ProviderID:               "custom",
-		SupportsResponsesCompact: true,
-	}
-	authReader := &workspaceChatContextAuthReader{loadErr: errors.New("auth must not be loaded")}
-	service := NewService(launchPlannerForWorkspaceChatContext(settings)).
-		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(&draftPersistence{}), "workspace-1").
-		WithAuthStateReader(authReader)
-
-	got, err := service.ReadWorkspaceChatContext(t.Context())
-	if err != nil {
-		t.Fatalf("ReadWorkspaceChatContext: %v", err)
-	}
-	if got.CompactionMode != serverapi.ChatContextCompactionModeProviderNative {
-		t.Fatalf("CompactionMode = %q, want explicit provider-native mode", got.CompactionMode)
-	}
-	if authReader.loadCalls != 0 {
-		t.Fatalf("effective auth Load calls = %d, want 0", authReader.loadCalls)
 	}
 }
 

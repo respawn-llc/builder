@@ -19,10 +19,9 @@ func TestResolvePolicyUsesUnlockedFinalSettings(t *testing.T) {
 	got := ResolvePolicy(settings, llm.ProviderCapabilities{SupportsResponsesCompact: true}, nil)
 
 	want := Policy{
-		ContextWindowTokens:       200_000,
-		EffectiveConfiguredWindow: 200_000,
-		AutomaticThresholdTokens:  180_000,
-		CompactionMode:            serverapi.ChatContextCompactionModeProviderNative,
+		ContextWindowTokens:      200_000,
+		AutomaticThresholdTokens: 180_000,
+		CompactionMode:           serverapi.ChatContextCompactionModeProviderNative,
 	}
 	if got != want {
 		t.Fatalf("ResolvePolicy() = %+v, want %+v", got, want)

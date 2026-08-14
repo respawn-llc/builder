@@ -3,10 +3,9 @@ package chatcontext
 import "core/shared/serverapi"
 
 type Policy struct {
-	ContextWindowTokens       int64
-	EffectiveConfiguredWindow int64
-	AutomaticThresholdTokens  int64
-	CompactionMode            serverapi.ChatContextCompactionMode
+	ContextWindowTokens      int64
+	AutomaticThresholdTokens int64
+	CompactionMode           serverapi.ChatContextCompactionMode
 }
 
 type ProjectionInput struct {
@@ -20,9 +19,6 @@ type ProjectionInput struct {
 
 func Project(input ProjectionInput) serverapi.ChatContext {
 	window := input.Policy.ContextWindowTokens
-	if window <= 0 {
-		window = input.Policy.EffectiveConfiguredWindow
-	}
 	used := max(input.UsedTokens, 0)
 	threshold := min(max(input.Policy.AutomaticThresholdTokens, 0), window)
 	count := max(input.CompletedCompactionCount, 0)

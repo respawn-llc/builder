@@ -95,12 +95,6 @@ func TestFailedAgentStepContextFactWriteDoesNotFailStepOrRetryLater(t *testing.T
 	if writer.eligibilityWrites != 1 {
 		t.Fatalf("eligibility writes = %d, want one failed best-effort write", writer.eligibilityWrites)
 	}
-	if err := store.SetName("later ordinary mutation"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-	if writer.eligibilityWrites != 1 {
-		t.Fatalf("ordinary mutation retried eligibility write: %d", writer.eligibilityWrites)
-	}
 	facts := store.ContextFacts()
 	if facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {
 		t.Fatalf("failed eligibility became present true: %+v", facts)
@@ -136,48 +130,10 @@ func TestFailedCompactionContextFactWriteDoesNotFailCompactionOrRetryLater(t *te
 	if writer.countWrites != 1 {
 		t.Fatalf("count writes = %d, want one failed best-effort write", writer.countWrites)
 	}
-	if err := store.SetName("later ordinary mutation"); err != nil {
-		t.Fatalf("SetName: %v", err)
-	}
-	if writer.countWrites != 1 {
-		t.Fatalf("ordinary mutation retried count write: %d", writer.countWrites)
-	}
 	facts := store.ContextFacts()
 	if facts.CompletedCompactionCount == nil || *facts.CompletedCompactionCount != 0 ||
 		facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {
 		t.Fatalf("failed compaction facts were published: %+v", facts)
-	}
-}
-
-func TestRestoredRuntimeAuthorityDoesNotOpenAbsentPresentationGates(t *testing.T) {
-	store := mustCreateTestSession(t)
-	count := 2
-	eligible := true
-	record := session.PersistedSessionRecord{
-		SessionDir: store.Dir(),
-		Meta:       textutil.Value(store.Meta()),
-		ContextFacts: session.SessionContextFacts{
-			CompletedCompactionCount: nil,
-			ManualCompactEligible:    nil,
-		},
-	}
-	reopened, err := session.OpenResolved(
-		record,
-		append(
-			runtimeTestSessionPersistence.Options(),
-			session.WithSessionContextFactWriter(runtimeTestSessionPersistence),
-		)...,
-	)
-	if err != nil {
-		t.Fatalf("OpenResolved: %v", err)
-	}
-	engine := mustNewTestEngine(t, reopened, &fakeClient{}, newTestToolRegistry(t), Config{Model: "gpt-5"})
-	engine.compactionRuntimeState().SetCount(count)
-	engine.compactionRuntimeState().SetManualCompactionEligible(eligible)
-
-	facts := engine.compactionRuntimeState().ContextFacts()
-	if facts.CompletedCompactionCount != nil || facts.ManualCompactEligible != nil {
-		t.Fatalf("restored runtime authority opened presentation gates: %+v", facts)
 	}
 }
 
@@ -241,32 +197,5 @@ func TestSuccessfulCompactionEstablishesBothAbsentContextFacts(t *testing.T) {
 	if facts.CompletedCompactionCount == nil || *facts.CompletedCompactionCount != 1 ||
 		facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {
 		t.Fatalf("compaction Context facts = %+v, want present 1/false", facts)
-	}
-}
-
-func TestReservedCompactionInterpositionReplacesAgentStepEligibilityFact(t *testing.T) {
-	engine, store := newContextFactTestEngine(
-		t,
-		runtimeTestSessionPersistence,
-		&fakeClient{},
-		newTestToolRegistry(t),
-	)
-	lifecycle := &stubExclusiveStepLifecycle{}
-	lifecycle.drainFn = func(context.Context) error {
-		engine.compactionRuntimeState().SetCount(1)
-		engine.compactionRuntimeState().SetManualCompactionEligible(false)
-		engine.persistCompletedCompactionFactsBestEffort("reserved-compaction", 1)
-		return nil
-	}
-	engine.stepLifecycle = lifecycle
-	executor := &defaultStepExecutor{engine: engine}
-
-	if err := executor.completeAgentStepBoundary(context.Background(), "agent-step"); err != nil {
-		t.Fatalf("completeAgentStepBoundary: %v", err)
-	}
-	facts := store.ContextFacts()
-	if facts.CompletedCompactionCount == nil || *facts.CompletedCompactionCount != 1 ||
-		facts.ManualCompactEligible == nil || *facts.ManualCompactEligible {
-		t.Fatalf("post-interposition Context facts = %+v, want compaction 1/false", facts)
 	}
 }

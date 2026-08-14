@@ -14,7 +14,7 @@ func (e *Engine) persistManualCompactEligibilityBestEffort(stepID string, eligib
 		e.reportContextFactPersistenceError(stepID, "manual Compact eligibility", err)
 		return
 	}
-	e.setPresentedManualCompactEligibility(eligible)
+	e.compactionRuntimeState().SetPresentedManualCompactEligibility(eligible)
 }
 
 func (e *Engine) persistCompletedCompactionFactsBestEffort(
@@ -30,7 +30,7 @@ func (e *Engine) persistCompletedCompactionFactsBestEffort(
 	}
 	count := completedCompactionCount
 	eligible := false
-	e.setContextFacts(sessionContextFacts(count, eligible))
+	e.compactionRuntimeState().SetContextFacts(sessionContextFacts(count, eligible))
 }
 
 func sessionContextFacts(count int, eligible bool) session.SessionContextFacts {

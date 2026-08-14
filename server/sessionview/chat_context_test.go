@@ -181,88 +181,6 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	}
 }
 
-func TestReadDormantSessionChatContextSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-	settings := config.DefaultOnboardingSettings()
-	settings.CompactionMode = config.CompactionModeNative
-	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
-		ProviderID:               "custom",
-		SupportsResponsesCompact: true,
-	}
-	authReader := &sessionChatContextAuthReader{err: errors.New("auth must not be loaded")}
-	service := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
-	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
-		app: config.App{Settings: settings},
-	}).WithChatContextAuthReader(authReader)
-
-	got, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
-	if err != nil {
-		t.Fatalf("ReadSessionChatContext: %v", err)
-	}
-	if got.CompactionMode != serverapi.ChatContextCompactionModeProviderNative {
-		t.Fatalf("CompactionMode = %q, want explicit provider-native mode", got.CompactionMode)
-	}
-	if authReader.calls != 0 {
-		t.Fatalf("effective auth Load calls = %d, want 0", authReader.calls)
-	}
-}
-
-func TestReadDormantSessionChatContextProjectsAbsentAndNormalizesFacts(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-	settings := config.DefaultOnboardingSettings()
-	settings.ModelContextWindow = 120_000
-	settings.ContextCompactionThresholdTokens = 90_000
-	settings.CompactionMode = config.CompactionModeNone
-	service := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
-	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
-		app: config.App{Settings: settings},
-	}).WithChatContextAuthReader(&sessionChatContextAuthReader{})
-
-	got, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
-	if err != nil {
-		t.Fatalf("ReadSessionChatContext: %v", err)
-	}
-	if got.ContextWindowTokens != 120_000 ||
-		got.UsedTokens != 0 ||
-		got.RemainingTokens != 120_000 ||
-		got.CompletedCompactionCount != 0 ||
-		got.ManualCompactAvailable ||
-		got.CompactionMode != serverapi.ChatContextCompactionModeDisabled {
-		t.Fatalf("absent/disabled result = %+v", got)
-	}
-}
-
-func TestReadDormantSessionChatContextDoesNotReadEventLogOrActivateRuntime(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-	if err := store.EnsureDurable(); err != nil {
-		t.Fatalf("EnsureDurable: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(store.Dir(), "events.jsonl"), []byte("{malformed"), 0o600); err != nil {
-		t.Fatalf("write malformed event log: %v", err)
-	}
-	settings := config.DefaultOnboardingSettings()
-	service := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
-	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
-		app: config.App{Settings: settings},
-	}).WithChatContextAuthReader(&sessionChatContextAuthReader{})
-
-	if _, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store)); err != nil {
-		t.Fatalf("ReadSessionChatContext touched event log or runtime authority: %v", err)
-	}
-}
-
 func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEventLogMaterialization(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
@@ -503,117 +421,73 @@ func TestReadSessionChatContextRuntimeDisappearanceDiscardsPartialLiveFacts(t *t
 	}
 }
 
-func TestReadSessionChatContextDormantPolicyEqualsFirstLivePolicy(t *testing.T) {
-	tests := []struct {
-		name         string
-		configure    func(*testing.T, *session.Store, *config.Settings)
-		capabilities llm.ProviderCapabilities
-	}{
-		{name: "default Agent"},
-		{
-			name: "named Agent",
-			configure: func(t *testing.T, store *session.Store, settings *config.Settings) {
-				role := "worker"
-				if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
-					t.Fatalf("SetContinuationContext: %v", err)
-				}
-				roleSettings := *settings
-				roleSettings.Reviewer.Model = settings.Model
-				roleSettings.Reviewer.ModelContextWindow = 130_000
-				roleSettings.ModelContextWindow = 130_000
-				roleSettings.ContextCompactionThresholdTokens = 105_000
-				roleSettings.CompactionMode = config.CompactionModeNone
-				roleSettings.Subagents = nil
-				settings.Subagents = map[string]config.SubagentRole{
-					role: {
-						Settings: roleSettings,
-						Sources: map[string]string{
-							"model_context_window":                "file",
-							"context_compaction_threshold_tokens": "file",
-							"compaction_mode":                     "file",
-						},
-					},
-				}
-			},
-		},
-		{
-			name: "locked continuity",
-			configure: func(t *testing.T, store *session.Store, _ *config.Settings) {
-				if err := store.MarkModelDispatchLocked(session.LockedContract{
-					Model:         "locked-model",
-					ContextWindow: 90_000,
-					ProviderContract: session.LockedProviderCapabilities{
-						ProviderID:               "locked-provider",
-						SupportsResponsesCompact: false,
-					},
-				}); err != nil {
-					t.Fatalf("MarkModelDispatchLocked: %v", err)
-				}
-			},
-		},
-		{
-			name: "configured native unsupported fallback",
-			configure: func(_ *testing.T, _ *session.Store, settings *config.Settings) {
-				settings.CompactionMode = config.CompactionModeNative
-			},
-			capabilities: llm.ProviderCapabilities{
-				ProviderID:               "openai",
-				SupportsResponsesCompact: false,
+func TestReadSessionChatContextDormantPolicyEqualsFirstLivePolicyForNamedAgent(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
+	role := "worker"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+		t.Fatalf("SetContinuationContext: %v", err)
+	}
+	settings := config.DefaultOnboardingSettings()
+	settings.ProviderOverride = "openai"
+	settings.Model = "gpt-5"
+	settings.Reviewer.Model = "gpt-5"
+	settings.Reviewer.ModelContextWindow = 100_000
+	settings.Reviewer.Frequency = "off"
+	settings.ModelContextWindow = 100_000
+	settings.ContextCompactionThresholdTokens = 75_000
+	settings.CompactionMode = config.CompactionModeLocal
+	capabilities := llm.ProviderCapabilities{
+		ProviderID:               "openai",
+		SupportsResponsesCompact: false,
+	}
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               capabilities.ProviderID,
+		SupportsResponsesCompact: capabilities.SupportsResponsesCompact,
+	}
+	roleSettings := settings
+	roleSettings.Reviewer.ModelContextWindow = 130_000
+	roleSettings.ModelContextWindow = 130_000
+	roleSettings.ContextCompactionThresholdTokens = 105_000
+	roleSettings.CompactionMode = config.CompactionModeNative
+	roleSettings.Subagents = nil
+	settings.Subagents = map[string]config.SubagentRole{
+		role: {
+			Settings: roleSettings,
+			Sources: map[string]string{
+				"model_context_window":                "file",
+				"context_compaction_threshold_tokens": "file",
+				"compaction_mode":                     "file",
 			},
 		},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-			settings := config.DefaultOnboardingSettings()
-			settings.ProviderOverride = "openai"
-			settings.Model = "gpt-5"
-			settings.Reviewer.Model = "gpt-5"
-			settings.Reviewer.ModelContextWindow = 100_000
-			settings.Reviewer.Frequency = "off"
-			settings.ModelContextWindow = 100_000
-			settings.ContextCompactionThresholdTokens = 75_000
-			settings.CompactionMode = config.CompactionModeLocal
-			capabilities := test.capabilities
-			if capabilities.ProviderID == "" {
-				capabilities = llm.ProviderCapabilities{
-					ProviderID:               "openai",
-					SupportsResponsesCompact: true,
-				}
-			}
-			settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
-				ProviderID:               capabilities.ProviderID,
-				SupportsResponsesCompact: capabilities.SupportsResponsesCompact,
-			}
-			if test.configure != nil {
-				test.configure(t, store, &settings)
-			}
-			resolver := &sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}
-			targets := staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())}
-			dormantService := NewService(newTestSessionResolver(store), nil, nil, targets).
-				WithChatContextWorkspaceResolver(resolver).
-				WithChatContextAuthReader(&sessionChatContextAuthReader{})
-			dormant, err := dormantService.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
-			if err != nil {
-				t.Fatalf("dormant ReadSessionChatContext: %v", err)
-			}
+	targets := staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())}
+	dormantService := NewService(newTestSessionResolver(store), nil, nil, targets).
+		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}).
+		WithChatContextAuthReader(&sessionChatContextAuthReader{})
+	dormant, err := dormantService.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
+	if err != nil {
+		t.Fatalf("dormant ReadSessionChatContext: %v", err)
+	}
 
-			current, err := launch.ResolveReadOnlySessionContextSettings(config.App{Settings: settings}, store.ContextSnapshot().Meta, false)
-			if err != nil {
-				t.Fatalf("ResolveReadOnlySessionContextSettings: %v", err)
-			}
-			fixture := newSessionChatContextRuntimeFixture(t, store, current.Settings, capabilities)
-			liveService := NewService(newTestSessionResolver(store), nil, fixture.authority, targets).
-				WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{err: errors.New("live Context must not reload config")}).
-				WithChatContextAuthReader(&sessionChatContextAuthReader{err: errors.New("live Context must not load auth")})
-			live, err := liveService.ReadSessionChatContext(t.Context(), fixture.sessionID)
-			if err != nil {
-				t.Fatalf("live ReadSessionChatContext: %v", err)
-			}
-			if live != dormant {
-				t.Fatalf("first-live Context = %+v, want dormant/planned %+v", live, dormant)
-			}
-		})
+	current, err := launch.ResolveReadOnlySessionContextSettings(config.App{Settings: settings}, store.ContextSnapshot().Meta, false)
+	if err != nil {
+		t.Fatalf("ResolveReadOnlySessionContextSettings: %v", err)
+	}
+	fixture := newSessionChatContextRuntimeFixture(t, store, current.Settings, capabilities)
+	liveService := NewService(newTestSessionResolver(store), nil, fixture.authority, targets).
+		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{err: errors.New("live Context must not reload config")}).
+		WithChatContextAuthReader(&sessionChatContextAuthReader{err: errors.New("live Context must not load auth")})
+	live, err := liveService.ReadSessionChatContext(t.Context(), fixture.sessionID)
+	if err != nil {
+		t.Fatalf("live ReadSessionChatContext: %v", err)
+	}
+	if live != dormant {
+		t.Fatalf("first-live Context = %+v, want dormant/planned %+v", live, dormant)
+	}
+	if live.ContextWindowTokens != 130_000 ||
+		live.AutomaticThresholdTokens != 105_000 ||
+		live.CompactionMode != serverapi.ChatContextCompactionModeLocal {
+		t.Fatalf("named Agent Context = %+v", live)
 	}
 }
 

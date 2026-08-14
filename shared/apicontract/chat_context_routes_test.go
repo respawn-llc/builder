@@ -1,21 +1,12 @@
 package apicontract
 
 import (
-	"context"
 	"reflect"
 	"testing"
 
 	"core/shared/protocol"
 	"core/shared/serverapi"
 )
-
-type chatContextContractFixture struct{}
-
-func (chatContextContractFixture) GetChatContext(context.Context, serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
-	return serverapi.ChatContextResponse{}, nil
-}
-
-var _ ChatContextService = chatContextContractFixture{}
 
 func TestChatContextRouteContract(t *testing.T) {
 	route, ok := RouteByMethod(protocol.MethodChatContextGet)

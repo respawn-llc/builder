@@ -74,15 +74,6 @@ func (s *compactionRuntimeState) SetContextFacts(facts session.SessionContextFac
 	s.mu.Unlock()
 }
 
-func (s *compactionRuntimeState) ContextFacts() session.SessionContextFacts {
-	if s == nil {
-		return session.SessionContextFacts{}
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.contextFacts.Clone()
-}
-
 func (s *compactionRuntimeState) SetPresentedManualCompactEligibility(eligible bool) {
 	if s == nil {
 		return

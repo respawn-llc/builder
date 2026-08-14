@@ -10,7 +10,6 @@ import (
 // FixedRootWorkspaceResolver reloads an exact workspace while retaining the
 // config root and explicit settings overrides selected at server startup.
 type FixedRootWorkspaceResolver struct {
-	configRoot           string
 	startupWorkspaceRoot string
 	startupLoadOptions   config.LoadOptions
 }
@@ -19,17 +18,17 @@ func NewFixedRootWorkspaceResolver(configRoot string, startupWorkspaceRoot strin
 	configRoot = strings.TrimSpace(configRoot)
 	startupLoadOptions.ConfigRoot = configRoot
 	return FixedRootWorkspaceResolver{
-		configRoot:           configRoot,
 		startupWorkspaceRoot: strings.TrimSpace(startupWorkspaceRoot),
 		startupLoadOptions:   startupLoadOptions,
 	}
 }
 
 func (r FixedRootWorkspaceResolver) Resolve(workspaceRoot string) (config.App, error) {
-	if r.configRoot == "" {
+	configRoot := strings.TrimSpace(r.startupLoadOptions.ConfigRoot)
+	if configRoot == "" {
 		return config.App{}, errors.New("fixed config root is required")
 	}
-	loadOptions := config.LoadOptions{ConfigRoot: r.configRoot}
+	loadOptions := config.LoadOptions{ConfigRoot: configRoot}
 	if r.startupWorkspaceRoot != "" {
 		requestedRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
 		if err != nil {

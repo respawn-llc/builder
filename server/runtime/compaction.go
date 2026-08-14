@@ -483,7 +483,7 @@ func (e *Engine) compactNowWithAcceptance(ctx context.Context, stepID string, mo
 		}
 		return compactionResult{}, replacementReceipt, compactionFailure(result, replacementErr)
 	}
-	e.setManualCompactionEligible(false)
+	e.compactionRuntimeState().SetManualCompactionEligible(false)
 	e.persistCompletedCompactionFactsBestEffort(stepID, e.compactionRuntimeState().Count())
 	finalizationErr := replacementErr
 	if result.overflowRepair.Collapsed() {

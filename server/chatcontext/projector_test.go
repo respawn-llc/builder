@@ -38,10 +38,9 @@ func TestProjectNormalizesAndDerivesContextFacts(t *testing.T) {
 			name: "invalid numeric facts normalize independently",
 			input: ProjectionInput{
 				Policy: Policy{
-					ContextWindowTokens:       -1,
-					EffectiveConfiguredWindow: 200,
-					AutomaticThresholdTokens:  300,
-					CompactionMode:            serverapi.ChatContextCompactionModeDisabled,
+					ContextWindowTokens:      200,
+					AutomaticThresholdTokens: 300,
+					CompactionMode:           serverapi.ChatContextCompactionModeDisabled,
 				},
 				UsedTokens:               -7,
 				CompletedCompactionCount: -3,
@@ -98,20 +97,5 @@ func TestProjectNormalizesAndDerivesContextFacts(t *testing.T) {
 				t.Fatalf("projected Context is invalid: %v", err)
 			}
 		})
-	}
-}
-
-func TestProjectUsesPositiveConfiguredWindowWhenPolicyWindowIsInvalid(t *testing.T) {
-	for _, invalid := range []int64{0, -1} {
-		got := Project(ProjectionInput{
-			Policy: Policy{
-				ContextWindowTokens:       invalid,
-				EffectiveConfiguredWindow: 372_000,
-				CompactionMode:            serverapi.ChatContextCompactionModeLocal,
-			},
-		})
-		if got.ContextWindowTokens != 372_000 {
-			t.Fatalf("window for %d = %d, want 372000", invalid, got.ContextWindowTokens)
-		}
 	}
 }

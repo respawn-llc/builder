@@ -220,17 +220,6 @@ func (e *Engine) ContextUsage() ContextUsage {
 	}
 }
 
-// ContextPolicySnapshot returns the cohesive immutable policy currently in
-// force for this Engine. It performs no provider or configuration reads.
-func (e *Engine) ContextPolicySnapshot() chatcontext.Policy {
-	if e == nil {
-		return chatcontext.Policy{}
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.contextPolicy
-}
-
 // LiveChatContextSnapshot returns all runtime-owned Context facts from one
 // cohesive Engine read without configuration or authentication I/O.
 func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
@@ -239,8 +228,6 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	}
 	e.outputMutationMu.Lock()
 	defer e.outputMutationMu.Unlock()
-	e.contextSnapshotMu.RLock()
-	defer e.contextSnapshotMu.RUnlock()
 	e.mu.Lock()
 	policy := e.contextPolicy
 	autoCompactionEnabled := true
@@ -259,48 +246,6 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 		CompactionRunning:        compaction.compactionRunning,
 		ManualCompactEligible:    compaction.manualCompactEligible,
 	}
-}
-
-func (e *Engine) setCompactionActive(stepID, mode string, count int) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().SetActive(stepID, mode, count)
-}
-
-func (e *Engine) clearCompactionActive(stepID string) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().ClearActive(stepID)
-}
-
-func (e *Engine) setCompactionCount(count int) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().SetCount(count)
-}
-
-func (e *Engine) incrementCompactionCount() int {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	return e.compactionRuntimeState().IncrementCount()
-}
-
-func (e *Engine) setManualCompactionEligible(eligible bool) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().SetManualCompactionEligible(eligible)
-}
-
-func (e *Engine) setPresentedManualCompactEligibility(eligible bool) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().SetPresentedManualCompactEligibility(eligible)
-}
-
-func (e *Engine) setContextFacts(facts session.SessionContextFacts) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
-	e.compactionRuntimeState().SetContextFacts(facts)
 }
 
 func (e *Engine) AppendCommittedEntry(role, text string) error {
@@ -425,8 +370,6 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 }
 
 func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	current := true
@@ -643,7 +586,7 @@ func (e *Engine) AutoCompactionEnabled() bool {
 }
 
 func (e *Engine) CompactionMode() string {
-	return e.compactionPlannerState().mode(e.ContextPolicySnapshot())
+	return e.compactionPlannerState().mode(e.contextPolicy)
 }
 
 func (e *Engine) initReviewerClient() error {
@@ -886,8 +829,6 @@ func (e *Engine) restorePersistedUsageState(state *session.UsageState) {
 }
 
 func (e *Engine) applyUsageTrackingState(usage llm.Usage, baselineEstimate, totalInputTokens, totalCachedInputTokens int) {
-	e.contextSnapshotMu.Lock()
-	defer e.contextSnapshotMu.Unlock()
 	if baselineEstimate < 0 {
 		baselineEstimate = 0
 	}

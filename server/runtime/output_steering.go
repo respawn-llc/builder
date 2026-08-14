@@ -648,9 +648,9 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 	if item.compactionActivity != nil {
 		activity := item.compactionActivity
 		if activity.active {
-			e.setCompactionActive(stepID, activity.mode, activity.count)
+			e.compactionRuntimeState().SetActive(stepID, activity.mode, activity.count)
 		} else {
-			e.clearCompactionActive(stepID)
+			e.compactionRuntimeState().ClearActive(stepID)
 		}
 		return nil
 	}
@@ -1100,7 +1100,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	// here rather than scanning individual items.
 	e.baseMetaInjected = len(preparedItems) > 0
 	if replacement.payload.CompactionNumber != nil {
-		e.setCompactionCount(*replacement.payload.CompactionNumber)
+		e.compactionRuntimeState().SetCount(*replacement.payload.CompactionNumber)
 	}
 	e.resetLocalDiagnostics()
 	e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(

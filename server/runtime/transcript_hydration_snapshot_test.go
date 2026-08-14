@@ -93,7 +93,7 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 		snapshot.ActiveCompaction.Count != 8 || snapshot.CompactionCount != 7 {
 		t.Fatalf("compaction = active %+v count %d", snapshot.ActiveCompaction, snapshot.CompactionCount)
 	}
-	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != int(engine.ContextPolicySnapshot().ContextWindowTokens) || snapshot.ContextUsage.UsedTokens <= 0 {
+	if snapshot.ContextUsage == nil || snapshot.ContextUsage.WindowTokens != int(engine.LiveChatContextSnapshot().Policy.ContextWindowTokens) || snapshot.ContextUsage.UsedTokens <= 0 {
 		t.Fatalf("context usage = %+v", snapshot.ContextUsage)
 	}
 	if snapshot.Goal == nil || !snapshot.GoalSuspended {

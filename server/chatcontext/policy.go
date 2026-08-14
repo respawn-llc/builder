@@ -31,10 +31,9 @@ func ResolvePolicy(
 	}
 	threshold := min(max(settings.ContextCompactionThresholdTokens, 0), window)
 	return Policy{
-		ContextWindowTokens:       int64(window),
-		EffectiveConfiguredWindow: int64(configuredWindow),
-		AutomaticThresholdTokens:  int64(threshold),
-		CompactionMode:            effectiveCompactionMode(settings.CompactionMode, capabilities),
+		ContextWindowTokens:      int64(window),
+		AutomaticThresholdTokens: int64(threshold),
+		CompactionMode:           effectiveCompactionMode(settings.CompactionMode, capabilities),
 	}
 }
 

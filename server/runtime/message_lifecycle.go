@@ -194,9 +194,9 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				)
 			}
 			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {
-				e.setCompactionCount(*replacement.CompactionNumber)
+				e.compactionRuntimeState().SetCount(*replacement.CompactionNumber)
 			} else {
-				e.incrementCompactionCount()
+				e.compactionRuntimeState().IncrementCount()
 			}
 			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()
@@ -225,7 +225,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 		e.transcriptRuntimeState().SetLatestRollbackCandidate(*restoredRollbackCandidate)
 	}
 	e.compactionRuntimeState().SetSoonReminderIssued(reminderIssued)
-	e.setManualCompactionEligible(manualEligible)
+	e.compactionRuntimeState().SetManualCompactionEligible(manualEligible)
 	if err := e.store.SetCompactionSoonReminderIssued(reminderIssued); err != nil {
 		return err
 	}
