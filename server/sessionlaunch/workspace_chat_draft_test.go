@@ -139,6 +139,25 @@ func TestWorkspaceChatDraftMessageUpdatePreservesCustomThinking(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChatDraftTransformRejectsNewUnsupportedThinking(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	persistence := &draftPersistence{}
+	service := NewService(launch.Planner{Config: config.App{Settings: settings}}).
+		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(persistence), "workspace-1")
+
+	_, err := service.TransformWorkspaceChatDraftAggregate(
+		t.Context(),
+		func(current WorkspaceChatDraftResolution) (WorkspaceChatDraft, error) {
+			next := current.Draft
+			next.Thinking = "provider-specific-depth"
+			return next, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("TransformWorkspaceChatDraftAggregate accepted unsupported Thinking change")
+	}
+}
+
 type draftPersistence struct {
 	draft  *WorkspaceChatDraft
 	reads  int
