@@ -43,6 +43,11 @@ func validateEventRecordV2ToolName(name string) error {
 }
 
 func validateEventRecordV2MessageToolNames(message MessageRecord) error {
+	if message.Role == MessageRoleTool && message.Name != nil {
+		if err := validateEventRecordV2ToolName(*message.Name); err != nil {
+			return fmt.Errorf("tool-role message: %w", err)
+		}
+	}
 	for index, call := range message.ToolCalls {
 		if err := validateEventRecordV2ToolName(call.Name); err != nil {
 			return fmt.Errorf("message tool call %d: %w", index, err)

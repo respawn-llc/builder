@@ -279,6 +279,55 @@ func TestEventLogV2MessageToolNameLimit(t *testing.T) {
 	})
 }
 
+func TestEventLogV2ToolRoleMessageNameLimit(t *testing.T) {
+	makeRecord := func(t *testing.T, nameBytes int) EventRecord {
+		t.Helper()
+		record, err := NewEventRecord(
+			1,
+			nil,
+			MessageRecord{
+				Role:       MessageRoleTool,
+				Content:    stringPointer("result"),
+				Name:       stringPointer(string(bytes.Repeat([]byte{'x'}, nameBytes))),
+				ToolCallID: stringPointer("call"),
+			},
+		)
+		if err != nil {
+			t.Fatalf("create tool-role message fixture: %v", err)
+		}
+		return record
+	}
+
+	t.Run("at limit", func(t *testing.T) {
+		line, err := encodeEventRecordV2(
+			makeRecord(t, eventRecordDiscriminatorMaxBytes),
+		)
+		if err != nil {
+			t.Fatalf("encode boundary tool-role message name: %v", err)
+		}
+		if _, err := decodeEventRecordV2(line); err != nil {
+			t.Fatalf("decode boundary tool-role message name: %v", err)
+		}
+	})
+
+	t.Run("oversized", func(t *testing.T) {
+		record := makeRecord(t, eventRecordDiscriminatorMaxBytes+1)
+		if _, err := encodeEventRecordV2(record); err == nil {
+			t.Fatal("v2 encoder accepted oversized tool-role message name")
+		}
+		line, err := encodeEventRecordV1(record)
+		if err != nil {
+			t.Fatalf("v1 encoder rejected compatible oversized tool-role message name: %v", err)
+		}
+		if _, err := decodeEventRecordV2(line); err == nil {
+			t.Fatal("v2 decoder accepted oversized tool-role message name")
+		}
+		if _, err := decodeEventRecordV1(line); err != nil {
+			t.Fatalf("v1 decoder rejected compatible oversized tool-role message name: %v", err)
+		}
+	})
+}
+
 func v2CompletionFixtureLine(
 	t *testing.T,
 	toolName string,
