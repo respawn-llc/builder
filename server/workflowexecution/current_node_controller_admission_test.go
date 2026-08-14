@@ -352,7 +352,7 @@ func TestCurrentNodeControllerResumeReturnsBeforeSetupAndStartsParallelBranchesI
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
-	if len(resumed) != 2 {
+	if len(resumed.CurrentNodes) != 2 {
 		t.Fatalf("resumed current nodes = %+v, want both branches", resumed)
 	}
 	if resolved := attention.resolvedInterruptions(); len(resolved) != 2 {
@@ -489,7 +489,7 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
-	if len(resumed) != 1 || !resumed[0].Reference.Equal(reference) {
+	if len(resumed.CurrentNodes) != 1 || !resumed.CurrentNodes[0].Reference.Equal(reference) {
 		t.Fatalf("resumed Current Nodes = %+v, want %v", resumed, reference)
 	}
 	select {
@@ -544,8 +544,8 @@ func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSibling
 	if err != nil {
 		t.Fatalf("ResumeTask: %v", err)
 	}
-	if len(resumed) != branchCount {
-		t.Fatalf("resumed Current Nodes = %d, want %d", len(resumed), branchCount)
+	if len(resumed.CurrentNodes) != branchCount {
+		t.Fatalf("resumed Current Nodes = %d, want %d", len(resumed.CurrentNodes), branchCount)
 	}
 	for index := 0; index < explicitAdmissionConcurrency; index++ {
 		select {

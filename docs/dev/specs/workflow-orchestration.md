@@ -386,6 +386,9 @@
 - Deliberately selecting an Approval-gated Transition counts as its Approval. Kent applies the move without creating another Approval and clears any older pending Approval.
 - Task Start and manual movement into executable work make no Task change while Execution Target selection is required. Dismissal leaves the Task unchanged.
 - Workflow lifecycle mutations serialize within one Task. A lifecycle mutation or Runtime assignment wait for one Task must not delay lifecycle mutations for another Task.
+- Task, board, list, and search reads combine durable Workflow state with stale-tolerant Immutable Live Snapshots. They never wait for Workflow lifecycle ownership or Runtime live-state ownership, may combine facts captured at different moments, and may temporarily lag or omit current activity until a later refresh.
+- Read-model actions, including the Interrupt affordance, inherit that stale-tolerant contract and do not acquire Runtime ownership for freshness. Accepting Interrupt revalidates exact live execution and may reject an action offered from an older snapshot.
+- Stale live facts must not authorize a Workflow mutation. Lifecycle owners revalidate exact Runtime activity and Task Quiescence when applying an action.
 - After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without retaining the Task's lifecycle mutation ownership; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
 - Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
@@ -498,8 +501,9 @@
 - A pending Transition Approval survives restart with the exact frozen Transition that the operator saw.
 - Before Resume continues, the Session satisfies the fresh-resource recovery contract in `core-runtime-tools.md`. Resume does not replay answers or apply a Workflow effect blocked by a durability failure.
 - Kent never retries an interrupted Current Node automatically.
-- Task Interrupt can target one Session or every actively executing agent and Script on the Task. A waiting Question and any state without active execution are not interruptible.
-- Clients offer Interrupt only while Kent reports matching active execution. Kent checks again before interrupting and makes no change if execution has already stopped.
+- Task Interrupt can target one Session or every actively executing agent and Script on the Task. A waiting Question does not authorize stopping its execution.
+- Clients may offer Interrupt from a stale read snapshot. Kent revalidates exact live execution before stopping work. If the selected Task or Session is already durably interrupted, Interrupt succeeds without another change; other state without active execution is rejected.
+- Clients may offer Resume from a stale read snapshot. If the Task already has ready or admitted executable Current Nodes when Kent revalidates the request, Resume succeeds as a no-op and returns those Current Nodes.
 - Saved state without matching live execution never becomes interruptible as a fallback. Kent must prevent the mismatch, surface the lifecycle failure, or convert the affected Current Node to interrupted during restart recovery.
 - Completion can change a Task only from the matching Exact Execution Scope or from one unambiguous idle executable Current Node. A stopped scope and a non-current Node cannot change Task state.
 - Completion replaces source Current Nodes, materializes target inputs, and adds target Current Nodes as one atomic change.

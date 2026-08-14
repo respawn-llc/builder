@@ -1,8 +1,8 @@
 package metadata
 
-// SessionIDSetsEqual reports whether both inputs contain the same distinct
-// Session IDs. Duplicate IDs are invalid and compare unequal.
-func SessionIDSetsEqual(left []string, right []string) bool {
+// StringSetsEqual reports whether both inputs contain the same distinct
+// strings. Duplicate values are invalid and compare unequal.
+func StringSetsEqual(left []string, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
