@@ -9,7 +9,6 @@ import (
 
 	"core/cli/app/internal/startupconfig"
 	"core/shared/config"
-	"core/shared/protocol"
 )
 
 func TestStartRunPromptClientMissingWorkspaceContextSessionFailsBeforeAttach(t *testing.T) {
@@ -44,11 +43,7 @@ func TestStartupConfigRequestThreadsPersistenceRoot(t *testing.T) {
 func TestStartRunPromptClientTranslatesRootMismatchReason(t *testing.T) {
 	newAppTestHome(t)
 	workspace := t.TempDir()
-	closeServer := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		AuthBootstrap: true,
-		ProjectAttach: true,
-		RunPrompt:     true,
-	})
+	closeServer := publishConfiguredRemoteForWorkspace(t, workspace)
 	defer closeServer()
 	service, closeFn, err := startRunPromptClient(context.Background(), Options{
 		WorkspaceRoot:         workspace,

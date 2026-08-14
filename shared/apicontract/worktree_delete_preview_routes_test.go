@@ -16,8 +16,7 @@ func TestWorktreeDeletePreviewRouteUsesSessionWorktreeBoundary(t *testing.T) {
 	if route.Kind != KindUnary ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeSessionActiveProject ||
-		route.Connection != ConnectionControl ||
-		route.Dependency != DependencyWorktree {
+		route.Connection != ConnectionControl {
 		t.Fatalf("delete preview route policy = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.WorktreeDeletePreviewRequest{}) ||
