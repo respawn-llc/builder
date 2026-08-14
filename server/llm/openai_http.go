@@ -48,6 +48,7 @@ type OpenAIAuthMode struct {
 type openAIDispatchPreparation struct {
 	authHeader   string
 	mode         OpenAIAuthMode
+	variant      ProviderVariantContract
 	providerCaps ProviderCapabilities
 	projection   *codexDispatchProjection
 }
@@ -106,15 +107,11 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
 
-	variant, err := t.providerVariantForMode(preparation.mode)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
 	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	compressionOption := requestCompressionOption(variant)
+	compressionOption := requestCompressionOption(preparation.variant)
 
 	requestClient := t.Client
 	if preparation.mode.IsOAuth {
@@ -137,7 +134,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 			ctx,
 			stream,
 			rawResp,
-			request.CodexDispatch,
+			codexTurnStateObserver(preparation.projection, request.CodexDispatch),
 			preparation.providerCaps.ProviderID,
 			windowTokens,
 			StreamCallbacks{},
@@ -194,15 +191,11 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
 
-	variant, err := t.providerVariantForMode(preparation.mode)
-	if err != nil {
-		return OpenAIResponse{}, err
-	}
 	payload, err := t.buildDispatchPayload(request, preparation.mode, preparation.providerCaps, preparation.projection)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	compressionOption := requestCompressionOption(variant)
+	compressionOption := requestCompressionOption(preparation.variant)
 
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(preparation.mode)),
@@ -217,10 +210,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	stream := service.NewStreaming(ctx, payload, reqOpts...)
 	defer func() { _ = stream.Close() }()
 
-	var turnStateObserver *CodexDispatchContext
-	if preparation.mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
+	turnStateObserver := codexTurnStateObserver(preparation.projection, request.CodexDispatch)
 	return consumeResponsesStream(
 		ctx,
 		stream,
@@ -378,17 +368,20 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-	variant, err := t.providerVariantForMode(preparation.mode)
-	if err != nil {
-		return OpenAICompactionResponse{}, err
-	}
 	windowTokens := t.resolveContextWindowFallback(ctx, request.Model)
-	switch variant.RemoteCompactionProtocol {
+	switch preparation.variant.RemoteCompactionProtocol {
 	case remoteCompactionResponsesTriggerV2:
-		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, variant, preparation.providerCaps, windowTokens, preparation.projection)
+		return t.compactResponsesTriggerV2(ctx, request, preparation.authHeader, preparation.mode, preparation.variant, preparation.providerCaps, windowTokens, preparation.projection)
 	default:
 		return OpenAICompactionResponse{}, fmt.Errorf("provider %s does not support remote compaction", preparation.providerCaps.ProviderID)
 	}
+}
+
+func codexTurnStateObserver(projection *codexDispatchProjection, dispatch *CodexDispatchContext) *CodexDispatchContext {
+	if projection == nil {
+		return nil
+	}
+	return dispatch
 }
 
 func (t *HTTPTransport) prepareDispatch(
@@ -408,15 +401,17 @@ func (t *HTTPTransport) prepareDispatch(
 	if err != nil {
 		return openAIDispatchPreparation{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return openAIDispatchPreparation{}, err
 	}
-	projection, err := validateOpenAIDispatchForMode(
+	providerCaps := t.providerCapabilitiesForVariant(variant)
+	isChatGPTCodex := variant.ProviderID == "chatgpt-codex"
+	projection, err := validateOpenAIDispatch(
 		*sessionID,
 		model,
 		dispatch,
-		mode,
+		isChatGPTCodex,
 		effectiveServiceTier(fastMode, providerCaps),
 	)
 	if err != nil {
@@ -425,6 +420,7 @@ func (t *HTTPTransport) prepareDispatch(
 	return openAIDispatchPreparation{
 		authHeader:   authHeader,
 		mode:         mode,
+		variant:      variant,
 		providerCaps: providerCaps,
 		projection:   projection,
 	}, nil
@@ -452,10 +448,7 @@ func (t *HTTPTransport) compactResponsesTriggerV2(ctx context.Context, request O
 	defer func() { _ = stream.Close() }()
 
 	accumulator := newResponseStreamAccumulator(StreamCallbacks{}, windowTokens)
-	var turnStateObserver *CodexDispatchContext
-	if mode.IsOAuth {
-		turnStateObserver = request.CodexDispatch
-	}
+	turnStateObserver := codexTurnStateObserver(projection, request.CodexDispatch)
 	headersObserved := false
 	observeCodexTurnStateResponseHeader(turnStateObserver, rawResp, &headersObserved)
 	for stream.Next() {

@@ -238,14 +238,14 @@ func validateSessionDispatchPairing(sessionID *string, dispatch *CodexDispatchCo
 	return dispatch.validateForSession(*sessionID)
 }
 
-func validateOpenAIDispatchForMode(
+func validateOpenAIDispatch(
 	sessionID string,
 	model string,
 	dispatch *CodexDispatchContext,
-	mode OpenAIAuthMode,
+	isChatGPTCodex bool,
 	serviceTier *responses.ResponseNewParamsServiceTier,
 ) (*codexDispatchProjection, error) {
-	if !mode.IsOAuth {
+	if !isChatGPTCodex {
 		return nil, nil
 	}
 	if dispatch == nil {

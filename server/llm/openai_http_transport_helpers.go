@@ -44,11 +44,11 @@ func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMo
 	if mode.IsOAuth && mode.AccountID != "" {
 		opts = append(opts, option.WithHeader("ChatGPT-Account-Id", mode.AccountID))
 	}
-	if mode.IsOAuth && projection != nil {
+	if projection != nil {
 		opts = append(opts, option.WithHeader("x-codex-routing-hint", projection.RoutingHint))
-	}
-	if turnState, present := dispatch.turnStateForRetry(); mode.IsOAuth && present {
-		opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
+		if turnState, present := dispatch.turnStateForRetry(); present {
+			opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
+		}
 	}
 	return opts
 }
@@ -127,6 +127,13 @@ func (t *HTTPTransport) providerCapabilitiesForMode(mode OpenAIAuthMode) (Provid
 		return ProviderCapabilities{}, err
 	}
 	return variant.Capabilities, nil
+}
+
+func (t *HTTPTransport) providerCapabilitiesForVariant(variant ProviderVariantContract) ProviderCapabilities {
+	if t.ProviderCapabilitiesOverride != nil {
+		return *t.ProviderCapabilitiesOverride
+	}
+	return variant.Capabilities
 }
 
 func (t *HTTPTransport) cacheModelContextWindow(model string, tokens int) {

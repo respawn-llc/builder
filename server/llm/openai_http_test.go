@@ -1157,9 +1157,3 @@ func TestPrepareOpenAIInputItemsPreservesReasoningPresentationBytes(t *testing.T
 		t.Fatalf("prepared reasoning bytes = %q, want %q", prepared[0].Raw, raw)
 	}
 }
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
