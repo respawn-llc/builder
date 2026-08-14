@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/attentionnotify"
@@ -26,6 +28,8 @@ type RuntimeRegistry struct {
 	authorityMu                sync.RWMutex
 	authorityBySession         map[string]*authorityRuntimeEntry
 	authorityChanged           chan struct{}
+	mainViewPublicationMu      sync.Mutex
+	mainViews                  atomic.Pointer[runtimeMainViewCatalog]
 	sleepObserverMu            sync.Mutex
 	sleepObserver              func(active bool)
 	runStateMu                 sync.Mutex
@@ -45,6 +49,7 @@ type authorityRuntimeEntry struct {
 	engine      *runtime.Engine
 	sessionFeed *sessionFeedSequencer
 	retain      func() (io.Closer, error)
+	readModel   atomic.Pointer[clientui.RuntimeReadModelUpdate]
 
 	mu             sync.Mutex
 	lifecycle      authorityRuntimeEntryLifecycle
@@ -63,13 +68,15 @@ const (
 )
 
 func NewRuntimeRegistry() *RuntimeRegistry {
-	return &RuntimeRegistry{
+	registry := &RuntimeRegistry{
 		authorityBySession:       make(map[string]*authorityRuntimeEntry),
 		authorityChanged:         make(chan struct{}),
 		blockingActivitySessions: make(map[string]bool),
 		readModels:               runtimeactivity.NewCoordinatorCache(runtimeactivity.DefaultCoordinatorCacheLimit),
 		pendingPrompts:           newPendingPromptStore(),
 	}
+	registry.mainViews.Store(&runtimeMainViewCatalog{bySession: make(map[string]runtimeMainViewPublication)})
+	return registry
 }
 
 func (r *RuntimeRegistry) ResourceReady(
@@ -115,6 +122,7 @@ func (r *RuntimeRegistry) ResourceReady(
 		entry.readModelUnpin = r.readModels.Pin(sessionID)
 	}
 	if err := r.publishCurrentRuntimeActivity(sessionID); err != nil {
+		r.removeRuntimeMainView(entry)
 		r.authorityMu.Lock()
 		if r.authorityBySession[sessionID] == entry {
 			delete(r.authorityBySession, sessionID)
@@ -163,6 +171,7 @@ func (r *RuntimeRegistry) ResourceDraining(_ context.Context, resource sessionru
 	retentions := entry.retentions
 	entry.retentions = nil
 	entry.mu.Unlock()
+	r.removeRuntimeMainView(entry)
 
 	sessionID := ref.SessionID().String()
 	r.pendingPrompts.CloseSession(sessionID, func(snapshot PendingPromptSnapshot) {
@@ -455,7 +464,7 @@ func (r *RuntimeRegistry) publishCurrentRuntimeActivity(sessionID string) error 
 	if err != nil {
 		return err
 	}
-	r.PublishRuntimeReadModelUpdate(id, update)
+	_ = r.publishRuntimeReadModelUpdate(id, update)
 	return nil
 }
 
@@ -507,6 +516,7 @@ func (r *RuntimeRegistry) publishRuntimeEvent(entry *authorityRuntimeEntry, evt 
 		}); err != nil {
 			return err
 		}
+		return r.republishRuntimeMainView(entry)
 	}
 	return nil
 }
@@ -520,7 +530,7 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
 		identity, err := runtimeview.TranscriptSessionIdentityFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
@@ -531,7 +541,10 @@ func (r *RuntimeRegistry) PublishSessionIdentity(sessionID string) error {
 		}
 		identity.ExecutionTarget = target
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(identity)}, nil
-	})
+	}); err != nil {
+		return err
+	}
+	return r.republishRuntimeMainView(entry)
 }
 
 func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
@@ -542,13 +555,16 @@ func (r *RuntimeRegistry) PublishSessionStatus(sessionID string) error {
 	if entry == nil {
 		return nil
 	}
-	return entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
+	if err := entry.sessionFeed.PublishBuilt(func() ([]clientui.TranscriptEvent, error) {
 		status, err := runtimeview.TranscriptSessionStatusFromRuntime(entry.engine)
 		if err != nil {
 			return nil, err
 		}
 		return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(status)}, nil
-	})
+	}); err != nil {
+		return err
+	}
+	return r.republishRuntimeMainView(entry)
 }
 
 func (r *RuntimeRegistry) resolveSessionExecutionTarget(ctx context.Context, sessionID string) (*clientui.SessionExecutionTarget, error) {
@@ -581,10 +597,27 @@ func (r *RuntimeRegistry) PublishRuntimeReadModelUpdate(sessionID string, update
 	if r == nil {
 		return
 	}
+	if err := r.publishRuntimeReadModelUpdate(sessionID, update); err != nil {
+		logRuntimeMainViewPublicationFailure(sessionID, err)
+	}
+}
+
+func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update clientui.RuntimeReadModelUpdate) error {
+	if r == nil {
+		return nil
+	}
 	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
 		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
 		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
+		completed := cloneRuntimeReadModelUpdate(update)
+		authorityEntry.readModel.Store(&completed)
+		return r.publishRuntimeMainView(authorityEntry, completed.Version, completed.Activity)
 	}
+	return nil
+}
+
+func logRuntimeMainViewPublicationFailure(sessionID string, err error) {
+	log.Printf("publish Runtime Main View for Session %q: %v", strings.TrimSpace(sessionID), err)
 }
 
 func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, outcome clientui.WorktreeTransitionOutcome) {
