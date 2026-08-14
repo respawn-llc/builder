@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -351,6 +352,75 @@ func TestCurrentEventLogAppendRejectsSequenceGapWithoutMutation(t *testing.T) {
 			after.Size(),
 			log.lastSequence,
 		)
+	}
+}
+
+func TestCurrentEventLogAppendRejectsChangedPersistedRevision(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, string, *currentEventLog, EventRecord)
+	}{
+		{
+			name: "truncated sequence",
+			mutate: func(t *testing.T, path string, log *currentEventLog, _ EventRecord) {
+				t.Helper()
+				if err := os.Truncate(path, log.firstEventOffset); err != nil {
+					t.Fatalf("truncate current event log: %v", err)
+				}
+			},
+		},
+		{
+			name: "replaced version",
+			mutate: func(t *testing.T, path string, _ *currentEventLog, first EventRecord) {
+				t.Helper()
+				replacementPath := filepath.Join(filepath.Dir(path), "replacement-events.jsonl")
+				replacement, err := createCurrentEventLogVersion(replacementPath, EventLogVersionV1)
+				if err != nil {
+					t.Fatalf("create replacement current event log: %v", err)
+				}
+				if _, err := replacement.appendRecords([]EventRecord{first}); err != nil {
+					t.Fatalf("append replacement current event log: %v", err)
+				}
+				if err := os.Rename(replacementPath, path); err != nil {
+					t.Fatalf("replace current event log: %v", err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), eventsFile)
+			log, err := createCurrentEventLog(path)
+			if err != nil {
+				t.Fatalf("create current event log: %v", err)
+			}
+			first := currentTestMessageRecord(t, 1, "first")
+			if _, err := log.appendRecords([]EventRecord{first}); err != nil {
+				t.Fatalf("append first current event record: %v", err)
+			}
+			test.mutate(t, path, log, first)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read changed current event log: %v", err)
+			}
+
+			_, err = log.appendRecords([]EventRecord{currentTestMessageRecord(t, 2, "second")})
+			var persistenceErr *EventLogPersistenceError
+			if !errors.As(err, &persistenceErr) ||
+				persistenceErr.Certainty != EventLogCommitNotCommitted {
+				t.Fatalf("append changed current event log error = %v, want not-committed persistence failure", err)
+			}
+			after, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("read current event log after rejected append: %v", readErr)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatal("rejected append mutated the changed current event log")
+			}
+			if log.lastSequence != 1 {
+				t.Fatalf("cached last sequence = %d, want 1", log.lastSequence)
+			}
+		})
 	}
 }
 

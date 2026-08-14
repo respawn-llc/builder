@@ -24,7 +24,6 @@ type currentEventLog struct {
 	version            int
 	firstEventOffset   int64
 	lastSequence       int64
-	needsSeparator     bool
 	mode               currentEventLogMode
 	durabilityObserver DurabilityObserver
 }
@@ -127,9 +126,8 @@ func openCurrentEventLog(
 		return nil, fmt.Errorf("stat current event log: %w", err)
 	}
 	size := info.Size()
-	needsSeparator := false
 	if mode == currentEventLogAuthoritative {
-		size, needsSeparator, err = repairCurrentEventLogTail(fp, size, firstEventOffset)
+		size, _, err = repairCurrentEventLogTail(fp, size, firstEventOffset)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +145,6 @@ func openCurrentEventLog(
 		version:          header.Version,
 		firstEventOffset: firstEventOffset,
 		lastSequence:     lastSequence,
-		needsSeparator:   needsSeparator,
 		mode:             mode,
 	}
 	return log, nil
@@ -191,10 +188,6 @@ func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64,
 		expectedSequence++
 	}
 
-	payload, err := encodeCurrentEventRecordLines(records, l.needsSeparator, l.version)
-	if err != nil {
-		return 0, err
-	}
 	fp, err := os.OpenFile(l.path, os.O_APPEND|os.O_RDWR, 0)
 	if err != nil {
 		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "open current event log for append", err)
@@ -212,12 +205,16 @@ func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64,
 			resultErr = errors.Join(resultErr, eventLogPersistenceError(certainty, "close current event log append", closeErr))
 		}
 	}()
-	info, err := fp.Stat()
+	currentSize, needsSeparator, err := l.prepareAppend(fp)
 	if err != nil {
-		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "stat current event log before append", err)
+		return 0, eventLogPersistenceError(EventLogCommitNotCommitted, "validate current event log before append", err)
+	}
+	payload, err := encodeCurrentEventRecordLines(records, needsSeparator, l.version)
+	if err != nil {
+		return 0, err
 	}
 	written, err := writeAll(fp, payload)
-	endOffset = info.Size() + int64(written)
+	endOffset = currentSize + int64(written)
 	if err != nil {
 		return endOffset, eventLogPersistenceError(EventLogCommitUnknown, "write current event log append", err)
 	}
@@ -229,8 +226,52 @@ func (l *currentEventLog) appendRecords(records []EventRecord) (endOffset int64,
 	_ = fp.Close()
 	closed = true
 	l.lastSequence = records[len(records)-1].Seq()
-	l.needsSeparator = false
 	return endOffset, nil
+}
+
+func (l *currentEventLog) prepareAppend(fp *os.File) (currentSize int64, needsSeparator bool, err error) {
+	header, firstEventOffset, err := readCurrentEventLogHeader(fp)
+	if err != nil {
+		return 0, false, err
+	}
+	if firstEventOffset != l.firstEventOffset {
+		return 0, false, fmt.Errorf(
+			"current event log header offset changed from %d to %d",
+			l.firstEventOffset,
+			firstEventOffset,
+		)
+	}
+	if header.Version != l.version {
+		return 0, false, fmt.Errorf(
+			"current event log version changed from %d to %d",
+			l.version,
+			header.Version,
+		)
+	}
+	info, err := fp.Stat()
+	if err != nil {
+		return 0, false, fmt.Errorf("stat current event log before append: %w", err)
+	}
+	currentSize, needsSeparator, err = repairCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
+	if err != nil {
+		return 0, false, err
+	}
+	lastRecord, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
+	if err != nil {
+		return 0, false, err
+	}
+	persistedSequence := int64(0)
+	if lastRecord != nil {
+		persistedSequence = lastRecord.Seq()
+	}
+	if persistedSequence != l.lastSequence {
+		return 0, false, fmt.Errorf(
+			"current event log append sequence authority changed from %d to %d",
+			l.lastSequence,
+			persistedSequence,
+		)
+	}
+	return currentSize, needsSeparator, nil
 }
 
 func eventLogPersistenceError(certainty EventLogCommitCertainty, operation string, cause error) error {
