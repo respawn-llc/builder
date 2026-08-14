@@ -26,6 +26,9 @@ type goSourceFile struct {
 
 func checkProductionGo(root string, policy goASTPolicy) error {
 	root = filepath.Clean(root)
+	buildContext := build.Default
+	buildContext.CgoEnabled = true
+	buildContext.UseAllFiles = true
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -39,7 +42,7 @@ func checkProductionGo(root string, policy goASTPolicy) error {
 			return filepath.SkipDir
 		}
 
-		buildPackage, importErr := build.Default.ImportDir(path, 0)
+		buildPackage, importErr := buildContext.ImportDir(path, 0)
 		var noGoError *build.NoGoError
 		if errors.As(importErr, &noGoError) {
 			return nil
@@ -79,10 +82,12 @@ func checkProductionGo(root string, policy goASTPolicy) error {
 	return errors.New(policy.errorHeading + ":\n" + strings.Join(violations, "\n"))
 }
 
-func (source goSourceFile) violation(node ast.Node, detail string) string {
+func (source goSourceFile) locationViolation(node ast.Node) string {
 	position := source.fileSet.Position(node.Pos())
-	if detail == "" {
-		return fmt.Sprintf("%s:%d", source.relativePath, position.Line)
-	}
+	return fmt.Sprintf("%s:%d", source.relativePath, position.Line)
+}
+
+func (source goSourceFile) detailedViolation(node ast.Node, detail string) string {
+	position := source.fileSet.Position(node.Pos())
 	return fmt.Sprintf("%s:%d: %s", source.relativePath, position.Line, detail)
 }

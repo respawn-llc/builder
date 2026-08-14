@@ -129,31 +129,31 @@ func CheckNoAPICapabilityNegotiation(root string) error {
 				switch declaration := node.(type) {
 				case *ast.TypeSpec:
 					if _, forbidden := declarations[declaration.Name.Name]; forbidden {
-						violations = append(violations, source.violation(declaration.Name, declaration.Name.Name))
+						violations = append(violations, source.detailedViolation(declaration.Name, declaration.Name.Name))
 					}
 					forbiddenFields := fields[declaration.Name.Name]
 					if structType, ok := declaration.Type.(*ast.StructType); ok && len(forbiddenFields) != 0 {
 						for _, field := range structType.Fields.List {
 							for _, name := range field.Names {
 								if _, forbidden := forbiddenFields[name.Name]; forbidden {
-									violations = append(violations, source.violation(name, declaration.Name.Name+"."+name.Name))
+									violations = append(violations, source.detailedViolation(name, declaration.Name.Name+"."+name.Name))
 								}
 							}
 						}
 					}
 				case *ast.FuncDecl:
 					if _, forbidden := declarations[declaration.Name.Name]; forbidden {
-						violations = append(violations, source.violation(declaration.Name, declaration.Name.Name))
+						violations = append(violations, source.detailedViolation(declaration.Name, declaration.Name.Name))
 					}
 				case *ast.ValueSpec:
 					for _, name := range declaration.Names {
 						if _, forbidden := declarations[name.Name]; forbidden {
-							violations = append(violations, source.violation(name, name.Name))
+							violations = append(violations, source.detailedViolation(name, name.Name))
 						}
 					}
 				case *ast.SelectorExpr:
 					if _, forbidden := selectors[declaration.Sel.Name]; forbidden {
-						violations = append(violations, source.violation(declaration.Sel, declaration.Sel.Name+" selector"))
+						violations = append(violations, source.detailedViolation(declaration.Sel, declaration.Sel.Name+" selector"))
 					}
 				}
 				return true

@@ -1,10 +1,6 @@
 package architectureguard
 
-import (
-	"os"
-	"path/filepath"
-	"testing"
-)
+import "testing"
 
 func TestCheckNoAPICapabilityNegotiationRejectsFormerClientMechanism(t *testing.T) {
 	tests := []struct {
@@ -97,7 +93,7 @@ func TestCheckNoAPICapabilityNegotiationRejectsFormerClientMechanism(t *testing.
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeAPICapabilityGuardFixture(t, root, test.path, test.content)
+			writeGuardFixture(t, root, test.path, test.content)
 			if err := CheckNoAPICapabilityNegotiation(root); err == nil {
 				t.Fatal("forbidden client capability mechanism was accepted")
 			}
@@ -191,7 +187,7 @@ func TestCheckNoAPICapabilityNegotiationRejectsFormerServerMechanism(t *testing.
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
-			writeAPICapabilityGuardFixture(t, root, test.path, test.content)
+			writeGuardFixture(t, root, test.path, test.content)
 			if err := CheckNoAPICapabilityNegotiation(root); err == nil {
 				t.Fatal("forbidden server capability mechanism was accepted")
 			}
@@ -201,31 +197,31 @@ func TestCheckNoAPICapabilityNegotiationRejectsFormerServerMechanism(t *testing.
 
 func TestCheckNoAPICapabilityNegotiationAllowsRetainedCapabilityConcepts(t *testing.T) {
 	root := t.TempDir()
-	writeAPICapabilityGuardFixture(
+	writeGuardFixture(
 		t,
 		root,
 		"cli/app/terminal_capabilities.go",
 		"package app\ntype terminalCapabilities struct { MarkdownLinks bool }\n",
 	)
-	writeAPICapabilityGuardFixture(
+	writeGuardFixture(
 		t,
 		root,
 		"server/capabilityfacts/service.go",
 		"package capabilityfacts\ntype CapabilityFacts struct { Models []string }\n",
 	)
-	writeAPICapabilityGuardFixture(
+	writeGuardFixture(
 		t,
 		root,
 		"server/llm/provider.go",
 		"package llm\ntype ProviderCapabilities struct { Models []string }\n",
 	)
-	writeAPICapabilityGuardFixture(
+	writeGuardFixture(
 		t,
 		root,
 		"server/session/event_log_capability.go",
 		"package session\ntype EventLogCapability interface{}\n",
 	)
-	writeAPICapabilityGuardFixture(
+	writeGuardFixture(
 		t,
 		root,
 		"apps/desktop/packages/native-bridge/src/capabilities.ts",
@@ -233,16 +229,5 @@ func TestCheckNoAPICapabilityNegotiationAllowsRetainedCapabilityConcepts(t *test
 	)
 	if err := CheckNoAPICapabilityNegotiation(root); err != nil {
 		t.Fatalf("retained capability concepts were rejected: %v", err)
-	}
-}
-
-func writeAPICapabilityGuardFixture(t *testing.T, root string, path string, content string) {
-	t.Helper()
-	fullPath := filepath.Join(root, filepath.FromSlash(path))
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o700); err != nil {
-		t.Fatalf("create fixture directory: %v", err)
-	}
-	if err := os.WriteFile(fullPath, []byte(content), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
 	}
 }

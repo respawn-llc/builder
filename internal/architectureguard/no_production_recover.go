@@ -18,7 +18,7 @@ func CheckNoProductionRecover(root string) error {
 				if !ok || identifier.Name != "recover" {
 					return true
 				}
-				violations = append(violations, source.violation(call, ""))
+				violations = append(violations, source.locationViolation(call))
 				return true
 			})
 			return violations
