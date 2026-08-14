@@ -474,7 +474,7 @@ func TestApplyRunPromptOverridesWithOptionsPreservesAgentRoleForLockedSession(t 
 	}
 }
 
-func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *testing.T) {
+func TestApplyRunPromptOverridesLockedSessionPreservesSnapshotSources(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace)
 	baseSettings := loaded.Settings
@@ -504,8 +504,8 @@ func TestApplyRunPromptOverridesLockedModelDoesNotMarkModelSourceAsSubagent(t *t
 	if updated.Source.Sources["model"] != "file" {
 		t.Fatalf("model source = %q, want original file source under lock", updated.Source.Sources["model"])
 	}
-	if updated.Source.Sources["thinking_level"] != "subagent" {
-		t.Fatalf("thinking source = %q, want subagent", updated.Source.Sources["thinking_level"])
+	if updated.Source.Sources["thinking_level"] != "file" {
+		t.Fatalf("thinking source = %q, want original file source under lock", updated.Source.Sources["thinking_level"])
 	}
 }
 

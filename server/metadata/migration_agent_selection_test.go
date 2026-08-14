@@ -38,14 +38,14 @@ func TestMigrationAgentExecutionSelectionUsesCanonicalSessionPolicy(t *testing.T
 			wantOrigin:     workflow.AssigneeOriginConfiguredFallback,
 		},
 		{
-			name:           "immediate continuation requires target fallback",
+			name:           "immediate continuation preserves session role",
 			mode:           workflow.ContextModeContinueSession,
 			source:         workflow.ContextSourceImmediateSource,
 			targetResolved: true,
 			fallbackRole:   "fallback",
 			sessionRole:    "retained",
-			wantRole:       "fallback",
-			wantOrigin:     workflow.AssigneeOriginConfiguredFallback,
+			wantRole:       "retained",
+			wantOrigin:     workflow.AssigneeOriginRetainedSession,
 		},
 		{
 			name:           "previous target preserves session role",
