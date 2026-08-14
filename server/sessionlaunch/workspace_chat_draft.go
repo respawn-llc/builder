@@ -333,10 +333,8 @@ func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved Work
 	if !ok {
 		return fmt.Errorf("workspace Chat draft Agent %q is unavailable", draft.Agent)
 	}
-	if draft.Thinking != resolved.Draft.Thinking {
-		if _, ok := limit.thinking[draft.Thinking]; !ok {
-			return fmt.Errorf("workspace Chat draft thinking %q is unavailable for Agent %q", draft.Thinking, agent)
-		}
+	if _, ok := limit.thinking[draft.Thinking]; !ok {
+		return fmt.Errorf("workspace Chat draft thinking %q is unavailable for Agent %q", draft.Thinking, agent)
 	}
 	if draft.Fast && !limit.fast {
 		return fmt.Errorf("workspace Chat draft fast mode is unavailable for Agent %q", agent)
