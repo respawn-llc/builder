@@ -885,6 +885,104 @@ func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Contex
 	return ref_count, err
 }
 
+const countProjectTaskGroups = `-- name: CountProjectTaskGroups :one
+WITH
+args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS project_id,
+        CAST(?2 AS TEXT) AS live_task_states_json
+),
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM json_each((SELECT live_task_states_json FROM args))
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+),
+
+eligible_rows AS (
+    SELECT status.kind
+    FROM args
+    CROSS JOIN project_workflow_links pwl
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN effective_status status ON status.task_id = t.id
+    WHERE pwl.project_id = args.project_id
+      AND t.project_workflow_link_id = pwl.id
+)
+SELECT
+    CAST(COUNT(*) FILTER (WHERE kind IN ('waiting_question', 'waiting_approval', 'interrupted', 'running', 'queued', 'active')) AS INTEGER) AS active_count,
+    CAST(COUNT(*) FILTER (WHERE kind IN ('backlog')) AS INTEGER) AS backlog_count,
+    CAST(COUNT(*) FILTER (WHERE kind IN ('done')) AS INTEGER) AS done_count
+FROM eligible_rows
+`
+
+type CountProjectTaskGroupsParams struct {
+	ProjectID          string
+	LiveTaskStatesJson string
+}
+
+type CountProjectTaskGroupsRow struct {
+	ActiveCount  int64
+	BacklogCount int64
+	DoneCount    int64
+}
+
+func (q *Queries) CountProjectTaskGroups(ctx context.Context, arg CountProjectTaskGroupsParams) (CountProjectTaskGroupsRow, error) {
+	row := q.db.QueryRowContext(ctx, countProjectTaskGroups, arg.ProjectID, arg.LiveTaskStatesJson)
+	var i CountProjectTaskGroupsRow
+	err := recordQueryError(ctx, row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount), countProjectTaskGroups, 2)
+
+	return i, err
+}
+
 const countProjectWorkflowLinksByIDAndProject = `-- name: CountProjectWorkflowLinksByIDAndProject :one
 SELECT CAST(COUNT(*) AS INTEGER) AS link_count
 FROM project_workflow_links
@@ -5743,21 +5841,22 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 	return items, nil
 }
 
-const listTaskAssignedLabelIDsByTasks = `-- name: ListTaskAssignedLabelIDsByTasks :many
-SELECT tla.task_id, pl.id AS label_id
+const listTaskAssignedLabelsByTasks = `-- name: ListTaskAssignedLabelsByTasks :many
+SELECT tla.task_id, pl.id AS label_id, pl.name AS label_name
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
 WHERE tla.task_id IN (/*SLICE:task_ids*/?)
 ORDER BY tla.task_id ASC, pl.ordinal ASC, pl.id ASC
 `
 
-type ListTaskAssignedLabelIDsByTasksRow struct {
-	TaskID  string
-	LabelID string
+type ListTaskAssignedLabelsByTasksRow struct {
+	TaskID    string
+	LabelID   string
+	LabelName string
 }
 
-func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds []string) ([]ListTaskAssignedLabelIDsByTasksRow, error) {
-	query := listTaskAssignedLabelIDsByTasks
+func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []string) ([]ListTaskAssignedLabelsByTasksRow, error) {
+	query := listTaskAssignedLabelsByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
 		for _, v := range taskIds {
@@ -5773,10 +5872,10 @@ func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds [
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTaskAssignedLabelIDsByTasksRow
+	var items []ListTaskAssignedLabelsByTasksRow
 	for rows.Next() {
-		var i ListTaskAssignedLabelIDsByTasksRow
-		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.LabelID), query, 1); err != nil {
+		var i ListTaskAssignedLabelsByTasksRow
+		if err := recordQueryError(ctx, rows.Scan(&i.TaskID, &i.LabelID, &i.LabelName), query, 1); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7838,7 +7937,6 @@ matching_workflows AS (
           WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
-    LIMIT 2
 ),
 page_rows AS (
     SELECT "rows".id, "rows".project_id, "rows".project_workflow_link_id, "rows".workflow_id, "rows".workflow_name, "rows".workflow_revision_seen, "rows".task_seq, "rows".short_id, "rows".title, "rows".body, "rows".source_url, "rows".source_workspace_id, "rows".managed_worktree_id, "rows".execution_target_mode, "rows".execution_target_requested_ref, "rows".execution_target_resolved_ref, "rows".execution_target_commit_oid, "rows".execution_target_provenance, "rows".created_at_unix_ms, "rows".updated_at_unix_ms, "rows".metadata_json, "rows".column_rank, "rows".column_keys_json, "rows".kind, "rows".primary_status_rank, "rows".node_ids_json, "rows".attention_types_json, "rows".title_sort, "rows".label_ordinals, "rows".labels_unlabeled, "rows".sort_1_value, "rows".sort_2_value, "rows".sort_3_value, "rows".sort_4_value, "rows".sort_5_value, "rows".sort_6_value, "rows".sort_7_value   FROM scored_rows rows

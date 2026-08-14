@@ -448,7 +448,7 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 	if len(one.Tasks) != 1 ||
 		one.Tasks[0].TaskID != string(task.ID) ||
 		one.Tasks[0].WorkflowID != fixture.workflowID ||
-		one.Tasks[0].WorkflowName != nil ||
+		one.Tasks[0].WorkflowName == nil ||
 		one.Tasks[0].ColumnKeys != nil ||
 		one.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne {
 		t.Fatalf("one-workflow project-wide page = %+v", one)
@@ -465,8 +465,19 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 	}); err != nil {
 		t.Fatalf("CreateTask second workflow: %v", err)
 	}
+	thirdWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, thirdWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow third workflow: %v", err)
+	}
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &thirdWorkflowID,
+		Title:      "Third workflow task",
+	}); err != nil {
+		t.Fatalf("CreateTask third workflow: %v", err)
+	}
 	multiple := list(nil, 20)
-	if len(multiple.Tasks) != 2 ||
+	if len(multiple.Tasks) != 3 ||
 		multiple.MatchingWorkflowCardinality != serverapi.WorkflowTaskListMatchingWorkflowCardinalityMultiple {
 		t.Fatalf("multiple-workflow project-wide page = %+v", multiple)
 	}
@@ -476,7 +487,7 @@ func TestProjectWideTaskListPreservesCardinalityOwnedRowVisibility(t *testing.T)
 		}
 	}
 
-	offset := 3
+	offset := 4
 	beyondEnd := list(&offset, 1)
 	if len(beyondEnd.Tasks) != 0 ||
 		beyondEnd.NextOffset != nil ||
@@ -531,6 +542,37 @@ func TestTaskListDefaultSortUsesCurrentStatusBeforeActivity(t *testing.T) {
 		activeItem.ColumnKeys == nil ||
 		!slices.Equal(*activeItem.ColumnKeys, []string{"agent"}) {
 		t.Fatalf("Workflow-narrowed active Task = %+v, want ordered Current Node column", activeItem)
+	}
+}
+
+func TestProjectTaskGroupCountsObserveLiveStatusesAcrossLinkedWorkflows(t *testing.T) {
+	fixture := newCurrentNodeViewFixture(t, false)
+	active := fixture.startTask(t, "Active")
+	fixture.createBacklogTask(t, "Backlog")
+	secondWorkflowID := currentNodeViewWorkflow(t, fixture.store, false)
+	if _, err := fixture.store.LinkWorkflow(fixture.ctx, fixture.binding.ProjectID, secondWorkflowID, false); err != nil {
+		t.Fatalf("LinkWorkflow second workflow: %v", err)
+	}
+	if _, err := fixture.store.CreateTask(fixture.ctx, workflowstore.CreateTaskRequest{
+		ProjectID:  fixture.binding.ProjectID,
+		WorkflowID: &secondWorkflowID,
+		Title:      "Second backlog",
+	}); err != nil {
+		t.Fatalf("CreateTask second workflow: %v", err)
+	}
+	fixture.quiescence.blocked[active.task.ID] = true
+
+	counts, err := fixture.tasks.CountGroups(fixture.ctx, serverapi.WorkflowProjectTaskGroupCountsRequest{
+		ProjectID: fixture.binding.ProjectID,
+	})
+	if err != nil {
+		t.Fatalf("CountGroups: %v", err)
+	}
+	if counts.Counts.Active != 1 || counts.Counts.Backlog != 2 || counts.Counts.Done != 0 {
+		t.Fatalf("counts = %+v, want active=1 backlog=2 done=0", counts.Counts)
+	}
+	if !reflect.DeepEqual(counts.Definitions, serverapi.WorkflowProjectTaskGroupDefinitions()) {
+		t.Fatalf("definitions = %+v, want canonical Project Task groups", counts.Definitions)
 	}
 }
 

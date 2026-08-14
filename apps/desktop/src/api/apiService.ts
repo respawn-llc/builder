@@ -8,6 +8,7 @@ import type {
   TaskResumeInput,
   TaskStartInput,
   TaskMutationInput,
+  ProjectTaskGroupCountsInput,
   TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
@@ -64,7 +65,13 @@ import type {
   WorkspaceCatalogPage,
   WorkspaceUnlinkResponse,
 } from "./models";
-import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
+import type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
+  TaskLabelAssignment,
+  TaskListPage,
+} from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 import type * as worktree from "./schemas/worktree";
@@ -148,6 +155,7 @@ export interface ApiService {
     direction?: TaskDependencyDirection,
   ): Promise<TaskDependencyListResponse>;
   listTasks(input: TaskListInput): Promise<TaskListPage>;
+  getProjectTaskGroupCounts(input: ProjectTaskGroupCountsInput): Promise<ProjectTaskGroupCounts>;
   searchTasks(input: TaskSearchInput, signal?: AbortSignal): Promise<TaskSearchResponse>;
   updateTask(input: TaskEditInput): Promise<string>;
   startTask(input: TaskStartInput): Promise<TaskStartResponse>;

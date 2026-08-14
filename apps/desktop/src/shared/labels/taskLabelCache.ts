@@ -1,12 +1,6 @@
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
-import type {
-  BoardNodeCardsPage,
-  ProjectLabelCatalog,
-  TaskDetail,
-  TaskLabelAssignment,
-  TaskListPage,
-} from "@/api";
+import type { BoardNodeCardsPage, ProjectLabelCatalog, TaskDetail, TaskLabelAssignment } from "@/api";
 import { queryKeys } from "@/app-facade";
 
 export function patchExistingTaskLabelProjections(
@@ -22,14 +16,14 @@ export function patchExistingTaskLabelProjections(
       labelIDs: [...labelIDs],
     });
   }
-  transformExistingPagedTaskLabels(queryClient, (candidateTaskID, currentLabelIDs) =>
+  transformExistingBoardTaskLabels(queryClient, (candidateTaskID, currentLabelIDs) =>
     candidateTaskID === taskID ? labelIDs : currentLabelIDs,
   );
 }
 
 type TaskLabelTransform = (taskID: string, labelIDs: readonly string[]) => readonly string[];
 
-function transformExistingPagedTaskLabels(queryClient: QueryClient, transform: TaskLabelTransform): void {
+function transformExistingBoardTaskLabels(queryClient: QueryClient, transform: TaskLabelTransform): void {
   queryClient.setQueriesData<InfiniteData<BoardNodeCardsPage, number>>(
     { queryKey: queryKeys.allBoardNodeCards },
     (data) => {
@@ -48,18 +42,6 @@ function transformExistingPagedTaskLabels(queryClient: QueryClient, transform: T
       };
     },
   );
-  queryClient.setQueriesData<TaskListPage>({ queryKey: queryKeys.allTaskLists }, (page) => {
-    if (page === undefined) {
-      return undefined;
-    }
-    return {
-      ...page,
-      tasks: page.tasks.map((task) => ({
-        ...task,
-        labelIDs: [...transform(task.id, task.labelIDs)],
-      })),
-    };
-  });
 }
 
 export function patchExistingTaskLabelAssignment(
@@ -114,7 +96,7 @@ export function pruneDeletedLabelFromExistingCaches(
           labelIDs: detail.labelIDs.filter((assignedLabelID) => assignedLabelID !== labelID),
         },
   );
-  transformExistingPagedTaskLabels(queryClient, (_taskID, labelIDs) =>
+  transformExistingBoardTaskLabels(queryClient, (_taskID, labelIDs) =>
     labelIDs.filter((assignedLabelID) => assignedLabelID !== labelID),
   );
 }
@@ -140,13 +122,5 @@ export function removeDeletedTaskFromExistingCaches(queryClient: QueryClient, ta
               cards: page.cards.filter((card) => card.id !== taskID),
             })),
           },
-  );
-  queryClient.setQueriesData<TaskListPage>({ queryKey: queryKeys.allTaskLists }, (page) =>
-    page === undefined
-      ? undefined
-      : {
-          ...page,
-          tasks: page.tasks.filter((task) => task.id !== taskID),
-        },
   );
 }
