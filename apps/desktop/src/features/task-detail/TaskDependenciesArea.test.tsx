@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 
@@ -215,7 +215,7 @@ describe("TaskDependenciesArea", () => {
     });
   });
 
-  it("adds an existing searched Task in the selected direction", async () => {
+  it("keeps the picker open across sequential selections and resets accepted IDs after close", async () => {
     const onAddExisting = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     searchFixture.results = [
@@ -242,6 +242,37 @@ describe("TaskDependenciesArea", () => {
               literal: {
                 before: "",
                 match: "Existing",
+                after: " candidate",
+                leftTruncated: false,
+                rightTruncated: false,
+              },
+            },
+          ],
+        },
+      },
+      {
+        key: "candidate-2",
+        group: {
+          projectID: "project-1",
+          projectKey: "KENT",
+          taskID: "task-10",
+          shortID: "KENT-10",
+          workflowID: "workflow-2",
+          title: "Second candidate",
+          status: {
+            kind: "backlog",
+            nativeState: "active",
+            nodeIDs: [],
+            attentionTypes: [],
+          },
+          totalHitCount: 1,
+          hits: [
+            {
+              ordinal: 1,
+              source: { kind: "title" },
+              literal: {
+                before: "",
+                match: "Second",
                 after: " candidate",
                 leftTruncated: false,
                 rightTruncated: false,
@@ -278,11 +309,102 @@ describe("TaskDependenciesArea", () => {
 
     await user.click(screen.getByTestId("dependency-add-blocked-by"));
     await user.click(screen.getByTestId("dependency-candidate-task-9"));
+    await waitFor(() => {
+      expect(screen.queryByTestId("dependency-candidate-task-9")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("dependency-candidate-task-10")).toBeInTheDocument();
+    await user.click(screen.getByTestId("dependency-candidate-task-10"));
 
-    expect(onAddExisting).toHaveBeenCalledWith({
+    expect(onAddExisting).toHaveBeenNthCalledWith(1, {
       blockerTaskID: "task-9",
       blockedTaskID: "task-1",
     });
+    expect(onAddExisting).toHaveBeenNthCalledWith(2, {
+      blockerTaskID: "task-10",
+      blockedTaskID: "task-1",
+    });
+
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    expect(screen.getByTestId("dependency-candidate-task-9")).toBeInTheDocument();
+  });
+
+  it("unmounts a populated picker when Task Detail reaches its direction limit", async () => {
+    const user = userEvent.setup();
+    searchFixture.results = [
+      {
+        key: "candidate",
+        group: {
+          projectID: "project-1",
+          projectKey: "KENT",
+          taskID: "task-9",
+          shortID: "KENT-9",
+          workflowID: "workflow-1",
+          title: "Existing candidate",
+          status: {
+            kind: "backlog",
+            nativeState: "active",
+            nodeIDs: [],
+            attentionTypes: [],
+          },
+          totalHitCount: 1,
+          hits: [
+            {
+              ordinal: 1,
+              source: { kind: "title" },
+              literal: {
+                before: "",
+                match: "Existing",
+                after: " candidate",
+                leftTruncated: false,
+                rightTruncated: false,
+              },
+            },
+          ],
+        },
+      },
+    ];
+    const props = {
+      disabled: false,
+      navigationDisabled: false,
+      onAdd: vi.fn(),
+      onAddExisting: vi.fn().mockResolvedValue(undefined),
+      onRemove: vi.fn(),
+      onSelectTask: vi.fn(),
+      projectID: "project-1",
+      taskID: "task-1",
+    } as const;
+    const oneRemaining: TaskDependencies = {
+      ...dependencies,
+      directions: dependencies.directions.map((direction) =>
+        direction.direction === "blocked-by"
+          ? { ...direction, addAvailability: { kind: "available" as const, remainingCapacity: 1 } }
+          : direction,
+      ),
+    };
+    const { rerender } = render(<TaskDependenciesArea dependencies={oneRemaining} {...props} />);
+
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    expect(screen.getByTestId("dependency-candidate-task-9")).toBeInTheDocument();
+
+    rerender(
+      <TaskDependenciesArea
+        dependencies={{
+          ...oneRemaining,
+          directions: oneRemaining.directions.map((direction) =>
+            direction.direction === "blocked-by"
+              ? { ...direction, addAvailability: { kind: "limit_reached" as const } }
+              : direction,
+          ),
+        }}
+        {...props}
+      />,
+    );
+
+    expect(screen.queryByTestId("dependency-candidate-task-9")).not.toBeInTheDocument();
+    const add = screen.getByTestId("dependency-add-blocked-by");
+    expect(add).toBeDisabled();
+    expect(add).toHaveAttribute("aria-describedby");
   });
 
   it("blocks relationship navigation while keeping Remove independently available", async () => {

@@ -38,7 +38,7 @@ type CreateTaskRequest struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	LabelIDs          []string
-	DependencyIntent  *workflow.TaskDependencyCreateIntent
+	DependencyIntents []workflow.TaskDependencyCreateIntent
 }
 
 type preparedTaskCreate struct {
@@ -50,7 +50,7 @@ type preparedTaskCreate struct {
 	sourceWorkspaceID string
 	taskID            string
 	labelIDs          []label.ID
-	dependencyIntent  *workflow.TaskDependencyCreateIntent
+	dependencyIntents []workflow.TaskDependencyCreateIntent
 	nowUnixMs         int64
 }
 
@@ -180,14 +180,20 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
-	if req.DependencyIntent != nil {
-		if strings.TrimSpace(string(req.DependencyIntent.RelatedTaskID)) == "" {
+	roleCounts := map[workflow.TaskDependencyRole]int{}
+	dependencyIntents := append([]workflow.TaskDependencyCreateIntent(nil), req.DependencyIntents...)
+	for _, intent := range dependencyIntents {
+		if strings.TrimSpace(string(intent.RelatedTaskID)) == "" {
 			return TaskRecord{}, errors.New("dependency related task id is required")
 		}
-		switch req.DependencyIntent.NewTaskRole {
+		switch intent.NewTaskRole {
 		case workflow.TaskDependencyRoleBlocker, workflow.TaskDependencyRoleBlocked:
 		default:
 			return TaskRecord{}, errors.New("dependency new task role is invalid")
+		}
+		roleCounts[intent.NewTaskRole]++
+		if roleCounts[intent.NewTaskRole] > workflow.MaxTaskDependencies {
+			return TaskRecord{}, fmt.Errorf("dependency intents exceed the %d per-role limit", workflow.MaxTaskDependencies)
 		}
 	}
 	labelIDs, _, err := parseUniqueLabelIDs(req.LabelIDs, "label_ids", TaskLabelMutationDuplicateAdd)
@@ -198,7 +204,7 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		projectID: projectID, workflowID: workflowID, title: strings.TrimSpace(req.Title),
 		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
-		labelIDs: labelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
+		labelIDs: labelIDs, dependencyIntents: dependencyIntents, nowUnixMs: s.now().UnixMilli(),
 	}
 	if prepared.title == "" {
 		return TaskRecord{}, errors.New("task title is required")
@@ -271,13 +277,13 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 			return TaskRecord{}, fmt.Errorf("insert task label: %w", err)
 		}
 	}
-	if prepared.dependencyIntent != nil {
+	for _, intent := range prepared.dependencyIntents {
 		dependencyRequest := TaskDependencyAddRequest{
 			BlockerTaskID: workflow.TaskID(prepared.taskID),
-			BlockedTaskID: prepared.dependencyIntent.RelatedTaskID,
+			BlockedTaskID: intent.RelatedTaskID,
 		}
-		if prepared.dependencyIntent.NewTaskRole == workflow.TaskDependencyRoleBlocked {
-			dependencyRequest.BlockerTaskID = prepared.dependencyIntent.RelatedTaskID
+		if intent.NewTaskRole == workflow.TaskDependencyRoleBlocked {
+			dependencyRequest.BlockerTaskID = intent.RelatedTaskID
 			dependencyRequest.BlockedTaskID = workflow.TaskID(prepared.taskID)
 		}
 		decision, err := attachTaskDependencyWithQueries(ctx, q, dependencyRequest)

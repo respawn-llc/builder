@@ -683,17 +683,17 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		SourceWorkspaceID: req.SourceWorkspaceID,
 		LabelIDs:          req.LabelIDs,
 	}
-	if req.DependencyIntent != nil {
+	for _, requestedIntent := range req.DependencyIntents {
 		intent := workflow.TaskDependencyCreateIntent{
-			RelatedTaskID: workflow.TaskID(req.DependencyIntent.RelatedTaskID),
+			RelatedTaskID: workflow.TaskID(requestedIntent.RelatedTaskID),
 		}
-		switch req.DependencyIntent.NewTaskRole {
+		switch requestedIntent.NewTaskRole {
 		case serverapi.WorkflowTaskDependencyRoleBlocker:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocker
 		case serverapi.WorkflowTaskDependencyRoleBlocked:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocked
 		}
-		taskRequest.DependencyIntent = &intent
+		taskRequest.DependencyIntents = append(taskRequest.DependencyIntents, intent)
 	}
 	task, err := s.store.CreateTask(ctx, taskRequest)
 	if err != nil {
@@ -704,9 +704,12 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err, req.ProjectID)
 	}
 	s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCreated, string(task.ID))
-	if req.DependencyIntent != nil {
-		relatedID := req.DependencyIntent.RelatedTaskID
-		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedID)
+	if len(req.DependencyIntents) > 0 {
+		relatedIDs := make([]string, 0, len(req.DependencyIntents))
+		for _, intent := range req.DependencyIntents {
+			relatedIDs = append(relatedIDs, intent.RelatedTaskID)
+		}
+		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedIDs...)
 	}
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {

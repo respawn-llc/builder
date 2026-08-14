@@ -13,8 +13,8 @@ import { useSidebarCurrentPage } from "./sidebarPageContext";
 import { SidebarHost } from "./sidebar";
 
 const policy: SidebarDestinationPolicy = {
-  equals: (left, right) =>
-    left.kind === "custom" && right.kind === "custom" && left.title === right.title,
+  applyBackResult: (_destination, state, result) => ({ state, result }),
+  equals: (left, right) => left.kind === "custom" && right.kind === "custom" && left.title === right.title,
   retainedState: (_destination, state) => state,
 };
 
@@ -305,6 +305,101 @@ describe("SidebarProvider stack", () => {
       expect(b.back()).toBe("accepted");
     });
     expect(result.current.page?.retainedState).toEqual({ draft: "new" });
+  });
+
+  it("applies an active child Back result to the previous retained state and ignores a stale result", () => {
+    const { result } = renderHook(useHarness, { wrapper });
+    act(() => {
+      result.current.roots.open(destination("Parent"));
+    });
+    const parent = requireNavigator(result.current);
+    act(() => {
+      parent.registerCapture(() => ({ draft: "parent" }));
+      expect(parent.push(destination("Child"))).toBe("accepted");
+    });
+    const child = requireNavigator(result.current);
+    const childResult = {
+      kind: "newTaskCreated",
+      direction: "blocked-by",
+      task: {
+        id: "task-child",
+        shortID: "KENT-2",
+        status: {
+          kind: "backlog",
+          nativeState: "active",
+          nodeIDs: [],
+          attentionTypes: [],
+        },
+        title: "Child",
+        workflowID: "workflow-1",
+      },
+    } as const;
+    act(() => {
+      expect(child.back(childResult)).toBe("accepted");
+    });
+    expect(result.current.page?.retainedState).toEqual({
+      state: { draft: "parent" },
+      result: childResult,
+    });
+    act(() => {
+      expect(child.back(childResult)).toBe("stale");
+    });
+    expect(result.current.page?.retainedState).toEqual({
+      state: { draft: "parent" },
+      result: childResult,
+    });
+  });
+
+  it("restores an unrelated Task row Draft but truncates to an earlier retained Task without capture", () => {
+    const taskPolicy: SidebarDestinationPolicy = {
+      applyBackResult: (_destination, state) => state,
+      equals: (left, right) =>
+        left.kind === "taskDetail" && right.kind === "taskDetail" && left.taskID === right.taskID,
+      retainedState: (_destination, state) => state,
+    };
+    const taskWrapper = ({ children }: Readonly<{ children: ReactNode }>) => (
+      <SidebarProvider policy={taskPolicy}>{children}</SidebarProvider>
+    );
+    const { result } = renderHook(useHarness, { wrapper: taskWrapper });
+    act(() => {
+      result.current.roots.open({ kind: "taskDetail", taskID: "task-origin" });
+    });
+    const origin = requireNavigator(result.current);
+    act(() => {
+      origin.registerCapture(() => ({ origin: true }));
+      expect(
+        origin.push({
+          boardQueryWorkflowID: "workflow-1",
+          kind: "newTask",
+          projectID: "project-1",
+          workflowID: "workflow-1",
+        }),
+      ).toBe("accepted");
+    });
+    const draftCapture = vi.fn(() => ({ title: "Draft" }));
+    const newTask = requireNavigator(result.current);
+    act(() => {
+      newTask.registerCapture(draftCapture);
+      expect(newTask.push({ kind: "taskDetail", taskID: "task-unrelated" })).toBe("accepted");
+    });
+    expect(draftCapture).toHaveBeenCalledOnce();
+    act(() => {
+      expect(requireNavigator(result.current).back()).toBe("accepted");
+    });
+    expect(result.current.page?.retainedState).toEqual({ title: "Draft" });
+
+    const restoredNewTask = requireNavigator(result.current);
+    const discardedCapture = vi.fn(() => ({ title: "discarded" }));
+    act(() => {
+      restoredNewTask.registerCapture(discardedCapture);
+      expect(restoredNewTask.push({ kind: "taskDetail", taskID: "task-origin" })).toBe("accepted");
+    });
+    expect(discardedCapture).not.toHaveBeenCalled();
+    expect(result.current.shell.activeDestination).toEqual({
+      kind: "taskDetail",
+      taskID: "task-origin",
+    });
+    expect(result.current.shell.canGoBack).toBe(false);
   });
 
   it("retains widths per profile and keeps the closing page rendered through the exit phase", () => {

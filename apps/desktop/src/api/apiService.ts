@@ -27,6 +27,7 @@ import type {
   BindingPlan,
   BoardNodeCardsPage,
   CommentPage,
+  CreatedTaskSummary,
   PendingAsk,
   ProjectBinding,
   ProjectDeleteResponse,
@@ -140,7 +141,7 @@ export interface ApiService {
   listBoardNodeCards(input: BoardNodeCardsInput): Promise<BoardNodeCardsPage>;
   listAttention(pageToken: string): Promise<AttentionPage>;
   listTaskAttention(taskID: string): Promise<TaskAttention>;
-  createTask(input: TaskMutationInput): Promise<string>;
+  createTask(input: TaskMutationInput): Promise<CreatedTaskSummary>;
   addTaskDependency(blockerTaskID: string, blockedTaskID: string): Promise<TaskDependencyMutationResponse>;
   removeTaskDependency(blockerTaskID: string, blockedTaskID: string): Promise<TaskDependencyMutationResponse>;
   listTaskDependencies(

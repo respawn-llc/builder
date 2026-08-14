@@ -235,8 +235,15 @@ describe("Task Detail retained sidebar state", () => {
 
     expect(opened).toEqual([
       expect.objectContaining({
+        initialPreparedDependency: {
+          direction: "blocks",
+          shortID: taskDetailResponse.task.summary.short_id,
+          status: expect.objectContaining({ kind: taskDetailResponse.task.status.kind }),
+          taskID: "task-1",
+          title: taskDetailResponse.task.summary.title,
+          workflowID: taskDetailResponse.task.summary.workflow_id,
+        },
         kind: "newTask",
-        pendingRelationship: { newTaskRole: "blocker", originTaskID: "task-1" },
       }),
     ]);
   });

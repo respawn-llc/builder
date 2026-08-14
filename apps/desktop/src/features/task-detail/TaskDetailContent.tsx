@@ -499,12 +499,16 @@ function openRelatedTaskCreation({
   const destination = {
     boardQueryWorkflowID: detail.workflowID,
     initialSourceWorkspaceID: detail.sourceWorkspace.id,
+    initialPreparedDependency: {
+      direction: direction === "blocked-by" ? ("blocks" as const) : ("blocked-by" as const),
+      taskID: detail.id,
+      shortID: detail.shortID,
+      title: detail.title,
+      workflowID: detail.workflowID,
+      status: detail.status,
+    },
     kind: "newTask" as const,
     mode: "overlay" as const,
-    pendingRelationship: {
-      originTaskID: detail.id,
-      newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
-    },
     projectID: detail.projectID,
     workflowID: detail.workflowID,
   };

@@ -5,29 +5,31 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
+import { errorMessage, isProjectMissingError, type ApiService, type WorkspaceCatalogRow } from "@/api";
 import {
-  errorMessage,
-  isProjectMissingError,
-  type ApiService,
-  type TaskDependencyCreateIntent,
-  type WorkspaceCatalogRow,
-} from "@/api";
-import {
-  useConnectionSnapshot,
   projectWorkspaceQueryOptions,
   queryKeys,
+  useAppServices,
+  useConnectionSnapshot,
+  useStatusController,
   useTextFieldSubmitShortcut,
   workspaceCatalogInfiniteQueryOptions,
+  type NewTaskPreparedDependency,
+  type SidebarPageNavigator,
 } from "@/app-facade";
-import { useAppServices } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
 import {
   LabelChooser,
   ProjectLabelsProvider,
   orderedAssignedLabels,
   useProjectLabelCatalog,
 } from "@/shared/labels";
-import { NativeDialogWindow } from "@/shared/native-dialog";
+import {
+  DependenciesArea,
+  insertPreparedTaskDependency,
+  preparedTaskDependenciesProjection,
+  removePreparedTaskDependency,
+  type PreparedTaskDependency,
+} from "@/shared/task-dependencies";
 import { useCreateTask } from "@/shared/task-mutations";
 import {
   projectWorkspaceSelectorProjection,
@@ -38,7 +40,6 @@ import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-quer
 import {
   Badge,
   Button,
-  Dialog,
   FieldShell,
   InfiniteListBoundary,
   SelectField,
@@ -48,8 +49,6 @@ import {
 } from "@/ui";
 import { cx } from "@/ui";
 
-const newTaskContentMaxWidth = "560px";
-
 const newTaskSchema = z.object({
   title: z.string().trim().min(1),
   body: z.string(),
@@ -58,89 +57,74 @@ const newTaskSchema = z.object({
 
 type NewTaskFormValues = z.output<typeof newTaskSchema>;
 
-export type NewTaskFallbackDialogProps = Readonly<{
-  boardQueryWorkflowID: string | undefined;
-  projectID: string;
-  workflowID: string;
-  onClose: () => void;
+const retainedStatusSchema = z.object({
+  kind: z.enum([
+    "done",
+    "waiting_question",
+    "waiting_approval",
+    "interrupted",
+    "running",
+    "queued",
+    "backlog",
+    "active",
+  ]),
+  nativeState: z.string(),
+  nodeIDs: z.array(z.string()),
+  attentionTypes: z.array(z.string()),
+});
+
+const preparedDependencySchema = z.object({
+  direction: z.enum(["blocked-by", "blocks"]),
+  taskID: z.string().min(1),
+  shortID: z.string().min(1),
+  title: z.string(),
+  workflowID: z.string().min(1),
+  status: retainedStatusSchema,
+});
+
+const newTaskRetainedStateSchema = z.object({
+  formValues: z.object({
+    title: z.string(),
+    body: z.string(),
+    sourceWorkspaceID: z.string().trim().min(1).optional(),
+  }),
+  selectedLabelIDs: z.array(z.string().min(1)),
+  preparedDependencies: z.array(preparedDependencySchema),
+});
+
+export type NewTaskRetainedState = Readonly<{
+  formValues: NewTaskFormValues;
+  selectedLabelIDs: readonly string[];
+  preparedDependencies: readonly PreparedTaskDependency[];
 }>;
 
-export function NewTaskFallbackDialog({
-  boardQueryWorkflowID,
-  projectID,
-  workflowID,
-  onClose,
-}: NewTaskFallbackDialogProps) {
-  const { t } = useTranslation();
-
-  return (
-    <Dialog
-      className="w-[min(calc(560px+var(--space-4)*2),calc(100vw-32px))]"
-      closeLabel={t("app.close")}
-      onClose={onClose}
-      open
-      title={t("task.newTitle")}
-    >
-      <NewTaskForm
-        boardQueryWorkflowID={boardQueryWorkflowID}
-        className="mx-auto w-full max-w-[560px]"
-        onSubmitted={onClose}
-        projectID={projectID}
-        workflowID={workflowID}
-      />
-    </Dialog>
-  );
-}
-
-export function NewTaskWindowRoute({
-  projectID,
-  workflowID,
-}: Readonly<{
-  projectID: string;
-  workflowID: string;
-}>) {
-  const { t } = useTranslation();
-  const { nativeBridge } = useAppServices();
-
-  return (
-    <NativeDialogWindow
-      contentMaxWidth={newTaskContentMaxWidth}
-      fitToContent={false}
-      title={t("task.newTitle")}
-    >
-      <NewTaskForm
-        boardQueryWorkflowID={workflowID}
-        className="w-full"
-        onSubmitted={() => {
-          void nativeBridge.window.closeCurrent();
-        }}
-        projectID={projectID}
-        workflowID={workflowID}
-      />
-    </NativeDialogWindow>
-  );
+export function decodeNewTaskRetainedState(value: unknown): NewTaskRetainedState | undefined {
+  const parsed = newTaskRetainedStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function NewTaskForm({
-  projectID,
+  boardQueryWorkflowID,
+  className,
+  initialPreparedDependency,
   initialSourceWorkspaceID,
-  pendingRelationship,
-  ...props
+  navigator,
+  onPendingChange,
+  parentReturnDirection,
+  projectID,
+  retainedState,
+  workflowID,
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
-  className?: string;
-  onSubmitted: (taskID: string) => void;
-  onPendingChange?: ((pending: boolean) => void) | undefined;
-  onProjectMissing?: (() => void) | undefined;
-  projectID: string;
-  workflowID: string;
+  className?: string | undefined;
+  initialPreparedDependency?: NewTaskPreparedDependency | undefined;
   initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
+  navigator: SidebarPageNavigator;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  parentReturnDirection?: "blocked-by" | "blocks" | undefined;
+  projectID: string;
+  retainedState?: unknown;
+  workflowID: string;
 }>) {
   const { t } = useTranslation();
   const { push } = useStatusController();
@@ -159,10 +143,16 @@ export function NewTaskForm({
   return (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
       <NewTaskFormContent
+        boardQueryWorkflowID={boardQueryWorkflowID}
+        className={className}
+        initialPreparedDependency={initialPreparedDependency}
         initialSourceWorkspaceID={initialSourceWorkspaceID}
-        pendingRelationship={pendingRelationship}
+        navigator={navigator}
+        onPendingChange={onPendingChange}
+        parentReturnDirection={parentReturnDirection}
         projectID={projectID}
-        {...props}
+        retainedState={retainedState}
+        workflowID={workflowID}
       />
     </ProjectLabelsProvider>
   );
@@ -171,45 +161,51 @@ export function NewTaskForm({
 function NewTaskFormContent({
   boardQueryWorkflowID,
   className,
-  onSubmitted,
-  onPendingChange,
-  onProjectMissing,
+  initialPreparedDependency,
   initialSourceWorkspaceID,
-  pendingRelationship,
+  navigator,
+  onPendingChange,
+  parentReturnDirection,
   projectID,
+  retainedState,
   workflowID,
 }: Readonly<{
   boardQueryWorkflowID: string | undefined;
-  className?: string;
-  onSubmitted: (taskID: string) => void;
-  onPendingChange?: ((pending: boolean) => void) | undefined;
-  onProjectMissing?: (() => void) | undefined;
-  projectID: string;
-  workflowID: string;
+  className?: string | undefined;
+  initialPreparedDependency?: NewTaskPreparedDependency | undefined;
   initialSourceWorkspaceID?: string | undefined;
-  pendingRelationship?:
-    | Readonly<{
-        originTaskID: string;
-        newTaskRole: TaskDependencyCreateIntent["newTaskRole"];
-      }>
-    | undefined;
+  navigator: SidebarPageNavigator;
+  onPendingChange?: ((pending: boolean) => void) | undefined;
+  parentReturnDirection?: "blocked-by" | "blocks" | undefined;
+  projectID: string;
+  retainedState?: unknown;
+  workflowID: string;
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
+  const { push } = useStatusController();
   const connection = useConnectionSnapshot();
-  const workspaceCatalog = useNewTaskWorkspaceCatalog(api, projectID, initialSourceWorkspaceID, t);
+  const restored = useMemo(() => decodeNewTaskRetainedState(retainedState), [retainedState]);
+  const authoredSourceWorkspaceID = restored?.formValues.sourceWorkspaceID ?? initialSourceWorkspaceID;
+  const workspaceCatalog = useNewTaskWorkspaceCatalog(api, projectID, authoredSourceWorkspaceID, t);
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
-  const projectMissing = [
+  const workspaceProjectMissing = [
     workspaceCatalog.workspaces.error,
     workspaceCatalog.initiatingWorkspace.error,
-    createTask.error,
   ].some(isProjectMissingError);
   useEffect(() => {
-    if (projectMissing) onProjectMissing?.();
-  }, [onProjectMissing, projectMissing]);
-  const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>([]);
+    if (workspaceProjectMissing) navigator.back();
+  }, [navigator, workspaceProjectMissing]);
+  const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>(
+    () => restored?.selectedLabelIDs ?? [],
+  );
+  const [preparedDependencies, setPreparedDependencies] = useState<readonly PreparedTaskDependency[]>(
+    () =>
+      restored?.preparedDependencies ??
+      (initialPreparedDependency === undefined ? [] : [initialPreparedDependency]),
+  );
   const [labelCreatePending, setLabelCreatePending] = useState(false);
   const effectiveSelectedLabelIDs = useMemo(() => {
     if (catalog.data === undefined) {
@@ -221,7 +217,7 @@ function NewTaskFormContent({
   const { selectedWorkspace, workspaceItems, workspaceProjection, workspaceSelection } = workspaceCatalog;
   const form = useForm<NewTaskFormValues>({
     resolver: zodResolver(newTaskSchema),
-    defaultValues: {
+    defaultValues: restored?.formValues ?? {
       title: "",
       body: "",
       sourceWorkspaceID: undefined,
@@ -237,6 +233,15 @@ function NewTaskFormContent({
       });
     }
   }, [form, selectedWorkspace, selectedWorkspaceID]);
+  useEffect(
+    () =>
+      navigator.registerCapture((): NewTaskRetainedState => ({
+        formValues: form.getValues(),
+        preparedDependencies,
+        selectedLabelIDs: effectiveSelectedLabelIDs,
+      })),
+    [effectiveSelectedLabelIDs, form, navigator, preparedDependencies],
+  );
   const canSubmit =
     connection.phase === "connected" &&
     !createTask.isPending &&
@@ -252,24 +257,43 @@ function NewTaskFormContent({
     }
     const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     try {
-      const taskID = await createTask.mutateAsync({
+      const createdTask = await createTask.mutateAsync({
         projectID,
         workflowID,
         title: values.title,
         body: values.body,
         sourceWorkspaceID,
         labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
-        dependencyIntent:
-          pendingRelationship === undefined
-            ? undefined
-            : {
-                relatedTaskID: pendingRelationship.originTaskID,
-                newTaskRole: pendingRelationship.newTaskRole,
-              },
+        dependencyIntents: preparedDependencies.map((dependency) => ({
+          relatedTaskID: dependency.taskID,
+          newTaskRole: dependency.direction === "blocked-by" ? "blocked" : "blocker",
+        })),
       });
-      onSubmitted(taskID);
-    } catch {
-      // The mutation state renders the persistent failure without clearing form input.
+      navigator.back(
+        parentReturnDirection === undefined
+          ? undefined
+          : {
+              kind: "newTaskCreated",
+              direction: parentReturnDirection,
+              task: {
+                ...createdTask,
+                status: {
+                  kind: "backlog",
+                  nativeState: "active",
+                  nodeIDs: [],
+                  attentionTypes: [],
+                },
+              },
+            },
+      );
+    } catch (error) {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "new-task-create-error",
+        title: t("task.createFailed"),
+        tone: "danger",
+      });
     }
   }
 
@@ -312,6 +336,48 @@ function NewTaskFormContent({
           });
         }}
         selectedLabelIDs={effectiveSelectedLabelIDs}
+      />
+      <DependenciesArea
+        dependencies={preparedTaskDependenciesProjection(preparedDependencies)}
+        disabled={connection.phase !== "connected"}
+        excludedTaskIDs={(direction) =>
+          new Set(
+            preparedDependencies
+              .filter((dependency) => dependency.direction === direction)
+              .map((dependency) => dependency.taskID),
+          )
+        }
+        navigationDisabled={connection.phase !== "connected"}
+        onAdd={(direction) => {
+          navigator.push({
+            boardQueryWorkflowID,
+            ...(selectedWorkspace === undefined ? {} : { initialSourceWorkspaceID: selectedWorkspace.id }),
+            kind: "newTask",
+            parentReturnDirection: direction,
+            projectID,
+            workflowID,
+          });
+        }}
+        onRemove={(direction, item) => {
+          setPreparedDependencies((current) => removePreparedTaskDependency(current, direction, item.taskID));
+        }}
+        onSelectCandidate={async (direction, result) => {
+          setPreparedDependencies((current) =>
+            insertPreparedTaskDependency(current, {
+              direction,
+              taskID: result.group.taskID,
+              shortID: result.group.shortID,
+              title: result.group.title,
+              workflowID: result.group.workflowID,
+              status: result.group.status,
+            }),
+          );
+        }}
+        onSelectTask={(taskID) => {
+          navigator.push({ kind: "taskDetail", taskID });
+        }}
+        previewProgress
+        projectID={projectID}
       />
       {workspaceProjection.selectionDisabled ? (
         <>
@@ -362,9 +428,6 @@ function NewTaskFormContent({
       ) : null}
       {workspaceItems.length > 0 && workspacePaging.initialBoundary !== undefined ? (
         <InfiniteListBoundary direction="initial" state={workspacePaging.initialBoundary} />
-      ) : null}
-      {createTask.error !== null ? (
-        <p className="m-0 text-[var(--color-error)]">{errorMessage(createTask.error)}</p>
       ) : null}
       <Button className="mx-auto w-full max-w-[400px]" disabled={!canSubmit} type="submit" variant="primary">
         {t("task.create")}

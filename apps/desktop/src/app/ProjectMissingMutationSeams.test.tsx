@@ -20,8 +20,14 @@ vi.mock("@tanstack/react-query", () => ({
     mutateAsync: vi.fn(),
   }),
   useInfiniteQuery: () => ({
-    data: undefined, error: null, hasNextPage: false, isError: false,
-    isFetchingNextPage: false, isPending: false, fetchNextPage: vi.fn(), refetch: vi.fn(),
+    data: undefined,
+    error: null,
+    hasNextPage: false,
+    isError: false,
+    isFetchingNextPage: false,
+    isPending: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
   }),
   useQuery: () => ({ data: undefined, error: null, isError: false, isPending: false, refetch: vi.fn() }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
@@ -45,6 +51,10 @@ vi.mock("@/shared/labels", () => ({
 vi.mock("@/shared/task-mutations", () => ({
   useCreateTask: () => ({ error: fixture.createError, isPending: false, mutateAsync: vi.fn() }),
 }));
+vi.mock("@/shared/task-dependencies", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/task-dependencies")>()),
+  DependenciesArea: () => null,
+}));
 vi.mock("@/shared/workflow-library", () => ({
   useWorkflowPages: () => ({
     data: { pages: [{ workflows: [] }] },
@@ -66,19 +76,18 @@ function renderWithI18n(element: ReactElement) {
 }
 
 describe("Project-missing mutation seams", () => {
-  it("dismisses New Task when creation reports the Project missing", async () => {
+  it("keeps New Task mounted when creation reports the Project missing", async () => {
     fixture.createError = missing;
-    const onProjectMissing = vi.fn();
+    const navigator = createTestSidebarNavigator();
     renderWithI18n(
       <NewTaskForm
         boardQueryWorkflowID="workflow-1"
-        onProjectMissing={onProjectMissing}
-        onSubmitted={vi.fn()}
+        navigator={navigator}
         projectID="project-1"
         workflowID="workflow-1"
       />,
     );
-    expect(onProjectMissing).toHaveBeenCalledOnce();
+    expect(navigator.back).not.toHaveBeenCalled();
   });
 
   it("backs out of Link Workflow when linking reports the Project missing", async () => {

@@ -19,7 +19,7 @@ export type TaskMutationInput = Readonly<{
   body: string;
   sourceWorkspaceID: string;
   labelIDs: readonly string[];
-  dependencyIntent?: TaskDependencyCreateIntent | undefined;
+  dependencyIntents: readonly TaskDependencyCreateIntent[];
 }>;
 
 export type TaskDependencyCreateIntent = Readonly<{

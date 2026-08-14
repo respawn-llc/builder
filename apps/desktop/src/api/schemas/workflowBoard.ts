@@ -247,14 +247,20 @@ export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discrim
   selectionRequiredResponseSchema,
 ]);
 
-type TaskMoveMutationResult = Readonly<{ currentNodes: readonly TaskCurrentNode[];
-  retainedPreviousWorktree: RetainedPreviousWorktree | null }>;
+type TaskMoveMutationResult = Readonly<{
+  currentNodes: readonly TaskCurrentNode[];
+  retainedPreviousWorktree: RetainedPreviousWorktree | null;
+}>;
 const taskMoveResultSchema: z.ZodType<TaskMoveMutationResult> = z
-  .object({ current_nodes: z.array(currentNodeSchema).min(1),
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() })
+  .object({
+    current_nodes: z.array(currentNodeSchema).min(1),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+  })
   .strict()
-  .transform((value) => ({ currentNodes: value.current_nodes,
-    retainedPreviousWorktree: value.retained_previous_worktree }));
+  .transform((value) => ({
+    currentNodes: value.current_nodes,
+    retainedPreviousWorktree: value.retained_previous_worktree,
+  }));
 
 const taskMoveNoOpResponseSchema = z
   .object({ outcome: z.literal("no_op"), no_op: taskMoveResultSchema })
@@ -262,8 +268,10 @@ const taskMoveNoOpResponseSchema = z
   .transform((value) => ({ outcome: value.outcome, noOp: value.no_op }));
 
 const taskMovePreviewNoOpResponseSchema = z
-  .object({ outcome: z.literal("no_op"), no_op:
-    z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict() })
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
   .strict()
   .transform((value) => ({ outcome: value.outcome, noOp: { currentNodes: value.no_op.current_nodes } }));
 
@@ -664,10 +672,22 @@ export const pendingAskListSchema = z
   })
   .transform((value) => value.Asks);
 
-const taskSummaryResponseSchema = z.object({ task: z.object({ id: z.string() }) });
-
-export const taskCreateResponseSchema = taskSummaryResponseSchema;
-export const taskUpdateResponseSchema = taskSummaryResponseSchema;
+export const taskCreateResponseSchema = z
+  .object({
+    task: z.object({
+      id: z.string().min(1),
+      short_id: z.string().min(1),
+      title: z.string(),
+      workflow_id: workflowIDSchema,
+    }),
+  })
+  .transform((value) => ({
+    id: value.task.id,
+    shortID: value.task.short_id,
+    title: value.task.title,
+    workflowID: value.task.workflow_id,
+  }));
+export const taskUpdateResponseSchema = z.object({ task: z.object({ id: z.string() }) });
 export const commentAddResponseSchema = z.object({ comment: commentSchema });
 
 export const commentPageSchema: z.ZodType<CommentPage> = offsetPageObjectSchema(commentSchema)

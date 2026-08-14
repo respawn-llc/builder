@@ -659,14 +659,14 @@ type WorkflowValidationErrorDetails struct {
 }
 
 type WorkflowTaskCreateRequest struct {
-	ProjectID         string                              `json:"project_id"`
-	WorkflowID        *runtimeids.WorkflowID              `json:"workflow_id,omitempty"`
-	Title             string                              `json:"title"`
-	Body              string                              `json:"body,omitempty"`
-	SourceURL         string                              `json:"source_url,omitempty"`
-	SourceWorkspaceID string                              `json:"source_workspace_id,omitempty"`
-	LabelIDs          []string                            `json:"label_ids"`
-	DependencyIntent  *WorkflowTaskDependencyCreateIntent `json:"dependency_intent,omitempty"`
+	ProjectID         string                               `json:"project_id"`
+	WorkflowID        *runtimeids.WorkflowID               `json:"workflow_id,omitempty"`
+	Title             string                               `json:"title"`
+	Body              string                               `json:"body,omitempty"`
+	SourceURL         string                               `json:"source_url,omitempty"`
+	SourceWorkspaceID string                               `json:"source_workspace_id,omitempty"`
+	LabelIDs          []string                             `json:"label_ids"`
+	DependencyIntents []WorkflowTaskDependencyCreateIntent `json:"dependency_intents,omitempty"`
 }
 
 type WorkflowTaskCreateResponse struct {
@@ -2426,9 +2426,33 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
 		return err
 	}
-	if r.DependencyIntent != nil {
-		if err := r.DependencyIntent.Validate(); err != nil {
+	roleCounts := map[WorkflowTaskDependencyRole]int{}
+	type dependencyIntentIdentity struct {
+		role          WorkflowTaskDependencyRole
+		relatedTaskID string
+	}
+	seenIntents := map[dependencyIntentIdentity]struct{}{}
+	for index, intent := range r.DependencyIntents {
+		field := fmt.Sprintf("dependency_intents[%d]", index)
+		if err := intent.validate(field); err != nil {
 			return err
+		}
+		identity := dependencyIntentIdentity{role: intent.NewTaskRole, relatedTaskID: intent.RelatedTaskID}
+		if _, exists := seenIntents[identity]; exists {
+			return workflowRequestError(
+				WorkflowRequestErrorInvalidValue,
+				field+".related_task_id",
+				"dependency intent duplicates an earlier entry for the same new Task role",
+			)
+		}
+		seenIntents[identity] = struct{}{}
+		roleCounts[intent.NewTaskRole]++
+		if roleCounts[intent.NewTaskRole] > workflowcontract.MaxTaskDependencies {
+			return workflowRequestError(
+				WorkflowRequestErrorTooLong,
+				"dependency_intents",
+				fmt.Sprintf("dependency intents must contain at most %d entries per new Task role", workflowcontract.MaxTaskDependencies),
+			)
 		}
 	}
 	if r.WorkflowID != nil {

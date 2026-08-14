@@ -11,6 +11,7 @@ const fixture = vi.hoisted(() => ({
   openProject: vi.fn(async () => undefined),
   openWorkflowEditor: vi.fn(async () => undefined),
   workflowEditorProps: vi.fn<(props: unknown) => void>(),
+  newTaskProps: vi.fn<(props: unknown) => void>(),
 }));
 vi.mock("@/app-facade", () => ({
   sidebarTitle: () => "",
@@ -39,35 +40,25 @@ vi.mock("@/features/home", () => ({
   SidebarInboxNav: () => <div />,
 }));
 vi.mock("@/features/tasks", () => ({
-  NewTaskForm: (
-    props: Readonly<{
-      onPendingChange?: (pending: boolean) => void;
-      onProjectMissing?: () => void;
-      onSubmitted: (taskID: string) => void;
-    }>,
-  ) => (
-    <>
-      <button
-        data-testid="new-task-pending"
-        onClick={() => {
-          props.onPendingChange?.(true);
-        }}
-      />
-      <button
-        data-testid="new-task-settled"
-        onClick={() => {
-          props.onPendingChange?.(false);
-        }}
-      />
-      <button data-testid="new-task-missing" onClick={props.onProjectMissing} />
-      <button
-        data-testid="new-task-success"
-        onClick={() => {
-          props.onSubmitted("task-created");
-        }}
-      />
-    </>
-  ),
+  NewTaskForm: (props: Readonly<{ onPendingChange?: (pending: boolean) => void }>) => {
+    fixture.newTaskProps(props);
+    return (
+      <>
+        <button
+          data-testid="new-task-pending"
+          onClick={() => {
+            props.onPendingChange?.(true);
+          }}
+        />
+        <button
+          data-testid="new-task-settled"
+          onClick={() => {
+            props.onPendingChange?.(false);
+          }}
+        />
+      </>
+    );
+  },
 }));
 
 vi.mock("@/features/workflows", () => ({
@@ -149,11 +140,24 @@ describe("Sidebar destination completion ownership", () => {
       workflowID: "workflow-1",
     });
   });
-  it("locks header exit only for a pending related New Task and replaces it on success", () => {
+  it("locks header exit only for a pending Task Detail-originated New Task", () => {
+    const initialPreparedDependency = {
+      direction: "blocks",
+      taskID: "task-1",
+      shortID: "KENT-1",
+      title: "Origin",
+      workflowID: "workflow-1",
+      status: {
+        kind: "backlog",
+        nativeState: "active",
+        nodeIDs: [],
+        attentionTypes: [],
+      },
+    } as const;
     const pageNavigator = mountDestination({
       boardQueryWorkflowID: "workflow-1",
+      initialPreparedDependency,
       kind: "newTask",
-      pendingRelationship: { newTaskRole: "blocker", originTaskID: "task-1" },
       projectID: "project-1",
       workflowID: "workflow-1",
     });
@@ -162,25 +166,28 @@ describe("Sidebar destination completion ownership", () => {
     expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: false, close: false });
     fireEvent.click(screen.getByTestId("new-task-settled"));
     expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
-    fireEvent.click(screen.getByTestId("new-task-success"));
-    expect(pageNavigator.replace).toHaveBeenCalledWith({ kind: "taskDetail", taskID: "task-created" });
-    expect(pageNavigator.close).not.toHaveBeenCalled();
+    expect(fixture.newTaskProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialPreparedDependency,
+        navigator: pageNavigator,
+      }),
+    );
   });
-  it("keeps ordinary New Task exit available while pending and scopes success/missing dismissal", () => {
-    const pageNavigator = mountDestination({
-      boardQueryWorkflowID: "workflow-1",
-      kind: "newTask",
-      projectID: "project-1",
-      workflowID: "workflow-1",
-    });
+  it.each([{}, { parentReturnDirection: "blocked-by" as const }])(
+    "keeps root and stacked New Task exit available while pending",
+    (context) => {
+      const pageNavigator = mountDestination({
+        boardQueryWorkflowID: "workflow-1",
+        ...context,
+        kind: "newTask",
+        projectID: "project-1",
+        workflowID: "workflow-1",
+      });
 
-    fireEvent.click(screen.getByTestId("new-task-pending"));
-    expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
-    fireEvent.click(screen.getByTestId("new-task-missing"));
-    fireEvent.click(screen.getByTestId("new-task-success"));
-    expect(pageNavigator.back).toHaveBeenCalledOnce();
-    expect(pageNavigator.close).toHaveBeenCalledOnce();
-  });
+      fireEvent.click(screen.getByTestId("new-task-pending"));
+      expect(pageNavigator.registerAvailability).toHaveBeenLastCalledWith({ back: true, close: true });
+    },
+  );
   it("publishes Link Workflow creation through scoped replace", () => {
     const destination = { kind: "linkWorkflow", projectID: "project-1" } as const;
     const navigator = mountDestination(destination);

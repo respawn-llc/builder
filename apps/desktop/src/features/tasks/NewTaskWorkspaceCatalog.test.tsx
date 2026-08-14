@@ -1,7 +1,17 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps, ReactNode } from "react";
 
-import { RpcError, rpcErrorCodes, type WorkspaceCatalogPage, type WorkspaceCatalogRow } from "@/api";
+import {
+  RpcError,
+  rpcErrorCodes,
+  type TaskDependencies,
+  type TaskDependencyDirection,
+  type WorkspaceCatalogPage,
+  type WorkspaceCatalogRow,
+} from "@/api";
+import type { TaskSearchResult } from "@/app-facade";
+import type { PreparedTaskDependency } from "@/shared/task-dependencies";
+import { createTestSidebarNavigator } from "@/test-support/sidebar";
 import type { SelectFieldPaging } from "@/ui";
 
 interface TestSelectProps {
@@ -27,10 +37,7 @@ interface TestState {
     refetch: ReturnType<typeof vi.fn>;
   };
   exact: {
-    data:
-      | { kind: "attached"; workspace: WorkspaceCatalogRow }
-      | { kind: "not_attached" }
-      | undefined;
+    data: { kind: "attached"; workspace: WorkspaceCatalogRow } | { kind: "not_attached" } | undefined;
     error: Error | null;
     isError: boolean;
     isPending: boolean;
@@ -39,6 +46,7 @@ interface TestState {
   select: TestSelectProps | undefined;
   create: ReturnType<typeof vi.fn>;
   resetQueries: ReturnType<typeof vi.fn>;
+  statusPush: ReturnType<typeof vi.fn>;
 }
 
 const state = vi.hoisted((): TestState => ({
@@ -63,8 +71,14 @@ const state = vi.hoisted((): TestState => ({
     refetch: vi.fn(async () => undefined),
   },
   select: undefined,
-  create: vi.fn(async () => "task-created"),
+  create: vi.fn(async () => ({
+    id: "task-created",
+    shortID: "KENT-42",
+    title: "Task",
+    workflowID: "workflow-1",
+  })),
   resetQueries: vi.fn(async () => undefined),
+  statusPush: vi.fn(),
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
@@ -77,15 +91,11 @@ vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => k
 vi.mock("@/app-facade", () => ({
   projectWorkspaceQueryOptions: () => ({}),
   queryKeys: {
-    projectWorkspaceCatalog: (projectID: string) => [
-      "project-catalog",
-      projectID,
-      "workspaces",
-    ],
+    projectWorkspaceCatalog: (projectID: string) => ["project-catalog", projectID, "workspaces"],
   },
   useAppServices: () => ({ api: {} }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
-  useStatusController: () => ({ push: vi.fn() }),
+  useStatusController: () => ({ push: state.statusPush }),
   useTextFieldSubmitShortcut: () => undefined,
   workspaceCatalogInfiniteQueryOptions: () => ({}),
 }));
@@ -100,6 +110,62 @@ vi.mock("@/shared/native-dialog", () => ({
 }));
 vi.mock("@/shared/task-mutations", () => ({
   useCreateTask: () => ({ error: null, isPending: false, mutateAsync: state.create }),
+}));
+vi.mock("@/shared/task-dependencies", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/shared/task-dependencies")>()),
+  DependenciesArea: (props: TestDependenciesAreaProps) => (
+    <div data-testid="new-task-dependencies">
+      {props.dependencies.directions.flatMap((direction) =>
+        direction.items.map((item) => (
+          <div
+            data-testid={`prepared-${direction.direction}-${item.taskID}`}
+            key={`${direction.direction}-${item.taskID}`}
+          >
+            <button
+              data-testid={`prepared-open-${direction.direction}-${item.taskID}`}
+              onClick={() => {
+                props.onSelectTask(item.taskID);
+              }}
+              type="button"
+            />
+            <button
+              data-testid={`prepared-remove-${direction.direction}-${item.taskID}`}
+              onClick={() => {
+                props.onRemove(direction.direction, item);
+              }}
+              type="button"
+            />
+          </div>
+        )),
+      )}
+      {(["blocked-by", "blocks"] as const).flatMap((direction) => [
+        <button
+          data-testid={`prepared-select-${direction}-a`}
+          key={`${direction}-a`}
+          onClick={() => {
+            void props.onSelectCandidate(direction, dependencyCandidate(`${direction}-a`));
+          }}
+          type="button"
+        />,
+        <button
+          data-testid={`prepared-select-${direction}-b`}
+          key={`${direction}-b`}
+          onClick={() => {
+            void props.onSelectCandidate(direction, dependencyCandidate(`${direction}-b`));
+          }}
+          type="button"
+        />,
+        <button
+          data-testid={`prepared-create-${direction}`}
+          key={`${direction}-create`}
+          onClick={() => {
+            props.onAdd(direction);
+          }}
+          type="button"
+        />,
+      ])}
+    </div>
+  ),
 }));
 vi.mock("@/ui", () => ({
   Badge: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
@@ -123,7 +189,9 @@ vi.mock("@/ui", () => ({
           <button
             disabled={props.disabled}
             key={option.value}
-            onClick={() => { props.onValueChange(option.value); }}
+            onClick={() => {
+              props.onValueChange(option.value);
+            }}
           >
             {option.label}
           </button>
@@ -137,13 +205,27 @@ vi.mock("@/ui", () => ({
   TextArea: (props: ComponentProps<"textarea"> & { label: string }) => (
     <textarea aria-label={props.label} {...props} />
   ),
-  TextInput: (props: ComponentProps<"input"> & { label: string }) => (
-    <input aria-label={props.label} {...props} />
+  TextInput: ({ error, label, ...props }: ComponentProps<"input"> & { error?: ReactNode; label: string }) => (
+    <>
+      <input aria-label={label} {...props} />
+      {error}
+    </>
   ),
   cx: (...values: readonly (string | undefined)[]) => values.filter(Boolean).join(" "),
 }));
 
 import { NewTaskForm } from "./NewTaskDialog";
+
+type TestDependenciesAreaProps = Readonly<{
+  dependencies: TaskDependencies;
+  onAdd(direction: TaskDependencyDirection): void;
+  onRemove: (
+    direction: TaskDependencyDirection,
+    item: TaskDependencies["directions"][number]["items"][number],
+  ) => void;
+  onSelectCandidate(direction: TaskDependencyDirection, result: TaskSearchResult): Promise<unknown>;
+  onSelectTask(taskID: string): void;
+}>;
 
 const row = (id: string, isDefault = false): WorkspaceCatalogRow => ({
   id,
@@ -160,7 +242,7 @@ const page = (workspaces = [row("default", true), row("other")]): WorkspaceCatal
 const props = {
   boardQueryWorkflowID: "workflow-1",
   initialSourceWorkspaceID: "source",
-  onSubmitted: vi.fn(),
+  navigator: createTestSidebarNavigator(),
   projectID: "project-1",
   workflowID: "workflow-1",
 };
@@ -190,8 +272,8 @@ describe("New Task Workspace catalog integration", () => {
     state.exact.refetch.mockClear();
     state.create.mockClear();
     state.resetQueries.mockClear();
+    state.statusPush.mockClear();
     state.select = undefined;
-    props.onSubmitted.mockClear();
   });
 
   it.each(["catalog-first", "exact-first"])(
@@ -349,14 +431,14 @@ describe("New Task Workspace catalog integration", () => {
     loadCatalog();
     state.exact.data = { kind: "not_attached" };
     state.exact.isPending = false;
-    const onProjectMissing = vi.fn();
+    const navigator = createTestSidebarNavigator();
     const view = render(<NewTaskForm {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "other" }));
     fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), { target: { value: "Task" } });
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-    await vi.waitFor(() =>
-      { expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ sourceWorkspaceID: "other" })); },
-    );
+    await vi.waitFor(() => {
+      expect(state.create).toHaveBeenCalledWith(expect.objectContaining({ sourceWorkspaceID: "other" }));
+    });
     view.unmount();
     state.exact.error = new RpcError({
       code: rpcErrorCodes.projectNotFound,
@@ -365,7 +447,242 @@ describe("New Task Workspace catalog integration", () => {
     });
     state.exact.data = undefined;
     state.exact.isError = true;
-    render(<NewTaskForm {...props} onProjectMissing={onProjectMissing} />);
-    await vi.waitFor(() => { expect(onProjectMissing).toHaveBeenCalled(); });
+    render(<NewTaskForm {...props} navigator={navigator} />);
+    await vi.waitFor(() => {
+      expect(navigator.back).toHaveBeenCalled();
+    });
+  });
+
+  it("shows ordinary and Task Detail-originated prepared dependencies and removes the origin", () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const ordinary = render(<NewTaskForm {...props} />);
+    expect(screen.getByTestId("new-task-dependencies")).toBeInTheDocument();
+    expect(screen.queryByTestId(/^prepared-blocked-by-/)).not.toBeInTheDocument();
+    ordinary.unmount();
+
+    render(
+      <NewTaskForm {...props} initialPreparedDependency={preparedDependency("blocks", "task-origin")} />,
+    );
+    expect(screen.getByTestId("prepared-blocks-task-origin")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("prepared-remove-blocks-task-origin"));
+    expect(screen.queryByTestId("prepared-blocks-task-origin")).not.toBeInTheDocument();
+  });
+
+  it("stages sequential searched Tasks in both directions and opens prepared rows through Task Detail", () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const navigator = createTestSidebarNavigator();
+    render(<NewTaskForm {...props} navigator={navigator} />);
+
+    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
+    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-b"));
+    fireEvent.click(screen.getByTestId("prepared-select-blocks-a"));
+    expect(screen.getByTestId("prepared-blocked-by-blocked-by-a")).toBeInTheDocument();
+    expect(screen.getByTestId("prepared-blocked-by-blocked-by-b")).toBeInTheDocument();
+    expect(screen.getByTestId("prepared-blocks-blocks-a")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("prepared-open-blocked-by-blocked-by-a"));
+    expect(navigator.push).toHaveBeenCalledWith({
+      kind: "taskDetail",
+      taskID: "blocked-by-a",
+    });
+  });
+
+  it("pushes a stacked child without an unsaved-parent relationship and captures the complete Draft", () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const navigator = createTestSidebarNavigator();
+    render(<NewTaskForm {...props} navigator={navigator} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
+      target: { value: "Parent title" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "task.body" }), {
+      target: { value: "Parent body" },
+    });
+    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
+    fireEvent.click(screen.getByTestId("prepared-create-blocks"));
+
+    expect(navigator.push).toHaveBeenCalledWith({
+      boardQueryWorkflowID: "workflow-1",
+      initialSourceWorkspaceID: "source",
+      kind: "newTask",
+      parentReturnDirection: "blocks",
+      projectID: "project-1",
+      workflowID: "workflow-1",
+    });
+    const capture = vi.mocked(navigator.registerCapture).mock.lastCall?.[0];
+    if (capture === undefined) throw new Error("Expected New Task Draft capture.");
+    expect(capture()).toEqual({
+      formValues: {
+        body: "Parent body",
+        sourceWorkspaceID: "source",
+        title: "Parent title",
+      },
+      preparedDependencies: [preparedDependency("blocked-by", "blocked-by-a")],
+      selectedLabelIDs: [],
+    });
+  });
+
+  it("restores the authored Draft with picker state closed and recomputes validation on submission", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const retainedState = {
+      formValues: { body: "Body", sourceWorkspaceID: "source", title: "" },
+      preparedDependencies: [preparedDependency("blocked-by", "task-restored")],
+      selectedLabelIDs: [],
+    };
+    render(<NewTaskForm {...props} retainedState={retainedState} />);
+
+    expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "task.body" })).toHaveValue("Body");
+    expect(screen.getByTestId("prepared-blocked-by-task-restored")).toBeInTheDocument();
+    expect(screen.queryByText("form.required")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+    expect(await screen.findByText("form.required")).toBeInTheDocument();
+  });
+
+  it("submits every prepared relationship atomically and returns through one Back operation", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const navigator = createTestSidebarNavigator();
+    render(
+      <NewTaskForm
+        {...props}
+        initialPreparedDependency={preparedDependency("blocks", "task-origin")}
+        navigator={navigator}
+      />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
+      target: { value: "Task" },
+    });
+    fireEvent.click(screen.getByTestId("prepared-select-blocked-by-a"));
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+
+    await vi.waitFor(() => {
+      expect(state.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dependencyIntents: [
+            { relatedTaskID: "task-origin", newTaskRole: "blocker" },
+            { relatedTaskID: "blocked-by-a", newTaskRole: "blocked" },
+          ],
+        }),
+      );
+    });
+    expect(navigator.back).toHaveBeenCalledOnce();
+    expect(navigator.close).not.toHaveBeenCalled();
+    expect(navigator.replace).not.toHaveBeenCalled();
+  });
+
+  it("returns an active stacked child summary with backlog status and keeps Back available while pending", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    const navigator = createTestSidebarNavigator();
+    render(<NewTaskForm {...props} navigator={navigator} parentReturnDirection="blocked-by" />);
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
+      target: { value: "Child" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+
+    await vi.waitFor(() => {
+      expect(navigator.back).toHaveBeenCalledWith({
+        kind: "newTaskCreated",
+        direction: "blocked-by",
+        task: {
+          id: "task-created",
+          shortID: "KENT-42",
+          status: {
+            kind: "backlog",
+            nativeState: "active",
+            nodeIDs: [],
+            attentionTypes: [],
+          },
+          title: "Task",
+          workflowID: "workflow-1",
+        },
+      });
+    });
+  });
+
+  it("keeps the Draft and emits one Sonner failure when atomic creation reports Project missing", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    state.create.mockRejectedValueOnce(
+      new RpcError({
+        code: rpcErrorCodes.projectNotFound,
+        message: "Project no longer exists",
+        method: "workflow.task.create",
+      }),
+    );
+    const navigator = createTestSidebarNavigator();
+    render(<NewTaskForm {...props} navigator={navigator} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
+      target: { value: "Keep me" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+
+    await vi.waitFor(() => {
+      expect(state.statusPush).toHaveBeenCalledOnce();
+    });
+    expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("Keep me");
+    expect(navigator.back).not.toHaveBeenCalled();
+    expect(screen.queryByText("Project no longer exists")).not.toBeInTheDocument();
   });
 });
+
+function preparedDependency(direction: TaskDependencyDirection, taskID: string): PreparedTaskDependency {
+  return {
+    direction,
+    taskID,
+    shortID: taskID,
+    title: taskID,
+    workflowID: "workflow-1",
+    status: {
+      kind: "backlog",
+      nativeState: "active",
+      nodeIDs: [],
+      attentionTypes: [],
+    },
+  };
+}
+
+function dependencyCandidate(taskID: string): TaskSearchResult {
+  return {
+    key: taskID,
+    group: {
+      projectID: "project-1",
+      projectKey: "KENT",
+      taskID,
+      shortID: taskID,
+      workflowID: "workflow-1",
+      title: taskID,
+      status: {
+        kind: "backlog",
+        nativeState: "active",
+        nodeIDs: [],
+        attentionTypes: [],
+      },
+      totalHitCount: 1,
+      hits: [
+        {
+          ordinal: 1,
+          source: { kind: "title" },
+          literal: {
+            before: "",
+            match: taskID,
+            after: "",
+            leftTruncated: false,
+            rightTruncated: false,
+          },
+        },
+      ],
+    },
+  };
+}

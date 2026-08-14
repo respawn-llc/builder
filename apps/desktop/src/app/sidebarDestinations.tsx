@@ -36,7 +36,9 @@ export function SidebarDestinationView({
   retainedState?: unknown;
 }>): ReactElement {
   if (destination.kind === "newTask")
-    return <NewTaskDestination destination={destination} navigator={navigator} />;
+    return (
+      <NewTaskDestination destination={destination} navigator={navigator} retainedState={retainedState} />
+    );
   if (destination.kind === "taskDetail") {
     return (
       <TaskDetailDestination destination={destination} navigator={navigator} retainedState={retainedState} />
@@ -140,37 +142,32 @@ function TaskDetailHeaderActions({
 function NewTaskDestination({
   destination,
   navigator,
+  retainedState,
 }: Readonly<{
   destination: Extract<SidebarDestination, { kind: "newTask" }>;
   navigator: SidebarPageNavigator;
+  retainedState?: unknown;
 }>): ReactElement {
   const [pending, setPending] = useState(false);
   useEffect(
     () =>
       navigator.registerAvailability({
-        back: destination.pendingRelationship === undefined || !pending,
-        close: destination.pendingRelationship === undefined || !pending,
+        back: destination.initialPreparedDependency === undefined || !pending,
+        close: destination.initialPreparedDependency === undefined || !pending,
       }),
-    [destination.pendingRelationship, navigator, pending],
+    [destination.initialPreparedDependency, navigator, pending],
   );
   return (
     <NewTaskForm
       boardQueryWorkflowID={destination.boardQueryWorkflowID}
       className="w-full"
+      initialPreparedDependency={destination.initialPreparedDependency}
       initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
+      navigator={navigator}
       onPendingChange={setPending}
-      onProjectMissing={navigator.back}
-      onSubmitted={(taskID) => {
-        if (destination.pendingRelationship === undefined) navigator.close();
-        else
-          navigator.replace({
-            kind: "taskDetail",
-            taskID,
-            ...(destination.mode === undefined ? {} : { mode: destination.mode }),
-          });
-      }}
+      parentReturnDirection={destination.parentReturnDirection}
       projectID={destination.projectID}
-      pendingRelationship={destination.pendingRelationship}
+      retainedState={retainedState}
       workflowID={destination.workflowID}
     />
   );

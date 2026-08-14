@@ -495,6 +495,13 @@ export type TaskStatus = Readonly<{
   attentionTypes: readonly string[];
 }>;
 
+export type CreatedTaskSummary = Readonly<{
+  id: string;
+  shortID: string;
+  title: string;
+  workflowID: string;
+}>;
+
 export type TaskActions = Readonly<{
   canStart: boolean;
   canInterrupt: boolean;

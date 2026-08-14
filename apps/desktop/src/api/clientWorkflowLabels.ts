@@ -11,6 +11,7 @@ import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflow
 import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import { canonicalTaskLabelFilter } from "./workflowLabels";
+import type { CreatedTaskSummary } from "./models";
 import type {
   ProjectLabel,
   ProjectLabelCatalog,
@@ -133,7 +134,10 @@ export async function updateTaskLabels(
   );
 }
 
-export async function createTask(transport: RpcTransport, input: TaskMutationInput): Promise<string> {
+export async function createTask(
+  transport: RpcTransport,
+  input: TaskMutationInput,
+): Promise<CreatedTaskSummary> {
   const response = parse(
     "workflow.task.create",
     taskCreateResponseSchema,
@@ -146,17 +150,14 @@ export async function createTask(transport: RpcTransport, input: TaskMutationInp
         body: input.body,
         source_workspace_id: input.sourceWorkspaceID,
         label_ids: input.labelIDs,
-        dependency_intent:
-          input.dependencyIntent === undefined
-            ? undefined
-            : {
-                related_task_id: input.dependencyIntent.relatedTaskID,
-                new_task_role: input.dependencyIntent.newTaskRole,
-              },
+        dependency_intents: input.dependencyIntents.map((intent) => ({
+          related_task_id: intent.relatedTaskID,
+          new_task_role: intent.newTaskRole,
+        })),
       }),
     ),
   );
-  return response.task.id;
+  return response;
 }
 
 export async function listTasks(transport: RpcTransport, input: TaskListInput): Promise<TaskListPage> {
@@ -167,8 +168,7 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
       "workflow.task.list",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id:
-          input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+        workflow_id: input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],
