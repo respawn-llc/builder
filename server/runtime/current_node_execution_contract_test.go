@@ -1,6 +1,11 @@
 package runtime
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"strings"
 	"testing"
 
 	"core/server/session"
@@ -8,6 +13,39 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
+
+func TestWorkflowTerminalStateHasOneProductionWriter(t *testing.T) {
+	t.Parallel()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read runtime package: %v", err)
+	}
+	var writers []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, parseErr := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", name, parseErr)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && selector.Sel.Name == "recordWorkflowTerminalState" {
+				writers = append(writers, name)
+			}
+			return true
+		})
+	}
+	if len(writers) != 1 || writers[0] != "workflow_completion.go" {
+		t.Fatalf("Workflow terminal writers = %v, want only exact Agent Step application", writers)
+	}
+}
 
 func TestDetachedPublicationRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
 	t.Parallel()

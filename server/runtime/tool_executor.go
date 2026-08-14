@@ -422,21 +422,8 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 		}
 		return e.workflowCompletionRejectedResult(ctx, result, rejection)
 	}
-	recorded, err := e.recordWorkflowTerminalState(WorkflowCompletionSourceTool, *outcome.Accepted)
-	if err != nil {
-		return tools.ErrorResult(tools.Call{
-			ID:    call.ID,
-			Name:  toolspec.ToolCompleteNode,
-			Input: call.Input,
-		}, err.Error())
-	}
-	if !recorded {
-		result.Output = workflowruntime.ToolSuccessPayload(outcome.Accepted.Result)
-		result.Summary = textutil.Value("workflow node completed")
-		result.Terminal = true
-		return result
-	}
-	result.Output = workflowruntime.ToolSuccessPayload(outcome.Accepted.Result)
+	terminal := e.WorkflowTerminalState()
+	result.Output = workflowruntime.ToolSuccessPayload(terminal.Completion.Result)
 	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true
 	return result

@@ -973,13 +973,6 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, rejection)
 		return true, terminal, nudgeErr
 	}
-	recorded, err := e.recordWorkflowTerminalState(workflowCompletionSource(mode), *completion.Accepted)
-	if err != nil {
-		return true, false, err
-	}
-	if !recorded {
-		return true, true, nil
-	}
 	return true, true, nil
 }
 

@@ -605,7 +605,11 @@ func (c *workflowCompletionAccountingController) CompleteAgentCurrentNode(
 	c.completionRequests = append(c.completionRequests, request)
 	c.completionMu.Unlock()
 	c.completions.Add(1)
-	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{}), nil
+	return applyAcceptedWorkflowCompletionForTest(
+		c.externallyCompletedWorkflowController.engine,
+		request,
+		workflowruntime.AcceptedCompletion{},
+	)
 }
 
 func (c *workflowCompletionAccountingController) CompleteScriptCurrentNode(

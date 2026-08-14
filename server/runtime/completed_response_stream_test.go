@@ -903,6 +903,11 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 }
 
 type externallyCompletedWorkflowController struct {
+	engine *Engine
+}
+
+func (c *externallyCompletedWorkflowController) bindWorkflowCompletionEngine(engine *Engine) {
+	c.engine = engine
 }
 
 type interruptingWorkflowProtocolViolationController struct {
@@ -948,10 +953,10 @@ func (c *failingWorkflowCompletionController) RecordProtocolViolation(
 }
 
 func (c *externallyCompletedWorkflowController) CompleteAgentCurrentNode(
-	context.Context,
-	workflowruntime.AgentCompletionRequest,
+	_ context.Context,
+	req workflowruntime.AgentCompletionRequest,
 ) (workflowruntime.CompletionOutcome, error) {
-	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{}), nil
+	return applyAcceptedWorkflowCompletionForTest(c.engine, req, workflowruntime.AcceptedCompletion{})
 }
 
 func (c *externallyCompletedWorkflowController) CompleteScriptCurrentNode(

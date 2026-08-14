@@ -488,6 +488,11 @@ func publishTestWorkflowExecution(t *testing.T, engine *Engine, workflowCfg *wor
 	if workflowCfg == nil {
 		t.Fatal("workflow execution config is required")
 	}
+	if binder, ok := workflowCfg.Controller.(interface {
+		bindWorkflowCompletionEngine(*Engine)
+	}); ok {
+		binder.bindWorkflowCompletionEngine(engine)
+	}
 	if workflowCfg.ScopeID.IsZero() {
 		workflowCfg.ScopeID = runtimeids.NewExecutionScopeID()
 	}

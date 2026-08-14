@@ -23,7 +23,7 @@ type completeNodeBarrierController struct {
 
 func (c *completeNodeBarrierController) CompleteAgentCurrentNode(
 	_ context.Context,
-	_ workflowruntime.AgentCompletionRequest,
+	req workflowruntime.AgentCompletionRequest,
 ) (workflowruntime.CompletionOutcome, error) {
 	c.completeCalls.Add(1)
 	if c.beforeComplete != nil {
@@ -32,12 +32,12 @@ func (c *completeNodeBarrierController) CompleteAgentCurrentNode(
 	if c.completeError != nil {
 		return workflowruntime.RejectedCompletionOutcome(c.completeError), c.completeError
 	}
-	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
+	return applyAcceptedWorkflowCompletionForTest(c.engine, req, workflowruntime.AcceptedCompletion{
 		Result: workflowruntime.CompletionResult{
 			TransitionID: "done",
 			State:        "applied",
 		},
-	}), nil
+	})
 }
 
 func (c *completeNodeBarrierController) CompleteScriptCurrentNode(
