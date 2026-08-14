@@ -188,9 +188,9 @@ describe("task lifecycle client", () => {
     expect(
       taskMovePreviewResponseSchema.parse({
         outcome: "blocked",
-        blocked: { reason: "waiting_question" },
+        blocked: { reason: "lifecycle_conflict" },
       }),
-    ).toEqual({ outcome: "blocked", blocked: { reason: "waiting_question" } });
+    ).toEqual({ outcome: "blocked", blocked: { reason: "lifecycle_conflict" } });
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {

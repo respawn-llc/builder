@@ -16,8 +16,8 @@ func TestResolveAssigneeSessionPolicyMatrix(t *testing.T) {
 	}{
 		{name: "new session", mode: workflow.ContextModeNewSession, source: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}, want: workflow.AssigneeSessionPolicyEstablishTarget},
 		{name: "compact and continue", mode: workflow.ContextModeCompactAndContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "review"}, want: workflow.AssigneeSessionPolicyEstablishTarget},
-		{name: "continue immediate", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}, want: workflow.AssigneeSessionPolicyRequireTargetMatch},
-		{name: "continue selected", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "review"}, want: workflow.AssigneeSessionPolicyRequireTargetMatch},
+		{name: "continue immediate", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}, want: workflow.AssigneeSessionPolicyPreserve},
+		{name: "continue selected", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "review"}, want: workflow.AssigneeSessionPolicyPreserve},
 		{name: "continue previous target", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}, hasSession: true, want: workflow.AssigneeSessionPolicyPreserve},
 		{name: "continue previous target or new retained", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, hasSession: true, want: workflow.AssigneeSessionPolicyPreserve},
 		{name: "continue previous target or new fresh", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}, want: workflow.AssigneeSessionPolicyEstablishTarget},

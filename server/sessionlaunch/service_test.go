@@ -597,38 +597,39 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		t.Fatalf("ordinary caller target: %v", err)
 	}
 }
-func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T) {
+func TestServicePlanSessionPreservesLockedAgentRoleAndTools(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
-	role := "worker"
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+	persistedRole := "old_role"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &persistedRole}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
-	roleSettings := cfg.Settings
-	roleSettings.ThinkingLevel = "high"
+	persistedSettings := cfg.Settings
+	persistedSettings.ThinkingLevel = "low"
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
-		role: {
-			Settings:         roleSettings,
+		persistedRole: {
+			Settings:         persistedSettings,
 			Sources:          map[string]string{"thinking_level": "file"},
 			AgentCallable:    true,
 			AgentCallableSet: true,
 		},
 	}
 	service := newSessionLaunchTestService(cfg, containerDir)
+	requestedRole := "removed_role"
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "locked-named-tools",
+		ClientRequestID: "locked-role-and-tools",
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		Overrides: serverapi.RunPromptOverrides{
-			AgentRole: &role,
+			AgentRole: &requestedRole,
 			Tools:     "patch,edit",
 		},
 	})
@@ -637,6 +638,15 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	}
 	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "exec_command" {
 		t.Fatalf("enabled tools = %+v, want the persisted locked tool set", resp.Plan.EnabledToolIDs)
+	}
+	continuation := store.Meta().Continuation
+	if continuation == nil ||
+		continuation.AgentRole == nil ||
+		*continuation.AgentRole != persistedRole {
+		t.Fatalf("continuation = %+v, want preserved %q role", continuation, persistedRole)
+	}
+	if resp.Plan.ActiveSettings.ThinkingLevel != "low" {
+		t.Fatalf("thinking level = %q, want persisted role value low", resp.Plan.ActiveSettings.ThinkingLevel)
 	}
 }
 

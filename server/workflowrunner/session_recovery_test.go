@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"core/server/launch"
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -112,7 +111,7 @@ func TestCurrentNodeSessionPolicyReusesTargetOwnedFanoutSession(t *testing.T) {
 	}
 }
 
-func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
+func TestPlanCurrentNodeSessionPreservesRetainedRoleAcrossContextSources(t *testing.T) {
 	ctx := context.Background()
 	persistenceRoot := t.TempDir()
 	workspace := t.TempDir()
@@ -312,12 +311,27 @@ func TestPlanCurrentNodeSessionEnforcesRoleBoundaries(t *testing.T) {
 	input.CurrentNode.SessionID = &continuedSessionID
 	input.ContextMode = workflow.ContextModeContinueSession
 
-	_, directDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
-	if !errors.Is(err, launch.ErrLockedAgentRoleChange) {
-		t.Fatalf("plan cross-role direct continuation error = %v, want %v", err, launch.ErrLockedAgentRoleChange)
+	directPlan, directDisposable, err := starter.planCurrentNodeSession(ctx, input, root, false)
+	if err != nil {
+		t.Fatalf("plan cross-role direct continuation: %v", err)
 	}
 	if directDisposable {
 		t.Fatal("cross-role direct continuation unexpectedly marked retained Session disposable")
+	}
+	if directPlan.Continuation == nil ||
+		directPlan.Continuation.AgentRole == nil ||
+		*directPlan.Continuation.AgentRole != "coder" {
+		t.Fatalf("direct continuation plan role = %+v, want preserved coder", directPlan.Continuation)
+	}
+	directRecord, err := metadataStore.ResolvePersistedSession(ctx, continuedSessionID.String())
+	if err != nil {
+		t.Fatalf("resolve direct continuation Session: %v", err)
+	}
+	if directRecord.Meta == nil ||
+		directRecord.Meta.Continuation == nil ||
+		directRecord.Meta.Continuation.AgentRole == nil ||
+		*directRecord.Meta.Continuation.AgentRole != "coder" {
+		t.Fatalf("direct continuation role = %+v, want preserved coder", directRecord.Meta)
 	}
 
 	input.IsFanoutBranch = true

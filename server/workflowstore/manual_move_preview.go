@@ -28,7 +28,6 @@ const (
 	ManualMoveBlockerInvalidWorkflow              ManualMoveBlocker = "invalid_workflow"
 	ManualMoveBlockerNoSourcePosition             ManualMoveBlocker = "no_source_position"
 	ManualMoveBlockerUnsupportedDestination       ManualMoveBlocker = "unsupported_destination"
-	ManualMoveBlockerWaitingQuestion              ManualMoveBlocker = "waiting_question"
 	ManualMoveBlockerLifecycleConflict            ManualMoveBlocker = "lifecycle_conflict"
 	ManualMoveBlockerContextSessionUnavailable    ManualMoveBlocker = "context_session_unavailable"
 	ManualMoveBlockerNoUsableTransition           ManualMoveBlocker = "no_usable_transition"

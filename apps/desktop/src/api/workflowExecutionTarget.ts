@@ -98,7 +98,6 @@ export type TaskMovePreviewBlocker =
   | "invalid_workflow"
   | "no_source_position"
   | "unsupported_destination"
-  | "waiting_question"
   | "lifecycle_conflict"
   | "context_session_unavailable"
   | "no_usable_transition"

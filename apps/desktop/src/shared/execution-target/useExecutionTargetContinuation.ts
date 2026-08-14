@@ -9,6 +9,7 @@ import {
   decodeWorktreeSetupRetainedError,
   type WorktreeSetupRetainedError,
 } from "@/api";
+import { reportNonCancelledError } from "@/app-facade";
 import {
   initialExecutionTargetSelectionDraft,
   taskInitiatingActionID,
@@ -72,7 +73,7 @@ export function useTaskInitiatingActionController({
         try {
           await onApplied(result);
         } catch (error) {
-          onAppliedError(error);
+          reportNonCancelledError(error, onAppliedError);
         }
         return;
       }

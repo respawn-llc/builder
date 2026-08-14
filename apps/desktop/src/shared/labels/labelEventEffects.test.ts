@@ -1,4 +1,4 @@
-import { QueryClient, QueryObserver } from "@tanstack/react-query";
+import { CancelledError, QueryClient, QueryObserver } from "@tanstack/react-query";
 import { waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -61,6 +61,22 @@ describe("Project label event effects", () => {
       expect(onBackgroundError).toHaveBeenCalledWith(failure);
     });
     unsubscribe();
+  });
+
+  it("does not report canceled catalog refreshes", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onBackgroundError = vi.fn();
+    const effects = createEffects(queryClient, { onBackgroundError });
+    const invalidate = vi
+      .spyOn(queryClient, "invalidateQueries")
+      .mockRejectedValue(new CancelledError());
+
+    effects.scheduleCatalogRefresh();
+
+    await waitFor(() => {
+      expect(invalidate).toHaveBeenCalled();
+    });
+    expect(onBackgroundError).not.toHaveBeenCalled();
   });
 
   it("reports active Task assignment refresh failures", async () => {

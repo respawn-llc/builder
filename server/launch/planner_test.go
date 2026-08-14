@@ -327,7 +327,7 @@ func TestPlannerKeepsRoleBaseURLOutOfBaseSettingsOnResume(t *testing.T) {
 	}
 }
 
-func TestApplyRunPromptOverridesDefaultCannotClearLockedRoleAfterSkippingPersistedRoleLookup(t *testing.T) {
+func TestApplyRunPromptOverridesDefaultPreservesLockedRoleAfterSkippingPersistedRoleLookup(t *testing.T) {
 	workspace := t.TempDir()
 	settings := config.Settings{
 		Model:         "gpt-5.6-sol",
@@ -340,20 +340,20 @@ func TestApplyRunPromptOverridesDefaultCannotClearLockedRoleAfterSkippingPersist
 	})
 	plan.SkipContinuationAgentRoleValidation = true
 
-	_, _, err := ApplyRunPromptOverrides(
+	updated, _, err := ApplyRunPromptOverrides(
 		plan,
 		serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(config.DefaultSubagentRole)},
 		auth.EmptyState(),
 	)
-	if !errors.Is(err, ErrLockedAgentRoleChange) {
-		t.Fatalf("default locked-role clear error = %v, want %v", err, ErrLockedAgentRoleChange)
+	if err != nil {
+		t.Fatalf("default locked-role selection: %v", err)
 	}
-	if got := plan.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
-		t.Fatalf("locked continuation changed after rejected clear: %+v", got)
+	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
+		t.Fatalf("locked continuation = %+v, want preserved worker", got)
 	}
 }
 
-func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *testing.T) {
+func TestApplyRunPromptOverridesPreservesAgentRoleForLockedSession(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace,
 		"[subagents.old_role]",
@@ -379,6 +379,11 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 			override:  config.DefaultSubagentRole,
 		},
 		{
+			name:      "unavailable later role",
+			persisted: sessiontest.AgentRole("old_role"),
+			override:  "removed_role",
+		},
+		{
 			name:     "base session gains role",
 			override: "worker",
 		},
@@ -389,9 +394,20 @@ func TestApplyRunPromptOverridesRejectsDifferentAgentRoleForLockedSession(t *tes
 				Model:        "locked-model",
 				EnabledTools: []string{"shell"},
 			})
-			_, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(tt.override)}, auth.EmptyState())
-			if !errors.Is(err, ErrLockedAgentRoleChange) {
-				t.Fatalf("ApplyRunPromptOverrides error = %v, want locked role change", err)
+			updated, _, err := ApplyRunPromptOverrides(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr(tt.override)}, auth.EmptyState())
+			if err != nil {
+				t.Fatalf("ApplyRunPromptOverrides: %v", err)
+			}
+			got := updated.Continuation
+			if tt.persisted == nil {
+				if got != nil && got.AgentRole != nil {
+					t.Fatalf("continuation = %+v, want preserved default role", got)
+				}
+			} else if got == nil || !textutil.EqualOptional(got.AgentRole, tt.persisted) {
+				t.Fatalf("continuation = %+v, want preserved role %q", got, *tt.persisted)
+			}
+			if updated.ActiveSettings.Model != "locked-model" {
+				t.Fatalf("model = %q, want locked-model", updated.ActiveSettings.Model)
 			}
 		})
 	}
@@ -417,7 +433,7 @@ func TestApplyRunPromptOverridesAllowsSameAgentRoleForLockedSession(t *testing.T
 	}
 }
 
-func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *testing.T) {
+func TestApplyRunPromptOverridesWithOptionsPreservesAgentRoleForLockedSession(t *testing.T) {
 	workspace := t.TempDir()
 	loaded := loadLaunchConfig(t, workspace,
 		"[subagents.worker]",
@@ -438,20 +454,23 @@ func TestApplyRunPromptOverridesOptionAllowsAgentRoleChangeForLockedSession(t *t
 		EnabledTools:    []string{"shell"},
 		HasEnabledTools: true,
 	})
-	updated, _, err := ApplyRunPromptOverridesWithOptions(plan, serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")}, auth.EmptyState(), RunPromptOverrideOptions{
-		AllowLockedAgentRoleChange: true,
-	})
+	updated, _, err := ApplyRunPromptOverridesWithOptions(
+		plan,
+		serverapi.RunPromptOverrides{AgentRole: launchTestStringPtr("worker")},
+		auth.EmptyState(),
+		RunPromptOverrideOptions{},
+	)
 	if err != nil {
 		t.Fatalf("ApplyRunPromptOverridesWithOptions: %v", err)
 	}
-	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("worker")) {
-		t.Fatalf("continuation = %+v, want worker", got)
+	if got := updated.Continuation; got == nil || !textutil.EqualOptional(got.AgentRole, sessiontest.AgentRole("old_role")) {
+		t.Fatalf("continuation = %+v, want preserved old_role", got)
 	}
 	if updated.ActiveSettings.Model != "locked-model" {
 		t.Fatalf("model = %q, want locked-model", updated.ActiveSettings.Model)
 	}
-	if containsTool(updated.EnabledTools, toolspec.ToolExecCommand) || !containsTool(updated.EnabledTools, toolspec.ToolEdit) {
-		t.Fatalf("enabled tools = %+v, want recomputed role tools without old locked shell", updated.EnabledTools)
+	if !containsTool(updated.EnabledTools, toolspec.ToolExecCommand) || containsTool(updated.EnabledTools, toolspec.ToolEdit) {
+		t.Fatalf("enabled tools = %+v, want preserved locked shell contract", updated.EnabledTools)
 	}
 }
 

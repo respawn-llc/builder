@@ -1,7 +1,11 @@
 import type { QueryClient } from "@tanstack/react-query";
 
 import type { WorkflowProjectEvent } from "@/api";
-import { invalidateProjectBoardQueries, queryKeys } from "@/app-facade";
+import {
+  invalidateProjectBoardQueries,
+  queryKeys,
+  reportNonCancelledError,
+} from "@/app-facade";
 import type { LabelFilterAction } from "./labelFilterState";
 import { pruneDeletedLabelFromExistingCaches, removeDeletedTaskFromExistingCaches } from "./taskLabelCache";
 
@@ -96,7 +100,9 @@ export function createProjectLabelEffects({
     ]);
   };
   const run = (operation: Promise<void>): void => {
-    void operation.catch(onBackgroundError);
+    void operation.catch((error: unknown) => {
+      reportNonCancelledError(error, onBackgroundError);
+    });
   };
   const pruneDeletedLabel = (labelID: string): void => {
     pruneDeletedLabelFromExistingCaches(queryClient, projectID, labelID);

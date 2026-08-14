@@ -151,7 +151,7 @@ func TestCurrentNodeControllerTaskInterruptRejectsDurablyInterruptedPendingAppro
 	}
 }
 
-func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSibling(t *testing.T) {
+func TestCurrentNodeControllerManualMoveCancelsWaitingQuestionAndStopsSibling(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -199,17 +199,29 @@ func TestCurrentNodeControllerManualMoveRejectsWaitingQuestionWithoutStoppingSib
 	fixture.controller.mu.Unlock()
 	waitForRunningCurrentNode(t, fixture.authority, running)
 
-	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); !errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
-		t.Fatalf("InterruptForManualMove error = %v, want pending-question blocker", err)
+	if err := fixture.controller.InterruptForManualMove(context.Background(), running.TaskID, nil); err != nil {
+		t.Fatalf("InterruptForManualMove: %v", err)
 	}
-	if _, live := fixture.authority.ExecutionByScope(runningHandle.Scope().ID()); !live {
-		t.Fatal("manual move interruption stopped the running sibling")
+	if _, live := fixture.authority.ExecutionByScope(runningHandle.Scope().ID()); live {
+		t.Fatal("manual move left the running sibling live")
 	}
-	if _, interrupted := fixture.store.interruption(running); interrupted {
-		t.Fatal("manual move interruption persisted a sibling interruption")
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); live {
+		t.Fatal("manual move left the waiting Question live")
 	}
-	runningHandle.RequestStop()
-	_, _ = runningHandle.Wait(context.Background())
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("waiting Question result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual move did not cancel the waiting Question")
+	}
+	if _, interrupted := fixture.store.interruption(running); !interrupted {
+		t.Fatal("manual move did not persist the sibling interruption")
+	}
+	if _, interrupted := fixture.store.interruption(question); !interrupted {
+		t.Fatal("manual move did not persist the waiting Question interruption")
+	}
 }
 
 func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testing.T) {
@@ -241,8 +253,8 @@ func TestCurrentNodeControllerManualMoveDispositionClassifiesLifecycle(t *testin
 		if err != nil {
 			t.Fatalf("ManualMoveDisposition: %v", err)
 		}
-		if disposition != ManualMoveDispositionWaitingQuestion {
-			t.Fatalf("disposition = %q, want waiting_question", disposition)
+		if disposition != ManualMoveDispositionAutoInterruptible {
+			t.Fatalf("disposition = %q, want auto_interruptible", disposition)
 		}
 	})
 
