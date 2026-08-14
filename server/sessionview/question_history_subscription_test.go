@@ -202,6 +202,13 @@ func TestQuestionHistorySubscriptionChecksCancellationWhileSkippingRecords(t *te
 	if _, err := sub.Next(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Next after skipped record error = %v, want context canceled", err)
 	}
+	if ctx.errCalls != cancelAfterSkippedRecordErrCall {
+		t.Fatalf(
+			"context error checks = %d, want cancellation after skipped record at %d",
+			ctx.errCalls,
+			cancelAfterSkippedRecordErrCall,
+		)
+	}
 }
 
 func TestQuestionHistorySubscriptionPullsThroughLargeSingleWindow(t *testing.T) {
@@ -310,9 +317,14 @@ type cancelAfterSkippedRecordContext struct {
 	errCalls int
 }
 
+// The first thirteen checks span subscription entry and reading/projecting the
+// malformed candidate. The next check is the subscription boundary before it
+// asks the cursor for another record.
+const cancelAfterSkippedRecordErrCall = 14
+
 func (c *cancelAfterSkippedRecordContext) Err() error {
 	c.errCalls++
-	if c.errCalls >= 3 {
+	if c.errCalls >= cancelAfterSkippedRecordErrCall {
 		return context.Canceled
 	}
 	return nil
