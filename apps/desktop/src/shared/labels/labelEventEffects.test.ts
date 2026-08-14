@@ -79,6 +79,24 @@ describe("Project label event effects", () => {
     expect(onBackgroundError).not.toHaveBeenCalled();
   });
 
+  it("reports ordinary batched refresh failures when another refresh is canceled", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onBackgroundError = vi.fn();
+    const effects = createEffects(queryClient, { onBackgroundError });
+    const failure = new Error("membership refresh failed");
+    vi.spyOn(queryClient, "invalidateQueries")
+      .mockRejectedValueOnce(new CancelledError())
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValue(undefined);
+
+    effects.scheduleReorderRefresh();
+
+    await waitFor(() => {
+      expect(onBackgroundError).toHaveBeenCalledWith(failure);
+    });
+    expect(onBackgroundError).toHaveBeenCalledOnce();
+  });
+
   it("reports active Task assignment refresh failures", async () => {
     const queryClient = queryClientWithMembership();
     const onBackgroundError = vi.fn();

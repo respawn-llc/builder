@@ -225,6 +225,27 @@ func TestWorkflowGraphSaveBlocksRetargetingEnteringEdgeReferencedByCurrentNode(t
 	if saved.Saved {
 		t.Fatalf("retarget save = %+v, want blocked graph mutation", saved)
 	}
+	unchanged, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after blocked save: %v", err)
+	}
+	persistedEdgeFound := false
+	for _, edge := range unchanged.Edges {
+		if edge.ID == *review.EnteredByEdgeID {
+			persistedEdgeFound = true
+			if edge.TargetNodeID != review.Reference.NodeID {
+				t.Fatalf(
+					"referenced Edge target after blocked save = %q, want %q",
+					edge.TargetNodeID,
+					review.Reference.NodeID,
+				)
+			}
+			break
+		}
+	}
+	if !persistedEdgeFound {
+		t.Fatalf("referenced Edge %q missing after blocked save", *review.EnteredByEdgeID)
+	}
 }
 
 func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {

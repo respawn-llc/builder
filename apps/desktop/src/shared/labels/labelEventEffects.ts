@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 
 import type { WorkflowProjectEvent } from "@/api";
 import {
+  awaitAllQueryOperations,
   invalidateProjectBoardQueries,
   queryKeys,
   reportNonCancelledError,
@@ -43,7 +44,7 @@ export function createProjectLabelEffects({
     );
   };
   const invalidateReorderMembership = async (): Promise<void> => {
-    await Promise.all([
+    await awaitAllQueryOperations([
       queryClient.invalidateQueries(
         {
           queryKey: queryKeys.projectBoardNodeCardsRoot(projectID),
@@ -61,10 +62,10 @@ export function createProjectLabelEffects({
     ]);
   };
   const invalidateReorder = async (): Promise<void> => {
-    await Promise.all([invalidateCatalog(), invalidateReorderMembership()]);
+    await awaitAllQueryOperations([invalidateCatalog(), invalidateReorderMembership()]);
   };
   const invalidateMembership = async (): Promise<void> => {
-    await Promise.all([
+    await awaitAllQueryOperations([
       invalidateProjectBoardQueries(queryClient, projectID),
       queryClient.invalidateQueries(
         {
@@ -76,7 +77,7 @@ export function createProjectLabelEffects({
     ]);
   };
   const invalidateTaskAssignment = async (taskID: string): Promise<void> => {
-    await Promise.all([
+    await awaitAllQueryOperations([
       queryClient.invalidateQueries(
         {
           queryKey: queryKeys.taskLabels(taskID),
@@ -89,7 +90,7 @@ export function createProjectLabelEffects({
     ]);
   };
   const invalidateDeletedLabel = async (): Promise<void> => {
-    await Promise.all([
+    await awaitAllQueryOperations([
       invalidateCatalog(),
       queryClient.invalidateQueries(
         { queryKey: queryKeys.allTaskLabels, refetchType: "active" },
@@ -141,7 +142,7 @@ export function createProjectLabelEffects({
       await invalidateTaskAssignment(taskID);
     },
     async refreshAfterSubscriptionBoundary() {
-      await Promise.all([
+      await awaitAllQueryOperations([
         invalidateCatalog(),
         queryClient.invalidateQueries(
           { queryKey: queryKeys.allTaskLabels, refetchType: "active" },

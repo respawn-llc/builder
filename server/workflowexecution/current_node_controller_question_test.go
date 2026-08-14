@@ -15,6 +15,25 @@ import (
 	"github.com/google/uuid"
 )
 
+type failingResolutionPromptFeed struct {
+	err error
+}
+
+func (failingResolutionPromptFeed) PromptPendingScope(
+	sessionruntime.ExecutionScope,
+	askquestion.AskQuestionRequest,
+	time.Time,
+) error {
+	return nil
+}
+
+func (f failingResolutionPromptFeed) PromptResolvedScope(
+	sessionruntime.ExecutionScope,
+	string,
+) error {
+	return f.err
+}
+
 func TestCurrentNodeControllerTaskInterruptLeavesWaitingQuestionScopeNonQuiescent(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
@@ -221,6 +240,56 @@ func TestCurrentNodeControllerManualMoveCancelsWaitingQuestionAndStopsSibling(t 
 	}
 	if _, interrupted := fixture.store.interruption(question); !interrupted {
 		t.Fatal("manual move did not persist the waiting Question interruption")
+	}
+}
+
+func TestCurrentNodeControllerManualMoveCleansUpAfterQuestionResolutionPublicationFailure(t *testing.T) {
+	publicationFailure := errors.New("publish Question resolution")
+	fixture := newCurrentNodeQuestionFixtureWithPromptFeed(
+		t,
+		failingResolutionPromptFeed{err: publicationFailure},
+	)
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-manual-move-publication-failure",
+		"node-question",
+	)
+	request := askquestion.AskQuestionRequest{
+		ID:       "ask-manual-move-publication-failure",
+		StepID:   uuid.NewString(),
+		Question: "Keep waiting?",
+	}
+	pending := fixture.startPendingPrompt(t, reference, request)
+	fixture.waitForPendingPrompt(t, reference.TaskID, request.ID)
+	t.Cleanup(func() {
+		pending.handle.RequestStop()
+		_, _ = pending.handle.Wait(context.Background())
+	})
+
+	err := fixture.controller.InterruptForManualMove(context.Background(), reference.TaskID, nil)
+	if !errors.Is(err, publicationFailure) {
+		t.Fatalf("InterruptForManualMove error = %v, want publication failure", err)
+	}
+	if _, live := fixture.authority.ExecutionByScope(pending.handle.Scope().ID()); live {
+		t.Fatal("manual move publication failure left the waiting Question live")
+	}
+	select {
+	case result := <-pending.result:
+		if !errors.Is(result.err, context.Canceled) {
+			t.Fatalf("waiting Question result = %v, want context cancellation", result.err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("manual move publication failure did not cancel the waiting Question")
+	}
+	if _, interrupted := fixture.store.interruption(reference); !interrupted {
+		t.Fatal("manual move publication failure did not persist interruption")
+	}
+	if err := fixture.controller.InterruptForManualMove(
+		context.Background(),
+		reference.TaskID,
+		nil,
+	); err != nil {
+		t.Fatalf("second Manual Move remained fenced: %v", err)
 	}
 }
 

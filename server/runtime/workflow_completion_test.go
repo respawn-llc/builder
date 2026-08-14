@@ -631,7 +631,7 @@ func TestWorkflowModePromptResumedCurrentNodeMessageSkipsTaskAwarenessQueryAndRe
 	}
 }
 
-func TestWorkflowModePromptResumeRepairsMissingCurrentNodeAssignmentBeforeModelRequest(t *testing.T) {
+func TestWorkflowModePromptResumeRejectsMissingCurrentNodeAssignmentBeforeModelRequest(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	counter := &fakeTaskAwarenessSource{
@@ -648,22 +648,21 @@ func TestWorkflowModePromptResumeRepairsMissingCurrentNodeAssignmentBeforeModelR
 		),
 	)}}
 	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
+	before := eng.transcriptRuntimeState().SnapshotItems()
 
-	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
-		t.Fatalf("submit resumed workflow turn: %v", err)
+	_, err := eng.SubmitWorkflowTurn(context.Background())
+	if !errors.Is(err, errWorkflowResumeAssignmentUnavailable) {
+		t.Fatalf(
+			"submit resumed workflow turn error = %v, want missing assignment invariant",
+			err,
+		)
 	}
-
-	assertModelCallCount(t, client, 1)
-	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
-	if len(workflowMessages) != 1 {
-		t.Fatalf("workflow messages = %+v, want one repaired current-node assignment", workflowMessages)
+	assertModelCallCount(t, client, 0)
+	if after := eng.transcriptRuntimeState().SnapshotItems(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("Resume mutated model-visible history: before=%+v after=%+v", before, after)
 	}
-	wantIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
-	if workflowMessages[0].SourcePath == nil || *workflowMessages[0].SourcePath != wantIdentity {
-		t.Fatalf("workflow assignment identity = %v, want %q", workflowMessages[0].SourcePath, wantIdentity)
-	}
-	if got := counter.calls.Load(); got != 1 {
-		t.Fatalf("TaskAwareness calls = %d, want one repaired assignment prompt", got)
+	if got := counter.calls.Load(); got != 0 {
+		t.Fatalf("TaskAwareness calls = %d, want no assignment reconstruction", got)
 	}
 }
 
