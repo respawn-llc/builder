@@ -122,7 +122,7 @@ func isChatGPTCodexEndpoint(parsed *url.URL) bool {
 	if parsed == nil {
 		return false
 	}
-	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" ||
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" ||
 		!strings.EqualFold(parsed.Scheme, "https") ||
 		!strings.EqualFold(parsed.Hostname(), "chatgpt.com") ||
 		parsed.Port() != "" {

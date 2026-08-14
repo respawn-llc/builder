@@ -25,7 +25,7 @@ func TestCodexTurnStateUsesInitialHTTPHeaderAndIgnoresMetadata(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	dispatch := newTestCodexDispatch(t)
-	transport := newOAuthTestTransport(t, server)
+	transport := newCanonicalOAuthTestTransport(t, server)
 	if _, err := transport.GenerateStreamWithEvents(context.Background(), testCodexOpenAIRequest(dispatch), StreamCallbacks{}); err != nil {
 		t.Fatalf("GenerateStreamWithEvents: %v", err)
 	}
@@ -88,13 +88,4 @@ func testCodexOpenAIRequest(dispatch *CodexDispatchContext) OpenAIRequest {
 		SessionID:      textutil.Value("session-1"),
 		CodexDispatch:  dispatch,
 	}
-}
-
-func newOAuthTestTransport(t *testing.T, server *httptest.Server) *HTTPTransport {
-	t.Helper()
-	transport := NewHTTPTransport(oauthStaticAuth{})
-	transport.BaseURL = "https://chatgpt.com/backend-api/codex"
-	transport.BaseURLExplicit = true
-	transport.Client = newRewritingHTTPClient(t, server)
-	return transport
 }

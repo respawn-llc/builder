@@ -64,7 +64,7 @@ func TestClientNegotiatesAndDecodesZstdAndGzipResponses(t *testing.T) {
 			if err != nil {
 				t.Fatalf("GET: %v", err)
 			}
-			defer response.Body.Close()
+			defer closeResponseBody(t, response)
 
 			got, err := io.ReadAll(response.Body)
 			if err != nil {
@@ -88,7 +88,7 @@ func TestClientReturnsMalformedCompressedResponseReadError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer response.Body.Close()
+	defer closeResponseBody(t, response)
 
 	if _, err := io.ReadAll(response.Body); err == nil {
 		t.Fatal("expected malformed compressed response read error")
@@ -124,7 +124,7 @@ func TestClientPreservesCallerAcceptEncodingAndDecodesMatchingResponse(t *testin
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
-	defer response.Body.Close()
+	defer closeResponseBody(t, response)
 
 	got, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -153,9 +153,11 @@ func TestRequestMiddlewareGzipEncoderProducesGzipBody(t *testing.T) {
 		gotBody, err = io.ReadAll(request.Body)
 		return nil, err
 	})
-	if _, err := Middleware(ContentCodingGzip)(request, next); err != nil {
+	response, err := Middleware(ContentCodingGzip)(request, next)
+	if err != nil {
 		t.Fatalf("middleware: %v", err)
 	}
+	closeResponseBody(t, response)
 	if gotEncoding != "gzip" {
 		t.Fatalf("Content-Encoding = %q, want gzip", gotEncoding)
 	}
@@ -229,9 +231,11 @@ func TestRequestMiddlewareCompressesOnlyReplayableBodiesAtOrAboveThreshold(t *te
 				gotEncoding = request.Header.Get("Content-Encoding")
 				return nil, nil
 			})
-			if _, err := Middleware(ContentCodingZstd)(request, next); err != nil {
+			response, err := Middleware(ContentCodingZstd)(request, next)
+			if err != nil {
 				t.Fatalf("middleware: %v", err)
 			}
+			closeResponseBody(t, response)
 			if gotEncoding != test.wantEncoding {
 				t.Fatalf("Content-Encoding = %q, want %q", gotEncoding, test.wantEncoding)
 			}
@@ -250,12 +254,14 @@ func TestRequestMiddlewarePreservesExplicitAcceptEncoding(t *testing.T) {
 	request.Header.Set("Accept-Encoding", "br")
 
 	var acceptEncoding string
-	if _, err := Middleware(ContentCodingZstd)(request, func(request *http.Request) (*http.Response, error) {
+	response, err := Middleware(ContentCodingZstd)(request, func(request *http.Request) (*http.Response, error) {
 		acceptEncoding = request.Header.Get("Accept-Encoding")
 		return nil, nil
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("middleware: %v", err)
 	}
+	closeResponseBody(t, response)
 	if acceptEncoding != "br" {
 		t.Fatalf("Accept-Encoding = %q, want br", acceptEncoding)
 	}
@@ -278,9 +284,11 @@ func TestRequestMiddlewarePreservesExplicitContentEncoding(t *testing.T) {
 		gotEncoding = request.Header.Get("Content-Encoding")
 		return nil, err
 	})
-	if _, err := Middleware(ContentCodingZstd)(request, next); err != nil {
+	response, err := Middleware(ContentCodingZstd)(request, next)
+	if err != nil {
 		t.Fatalf("middleware: %v", err)
 	}
+	closeResponseBody(t, response)
 	if !bytes.Equal(gotBody, payload) {
 		t.Fatal("explicitly encoded body was changed")
 	}
@@ -303,9 +311,11 @@ func TestRequestMiddlewarePreservesCancellationAndCompressedReplay(t *testing.T)
 		prepared = request
 		return nil, nil
 	})
-	if _, err := Middleware(ContentCodingZstd)(request, next); err != nil {
+	response, err := Middleware(ContentCodingZstd)(request, next)
+	if err != nil {
 		t.Fatalf("middleware: %v", err)
 	}
+	closeResponseBody(t, response)
 	replay, err := prepared.GetBody()
 	if err != nil {
 		t.Fatalf("get compressed replay: %v", err)
@@ -314,7 +324,9 @@ func TestRequestMiddlewarePreservesCancellationAndCompressedReplay(t *testing.T)
 	if err != nil {
 		t.Fatalf("read compressed replay: %v", err)
 	}
-	_ = replay.Close()
+	if err := replay.Close(); err != nil {
+		t.Errorf("close compressed replay: %v", err)
+	}
 	decoder, err := zstd.NewReader(bytes.NewReader(replayed))
 	if err != nil {
 		t.Fatalf("create replay decoder: %v", err)
@@ -337,7 +349,7 @@ func TestRequestMiddlewarePreservesCancellationAndCompressedReplay(t *testing.T)
 	canceledRequest.ContentLength = int64(len(payload))
 	canceledRequest.GetBody = replayBody(payload)
 	called := false
-	_, err = Middleware(ContentCodingZstd)(canceledRequest, func(*http.Request) (*http.Response, error) {
+	response, err = Middleware(ContentCodingZstd)(canceledRequest, func(*http.Request) (*http.Response, error) {
 		called = true
 		return nil, nil
 	})
@@ -347,10 +359,21 @@ func TestRequestMiddlewarePreservesCancellationAndCompressedReplay(t *testing.T)
 	if called {
 		t.Fatal("canceled request reached the next handler")
 	}
+	closeResponseBody(t, response)
 }
 
 func replayBody(payload []byte) func() (io.ReadCloser, error) {
 	return func() (io.ReadCloser, error) {
 		return io.NopCloser(bytes.NewReader(payload)), nil
+	}
+}
+
+func closeResponseBody(t *testing.T, response *http.Response) {
+	t.Helper()
+	if response == nil || response.Body == nil {
+		return
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Errorf("close response body: %v", err)
 	}
 }

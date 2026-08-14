@@ -31,7 +31,7 @@ func ResolveRuntimeProviderCapabilities(authState auth.State, settings config.Se
 		}
 	}
 	mode := OpenAIAuthModeForAuthState(authState)
-	endpoint, err := newProviderTransportEndpoint(settings.OpenAIBaseURL, strings.TrimSpace(settings.OpenAIBaseURL) != "" && !IsOpenAIFirstPartyBaseURL(settings.OpenAIBaseURL))
+	endpoint, err := newProviderTransportEndpoint(settings.OpenAIBaseURL, strings.TrimSpace(settings.OpenAIBaseURL) != "")
 	if err != nil {
 		return ProviderCapabilities{}, err
 	}

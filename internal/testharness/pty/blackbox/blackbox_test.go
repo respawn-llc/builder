@@ -796,14 +796,11 @@ func newCanonicalOAuthStubClient(t *testing.T, stub *blackbox.ResponsesStub) *ht
 	if err != nil {
 		t.Fatalf("parse Responses stub URL: %v", err)
 	}
-	return &http.Client{Transport: httpclient.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		cloned := request.Clone(request.Context())
-		cloned.URL.Scheme = target.Scheme
-		cloned.URL.Host = target.Host
-		cloned.URL.Path = target.Path + strings.TrimPrefix(request.URL.Path, "/backend-api/codex")
-		cloned.Host = target.Host
-		return (&http.Transport{Proxy: nil}).RoundTrip(cloned)
-	})}
+	roundTripper := &http.Transport{Proxy: nil}
+	t.Cleanup(roundTripper.CloseIdleConnections)
+	return &http.Client{
+		Transport: httpclient.NewURLRewriteTransport(target, roundTripper, "/backend-api/codex"),
+	}
 }
 
 type unknownLengthReader struct {

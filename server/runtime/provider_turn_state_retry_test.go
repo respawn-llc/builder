@@ -140,12 +140,8 @@ func newProviderTurnStateTransport(t *testing.T, server *httptest.Server) *llm.H
 	transport := llm.NewHTTPTransport(providerTurnStateOAuthAuth{})
 	transport.BaseURL = "https://chatgpt.com/backend-api/codex"
 	transport.BaseURLExplicit = true
-	transport.Client = &http.Client{Transport: httpclient.RoundTripFunc(func(request *http.Request) (*http.Response, error) {
-		cloned := request.Clone(request.Context())
-		cloned.URL.Scheme = target.Scheme
-		cloned.URL.Host = target.Host
-		cloned.Host = target.Host
-		return server.Client().Transport.RoundTrip(cloned)
-	})}
+	transport.Client = &http.Client{
+		Transport: httpclient.NewURLRewriteTransport(target, server.Client().Transport, ""),
+	}
 	return transport
 }

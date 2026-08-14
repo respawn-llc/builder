@@ -278,15 +278,15 @@ func TestNewProviderClient_RemoteOpenAICompatibleBaseURLAllowsAnonymousCapabilit
 	}
 }
 
-func TestNewProviderClient_DefaultOpenAIBaseURLDoesNotStayExplicit(t *testing.T) {
+func TestNewProviderClient_KeepsExplicitOpenAIBaseURLExplicit(t *testing.T) {
 	openAIClient := newOpenAIClientFromOptions(t, ProviderClientOptions{
 		Model:         "gpt-5",
 		Auth:          providerTestMissingAuth{},
 		OpenAIBaseURL: "https://api.openai.com",
 	})
 	transport := httpTransportFromOpenAIClient(t, openAIClient)
-	if transport.BaseURLExplicit {
-		t.Fatal("expected canonical default OpenAI URL to avoid explicit anonymous-mode transport")
+	if !transport.BaseURLExplicit {
+		t.Fatal("expected configured OpenAI URL to remain explicit for OAuth routing")
 	}
 }
 

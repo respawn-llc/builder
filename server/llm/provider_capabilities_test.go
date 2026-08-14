@@ -125,6 +125,12 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 			wantID:   "openai-compatible",
 		},
 		{
+			name:     "oauth explicit first party API endpoint uses compatible capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://api.openai.com/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
 			name:     "oauth explicit canonical codex endpoint uses codex capabilities",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
 			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://chatgpt.com/backend-api/codex"},
@@ -253,6 +259,7 @@ func TestResolveOpenAITransportProviderVariant_DefaultLoopbackAndRemoteCompatibl
 	}
 	for _, endpoint := range []string{
 		"https://chatgpt.com/backend-api/codex?proxy=true",
+		"https://chatgpt.com/backend-api/codex?",
 		"https://user:secret@chatgpt.com/backend-api/codex",
 	} {
 		parsed, err := url.Parse(endpoint)
