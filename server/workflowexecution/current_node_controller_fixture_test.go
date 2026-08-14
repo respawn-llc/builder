@@ -323,17 +323,17 @@ func completeCurrentNodeLifecycleForTest(
 	ctx context.Context,
 	controller *CurrentNodeController,
 	scopeID runtimeids.ExecutionScopeID,
-	sessionID *runtimeids.SessionID,
 	transitionID string,
 ) (workflowstore.CurrentNodeCompletionResult, error) {
 	result, _, err := controller.completeLiveCurrentNode(
 		ctx,
 		scopeID,
-		sessionID,
 		transitionID,
 		nil,
 		"",
-		func(commit func() error) error { return commit() },
+		func(commit func() (workflowruntime.CompletionDecision, error)) (workflowruntime.CompletionDecision, error) {
+			return commit()
+		},
 	)
 	return result, err
 }
@@ -586,6 +586,7 @@ type currentNodeControllerStore struct {
 	interruptionCalls     map[workflow.CurrentNodeReferenceKey]int
 	recovered             []workflow.CurrentNodeReference
 	completion            workflowstore.CurrentNodeCompletionResult
+	completionDiagnostic  error
 	completions           int
 	startTaskStarted      chan struct{}
 	startTaskRelease      chan struct{}
@@ -810,7 +811,7 @@ func (s *currentNodeControllerStore) ResolveIdleExecutableCurrentNode(context.Co
 	return *s.idleResolved, nil
 }
 
-func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error) {
+func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error) {
 	if s.completionStarted != nil {
 		s.completionOnce.Do(func() {
 			close(s.completionStarted)
@@ -820,13 +821,17 @@ func (s *currentNodeControllerStore) CompleteCurrentNode(ctx context.Context, _ 
 		select {
 		case <-s.completionRelease:
 		case <-ctx.Done():
-			return workflowstore.CurrentNodeCompletionResult{}, context.Cause(ctx)
+			return workflowstore.CurrentNodeCompletionOutcome{}, session.DefinitelyUncommittedMutation(context.Cause(ctx))
 		}
 	}
 	s.mu.Lock()
 	s.completions++
 	s.mu.Unlock()
-	return s.completion, nil
+	return workflowstore.CurrentNodeCompletionOutcome{
+		CommitReceipt:               session.CommitReceipt{Committed: true},
+		CurrentNodeCompletionResult: s.completion,
+		PostCommitDiagnostic:        s.completionDiagnostic,
+	}, nil
 }
 
 func (s *currentNodeControllerStore) ValidateCurrentNodeSessionBinding(_ context.Context, sessionID runtimeids.SessionID, reference workflow.CurrentNodeReference) error {

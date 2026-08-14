@@ -9,6 +9,7 @@ import (
 
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
+	"core/server/session"
 	"core/server/workflow"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -32,6 +33,37 @@ func TestCompleteCurrentNodeWithoutApprovalDoesNotEmitQueryFailureDiagnostics(t 
 	}
 	if diagnostics.Len() != 0 {
 		t.Fatalf("ordinary completion diagnostics = %q, want none", diagnostics.String())
+	}
+}
+
+func TestCompleteCurrentNodeAssociationReadFailureIsDefinitelyUncommitted(t *testing.T) {
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, source.Reference)
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE session_workflow_node_associations`); err != nil {
+		t.Fatalf("drop association table: %v", err)
+	}
+
+	outcome, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "completed"},
+	})
+	if !errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
+		t.Fatalf("completion error = %v, want definitely uncommitted association failure", err)
+	}
+	if outcome.CommitReceipt.Committed {
+		t.Fatal("association failure reported a committed completion")
+	}
+	currentNodes, listErr := store.ListCurrentNodes(ctx, task.ID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes after failed completion: %v", listErr)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
+		t.Fatalf("current nodes after failed completion = %+v, want unchanged source", currentNodes)
 	}
 }
 
@@ -133,7 +165,7 @@ func TestCompleteCurrentNodeWaitsForConcurrentWriterWithoutLosingItsSnapshot(t *
 	}
 
 	type completionOutcome struct {
-		result CurrentNodeCompletionResult
+		result CurrentNodeCompletionOutcome
 		err    error
 	}
 	completed := make(chan completionOutcome, 1)
@@ -203,6 +235,13 @@ func TestCompleteCurrentNodeInfersOnlyOutgoingFanoutTransition(t *testing.T) {
 		if intent.NodeKind != workflow.NodeKindAgent {
 			t.Fatalf("fan-out automatic intent = %+v, want Agent Node kind", intent)
 		}
+	}
+	if completed.SourceSessionID != nil || completed.SessionReuseClassification != workflow.SessionReuseNone {
+		t.Fatalf(
+			"fan-out post-turn facts = session %v classification %q, want absent/none",
+			completed.SourceSessionID,
+			completed.SessionReuseClassification,
+		)
 	}
 }
 
@@ -276,6 +315,13 @@ func TestCompleteCurrentNodeJoinContinuationReturnsTargetNodeKind(t *testing.T) 
 	})
 	if err != nil {
 		t.Fatalf("CompleteCurrentNode second join arrival: %v", err)
+	}
+	if joined.SourceSessionID != nil || joined.SessionReuseClassification != workflow.SessionReuseNone {
+		t.Fatalf(
+			"Join post-turn facts = session %v classification %q, want absent/none",
+			joined.SourceSessionID,
+			joined.SessionReuseClassification,
+		)
 	}
 	if len(joined.AutomaticIntents) != 1 {
 		t.Fatalf("join continuation automatic intents = %+v, want one synth successor", joined.AutomaticIntents)
@@ -437,6 +483,16 @@ func TestCompleteCurrentNodeCreatesFrozenPendingApprovalAndRetainsSource(t *test
 	}
 	if completed.PendingApproval == nil {
 		t.Fatal("pending approval completion omitted approval projection")
+	}
+	if completed.SourceSessionID == nil || *completed.SourceSessionID != sourceSessionID {
+		t.Fatalf("pending Approval source Session = %v, want %q", completed.SourceSessionID, sourceSessionID)
+	}
+	if completed.SessionReuseClassification != workflow.SessionReuseThresholdPossibleReuse {
+		t.Fatalf(
+			"pending Approval reuse classification = %q, want %q",
+			completed.SessionReuseClassification,
+			workflow.SessionReuseThresholdPossibleReuse,
+		)
 	}
 	approval := *completed.PendingApproval
 	if err := approval.ID.Validate(); err != nil {
@@ -738,6 +794,12 @@ func TestCompleteCurrentNodeCompactAndContinueSessionUsesImmediateSourceSession(
 		completed.Mutation.Created[0].SessionID == nil ||
 		*completed.Mutation.Created[0].SessionID != fixture.sessionID {
 		t.Fatalf("compact-and-continue target = %+v, want source session %q", completed.Mutation.Created, fixture.sessionID)
+	}
+	if completed.SourceSessionID == nil || *completed.SourceSessionID != fixture.sessionID {
+		t.Fatalf("completion source Session = %v, want %q", completed.SourceSessionID, fixture.sessionID)
+	}
+	if completed.SessionReuseClassification != workflow.SessionReuseNone {
+		t.Fatalf("direct compact continuation classification = %q, want none before source dormancy", completed.SessionReuseClassification)
 	}
 }
 

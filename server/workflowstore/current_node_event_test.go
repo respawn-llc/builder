@@ -73,3 +73,31 @@ func TestCompleteCurrentNodePublishesCompletionEventAfterCommittedMutation(t *te
 		t.Fatalf("completion events = %+v, want one completed task event", publisher.events)
 	}
 }
+
+func TestCompleteCurrentNodeReturnsCommittedResultWithPublicationDiagnostic(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	publicationErr := errors.New("wake unavailable")
+	store.SetWorkflowEventPublisher(&recordingCurrentNodeEventPublisher{err: publicationErr})
+
+	outcome, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       source.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "completed"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	if !outcome.CommitReceipt.Committed {
+		t.Fatal("completion outcome did not report its committed receipt")
+	}
+	if !errors.Is(outcome.PostCommitDiagnostic, publicationErr) {
+		t.Fatalf("post-commit diagnostic = %v, want %v", outcome.PostCommitDiagnostic, publicationErr)
+	}
+	if len(outcome.Mutation.Removed) != 1 || !outcome.Mutation.Removed[0].Equal(source.Reference) {
+		t.Fatalf("committed completion result = %+v, want removed source", outcome.CurrentNodeCompletionResult)
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"sync/atomic"
 
@@ -131,7 +130,7 @@ type CurrentNodeController struct {
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	}
@@ -186,7 +185,7 @@ func NewCurrentNodeController(
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
 		ResolveIdleExecutableCurrentNode(context.Context, workflowstore.IdleCurrentNodeSelector) (workflow.CurrentNode, error)
-		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionResult, error)
+		CompleteCurrentNode(context.Context, workflowstore.CurrentNodeCompletionRequest) (workflowstore.CurrentNodeCompletionOutcome, error)
 		ValidateCurrentNodeSessionBinding(context.Context, runtimeids.SessionID, workflow.CurrentNodeReference) error
 		TaskExecutionScope(context.Context, workflow.TaskID) (workflowstore.TaskExecutionScope, error)
 	},
@@ -267,11 +266,10 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 	_, operation, err := c.completeLiveCurrentNode(
 		ctx,
 		req.ScopeID,
-		nil,
 		req.TransitionID,
 		req.OutputValues,
 		req.Commentary,
-		func(commit func() error) error {
+		func(commit func() (workflowruntime.CompletionDecision, error)) (workflowruntime.CompletionDecision, error) {
 			return c.authority.CompleteFinalizingScript(req.ScopeID, commit)
 		},
 	)
@@ -337,11 +335,10 @@ func (c *CurrentNodeController) completeAgentCurrentNode(
 	return c.completeLiveCurrentNode(
 		ctx,
 		req.Provenance.ScopeID,
-		&req.SessionID,
 		req.TransitionID,
 		req.OutputValues,
 		req.Commentary,
-		func(commit func() error) error {
+		func(commit func() (workflowruntime.CompletionDecision, error)) (workflowruntime.CompletionDecision, error) {
 			return c.authority.CompleteAgentStep(
 				ctx,
 				req.Provenance.ScopeID,
@@ -356,11 +353,12 @@ func (c *CurrentNodeController) completeAgentCurrentNode(
 func (c *CurrentNodeController) completeLiveCurrentNode(
 	ctx context.Context,
 	scopeID runtimeids.ExecutionScopeID,
-	sessionID *runtimeids.SessionID,
 	transitionID string,
 	outputValues map[string]string,
 	commentary string,
-	validateAndCommit func(func() error) error,
+	validateAndCommit func(
+		func() (workflowruntime.CompletionDecision, error),
+	) (workflowruntime.CompletionDecision, error),
 ) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error) {
 	handle, live := c.authority.ExecutionByScope(scopeID)
 	if !live {
@@ -389,33 +387,33 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 			return err
 		}
 		c.mu.Unlock()
-		if err := validateAndCommit(func() error {
+		if _, err := validateAndCommit(func() (workflowruntime.CompletionDecision, error) {
 			c.mu.Lock()
 			exact := c.operations[key]
 			if exact == nil || exact.ref.OperationID != workflowRef.OperationID || exact.completion != nil {
 				c.mu.Unlock()
-				return sessionruntime.ErrExecutionNoLongerLive
+				return workflowruntime.CompletionDecision{}, sessionruntime.ErrExecutionNoLongerLive
 			}
 			if err := c.ensureTaskAvailableLocked(workflowRef.CurrentNode.TaskID); err != nil {
 				c.mu.Unlock()
-				return err
+				return workflowruntime.CompletionDecision{}, err
 			}
 			c.mu.Unlock()
-			var completionErr error
-			completed, completionErr = c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
+			outcome, completionErr := c.store.CompleteCurrentNode(ctx, workflowstore.CurrentNodeCompletionRequest{
 				Source:       workflowRef.CurrentNode,
 				TransitionID: transitionID,
 				OutputValues: outputValues,
 				Commentary:   commentary,
 			})
+			decision := workflowruntime.CompletionDecision{
+				CommitReceipt:        outcome.CommitReceipt,
+				PostCommitDiagnostic: outcome.PostCommitDiagnostic,
+			}
 			if completionErr != nil {
-				return completionErr
+				return decision, completionErr
 			}
-			intents, intentErr := currentNodeAutomaticIntents(completed.AutomaticIntents)
-			if intentErr != nil {
-				return intentErr
-			}
-			starts = automaticQueuedStarts(intents)
+			completed = outcome.CurrentNodeCompletionResult
+			starts = automaticQueuedStarts(completed.AutomaticIntents)
 			c.mu.Lock()
 			exact = c.operations[key]
 			if exact == nil || exact.ref.OperationID != workflowRef.OperationID {
@@ -433,17 +431,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 			}
 			c.mu.Unlock()
 			if completed.PostCompletionEligible {
-				analysis := workflow.SessionReuseAnalysisInput{}
-				if completed.SessionReuse != nil {
-					analysis = *completed.SessionReuse
-					analysis.RetainedAssociations = c.loadSessionReuseAssociations(ctx, analysis)
-				}
-				classification := workflow.ClassifyWorkflowSessionReuse(analysis)
-				sourceSessionID := sessionID
-				if sourceSessionID == nil && analysis.CompletedCurrentNode.SessionID != nil {
-					value := *analysis.CompletedCurrentNode.SessionID
-					sourceSessionID = &value
-				}
+				sourceSessionID := completed.SourceSessionID
 				c.mu.Lock()
 				exact = c.operations[key]
 				if exact == nil || exact.ref.OperationID != workflowRef.OperationID {
@@ -452,14 +440,14 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 				}
 				phase := currentNodePostTurnFinalization{
 					sessionID:      sourceSessionID,
-					classification: classification,
+					classification: completed.SessionReuseClassification,
 					reference:      workflowRef.CurrentNode,
 					starts:         append([]currentNodeQueuedStart(nil), starts...),
 				}
 				exact.postTurnFinalization = &phase
 				exact.heldStarts = append([]currentNodeQueuedStart(nil), starts...)
 				c.mu.Unlock()
-				return nil
+				return decision, nil
 			}
 			starts, pending = pendingCurrentNodeAssignmentStarts(starts)
 			c.mu.Lock()
@@ -470,7 +458,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 			}
 			exact.heldStarts = starts
 			c.mu.Unlock()
-			return nil
+			return decision, nil
 		}); err != nil {
 			resolveErr := c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 			return errors.Join(err, resolveErr)
@@ -484,30 +472,6 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, err
 	}
 	return completed, workflowRef.Operation(), nil
-}
-
-func (c *CurrentNodeController) loadSessionReuseAssociations(
-	ctx context.Context,
-	input workflow.SessionReuseAnalysisInput,
-) []workflow.SessionReuseAssociation {
-	loader, ok := c.store.(interface {
-		LoadSessionReuseAssociations(context.Context, []workflow.CurrentNodeReference) ([]workflow.SessionReuseAssociation, error)
-	})
-	if !ok {
-		return nil
-	}
-	references := workflow.SessionReuseAssociationReferences(input)
-	associations, err := loader.LoadSessionReuseAssociations(ctx, references)
-	if err != nil {
-		slog.Warn(
-			"load workflow session reuse associations failed",
-			"task_id", input.CompletedCurrentNode.Reference.TaskID,
-			"node_id", input.CompletedCurrentNode.Reference.NodeID,
-			"error", err,
-		)
-		return nil
-	}
-	return associations
 }
 
 func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(

@@ -726,7 +726,7 @@ func TestCurrentNodeControllerHoldsApprovalTargetUntilCompletedSourceScopeRetire
 	waitForRunningCurrentNode(t, authority, source)
 	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := completeCurrentNodeLifecycleForTest(
-		context.Background(), controller, sourceScope, nil, "review",
+		context.Background(), controller, sourceScope, "review",
 	); err != nil {
 		t.Fatalf("complete approval source: %v", err)
 	}
@@ -782,15 +782,12 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	successor := currentNodeReferenceForControllerTest(t, "task-successor", "node-successor")
 	sessionID := runtimeids.NewSessionID()
 	store := &currentNodeControllerStore{
+		completionDiagnostic: errors.New("completion event publication failed"),
 		completion: workflowstore.CurrentNodeCompletionResult{
-			AutomaticIntents: []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
-			SessionReuse: &workflow.SessionReuseAnalysisInput{
-				CompletedCurrentNode: workflow.CurrentNode{
-					Reference: source,
-					SessionID: &sessionID,
-				},
-			},
-			PostCompletionEligible: true,
+			AutomaticIntents:           []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindAgent}},
+			SourceSessionID:            &sessionID,
+			SessionReuseClassification: workflow.SessionReuseGuaranteedCACReuse,
+			PostCompletionEligible:     true,
 		},
 	}
 	var controller *CurrentNodeController
@@ -835,9 +832,22 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}, "source did not become live")
 	sourceScope := singleLiveScope(t, authority, source)
 	if _, err := completeCurrentNodeLifecycleForTest(
-		context.Background(), controller, sourceScope, &sessionID, "next",
+		context.Background(), controller, sourceScope, "next",
 	); err != nil {
 		t.Fatalf("complete source: %v", err)
+	}
+	sourceKey, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
+	controller.mu.Lock()
+	phase := controller.operations[sourceKey].postTurnFinalization
+	controller.mu.Unlock()
+	if phase == nil ||
+		phase.sessionID == nil ||
+		*phase.sessionID != sessionID ||
+		phase.classification != workflow.SessionReuseGuaranteedCACReuse {
+		t.Fatalf("prepared post-turn facts = %+v, want source Session and guaranteed CAC", phase)
 	}
 	select {
 	case started := <-runner.started:
@@ -884,6 +894,9 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 	}
 	if err := sourceHandle.Stop(context.Background()); err != nil {
 		t.Fatalf("stop source: %v", err)
+	}
+	if interruption, interrupted := store.interruption(source); interrupted {
+		t.Fatalf("committed diagnostic interrupted source: %+v", interruption)
 	}
 }
 
@@ -934,7 +947,7 @@ func TestCurrentNodeControllerCompletionAndTaskInterruptDoNotDeadlockOrReleaseSu
 	completionDone := make(chan error, 1)
 	go func() {
 		_, err := completeCurrentNodeLifecycleForTest(
-			context.Background(), controller, sourceScope, nil, "next",
+			context.Background(), controller, sourceScope, "next",
 		)
 		completionDone <- err
 	}()

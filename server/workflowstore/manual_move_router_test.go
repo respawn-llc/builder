@@ -132,7 +132,7 @@ func completeManualMoveFixtureNode(t *testing.T, ctx context.Context, store *Sto
 	if err != nil {
 		t.Fatalf("%s: %v", label, err)
 	}
-	return result
+	return result.CurrentNodeCompletionResult
 }
 
 func applyManualMoveFixture(t *testing.T, ctx context.Context, store *Store, binding metadata.Binding, req ManualMoveRequest) ManualMoveResult {

@@ -205,12 +205,11 @@ func (s *Store) LatestTaskSessionForNode(ctx context.Context, currentNode workfl
 	return latestTaskSessionForNode(ctx, s.queries, currentNode)
 }
 
-// LoadSessionReuseAssociations resolves the bounded Current Node references
-// selected by Workflow execution through the existing latest-association
-// lookups. Missing references are omitted because context sources can
-// distinguish an absent retained Session from a selected one.
-func (s *Store) LoadSessionReuseAssociations(
+// loadSessionReuseAssociations resolves bounded retained provenance through
+// the same transaction-bound query owner as Current Node completion.
+func loadSessionReuseAssociations(
 	ctx context.Context,
+	q *sqlitegen.Queries,
 	references []workflow.CurrentNodeReference,
 ) ([]workflow.SessionReuseAssociation, error) {
 	associations := make([]workflow.SessionReuseAssociation, 0, len(references))
@@ -225,7 +224,7 @@ func (s *Store) LoadSessionReuseAssociations(
 			continue
 		}
 		seen[key] = struct{}{}
-		association, err := s.LatestTaskSessionForNode(lookupCtx, reference)
+		association, err := latestTaskSessionForNode(lookupCtx, q, reference)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}

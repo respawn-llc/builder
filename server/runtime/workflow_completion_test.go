@@ -243,7 +243,7 @@ func bindExternalAgentCompletion(
 		if err != nil {
 			return err
 		}
-		return engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, func() error {
+		_, completionErr := engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, func() (workflowruntime.CompletionDecision, error) {
 			_, err := controller.CompleteAgentCurrentNode(context.Background(), workflowruntime.AgentCompletionRequest{
 				Provenance: workflowruntime.AgentCompletionProvenance{
 					ScopeID: scopeID,
@@ -252,8 +252,11 @@ func bindExternalAgentCompletion(
 				},
 				SessionID: runtimeids.NewSessionID(),
 			})
-			return err
+			return workflowruntime.CompletionDecision{
+				CommitReceipt: session.CommitReceipt{Committed: err == nil},
+			}, err
 		})
+		return completionErr
 	}
 }
 

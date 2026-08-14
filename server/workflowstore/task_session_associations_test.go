@@ -420,7 +420,7 @@ func TestLoadSessionReuseAssociationsUsesExistingSerialAndBranchLookups(t *testi
 		}
 	}
 
-	associations, err := store.LoadSessionReuseAssociations(ctx, []workflow.CurrentNodeReference{
+	associations, err := loadSessionReuseAssociations(ctx, store.queries, []workflow.CurrentNodeReference{
 		serialReference,
 		branchAReference,
 		branchBReference,
@@ -463,8 +463,9 @@ func TestLoadSessionReuseAssociationsTreatsMissingReferencesAsNormalWithoutDiagn
 
 	diagnostics := testsetup.CaptureSlog(t)
 
-	associations, err := store.LoadSessionReuseAssociations(
+	associations, err := loadSessionReuseAssociations(
 		metadata.WithQueryFailureDiagnostics(ctx),
+		store.queries,
 		[]workflow.CurrentNodeReference{started.Reference, branchReference},
 	)
 	if err != nil {
@@ -519,7 +520,7 @@ func TestLoadSessionReuseAssociationsRetainsBranchVisitAfterJoinCycle(t *testing
 		}
 	}
 
-	associations, err := store.LoadSessionReuseAssociations(ctx, []workflow.CurrentNodeReference{
+	associations, err := loadSessionReuseAssociations(ctx, store.queries, []workflow.CurrentNodeReference{
 		branchBeforeJoin,
 		branchAfterJoin,
 	})

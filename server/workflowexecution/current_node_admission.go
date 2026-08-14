@@ -10,7 +10,6 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowruntime"
-	"core/server/workflowstore"
 	"core/shared/runtimeids"
 )
 
@@ -1024,26 +1023,6 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
 	}
 	return err
-}
-
-func currentNodeAutomaticIntents(source []workflowstore.CurrentNodeAutomaticIntent) ([]CurrentNodeAutomaticIntent, error) {
-	intents := make([]CurrentNodeAutomaticIntent, 0, len(source))
-	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(source))
-	for index, intent := range source {
-		key, err := intent.CurrentNode.Key()
-		if err != nil {
-			return nil, fmt.Errorf("automatic successor current node at index %d: %w", index, err)
-		}
-		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("automatic successor current node at index %d is duplicated", index)
-		}
-		if intent.NodeKind != workflow.NodeKindAgent && intent.NodeKind != workflow.NodeKindScript {
-			return nil, fmt.Errorf("automatic successor current node at index %d has non-executable kind %q", index, intent.NodeKind)
-		}
-		seen[key] = struct{}{}
-		intents = append(intents, intent)
-	}
-	return intents, nil
 }
 
 func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQueuedStart {

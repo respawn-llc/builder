@@ -123,21 +123,24 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 	scopeID runtimeids.ExecutionScopeID,
 	runID runtimeids.RunID,
 	stepID runtimeids.StepID,
-	commit func() error,
-) error {
+	commit func() (workflowruntime.CompletionDecision, error),
+) (workflowruntime.CompletionDecision, error) {
 	if e == nil || commit == nil {
-		return errors.New("Workflow Agent completion authority is unavailable")
+		return workflowruntime.CompletionDecision{}, errors.New("Workflow Agent completion authority is unavailable")
 	}
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.ScopeID != scopeID {
-		return ErrActiveStepInactive
+		return workflowruntime.CompletionDecision{}, ErrActiveStepInactive
 	}
 	snapshot := e.ActiveRun()
 	if snapshot == nil || snapshot.RunID != runID.String() || snapshot.StepID != stepID.String() {
-		return ErrActiveStepInactive
+		return workflowruntime.CompletionDecision{}, ErrActiveStepInactive
 	}
-	return e.ApplyForActiveStep(stepID.String(), func() error {
-		if err := commit(); err != nil {
+	var decision workflowruntime.CompletionDecision
+	err := e.ApplyForActiveStep(stepID.String(), func() error {
+		var err error
+		decision, err = commit()
+		if err != nil {
 			return err
 		}
 		recorded, err := e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode))
@@ -149,6 +152,7 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 		}
 		return nil
 	})
+	return decision, err
 }
 
 func (e *Engine) workflowSessionID() (runtimeids.SessionID, error) {

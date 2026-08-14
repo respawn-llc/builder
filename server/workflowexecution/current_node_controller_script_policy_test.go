@@ -432,7 +432,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 	cause := errors.New("assignment persistence failed")
 	steerer.setWaitError(cause)
 	if _, err := completeCurrentNodeLifecycleForTest(
-		context.Background(), controller, sourceScope, nil, "next",
+		context.Background(), controller, sourceScope, "next",
 	); err != nil {
 		t.Fatalf("complete source: %v", err)
 	}

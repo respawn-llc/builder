@@ -14,6 +14,7 @@ import (
 	"core/server/session"
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
+	"core/server/workflowruntime"
 	"core/shared/invariant"
 	"core/shared/runtimeids"
 )
@@ -356,13 +357,14 @@ func (a *Authority) CompleteAgentStep(
 	scopeID runtimeids.ExecutionScopeID,
 	runID runtimeids.RunID,
 	stepID runtimeids.StepID,
-	operation func() error,
-) error {
+	operation func() (workflowruntime.CompletionDecision, error),
+) (workflowruntime.CompletionDecision, error) {
 	handle, ok := a.ExecutionByScope(scopeID)
 	if !ok {
-		return ErrExecutionNoLongerLive
+		return workflowruntime.CompletionDecision{}, ErrExecutionNoLongerLive
 	}
-	return a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+	var decision workflowruntime.CompletionDecision
+	err := a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
 		exact := handle.(executionHandle).execution
 		if exact.scope.Kind() != ExecutionScopeAgent ||
 			exact.phase != executionPhaseRunning ||
@@ -373,14 +375,24 @@ func (a *Authority) CompleteAgentStep(
 			ctx,
 			exact.resource.ref,
 			func(_ context.Context, engine *runtime.Engine) error {
-				return engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, operation)
+				var completionErr error
+				decision, completionErr = engine.ApplyWorkflowAgentCompletion(scopeID, runID, stepID, operation)
+				return completionErr
 			},
 		)
-		if err == nil {
+		if decision.CommitReceipt.Committed {
 			exact.completed = true
+			return err
 		}
-		return err
+		if errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
+			return err
+		}
+		return a.invariant(
+			"classify Agent completion commit certainty",
+			errors.Join(err, errors.New("completion returned without a committed receipt")),
+		)
 	})
+	return decision, err
 }
 
 func (a *Authority) ScheduleAgentGoalMutation(
@@ -425,24 +437,34 @@ func (a *Authority) ScheduleAgentGoalMutation(
 
 func (a *Authority) CompleteFinalizingScript(
 	scopeID runtimeids.ExecutionScopeID,
-	operation func() error,
-) error {
+	operation func() (workflowruntime.CompletionDecision, error),
+) (workflowruntime.CompletionDecision, error) {
 	handle, ok := a.ExecutionByScope(scopeID)
 	if !ok {
-		return ErrExecutionNoLongerLive
+		return workflowruntime.CompletionDecision{}, ErrExecutionNoLongerLive
 	}
-	return a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
+	var decision workflowruntime.CompletionDecision
+	err := a.WithExactExecutions([]ExecutionHandle{handle}, func() error {
 		exact := handle.(executionHandle).execution
 		if exact.scope.Kind() != ExecutionScopeScript ||
 			exact.phase != executionPhaseFinalizing {
 			return ErrExecutionNoLongerLive
 		}
-		if err := operation(); err != nil {
+		var err error
+		decision, err = operation()
+		if decision.CommitReceipt.Committed {
+			exact.completed = true
 			return err
 		}
-		exact.completed = true
-		return nil
+		if errors.Is(err, session.ErrMutationDefinitelyUncommitted) {
+			return err
+		}
+		return a.invariant(
+			"classify Script completion commit certainty",
+			errors.Join(err, errors.New("completion returned without a committed receipt")),
+		)
 	})
+	return decision, err
 }
 
 func (a *Authority) SessionExecution(sessionID runtimeids.SessionID) (ExecutionHandle, bool) {

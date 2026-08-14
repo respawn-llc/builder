@@ -164,6 +164,11 @@ type CompletionResult struct {
 	Operation    workflow.CurrentNodeOperationRef
 }
 
+type CompletionDecision struct {
+	CommitReceipt        session.CommitReceipt
+	PostCommitDiagnostic error
+}
+
 // PostCompletionCompactionResult preserves a durable history-replacement
 // receipt separately from operational work that ran after that replacement.
 type PostCompletionCompactionResult struct {
