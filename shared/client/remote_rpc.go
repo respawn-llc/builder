@@ -416,9 +416,6 @@ func handshakeRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdenti
 	var resp protocol.HandshakeResponse
 	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{
 		ProtocolVersion: protocol.Version,
-		ClientCapabilities: &protocol.ClientCapabilities{
-			TranscriptLiveRunFinished: true,
-		},
 	}, &resp); err != nil {
 		return protocol.ServerIdentity{}, err
 	}

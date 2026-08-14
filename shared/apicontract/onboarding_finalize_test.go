@@ -15,7 +15,6 @@ func TestOnboardingFinalizeRouteMetadata(t *testing.T) {
 	if route.Kind != apicontract.KindUnary ||
 		route.Auth != apicontract.AuthPreServerAuth ||
 		route.Scope != apicontract.ScopeNone ||
-		route.Dependency != apicontract.DependencyOnboardingFinalize ||
 		route.Connection != apicontract.ConnectionUnscoped {
 		t.Fatalf("unexpected onboarding finalize route metadata: %+v", route)
 	}

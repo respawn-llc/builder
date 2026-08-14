@@ -57,8 +57,8 @@ type GatewayDependencies interface {
 	GatewayWorktreeDependencies
 }
 
-type GatewayDependencyAvailability interface {
-	RouteDependencyAvailable(apicontract.Dependency) error
+type GatewayStartupLifecycle interface {
+	RequireCoreActive() error
 }
 
 type GatewayServerStatusDependencies interface {
@@ -155,20 +155,6 @@ type gatewayRequestSchedule struct {
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
-func RuntimeLiveControlRoutesExecutable() bool {
-	for _, method := range []string{
-		protocol.MethodRuntimeLiveSteer,
-		protocol.MethodRuntimeLiveStop,
-		protocol.MethodRuntimeLiveWait,
-		protocol.MethodRuntimeLiveWatch,
-	} {
-		if _, ok := gatewayUnaryHandlers[method]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func protocolSubscriptionMethodSet() map[string]struct{} {
 	methods := apicontract.SubscriptionMethods()
 	set := make(map[string]struct{}, len(methods))
@@ -180,7 +166,6 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
-	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
@@ -381,22 +366,50 @@ func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Con
 }
 
 func isGatewayExclusiveRequest(req protocol.Request) bool {
-	if req.Method == protocol.MethodHandshake {
+	switch req.Method {
+	case protocol.MethodHandshake,
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus:
 		return true
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)
 	if !ok {
 		return false
 	}
-	switch route.Dependency {
-	case apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus:
-		return true
-	}
 	switch route.Scope {
 	case apicontract.ScopeAttachProject, apicontract.ScopeAttachSession:
 		return true
 	}
 	return false
+}
+
+func isGatewayPreActivationOperation(method string) bool {
+	switch method {
+	case protocol.MethodHandshake,
+		protocol.MethodServerReadinessGet,
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus,
+		protocol.MethodCapabilityFactsGet,
+		protocol.MethodOnboardingFinalize:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *Gateway) preflightStartup(method string) error {
+	if isGatewayPreActivationOperation(method) {
+		return nil
+	}
+	lifecycle, ok := g.deps.(GatewayStartupLifecycle)
+	if !ok {
+		return nil
+	}
+	return lifecycle.RequireCoreActive()
 }
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
@@ -435,10 +448,8 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return responseForError(req.ID, err)
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		return responseForError(req.ID, err)
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)

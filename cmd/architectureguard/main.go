@@ -16,4 +16,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if err := architectureguard.CheckNoAPICapabilityNegotiation(root); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 }

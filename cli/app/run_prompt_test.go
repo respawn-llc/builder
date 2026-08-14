@@ -248,36 +248,6 @@ func TestRunPromptUsesConfiguredDaemonWithoutLocalAuth(t *testing.T) {
 
 }
 
-func TestRunPromptWithIncompatibleServerReportsIncompatibleError(t *testing.T) {
-	_, workspace := newRegisteredAppWorkspace(t)
-	saveReadyAppAuthState(t, workspace)
-
-	// A reachable but capability-incompatible server (e.g. an older build without
-	// RunPrompt) must surface the distinct "incompatible server" error directing
-	// the operator to restart/upgrade it, not the generic "no server" error that
-	// would invite starting a conflicting second server.
-	cleanup := publishConfiguredRemoteForWorkspace(t, workspace, protocol.CapabilityFlags{
-		JSONRPCWebSocket: true,
-		ProjectAttach:    true,
-		SessionAttach:    true,
-		SessionPlan:      true,
-		SessionLifecycle: true,
-		SessionRuntime:   true,
-		RuntimeControl:   true,
-		PromptControl:    true,
-	})
-	defer cleanup()
-
-	_, err := RunPrompt(context.Background(), Options{
-		WorkspaceRoot:         workspace,
-		WorkspaceRootExplicit: true,
-		Model:                 "gpt-5",
-	}, "hello", 0, nil)
-	if !errors.Is(err, errRunServerIncompatible) {
-		t.Fatalf("RunPrompt error = %v, want errRunServerIncompatible", err)
-	}
-}
-
 func TestRunPromptUsesInvocationOverridesWhenAttachingToConfiguredDaemon(t *testing.T) {
 	_, workspace := newRegisteredAppWorkspace(t)
 
@@ -345,13 +315,12 @@ func TestStartRunPromptClientWithoutServerRequiresRunningServer(t *testing.T) {
 	}
 }
 
-func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string, caps protocol.CapabilityFlags) func() {
+func publishConfiguredRemoteForWorkspace(t *testing.T, workspace string) func() {
 	t.Helper()
 	identity := protocol.ServerIdentity{
 		ProtocolVersion: protocol.Version,
 		ServerID:        "stale-daemon",
 		PID:             222,
-		Capabilities:    caps,
 	}
 	server := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
 		defer func() { _ = ws.Close() }()

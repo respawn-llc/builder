@@ -20,7 +20,6 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowstore"
-	rpccontract "core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/protocol"
@@ -169,65 +168,21 @@ func configureServeTestServerPort(t *testing.T) {
 	t.Setenv("KENT_SERVER_PORT", strconv.Itoa(reservation.Port))
 }
 
-func TestServerIdentityCapabilitiesFollowRouteContracts(t *testing.T) {
-	capabilities := newServerIdentity(config.App{}).Capabilities
-	if !capabilities.JSONRPCWebSocket ||
-		!capabilities.AuthBootstrap ||
-		!capabilities.ProjectAttach ||
-		!capabilities.SessionAttach ||
-		!capabilities.HealthEndpoint ||
-		!capabilities.ReadinessEndpoint ||
-		!capabilities.RunPrompt ||
-		!capabilities.SessionPlan ||
-		!capabilities.SessionLifecycle ||
-		!capabilities.SessionTranscript ||
-		!capabilities.SessionRuntime ||
-		!capabilities.RuntimeControl ||
-		!capabilities.RuntimeLiveControl ||
-		!capabilities.PromptControl ||
-		!capabilities.AttentionNotifications ||
-		!capabilities.OnboardingFinalize ||
-		!capabilities.PromptCommands {
-		t.Fatalf("current route contracts produced incomplete server capabilities: %+v", capabilities)
+func TestServerIdentityContainsOnlyVersionAndIdentityFacts(t *testing.T) {
+	identity := newServerIdentity(config.App{PersistenceRoot: t.TempDir()})
+	if identity.ProtocolVersion != protocol.Version || identity.ServerID == "" || identity.PID <= 0 || identity.PersistenceRootID == "" {
+		t.Fatalf("server identity facts = %+v", identity)
 	}
-}
-
-func TestServerCapabilityFlagsReflectMissingRoutes(t *testing.T) {
-	capabilities := serverCapabilityFlags([]rpccontract.Route{
-		{Method: protocol.MethodHandshake, Dependency: rpccontract.DependencyProtocol},
-		{Method: protocol.MethodAttachProject, Dependency: rpccontract.DependencyProtocolAttach},
-		{Method: protocol.MethodAttachSession, Dependency: rpccontract.DependencyProtocolAttach},
-		{Dependency: rpccontract.DependencyRunPrompt},
-	})
-
-	if !capabilities.JSONRPCWebSocket || !capabilities.ProjectAttach || !capabilities.SessionAttach || !capabilities.RunPrompt {
-		t.Fatalf("expected supplied routes to enable matching capabilities: %+v", capabilities)
+	data, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatalf("marshal server identity: %v", err)
 	}
-	if !capabilities.HealthEndpoint || !capabilities.ReadinessEndpoint {
-		t.Fatalf("health/readiness endpoints are mux capabilities, got %+v", capabilities)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("decode server identity fields: %v", err)
 	}
-	if capabilities.AuthBootstrap ||
-		capabilities.RuntimeLiveControl ||
-		capabilities.AttentionNotifications ||
-		capabilities.PromptCommands {
-		t.Fatalf("capabilities must not be true without their routes/dependencies: %+v", capabilities)
-	}
-	promptOnly := serverCapabilityFlags([]rpccontract.Route{
-		{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog},
-		{Dependency: rpccontract.DependencyRuntimeControl},
-		{Method: protocol.MethodRuntimeSubmitUserTurn},
-	})
-	if !promptOnly.PromptCommands {
-		t.Fatalf("catalog/runtime/typed-submit routes should enable PromptCommands: %+v", promptOnly)
-	}
-	for _, routes := range [][]rpccontract.Route{
-		{{Dependency: rpccontract.DependencyRuntimeControl}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
-		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Method: protocol.MethodRuntimeSubmitUserTurn}},
-		{{Method: protocol.MethodPromptCommandCatalogGet, Dependency: rpccontract.DependencyPromptCommandCatalog}, {Dependency: rpccontract.DependencyRuntimeControl}},
-	} {
-		if got := serverCapabilityFlags(routes).PromptCommands; got {
-			t.Fatalf("incomplete prompt-command routes enabled capability: %+v", routes)
-		}
+	if _, ok := fields["capabilities"]; ok {
+		t.Fatalf("server identity contains capability projection: %s", data)
 	}
 }
 
