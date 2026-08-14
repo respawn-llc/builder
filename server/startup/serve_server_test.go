@@ -72,6 +72,27 @@ type blockingAuthHandler struct {
 	releaseSave <-chan struct{}
 }
 
+type blockingStartupReadinessService struct {
+	called  chan struct{}
+	release <-chan struct{}
+}
+
+func (s blockingStartupReadinessService) GetServerReadiness(
+	context.Context,
+	serverapi.ServerReadinessRequest,
+) (serverapi.ServerReadinessResponse, error) {
+	close(s.called)
+	<-s.release
+	return serverapi.ServerReadinessResponse{}, nil
+}
+
+func (blockingStartupReadinessService) GetUpdateStatus(
+	context.Context,
+	serverapi.UpdateStatusRequest,
+) (serverapi.UpdateStatusResponse, error) {
+	return serverapi.UpdateStatusResponse{}, nil
+}
+
 func (h blockingAuthHandler) WrapStore(base auth.Store) auth.Store {
 	return &blockingAuthStore{
 		base:        h.envAuthHandler.WrapStore(base),
@@ -574,24 +595,27 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	}
 
 	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, nil)
-	originalBuilder := server.deps.buildCore
-	buildStarted := make(chan config.App, 1)
-	releaseBuild := make(chan struct{})
-	var releaseBuildOnce sync.Once
-	releaseCoreBuild := func() { releaseBuildOnce.Do(func() { close(releaseBuild) }) }
-	server.deps.buildCore = func(
-		ctx context.Context,
-		cfg config.App,
-		authSupport serverbootstrap.AuthSupport,
-		runtimeSupport serverbootstrap.RuntimeSupport,
-		options corepkg.Options,
-	) (*corepkg.Core, error) {
-		buildStarted <- cloneStartupConfig(cfg)
-		<-releaseBuild
-		return originalBuilder(ctx, cfg, authSupport, runtimeSupport, options)
+	finalizer, ok := server.deps.finalizer.(startupFinalizeService)
+	if !ok {
+		t.Fatalf("startup finalizer = %T, want startupFinalizeService", server.deps.finalizer)
 	}
+	originalActivate := finalizer.activate
+	activationStarted := make(chan config.App, 1)
+	releaseActivation := make(chan struct{})
+	var releaseActivationOnce sync.Once
+	releaseCoreActivation := func() { releaseActivationOnce.Do(func() { close(releaseActivation) }) }
+	finalizer.activate = func(ctx context.Context, resp serverapi.OnboardingFinalizeResponse) error {
+		refreshed, err := serverbootstrap.ResolveConfig(server.deps.bootstrap)
+		if err != nil {
+			return err
+		}
+		activationStarted <- cloneStartupConfig(refreshed.Config)
+		<-releaseActivation
+		return originalActivate(ctx, resp)
+	}
+	server.deps.finalizer = finalizer
 	startServingTestServer(t, server)
-	t.Cleanup(releaseCoreBuild)
+	t.Cleanup(releaseCoreActivation)
 
 	activator, err := client.DialConfiguredRemote(context.Background(), server.Config())
 	if err != nil {
@@ -648,7 +672,7 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		})
 		finalizeDone <- finalizeErr
 	}()
-	pendingConfig := <-buildStarted
+	pendingConfig := <-activationStarted
 	if pendingConfig.Settings.Model != "pending-model" || pendingConfig.Settings.ProviderOverride != provider || pendingConfig.Settings.SkillToggles["helper"] {
 		t.Fatalf("pending activation config = %+v", pendingConfig.Settings)
 	}
@@ -698,7 +722,7 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		t.Fatalf("activation reads crossed published tuples")
 	}
 
-	releaseCoreBuild()
+	releaseCoreActivation()
 	if err := <-finalizeDone; err != nil {
 		t.Fatalf("finalize onboarding: %v", err)
 	}
@@ -930,6 +954,52 @@ func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
 		second.Settings.Subagents["worker"].Sources["model"] != "file" ||
 		!second.Settings.Subagents["worker"].Settings.SkillToggles["nested"] {
 		t.Fatalf("published startup config was aliased: %+v", second)
+	}
+}
+
+func TestStartupReadinessDoesNotConsultCoreStatusBeforeCorePublication(t *testing.T) {
+	called := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBase := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseBase)
+	reason := serverapi.ServerNotReadyOnboardingRequired
+	service := startupServerStatusService{
+		base: blockingStartupReadinessService{
+			called:  called,
+			release: release,
+		},
+		cfg: config.App{Settings: config.Settings{
+			Model: "gpt-5",
+		}},
+		readiness: startupReadinessState{Reason: &reason},
+	}
+
+	result := make(chan struct {
+		response serverapi.ServerReadinessResponse
+		err      error
+	}, 1)
+	go func() {
+		response, err := service.GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
+		result <- struct {
+			response serverapi.ServerReadinessResponse
+			err      error
+		}{response: response, err: err}
+	}()
+	select {
+	case <-called:
+		releaseBase()
+		t.Fatal("pre-Core readiness consulted the Core status service")
+	case got := <-result:
+		if got.err != nil {
+			t.Fatalf("GetServerReadiness: %v", got.err)
+		}
+		if got.response.Ready || len(got.response.Causes) != 1 ||
+			got.response.Causes[0].Code != string(serverapi.ServerNotReadyOnboardingRequired) {
+			t.Fatalf("startup readiness = %+v, want onboarding-required snapshot", got.response)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pre-Core readiness did not complete")
 	}
 }
 

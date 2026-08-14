@@ -610,8 +610,7 @@ func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update
 		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
 		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
 		completed := cloneRuntimeReadModelUpdate(update)
-		authorityEntry.readModel.Store(&completed)
-		return r.publishRuntimeMainView(authorityEntry, completed.Version, completed.Activity)
+		return r.publishRuntimeMainViewUpdate(authorityEntry, completed)
 	}
 	return nil
 }

@@ -41,21 +41,38 @@ func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry)
 	if r == nil || entry == nil {
 		return nil
 	}
+	r.mainViewPublicationMu.Lock()
+	defer r.mainViewPublicationMu.Unlock()
 	readModel := entry.readModel.Load()
 	if readModel == nil {
 		return nil
 	}
-	return r.publishRuntimeMainView(entry, readModel.Version, readModel.Activity)
+	return r.publishRuntimeMainViewLocked(entry, readModel.Version, readModel.Activity)
 }
 
-func (r *RuntimeRegistry) publishRuntimeMainView(
+func (r *RuntimeRegistry) publishRuntimeMainViewUpdate(
 	entry *authorityRuntimeEntry,
-	version clientui.ReadModelVersion,
-	activity clientui.RuntimeActivity,
+	update clientui.RuntimeReadModelUpdate,
 ) error {
 	if r == nil || entry == nil {
 		return nil
 	}
+	r.mainViewPublicationMu.Lock()
+	defer r.mainViewPublicationMu.Unlock()
+	current := entry.readModel.Load()
+	if current != nil && !update.Version.NewerThan(current.Version) {
+		return nil
+	}
+	completed := cloneRuntimeReadModelUpdate(update)
+	entry.readModel.Store(&completed)
+	return r.publishRuntimeMainViewLocked(entry, completed.Version, completed.Activity)
+}
+
+func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
+	entry *authorityRuntimeEntry,
+	version clientui.ReadModelVersion,
+	activity clientui.RuntimeActivity,
+) error {
 	entry.mu.Lock()
 	ready := entry.lifecycle == authorityRuntimeEntryReady
 	entry.mu.Unlock()
@@ -75,8 +92,6 @@ func (r *RuntimeRegistry) publishRuntimeMainView(
 		view:     cloneRuntimeMainView(view),
 	}
 
-	r.mainViewPublicationMu.Lock()
-	defer r.mainViewPublicationMu.Unlock()
 	entry.mu.Lock()
 	ready = entry.lifecycle == authorityRuntimeEntryReady
 	entry.mu.Unlock()

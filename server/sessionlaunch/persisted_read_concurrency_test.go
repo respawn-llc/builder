@@ -11,6 +11,7 @@ import (
 	"core/server/session/sessiontest"
 	"core/shared/config"
 	"core/shared/runtimeids"
+	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 )
 
@@ -76,6 +77,71 @@ func TestMaterializedChatSettingsDoesNotWaitForSessionMetadataMutation(t *testin
 		}
 	case <-time.After(time.Second):
 		t.Fatal("MaterializedChatSettings waited for the Session mutation owner")
+	}
+	release()
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("complete metadata mutation: %v", err)
+	}
+}
+
+func TestHeadlessExistingSessionPlanDoesNotWaitForSessionMetadataMutation(t *testing.T) {
+	persistence := sessiontest.NewPersistence()
+	gate := sessiontest.NewPersistenceGate(persistence)
+	root := t.TempDir()
+	workspace := t.TempDir()
+	containerDir := t.TempDir()
+	store, err := session.Create(
+		containerDir,
+		"workspace",
+		workspace,
+		sessioncontract.SessionCategoryMain,
+		session.WithPersistenceObserver(gate),
+		session.WithPersistedSessionResolver(persistence),
+	)
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	blocked, release := gate.BlockNextAfter()
+	t.Cleanup(release)
+	mutationDone := make(chan error, 1)
+	go func() { mutationDone <- store.SetName("committed name") }()
+	<-blocked
+
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.PersistenceRoot = root
+	cfg.Settings.ProviderCapabilities.ProviderID = "anthropic"
+	service := NewService(launch.Planner{
+		Config:                   cfg,
+		ContainerDir:             containerDir,
+		PersistedSessions:        persistence,
+		ProjectWorkspaceBoundary: sessionLaunchBoundaryResolver{root: workspace},
+	})
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("parse Session ID: %v", err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		response, planErr := service.PlanSession(t.Context(), serverapi.SessionPlanRequest{
+			ClientRequestID: "persisted-headless-plan",
+			Mode:            serverapi.SessionLaunchModeHeadless,
+			Intent:          serverapi.OpenExistingSessionLaunchIntent(sessionID),
+		})
+		if planErr == nil && (response.Plan.SessionName == nil || *response.Plan.SessionName != "committed name") {
+			planErr = errors.New("headless plan did not use committed persisted Session facts")
+		}
+		result <- planErr
+	}()
+	select {
+	case planErr := <-result:
+		if planErr != nil {
+			t.Fatalf("PlanSession during metadata mutation: %v", planErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("headless existing-Session planning waited for the Session mutation owner")
 	}
 	release()
 	if err := <-mutationDone; err != nil {

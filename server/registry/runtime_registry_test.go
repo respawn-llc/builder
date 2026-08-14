@@ -415,6 +415,32 @@ func TestRuntimeMainViewPublicationFollowsVisibleIdentityAndStatusCommits(t *tes
 	}
 }
 
+func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
+	registry := NewRuntimeRegistry()
+	engine := newRegistryTestRuntime(t, nil)
+	registerReady(t, registry, engine.SessionID(), engine)
+
+	current, err := registry.RuntimeReadModelFeedSnapshot(t.Context(), engine.SessionID())
+	if err != nil {
+		t.Fatalf("read Runtime Read Model: %v", err)
+	}
+	newer := current
+	newer.Version.Sequence += 2
+	older := current
+	older.Version.Sequence++
+
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), newer)
+	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), older)
+
+	view, ok := registry.RuntimeMainViewSnapshot(engine.SessionID())
+	if !ok {
+		t.Fatal("Runtime Main View snapshot is missing")
+	}
+	if view.Version != newer.Version {
+		t.Fatalf("Runtime Main View version = %+v, want newer %+v", view.Version, newer.Version)
+	}
+}
+
 func newRegistryTestRuntime(t *testing.T, onEvent func(runtime.Event)) *runtime.Engine {
 	t.Helper()
 	return newRegistryRuntime(t, registryRuntimeFakeClient{}, askquestion.NewRegistry(), runtime.Config{Model: "gpt-5", ThinkingLevel: "medium"}, func(_ *runtime.Engine, evt runtime.Event) {

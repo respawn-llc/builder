@@ -114,11 +114,7 @@ func ApplyContextPolicy(plan SessionPlan, capabilities llm.ProviderCapabilities)
 	return plan
 }
 
-func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
-	if store == nil {
-		panic("session plan snapshot requires a store")
-	}
-	meta := store.Meta()
+func sessionPlanWithMeta(plan SessionPlan, meta session.Meta, containerDir string) SessionPlan {
 	sessionID, err := runtimeids.ParseSessionID(meta.SessionID)
 	if err != nil {
 		panic(fmt.Sprintf("session plan snapshot has invalid session id %q: %v", meta.SessionID, err))
@@ -136,6 +132,13 @@ func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDi
 	plan.Locked = meta.Locked
 	plan.ModelContractLocked = meta.Locked != nil
 	return plan
+}
+
+func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
+	if store == nil {
+		panic("session plan snapshot requires a store")
+	}
+	return sessionPlanWithMeta(plan, store.Meta(), containerDir)
 }
 
 func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store) SessionPlan {
@@ -321,7 +324,7 @@ func ResolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 			return SessionPlan{}, backfillErr
 		}
 	}
-	return sessionPlanWithSnapshot(plan, store, filepath.Dir(store.Dir())), nil
+	return sessionPlanWithMeta(plan, store.Meta(), filepath.Dir(store.Dir())), nil
 }
 
 func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
@@ -347,7 +350,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	return sessionPlanWithSnapshot(SessionPlan{
+	return sessionPlanWithMeta(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
@@ -360,7 +363,7 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 		BaseSource:                          baseSource,
 		QuestionsEnabled:                    chatSettings.Questions,
 		AutoCompactionEnabled:               chatSettings.AutoCompaction,
-	}, store, filepath.Dir(store.Dir())), nil
+	}, meta, filepath.Dir(store.Dir())), nil
 }
 
 func (p Planner) PlanSession(ctx context.Context, req SessionRequest) (SessionPlan, error) {
@@ -436,6 +439,39 @@ func (p Planner) PlanSessionWithStore(ctx context.Context, req SessionRequest, s
 	return p.planSessionWithStore(ctx, req, store)
 }
 
+func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
+	if store == nil {
+		return SessionPlan{}, errors.New("session store is required")
+	}
+	return p.planSession(ctx, req, store.Meta(), store)
+}
+
+func (p Planner) PlanPersistedSession(
+	ctx context.Context,
+	req SessionRequest,
+	view *session.PersistedSessionView,
+) (SessionPlan, error) {
+	if view == nil {
+		return SessionPlan{}, errors.New("persisted session view is required")
+	}
+	if !req.ReadOnlySnapshot {
+		return SessionPlan{}, errors.New("persisted session planning must be read-only")
+	}
+	if req.Intent.Kind() != serverapi.SessionLaunchIntentOpenExisting {
+		return SessionPlan{}, errors.New("persisted session planning requires an existing-session intent")
+	}
+	meta := view.Meta()
+	sessionID, _ := req.Intent.SessionID()
+	if meta.SessionID != sessionID.String() {
+		return SessionPlan{}, fmt.Errorf(
+			"persisted session %q does not match requested session %q",
+			meta.SessionID,
+			sessionID,
+		)
+	}
+	return p.planSession(ctx, req, meta, nil)
+}
+
 func preparePlanStore(req SessionRequest, store *session.Store) error {
 	if req.ReadOnlySnapshot {
 		return nil
@@ -448,13 +484,21 @@ func preparePlanStore(req SessionRequest, store *session.Store) error {
 	return nil
 }
 
-func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
+func (p Planner) planSession(
+	ctx context.Context,
+	req SessionRequest,
+	meta session.Meta,
+	store *session.Store,
+) (SessionPlan, error) {
 	if req.Mode == ModeHeadless && !req.ReadOnlySnapshot {
+		if store == nil {
+			return SessionPlan{}, errors.New("writable session planning requires a store")
+		}
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
 		}
+		meta = store.Meta()
 	}
-	meta := store.Meta()
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
 	var continuationAgentRole *string
@@ -484,9 +528,13 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		continuation.AgentRole = continuationAgentRole
 	}
 	if !req.AgentSelectionResolved && !req.ReadOnlySnapshot {
+		if store == nil {
+			return SessionPlan{}, errors.New("writable session planning requires a store")
+		}
 		if err := store.SetContinuationContext(continuation); err != nil {
 			return SessionPlan{}, err
 		}
+		meta = store.Meta()
 	}
 	if req.PreparedPromptFacingTarget == nil {
 		enabledTools, err = ActiveToolIDsForPlan(active, source, meta.Locked)
@@ -501,6 +549,9 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if meta.Locked != nil &&
 		(!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") &&
 		!req.ReadOnlySnapshot {
+		if store == nil {
+			return SessionPlan{}, errors.New("writable session planning requires a store")
+		}
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
@@ -540,7 +591,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	if err != nil {
 		return SessionPlan{}, err
 	}
-	return p.sessionPlanWithSnapshot(SessionPlan{
+	return sessionPlanWithMeta(SessionPlan{
 		ActiveSettings:                      active,
 		BaseSettings:                        baseActive,
 		EnabledTools:                        enabledTools,
@@ -556,7 +607,7 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		BaseSource:                          baseSource,
 		QuestionsEnabled:                    chatSettings.Questions,
 		AutoCompactionEnabled:               chatSettings.AutoCompaction,
-	}, store), nil
+	}, meta, p.ContainerDir), nil
 }
 
 func (p Planner) resolvePlannedExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
