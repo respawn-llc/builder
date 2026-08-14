@@ -128,6 +128,42 @@ func TestServiceMaterializedChatSettingsReadsPersistedStateWithoutRuntime(t *tes
 	}
 }
 
+type mutableWorkflowTaskReader struct {
+	taskID *string
+}
+
+func (r *mutableWorkflowTaskReader) WorkflowTaskIDForSession(context.Context, string) (*string, error) {
+	return r.taskID, nil
+}
+
+func TestServiceMaterializedChatSettingsOmitsDeletedTaskNavigation(t *testing.T) {
+	service, _, _, _ := newWorkspaceChatMaterializationService(t)
+	taskID := "task-retained"
+	tasks := &mutableWorkflowTaskReader{taskID: &taskID}
+	service.WithWorkflowTaskReader(tasks)
+	sessionID, err := service.materializeWorkspaceChatSession(t.Context())
+	if err != nil {
+		t.Fatalf("materializeWorkspaceChatSession: %v", err)
+	}
+
+	retained, err := service.MaterializedChatSettings(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("MaterializedChatSettings retained Task: %v", err)
+	}
+	if retained.Session == nil || retained.Session.TaskID == nil || *retained.Session.TaskID != taskID {
+		t.Fatalf("retained Task facts = %+v", retained.Session)
+	}
+
+	tasks.taskID = nil
+	deleted, err := service.MaterializedChatSettings(t.Context(), sessionID)
+	if err != nil {
+		t.Fatalf("MaterializedChatSettings deleted Task: %v", err)
+	}
+	if deleted.Session == nil || deleted.Session.TaskID != nil {
+		t.Fatalf("deleted Task facts = %+v", deleted.Session)
+	}
+}
+
 func TestServiceMaterializationDoesNotValidateProviderReadiness(t *testing.T) {
 	service, metadataStore, cfg, binding := newWorkspaceChatMaterializationService(t)
 	cfg.Settings.ProviderOverride = "unsupported-provider"

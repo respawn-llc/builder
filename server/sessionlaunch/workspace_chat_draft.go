@@ -26,7 +26,6 @@ type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceCh
 type workspaceChatDraftLimits struct {
 	draft           WorkspaceChatDraft
 	fast, questions bool
-	thinking        map[string]struct{}
 }
 type WorkspaceChatDraftResolution struct {
 	Draft                    WorkspaceChatDraft
@@ -300,10 +299,6 @@ func resolveWorkspaceChatDraftBaselines(
 	for _, entry := range entries {
 		selector := entry.Choice.Role
 		preparedSettings := entry.Settings
-		thinkingLevels := make(map[string]struct{}, len(preparedSettings.SupportedThinkingValues))
-		for _, level := range preparedSettings.SupportedThinkingValues {
-			thinkingLevels[level] = struct{}{}
-		}
 		baseline := preparedSettings.Baseline
 		result[selector] = workspaceChatDraftLimits{
 			draft: WorkspaceChatDraft{
@@ -316,7 +311,6 @@ func resolveWorkspaceChatDraftBaselines(
 			},
 			fast:      preparedSettings.FastAvailable,
 			questions: preparedSettings.QuestionsAvailable,
-			thinking:  thinkingLevels,
 		}
 	}
 	return catalog, result, nil
@@ -333,8 +327,8 @@ func validateWorkspaceChatDraftTransform(draft WorkspaceChatDraft, resolved Work
 	if !ok {
 		return fmt.Errorf("workspace Chat draft Agent %q is unavailable", draft.Agent)
 	}
-	if _, ok := limit.thinking[draft.Thinking]; !ok {
-		return fmt.Errorf("workspace Chat draft thinking %q is unavailable for Agent %q", draft.Thinking, agent)
+	if strings.TrimSpace(draft.Thinking) == "" {
+		return fmt.Errorf("workspace Chat draft thinking is required for Agent %q", agent)
 	}
 	if draft.Fast && !limit.fast {
 		return fmt.Errorf("workspace Chat draft fast mode is unavailable for Agent %q", agent)

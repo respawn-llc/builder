@@ -150,6 +150,42 @@ func TestPrepareChatAgentCatalogOmitsCompletelyEquivalentRoles(t *testing.T) {
 	}
 }
 
+func TestPrepareChatAgentCatalogUsesFinalNamedAgentProviderCapabilities(t *testing.T) {
+	settings := chatAgentCatalogSettings()
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
+	settings.Subagents = map[string]config.SubagentRole{
+		"anthropic-model": {
+			Settings: config.Settings{
+				Model:         "claude-sonnet-4-5",
+				ThinkingLevel: "high",
+			},
+			Sources: map[string]string{
+				"model":          "file",
+				"thinking_level": "file",
+			},
+		},
+	}
+	catalog, err := PrepareChatAgentCatalog(
+		config.App{Settings: settings},
+		auth.EmptyState(),
+		ChatAgentCatalogOptions{},
+	)
+	if err != nil {
+		t.Fatalf("PrepareChatAgentCatalog: %v", err)
+	}
+	entry, ok := catalog.Lookup("anthropic-model")
+	if !ok {
+		t.Fatal("anthropic-model entry is missing")
+	}
+	if entry.ProviderCapabilities.ProviderID != "anthropic" || entry.Settings.FastAvailable {
+		t.Fatalf(
+			"provider capabilities = %+v Fast=%t, want anthropic without Fast",
+			entry.ProviderCapabilities,
+			entry.Settings.FastAvailable,
+		)
+	}
+}
+
 func TestPrepareChatAgentCatalogClassifiesAgentPreparationFailures(t *testing.T) {
 	settings := chatAgentCatalogSettings()
 	settings.Subagents = map[string]config.SubagentRole{

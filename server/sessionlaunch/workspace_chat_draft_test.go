@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"core/server/auth"
+	"core/server/launch"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -107,6 +108,34 @@ func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *te
 	if projected.Questions.Capable || !projected.Questions.Enabled ||
 		projected.Questions.Editability != serverapi.ChatSettingsEditable {
 		t.Fatalf("Questions projection = %+v", projected.Questions)
+	}
+}
+
+func TestWorkspaceChatDraftMessageUpdatePreservesCustomThinking(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	stored := &WorkspaceChatDraft{
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "provider-specific-depth",
+		AutoCompaction: true,
+	}
+	persistence := &draftPersistence{draft: stored}
+	service := NewService(launch.Planner{Config: config.App{Settings: settings}}).
+		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(persistence), "workspace-1")
+	message := "updated without touching settings"
+
+	if _, err := service.WorkspaceChatDraft(t.Context(), serverapi.WorkspaceChatDraftRequest{
+		Operation: serverapi.WorkspaceChatDraftOperation{
+			Kind:    serverapi.WorkspaceChatDraftUpdateMessage,
+			Message: &message,
+		},
+	}); err != nil {
+		t.Fatalf("WorkspaceChatDraft update message: %v", err)
+	}
+	if persistence.draft == nil ||
+		persistence.draft.Message != message ||
+		persistence.draft.Thinking != stored.Thinking {
+		t.Fatalf("persisted draft = %+v", persistence.draft)
 	}
 }
 
