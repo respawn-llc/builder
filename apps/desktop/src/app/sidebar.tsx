@@ -396,30 +396,40 @@ function sidebarResizeBounds(
   sizePreference: ReturnType<typeof sidebarSizePreference>,
 ): SidebarResizeBounds {
   const shellElement = sidebarElement?.closest('[data-testid="app-shell-content"]') ?? null;
-  const shellWidth = shellElement?.getBoundingClientRect().width;
-  if (shellWidth === undefined || shellWidth === 0) {
+  const shellWidth = positiveElementWidth(shellElement);
+  if (shellWidth === null) {
     return sidebarResizeBoundsForShellWidth(fallbackSidebarShellWidth(), sizePreference);
   }
-  if (mode === "shift") {
-    const protectedMainWidth = shellElement
-      ?.querySelector<HTMLElement>("[data-sidebar-protected-main]")
-      ?.getBoundingClientRect().width;
-    const currentSidebarWidth = sidebarElement?.getBoundingClientRect().width;
-    if (
-      protectedMainWidth !== undefined &&
-      protectedMainWidth > 0 &&
-      currentSidebarWidth !== undefined &&
-      currentSidebarWidth > 0
-    ) {
-      return sidebarShiftResizeBoundsForCurrentLayout(
-        shellWidth,
-        protectedMainWidth,
-        currentSidebarWidth,
-        sizePreference,
-      );
-    }
+  const shiftBounds =
+    mode === "shift"
+      ? sidebarShiftResizeBounds(shellElement, sidebarElement, shellWidth, sizePreference)
+      : null;
+  return shiftBounds ?? sidebarResizeBoundsForShellWidth(shellWidth, sizePreference);
+}
+
+function sidebarShiftResizeBounds(
+  shellElement: Element | null,
+  sidebarElement: HTMLElement | null,
+  shellWidth: number,
+  sizePreference: ReturnType<typeof sidebarSizePreference>,
+): SidebarResizeBounds | null {
+  const protectedMain = shellElement?.querySelector<HTMLElement>("[data-sidebar-protected-main]") ?? null;
+  const protectedMainWidth = positiveElementWidth(protectedMain);
+  const currentSidebarWidth = positiveElementWidth(sidebarElement);
+  if (protectedMainWidth === null || currentSidebarWidth === null) {
+    return null;
   }
-  return sidebarResizeBoundsForShellWidth(shellWidth, sizePreference);
+  return sidebarShiftResizeBoundsForCurrentLayout(
+    shellWidth,
+    protectedMainWidth,
+    currentSidebarWidth,
+    sizePreference,
+  );
+}
+
+function positiveElementWidth(element: Element | null): number | null {
+  const width = element?.getBoundingClientRect().width;
+  return width !== undefined && width > 0 ? width : null;
 }
 
 function fallbackSidebarShellWidth(): number {

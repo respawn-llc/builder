@@ -58,13 +58,9 @@ it("restores Task-grid pixels after visiting another Project tab", () => {
   fireEvent.scroll(grid);
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.sessions") }));
-  const outgoingGrid = screen.getByRole("grid", {
-    name: appI18n.t("home.prototype.projectTasksGrid"),
-  });
-  const outgoingLayer = outgoingGrid.parentElement;
-  if (outgoingLayer === null) throw new Error("Expected an outgoing crossfade layer.");
-  fireEvent.animationEnd(outgoingLayer);
-  expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.tasks") }));
   const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });

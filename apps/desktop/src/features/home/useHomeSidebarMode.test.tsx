@@ -11,10 +11,10 @@ it("switches Home sidebars between overlay and shift as available main-pane widt
     .mockImplementation(() => domRect(availableWidthPx));
   Object.defineProperty(globalThis, "ResizeObserver", {
     configurable: true,
-    value: class ControlledResizeObserver {
+    value: class ControlledResizeObserver implements ResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         notifyResize = () => {
-          callback([], this as unknown as ResizeObserver);
+          callback([], this);
         };
       }
 

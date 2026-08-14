@@ -61,6 +61,7 @@ function groupEntries(
   group: ProjectTaskGroup,
   input: ProjectTaskPresentationInput & {
     counts: Readonly<Record<ProjectTaskGroup, number>>;
+    definitions: ProjectTaskGroupCounts["definitions"];
   },
 ): readonly ProjectTaskListEntry[] {
   const count = input.counts[group];

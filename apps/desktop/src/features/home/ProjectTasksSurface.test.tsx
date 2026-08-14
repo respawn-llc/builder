@@ -2,11 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nextProvider } from "react-i18next";
 
-import {
-  type ProjectTaskGroupCounts,
-  type ProjectTaskGroupDefinition,
-  type TaskListItem,
-} from "@/api";
+import { type ProjectTaskGroupCounts, type ProjectTaskGroupDefinition, type TaskListItem } from "@/api";
 import { queryKeys, type SidebarDestination, type SidebarRootController } from "@/app-facade";
 import type * as ProjectTaskListData from "./projectTaskListData";
 
@@ -238,7 +234,11 @@ describe("ProjectTasksSurface", () => {
     renderSurface();
 
     const statusLegendTriggers = screen.getAllByRole("button", { name: appI18n.t("task.status") });
-    fireEvent.focus(statusLegendTriggers[0]);
+    const statusLegendTrigger = statusLegendTriggers[0];
+    if (statusLegendTrigger === undefined) {
+      throw new Error("Expected a Task Status legend trigger.");
+    }
+    fireEvent.focus(statusLegendTrigger);
 
     expect(await screen.findByRole("tooltip")).toBeVisible();
   });
@@ -369,7 +369,10 @@ describe("ProjectTasksSurface", () => {
     const memory = createProjectTasksViewMemory();
     const view = renderSurface(memory);
 
-    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", { count: 2, group: appI18n.t("home.prototype.statusGroups.active") });
+    const activeGroupName = appI18n.t("home.prototype.taskGroupCount", {
+      count: 2,
+      group: appI18n.t("home.prototype.statusGroups.active"),
+    });
     const activeGroup = screen.getByRole("button", { name: activeGroupName });
     fireEvent.click(activeGroup);
     expect(activeGroup).toHaveAttribute("aria-expanded", "false");
@@ -415,7 +418,9 @@ describe("ProjectTasksSurface", () => {
 
       fixture.initialGroupPagesError = true;
       view.rerender(withQueryClient(surface(memory)));
-      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(0);
+      expect(screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }).scrollTop).toBe(
+        0,
+      );
 
       fixture.initialGroupPagesError = false;
       fixture.initialGroupPagesEstablished = true;
@@ -460,7 +465,9 @@ describe("ProjectTasksSurface", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent(countsError.message);
     expect(screen.getByRole("button", { name: appI18n.t("app.retry") })).toBeInTheDocument();
-    expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+    ).not.toBeInTheDocument();
   });
 
   it("opens Task Detail with the containing sidebar mode", () => {
@@ -484,7 +491,11 @@ describe("ProjectTasksSurface", () => {
 
     const row = screen.getByRole("row", { name: "KNT-1 Selected task" });
     expect(row).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }) }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: appI18n.t("task.dependenciesProgressAccessible", { completed: 2, total: 2 }),
+      }),
+    );
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "shift",
@@ -507,12 +518,19 @@ describe("ProjectTasksSurface", () => {
 
     const detailRow = screen.getByRole("row", { name: "KNT-1 Detail selected" });
     const labelsRow = screen.getByRole("row", { name: "KNT-2 Labels selected" });
+    const dependenciesCell = detailRow.querySelector('[data-project-task-column="dependencies"]');
+    if (!(dependenciesCell instanceof HTMLElement)) {
+      throw new Error("Expected the Task Dependencies cell.");
+    }
+    expect(dependenciesCell).toBeEmptyDOMElement();
     expect(detailRow).toHaveAttribute("aria-selected", "true");
     expect(labelsRow).toHaveAttribute("aria-selected", "false");
 
     expect(fixture.labelCatalogRequests).toBe(0);
     expect(fixture.assignmentRequests).toBe(0);
-    fireEvent.click(screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }));
+    fireEvent.click(
+      screen.getByRole("button", { name: appI18n.t("home.prototype.editTaskLabels", { shortID: "KNT-2" }) }),
+    );
     expect(fixture.open).not.toHaveBeenCalled();
     expect(detailRow).toHaveAttribute("aria-selected", "false");
     expect(labelsRow).toHaveAttribute("aria-selected", "true");
@@ -562,10 +580,7 @@ function withQueryClient(children: React.ReactNode) {
   vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters) => {
     fixture.invalidations.push(filters);
   });
-  queryClient.setQueryData(
-    queryKeys.projectTaskWorkflows("project-1"),
-    fixture.board.data.workflows,
-  );
+  queryClient.setQueryData(queryKeys.projectTaskWorkflows("project-1"), fixture.board.data.workflows);
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 

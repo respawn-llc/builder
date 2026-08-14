@@ -1,16 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, ChevronRight, Circle, CircleDot, Plus } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type HTMLAttributes,
-  type RefObject,
-  type ReactNode,
-} from "react";
+import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import { errorMessage, type WorkflowExecutionTargetSelection } from "@/api";
@@ -55,6 +45,13 @@ import {
   type ProjectTaskGroupDisclosure,
   type ProjectTaskListData,
 } from "./projectTaskListData";
+import {
+  projectTaskColumnStyle,
+  resolveProjectTaskVisibleColumns,
+  useProjectTaskColumnLayout,
+  useProjectTaskListWidth,
+  type ProjectTaskColumnLayout,
+} from "./projectTaskColumnLayout";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
@@ -84,16 +81,17 @@ export function ProjectTasksSurface({
     queryFn: async (): Promise<readonly ProjectTaskWorkflowItem[]> => {
       const links = await api.listProjectWorkflowLinks(projectID);
       const definitions = await Promise.all(
-        links.map((link) =>
-          queryClient.fetchQuery({
+        links.map(async (link) => {
+          const definition = await queryClient.fetchQuery({
             queryKey: queryKeys.workflowDefinition(link.workflowID),
             queryFn: async () => api.getWorkflow(link.workflowID),
-          }),
-        ),
+          });
+          return definition;
+        }),
       );
       return links.map((link, index) => {
         const workflow = definitions[index]?.workflow;
-        if (workflow === undefined || workflow.id !== link.workflowID) {
+        if (workflow?.id !== link.workflowID) {
           throw new Error(`Workflow definition does not match Project link ${link.id}.`);
         }
         return {
@@ -130,8 +128,10 @@ export function ProjectTasksSurface({
     [push, t],
   );
   const executeInitiatingAction = useCallback(
-    (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection) =>
-      executeTaskInitiatingAction(api, action, selection),
+    async (action: TaskInitiatingAction, selection?: WorkflowExecutionTargetSelection) => {
+      const result = await executeTaskInitiatingAction(api, action, selection);
+      return result;
+    },
     [api],
   );
   const initiatingAction = useTaskInitiatingActionController({
@@ -239,9 +239,7 @@ export function ProjectTasksSurface({
     pendingResumeTaskIDs: resumeAction.pendingTaskIDs,
     projectID,
     resumeDisabled:
-      connection.phase !== "connected" ||
-      initiatingAction.pending !== null ||
-      initiatingAction.running,
+      connection.phase !== "connected" || initiatingAction.pending !== null || initiatingAction.running,
     taskDetailID,
     t,
   });
@@ -249,15 +247,11 @@ export function ProjectTasksSurface({
   const onScrollElementChange = useCallback(
     (element: HTMLDivElement | null) => {
       if (element === null) return;
-      const memory = viewMemory.read();
       element.scrollLeft = 0;
       element.onscroll = () => {
         setPaginationEnabled(true);
         const current = viewMemory.read();
-        viewMemory.setScrollOffsets(
-          scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx,
-          0,
-        );
+        viewMemory.setScrollOffsets(scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx, 0);
       };
     },
     [scrollRestorationReady, viewMemory],
@@ -349,8 +343,7 @@ function ProjectTasksContent({
   const { containerRef, widthPx } = useProjectTaskListWidth();
   const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout);
   const workflowsResolved = workflowsBoundary === undefined;
-  const newTaskAvailable =
-    workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
+  const newTaskAvailable = projectTaskNewTaskAvailable(workflows);
   const memory = viewMemory.read();
   return (
     <TasksShell
@@ -420,6 +413,10 @@ function ProjectTasksContent({
       )}
     </TasksShell>
   );
+}
+
+function projectTaskNewTaskAvailable(workflows: readonly ProjectTaskWorkflowItem[]): boolean {
+  return workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
 }
 
 function projectTaskEntryWrapperProps(entry: ProjectTaskListEntry): HTMLAttributes<HTMLDivElement> {
@@ -527,174 +524,6 @@ function ProjectTaskGroupIcon({ group }: Readonly<{ group: ProjectTaskGroup }>) 
     return <Circle aria-hidden="true" className="text-[var(--color-muted)]" size={15} />;
   }
   return <CircleDot aria-hidden="true" className="text-[var(--color-primary)]" size={15} />;
-}
-
-type ProjectTaskColumnLayout = Readonly<{
-  dependenciesPx: number;
-  idCharacters: number;
-  labelsPx: number;
-  workflowCharacters: number;
-}>;
-
-type ProjectTaskVisibleColumns = Readonly<{
-  dependencies: boolean;
-  labels: boolean;
-  title: boolean;
-  workflow: boolean;
-}>;
-
-const initialProjectTaskColumnLayout: ProjectTaskColumnLayout = {
-  dependenciesPx: 18,
-  idCharacters: 2,
-  labelsPx: 48,
-  workflowCharacters: 8,
-};
-
-function useProjectTaskColumnLayout(data: ProjectTaskListData): ProjectTaskColumnLayout {
-  const measured = measureProjectTaskColumns(data);
-  const [layout, setLayout] = useState(initialProjectTaskColumnLayout);
-  useEffect(() => {
-    setLayout((current) => {
-      const next = {
-        dependenciesPx: Math.max(current.dependenciesPx, measured.dependenciesPx),
-        idCharacters: Math.max(current.idCharacters, measured.idCharacters),
-        labelsPx: Math.max(current.labelsPx, measured.labelsPx),
-        workflowCharacters: Math.max(current.workflowCharacters, measured.workflowCharacters),
-      };
-      return projectTaskColumnLayoutsEqual(current, next) ? current : next;
-    });
-  }, [
-    measured.dependenciesPx,
-    measured.idCharacters,
-    measured.labelsPx,
-    measured.workflowCharacters,
-  ]);
-  return layout;
-}
-
-function measureProjectTaskColumns(data: ProjectTaskListData): ProjectTaskColumnLayout {
-  return projectTaskGroups
-    .flatMap((group) => data[group].tasks)
-    .reduce<ProjectTaskColumnLayout>(
-      (layout, task) => ({
-        dependenciesPx: Math.max(layout.dependenciesPx, dependencyChipWidthPx(task.dependencyProgress)),
-        idCharacters: Math.max(layout.idCharacters, Math.min(18, task.shortID.length)),
-        labelsPx: Math.max(layout.labelsPx, taskLabelsWidthPx(task.labels.map((label) => label.name))),
-        workflowCharacters: Math.max(
-          layout.workflowCharacters,
-          Math.min(24, task.workflowName?.length ?? 0),
-        ),
-      }),
-      initialProjectTaskColumnLayout,
-    );
-}
-
-function dependencyChipWidthPx(
-  progress: Readonly<{ satisfiedCount: number; totalCount: number }> | null,
-): number {
-  if (progress === null) {
-    return initialProjectTaskColumnLayout.dependenciesPx;
-  }
-  const textLength = `${progress.satisfiedCount.toString()}/${progress.totalCount.toString()}`.length;
-  return Math.min(76, 29 + textLength * 7);
-}
-
-function taskLabelsWidthPx(names: readonly string[]): number {
-  if (names.length === 0) {
-    return initialProjectTaskColumnLayout.labelsPx;
-  }
-  const contentWidth = names.reduce((width, name) => width + 14 + name.length * 7, 0);
-  return Math.min(320, contentWidth + Math.max(0, names.length - 1) * 4);
-}
-
-function projectTaskColumnLayoutsEqual(
-  left: ProjectTaskColumnLayout,
-  right: ProjectTaskColumnLayout,
-): boolean {
-  return (
-    left.dependenciesPx === right.dependenciesPx &&
-    left.idCharacters === right.idCharacters &&
-    left.labelsPx === right.labelsPx &&
-    left.workflowCharacters === right.workflowCharacters
-  );
-}
-
-type ProjectTaskColumnStyle = CSSProperties &
-  Readonly<{
-    "--project-task-grid-columns": string;
-  }>;
-
-function projectTaskColumnStyle(
-  layout: ProjectTaskColumnLayout,
-  visible: ProjectTaskVisibleColumns,
-): ProjectTaskColumnStyle {
-  const columns = [
-    "16px",
-    `${layout.idCharacters.toString()}ch`,
-    visible.title ? "minmax(7ch, 1fr)" : null,
-    visible.dependencies ? `${layout.dependenciesPx.toString()}px` : null,
-    visible.labels ? `${layout.labelsPx.toString()}px` : null,
-    visible.workflow ? `${layout.workflowCharacters.toString()}ch` : null,
-  ].filter((column): column is string => column !== null);
-  return {
-    "--project-task-grid-columns": columns.join(" "),
-  };
-}
-
-function resolveProjectTaskVisibleColumns(
-  widthPx: number | null,
-  layout: ProjectTaskColumnLayout,
-): ProjectTaskVisibleColumns {
-  if (widthPx === null) {
-    return { dependencies: true, labels: true, title: true, workflow: true };
-  }
-  const characterWidthPx = 8;
-  const horizontalPaddingPx = 24;
-  const gapPx = 12;
-  const scrollbarGutterPx = 16;
-  const titleMinimumPx = 7 * characterWidthPx;
-  const idWidthPx = layout.idCharacters * characterWidthPx;
-  const requiredWidth = (optionalWidths: readonly number[]) =>
-    horizontalPaddingPx +
-    scrollbarGutterPx +
-    16 +
-    idWidthPx +
-    titleMinimumPx +
-    optionalWidths.reduce((total, columnWidth) => total + columnWidth, 0) +
-    gapPx * (2 + optionalWidths.length);
-
-  const optionalWidths = [layout.dependenciesPx, layout.labelsPx, layout.workflowCharacters * characterWidthPx];
-  const workflow = requiredWidth(optionalWidths) <= widthPx;
-  const withoutWorkflow = optionalWidths.slice(0, 2);
-  const labels = workflow || requiredWidth(withoutWorkflow) <= widthPx;
-  const withoutLabels = [layout.dependenciesPx];
-  const dependencies = labels || requiredWidth(withoutLabels) <= widthPx;
-  const title = dependencies || requiredWidth([]) <= widthPx;
-  return { dependencies, labels, title, workflow };
-}
-
-function useProjectTaskListWidth(): Readonly<{
-  containerRef: RefObject<HTMLDivElement | null>;
-  widthPx: number | null;
-}> {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [widthPx, setWidthPx] = useState<number | null>(null);
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    if (container === null) {
-      return;
-    }
-    const measure = () => {
-      setWidthPx(container.getBoundingClientRect().width);
-    };
-    measure();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    observer?.observe(container);
-    return () => {
-      observer?.disconnect();
-    };
-  }, []);
-  return { containerRef, widthPx };
 }
 
 function projectTaskVisibilityTriggers(
