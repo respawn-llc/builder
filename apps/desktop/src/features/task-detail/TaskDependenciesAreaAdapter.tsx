@@ -23,8 +23,12 @@ export function TaskDependenciesArea(props: Props) {
       excludedTaskIDs={() => excludedTaskIDs}
       navigationDisabled={navigationDisabled}
       onAdd={onAdd}
-      onRemove={(direction, item) => onRemove(taskDependencyPairForDirection(taskID, direction, item.taskID))}
-      onSelectCandidate={(direction, result) => onAddExisting(taskDependencyPairForDirection(taskID, direction, result.group.taskID))}
+      onRemove={(direction, item) => {
+        onRemove(taskDependencyPairForDirection(taskID, direction, item.taskID));
+      }}
+      onSelectCandidate={async (direction, result) =>
+        onAddExisting(taskDependencyPairForDirection(taskID, direction, result.group.taskID))
+      }
       onSelectTask={onSelectTask}
       projectID={projectID}
     />

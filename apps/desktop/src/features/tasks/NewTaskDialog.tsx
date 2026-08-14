@@ -180,13 +180,14 @@ function NewTaskFormContent({
   const catalog = useProjectLabelCatalog();
   const createTask = useCreateTask(projectID, boardQueryWorkflowID, workflowID);
   useEffect(() => onPendingChange?.(createTask.isPending), [createTask.isPending, onPendingChange]);
-  const workspaceProjectMissing = [
+  const projectMissing = [
     workspaceCatalog.workspaces.error,
     workspaceCatalog.initiatingWorkspace.error,
+    createTask.error,
   ].some(isProjectMissingError);
   useEffect(() => {
-    if (workspaceProjectMissing) navigator.back();
-  }, [navigator, workspaceProjectMissing]);
+    if (projectMissing) navigator.back();
+  }, [navigator, projectMissing]);
   const [selectedLabelIDs, setSelectedLabelIDs] = useState<readonly string[]>(
     () => restored?.selectedLabelIDs ?? [],
   );
@@ -235,6 +236,7 @@ function NewTaskFormContent({
     connection.phase === "connected",
     !createTask.isPending,
     !labelCreatePending,
+    catalog.data !== undefined,
     selectedWorkspace !== undefined,
   ].every(Boolean);
   async function submit(values: NewTaskFormValues): Promise<void> {
@@ -245,7 +247,6 @@ function NewTaskFormContent({
     if (sourceWorkspaceID === undefined) {
       throw new Error("New Task submission requires a source Workspace.");
     }
-    const availableLabelIDs = new Set(catalog.data?.labels.map((label) => label.id) ?? []);
     dismiss("new-task-create-error");
     try {
       const createdTask = await createTask.mutateAsync({
@@ -254,7 +255,7 @@ function NewTaskFormContent({
         title: values.title,
         body: values.body,
         sourceWorkspaceID,
-        labelIDs: effectiveSelectedLabelIDs.filter((labelID) => availableLabelIDs.has(labelID)),
+        labelIDs: effectiveSelectedLabelIDs,
         dependencyIntents: preparedDependencies.map((dependency) => ({
           relatedTaskID: dependency.taskID,
           newTaskRole: dependency.direction === "blocked-by" ? "blocked" : "blocker",

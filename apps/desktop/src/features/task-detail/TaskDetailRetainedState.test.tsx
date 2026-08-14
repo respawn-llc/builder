@@ -233,18 +233,18 @@ describe("Task Detail retained sidebar state", () => {
     await user.click(await screen.findByTestId("dependency-add-blocked-by"));
     await user.click(await screen.findByRole("button", { name: appI18n.t("task.dependenciesCreateTask") }));
 
-    expect(opened).toEqual([
-      expect.objectContaining({
+    expect(opened).toMatchObject([
+      {
         initialPreparedDependency: {
           direction: "blocks",
           shortID: taskDetailResponse.task.summary.short_id,
-          status: expect.objectContaining({ kind: taskDetailResponse.task.status.kind }),
+          status: { kind: taskDetailResponse.task.status.kind },
           taskID: "task-1",
           title: taskDetailResponse.task.summary.title,
           workflowID: taskDetailResponse.task.summary.workflow_id,
         },
         kind: "newTask",
-      }),
+      },
     ]);
   });
 });

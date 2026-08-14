@@ -137,7 +137,7 @@ function DependencyDirection({
             onCreateTask={() => {
               onAdd(direction.direction);
             }}
-            onSelect={(result) => onSelectCandidate(direction.direction, result)}
+            onSelect={async (result) => onSelectCandidate(direction.direction, result)}
             projectID={projectID}
             trigger={trigger}
           />

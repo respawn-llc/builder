@@ -6,6 +6,7 @@ import { RpcError, rpcErrorCodes } from "@/api";
 import { NewTaskForm } from "@/features/tasks";
 import { LinkWorkflowSidebar } from "@/features/workflows";
 import { appI18n, initializeI18n } from "@/i18n";
+import type * as TaskDependenciesModule from "@/shared/task-dependencies";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 const fixture = vi.hoisted<{
   createError: Error | null;
@@ -52,7 +53,7 @@ vi.mock("@/shared/task-mutations", () => ({
   useCreateTask: () => ({ error: fixture.createError, isPending: false, mutateAsync: vi.fn() }),
 }));
 vi.mock("@/shared/task-dependencies", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/shared/task-dependencies")>()),
+  ...(await importOriginal<typeof TaskDependenciesModule>()),
   DependenciesArea: () => null,
 }));
 vi.mock("@/shared/workflow-library", () => ({
@@ -76,7 +77,7 @@ function renderWithI18n(element: ReactElement) {
 }
 
 describe("Project-missing mutation seams", () => {
-  it("keeps New Task mounted when creation reports the Project missing", async () => {
+  it("dismisses New Task when creation reports the Project missing", async () => {
     fixture.createError = missing;
     const navigator = createTestSidebarNavigator();
     renderWithI18n(
@@ -87,7 +88,7 @@ describe("Project-missing mutation seams", () => {
         workflowID="workflow-1"
       />,
     );
-    expect(navigator.back).not.toHaveBeenCalled();
+    expect(navigator.back).toHaveBeenCalledOnce();
   });
 
   it("backs out of Link Workflow when linking reports the Project missing", async () => {

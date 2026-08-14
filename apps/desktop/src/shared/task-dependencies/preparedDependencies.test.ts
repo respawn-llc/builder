@@ -36,7 +36,7 @@ describe("prepared Task Dependencies", () => {
     expect(insertPreparedTaskDependency(once, blockedBy)).toBe(once);
     expect(insertPreparedTaskDependency(once, entry("blocks", "KENT-1"))).toHaveLength(2);
 
-    const prepared = Array.from({ length: 49 }, (_, index) => entry("blocked-by", `KENT-${index}`));
+    const prepared = Array.from({ length: 49 }, (_, index) => entry("blocked-by", `KENT-${String(index)}`));
     const full = insertPreparedTaskDependency(prepared, entry("blocked-by", "KENT-50"));
     expect(full).toHaveLength(50);
     expect(preparedTaskDependenciesProjection(full).directions[0]?.addAvailability).toEqual({ kind: "limit_reached" });

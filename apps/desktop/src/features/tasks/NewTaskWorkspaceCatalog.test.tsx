@@ -47,6 +47,7 @@ interface TestState {
   select: TestSelectProps | undefined;
   create: ReturnType<typeof vi.fn>;
   loggerAppend: ReturnType<typeof vi.fn>;
+  labels: { labels: readonly { id: string; name: string }[] } | undefined;
   resetQueries: ReturnType<typeof vi.fn>;
   searchResults: readonly TaskSearchResult[];
   statusDismiss: ReturnType<typeof vi.fn>;
@@ -82,6 +83,7 @@ const state = vi.hoisted((): TestState => ({
     workflowID: "workflow-1",
   })),
   loggerAppend: vi.fn(async () => undefined),
+  labels: { labels: [] },
   resetQueries: vi.fn(async () => undefined),
   searchResults: [],
   statusDismiss: vi.fn(),
@@ -130,7 +132,7 @@ vi.mock("@/shared/labels", () => ({
   LabelChooser: () => null,
   ProjectLabelsProvider: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
   orderedAssignedLabels: () => [],
-  useProjectLabelCatalog: () => ({ data: { labels: [] } }),
+  useProjectLabelCatalog: () => ({ data: state.labels }),
 }));
 vi.mock("@/shared/native-dialog", () => ({
   NativeDialogWindow: ({ children }: Readonly<{ children: ReactNode }>) => <>{children}</>,
@@ -211,6 +213,11 @@ function loadCatalog(workspaces?: WorkspaceCatalogRow[]) {
   state.catalog.data = { pages: [page(workspaces)], pageParams: [0] };
   state.catalog.isError = state.catalog.isPending = false;
 }
+function loadAttachedCatalog() {
+  loadCatalog();
+  state.exact.data = { kind: "attached", workspace: row("source") };
+  state.exact.isPending = false;
+}
 function rerender(view: ReturnType<typeof render>) {
   view.rerender(<NewTaskForm {...props} />);
 }
@@ -233,6 +240,7 @@ describe("New Task Workspace catalog integration", () => {
     state.exact.refetch.mockClear();
     state.create.mockClear();
     state.loggerAppend.mockClear();
+    state.labels = { labels: [] };
     state.resetQueries.mockClear();
     state.searchResults = [];
     state.statusDismiss.mockClear();
@@ -418,9 +426,7 @@ describe("New Task Workspace catalog integration", () => {
   });
 
   it("shows ordinary and Task Detail-originated prepared dependencies and delegates their actions", () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     const view = render(<NewTaskForm {...props} />);
     expect(screen.getByText("task.dependencies")).toBeInTheDocument();
     expect(screen.queryByTestId(/^dependency-row-/)).not.toBeInTheDocument();
@@ -440,9 +446,7 @@ describe("New Task Workspace catalog integration", () => {
   });
 
   it("pushes a stacked child without an unsaved-parent relationship and captures the complete Draft", () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     const navigator = createTestSidebarNavigator();
     render(<NewTaskForm {...props} navigator={navigator} />);
     fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
@@ -476,27 +480,36 @@ describe("New Task Workspace catalog integration", () => {
   });
 
   it("restores the authored Draft with picker state closed and recomputes validation on submission", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
+    state.labels = undefined;
     const retainedState = {
       formValues: { body: "Body", sourceWorkspaceID: "source", title: "" },
       preparedDependencies: [preparedDependency("blocked-by", "task-restored")],
-      selectedLabelIDs: [],
+      selectedLabelIDs: ["label-restored"],
     };
-    render(<NewTaskForm {...props} retainedState={retainedState} />);
+    const view = render(<NewTaskForm {...props} retainedState={retainedState} />);
     expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("");
     expect(screen.getByRole("textbox", { name: "task.body" })).toHaveValue("Body");
     expect(screen.getByTestId("dependency-row-task-restored")).toBeInTheDocument();
     expect(screen.queryByText("form.required")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "task.create" })).toBeDisabled();
+    state.labels = { labels: [{ id: "label-restored", name: "Restored" }] };
+    view.rerender(<NewTaskForm {...props} retainedState={retainedState} />);
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
     expect(await screen.findByText("form.required")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), { target: { value: "Task" } });
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+    await vi.waitFor(() => {
+      expect(state.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          labelIDs: ["label-restored"],
+        }),
+      );
+    });
   });
 
   it("submits every prepared relationship atomically and returns through one Back operation", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     const navigator = createTestSidebarNavigator();
     render(
       <NewTaskForm
@@ -532,9 +545,7 @@ describe("New Task Workspace catalog integration", () => {
   });
 
   it("stages searched dependencies through the 49→50 limit and cannot select a 51st", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     state.searchResults = [candidate("task-49"), candidate("task-50"), candidate("task-51")];
     const user = userEvent.setup();
     render(
@@ -560,9 +571,7 @@ describe("New Task Workspace catalog integration", () => {
   });
 
   it("returns an active stacked child summary with backlog status and keeps Back available while pending", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     const navigator = createTestSidebarNavigator();
     render(<NewTaskForm {...props} navigator={navigator} parentReturnDirection="blocked-by" />);
     fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
@@ -589,35 +598,8 @@ describe("New Task Workspace catalog integration", () => {
     });
   });
 
-  it("keeps the Draft and emits one Sonner failure when atomic creation reports Project missing", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
-    state.create.mockRejectedValueOnce(
-      new RpcError({
-        code: rpcErrorCodes.projectNotFound,
-        message: "Project no longer exists",
-        method: "workflow.task.create",
-      }),
-    );
-    const navigator = createTestSidebarNavigator();
-    render(<NewTaskForm {...props} navigator={navigator} />);
-    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
-      target: { value: "Keep me" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-    await vi.waitFor(() => {
-      expect(state.statusPush).toHaveBeenCalledOnce();
-    });
-    expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("Keep me");
-    expect(navigator.back).not.toHaveBeenCalled();
-    expect(screen.queryByText("Project no longer exists")).not.toBeInTheDocument();
-  });
-
   it("presents reciprocal rejection as product copy and preserves authored dependencies", async () => {
-    loadCatalog();
-    state.exact.data = { kind: "attached", workspace: row("source") };
-    state.exact.isPending = false;
+    loadAttachedCatalog();
     state.searchResults = [candidate("task-related")];
     state.create.mockRejectedValueOnce(
       new RpcError({
