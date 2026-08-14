@@ -26,9 +26,12 @@ import {
   type VirtualizedItemVisibilityTrigger,
 } from "@/ui";
 import {
+  projectTaskGroups,
   useProjectTaskListData,
   useProjectTaskListEvents,
   type ProjectTaskGroup,
+  type ProjectTaskGroupDisclosure,
+  type ProjectTaskListData,
 } from "./projectTaskListData";
 import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
@@ -152,6 +155,7 @@ export function ProjectTasksSurface({
     taskDetailID,
     t,
   });
+  const scrollRestorationReady = projectTaskScrollRestorationReady(data, disclosure);
   return (
     <ProjectTasksContent
       boardBoundary={boardBoundary}
@@ -161,10 +165,24 @@ export function ProjectTasksSurface({
       onNewTask={openNewTask}
       onScrollElementChange={onScrollElementChange}
       projectID={projectID}
+      scrollRestorationReady={scrollRestorationReady}
       taskCount={presentation.taskCount}
       viewMemory={viewMemory}
       workflows={workflows}
     />
+  );
+}
+
+function projectTaskScrollRestorationReady(
+  data: ProjectTaskListData,
+  disclosure: ProjectTaskGroupDisclosure,
+): boolean {
+  const counts = data.counts.data?.counts;
+  return (
+    counts !== undefined &&
+    projectTaskGroups.every(
+      (group) => !disclosure[group] || counts[group] === 0 || data[group].pages.length > 0,
+    )
   );
 }
 
@@ -176,6 +194,7 @@ function ProjectTasksContent({
   onNewTask,
   onScrollElementChange,
   projectID,
+  scrollRestorationReady,
   taskCount,
   viewMemory,
   workflows,
@@ -187,6 +206,7 @@ function ProjectTasksContent({
   onNewTask: () => void;
   onScrollElementChange: (element: HTMLDivElement | null) => void;
   projectID: string;
+  scrollRestorationReady: boolean;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
   workflows: readonly WorkflowPickerItem[];
@@ -237,10 +257,11 @@ function ProjectTasksContent({
           loadingLabel={t("app.loadingMore")}
           onLoadMore={() => undefined}
           onScrollElementChange={onScrollElementChange}
-          pixelOffsetRequest={createVirtualizedPixelOffsetRequest(
-            `restore-${memory.scrollRequestSequence.toString()}`,
-            memory.verticalOffsetPx,
-          )}
+          pixelOffsetRequest={
+            scrollRestorationReady
+              ? createVirtualizedPixelOffsetRequest(`restore-${projectID}`, memory.verticalOffsetPx)
+              : undefined
+          }
           renderItem={renderProjectTaskEntry}
           role="grid"
           rowSpacing="tight"

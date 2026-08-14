@@ -36,6 +36,9 @@ const fixture = vi.hoisted<{
   countsError: Error | null;
   countsEstablished: boolean;
   countsPending: boolean;
+  initialGroupPagesError: boolean;
+  initialGroupPagesEstablished: boolean;
+  initialGroupPagesRefreshing: boolean;
   backlogTasks: readonly TaskListItem[];
   doneDataOverrides: Partial<ProjectTaskListData.ProjectTaskGroupData>;
   invalidations: unknown[];
@@ -71,6 +74,9 @@ const fixture = vi.hoisted<{
   countsError: null,
   countsEstablished: true,
   countsPending: false,
+  initialGroupPagesError: false,
+  initialGroupPagesEstablished: true,
+  initialGroupPagesRefreshing: false,
   backlogTasks: [taskFixture("backlog-1", "KNT-3", "Backlog task")],
   doneDataOverrides: {},
   invalidations: [],
@@ -126,8 +132,16 @@ vi.mock("./projectTaskListData", async (importOriginal) => {
           task("active-1", "KNT-1", "Active task"),
           task("active-2", "KNT-2", "Running task"),
         ],
+        fixture.initialGroupPagesEstablished,
+        fixture.initialGroupPagesError,
+        fixture.initialGroupPagesRefreshing,
       ),
-      backlog: groupData(fixture.backlogTasks),
+      backlog: groupData(
+        fixture.backlogTasks,
+        fixture.initialGroupPagesEstablished,
+        fixture.initialGroupPagesError,
+        fixture.initialGroupPagesRefreshing,
+      ),
       done: {
         ...groupData([task("done-1", "KNT-4", "Done task")]),
         ...fixture.doneDataOverrides,
@@ -162,6 +176,9 @@ describe("ProjectTasksSurface", () => {
     fixture.countsError = null;
     fixture.countsEstablished = true;
     fixture.countsPending = false;
+    fixture.initialGroupPagesError = false;
+    fixture.initialGroupPagesEstablished = true;
+    fixture.initialGroupPagesRefreshing = false;
     fixture.backlogTasks = [task("backlog-1", "KNT-3", "Backlog task")];
     fixture.doneDataOverrides = {};
     fixture.activeDestination = null;
@@ -358,6 +375,68 @@ describe("ProjectTasksSurface", () => {
     expect(screen.getByRole("button", { name: "Active, 2 tasks" })).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("restores retained pixels after remounted group pages establish their first results", () => {
+    const originalScrollTop = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollTop");
+    const scrollPositions = new WeakMap<HTMLElement, number>();
+    let maximumScrollTop = Number.POSITIVE_INFINITY;
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get: function getScrollTop(this: HTMLElement) {
+        return scrollPositions.get(this) ?? 0;
+      },
+      set: function setScrollTop(this: HTMLElement, value: number) {
+        scrollPositions.set(this, Math.min(value, maximumScrollTop));
+      },
+    });
+    try {
+      const memory = createProjectTasksViewMemory();
+      const { unmount } = renderSurface(memory);
+      const initialGrid = screen.getByRole("grid", { name: "Project tasks" });
+      initialGrid.scrollTop = 200;
+      initialGrid.scrollLeft = 120;
+      fireEvent.scroll(initialGrid);
+      unmount();
+
+      fixture.initialGroupPagesEstablished = false;
+      maximumScrollTop = 0;
+      const view = renderSurface(memory);
+      const loadingGrid = screen.getByRole("grid", { name: "Project tasks" });
+      expect(loadingGrid.scrollTop).toBe(0);
+      expect(loadingGrid.scrollLeft).toBe(120);
+
+      fixture.initialGroupPagesError = true;
+      view.rerender(withQueryClient(surface(memory)));
+      expect(screen.getByRole("grid", { name: "Project tasks" }).scrollTop).toBe(0);
+
+      fixture.initialGroupPagesError = false;
+      fixture.initialGroupPagesEstablished = true;
+      maximumScrollTop = 1_000;
+      view.rerender(withQueryClient(surface(memory)));
+
+      const restoredGrid = screen.getByRole("grid", { name: "Project tasks" });
+      expect(restoredGrid.scrollTop).toBe(200);
+      expect(restoredGrid.scrollLeft).toBe(120);
+    } finally {
+      if (originalScrollTop === undefined) {
+        Reflect.deleteProperty(HTMLElement.prototype, "scrollTop");
+      } else {
+        Object.defineProperty(HTMLElement.prototype, "scrollTop", originalScrollTop);
+      }
+    }
+  });
+
+  it("restores retained pixels while established group pages refresh", () => {
+    const memory = createProjectTasksViewMemory();
+    memory.setScrollOffsets(200, 120);
+    fixture.initialGroupPagesRefreshing = true;
+
+    renderSurface(memory);
+
+    const grid = screen.getByRole("grid", { name: "Project tasks" });
+    expect(grid.scrollTop).toBe(200);
+    expect(grid.scrollLeft).toBe(120);
+  });
+
   it("replaces the complete Tasks surface when initial exact counts fail", () => {
     fixture.countsError = new Error("Counts unavailable");
     fixture.countsEstablished = false;
@@ -546,25 +625,41 @@ function countsQuery(
   };
 }
 
-function groupData(tasks: readonly TaskListItem[]) {
+function groupData(
+  tasks: readonly TaskListItem[],
+  established = true,
+  initialError = false,
+  refreshing = false,
+) {
+  const establishedTasks = established ? tasks : [];
   return {
-    error: null,
+    error: initialError ? new Error("Group unavailable") : null,
     fetchNextPage: vi.fn(),
     fetchPreviousPage: vi.fn(),
     hasNextPage: false,
     hasPreviousPage: false,
-    isError: false,
+    isError: initialError,
     isFetchNextPageError: false,
     isFetchPreviousPageError: false,
-    isFetching: false,
+    isFetching: refreshing,
     isFetchingNextPage: false,
     isFetchingPreviousPage: false,
-    isPending: false,
+    isPending: !established && !initialError,
     nextRequestGeneration: "project-1:end",
-    pages: [],
+    pages: established
+      ? [
+          {
+            scope: { projectID: "project-1", workflowID: null },
+            matchingWorkflowCardinality: "multiple" as const,
+            nextOffset: null,
+            generatedAt: 1,
+            tasks: establishedTasks,
+          },
+        ]
+      : [],
     previousRequestGeneration: "project-1:0",
     refetch: vi.fn(),
-    tasks,
+    tasks: establishedTasks,
   };
 }
 

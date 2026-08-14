@@ -5,7 +5,6 @@ export interface ProjectTasksViewMemory {
     disclosure: ProjectTaskGroupDisclosure;
     horizontalOffsetPx: number;
     verticalOffsetPx: number;
-    scrollRequestSequence: number;
   }>;
   setDisclosure(disclosure: ProjectTaskGroupDisclosure): void;
   setScrollOffsets(verticalOffsetPx: number, horizontalOffsetPx: number): void;
@@ -16,7 +15,6 @@ export function createProjectTasksViewMemory(): ProjectTasksViewMemory {
     disclosure: { active: true, backlog: true, done: false },
     horizontalOffsetPx: 0,
     verticalOffsetPx: 0,
-    scrollRequestSequence: 0,
   };
   return {
     read: () => value,
