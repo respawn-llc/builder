@@ -322,12 +322,9 @@ func openPersistedSession(
 	if record.Meta == nil {
 		return nil, errPersistedSessionResolverRequired
 	}
-	if err := validateSessionContextFacts(record.ContextFacts); err != nil {
-		return nil, fmt.Errorf("validate Session Context facts: %w", err)
-	}
 	s.meta = cloneMeta(*record.Meta)
-	s.contextFacts = record.ContextFacts.Clone()
-	s.initialContextFacts = record.ContextFacts.Clone()
+	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
+	s.initialContextFacts = s.contextFacts.Clone()
 	if err := normalizeMetaContinuation(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session continuation: %w", err)
 	}

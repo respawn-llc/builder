@@ -44,11 +44,13 @@ func (facts SessionContextFacts) Clone() SessionContextFacts {
 	return cloned
 }
 
-func validateSessionContextFacts(facts SessionContextFacts) error {
-	if facts.CompletedCompactionCount != nil && *facts.CompletedCompactionCount < 0 {
-		return errors.New("completed compaction count must be non-negative")
+func normalizeSessionContextFacts(facts SessionContextFacts) SessionContextFacts {
+	normalized := facts.Clone()
+	if normalized.CompletedCompactionCount != nil && *normalized.CompletedCompactionCount < 0 {
+		count := 0
+		normalized.CompletedCompactionCount = &count
 	}
-	return nil
+	return normalized
 }
 
 func (s *Store) ContextFacts() SessionContextFacts {

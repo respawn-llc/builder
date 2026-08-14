@@ -706,7 +706,8 @@ func (s *Service) finalizeLaunchPlan(
 		return PlanResult{}, err
 	}
 	authState := auth.EmptyState()
-	if plan.Locked == nil && s.authStates != nil {
+	_, hasProviderContract := llm.ProviderCapabilitiesFromLocked(plan.Locked)
+	if !hasProviderContract && s.authStates != nil {
 		authState, err = s.authStates.Load(ctx)
 		if err != nil {
 			return PlanResult{}, err

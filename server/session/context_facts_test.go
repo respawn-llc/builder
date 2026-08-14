@@ -230,6 +230,49 @@ func TestOpenRestoresContextFactsOutsideRecoverableMeta(t *testing.T) {
 	}
 }
 
+func TestOpenNormalizesInvalidPersistedContextFactsWithoutWriting(t *testing.T) {
+	root := t.TempDir()
+	writer := &recordingContextFactWriter{}
+	observer := &recordingPersistenceObserver{}
+	store, err := Create(
+		root,
+		"workspace",
+		"/workspace",
+		testSessionCategory,
+		WithPersistenceObserver(observer),
+		WithSessionContextFactWriter(writer),
+	)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	writer.countWrites = 0
+	invalidCount := -7
+	record := PersistedSessionRecord{
+		SessionDir: store.Dir(),
+		Meta:       &observer.snapshot.Meta,
+		ContextFacts: SessionContextFacts{
+			CompletedCompactionCount: &invalidCount,
+		},
+	}
+
+	reopened, err := Open(
+		store.Dir(),
+		WithPersistenceObserver(observer),
+		WithPersistedSessionResolver(stubPersistedSessionResolver{record: record}),
+		WithSessionContextFactWriter(writer),
+	)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	facts := reopened.ContextFacts()
+	if facts.CompletedCompactionCount == nil || *facts.CompletedCompactionCount != 0 {
+		t.Fatalf("normalized completed count = %v, want present zero", facts.CompletedCompactionCount)
+	}
+	if writer.countWrites != 0 {
+		t.Fatalf("normalization wrote Context facts %d times, want read-only normalization", writer.countWrites)
+	}
+}
+
 func TestForkAndCloneLeaveContextFactsAbsent(t *testing.T) {
 	parent := newSessionTestStore(t)
 	log := materializedForkEventLog(t, parent)

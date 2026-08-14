@@ -657,7 +657,8 @@ func (s *Starter) applyContextPolicy(ctx context.Context, plan launch.SessionPla
 }
 
 func (s *Starter) loadEffectiveAuthState(ctx context.Context, locked *session.LockedContract) (auth.State, error) {
-	if locked != nil || s.authManager == nil {
+	_, hasProviderContract := llm.ProviderCapabilitiesFromLocked(locked)
+	if hasProviderContract || s.authManager == nil {
 		return auth.EmptyState(), nil
 	}
 	return s.authManager.Load(ctx)

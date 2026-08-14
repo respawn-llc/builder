@@ -121,6 +121,43 @@ func TestPlanLaunchSessionResolvesEffectiveAuthAfterFinalNamedRoleSelection(t *t
 	}
 }
 
+func TestPlanLaunchSessionLoadsEffectiveAuthWhenLockedProviderContractIsAbsent(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:         cfg.Settings.Model,
+		ContextWindow: cfg.Settings.ModelContextWindow,
+	}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded:  auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+		current: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "locked-without-provider-contract",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeNative {
+		t.Fatalf("CompactionMode = %q, want OAuth provider-native mode", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 1 {
+		t.Fatalf("effective auth Load calls = %d, want 1", reader.loadCalls)
+	}
+}
+
 func sessionLaunchStringPtr(value string) *string {
 	return &value
 }
