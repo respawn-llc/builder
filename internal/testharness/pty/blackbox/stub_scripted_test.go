@@ -74,6 +74,36 @@ func TestScriptedResponsesAcceptsHistoricalToolOutputOnFirstRequest(t *testing.T
 	}
 }
 
+func TestScriptedResponsesReseedsLineageAfterHistoryReplacement(t *testing.T) {
+	stub := startScriptedStub(t, scriptedllm.Script{Steps: []scriptedllm.Step{
+		scriptedllm.FinalAnswer("before"),
+		scriptedllm.FinalAnswer("after"),
+	}})
+	provider := providerClient(t, stub)
+	sessionID := runtimeids.NewSessionID().String()
+	generate(t, provider, sessionID, prepared(messageItem("before")))
+	replacement := prepared(llm.ResponseItem{
+		Type:        llm.ResponseItemTypeMessage,
+		Role:        textutil.Value(llm.RoleUser),
+		MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+		Content:     textutil.Value("summary"),
+	})
+	response, err := provider.(llm.StreamEventsClient).GenerateStreamWithEvents(
+		context.Background(),
+		request(sessionID, appendItems(replacement, prepared(messageItem("after")))),
+		llm.StreamCallbacks{},
+	)
+	if err != nil {
+		t.Fatalf("post-replacement Generate: %v (stub failure: %v)", err, stub.Snapshot().Failure)
+	}
+	if response.Assistant.Content == nil || *response.Assistant.Content != "after" {
+		t.Fatalf("post-replacement response = %+v, want final answer", response)
+	}
+	if stub.ScriptedRequestCount() != 2 || stub.RemainingScriptedSteps() != 0 {
+		t.Fatalf("post-replacement script observations: requests=%d remaining=%d", stub.ScriptedRequestCount(), stub.RemainingScriptedSteps())
+	}
+}
+
 func TestScriptedResponsesRejectsDuplicateHistoricalToolOutputs(t *testing.T) {
 	stub := startScriptedStub(t, scriptedllm.Script{Steps: []scriptedllm.Step{
 		scriptedllm.FinalAnswer("unused"),

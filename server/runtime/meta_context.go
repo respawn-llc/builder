@@ -133,9 +133,6 @@ func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 	}
 	return out
 }
-func (r metaContextBuildResult) OrderedBaseMessages() []llm.Message {
-	return r.Projection().Messages()
-}
 
 type metaContextBuilder struct {
 	workspaceRoot    string

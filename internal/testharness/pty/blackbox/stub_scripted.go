@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"core/internal/testharness/scriptedllm"
+	"core/prompts"
 	"core/server/llm"
 	"core/shared/textutil"
 )
@@ -150,7 +151,7 @@ func (s *ResponsesStub) beginScriptedLineage(
 		return nil, nil, scriptedllm.ErrConcurrentCall
 	}
 	previous := s.scripted.lineages[lineage]
-	if previous == nil {
+	if previous == nil || scriptedHistoryReplacementChanged(previous.input, current) {
 		state := &scriptedLineageState{
 			pending: make(map[string]scriptedCall), delivered: make(map[string]struct{}),
 		}
@@ -200,6 +201,26 @@ func (s *ResponsesStub) beginScriptedLineage(
 	}
 	s.scripted.active[lineage] = struct{}{}
 	return enriched, state, nil
+}
+
+func scriptedHistoryReplacementChanged(previous, current []llm.ResponseItem) bool {
+	return !reflect.DeepEqual(
+		scriptedHistoryReplacementBoundary(previous),
+		scriptedHistoryReplacementBoundary(current),
+	)
+}
+
+func scriptedHistoryReplacementBoundary(items []llm.ResponseItem) []llm.ResponseItem {
+	var boundary []llm.ResponseItem
+	for _, item := range items {
+		if item.Type == llm.ResponseItemTypeCompaction ||
+			(item.Type == llm.ResponseItemTypeMessage &&
+				item.MessageType != nil &&
+				*item.MessageType == llm.MessageTypeCompactionSummary) {
+			boundary = append(boundary, item)
+		}
+	}
+	return boundary
 }
 
 func (s *ResponsesStub) finishScriptedLineage(
@@ -275,18 +296,31 @@ func decodeScriptedRequest(body []byte) (llm.Request, []llm.ResponseItem, error)
 
 func decodeProviderResponseItem(raw json.RawMessage) (llm.ResponseItem, error) {
 	var envelope struct {
-		Type   llm.ResponseItemType `json:"type"`
-		Name   string               `json:"name"`
-		CallID string               `json:"call_id"`
-		Output json.RawMessage      `json:"output"`
+		Type    llm.ResponseItemType `json:"type"`
+		Name    string               `json:"name"`
+		CallID  string               `json:"call_id"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Output json.RawMessage `json:"output"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return llm.ResponseItem{}, err
 	}
 	item := llm.ResponseItem{
-		Type: envelope.Type, Name: textutil.OptionalTrimmedString(envelope.Name),
+		Type:   envelope.Type,
+		Name:   textutil.OptionalTrimmedString(envelope.Name),
 		CallID: textutil.OptionalTrimmedString(envelope.CallID),
 		Raw:    json.RawMessage(textutil.CompactNoHTMLEscape(raw)),
+	}
+	if envelope.Type == llm.ResponseItemTypeMessage {
+		for _, content := range envelope.Content {
+			if content.Type == "input_text" && strings.HasPrefix(content.Text, prompts.CompactionSummaryPrefix) {
+				item.MessageType = textutil.Value(llm.MessageTypeCompactionSummary)
+				break
+			}
+		}
 	}
 	switch envelope.Type {
 	case llm.ResponseItemTypeFunctionCallOutput, llm.ResponseItemTypeCustomToolOutput:
