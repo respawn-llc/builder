@@ -634,21 +634,6 @@ func currentTaskSessionForNode(
 	return latestTaskSessionForNode(ctx, q, currentNode)
 }
 
-func currentTaskSessionAssociationBeforeBinding(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	currentNode workflow.CurrentNodeReference,
-) (TaskSessionAssociation, bool, error) {
-	association, err := latestTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, currentNode)
-	if errors.Is(err, sql.ErrNoRows) {
-		return TaskSessionAssociation{}, false, nil
-	}
-	if err != nil {
-		return TaskSessionAssociation{}, false, err
-	}
-	return association, true, nil
-}
-
 func hasHistoricalTaskSessionForNode(
 	_ context.Context,
 	_ *sqlitegen.Queries,
@@ -676,28 +661,6 @@ func bindingSourceSessionID(
 		"assigned current node %v has non-binding continuation source %q",
 		currentNode.Reference,
 		currentNode.ContinuationSource.Kind(),
-	)
-}
-
-func retireDependentCurrentTaskSessionAssociations(
-	ctx context.Context,
-	q *sqlitegen.Queries,
-	currentNode workflow.CurrentNodeReference,
-	obsoleteSessionID runtimeids.SessionID,
-	preservedSourceSessionID runtimeids.SessionID,
-) error {
-	var transitionBranchKey sql.NullString
-	if branchKey, branchScoped := currentNode.TransitionBranchKey(); branchScoped {
-		transitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
-	}
-	return q.RetireDependentCurrentSessionWorkflowNodeAssociations(
-		ctx,
-		sqlitegen.RetireDependentCurrentSessionWorkflowNodeAssociationsParams{
-			TaskID:                   string(currentNode.TaskID),
-			ObsoleteSessionID:        obsoleteSessionID.String(),
-			PreservedSourceSessionID: preservedSourceSessionID.String(),
-			TransitionBranchKey:      transitionBranchKey,
-		},
 	)
 }
 

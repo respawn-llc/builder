@@ -421,7 +421,10 @@ func transitionProperty(transitionIDs []string) map[string]any {
 
 func commentaryProperty() map[string]any {
 	return map[string]any{
-		"type":        []string{"string", "null"},
+		"anyOf": []map[string]any{
+			{"type": "string"},
+			{"type": "null"},
+		},
 		"description": "Brief explanation of what was completed and why this transition was selected.",
 	}
 }
@@ -441,7 +444,10 @@ func nullableParameterProperty(parameter workflow.Parameter) map[string]any {
 		description += " Set to null when this parameter does not belong to the selected transition."
 	}
 	return map[string]any{
-		"type":        []string{"string", "null"},
+		"anyOf": []map[string]any{
+			{"type": "string"},
+			{"type": "null"},
+		},
 		"description": description,
 	}
 }
@@ -529,7 +535,6 @@ func DecodeCompletion(raw json.RawMessage, contract CompletionContract) (ParsedC
 				continue
 			}
 			if !knownParameters[field] {
-				issues = append(issues, ValidationIssue{Code: "unknown_parameter", Field: field, Message: "parameter is not declared by the advertised completion contract"})
 				continue
 			}
 			if bytes.Equal(bytes.TrimSpace(value), []byte("null")) {

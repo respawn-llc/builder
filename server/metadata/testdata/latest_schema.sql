@@ -38,28 +38,19 @@ CREATE TABLE "projects" (
     primary_workspace_id TEXT NOT NULL DEFAULT ''
 );
 
-CREATE TABLE session_prompt_history_entries (
+CREATE TABLE "session_prompt_history_entries" (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    source_id TEXT NOT NULL CHECK (trim(source_id) <> ''),
     text TEXT NOT NULL CHECK (trim(text) <> ''),
     created_at_unix_ms INTEGER NOT NULL
 );
 
 CREATE TABLE "session_workflow_node_associations" (
-    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    node_id BLOB NOT NULL
-        CHECK (typeof(node_id) = 'blob' AND length(node_id) = 16 AND node_id != zeroblob(16)),
+    node_id TEXT NOT NULL,
     transition_branch_key TEXT
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
-    association_status TEXT NOT NULL CHECK (association_status IN ('current', 'historical')),
-    source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT,
-    associated_at_unix_ms INTEGER NOT NULL CHECK (associated_at_unix_ms > 0),
-    CHECK (
-        (association_status = 'current' AND source_session_id IS NOT NULL)
-        OR association_status = 'historical'
-    )
+    associated_at_unix_ms INTEGER NOT NULL CHECK (associated_at_unix_ms > 0)
 );
 
 CREATE TABLE "sessions" (
@@ -88,23 +79,19 @@ CREATE TABLE "sessions" (
 CHECK (completed_compaction_count IS NULL OR completed_compaction_count >= 0), manual_compact_eligible INTEGER
 CHECK (manual_compact_eligible IS NULL OR manual_compact_eligible IN (0, 1)));
 
-CREATE TABLE task_active_fanout_branches (
+CREATE TABLE "task_active_fanout_branches" (
     task_id TEXT NOT NULL REFERENCES task_active_fanouts(task_id) ON DELETE CASCADE,
     transition_branch_key TEXT NOT NULL CHECK (length(trim(transition_branch_key)) BETWEEN 1 AND 64),
     arrival_state TEXT NOT NULL CHECK (arrival_state IN ('pending', 'arrived')),
     arrival_values_json TEXT
-        CHECK (arrival_values_json IS NULL OR (json_valid(arrival_values_json) AND json_type(arrival_values_json) = 'object')), continuation_source_kind TEXT
-    CHECK (continuation_source_kind IS NULL OR continuation_source_kind IN (
-        'exact',
-        'deferred_self',
-        'absent'
-    )), continuation_source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT, legacy_materialized INTEGER NOT NULL DEFAULT 1
-    CHECK (legacy_materialized IN (0, 1)),
+        CHECK (
+            arrival_values_json IS NULL
+            OR (json_valid(arrival_values_json) AND json_type(arrival_values_json) = 'object')
+        ),
     PRIMARY KEY (task_id, transition_branch_key),
     CHECK (
         (arrival_state = 'pending' AND arrival_values_json IS NULL)
-        OR
-        (arrival_state = 'arrived' AND arrival_values_json IS NOT NULL)
+        OR (arrival_state = 'arrived' AND arrival_values_json IS NOT NULL)
     )
 );
 
@@ -124,8 +111,7 @@ CREATE TABLE "task_comments" (
 
 CREATE TABLE "task_current_nodes" (
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-    node_id BLOB NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE RESTRICT
-        CHECK (typeof(node_id) = 'blob' AND length(node_id) = 16 AND node_id != zeroblob(16)),
+    node_id TEXT NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE RESTRICT,
     transition_branch_key TEXT
         CHECK (transition_branch_key IS NULL OR length(trim(transition_branch_key)) BETWEEN 1 AND 64),
     current_input_values_json TEXT NOT NULL DEFAULT '{}'
@@ -144,15 +130,7 @@ CREATE TABLE "task_current_nodes" (
         ),
     interrupted_at_unix_ms INTEGER
         CHECK (interrupted_at_unix_ms IS NULL OR interrupted_at_unix_ms > 0),
-    entered_by_edge_id BLOB
-        CHECK (
-            entered_by_edge_id IS NULL
-            OR (
-                typeof(entered_by_edge_id) = 'blob'
-                AND length(entered_by_edge_id) = 16
-                AND entered_by_edge_id != zeroblob(16)
-            )
-        ),
+    entered_by_edge_id TEXT,
     effective_assignee TEXT
         CHECK (effective_assignee IS NULL OR length(trim(effective_assignee)) > 0),
     effective_thinking TEXT
@@ -162,15 +140,9 @@ CREATE TABLE "task_current_nodes" (
             'configured_fallback',
             'transition_selected',
             'retained_session'
-        )), continuation_source_kind TEXT
-    CHECK (continuation_source_kind IS NULL OR continuation_source_kind IN (
-        'exact',
-        'deferred_self',
-        'absent'
-    )), continuation_source_session_id TEXT REFERENCES sessions(id) ON DELETE RESTRICT, legacy_materialized INTEGER NOT NULL DEFAULT 1
-    CHECK (legacy_materialized IN (0, 1)),
+        )),
     FOREIGN KEY (task_id, transition_branch_key)
-        REFERENCES task_active_fanout_branches(task_id, transition_branch_key)
+        REFERENCES "task_active_fanout_branches"(task_id, transition_branch_key)
         ON DELETE RESTRICT,
     CHECK (
         (
@@ -215,12 +187,7 @@ CREATE TABLE "task_pending_approval_branches" (
 CREATE TABLE "task_pending_approvals" (
     id TEXT PRIMARY KEY,
     source_task_id TEXT NOT NULL,
-    source_node_id BLOB NOT NULL
-        CHECK (
-            typeof(source_node_id) = 'blob'
-            AND length(source_node_id) = 16
-            AND source_node_id != zeroblob(16)
-        ),
+    source_node_id TEXT NOT NULL,
     source_transition_branch_key TEXT
         CHECK (source_transition_branch_key IS NULL OR length(trim(source_transition_branch_key)) BETWEEN 1 AND 64),
     source_session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL,
@@ -337,17 +304,10 @@ CREATE TABLE "tasks" (
 );
 
 CREATE TABLE "workflow_edges" (
-    id BLOB PRIMARY KEY
-        CHECK (typeof(id) = 'blob' AND length(id) = 16 AND id != zeroblob(16)),
-    transition_group_id BLOB NOT NULL REFERENCES "workflow_transition_groups"(id) ON DELETE CASCADE
-        CHECK (
-            typeof(transition_group_id) = 'blob'
-            AND length(transition_group_id) = 16
-            AND transition_group_id != zeroblob(16)
-        ),
+    id TEXT PRIMARY KEY,
+    transition_group_id TEXT NOT NULL REFERENCES "workflow_transition_groups"(id) ON DELETE CASCADE,
     edge_key TEXT NOT NULL CHECK (length(edge_key) BETWEEN 1 AND 64),
-    target_node_id BLOB NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE CASCADE
-        CHECK (typeof(target_node_id) = 'blob' AND length(target_node_id) = 16 AND target_node_id != zeroblob(16)),
+    target_node_id TEXT NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE CASCADE,
     requires_approval INTEGER NOT NULL DEFAULT 0 CHECK (requires_approval IN (0, 1)),
     context_mode TEXT NOT NULL CHECK (context_mode IN ('new_session', 'continue_session', 'compact_and_continue_session')),
     input_bindings_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(input_bindings_json)),
@@ -374,8 +334,7 @@ CREATE TABLE "workflow_edges" (
 );
 
 CREATE TABLE "workflow_node_groups" (
-    id BLOB PRIMARY KEY
-        CHECK (typeof(id) = 'blob' AND length(id) = 16 AND id != zeroblob(16)),
+    id TEXT PRIMARY KEY,
     workflow_id BLOB NOT NULL REFERENCES workflows(id) ON DELETE CASCADE
         CHECK (typeof(workflow_id) = 'blob' AND length(workflow_id) = 16),
     group_key TEXT NOT NULL CHECK (length(group_key) BETWEEN 1 AND 64),
@@ -386,19 +345,14 @@ CREATE TABLE "workflow_node_groups" (
 );
 
 CREATE TABLE "workflow_nodes" (
-    id BLOB PRIMARY KEY
-        CHECK (typeof(id) = 'blob' AND length(id) = 16 AND id != zeroblob(16)),
+    id TEXT PRIMARY KEY,
     workflow_id BLOB NOT NULL REFERENCES workflows(id) ON DELETE CASCADE
         CHECK (typeof(workflow_id) = 'blob' AND length(workflow_id) = 16),
     node_key TEXT NOT NULL CHECK (length(node_key) BETWEEN 1 AND 64),
     kind TEXT NOT NULL CHECK (kind IN ('start', 'agent', 'script', 'join', 'terminal')),
     display_name TEXT NOT NULL CHECK (length(trim(display_name)) BETWEEN 1 AND 120),
     subagent_role TEXT NOT NULL DEFAULT '',
-    group_id BLOB REFERENCES "workflow_node_groups"(id) ON DELETE SET NULL
-        CHECK (
-            group_id IS NULL
-            OR (typeof(group_id) = 'blob' AND length(group_id) = 16 AND group_id != zeroblob(16))
-        ),
+    group_id TEXT REFERENCES "workflow_node_groups"(id) ON DELETE SET NULL,
     sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
     join_input_providers_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(join_input_providers_json)),
     completion_mode TEXT NOT NULL DEFAULT ''
@@ -414,10 +368,8 @@ CREATE TABLE "workflow_nodes" (
 );
 
 CREATE TABLE "workflow_transition_groups" (
-    id BLOB PRIMARY KEY
-        CHECK (typeof(id) = 'blob' AND length(id) = 16 AND id != zeroblob(16)),
-    source_node_id BLOB NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE CASCADE
-        CHECK (typeof(source_node_id) = 'blob' AND length(source_node_id) = 16 AND source_node_id != zeroblob(16)),
+    id TEXT PRIMARY KEY,
+    source_node_id TEXT NOT NULL REFERENCES "workflow_nodes"(id) ON DELETE CASCADE,
     transition_id TEXT NOT NULL CHECK (length(transition_id) BETWEEN 1 AND 64),
     display_name TEXT NOT NULL DEFAULT '' CHECK (length(display_name) <= 120),
     sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
@@ -595,7 +547,7 @@ SELECT
     COALESCE((
         SELECT json_group_array(node_id)
         FROM (
-            SELECT kent_graph_entity_id_text_v1(position.node_id) AS node_id
+            SELECT position.node_id
             FROM current_positions position
             WHERE position.task_id = task.id
             ORDER BY position.node_id
@@ -631,31 +583,21 @@ CREATE UNIQUE INDEX projects_project_key_idx
 CREATE INDEX session_prompt_history_entries_session_sequence_idx
     ON session_prompt_history_entries(session_id, sequence);
 
-CREATE UNIQUE INDEX session_prompt_history_entries_source_idx
-    ON session_prompt_history_entries(session_id, source_id);
-
 CREATE UNIQUE INDEX session_workflow_node_associations_branch_unique_idx
     ON session_workflow_node_associations(session_id, node_id, transition_branch_key)
     WHERE transition_branch_key IS NOT NULL;
 
-CREATE UNIQUE INDEX session_workflow_node_associations_current_branch_unique_idx
-    ON session_workflow_node_associations(task_id, node_id, transition_branch_key)
-    WHERE association_status = 'current' AND transition_branch_key IS NOT NULL;
-
-CREATE UNIQUE INDEX session_workflow_node_associations_current_serial_unique_idx
-    ON session_workflow_node_associations(task_id, node_id)
-    WHERE association_status = 'current' AND transition_branch_key IS NULL;
-
-CREATE INDEX session_workflow_node_associations_history_lookup_idx
-    ON session_workflow_node_associations(task_id, node_id, transition_branch_key)
-    WHERE association_status = 'historical';
+CREATE INDEX session_workflow_node_associations_lookup_idx
+    ON session_workflow_node_associations(
+        node_id,
+        transition_branch_key,
+        associated_at_unix_ms DESC,
+        session_id DESC
+    );
 
 CREATE UNIQUE INDEX session_workflow_node_associations_serial_unique_idx
     ON session_workflow_node_associations(session_id, node_id)
     WHERE transition_branch_key IS NULL;
-
-CREATE INDEX session_workflow_node_associations_session_recency_idx
-    ON session_workflow_node_associations(session_id, associated_at_unix_ms DESC, node_id DESC);
 
 CREATE UNIQUE INDEX sessions_artifact_relpath_idx ON sessions(artifact_relpath);
 
@@ -840,49 +782,29 @@ BEFORE INSERT ON session_workflow_node_associations
 FOR EACH ROW
 WHEN NOT EXISTS (
     SELECT 1
-    FROM sessions retained_session
-    JOIN task_records task ON task.id = NEW.task_id
+    FROM sessions session
+    JOIN task_records task ON task.id = session.task_id
     JOIN workflow_nodes node ON node.id = NEW.node_id
-    WHERE retained_session.id = NEW.session_id
-      AND retained_session.task_id = NEW.task_id
+    WHERE session.id = NEW.session_id
       AND node.workflow_id = task.workflow_id
 )
-OR (
-    NEW.source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
 BEGIN
-    SELECT RAISE(ABORT, 'session node association must belong to one task workflow');
+    SELECT RAISE(ABORT, 'session node association must belong to owning task workflow');
 END;
 
 CREATE TRIGGER session_workflow_node_associations_owner_update
-BEFORE UPDATE OF task_id, session_id, node_id, source_session_id ON session_workflow_node_associations
+BEFORE UPDATE OF session_id, node_id ON session_workflow_node_associations
 FOR EACH ROW
 WHEN NOT EXISTS (
     SELECT 1
-    FROM sessions retained_session
-    JOIN task_records task ON task.id = NEW.task_id
+    FROM sessions session
+    JOIN task_records task ON task.id = session.task_id
     JOIN workflow_nodes node ON node.id = NEW.node_id
-    WHERE retained_session.id = NEW.session_id
-      AND retained_session.task_id = NEW.task_id
+    WHERE session.id = NEW.session_id
       AND node.workflow_id = task.workflow_id
 )
-OR (
-    NEW.source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
 BEGIN
-    SELECT RAISE(ABORT, 'session node association must belong to one task workflow');
+    SELECT RAISE(ABORT, 'session node association must belong to owning task workflow');
 END;
 
 CREATE TRIGGER sessions_task_owner_clear_associations
@@ -891,8 +813,7 @@ FOR EACH ROW
 WHEN NEW.task_id IS NULL
 BEGIN
     DELETE FROM session_workflow_node_associations
-    WHERE session_id = NEW.id
-       OR source_session_id = NEW.id;
+    WHERE session_id = NEW.id;
 END;
 
 CREATE TRIGGER sessions_task_owner_insert
@@ -985,72 +906,6 @@ BEGIN
     SELECT RAISE(ABORT, 'session worktree must belong to session workspace');
 END;
 
-CREATE TRIGGER task_active_fanout_branches_continuation_source_insert
-BEFORE INSERT ON task_active_fanout_branches
-FOR EACH ROW
-WHEN NOT (
-    (
-        NEW.legacy_materialized = 1
-        AND NEW.continuation_source_kind IS NULL
-        AND NEW.continuation_source_session_id IS NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND NEW.continuation_source_kind = 'exact'
-        AND NEW.continuation_source_session_id IS NOT NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND NEW.continuation_source_kind IN ('deferred_self', 'absent')
-        AND NEW.continuation_source_session_id IS NULL
-    )
-)
-OR (
-    NEW.continuation_source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.continuation_source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'Fan-Out branch continuation source is invalid');
-END;
-
-CREATE TRIGGER task_active_fanout_branches_continuation_source_update
-BEFORE UPDATE OF task_id, continuation_source_kind, continuation_source_session_id, legacy_materialized ON task_active_fanout_branches
-FOR EACH ROW
-WHEN NOT (
-    (
-        NEW.legacy_materialized = 1
-        AND NEW.continuation_source_kind IS NULL
-        AND NEW.continuation_source_session_id IS NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND NEW.continuation_source_kind = 'exact'
-        AND NEW.continuation_source_session_id IS NOT NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND NEW.continuation_source_kind IN ('deferred_self', 'absent')
-        AND NEW.continuation_source_session_id IS NULL
-    )
-)
-OR (
-    NEW.continuation_source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.continuation_source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'Fan-Out branch continuation source is invalid');
-END;
-
 CREATE TRIGGER task_active_fanouts_serial_current_node_insert
 BEFORE INSERT ON task_active_fanouts
 FOR EACH ROW
@@ -1075,78 +930,6 @@ WHEN EXISTS (
 )
 BEGIN
     SELECT RAISE(ABORT, 'active fan-out cannot coexist with serial current node');
-END;
-
-CREATE TRIGGER task_current_nodes_continuation_source_insert
-BEFORE INSERT ON task_current_nodes
-FOR EACH ROW
-WHEN NOT (
-    (
-        NEW.legacy_materialized = 1
-        AND NEW.continuation_source_kind IS NULL
-        AND NEW.continuation_source_session_id IS NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND (
-            (
-                NEW.continuation_source_kind = 'exact'
-                AND NEW.continuation_source_session_id IS NOT NULL
-            )
-            OR (
-                NEW.continuation_source_kind IN ('deferred_self', 'absent')
-                AND NEW.continuation_source_session_id IS NULL
-            )
-        )
-    )
-)
-OR (
-    NEW.continuation_source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.continuation_source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'current node continuation source is invalid');
-END;
-
-CREATE TRIGGER task_current_nodes_continuation_source_update
-BEFORE UPDATE OF task_id, continuation_source_kind, continuation_source_session_id, legacy_materialized ON task_current_nodes
-FOR EACH ROW
-WHEN NOT (
-    (
-        NEW.legacy_materialized = 1
-        AND NEW.continuation_source_kind IS NULL
-        AND NEW.continuation_source_session_id IS NULL
-    )
-    OR (
-        NEW.legacy_materialized = 0
-        AND (
-            (
-                NEW.continuation_source_kind = 'exact'
-                AND NEW.continuation_source_session_id IS NOT NULL
-            )
-            OR (
-                NEW.continuation_source_kind IN ('deferred_self', 'absent')
-                AND NEW.continuation_source_session_id IS NULL
-            )
-        )
-    )
-)
-OR (
-    NEW.continuation_source_session_id IS NOT NULL
-    AND NOT EXISTS (
-        SELECT 1
-        FROM sessions source_session
-        WHERE source_session.id = NEW.continuation_source_session_id
-          AND source_session.task_id = NEW.task_id
-    )
-)
-BEGIN
-    SELECT RAISE(ABORT, 'current node continuation source is invalid');
 END;
 
 CREATE TRIGGER task_current_nodes_pending_approval_delete
@@ -1673,9 +1456,7 @@ WHEN EXISTS (
     WHERE approval.source_node_id = OLD.id
 ) OR EXISTS (
     SELECT 1 FROM task_pending_approval_branches branch
-    WHERE kent_graph_entity_id_blob_v1(
-        json_extract(branch.target_snapshot_json, '$.node_id')
-    ) = OLD.id
+    WHERE json_extract(branch.target_snapshot_json, '$.node_id') = OLD.id
 )
 BEGIN
     SELECT RAISE(ABORT, 'workflow node has current task references');
@@ -1722,9 +1503,7 @@ AND (
     )
     OR EXISTS (
         SELECT 1 FROM task_pending_approval_branches branch
-        WHERE kent_graph_entity_id_blob_v1(
-            json_extract(branch.target_snapshot_json, '$.node_id')
-        ) = OLD.id
+        WHERE json_extract(branch.target_snapshot_json, '$.node_id') = OLD.id
     )
 )
 BEGIN

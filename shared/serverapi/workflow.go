@@ -641,9 +641,9 @@ type WorkflowValidationError struct {
 	Code              string                          `json:"code"`
 	Message           string                          `json:"message"`
 	WorkflowID        *runtimeids.WorkflowID          `json:"workflow_id,omitempty"`
-	NodeID            string                          `json:"node_id,omitempty"`
-	TransitionGroupID string                          `json:"transition_group_id,omitempty"`
-	EdgeID            string                          `json:"edge_id,omitempty"`
+	NodeID            *string                         `json:"node_id"`
+	TransitionGroupID *string                         `json:"transition_group_id"`
+	EdgeID            *string                         `json:"edge_id"`
 	Details           *WorkflowValidationErrorDetails `json:"details,omitempty"`
 	RelatedIDs        []string                        `json:"related_ids,omitempty"`
 	BlocksContext     bool                            `json:"blocks_context"`
@@ -653,7 +653,7 @@ type WorkflowValidationErrorDetails struct {
 	FieldName      string  `json:"field_name,omitempty"`
 	InputName      string  `json:"input_name,omitempty"`
 	Placeholder    string  `json:"placeholder,omitempty"`
-	ProviderEdgeID string  `json:"provider_edge_id,omitempty"`
+	ProviderEdgeID *string `json:"provider_edge_id"`
 	Role           *string `json:"role,omitempty"`
 	RequiredTool   *string `json:"required_tool,omitempty"`
 }

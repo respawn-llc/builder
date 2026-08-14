@@ -278,7 +278,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied, mismatchWarningCommitted := false, false
+	stepNo := 0
 	for {
+		stepNo++
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
@@ -314,6 +316,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		e.assertWorkflowInstructionsPresent(stepNo)
 		humanAdmissionOrdinal := e.steering.humanAdmissionOrdinal()
 
 		var reasoningSteerErr error

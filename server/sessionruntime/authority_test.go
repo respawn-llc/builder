@@ -1796,10 +1796,12 @@ func TestAgentExecutionBindsAndClearsShellCorrelation(t *testing.T) {
 	settings.ShellOutputMaxChars = 16_000
 	settings.Reviewer.Frequency = "off"
 	plan, err := NewAgentRuntimePlan(AgentRuntimePlanOptions{
-		Settings:          settings,
-		EnabledTools:      []toolspec.ID{toolspec.ToolExecCommand},
-		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		Client:            client,
+		Settings:              settings,
+		EnabledTools:          []toolspec.ID{toolspec.ToolExecCommand},
+		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                client,
 	})
 	if err != nil {
 		t.Fatalf("new runtime plan: %v", err)
@@ -3155,9 +3157,11 @@ func authorityTestRuntimePlan(t *testing.T, fixture sessionRuntimeFixture, clien
 	settings.ModelContextWindow = 200000
 	settings.Reviewer.Frequency = "off"
 	options := AgentRuntimePlanOptions{
-		Settings:          settings,
-		FilesystemContext: runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
-		Client:            client,
+		Settings:              settings,
+		FilesystemContext:     runtimeTestFilesystemContext(t, fixture.config.WorkspaceRoot),
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
+		Client:                client,
 	}
 	if len(onEvent) != 0 {
 		options.OnEvent = onEvent[0]

@@ -18,6 +18,7 @@ import (
 	"core/internal/testharness/testsetup"
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
@@ -148,7 +149,7 @@ func TestServiceValidateWorkflowScriptPathReportsMissingPath(t *testing.T) {
 		t.Fatalf("validation = %+v, want one blocking missing-path diagnostic", validated)
 	}
 	got := validated.Errors[0]
-	if got.Code != workflowscript.CodeMissingPath || got.WorkflowID == nil || *got.WorkflowID != workflowID || got.NodeID != "node-script" || !got.BlocksContext {
+	if got.Code != workflowscript.CodeMissingPath || got.WorkflowID == nil || *got.WorkflowID != workflowID || got.NodeID == nil || *got.NodeID != "node-script" || !got.BlocksContext {
 		t.Fatalf("validation error = %+v, want blocking missing-path diagnostic scoped to script node", got)
 	}
 }
@@ -3405,6 +3406,10 @@ func newWorkflowServiceReadModels(
 	if err != nil {
 		t.Fatalf("workflowview.NewActivity: %v", err)
 	}
+	taskSessions, err := workflowview.NewTaskSessions(metadataStore, emptyWorkflowTaskSessionActivitySource{})
+	if err != nil {
+		t.Fatalf("workflowview.NewTaskSessions: %v", err)
+	}
 	attention, err := workflowview.NewAttention(metadataStore, definitions, authority, prompts)
 	if err != nil {
 		t.Fatalf("workflowview.NewAttention: %v", err)
@@ -3416,6 +3421,7 @@ func newWorkflowServiceReadModels(
 		TaskSearch:       taskSearch,
 		TaskDetail:       taskDetail,
 		TaskDependencies: dependencies,
+		TaskSessions:     taskSessions,
 		Activity:         activity,
 		Attention:        attention,
 		Approvals:        emptyWorkflowApprovalView{},
@@ -3423,6 +3429,12 @@ func newWorkflowServiceReadModels(
 }
 
 type workflowViewQuiescenceSource struct{}
+
+type emptyWorkflowTaskSessionActivitySource struct{}
+
+func (emptyWorkflowTaskSessionActivitySource) ActiveRuntimeActivitySnapshots(context.Context) ([]runtimeactivity.ActiveSessionSnapshot, error) {
+	return nil, nil
+}
 
 type workflowViewStatusObservationSource struct {
 	authority  *sessionruntime.Authority

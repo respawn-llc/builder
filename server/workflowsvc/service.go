@@ -2472,11 +2472,12 @@ func (s *Service) workflowGraphValidationResultsForDefinition(def workflow.Defin
 
 func scriptPathValidationError(workflowID runtimeids.WorkflowID, nodeID workflow.NodeID, diagnostic workflowscript.Diagnostic) serverapi.WorkflowValidationError {
 	workflowIDValue := workflowID
+	nodeIDValue := string(nodeID)
 	return serverapi.WorkflowValidationError{
 		Code:          diagnostic.Code,
 		Message:       diagnostic.Message,
 		WorkflowID:    &workflowIDValue,
-		NodeID:        string(nodeID),
+		NodeID:        &nodeIDValue,
 		BlocksContext: diagnostic.Blocking,
 	}
 }

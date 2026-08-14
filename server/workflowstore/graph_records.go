@@ -17,6 +17,12 @@ func nullableGraphIdentity(value any) (*string, error) {
 	case string:
 		copy := typed
 		return &copy, nil
+	case sql.NullString:
+		if !typed.Valid {
+			return nil, nil
+		}
+		copy := typed.String
+		return &copy, nil
 	default:
 		return nil, fmt.Errorf("graph identity has unexpected SQLite type %T", value)
 	}

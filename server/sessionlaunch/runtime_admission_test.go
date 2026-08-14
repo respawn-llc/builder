@@ -19,6 +19,7 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 type sessionLaunchRuntimeClient struct{}
@@ -87,6 +88,8 @@ func TestServiceOpenExistingPlanningOwnsRuntimeAdmission(t *testing.T) {
 				PostprocessingMode: config.ShellPostprocessingModeNone,
 			},
 		},
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(workspace, workspace, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {

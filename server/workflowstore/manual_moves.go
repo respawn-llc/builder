@@ -774,14 +774,6 @@ func prepareManualMoveAssignedTargetsForInsert(
 		if result[index].SessionID == nil {
 			continue
 		}
-		previous, hasPrevious, err := currentTaskSessionAssociationBeforeBinding(
-			ctx,
-			q,
-			result[index].Reference,
-		)
-		if err != nil {
-			return nil, err
-		}
 		sourceSessionID, err := bindingSourceSessionID(result[index], *result[index].SessionID)
 		if err != nil {
 			return nil, err
@@ -803,17 +795,6 @@ func prepareManualMoveAssignedTargetsForInsert(
 				return nil, err
 			}
 			result[index].ContinuationSource = source
-		}
-		if hasPrevious && previous.SessionID != *result[index].SessionID {
-			if err := retireDependentCurrentTaskSessionAssociations(
-				ctx,
-				q,
-				result[index].Reference,
-				previous.SessionID,
-				sourceSessionID,
-			); err != nil {
-				return nil, err
-			}
 		}
 	}
 	return result, nil

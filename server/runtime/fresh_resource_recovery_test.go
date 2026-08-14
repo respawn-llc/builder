@@ -95,11 +95,15 @@ func TestFreshResourceRepairIsCauseIndependentAndDoesNotReplayTools(t *testing.T
 			}
 			probe := &recoveryReplayProbe{}
 			reopened := mustOpenTestSession(t, store.Dir())
+			registry := tools.NewRegistry()
+			if test.tool != toolspec.ToolCompleteNode {
+				registry = newTestToolRegistry(t, tools.HandlerRegistration{ID: test.tool, Handler: probe})
+			}
 			engine := mustNewTestEngine(
 				t,
 				reopened,
 				&fakeClient{},
-				newTestToolRegistry(t, tools.HandlerRegistration{ID: test.tool, Handler: probe}),
+				registry,
 				Config{Model: "gpt-5"},
 			)
 			if calls := probe.calls.Load(); calls != 0 {

@@ -327,13 +327,16 @@ func writeWorkflowGraphApplyDetails(stderr io.Writer, outcome workflowGraphApply
 				if validationError.WorkflowID != nil {
 					identities = append(identities, struct{ name, value string }{"workflow", validationError.WorkflowID.String()})
 				}
-				for _, identity := range []struct{ name, value string }{
+				for _, identity := range []struct {
+					name  string
+					value *string
+				}{
 					{"node", validationError.NodeID},
 					{"transition_group", validationError.TransitionGroupID},
 					{"edge", validationError.EdgeID},
 				} {
-					if strings.TrimSpace(identity.value) != "" {
-						identities = append(identities, identity)
+					if identity.value != nil {
+						identities = append(identities, struct{ name, value string }{identity.name, *identity.value})
 					}
 				}
 				for _, identity := range identities {

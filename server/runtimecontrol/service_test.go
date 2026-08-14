@@ -499,8 +499,10 @@ func newRuntimeControlTestServiceWithEventFeed(
 		})
 	}
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:     settings,
-		EnabledTools: enabledTools,
+		Settings:              settings,
+		EnabledTools:          enabledTools,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() tools.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(store.Meta().WorkspaceRoot, store.Meta().WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {

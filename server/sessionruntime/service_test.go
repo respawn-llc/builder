@@ -219,8 +219,10 @@ func TestServicePassesRuntimeClientFactoryIntoInteractiveRuntime(t *testing.T) {
 	fixture.api = NewAPI(fixture.metadata, fixture.authority, APIOptions{RuntimeClientFactory: factory})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID: fixture.store.Meta().SessionID,
-		OwnerID:   "owner",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "owner",
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -280,8 +282,10 @@ func TestActivateSessionRuntimeAllowsNativeEditInSiblingWorkspace(t *testing.T) 
 		}),
 	})
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID: fixture.store.Meta().SessionID,
-		OwnerID:   "interactive-owner",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:              "gpt-5",
 			ModelContextWindow: 200000,
@@ -412,8 +416,10 @@ func TestActivateSessionRuntimeDeniesEditInForeignManagedWorktree(t *testing.T) 
 		RuntimeClientFactory:   runtimewire.RuntimeClientFactoryFunc(func(context.Context, runtimewire.RuntimeClientRequest) (llm.Client, error) { return client, nil }),
 	})
 	_, err = fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID: fixture.store.Meta().SessionID,
-		OwnerID:   "foreign-worktree-test",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "foreign-worktree-test",
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"}, Timeouts: config.Timeouts{ModelRequestSeconds: 1},
@@ -499,8 +505,10 @@ func TestActivateSessionRuntimeRejectsManagedWorktreeOutsideServerNamespace(t *t
 	_, err = NewAPI(fixture.metadata, fixture.authority, APIOptions{
 		ManagedWorktreeBaseDir: t.TempDir(),
 	}).ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID: fixture.store.Meta().SessionID,
-		OwnerID:   "interactive-owner",
+		SessionID:             fixture.store.Meta().SessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model: "gpt-5", ModelContextWindow: 200000,
 			Reviewer: config.ReviewerSettings{Frequency: "off"},
@@ -575,8 +583,10 @@ func TestActivateSessionRuntimeUsesActiveShellPostprocessingWithSuppliedManager(
 	})
 
 	activation, err := fixture.api.ActivateSessionRuntime(context.Background(), serverapi.SessionRuntimeActivateRequest{
-		SessionID: sessionID,
-		OwnerID:   "interactive-owner",
+		SessionID:             sessionID,
+		OwnerID:               "interactive-owner",
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		ActiveSettings: config.Settings{
 			Model:                  "gpt-5",
 			ThinkingLevel:          "medium",
