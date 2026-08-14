@@ -657,6 +657,19 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		t.Fatalf("initial and pending capability settings are not observably different: initial=%+v pending=%+v", initialFacts, pendingConfig.Settings)
 	}
 
+	preflightDone := make(chan error, 1)
+	go func() {
+		preflightDone <- server.deps.RequireCoreActive()
+	}()
+	select {
+	case preflightErr := <-preflightDone:
+		if !errors.Is(preflightErr, serverapi.ErrServerNotReadyOnboardingRequired) {
+			t.Fatalf("core preflight during activation = %v, want onboarding required", preflightErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("core preflight waited for activation to finish")
+	}
+
 	readCtx, cancelReads := context.WithTimeout(context.Background(), time.Second)
 	defer cancelReads()
 	duringReadiness, err := reader.GetServerReadiness(readCtx, serverapi.ServerReadinessRequest{})
