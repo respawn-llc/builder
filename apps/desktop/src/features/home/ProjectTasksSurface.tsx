@@ -120,10 +120,14 @@ export function ProjectTasksSurface({
   const resumeAction = useTaskResumeAction(initiatingAction);
   const columnLayout = useProjectTaskColumnLayout(data);
   useProjectTaskListEvents({ enabled: true, projectID });
-  const workflowsEstablished = workflowsQuery.data !== undefined;
+  const workflowsInitialState = projectTaskWorkflowInitialState(
+    workflowsQuery.data !== undefined,
+    workflowsQuery.isError,
+    workflowsQuery.isPending,
+  );
   const workflowsBoundary = directionalBoundary({
-    failed: !workflowsEstablished && workflowsQuery.isError,
-    loading: !workflowsEstablished && workflowsQuery.isPending,
+    failed: workflowsInitialState.failed,
+    loading: workflowsInitialState.loading,
     loadingLabel: t("states.loading"),
     message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
     onRetry: () => void workflowsQuery.refetch(),
@@ -316,6 +320,17 @@ export function ProjectTasksSurface({
       />
     </>
   );
+}
+
+function projectTaskWorkflowInitialState(
+  established: boolean,
+  failed: boolean,
+  loading: boolean,
+): Readonly<{ failed: boolean; loading: boolean }> {
+  return {
+    failed: !established && failed,
+    loading: !established && loading,
+  };
 }
 
 function projectTaskScrollRestorationReady(

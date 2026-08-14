@@ -6,8 +6,13 @@ import type { WorkflowListInput, WorkflowRecord } from "@/api";
 import { projectTaskWorkflowItems, useProjectTaskWorkflowPages } from "./projectTaskWorkflows";
 
 const projectID = "project-1";
-const fixture = vi.hoisted(() => ({
-  requests: [] as number[],
+type ProjectTaskWorkflowFixture = {
+  requests: number[];
+  workflows: WorkflowRecord[];
+};
+
+const fixture = vi.hoisted<ProjectTaskWorkflowFixture>(() => ({
+  requests: [],
   workflows: Array.from({ length: 130 }, (_value, index): WorkflowRecord => ({
     description: "",
     executionTargetPolicy: { customRef: null, mode: "default_branch" },
@@ -40,28 +45,28 @@ beforeEach(() => {
 });
 
 it("keeps a bounded bidirectional window of Project Workflow pages", async () => {
-  const result = renderHook(() => useProjectTaskWorkflowPages(projectID), {
+  const view = renderHook(() => useProjectTaskWorkflowPages(projectID), {
     wrapper: queryWrapper(),
   });
 
   await waitFor(() => {
-    expect(result.result.current.isSuccess).toBe(true);
+    expect(view.result.current.isSuccess).toBe(true);
   });
   for (let page = 0; page < 3; page += 1) {
     await act(async () => {
-      await result.result.current.fetchNextPage();
+      await view.result.current.fetchNextPage();
     });
   }
 
-  expect(result.result.current.data?.pageParams).toEqual([40, 80, 120]);
-  expect(projectTaskWorkflowItems(result.result.current.data)).toHaveLength(90);
+  expect(view.result.current.data?.pageParams).toEqual([40, 80, 120]);
+  expect(projectTaskWorkflowItems(view.result.current.data)).toHaveLength(90);
 
   await act(async () => {
-    await result.result.current.fetchPreviousPage();
+    await view.result.current.fetchPreviousPage();
   });
 
-  expect(result.result.current.data?.pageParams).toEqual([0, 40, 80]);
-  expect(projectTaskWorkflowItems(result.result.current.data)).toHaveLength(120);
+  expect(view.result.current.data?.pageParams).toEqual([0, 40, 80]);
+  expect(projectTaskWorkflowItems(view.result.current.data)).toHaveLength(120);
   expect(fixture.requests).toEqual([0, 40, 80, 120, 0]);
 });
 
