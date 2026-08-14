@@ -5,7 +5,6 @@ import (
 	"errors"
 	"reflect"
 	"slices"
-	"strings"
 	"testing"
 
 	"core/shared/protocol"
@@ -226,18 +225,29 @@ func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) 
 }
 
 func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {
-	requestType := reflect.TypeOf(WorkflowProjectTaskGroupCountsRequest{})
-	if requestType.NumField() != 1 {
-		t.Fatalf("group-count request fields = %d, want only ProjectID", requestType.NumField())
-	}
-	if field := requestType.Field(0); field.Name != "ProjectID" {
-		t.Fatalf("group-count request field = %s, want ProjectID", field.Name)
-	}
 	request := WorkflowProjectTaskGroupCountsRequest{
 		ProjectID: "project-1",
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
+	}
+	requestData, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	var requestJSON map[string]json.RawMessage
+	if err := json.Unmarshal(requestData, &requestJSON); err != nil {
+		t.Fatalf("decode request JSON: %v", err)
+	}
+	if len(requestJSON) != 1 {
+		t.Fatalf("group-count request JSON keys = %v, want only project_id", requestJSON)
+	}
+	var serializedProjectID string
+	if err := json.Unmarshal(requestJSON["project_id"], &serializedProjectID); err != nil {
+		t.Fatalf("decode request project_id: %v", err)
+	}
+	if serializedProjectID != request.ProjectID {
+		t.Fatalf("request project_id = %q, want %q", serializedProjectID, request.ProjectID)
 	}
 	response := WorkflowProjectTaskGroupCountsResponse{
 		ProjectID: "project-1",
@@ -255,8 +265,14 @@ func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t 
 	if err != nil {
 		t.Fatalf("marshal response: %v", err)
 	}
-	if strings.Contains(string(data), "tasks") || strings.Contains(string(data), "offset") || strings.Contains(string(data), "limit") {
-		t.Fatalf("group-count response leaks rows or pagination: %s", data)
+	var responseJSON map[string]json.RawMessage
+	if err := json.Unmarshal(data, &responseJSON); err != nil {
+		t.Fatalf("decode response JSON: %v", err)
+	}
+	for _, forbiddenKey := range []string{"tasks", "offset", "limit"} {
+		if _, exists := responseJSON[forbiddenKey]; exists {
+			t.Fatalf("group-count response includes forbidden key %q: %s", forbiddenKey, data)
+		}
 	}
 
 	request.ProjectID = ""

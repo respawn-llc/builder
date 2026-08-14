@@ -145,9 +145,7 @@ export function projectTaskEntry({
         key: "dependencies",
         className: "grid place-items-center",
         content:
-          task.dependencyProgress === null ? (
-            ""
-          ) : (
+          task.dependencyProgress === null ? null : (
             <TaskDependencyProgressInteractiveChip
               onClick={(event: MouseEvent<HTMLButtonElement>) => {
                 event.stopPropagation();
