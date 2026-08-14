@@ -52,9 +52,36 @@ func TestNewHTTPClientPreservesTimeout(t *testing.T) {
 }
 
 func TestNewProviderHTTPClientKeepsLoopbackTransportUncompressed(t *testing.T) {
-	local := NewProviderHTTPClient("http://127.0.0.1:11434/v1", 0)
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		_, _ = w.Write([]byte("plain response"))
+	}))
+	defer server.Close()
+
+	local := NewProviderHTTPClient(server.URL, 0)
 	if local.Transport != sharedHTTPTransport {
 		t.Fatalf("loopback transport = %T, want shared local transport", local.Transport)
+	}
+	if !sharedHTTPTransport.DisableCompression {
+		t.Fatal("expected loopback transport compression to be disabled")
+	}
+	response, err := local.Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET loopback response: %v", err)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read loopback response: %v", err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Errorf("close loopback response: %v", err)
+	}
+	if got := string(body); got != "plain response" {
+		t.Fatalf("loopback body = %q, want plain response", got)
+	}
+	if acceptEncoding != "" {
+		t.Fatalf("loopback Accept-Encoding = %q, want empty", acceptEncoding)
 	}
 
 	remote := NewProviderHTTPClient("https://api.openai.com/v1", 0)

@@ -61,6 +61,7 @@ func newSharedHTTPTransport() *http.Transport {
 	if ok {
 		transport = base.Clone()
 	}
+	transport.DisableCompression = true
 	transport.ForceAttemptHTTP2 = true
 	if transport.MaxIdleConns < sharedHTTPTransportMaxIdleConns {
 		transport.MaxIdleConns = sharedHTTPTransportMaxIdleConns
