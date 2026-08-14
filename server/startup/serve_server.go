@@ -481,9 +481,13 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	if err != nil {
 		return d.activationError(resp, err)
 	}
-	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, core.Options{
-		RootLease: d.rootLease,
-	})
+	appCore, err := core.NewWithContextOptions(
+		ctx,
+		refreshed.Config,
+		d.authSupport,
+		runtimeSupport,
+		coreOptionsForBootstrap(d.bootstrap, d.rootLease),
+	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return d.activationError(resp, err)

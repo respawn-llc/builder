@@ -833,9 +833,12 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	appCore := newCoreTestApp(t, resolved.Config, auth.State{
+	appCore := newCoreTestAppWithLoadOptions(t, resolved.Config, auth.State{
 		Scope:  auth.ScopeGlobal,
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}, brand.LoadOptions{
+		Model:         "gpt-5",
+		OpenAIBaseURL: server.URL,
 	})
 
 	firstClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
@@ -942,6 +945,10 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 }
 
 func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
+	return newCoreTestAppWithLoadOptions(t, cfg, state, brand.LoadOptions{})
+}
+
+func newCoreTestAppWithLoadOptions(t *testing.T, cfg brand.App, state auth.State, loadOptions brand.LoadOptions) *Core {
 	t.Helper()
 	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
 	if err != nil {
@@ -952,7 +959,9 @@ func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
 		t.Fatalf("BuildRuntimeSupport: %v", err)
 	}
 	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-	appCore, err := New(cfg, authSupport, runtimeSupport)
+	appCore, err := NewWithContextOptions(t.Context(), cfg, authSupport, runtimeSupport, Options{
+		WorkspaceConfigLoadOptions: loadOptions,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

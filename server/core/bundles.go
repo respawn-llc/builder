@@ -172,6 +172,7 @@ func emptySessionBundle() *SessionBundle {
 
 type bundleCompositionInput struct {
 	cfg                     config.App
+	workspaceConfigResolver chatcontext.FixedRootWorkspaceResolver
 	authSupport             serverbootstrap.AuthSupport
 	capabilityFactsService  *capabilityfacts.Service
 	runtimeSupport          serverbootstrap.RuntimeSupport
@@ -242,7 +243,7 @@ func composeBundles(in bundleCompositionInput) *Bundles {
 		},
 		Persistence: newPersistenceBundle(in.rootLease, in.metadataStore),
 		Processes:   newProcessBundle(in.processService),
-		Projects:    newProjectBundle(in.cfg, in.projectViews),
+		Projects:    newProjectBundle(in.cfg, in.workspaceConfigResolver, in.projectViews),
 		Prompts:     newPromptBundle(in.askService, in.approvalService, in.promptControlService, in.attentionService),
 		Runtime:     newRuntimeBundle(in.runtimeSupport, in.runtimeRegistry, in.runtimeAuthority, in.runtimeControlService, in.sessionRuntimeAPI),
 		Sessions:    newSessionBundle(in.sessionViewService, in.sessionLifecycleService, in.metadataStore),
@@ -279,10 +280,10 @@ func newProcessBundle(processService *processview.ProcessViewService) *ProcessBu
 	}
 }
 
-func newProjectBundle(cfg config.App, projectViews apicontract.ProjectViewService) *ProjectBundle {
+func newProjectBundle(cfg config.App, workspaceConfigResolver chatcontext.FixedRootWorkspaceResolver, projectViews apicontract.ProjectViewService) *ProjectBundle {
 	return &ProjectBundle{
 		cfg:            cfg,
-		freshWorkspace: chatcontext.NewFixedRootWorkspaceResolver(cfg.PersistenceRoot),
+		freshWorkspace: workspaceConfigResolver,
 		projectViews:   projectViews,
 	}
 }
