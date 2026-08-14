@@ -38,7 +38,7 @@ type CreateTaskRequest struct {
 	SourceURL         string
 	SourceWorkspaceID string
 	LabelIDs          []label.ID
-	DependencyIntent  *workflow.TaskDependencyCreateIntent
+	DependencyIntents []workflow.TaskDependencyCreateIntent
 }
 
 type preparedTaskCreate struct {
@@ -50,7 +50,7 @@ type preparedTaskCreate struct {
 	sourceWorkspaceID string
 	taskID            string
 	labelIDs          []label.ID
-	dependencyIntent  *workflow.TaskDependencyCreateIntent
+	dependencyIntents []workflow.TaskDependencyCreateIntent
 	nowUnixMs         int64
 }
 
@@ -171,11 +171,12 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (_ TaskRe
 		limit := label.MaxProjectLabels
 		return TaskRecord{}, TaskLabelMutationError{Reason: TaskLabelMutationTooManyAdd, Field: "label_ids", Limit: &limit}
 	}
+	dependencyIntents := append([]workflow.TaskDependencyCreateIntent(nil), req.DependencyIntents...)
 	prepared := preparedTaskCreate{
 		projectID: projectID, workflowID: workflowID, title: req.Title,
 		body: strings.TrimSpace(req.Body), sourceURL: strings.TrimSpace(req.SourceURL),
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
-		labelIDs: req.LabelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
+		labelIDs: append([]label.ID(nil), req.LabelIDs...), dependencyIntents: dependencyIntents, nowUnixMs: s.now().UnixMilli(),
 	}
 	tx, err := s.metadata.BeginTransaction(ctx, "CreateTask", nil)
 	if err != nil {
@@ -245,13 +246,13 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 			)
 		}
 	}
-	if prepared.dependencyIntent != nil {
+	for _, intent := range prepared.dependencyIntents {
 		dependencyRequest := TaskDependencyAddRequest{
 			BlockerTaskID: workflow.TaskID(prepared.taskID),
-			BlockedTaskID: prepared.dependencyIntent.RelatedTaskID,
+			BlockedTaskID: intent.RelatedTaskID,
 		}
-		if prepared.dependencyIntent.NewTaskRole == workflow.TaskDependencyRoleBlocked {
-			dependencyRequest.BlockerTaskID = prepared.dependencyIntent.RelatedTaskID
+		if intent.NewTaskRole == workflow.TaskDependencyRoleBlocked {
+			dependencyRequest.BlockerTaskID = intent.RelatedTaskID
 			dependencyRequest.BlockedTaskID = workflow.TaskID(prepared.taskID)
 		}
 		decision, err := attachTaskDependencyWithQueries(ctx, q, dependencyRequest)

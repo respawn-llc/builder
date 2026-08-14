@@ -8,92 +8,109 @@ import (
 	workflowlabel "core/server/workflow/label"
 )
 
-func TestCreateTaskWithDependencyIntentCommitsNewBlockerAndRelationshipTogether(t *testing.T) {
+func TestCreateTaskWithDependencyIntentsCommitsMixedRelationshipsTogether(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	existing := createTask(t, ctx, store, CreateTaskRequest{
+	existingBlocked := createTask(t, ctx, store, CreateTaskRequest{
 		ProjectID:  binding.ProjectID,
 		WorkflowID: &workflowID,
 		Title:      "Existing blocked task",
 		Body:       "Body",
 	})
+	existingBlocker := createTask(t, ctx, store, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &workflowID,
+		Title:      "Existing blocker task",
+		Body:       "Body",
+	})
 
 	created, err := store.CreateTask(ctx, CreateTaskRequest{
 		ProjectID:  binding.ProjectID,
 		WorkflowID: &workflowID,
-		Title:      "New blocker task",
+		Title:      "New mixed task",
 		Body:       "Body",
-		DependencyIntent: &workflow.TaskDependencyCreateIntent{
-			RelatedTaskID: existing.ID,
-			NewTaskRole:   workflow.TaskDependencyRoleBlocker,
+		DependencyIntents: []workflow.TaskDependencyCreateIntent{
+			{RelatedTaskID: existingBlocked.ID, NewTaskRole: workflow.TaskDependencyRoleBlocker},
+			{RelatedTaskID: existingBlocker.ID, NewTaskRole: workflow.TaskDependencyRoleBlocked},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateTask with dependency intent: %v", err)
+		t.Fatalf("CreateTask with mixed dependency intents: %v", err)
 	}
-	assertTaskDependencyCount(t, store, created.ID, existing.ID, 1)
+	assertTaskDependencyCount(t, store, created.ID, existingBlocked.ID, 1)
+	assertTaskDependencyCount(t, store, existingBlocker.ID, created.ID, 1)
 	if _, err := store.queries.GetTask(ctx, string(created.ID)); err != nil {
 		t.Fatalf("created task missing: %v", err)
 	}
 }
 
-func TestCreateTaskWithDependencyIntentCommitsNewBlockedTask(t *testing.T) {
+func TestCreateTaskWithDependencyIntentsRollsBackReciprocalRequest(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createValidWorkflow(t, ctx, store)
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	existing := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Existing blocker", Body: "Body"})
+	related := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Related", Body: "Body"})
+	beforeTasks := taskCountForProject(t, store, binding.ProjectID)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+	beforeDependencies := taskDependencyCount(t, store)
 
-	created, err := store.CreateTask(ctx, CreateTaskRequest{
+	_, err := store.CreateTask(ctx, CreateTaskRequest{
 		ProjectID:  binding.ProjectID,
 		WorkflowID: &workflowID,
-		Title:      "New blocked task",
+		Title:      "Reciprocal",
 		Body:       "Body",
-		DependencyIntent: &workflow.TaskDependencyCreateIntent{
-			RelatedTaskID: existing.ID,
-			NewTaskRole:   workflow.TaskDependencyRoleBlocked,
+		DependencyIntents: []workflow.TaskDependencyCreateIntent{
+			{RelatedTaskID: related.ID, NewTaskRole: workflow.TaskDependencyRoleBlocker},
+			{RelatedTaskID: related.ID, NewTaskRole: workflow.TaskDependencyRoleBlocked},
 		},
 	})
-	if err != nil {
-		t.Fatalf("CreateTask with blocked dependency intent: %v", err)
+	assertTaskDependencyPolicyError(t, err, workflow.TaskDependencyReciprocal)
+	assertCreateTaskUnchanged(t, ctx, store, binding.ProjectID, beforeTasks, beforeSequence, 0)
+	if got := taskDependencyCount(t, store); got != beforeDependencies {
+		t.Fatalf("task dependency count = %d, want %d", got, beforeDependencies)
 	}
-	assertTaskDependencyCount(t, store, existing.ID, created.ID, 1)
 }
 
-func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t *testing.T) {
-	t.Run("cross project", func(t *testing.T) {
-		ctx, store, binding := newTestStoreContext(t)
-		workflowID := createValidWorkflow(t, ctx, store)
-		linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-		otherBinding, err := store.metadata.RegisterWorkspaceBinding(ctx, t.TempDir())
-		if err != nil {
-			t.Fatalf("RegisterWorkspaceBinding: %v", err)
-		}
-		otherWorkflowID := createValidWorkflow(t, ctx, store)
-		linkWorkflow(t, ctx, store, otherBinding.ProjectID, otherWorkflowID, true)
-		related := createTask(t, ctx, store, CreateTaskRequest{ProjectID: otherBinding.ProjectID, WorkflowID: &otherWorkflowID, Title: "Other", Body: "Body"})
-		label, err := store.CreateProjectLabel(ctx, binding.ProjectID, "rollback")
-		if err != nil {
-			t.Fatalf("CreateProjectLabel: %v", err)
-		}
-		beforeTasks := taskCountForProject(t, store, binding.ProjectID)
-		beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
-		beforeAssignments := taskLabelAssignmentCount(t, store, binding.ProjectID)
-		_, err = store.CreateTask(ctx, CreateTaskRequest{
-			ProjectID:  binding.ProjectID,
-			WorkflowID: &workflowID,
-			Title:      "Cross-project",
-			Body:       "Body",
-			LabelIDs:   []workflowlabel.ID{label.ID},
-			DependencyIntent: &workflow.TaskDependencyCreateIntent{
-				RelatedTaskID: related.ID,
-				NewTaskRole:   workflow.TaskDependencyRoleBlocker,
-			},
-		})
-		assertTaskDependencyPolicyError(t, err, workflow.TaskDependencyProjectMismatch)
-		assertCreateTaskUnchanged(t, ctx, store, binding.ProjectID, beforeTasks, beforeSequence, beforeAssignments)
-	})
+func TestCreateTaskWithDependencyIntentsRollsBackOneInvalidRelationshipAmongValid(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	validRelated := createTask(t, ctx, store, CreateTaskRequest{ProjectID: binding.ProjectID, WorkflowID: &workflowID, Title: "Valid related", Body: "Body"})
+	otherBinding, err := store.metadata.RegisterWorkspaceBinding(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("RegisterWorkspaceBinding: %v", err)
+	}
+	otherWorkflowID := createValidWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, otherBinding.ProjectID, otherWorkflowID, true)
+	invalidRelated := createTask(t, ctx, store, CreateTaskRequest{ProjectID: otherBinding.ProjectID, WorkflowID: &otherWorkflowID, Title: "Other", Body: "Body"})
+	label, err := store.CreateProjectLabel(ctx, binding.ProjectID, "rollback")
+	if err != nil {
+		t.Fatalf("CreateProjectLabel: %v", err)
+	}
+	beforeTasks := taskCountForProject(t, store, binding.ProjectID)
+	beforeSequence := projectNextTaskSequence(t, ctx, store, binding.ProjectID)
+	beforeAssignments := taskLabelAssignmentCount(t, store, binding.ProjectID)
+	beforeDependencies := taskDependencyCount(t, store)
 
+	_, err = store.CreateTask(ctx, CreateTaskRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &workflowID,
+		Title:      "Cross-project",
+		Body:       "Body",
+		LabelIDs:   []workflowlabel.ID{label.ID},
+		DependencyIntents: []workflow.TaskDependencyCreateIntent{
+			{RelatedTaskID: validRelated.ID, NewTaskRole: workflow.TaskDependencyRoleBlocker},
+			{RelatedTaskID: invalidRelated.ID, NewTaskRole: workflow.TaskDependencyRoleBlocked},
+		},
+	})
+	assertTaskDependencyPolicyError(t, err, workflow.TaskDependencyProjectMismatch)
+	assertCreateTaskUnchanged(t, ctx, store, binding.ProjectID, beforeTasks, beforeSequence, beforeAssignments)
+	if got := taskDependencyCount(t, store); got != beforeDependencies {
+		t.Fatalf("task dependency count = %d, want %d", got, beforeDependencies)
+	}
+}
+
+func TestCreateTaskWithDependencyIntentsRollsBackCardinalityFailures(t *testing.T) {
 	t.Run("existing blocked task incoming limit", func(t *testing.T) {
 		ctx, store, binding := newTestStoreContext(t)
 		workflowID := createValidWorkflow(t, ctx, store)
@@ -118,10 +135,10 @@ func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t 
 			Title:      "New blocker rejected",
 			Body:       "Body",
 			LabelIDs:   []workflowlabel.ID{label.ID},
-			DependencyIntent: &workflow.TaskDependencyCreateIntent{
+			DependencyIntents: []workflow.TaskDependencyCreateIntent{{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocker,
-			},
+			}},
 		})
 		assertTaskDependencyPolicyError(t, err, workflow.TaskDependencyBlockedLimit)
 		assertCreateTaskUnchanged(t, ctx, store, binding.ProjectID, beforeTasks, beforeSequence, beforeAssignments)
@@ -151,14 +168,23 @@ func TestCreateTaskWithDependencyIntentRollsBackProjectAndCardinalityFailures(t 
 			Title:      "New blocked rejected",
 			Body:       "Body",
 			LabelIDs:   []workflowlabel.ID{label.ID},
-			DependencyIntent: &workflow.TaskDependencyCreateIntent{
+			DependencyIntents: []workflow.TaskDependencyCreateIntent{{
 				RelatedTaskID: related.ID,
 				NewTaskRole:   workflow.TaskDependencyRoleBlocked,
-			},
+			}},
 		})
 		assertTaskDependencyPolicyError(t, err, workflow.TaskDependencyBlockerLimit)
 		assertCreateTaskUnchanged(t, ctx, store, binding.ProjectID, beforeTasks, beforeSequence, beforeAssignments)
 	})
+}
+
+func taskDependencyCount(t *testing.T, store *Store) int64 {
+	t.Helper()
+	var count int64
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM task_dependencies`).Scan(&count); err != nil {
+		t.Fatalf("count task dependencies: %v", err)
+	}
+	return count
 }
 
 func taskCountForProject(t *testing.T, store *Store, projectID string) int64 {

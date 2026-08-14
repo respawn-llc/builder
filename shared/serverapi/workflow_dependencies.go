@@ -163,17 +163,21 @@ func DecodeWorkflowTaskDependencyError(data json.RawMessage, message string) err
 }
 
 func (i WorkflowTaskDependencyCreateIntent) Validate() error {
-	if err := validateRequired("dependency_intent.related_task_id", i.RelatedTaskID); err != nil {
+	return i.validate("dependency_intents")
+}
+
+func (i WorkflowTaskDependencyCreateIntent) validate(field string) error {
+	if err := validateRequired(field+".related_task_id", i.RelatedTaskID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(i.RelatedTaskID) != i.RelatedTaskID {
-		return workflowRequestError(WorkflowRequestErrorInvalidMode, "dependency_intent.related_task_id", "related_task_id must not have leading or trailing whitespace")
+		return workflowRequestError(WorkflowRequestErrorInvalidMode, field+".related_task_id", "related_task_id must not have leading or trailing whitespace")
 	}
 	switch i.NewTaskRole {
 	case WorkflowTaskDependencyRoleBlocker, WorkflowTaskDependencyRoleBlocked:
 		return nil
 	default:
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "dependency_intent.new_task_role", "new_task_role is invalid")
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, field+".new_task_role", "new_task_role is invalid")
 	}
 }
 

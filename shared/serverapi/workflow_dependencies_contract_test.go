@@ -3,26 +3,36 @@ package serverapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"core/shared/protocol"
 )
 
 func TestWorkflowTaskDependencyMutationContractsRoundTrip(t *testing.T) {
-	intent := WorkflowTaskDependencyCreateIntent{
-		RelatedTaskID: "task-related",
-		NewTaskRole:   WorkflowTaskDependencyRoleBlocker,
-	}
 	request := WorkflowTaskCreateRequest{
-		ProjectID:        "project-1",
-		Title:            "new task",
-		LabelIDs:         []string{},
-		DependencyIntent: &intent,
+		ProjectID: "project-1",
+		Title:     "new task",
+		LabelIDs:  []string{},
+		DependencyIntents: []WorkflowTaskDependencyCreateIntent{
+			{RelatedTaskID: "task-blocked", NewTaskRole: WorkflowTaskDependencyRoleBlocker},
+			{RelatedTaskID: "task-blocker", NewTaskRole: WorkflowTaskDependencyRoleBlocked},
+		},
 	}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("create request Validate: %v", err)
 	}
-
+	data, decodedRequest := marshalWorkflowJSON[WorkflowTaskCreateRequest](t, request)
+	if len(decodedRequest.DependencyIntents) != 2 {
+		t.Fatalf("decoded dependency intents = %+v, want two", decodedRequest.DependencyIntents)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("decode create request JSON: %v", err)
+	}
+	if _, ok := envelope["dependency_intents"]; !ok {
+		t.Fatalf("create request JSON = %s, want dependency_intents", data)
+	}
 	mutation := WorkflowTaskDependencyMutationResponse{
 		Outcome:        WorkflowTaskDependencyOutcomeAdded,
 		BlockerTaskID:  "task-blocker",
@@ -36,6 +46,66 @@ func TestWorkflowTaskDependencyMutationContractsRoundTrip(t *testing.T) {
 	}
 	if string(data) == "" {
 		t.Fatal("mutation response JSON is empty")
+	}
+}
+
+func TestWorkflowTaskCreateDependencyIntentsAreBoundedPerRole(t *testing.T) {
+	request := WorkflowTaskCreateRequest{
+		ProjectID: "project-1",
+		Title:     "new task",
+		LabelIDs:  []string{},
+	}
+	for index := 0; index < 50; index++ {
+		request.DependencyIntents = append(request.DependencyIntents,
+			WorkflowTaskDependencyCreateIntent{
+				RelatedTaskID: fmt.Sprintf("task-blocked-%d", index),
+				NewTaskRole:   WorkflowTaskDependencyRoleBlocker,
+			},
+			WorkflowTaskDependencyCreateIntent{
+				RelatedTaskID: fmt.Sprintf("task-blocker-%d", index),
+				NewTaskRole:   WorkflowTaskDependencyRoleBlocked,
+			},
+		)
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("50 intents per role Validate: %v", err)
+	}
+
+	request.DependencyIntents = append(request.DependencyIntents, WorkflowTaskDependencyCreateIntent{
+		RelatedTaskID: "task-extra",
+		NewTaskRole:   WorkflowTaskDependencyRoleBlocker,
+	})
+	if err := request.Validate(); err == nil {
+		t.Fatal("51 blocker-role intents Validate succeeded, want bounded collection error")
+	}
+}
+
+func TestWorkflowTaskCreateDependencyIntentsRejectDuplicateRoleAndRelatedTask(t *testing.T) {
+	request := WorkflowTaskCreateRequest{
+		ProjectID: "project-1",
+		Title:     "new task",
+		LabelIDs:  []string{},
+		DependencyIntents: []WorkflowTaskDependencyCreateIntent{
+			{RelatedTaskID: "task-related", NewTaskRole: WorkflowTaskDependencyRoleBlocker},
+			{RelatedTaskID: "task-related", NewTaskRole: WorkflowTaskDependencyRoleBlocker},
+		},
+	}
+
+	err := request.Validate()
+	var validationErr WorkflowRequestValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("Validate error = %T %v, want WorkflowRequestValidationError", err, err)
+	}
+	if validationErr.Code != WorkflowRequestErrorInvalidValue {
+		t.Fatalf("Validate error code = %q, want %q", validationErr.Code, WorkflowRequestErrorInvalidValue)
+	}
+	if validationErr.Field != "dependency_intents[1].related_task_id" {
+		t.Fatalf("Validate error field = %q, want duplicate related Task field", validationErr.Field)
+	}
+
+	request.DependencyIntents[1].NewTaskRole = WorkflowTaskDependencyRoleBlocked
+	if err := request.Validate(); err != nil {
+		t.Fatalf("same related Task in opposite roles Validate: %v", err)
 	}
 }
 

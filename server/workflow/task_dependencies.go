@@ -1,8 +1,12 @@
 package workflow
 
-import "fmt"
+import (
+	"fmt"
 
-const MaxTaskDependencies = 50
+	"core/shared/workflowcontract"
+)
+
+const MaxTaskDependencies = workflowcontract.MaxTaskDependencies
 
 type TaskDependencyTaskFacts struct {
 	ID        TaskID

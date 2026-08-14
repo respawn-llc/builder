@@ -1,1 +1,1 @@
-export { NewTaskForm, NewTaskWindowRoute } from "./NewTaskDialog";
+export { decodeNewTaskRetainedState, NewTaskForm, type NewTaskRetainedState } from "./NewTaskDialog";

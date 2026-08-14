@@ -10,6 +10,16 @@ export type TaskDependencyPair = Readonly<{
   blockedTaskID: string;
 }>;
 
+export function taskDependencyPairForDirection(
+  taskID: string,
+  direction: TaskDependencyDirectionProjection["direction"],
+  relatedTaskID: string,
+): TaskDependencyPair {
+  return direction === "blocked-by"
+    ? { blockerTaskID: relatedTaskID, blockedTaskID: taskID }
+    : { blockerTaskID: taskID, blockedTaskID: relatedTaskID };
+}
+
 export function optimisticTaskDependencyRemoval(detail: TaskDetail, pair: TaskDependencyPair): TaskDetail {
   if (detail.id === pair.blockedTaskID) {
     return removeBlockedBy(detail, pair.blockerTaskID);

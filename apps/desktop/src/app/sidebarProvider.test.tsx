@@ -4,17 +4,19 @@ import { StrictMode, useEffect, useLayoutEffect, useState, type ReactNode } from
 import {
   useSidebarRoots,
   useSidebarShell,
+  type SidebarBackResult,
   type SidebarDestination,
   type SidebarDestinationPolicy,
   type SidebarPageNavigator,
 } from "@/app-facade";
+import { sidebarDestinationPolicy } from "./sidebarDestinationPolicy";
 import { SidebarProvider } from "./sidebarProvider";
 import { useSidebarCurrentPage } from "./sidebarPageContext";
 import { SidebarHost } from "./sidebar";
 
 const policy: SidebarDestinationPolicy = {
-  equals: (left, right) =>
-    left.kind === "custom" && right.kind === "custom" && left.title === right.title,
+  applyBackResult: (_destination, state, result) => ({ state, result }),
+  equals: (left, right) => left.kind === "custom" && right.kind === "custom" && left.title === right.title,
   retainedState: (_destination, state) => state,
 };
 
@@ -33,6 +35,33 @@ function strictWrapper({ children }: Readonly<{ children: ReactNode }>) {
     </StrictMode>
   );
 }
+
+function productionWrapper({ children }: Readonly<{ children: ReactNode }>) {
+  return <SidebarProvider policy={sidebarDestinationPolicy}>{children}</SidebarProvider>;
+}
+
+const newTaskDestination = {
+  boardQueryWorkflowID: "workflow-1",
+  kind: "newTask",
+  projectID: "project-1",
+  workflowID: "workflow-1",
+} as const;
+const newTaskDraft = {
+  formValues: { body: "Parent body", sourceWorkspaceID: "workspace-1", title: "Parent" },
+  preparedDependencies: [],
+  selectedLabelIDs: ["label-1"],
+};
+const childResult = {
+  kind: "newTaskCreated",
+  direction: "blocked-by",
+  task: {
+    id: "task-child",
+    shortID: "KENT-2",
+    status: { kind: "backlog", nativeState: "active", nodeIDs: [], attentionTypes: [] },
+    title: "Child",
+    workflowID: "workflow-1",
+  },
+} as const satisfies SidebarBackResult;
 
 function useHarness() {
   return {
@@ -305,6 +334,63 @@ describe("SidebarProvider stack", () => {
       expect(b.back()).toBe("accepted");
     });
     expect(result.current.page?.retainedState).toEqual({ draft: "new" });
+  });
+
+  it("integrates child results and retained Task branches through the production policy", () => {
+    const { result } = renderHook(useHarness, { wrapper: productionWrapper });
+    act(() => {
+      result.current.roots.open({ kind: "taskDetail", taskID: "task-origin" });
+    });
+    const origin = requireNavigator(result.current);
+    act(() => {
+      origin.registerCapture(() => ({ origin: true }));
+      expect(origin.push(newTaskDestination)).toBe("accepted");
+    });
+    act(() => {
+      requireNavigator(result.current).registerCapture(() => newTaskDraft);
+      expect(requireNavigator(result.current).push(newTaskDestination)).toBe("accepted");
+    });
+    act(() => {
+      expect(requireNavigator(result.current).back(childResult)).toBe("accepted");
+    });
+    const stagedDraft = {
+      ...newTaskDraft,
+      preparedDependencies: [
+        {
+          direction: "blocked-by",
+          taskID: "task-child",
+          shortID: "KENT-2",
+          status: childResult.task.status,
+          title: "Child",
+          workflowID: "workflow-1",
+        },
+      ],
+    };
+    expect(result.current.page?.retainedState).toEqual(stagedDraft);
+
+    const capture = vi.fn(() => stagedDraft);
+    act(() => {
+      requireNavigator(result.current).registerCapture(capture);
+      expect(requireNavigator(result.current).push({ kind: "taskDetail", taskID: "task-unrelated" })).toBe(
+        "accepted",
+      );
+    });
+    expect(capture).toHaveBeenCalledOnce();
+    act(() => {
+      expect(requireNavigator(result.current).back()).toBe("accepted");
+    });
+    expect(result.current.page?.retainedState).toEqual(stagedDraft);
+
+    const discardedCapture = vi.fn(() => newTaskDraft);
+    act(() => {
+      requireNavigator(result.current).registerCapture(discardedCapture);
+      expect(requireNavigator(result.current).push({ kind: "taskDetail", taskID: "task-origin" })).toBe(
+        "accepted",
+      );
+    });
+    expect(discardedCapture).not.toHaveBeenCalled();
+    expect(result.current.shell.activeDestination).toEqual({ kind: "taskDetail", taskID: "task-origin" });
+    expect(result.current.shell.canGoBack).toBe(false);
   });
 
   it("retains widths per profile and keeps the closing page rendered through the exit phase", () => {

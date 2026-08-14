@@ -22,7 +22,7 @@ import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresen
 import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
-import { TaskDependenciesArea } from "./TaskDependenciesArea";
+import { TaskDependenciesArea } from "./TaskDependenciesAreaAdapter";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
 import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";

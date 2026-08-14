@@ -63,11 +63,18 @@ describe("ApiClient workflow labels", () => {
     ]);
   });
 
-  it("creates a related task through one atomic relationship intent", async () => {
+  it("creates a related task through an atomic relationship-intent collection and returns its summary", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.create",
-        result: { task: { id: "task-new" } },
+        result: {
+          task: {
+            id: "task-new",
+            short_id: "KENT-42",
+            title: "New blocker",
+            workflow_id: smallID,
+          },
+        },
       },
     ]);
     const client = new ApiClient(transport);
@@ -80,12 +87,17 @@ describe("ApiClient workflow labels", () => {
         body: "",
         sourceWorkspaceID: "workspace-origin",
         labelIDs: [],
-        dependencyIntent: {
-          relatedTaskID: "task-origin",
-          newTaskRole: "blocker",
-        },
+        dependencyIntents: [
+          { relatedTaskID: "task-blocked", newTaskRole: "blocker" },
+          { relatedTaskID: "task-blocker", newTaskRole: "blocked" },
+        ],
       }),
-    ).resolves.toBe("task-new");
+    ).resolves.toEqual({
+      id: "task-new",
+      shortID: "KENT-42",
+      title: "New blocker",
+      workflowID: smallID,
+    });
 
     expect(transport.calls).toEqual([
       {
@@ -97,10 +109,10 @@ describe("ApiClient workflow labels", () => {
           body: "",
           source_workspace_id: "workspace-origin",
           label_ids: [],
-          dependency_intent: {
-            related_task_id: "task-origin",
-            new_task_role: "blocker",
-          },
+          dependency_intents: [
+            { related_task_id: "task-blocked", new_task_role: "blocker" },
+            { related_task_id: "task-blocker", new_task_role: "blocked" },
+          ],
         },
       },
     ]);
@@ -250,7 +262,14 @@ describe("ApiClient workflow labels", () => {
     const transport = new FakeRpcTransport([
       {
         method: "workflow.task.create",
-        result: { task: { id: "task-1" } },
+        result: {
+          task: {
+            id: "task-1",
+            short_id: "KENT-1",
+            title: "Ship labels",
+            workflow_id: "11111111-1111-4111-8111-111111111111",
+          },
+        },
       },
     ]);
     const client = new ApiClient(transport);
@@ -263,8 +282,14 @@ describe("ApiClient workflow labels", () => {
         body: "Wire the desktop API.",
         sourceWorkspaceID: "workspace-1",
         labelIDs: [priorityID],
+        dependencyIntents: [],
       }),
-    ).resolves.toBe("task-1");
+    ).resolves.toEqual({
+      id: "task-1",
+      shortID: "KENT-1",
+      title: "Ship labels",
+      workflowID: "11111111-1111-4111-8111-111111111111",
+    });
     expect(transport.calls).toEqual([
       {
         method: "workflow.task.create",
@@ -275,6 +300,7 @@ describe("ApiClient workflow labels", () => {
           body: "Wire the desktop API.",
           source_workspace_id: "workspace-1",
           label_ids: [priorityID],
+          dependency_intents: [],
         },
       },
     ]);
@@ -292,6 +318,7 @@ describe("ApiClient workflow labels", () => {
         body: "",
         sourceWorkspaceID: "workspace-1",
         labelIDs: [],
+        dependencyIntents: [],
       }),
     ).rejects.toThrow();
     await expect(

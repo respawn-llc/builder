@@ -1,7 +1,10 @@
 package workflowsvc_test
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"core/internal/testharness/corefixture"
 	"core/shared/serverapi"
@@ -165,5 +168,82 @@ func TestServiceRetainsWorkflowLabelsAndDependencies(t *testing.T) {
 		BlockedTaskID: blocked.ID,
 	}); err != nil {
 		t.Fatalf("RemoveWorkflowTaskDependency: %v", err)
+	}
+}
+
+func TestServiceTaskCreatePublishesOneDependencyEventForEveryAffectedTask(t *testing.T) {
+	fixture := corefixture.New(t)
+	service := fixture.Core.WorkflowClient()
+	createdWorkflow, err := service.CreateAndLinkWorkflowToProject(t.Context(), serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Dependency event workflow",
+		ProjectID:     fixture.Binding.ProjectID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultIfProjectHasNone,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+	createTask := func(title string) serverapi.WorkflowTaskSummary {
+		t.Helper()
+		response, createErr := service.CreateWorkflowTask(t.Context(), serverapi.WorkflowTaskCreateRequest{
+			ProjectID:  fixture.Binding.ProjectID,
+			WorkflowID: &createdWorkflow.Workflow.ID,
+			Title:      title,
+			LabelIDs:   []string{},
+		})
+		if createErr != nil {
+			t.Fatalf("CreateWorkflowTask %q: %v", title, createErr)
+		}
+		return response.Task
+	}
+	blocked := createTask("Blocked")
+	blocker := createTask("Blocker")
+	subscription, err := service.SubscribeWorkflowProject(t.Context(), serverapi.WorkflowProjectSubscribeRequest{
+		ProjectID: fixture.Binding.ProjectID,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+
+	created, err := service.CreateWorkflowTask(t.Context(), serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  fixture.Binding.ProjectID,
+		WorkflowID: &createdWorkflow.Workflow.ID,
+		Title:      "Mixed",
+		LabelIDs:   []string{},
+		DependencyIntents: []serverapi.WorkflowTaskDependencyCreateIntent{
+			{RelatedTaskID: blocked.ID, NewTaskRole: serverapi.WorkflowTaskDependencyRoleBlocker},
+			{RelatedTaskID: blocker.ID, NewTaskRole: serverapi.WorkflowTaskDependencyRoleBlocked},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowTask with dependencies: %v", err)
+	}
+	createdEvent, err := subscription.Next(t.Context())
+	if err != nil {
+		t.Fatalf("receive created event: %v", err)
+	}
+	if createdEvent.Action != serverapi.WorkflowProjectEventActionCreated ||
+		createdEvent.PrimaryEntityID != created.Task.ID {
+		t.Fatalf("created event = %+v", createdEvent)
+	}
+	dependencyEvent, err := subscription.Next(t.Context())
+	if err != nil {
+		t.Fatalf("receive dependency event: %v", err)
+	}
+	if dependencyEvent.Action != serverapi.WorkflowProjectEventActionDependenciesChanged ||
+		dependencyEvent.PrimaryEntityID != created.Task.ID {
+		t.Fatalf("dependency event = %+v", dependencyEvent)
+	}
+	related := map[string]bool{}
+	for _, taskID := range dependencyEvent.RelatedIDs {
+		related[taskID] = true
+	}
+	if len(related) != 2 || !related[blocked.ID] || !related[blocker.ID] {
+		t.Fatalf("dependency event related IDs = %+v", dependencyEvent.RelatedIDs)
+	}
+	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if _, err := subscription.Next(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unexpected extra event: %v", err)
 	}
 }

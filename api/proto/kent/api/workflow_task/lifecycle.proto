@@ -173,7 +173,9 @@ message CreateRequest {
     (buf.validate.field).repeated.items.string.uuid = true,
     (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  optional DependencyCreateIntent dependency_intent = 8;
+  repeated DependencyCreateIntent dependency_intents = 8 [
+    (buf.validate.field).repeated.max_items = 100
+  ];
 }
 
 message CreateSuccess {

@@ -619,10 +619,22 @@ export const pendingAskListSchema = z
   })
   .transform((value) => value.Asks);
 
-const taskSummaryResponseSchema = z.object({ task: z.object({ id: z.string() }) });
-
-export const taskCreateResponseSchema = taskSummaryResponseSchema;
-export const taskUpdateResponseSchema = taskSummaryResponseSchema;
+export const taskCreateResponseSchema = z
+  .object({
+    task: z.object({
+      id: z.string().min(1),
+      short_id: z.string().min(1),
+      title: z.string(),
+      workflow_id: workflowIDSchema,
+    }),
+  })
+  .transform((value) => ({
+    id: value.task.id,
+    shortID: value.task.short_id,
+    title: value.task.title,
+    workflowID: value.task.workflow_id,
+  }));
+export const taskUpdateResponseSchema = z.object({ task: z.object({ id: z.string() }) });
 export const commentAddResponseSchema = z.object({ comment: commentSchema });
 
 export const commentPageSchema: z.ZodType<CommentPage> = offsetPageObjectSchema(commentSchema)
