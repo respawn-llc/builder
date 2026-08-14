@@ -1,13 +1,14 @@
 package runtime
 
 import (
-	"sync"
+	"strings"
 	"testing"
 
 	"core/server/llm"
 	"core/server/session"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 func TestLiveChatContextSnapshotUsesRuntimeFactsBehindPersistencePresenceGates(t *testing.T) {
@@ -72,28 +73,44 @@ func TestLiveChatContextSnapshotCannotMixUsageAndCompactionTransitions(t *testin
 		ManualCompactEligible:    &presentEligibility,
 	})
 
-	const transitions = 500
-	var wg sync.WaitGroup
-	wg.Add(1)
+	before := engine.LiveChatContextSnapshot()
+	transitionDone := make(chan error, 1)
 	go func() {
-		defer wg.Done()
-		for value := 1; value <= transitions; value++ {
-			engine.contextSnapshotMu.Lock()
-			engine.usageTrackingState().Apply(llm.Usage{InputTokens: value}, 0, 0)
-			if value%2 == 1 {
-				engine.compactionRuntimeState().SetActive("compact-step", "manual", value)
-			} else {
-				engine.compactionRuntimeState().ClearActive("compact-step")
-			}
-			engine.contextSnapshotMu.Unlock()
-		}
+		transitionDone <- engine.steerOrdered(
+			"compact-step",
+			steerMessagesWithPersistenceIntent(
+				steeringPriorityUser,
+				steeringMessageEventDefault,
+				true,
+				[]llm.Message{{
+					Role:    llm.RoleUser,
+					Content: textutil.Value(strings.Repeat("context ", 20_000)),
+				}},
+			),
+			steerEventIntent(Event{
+				Kind:       EventCompactionStarted,
+				StepID:     "compact-step",
+				Compaction: &CompactionStatus{Mode: "manual", Count: 1},
+			}),
+		)
 	}()
 
-	for range transitions {
+	for {
 		snapshot := engine.LiveChatContextSnapshot()
-		if snapshot.CompactionRunning != (snapshot.UsedTokens%2 == 1) {
+		if snapshot.UsedTokens != before.UsedTokens && !snapshot.CompactionRunning {
 			t.Fatalf("mixed live Context snapshot = %+v", snapshot)
 		}
+		select {
+		case err := <-transitionDone:
+			if err != nil {
+				t.Fatalf("apply production Context transition: %v", err)
+			}
+			after := engine.LiveChatContextSnapshot()
+			if after.UsedTokens <= before.UsedTokens || !after.CompactionRunning {
+				t.Fatalf("completed live Context transition = %+v, before %+v", after, before)
+			}
+			return
+		default:
+		}
 	}
-	wg.Wait()
 }

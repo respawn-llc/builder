@@ -237,6 +237,8 @@ func (e *Engine) LiveChatContextSnapshot() chatcontext.ProjectionInput {
 	if e == nil {
 		return chatcontext.ProjectionInput{}
 	}
+	e.outputMutationMu.Lock()
+	defer e.outputMutationMu.Unlock()
 	e.contextSnapshotMu.RLock()
 	defer e.contextSnapshotMu.RUnlock()
 	e.mu.Lock()
