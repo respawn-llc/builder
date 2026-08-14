@@ -359,11 +359,14 @@ func advanceActiveWorkflowAssignmentFromRecords(meta *Meta, records []EventRecor
 			switch *value.MessageType {
 			case MessageTypeWorkflowMode:
 				meta.ActiveWorkflowAssignment = cloneMessageRecord(&value)
+				meta.ActiveWorkflowAssignmentKnown = true
 			case MessageTypeWorkflowModeExit:
 				meta.ActiveWorkflowAssignment = nil
+				meta.ActiveWorkflowAssignmentKnown = true
 			}
 		case HistoryReplacementRecord:
 			meta.ActiveWorkflowAssignment = nil
+			meta.ActiveWorkflowAssignmentKnown = true
 			for _, item := range value.Items {
 				if item.Type != ProviderHistoryItemTypeMessage ||
 					item.Role == nil ||
