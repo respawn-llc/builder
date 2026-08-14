@@ -252,6 +252,9 @@ jobs:
 
   gui:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps
     steps:
       - name: Checkout
         uses: actions/checkout@v7.0.0
@@ -277,22 +280,22 @@ jobs:
           cache-dependency-path: apps/pnpm-lock.yaml
 
       - name: Check GUI dependency policy
-        run: node apps/scripts/check-dependency-policy.mjs
+        run: node scripts/check-dependency-policy.mjs
 
       - name: Install GUI dependencies
-        run: pnpm --dir apps install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Lint GUI
-        run: pnpm --dir apps lint
+        run: pnpm lint
 
       - name: Typecheck GUI
-        run: pnpm --dir apps typecheck
+        run: pnpm typecheck
 
       - name: Test GUI
-        run: pnpm --dir apps test
+        run: pnpm test
 
       - name: Build GUI web assets
-        run: pnpm --dir apps build
+        run: pnpm build
 
   gui-native:
     runs-on: macos-latest

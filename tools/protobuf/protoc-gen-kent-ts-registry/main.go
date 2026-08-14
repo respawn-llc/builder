@@ -11,10 +11,7 @@ import (
 	"google.golang.org/protobuf/types/pluginpb"
 )
 
-const (
-	registryPath     = "registry/registry.ts"
-	testRegistryPath = "test-registry/registry.ts"
-)
+const registryPath = "registry/registry.ts"
 
 func main() {
 	var flags flag.FlagSet
@@ -26,17 +23,13 @@ func generate(plugin *protogen.Plugin) error {
 
 	files := generatedFiles(plugin.Files)
 	for _, file := range files {
-		if _, err := registrygen.ClassifySchemaPath(file.Desc.Path()); err != nil {
+		if err := registrygen.ValidateSchemaPath(file.Desc.Path()); err != nil {
 			return err
 		}
 	}
 	writeRegistry(
 		plugin.NewGeneratedFile(registryPath, ""),
-		filesForClass(files, registrygen.KentDomain),
-	)
-	writeRegistry(
-		plugin.NewGeneratedFile(testRegistryPath, ""),
-		filesForClass(files, registrygen.Fixture),
+		files,
 	)
 	return nil
 }
@@ -99,20 +92,6 @@ func generatedFiles(files []*protogen.File) []*protogen.File {
 		return generated[left].Desc.Path() < generated[right].Desc.Path()
 	})
 	return generated
-}
-
-func filesForClass(files []*protogen.File, class registrygen.SchemaClass) []*protogen.File {
-	selected := make([]*protogen.File, 0, len(files))
-	for _, file := range files {
-		schemaClass, err := registrygen.ClassifySchemaPath(file.Desc.Path())
-		if err != nil {
-			panic(err)
-		}
-		if schemaClass == class {
-			selected = append(selected, file)
-		}
-	}
-	return selected
 }
 
 func modulePath(schemaPath string) string {

@@ -19,29 +19,10 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-type FocusedProjectionFixtureName string
-
-const (
-	FocusedKENT345StrictJSON              FocusedProjectionFixtureName = "kent345_strict_json"
-	FocusedKENT345CustomWire              FocusedProjectionFixtureName = "kent345_custom_wire"
-	FocusedKENT345Hydration               FocusedProjectionFixtureName = "kent345_hydration"
-	FocusedKENT345Uniqueness              FocusedProjectionFixtureName = "kent345_uniqueness"
-	FocusedKENT345MixedValidators         FocusedProjectionFixtureName = "kent345_mixed_validators"
-	FocusedKENT554NegotiationValidation   FocusedProjectionFixtureName = "kent554_negotiation_validation"
-	FocusedKENT554NegotiationConstants    FocusedProjectionFixtureName = "kent554_negotiation_constants"
-	FocusedKENT554RetainedCapabilityFacts FocusedProjectionFixtureName = "kent554_retained_capability_facts"
-)
-
-type FocusedProjectionFixture struct {
-	Name  FocusedProjectionFixtureName
-	Check func() error
-}
-
 type BoundedMigrationCoverage struct {
 	Report                 Report
 	Operations             []protoapi.Operation
 	Classification         DeclarationClassification
-	FocusedFixtures        []FocusedProjectionFixture
 	WireExceptions         []WireException
 	FieldRenames           []WireFieldRename
 	ScalarMappings         []WireScalarMapping
@@ -100,7 +81,6 @@ const (
 	IssueCoverageWireShape             CoverageIssueCode = "wire_shape"
 	IssueCoverageWireException         CoverageIssueCode = "wire_exception"
 	IssueCoverageDeclaration           CoverageIssueCode = "declaration"
-	IssueCoverageFocusedFixture        CoverageIssueCode = "focused_fixture"
 )
 
 type CoverageIssue struct {
@@ -169,7 +149,6 @@ func CheckBoundedMigrationCoverage(coverage BoundedMigrationCoverage) error {
 		fingerprintWireExceptions(coverage.WireExceptions),
 		&issues,
 	)
-	checkFocusedProjectionFixtures(coverage.FocusedFixtures, &issues)
 	if len(issues) == 0 {
 		return nil
 	}
@@ -446,8 +425,7 @@ func checkCoverageWireShapes(
 
 	operationsByLegacyName := make(map[string]protoapi.Operation, len(operations))
 	for _, operation := range operations {
-		if operation.Descriptor.ParentFile().Package() == "fixture" ||
-			operation.LegacyWireName == nil {
+		if operation.LegacyWireName == nil {
 			continue
 		}
 		operationsByLegacyName[*operation.LegacyWireName] = operation
@@ -817,19 +795,19 @@ func (e *wireExceptionFingerprintError) Error() string {
 	switch e.Code {
 	case wireExceptionFingerprintMissingSignoff:
 		return fmt.Sprintf(
-			"focused fixture fingerprints are required; legacy=%s descriptor=%s",
+			"wire signoff fingerprints are required; legacy=%s descriptor=%s",
 			e.LegacyFingerprint,
 			e.DescriptorFingerprint,
 		)
 	case wireExceptionFingerprintLegacyChanged:
 		return fmt.Sprintf(
-			"legacy focused fixture changed: got %s, want %s",
+			"legacy wire signoff changed: got %s, want %s",
 			e.LegacyFingerprint,
 			e.ExpectedFingerprint,
 		)
 	case wireExceptionFingerprintDescriptorChanged:
 		return fmt.Sprintf(
-			"descriptor focused fixture changed: got %s, want %s",
+			"descriptor wire signoff changed: got %s, want %s",
 			e.DescriptorFingerprint,
 			e.ExpectedFingerprint,
 		)
@@ -1410,23 +1388,14 @@ func checkCoveragePredecessors(predecessors []ResolvedIdentity, issues *[]Covera
 	}
 }
 
-type operationDescriptorSlice []OperationDescriptor
-
-func (descriptors operationDescriptorSlice) OperationDescriptors() []OperationDescriptor {
-	return append([]OperationDescriptor(nil), descriptors...)
-}
-
 func checkCoverageOperations(
 	routes []apicontract.Route,
 	operations []protoapi.Operation,
 	issues *[]CoverageIssue,
 ) {
-	descriptors := make(operationDescriptorSlice, 0, len(operations))
+	descriptors := make([]OperationDescriptor, 0, len(operations))
 	operationsByLegacyName := make(map[string]protoapi.Operation, len(operations))
 	for _, operation := range operations {
-		if operation.Descriptor.ParentFile().Package() == "fixture" {
-			continue
-		}
 		if operation.LegacyWireName != nil {
 			operationsByLegacyName[*operation.LegacyWireName] = operation
 		}
@@ -1577,62 +1546,5 @@ func generatedUnaryConnection(connection apicontract.ConnectionStrategy) sharedp
 		return sharedpb.UnaryConnection_UNARY_CONNECTION_DEDICATED
 	default:
 		return sharedpb.UnaryConnection_UNARY_CONNECTION_UNSPECIFIED
-	}
-}
-
-func checkFocusedProjectionFixtures(fixtures []FocusedProjectionFixture, issues *[]CoverageIssue) {
-	want := requiredFocusedProjectionFixtures()
-	seen := make(map[FocusedProjectionFixtureName]int, len(fixtures))
-	for _, fixture := range fixtures {
-		seen[fixture.Name]++
-		if fixture.Check == nil {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageFocusedFixture,
-				Detail: "missing behavior check for " + string(fixture.Name),
-			})
-			continue
-		}
-		if err := fixture.Check(); err != nil {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageFocusedFixture,
-				Detail: string(fixture.Name) + ": " + err.Error(),
-			})
-		}
-	}
-	for fixture, count := range seen {
-		if _, exists := want[fixture]; !exists {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageFocusedFixture,
-				Detail: "unexpected " + string(fixture),
-			})
-			continue
-		}
-		if count != 1 {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageFocusedFixture,
-				Detail: fmt.Sprintf("%s occurs %d times", fixture, count),
-			})
-		}
-	}
-	for fixture := range want {
-		if seen[fixture] == 0 {
-			*issues = append(*issues, CoverageIssue{
-				Code:   IssueCoverageFocusedFixture,
-				Detail: "missing " + string(fixture),
-			})
-		}
-	}
-}
-
-func requiredFocusedProjectionFixtures() map[FocusedProjectionFixtureName]struct{} {
-	return map[FocusedProjectionFixtureName]struct{}{
-		FocusedKENT345StrictJSON:              {},
-		FocusedKENT345CustomWire:              {},
-		FocusedKENT345Hydration:               {},
-		FocusedKENT345Uniqueness:              {},
-		FocusedKENT345MixedValidators:         {},
-		FocusedKENT554NegotiationValidation:   {},
-		FocusedKENT554NegotiationConstants:    {},
-		FocusedKENT554RetainedCapabilityFacts: {},
 	}
 }

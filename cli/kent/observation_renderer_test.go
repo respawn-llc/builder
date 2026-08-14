@@ -11,15 +11,15 @@ import (
 	"core/shared/serverapi"
 )
 
-func TestObservedQuestionUsesClientOwnedApprovalDecisionLabel(t *testing.T) {
+func TestObservedQuestionUsesDynamicQuestionAndAnswerTarget(t *testing.T) {
 	question := serverapi.ObservationQuestion{Approval: &clientui.PendingApproval{
 		PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
 		StepID: questionCommandStepID(), Question: "dynamic question",
-		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce}},
+		Options: []clientui.ApprovalOption{{Label: "dynamic allow", Decision: clientui.ApprovalDecisionAllowOnce}},
 	}}
 	var output bytes.Buffer
 	writeObservedQuestion(&output, question, "kent question answer --session session-dynamic --option <number>")
-	for _, value := range []string{"dynamic question", clientui.ApprovalDecisionLabel(clientui.ApprovalDecisionAllowOnce), "session-dynamic"} {
+	for _, value := range []string{"dynamic question", "dynamic allow", "session-dynamic"} {
 		if !strings.Contains(output.String(), value) {
 			t.Fatalf("output %q does not contain dynamic value %q", output.String(), value)
 		}
@@ -37,7 +37,7 @@ func TestRunWatchApprovalHintUsesOptionOnly(t *testing.T) {
 				PromptID: "approval-dynamic", SessionID: mustQuestionCommandSessionID("session-1"),
 				StepID: questionCommandStepID(), Question: "Allow access?",
 				Options: []clientui.ApprovalOption{{
-					Decision: clientui.ApprovalDecisionAllowOnce,
+					Label: "Allow once",
 				}},
 			}},
 		},

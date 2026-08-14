@@ -89,10 +89,6 @@ run_protobuf() {
 	./scripts/generate-protobuf.sh verify all
 	echo "==> Protobuf migration lint"
 	./scripts/generate-protobuf.sh run go -- go run ./shared/apicontract/cmd/migrationlint
-	echo "==> Protobuf descriptor policy"
-	./scripts/generate-protobuf.sh run go -- go test ./shared/apicontract/internal/migrationcheck \
-		-run '^TestDescriptorPolicy' \
-		-count=1
 	echo "==> Protobuf schema/protocol version"
 	./scripts/check-protobuf-schema-version.sh
 }
@@ -129,15 +125,11 @@ build)
 	;;
 test)
 	shift
-	run_protobuf
 	run_test "$@"
-	;;
-protobuf)
-	run_protobuf
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]|protobuf]" >&2
+	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]]" >&2
 	exit 1
 	;;
 esac

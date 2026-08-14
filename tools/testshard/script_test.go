@@ -5,8 +5,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
-
-	"core/internal/testharness/testsetup"
 )
 
 func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
@@ -25,11 +23,11 @@ func TestDefaultScriptReusesPTYFixtureBinariesAcrossRuns(t *testing.T) {
 
 	runScript := func() {
 		t.Helper()
-		command := exec.Command("bash", "scripts/test.sh", "server", "--inherit-env")
+		command := exec.Command("bash", "scripts/test.sh", "server")
 		command.Dir = repoRoot
-		command.Env = append(testsetup.EnvironmentWithout("KENT_PROTOBUF_OUTPUTS_READY"),
+		command.Env = append(
+			os.Environ(),
 			"PATH="+fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-			"KENT_PROTOBUF_OUTPUTS_READY=go",
 			"TEST_SCRIPT_FIXTURE_PATH="+fixturePathRecord,
 			"TEST_SCRIPT_KENT_PATH="+kentPathRecord,
 			"TEST_SCRIPT_ANSI_WRITER_PATH="+ansiWriterPathRecord,

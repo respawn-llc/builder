@@ -22,15 +22,10 @@ const parserProjects = [
 
 export default tseslint.config(
   {
-    // Protobuf-ES output is reproducibly regenerated and is not handwritten product code.
-    // The package entrypoint, descriptor policy, codecs, and generators remain fully linted.
-    ignores: [
-      "**/dist",
-      "eslint-fixtures/architecture",
-      generatedServerApiContractFiles,
-      "src-tauri/target",
-      "node_modules",
-    ],
+    ignores: ["**/dist", "eslint-fixtures/architecture", "src-tauri/target", "node_modules"],
+  },
+  {
+    ignores: [generatedServerApiContractFiles],
   },
   {
     linterOptions: {

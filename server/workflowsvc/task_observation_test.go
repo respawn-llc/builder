@@ -159,7 +159,7 @@ func TestTaskQuestionResolvesLiveAccessThroughAuthoritativeApprovalView(t *testi
 			SessionID: sessionID,
 			StepID:    stepID,
 			Question:  message,
-			Options:   []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce}},
+			Options:   []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
 			CreatedAt: createdAt,
 		}}},
 	}}
@@ -178,7 +178,7 @@ func TestTaskQuestionResolvesLiveAccessThroughAuthoritativeApprovalView(t *testi
 		t.Fatalf("task question = %+v, ok=%v, err=%v", outcome, ok, err)
 	}
 	if outcome.Question == nil || outcome.Question.Approval == nil ||
-		outcome.Question.Approval.Options[0].Decision != clientui.ApprovalDecisionAllowOnce {
+		outcome.Question.Approval.Options[0].Label != "Allow once" {
 		t.Fatalf("question = %+v", outcome.Question)
 	}
 }

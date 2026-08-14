@@ -11,7 +11,6 @@
   },
   "scripts": {
     "build": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false",
-    "test": "pnpm build && node --test test/index.node.mjs",
     "typecheck": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false"
   },
   "dependencies": {

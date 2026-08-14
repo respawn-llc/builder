@@ -16,7 +16,7 @@
     "lint": "pnpm contract:run pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present lint",
     "ts:policy": "node ./scripts/check-typescript-policy.mjs",
     "typecheck": "pnpm contract:run pnpm --recursive --if-present typecheck",
-    "test": "pnpm contract:run pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present test",
+    "test": "pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present test",
     "format": "pnpm --recursive --if-present format",
     "build": "pnpm contract:run pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
   },

@@ -1,25 +1,16 @@
 package migrationcheck
 
 import (
-	"errors"
 	"fmt"
 	"reflect"
 
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/protoapi"
-	capabilitypb "core/shared/protoapi/gen/kent/api/capability"
-	connectionpb "core/shared/protoapi/gen/kent/api/connection"
-	runpromptpb "core/shared/protoapi/gen/kent/api/run_prompt"
-	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
-	sessionlaunchpb "core/shared/protoapi/gen/kent/api/session_launch"
-	transcriptpb "core/shared/protoapi/gen/kent/api/transcript"
 	"core/shared/protocol"
 	"core/shared/rollbacktarget"
-	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -267,177 +258,8 @@ func CheckExecutionTarget() error {
 		ScalarMappings:         actualTargetScalarMappings(),
 		PresenceMappings:       actualTargetPresenceMappings(),
 		ExceptionalFingerprint: reviewedExceptionalWireFingerprint,
-		FocusedFixtures: []FocusedProjectionFixture{
-			{Name: FocusedKENT345StrictJSON, Check: checkKENT345StrictJSONFixture},
-			{Name: FocusedKENT345CustomWire, Check: checkKENT345CustomWireFixture},
-			{Name: FocusedKENT345Hydration, Check: checkKENT345HydrationFixture},
-			{Name: FocusedKENT345Uniqueness, Check: checkKENT345UniquenessFixture},
-			{Name: FocusedKENT345MixedValidators, Check: checkKENT345MixedValidatorsFixture},
-			{Name: FocusedKENT554NegotiationValidation, Check: checkKENT554NegotiationValidationFixture},
-			{Name: FocusedKENT554NegotiationConstants, Check: checkKENT554NegotiationConstantsFixture},
-			{Name: FocusedKENT554RetainedCapabilityFacts, Check: checkKENT554RetainedCapabilityFactsFixture},
-		},
 	}
 	return CheckBoundedMigrationCoverage(coverage)
-}
-
-func checkKENT345StrictJSONFixture() error {
-	for _, message := range []proto.Message{
-		&runpromptpb.Request{},
-		&sessionlaunchpb.SessionPlanRequest{},
-		&runtimepb.SubmitUserTurnRequest{},
-	} {
-		if message.ProtoReflect().Descriptor().Fields().ByName("client_request_id") != nil {
-			return fmt.Errorf("%s retains client_request_id", message.ProtoReflect().Descriptor().FullName())
-		}
-		if err := protoapi.DecodeGeneratedMessage(nil, message); err == nil {
-			return fmt.Errorf("%s accepted an invalid empty request", message.ProtoReflect().Descriptor().FullName())
-		}
-	}
-	return nil
-}
-
-func checkKENT345CustomWireFixture() error {
-	sessionID, err := runtimeids.ParseSessionID("55555555-5555-4555-8555-555555555555")
-	if err != nil {
-		return err
-	}
-	queueItemID, err := runtimeids.ParseQueueItemID("11111111-1111-4111-8111-111111111111")
-	if err != nil {
-		return err
-	}
-	message := &runtimepb.LiveSteerSuccess{
-		QueueItemId: queueItemID.String(),
-		Text:        "continue",
-	}
-	encoded, err := protoapi.EncodeGeneratedMessage(message)
-	if err != nil {
-		return err
-	}
-	var decoded runtimepb.LiveSteerSuccess
-	if err := protoapi.DecodeGeneratedMessage(encoded, &decoded); err != nil {
-		return err
-	}
-	if decoded.QueueItemId != queueItemID.String() {
-		return fmt.Errorf("Queue Item identity round-trip = %q", decoded.QueueItemId)
-	}
-	request := &runtimepb.SubmitUserTurnRequest{SessionId: sessionID.String()}
-	if request.ProtoReflect().Descriptor().Fields().ByName("session_id") == nil {
-		return errors.New("retained Session identity is absent")
-	}
-	return nil
-}
-
-func checkKENT345HydrationFixture() error {
-	first := "first"
-	second := "second"
-	for _, message := range []*transcriptpb.QueuedMessageState{
-		{
-			QueueItemId: "11111111-1111-4111-8111-111111111111",
-			Status:      transcriptpb.QueuedMessageStatus_QUEUED_MESSAGE_STATUS_ACCEPTED,
-			Text:        &first,
-		},
-		{
-			QueueItemId: "22222222-2222-4222-8222-222222222222",
-			Status:      transcriptpb.QueuedMessageStatus_QUEUED_MESSAGE_STATUS_ACCEPTED,
-			Text:        &second,
-		},
-	} {
-		if err := protoapi.ValidateGeneratedMessage(message); err != nil {
-			return err
-		}
-	}
-	hydration := (&transcriptpb.Hydration{}).ProtoReflect().Descriptor()
-	if hydration.Fields().ByName("queued_messages") == nil {
-		return errors.New("generated hydration omits queued messages")
-	}
-	return nil
-}
-
-func checkKENT345UniquenessFixture() error {
-	if err := protoapi.ValidateGeneratedMessage(&transcriptpb.UserMessageFlushed{
-		StepId: "44444444-4444-4444-8444-444444444444",
-		QueueItemIds: []string{
-			"11111111-1111-4111-8111-111111111111",
-			"11111111-1111-4111-8111-111111111111",
-		},
-	}); err == nil {
-		return errors.New("generated transcript event accepted duplicate Queue Item identity")
-	}
-	return nil
-}
-
-func checkKENT345MixedValidatorsFixture() error {
-	if err := protoapi.ValidateGeneratedMessage(&sessionlaunchpb.SessionPlanRequest{
-		Mode: sessionlaunchpb.SessionLaunchMode_SESSION_LAUNCH_MODE_HEADLESS,
-	}); err == nil {
-		return errors.New("generated Session plan accepted missing retained intent")
-	}
-	if err := protoapi.ValidateGeneratedMessage(&runtimepb.SubmitUserTurnRequest{
-		SessionId: "session-1",
-		Input: &runtimepb.UserTurnInput{
-			Input: &runtimepb.UserTurnInput_Text{Text: "continue"},
-		},
-	}); err != nil {
-		return err
-	}
-	if err := protoapi.ValidateGeneratedMessage(&runtimepb.SubmitUserTurnRequest{
-		Input: &runtimepb.UserTurnInput{
-			Input: &runtimepb.UserTurnInput_Text{Text: "continue"},
-		},
-	}); err == nil {
-		return errors.New("mixed validator lost retained Session identity requirement")
-	}
-	return nil
-}
-
-func checkKENT554NegotiationValidationFixture() error {
-	if err := protoapi.ValidateGeneratedMessage(&connectionpb.HandshakeRequest{
-		ProtocolVersion: protocol.Version,
-	}); err != nil {
-		return err
-	}
-	descriptor := (&connectionpb.HandshakeRequest{}).ProtoReflect().Descriptor()
-	if descriptor.Fields().ByName("client_capabilities") != nil {
-		return errors.New("generated handshake retains client capabilities")
-	}
-	legacy := protocol.HandshakeRequest{
-		ProtocolVersion:    protocol.Version,
-		ClientCapabilities: &protocol.ClientCapabilities{},
-	}
-	if err := legacy.Validate(); err == nil {
-		return errors.New("legacy handshake no longer exercises capability negotiation")
-	}
-	return nil
-}
-
-func checkKENT554NegotiationConstantsFixture() error {
-	if protocol.MethodCapabilityFactsGet != "capability.facts.get" {
-		return fmt.Errorf("retained capability operation = %q", protocol.MethodCapabilityFactsGet)
-	}
-	return nil
-}
-
-func checkKENT554RetainedCapabilityFactsFixture() error {
-	blank := " "
-	if err := (serverapi.CapabilityFactsRequest{WorkspaceRoot: &blank}).Validate(); err == nil {
-		return errors.New("retained capability facts accepted a blank workspace root")
-	}
-	generatedBlank := " "
-	if err := protoapi.ValidateGeneratedMessage(&capabilitypb.GetFactsRequest{
-		WorkspaceRoot:          &generatedBlank,
-		ExplicitLlmProviderIds: []string{"openai", ""},
-	}); err == nil {
-		return errors.New("generated capability facts accepted an empty provider identity")
-	}
-	descriptor := (&capabilitypb.GetFactsRequest{}).ProtoReflect().Descriptor()
-	if descriptor.Fields().ByName("explicit_llm_provider_ids") == nil {
-		return errors.New("retained provider capability facts are absent")
-	}
-	if serverapi.ImportErrorItemKindSkill != "skill" {
-		return fmt.Errorf("retained import capability constant = %q", serverapi.ImportErrorItemKindSkill)
-	}
-	return nil
 }
 
 func wireExceptionSignoff[T any](

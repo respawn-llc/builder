@@ -608,13 +608,14 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 	sessionID := uuid.NewString()
 	approvalID := "approval-1"
 	successorQuestion := "Next?"
+	approvalLabel := "Grant this workspace once"
 	attention := taskQuestionAttention(taskID, sessionID, "Implementer", approvalID, "Allow access?", 1)
 	attention.Question.Kind = serverapi.WorkflowAttentionQuestionKindApproval
 	attention.Question.ApprovalDecisions = []clientui.ApprovalDecision{clientui.ApprovalDecisionAllowOnce}
 	approval := clientui.PendingApproval{
 		PromptID: clientui.PromptID(approvalID), SessionID: mustQuestionCommandSessionID(sessionID),
 		StepID: questionCommandStepID(), Question: "Allow access?",
-		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce}},
+		Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: approvalLabel}},
 	}
 	remote := &stubQuestionTaskRemote{
 		stubQuestionCommandRemote: &stubQuestionCommandRemote{
@@ -644,8 +645,7 @@ func TestQuestionByTaskApprovalReadsSuccessorQuestion(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	if exitCode := command.showResolvedTaskQuestion(selector, remote, taskID, &stdout, &stderr); exitCode != 0 ||
-		stderr.Len() != 0 ||
-		!strings.Contains(stdout.String(), clientui.ApprovalDecisionLabel(clientui.ApprovalDecisionAllowOnce)) {
+		stderr.Len() != 0 || !strings.Contains(stdout.String(), approvalLabel) {
 		t.Fatalf("show exit=%d stdout=%q stderr=%q", exitCode, stdout.String(), stderr.String())
 	}
 	stdout.Reset()

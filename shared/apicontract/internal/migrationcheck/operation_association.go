@@ -9,8 +9,6 @@ import (
 )
 
 // OperationDescriptor is the migration check's descriptor-facing boundary.
-// The Protobuf adapter added by a later slice can project method descriptors
-// into this shape without making fixtures depend on generated schemas.
 type OperationDescriptor struct {
 	Package        string
 	Service        string
@@ -25,12 +23,6 @@ type OperationReference struct {
 	Package string
 	Service string
 	Method  string
-}
-
-// OperationDescriptorSource permits both generated descriptor registries and
-// small in-memory fixtures to exercise the same association behavior.
-type OperationDescriptorSource interface {
-	OperationDescriptors() []OperationDescriptor
 }
 
 type AssociationIssueCode string
@@ -72,10 +64,9 @@ func (e *AssociationError) Error() string {
 // association evidence only; they are never inserted into the active index.
 func CheckOperationAssociations(
 	routes []apicontract.Route,
-	source OperationDescriptorSource,
+	descriptors []OperationDescriptor,
 	unapprovedAliases []string,
 ) error {
-	descriptors := source.OperationDescriptors()
 	issues := make([]AssociationIssue, 0)
 
 	routesByLegacyName := make(map[string][]apicontract.Route, len(routes))

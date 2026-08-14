@@ -5,32 +5,17 @@ import (
 	"strings"
 )
 
-// SchemaClass identifies which generated registry owns a Protobuf schema.
-type SchemaClass uint8
-
-const (
-	KentDomain SchemaClass = iota + 1
-	Fixture
-)
-
-// ClassifySchemaPath returns the sole generated-registry owner for a schema.
-func ClassifySchemaPath(schemaPath string) (SchemaClass, error) {
+// ValidateSchemaPath verifies that a generated schema belongs to the Kent API.
+func ValidateSchemaPath(schemaPath string) error {
 	first, remainder, ok := nextPathSegment(schemaPath)
-	if !ok {
-		return 0, unclassifiedSchemaPath(schemaPath)
+	if !ok || first != "kent" {
+		return unclassifiedSchemaPath(schemaPath)
 	}
-	switch first {
-	case "fixture":
-		return Fixture, nil
-	case "kent":
-		second, remainder, ok := nextPathSegment(remainder)
-		if !ok || second != "api" || remainder == "" {
-			return 0, unclassifiedSchemaPath(schemaPath)
-		}
-		return KentDomain, nil
-	default:
-		return 0, unclassifiedSchemaPath(schemaPath)
+	second, remainder, ok := nextPathSegment(remainder)
+	if !ok || second != "api" || remainder == "" {
+		return unclassifiedSchemaPath(schemaPath)
 	}
+	return nil
 }
 
 func nextPathSegment(value string) (segment string, remainder string, ok bool) {
@@ -51,7 +36,7 @@ func nextPathSegment(value string) (segment string, remainder string, ok bool) {
 
 func unclassifiedSchemaPath(schemaPath string) error {
 	return fmt.Errorf(
-		"generated schema %q is outside the Kent domain and fixture roots",
+		"generated schema %q is outside the Kent API root",
 		schemaPath,
 	)
 }

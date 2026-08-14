@@ -11,10 +11,8 @@ import (
 )
 
 const (
-	registryImportPath     = protogen.GoImportPath("core/shared/protoapi/gen/registry")
-	registryPackage        = protogen.GoPackageName("registry")
-	testRegistryImportPath = protogen.GoImportPath("core/shared/protoapi/gen/testregistry")
-	testRegistryPackage    = protogen.GoPackageName("testregistry")
+	registryImportPath = protogen.GoImportPath("core/shared/protoapi/gen/registry")
+	registryPackage    = protogen.GoPackageName("registry")
 )
 
 func main() {
@@ -27,19 +25,14 @@ func generate(plugin *protogen.Plugin) error {
 
 	files := generatedFiles(plugin.Files)
 	for _, file := range files {
-		if _, err := registrygen.ClassifySchemaPath(file.Desc.Path()); err != nil {
+		if err := registrygen.ValidateSchemaPath(file.Desc.Path()); err != nil {
 			return err
 		}
 	}
 	writeRegistry(
 		plugin.NewGeneratedFile("registry/registry.pb.go", registryImportPath),
 		registryPackage,
-		filesForClass(files, registrygen.KentDomain),
-	)
-	writeRegistry(
-		plugin.NewGeneratedFile("testregistry/registry.pb.go", testRegistryImportPath),
-		testRegistryPackage,
-		filesForClass(files, registrygen.Fixture),
+		files,
 	)
 	return nil
 }
@@ -140,18 +133,4 @@ func generatedFiles(files []*protogen.File) []*protogen.File {
 		return generated[left].Desc.Path() < generated[right].Desc.Path()
 	})
 	return generated
-}
-
-func filesForClass(files []*protogen.File, class registrygen.SchemaClass) []*protogen.File {
-	selected := make([]*protogen.File, 0, len(files))
-	for _, file := range files {
-		schemaClass, err := registrygen.ClassifySchemaPath(file.Desc.Path())
-		if err != nil {
-			panic(err)
-		}
-		if schemaClass == class {
-			selected = append(selected, file)
-		}
-	}
-	return selected
 }

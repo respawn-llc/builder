@@ -398,7 +398,7 @@ run_desktop_tests() {
         return
     fi
     ./scripts/install-frontend-dependencies.sh
-    ./scripts/generate-protobuf.sh run ts -- pnpm --dir apps test
+    pnpm --dir apps test
 }
 
 server_tests_need_pty_fixtures() {
@@ -508,7 +508,7 @@ run_server_tests() {
 
     if [ "$disable_wall_clock_cap" = "1" ]; then
         set +e
-        ./scripts/generate-protobuf.sh run go -- "${server_test_command[@]}"
+        "${server_test_command[@]}"
         status=$?
         set -e
         if [ "$status" -eq 0 ]; then
@@ -518,7 +518,7 @@ run_server_tests() {
     fi
 
     set +e
-    python3 - "$timeout_seconds" ./scripts/generate-protobuf.sh run go -- "${server_test_command[@]}" <<'PY' &
+    python3 - "$timeout_seconds" "${server_test_command[@]}" <<'PY' &
 import json
 import os
 import selectors

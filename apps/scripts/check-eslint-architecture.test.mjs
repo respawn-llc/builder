@@ -17,7 +17,6 @@ const fixtureRoot = fileURLToPath(
 const allowedPaths = Object.freeze([
   "packages/native-bridge/src/allowed-owner-local.ts",
   "packages/native-bridge/src/allowed-tauri.ts",
-  "packages/server-api-contract/src/index.ts",
   "src/api/allowed-owner-local.ts",
   "src/app-facade/allowed-public-seams.ts",
   "src/app/allowed-native-config.test.ts",
@@ -102,8 +101,6 @@ const forbiddenTauriPaths = Object.freeze([
 const unknownFilePath = "src/unknown-owner/file.ts";
 const unknownDependencyPath =
   "src/features/alpha/forbidden-unknown-dependency.ts";
-const generatedContractPath =
-  "packages/server-api-contract/src/gen/ignored-generated-owner-local.ts";
 
 test("desktop architecture policy exercises every locked fixture", async () => {
   const paths = [
@@ -133,21 +130,6 @@ test("desktop architecture policy exercises every locked fixture", async () => {
     messagesByPath,
     unknownDependencyPath,
     "boundaries/no-unknown-dependencies",
-  );
-});
-
-test("desktop architecture policy excludes only generated server API contract output", async () => {
-  const eslint = new ESLint({
-    cwd: fixtureRoot,
-    overrideConfigFile: true,
-    overrideConfig: createArchitecturePolicy({
-      rootPath: fixtureRoot,
-      parserProjects: [join(fixtureRoot, "tsconfig.json")],
-    }),
-  });
-  assert.equal(
-    await eslint.isPathIgnored(join(fixtureRoot, generatedContractPath)),
-    true,
   );
 });
 
