@@ -431,11 +431,8 @@ func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaConte
 // so repeated `--continue` launches do not duplicate the enter prompt.
 // Interactive is the default, so no reminder is injected while both are false.
 func (e *Engine) steerHeadlessModeTransitionIfNeeded(stepID string) error {
-	if e.workflowPromptActive() {
-		return nil
-	}
 	if e.cfg.HeadlessMode == e.store.Meta().HeadlessActive {
-		return nil
+		return e.store.SetHeadlessActive(e.cfg.HeadlessMode)
 	}
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	if e.cfg.HeadlessMode {
