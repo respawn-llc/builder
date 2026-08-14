@@ -309,7 +309,11 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(virtualizer.scrollToOffset).not.toHaveBeenCalled();
   });
 
-  it("renders generic grid and row semantics with a sticky item wrapper", () => {
+  it("keeps a vertically sticky grid row aligned while the grid scrolls horizontally", () => {
+    virtualizer.getVirtualItems.mockReturnValue([
+      { end: 40, index: 0, key: "header", lane: 0, size: 40, start: 0 },
+      { end: 80, index: 1, key: "task", lane: 0, size: 40, start: 40 },
+    ]);
     render(
       <VirtualizedInfiniteList
         estimateSize={testEstimateSize}
@@ -327,10 +331,15 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
       />,
     );
 
-    expect(screen.getByRole("grid")).toBeInTheDocument();
+    const grid = screen.getByRole("grid");
+    grid.scrollLeft = 120;
+    fireEvent.scroll(grid);
+
+    expect(grid.scrollLeft).toBe(120);
     expect(screen.getAllByRole("row")).toHaveLength(2);
     expect(screen.getByLabelText("header wrapper")).toHaveClass("sticky", "top-0");
-    expect(screen.getByLabelText("task wrapper")).not.toHaveClass("sticky");
+    expect(screen.getByLabelText("header wrapper")).not.toHaveClass("left-0");
+    expect(screen.getByLabelText("task wrapper")).toHaveClass("absolute", "left-0");
   });
 
   it("loads independent visible items once for their current request generation", () => {

@@ -507,7 +507,7 @@ function VirtualizedInfiniteListContent<TItem>({
             <div
               {...wrapperProps}
               className={cx(
-                sticky ? "sticky top-0 left-0 z-[1] w-full" : "absolute top-0 left-0 w-full",
+                sticky ? "sticky top-0 z-[1] w-full" : "absolute top-0 left-0 w-full",
                 virtualizedRowClassName({
                   count,
                   index: virtualItem.index,
