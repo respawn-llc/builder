@@ -31,6 +31,8 @@ type AppendProjection struct {
 	FirstPromptPreview              *string
 	ConversationEstablished         bool
 	GeneratedRecoveredWarningIssued bool
+	activeWorkflowAssignment        *MessageRecord
+	activeWorkflowAssignmentState   *ActiveWorkflowAssignmentState
 }
 
 type AppendProjector func(context.Context, AppendProjection) error
@@ -40,6 +42,7 @@ type StoreOption func(*storeOptions)
 type storeOptions struct {
 	observer           PersistenceObserver
 	resolver           PersistedSessionResolver
+	contextFactWriter  SessionContextFactWriter
 	durabilityObserver DurabilityObserver
 	appendProjector    AppendProjector
 	now                func() time.Time
@@ -54,6 +57,12 @@ func WithPersistenceObserver(observer PersistenceObserver) StoreOption {
 func WithPersistedSessionResolver(resolver PersistedSessionResolver) StoreOption {
 	return func(options *storeOptions) {
 		options.resolver = resolver
+	}
+}
+
+func WithSessionContextFactWriter(writer SessionContextFactWriter) StoreOption {
+	return func(options *storeOptions) {
+		options.contextFactWriter = writer
 	}
 }
 

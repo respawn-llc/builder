@@ -6,15 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/metadata"
 	"core/shared/apicontract"
 	"core/shared/invariant"
@@ -43,7 +42,6 @@ type Gateway struct {
 	identity                          protocol.ServerIdentity
 	onboardingFinalizeRequestContract serverjsoncontract.OnboardingFinalizeRequest
 	sessionExecutionRequestContract   serverjsoncontract.SessionExecutionEnvironmentRequest
-	debug                             bool
 }
 
 type GatewayDependencies interface {
@@ -60,8 +58,8 @@ type GatewayDependencies interface {
 	GatewayWorktreeDependencies
 }
 
-type GatewayDependencyAvailability interface {
-	RouteDependencyAvailable(apicontract.Dependency) error
+type GatewayStartupLifecycle interface {
+	RequireCoreActive() error
 }
 
 type GatewayServerStatusDependencies interface {
@@ -92,12 +90,16 @@ type GatewayProjectDependencies interface {
 }
 
 type GatewaySessionDependencies interface {
+	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
 	SessionTranscriptClient() apicontract.SessionTranscriptService
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	WorkspaceChatContextOwnerForProjectWorkspace(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	WorkspaceChatContextOwnerForProjectWorkspaceID(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	SessionChatContextOwner() chatcontext.SessionOwner
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
 	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
 }
@@ -206,7 +208,6 @@ func protocolSubscriptionMethodSet() map[string]struct{} {
 
 type connectionState struct {
 	handshakeDone         bool
-	clientCapabilities    protocol.ClientCapabilities
 	noAuthAccepted        bool
 	attachedProject       string
 	attachedWorkspaceID   string
@@ -221,6 +222,7 @@ type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.
 
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
+	protocol.MethodSessionQuestionHistorySubscribe:       (*Gateway).serveQuestionHistorySubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
 	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
@@ -280,7 +282,6 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 		identity:                          identity,
 		onboardingFinalizeRequestContract: onboardingFinalizeRequestContract,
 		sessionExecutionRequestContract:   sessionExecutionRequestContract,
-		debug:                             debugMode,
 	}, nil
 }
 
@@ -402,53 +403,56 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 }
 
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			if _, processFatal := recovered.(processFatalGatewayPanic); processFatal {
-				panic(recovered)
-			}
-			stack := string(debug.Stack())
-			slog.Error(
-				"gateway request handler panicked",
-				"method", req.Method,
-				"request_id", req.ID,
-				"panic", recovered,
-				"stack", stack,
-			)
-			stop()
-			if g.debug {
-				panic(gatewayRequestPanicDiagnostic{
-					Operation: gatewayOrdinaryRequestOperation,
-					Method:    req.Method,
-					RequestID: req.ID,
-					Cause:     recovered,
-					Stack:     stack,
-				})
-			}
-		}
-	}()
 	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {
 		stop()
 	}
 }
 
 func isGatewayExclusiveRequest(req protocol.Request) bool {
-	if req.Method == protocol.MethodHandshake {
+	switch req.Method {
+	case protocol.MethodHandshake,
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus:
 		return true
 	}
 	route, ok := apicontract.RouteByMethod(req.Method)
 	if !ok {
 		return false
 	}
-	switch route.Dependency {
-	case apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus:
-		return true
-	}
 	switch route.Scope {
 	case apicontract.ScopeAttachProject, apicontract.ScopeAttachSession:
 		return true
 	}
 	return false
+}
+
+func isGatewayPreActivationOperation(method string) bool {
+	switch method {
+	case protocol.MethodHandshake,
+		protocol.MethodServerReadinessGet,
+		protocol.MethodAuthGetBootstrapStatus,
+		protocol.MethodAuthCompleteBootstrap,
+		protocol.MethodAuthAcknowledgeNoAuth,
+		protocol.MethodAuthGetStatus,
+		protocol.MethodCapabilityFactsGet,
+		protocol.MethodOnboardingFinalize:
+		return true
+	default:
+		return false
+	}
+}
+
+func (g *Gateway) preflightStartup(method string) error {
+	if isGatewayPreActivationOperation(method) {
+		return nil
+	}
+	lifecycle, ok := g.deps.(GatewayStartupLifecycle)
+	if !ok {
+		return nil
+	}
+	return lifecycle.RequireCoreActive()
 }
 
 const gatewayRuntimeCleanupTimeout = 3 * time.Second
@@ -483,14 +487,12 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if req.Method != protocol.MethodHandshake && !state.handshakeDone {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods")
 	}
-	route, ok := apicontract.RouteByMethod(req.Method)
+	_, ok := apicontract.RouteByMethod(req.Method)
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return responseForError(req.ID, err)
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		return responseForError(req.ID, err)
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return responseForError(req.ID, err)

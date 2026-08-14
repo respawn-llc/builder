@@ -9,7 +9,7 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { reportNonCancelledError, useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
@@ -37,6 +37,7 @@ import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterRow } from "./BoardFilterRow";
 import { BoardQueryProvider } from "./BoardQueryContext";
+import { completeBoardWorkflowLink } from "./boardWorkflowLinkCompletion";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 
@@ -48,11 +49,18 @@ export type BoardRouteProps = Readonly<{
 
 const emptyExpandedEmptyColumnIDs: ReadonlySet<string> = new Set();
 
+function boardDragDisabled(
+  actionsDisabled: boolean,
+  initiatingActionRunning: boolean,
+  workflowValidForTaskCreation: boolean,
+): boolean {
+  return actionsDisabled || initiatingActionRunning || !workflowValidForTaskCreation;
+}
+
 const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
   unsupported_destination: "board.moveBlockedUnsupportedDestination",
-  waiting_question: "board.moveBlockedWaitingQuestion",
   lifecycle_conflict: "board.moveBlockedLifecycle",
   context_session_unavailable: "board.moveBlockedContextSession",
   no_usable_transition: "board.moveBlockedNoUsableTransition",
@@ -211,8 +219,10 @@ function BoardContent({
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
+      reportNonCancelledError(error, (failure) => {
+        const body = errorMessage(failure);
+        push({ id, tone: "danger", title, body, durationMs: Infinity });
+      });
     },
     [push],
   );
@@ -240,11 +250,7 @@ function BoardContent({
     },
     [push, t],
   );
-  const {
-    actionsDisabled: initiatingActionsDisabled,
-    initiatingAction,
-    runCardAction,
-  } = useBoardInitiatingActionController({
+  const { initiatingAction, runCardAction } = useBoardInitiatingActionController({
     api,
     connected: connection.phase === "connected",
     moveErrorTitle: t("board.moveFailed"),
@@ -262,8 +268,12 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    initiatingActionsDisabled || resumeAction.actionsDisabled || manualMove.actionsDisabled;
-  const dragDisabled = actionsDisabled || !board.selectedWorkflow.validForTaskCreation;
+    connection.phase !== "connected" || initiatingAction.pending !== null || manualMove.actionsDisabled;
+  const dragDisabled = boardDragDisabled(
+    actionsDisabled,
+    initiatingAction.running,
+    board.selectedWorkflow.validForTaskCreation,
+  );
   const {
     activeDrag,
     autoScroll: dragAutoScroll,
@@ -522,6 +532,9 @@ function BoardContent({
     open({
       kind: "linkWorkflow",
       mode: "overlay",
+      onCompleted: async (completion) => {
+        await completeBoardWorkflowLink(navigation, board.projectID, completion);
+      },
       projectID: board.projectID,
       selectedWorkflowID: board.selectedWorkflow.id,
     });

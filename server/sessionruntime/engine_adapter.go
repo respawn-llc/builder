@@ -95,7 +95,6 @@ func cloneAgentRuntimeSettings(settings config.Settings) config.Settings {
 
 type authorityRuntimeOptions struct {
 	persistenceRoot   string
-	debug             bool
 	authManager       *auth.Manager
 	background        *shelltool.Manager
 	storeOptions      []session.StoreOption
@@ -112,7 +111,6 @@ type runtimeStoreAdmission struct {
 func newAuthorityRuntimeOptions(options AuthorityOptions) authorityRuntimeOptions {
 	return authorityRuntimeOptions{
 		persistenceRoot:   options.PersistenceRoot,
-		debug:             options.Debug,
 		authManager:       options.AuthManager,
 		background:        options.Background,
 		storeOptions:      append([]session.StoreOption(nil), options.StoreOptions...),

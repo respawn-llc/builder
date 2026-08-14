@@ -46,6 +46,10 @@ type SessionTranscriptTrustedService interface {
 	SubscribeSessionTranscriptValidated(ctx context.Context, req Validated[serverapi.TranscriptSubscribeRequest], sessionID runtimeids.SessionID) (serverapi.TranscriptSubscription, error)
 }
 
+type QuestionHistoryTrustedService interface {
+	SubscribeQuestionHistoryValidated(ctx context.Context, req Validated[serverapi.QuestionHistorySubscribeRequest]) (serverapi.QuestionHistorySubscription, error)
+}
+
 type WorkflowSubscriptionTrustedService interface {
 	SubscribeWorkflowValidated(ctx context.Context, req Validated[serverapi.WorkflowSubscribeRequest]) (serverapi.WorkflowSubscription, error)
 	SubscribeWorkflowProjectValidated(ctx context.Context, req Validated[serverapi.WorkflowProjectSubscribeRequest]) (serverapi.WorkflowProjectSubscription, error)

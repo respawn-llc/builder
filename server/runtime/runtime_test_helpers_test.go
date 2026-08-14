@@ -19,6 +19,7 @@ import (
 	shelltool "core/server/tools/shell"
 	"core/server/workflow"
 	"core/server/workflowruntime"
+	"core/shared/config"
 	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
@@ -401,6 +402,19 @@ func mustNewTestEngine(t *testing.T, store *session.Store, client llm.Client, re
 	t.Helper()
 	if cfg.Model == "" {
 		cfg.Model = "gpt-5"
+	}
+	if cfg.ContextWindowTokens <= 0 {
+		settings := config.DefaultOnboardingSettings()
+		if meta, ok := llm.LookupModelMetadata(cfg.Model); ok && meta.ContextWindowTokens > 0 {
+			settings.ModelContextWindow = meta.ContextWindowTokens
+		}
+		cfg.ContextWindowTokens = settings.ModelContextWindow
+	}
+	if cfg.AutoCompactTokenLimit <= 0 {
+		cfg.AutoCompactTokenLimit = cfg.ContextWindowTokens * 95 / 100
+	}
+	if cfg.EffectiveContextWindowPercent <= 0 || cfg.EffectiveContextWindowPercent > 100 {
+		cfg.EffectiveContextWindowPercent = 95
 	}
 	if cfg.CurrentNodeExecution != nil {
 		if cfg.CurrentNodeExecution.ScopeID.IsZero() {

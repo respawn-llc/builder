@@ -385,14 +385,20 @@ func (r WorkflowTaskApproveResponse) Validate() error {
 }
 
 func (r WorkflowTaskResumeResponse) Validate() error {
+	if r.Outcome == WorkflowExecutionTargetActionOutcomeNoOp {
+		if r.NoOp == nil || r.Applied != nil || r.SelectionRequired != nil {
+			return errors.New("resume action response no_op outcome requires only no_op payload")
+		}
+		return validateWorkflowTaskCurrentNodes(r.NoOp.CurrentNodes, "resume no-op payload")
+	}
 	if r.Outcome == WorkflowExecutionTargetActionOutcomeApplied {
-		if r.Applied == nil || r.SelectionRequired != nil {
+		if r.Applied == nil || r.NoOp != nil || r.SelectionRequired != nil {
 			return errors.New("resume action response applied outcome requires only applied payload")
 		}
 		return validateWorkflowTaskCurrentNodes(r.Applied.CurrentNodes, "resume applied payload")
 	}
 	if r.Outcome == WorkflowExecutionTargetActionOutcomeSelectionRequired {
-		if r.Applied != nil || r.SelectionRequired == nil {
+		if r.Applied != nil || r.NoOp != nil || r.SelectionRequired == nil {
 			return errors.New("resume action response selection_required outcome requires only selection requirement")
 		}
 		return r.SelectionRequired.Validate()

@@ -7,7 +7,7 @@
     "dev": "vite --config tooling/vite.config.ts --host 127.0.0.1",
     "dev:browser": "vite --config tooling/vite.config.ts --host 127.0.0.1 --open /",
     "build": "pnpm build:web",
-    "build:web": "node ./node_modules/typescript7/bin/tsc -b --pretty false && vite --config tooling/vite.config.ts build && node ../scripts/check-desktop-font-assets.mjs",
+    "build:web": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir ../.. --temp-dir .generated/protobuf/task protobuf:ts && node ./node_modules/typescript7/bin/tsc -b --pretty false && vite --config tooling/vite.config.ts build && node ../scripts/check-desktop-font-assets.mjs",
     "preview": "vite --config tooling/vite.config.ts preview",
     "lint": "eslint .",
     "typecheck": "node ./node_modules/typescript7/bin/tsc -b --pretty false",
@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@app/native-bridge": "workspace:*",
+    "@app/server-api-contract": "workspace:*",
     "@app/ui-kit": "workspace:*",
     "@fontsource-variable/montserrat": "5.3.0",
     "@hookform/resolvers": "^5.5.7",

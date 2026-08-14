@@ -14,7 +14,9 @@ const (
 	eventLogMigrationWorkspaceDir            = "events.jsonl.migration"
 	eventLogMigrationWorkspaceMarkerFile     = "kent-session-events-migration-v1"
 	eventLogMigrationStagedLogFile           = "staged-events.jsonl"
+	eventLogMigrationReadyMarkerFile         = "staged-events.ready"
 	eventLogMigrationWorkspaceMarkerContents = "kent.session.events.migration.workspace.v1\n"
+	eventLogMigrationReadyMarkerContents     = "kent.session.events.migration.ready.v1\n"
 )
 
 type eventLogMaterializationState uint8
@@ -159,6 +161,10 @@ func (s *Store) prepareEventLogMaterializationWithStableLockHeld() (
 	s.mu.Unlock()
 
 	workspace := eventLogMigrationWorkspacePath(sessionDir)
+	if err := recoverStagedCurrentEventLog(eventsPath, workspace); err != nil {
+		s.clearEventLogMaterialization()
+		return eventLogPreparationResult{}, false, err
+	}
 	if err := cleanupEventLogMigrationWorkspace(workspace); err != nil {
 		s.clearEventLogMaterialization()
 		return eventLogPreparationResult{}, false, err
@@ -265,7 +271,7 @@ func (s *Store) eventLogPreparationResultLocked() eventLogPreparationResult {
 	result := eventLogPreparationResult{
 		State:            snapshot.state,
 		Source:           snapshot.source,
-		SupportedVersion: EventLogVersionV1,
+		SupportedVersion: EventLogVersionV2,
 	}
 	if snapshot.foundVersion != nil {
 		version := *snapshot.foundVersion
@@ -290,16 +296,16 @@ func cleanupEventLogMigrationWorkspace(workspace string) error {
 	}
 	for _, entry := range entries {
 		switch entry.Name() {
-		case eventLogMigrationStagedLogFile:
+		case eventLogMigrationStagedLogFile, eventLogMigrationReadyMarkerFile:
 			if err := os.Remove(filepath.Join(workspace, entry.Name())); err != nil {
-				return fmt.Errorf("remove staged event log: %w", err)
+				return fmt.Errorf("remove event-log migration artifact %q: %w", entry.Name(), err)
 			}
 		}
 	}
 	return nil
 }
 
-func ensureOwnedEventLogMigrationWorkspace(workspace string) (resultErr error) {
+func ensureOwnedEventLogMigrationWorkspace(workspace string) error {
 	if _, err := readOwnedEventLogMigrationWorkspace(workspace); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -309,30 +315,13 @@ func ensureOwnedEventLogMigrationWorkspace(workspace string) (resultErr error) {
 		return fmt.Errorf("create event-log migration workspace %s: %w", workspace, err)
 	}
 	markerPath := filepath.Join(workspace, eventLogMigrationWorkspaceMarkerFile)
-	marker, err := os.OpenFile(markerPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("create event-log migration workspace marker: %w", err)
+	if err := writeEventLogMigrationMarker(
+		markerPath,
+		"event-log migration workspace marker",
+		eventLogMigrationWorkspaceMarkerContents,
+	); err != nil {
+		return err
 	}
-	defer func() {
-		if marker != nil {
-			if closeErr := marker.Close(); closeErr != nil {
-				resultErr = errors.Join(
-					resultErr,
-					fmt.Errorf("close event-log migration workspace marker: %w", closeErr),
-				)
-			}
-		}
-	}()
-	if _, err := writeAll(marker, []byte(eventLogMigrationWorkspaceMarkerContents)); err != nil {
-		return fmt.Errorf("write event-log migration workspace marker: %w", err)
-	}
-	if err := marker.Sync(); err != nil {
-		return fmt.Errorf("sync event-log migration workspace marker: %w", err)
-	}
-	if err := marker.Close(); err != nil {
-		return fmt.Errorf("close event-log migration workspace marker: %w", err)
-	}
-	marker = nil
 	if err := syncSessionDirectory(workspace); err != nil {
 		return err
 	}
@@ -380,35 +369,17 @@ func readOwnedEventLogMigrationWorkspace(workspace string) ([]os.DirEntry, error
 
 func validateEventLogMigrationWorkspaceMarker(workspace string) error {
 	markerPath := filepath.Join(workspace, eventLogMigrationWorkspaceMarkerFile)
-	info, err := os.Lstat(markerPath)
+	err := validateEventLogMigrationMarker(
+		markerPath,
+		"workspace marker",
+		eventLogMigrationWorkspaceMarkerContents,
+	)
 	if errors.Is(err, os.ErrNotExist) {
 		return invalidEventLogMigrationWorkspaceError{
 			Reason: "workspace marker is missing",
 		}
 	}
-	if err != nil {
-		return fmt.Errorf("stat event-log migration workspace marker: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return invalidEventLogMigrationWorkspaceError{
-			Reason: "workspace marker is not a regular file",
-		}
-	}
-	if info.Size() != int64(len(eventLogMigrationWorkspaceMarkerContents)) {
-		return invalidEventLogMigrationWorkspaceError{
-			Reason: "workspace marker has unexpected size",
-		}
-	}
-	content, err := os.ReadFile(markerPath)
-	if err != nil {
-		return fmt.Errorf("read event-log migration workspace marker: %w", err)
-	}
-	if !bytes.Equal(content, []byte(eventLogMigrationWorkspaceMarkerContents)) {
-		return invalidEventLogMigrationWorkspaceError{
-			Reason: "workspace marker has unexpected contents",
-		}
-	}
-	return nil
+	return err
 }
 
 func validateOwnedEventLogMigrationWorkspaceEntry(entry os.DirEntry) error {
@@ -421,12 +392,53 @@ func validateOwnedEventLogMigrationWorkspaceEntry(entry os.DirEntry) error {
 		if entry.Type().IsRegular() {
 			return nil
 		}
+	case eventLogMigrationReadyMarkerFile:
+		if entry.Type().IsRegular() {
+			return nil
+		}
 	default:
 		return unknownEventLogMigrationWorkspaceContentError{Name: entry.Name()}
 	}
 	return invalidEventLogMigrationWorkspaceError{
 		Reason: fmt.Sprintf("owned artifact %q has unexpected type %s", entry.Name(), entry.Type()),
 	}
+}
+
+func recoverStagedCurrentEventLog(eventsPath, workspace string) error {
+	entries, err := readOwnedEventLogMigrationWorkspace(workspace)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	staged := false
+	ready := false
+	for _, entry := range entries {
+		switch entry.Name() {
+		case eventLogMigrationStagedLogFile:
+			staged = true
+		case eventLogMigrationReadyMarkerFile:
+			ready = true
+		}
+	}
+	if !staged || !ready {
+		return nil
+	}
+	if err := validateStagedCurrentEventLogReady(workspace); err != nil {
+		return err
+	}
+	stagePath := filepath.Join(workspace, eventLogMigrationStagedLogFile)
+	if _, err := openCurrentEventLog(stagePath, currentEventLogReadOnly); err != nil {
+		return fmt.Errorf("validate staged event log: %w", err)
+	}
+	if err := atomicallyReplaceEventLog(stagePath, eventsPath); err != nil {
+		return err
+	}
+	if err := syncSessionDirectory(filepath.Dir(eventsPath)); err != nil {
+		return err
+	}
+	return removeOwnedEventLogMigrationWorkspace(workspace)
 }
 
 func installCurrentEventLog(
@@ -480,6 +492,9 @@ func installCurrentEventLog(
 	if _, err := openCurrentEventLog(stagePath, currentEventLogReadOnly); err != nil {
 		return fmt.Errorf("validate staged event log: %w", err)
 	}
+	if err := markStagedCurrentEventLogReady(workspace); err != nil {
+		return err
+	}
 	if err := atomicallyReplaceEventLog(stagePath, eventsPath); err != nil {
 		return err
 	}
@@ -490,6 +505,93 @@ func installCurrentEventLog(
 	}
 	if err := removeOwnedEventLogMigrationWorkspace(workspace); err != nil {
 		return err
+	}
+	return nil
+}
+
+func markStagedCurrentEventLogReady(workspace string) error {
+	path := filepath.Join(workspace, eventLogMigrationReadyMarkerFile)
+	if err := writeEventLogMigrationMarker(
+		path,
+		"staged event-log ready marker",
+		eventLogMigrationReadyMarkerContents,
+	); err != nil {
+		return err
+	}
+	if err := syncSessionDirectory(workspace); err != nil {
+		return fmt.Errorf("sync staged event-log ready marker directory: %w", err)
+	}
+	return nil
+}
+
+func validateStagedCurrentEventLogReady(workspace string) error {
+	path := filepath.Join(workspace, eventLogMigrationReadyMarkerFile)
+	return validateEventLogMigrationMarker(
+		path,
+		"staged event-log ready marker",
+		eventLogMigrationReadyMarkerContents,
+	)
+}
+
+func writeEventLogMigrationMarker(
+	path string,
+	description string,
+	contents string,
+) (resultErr error) {
+	marker, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", description, err)
+	}
+	defer func() {
+		if marker != nil {
+			if closeErr := marker.Close(); closeErr != nil {
+				resultErr = errors.Join(
+					resultErr,
+					fmt.Errorf("close %s: %w", description, closeErr),
+				)
+			}
+		}
+	}()
+	if _, err := writeAll(marker, []byte(contents)); err != nil {
+		return fmt.Errorf("write %s: %w", description, err)
+	}
+	if err := marker.Sync(); err != nil {
+		return fmt.Errorf("sync %s: %w", description, err)
+	}
+	if err := marker.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", description, err)
+	}
+	marker = nil
+	return nil
+}
+
+func validateEventLogMigrationMarker(
+	path string,
+	description string,
+	contents string,
+) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", description, err)
+	}
+	if !info.Mode().IsRegular() {
+		return invalidEventLogMigrationWorkspaceError{
+			Reason: description + " is not a regular file",
+		}
+	}
+	if info.Size() != int64(len(contents)) {
+		return invalidEventLogMigrationWorkspaceError{
+			Reason: description + " has unexpected size",
+		}
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", description, err)
+	}
+	if !bytes.Equal(content, []byte(contents)) {
+		return invalidEventLogMigrationWorkspaceError{
+			Reason: description + " has unexpected contents",
+		}
 	}
 	return nil
 }
@@ -588,16 +690,16 @@ func classifyEventLogHeader(
 				Reason: malformedEventLogHeaderUnexpectedContract,
 			}
 	}
-	if version > EventLogVersionV1 {
+	if version > EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
 				source:       eventLogSourceNewer,
 				foundVersion: &version,
 			}, UnsupportedEventLogVersionError{
 				FoundVersion:     version,
-				SupportedVersion: EventLogVersionV1,
+				SupportedVersion: EventLogVersionV2,
 			}
 	}
-	if version != EventLogVersionV1 {
+	if version != EventLogVersionV1 && version != EventLogVersionV2 {
 		return &eventLogSourceClassificationResult{
 				source:       eventLogSourceMalformed,
 				foundVersion: &version,

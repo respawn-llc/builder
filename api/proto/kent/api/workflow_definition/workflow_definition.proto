@@ -1,0 +1,2489 @@
+syntax = "proto3";
+
+package kent.api.workflow_definition;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/project/project.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/workflow_definition;workflowdefinitionpb";
+
+enum NodeKind {
+  WORKFLOW_NODE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_NODE_KIND_START = 1;
+  WORKFLOW_NODE_KIND_AGENT = 2;
+  WORKFLOW_NODE_KIND_SCRIPT = 3;
+  WORKFLOW_NODE_KIND_JOIN = 4;
+  WORKFLOW_NODE_KIND_TERMINAL = 5;
+}
+
+enum ValidationMode {
+  WORKFLOW_VALIDATION_MODE_UNSPECIFIED = 0;
+  WORKFLOW_VALIDATION_MODE_DRAFT = 1;
+  WORKFLOW_VALIDATION_MODE_TASK_CREATION = 2;
+  WORKFLOW_VALIDATION_MODE_EXECUTION = 3;
+}
+
+enum ProjectLinkDefaultMode {
+  WORKFLOW_PROJECT_LINK_DEFAULT_MODE_UNSPECIFIED = 0;
+  WORKFLOW_PROJECT_LINK_DEFAULT_MODE_NEVER = 1;
+  WORKFLOW_PROJECT_LINK_DEFAULT_MODE_ALWAYS = 2;
+  WORKFLOW_PROJECT_LINK_DEFAULT_MODE_IF_PROJECT_HAS_NONE = 3;
+}
+
+enum ExecutionTargetMode {
+  WORKFLOW_EXECUTION_TARGET_MODE_UNSPECIFIED = 0;
+  WORKFLOW_EXECUTION_TARGET_MODE_NONE = 1;
+  WORKFLOW_EXECUTION_TARGET_MODE_HEAD = 2;
+  WORKFLOW_EXECUTION_TARGET_MODE_DEFAULT_BRANCH = 3;
+  WORKFLOW_EXECUTION_TARGET_MODE_CUSTOM_REF = 4;
+  WORKFLOW_EXECUTION_TARGET_MODE_ASK_ON_FIRST_EXECUTION = 5;
+}
+
+enum CompletionMode {
+  WORKFLOW_COMPLETION_MODE_UNSPECIFIED = 0;
+  WORKFLOW_COMPLETION_MODE_AUTO = 1;
+  WORKFLOW_COMPLETION_MODE_STRUCTURED_OUTPUT = 2;
+  WORKFLOW_COMPLETION_MODE_TOOL = 3;
+  WORKFLOW_COMPLETION_MODE_SHELL_COMMAND = 4;
+  WORKFLOW_COMPLETION_MODE_UNSTRUCTURED_OUTPUT = 5;
+}
+
+enum AssigneeSelection {
+  WORKFLOW_ASSIGNEE_SELECTION_UNSPECIFIED = 0;
+  WORKFLOW_ASSIGNEE_SELECTION_CONFIGURED = 1;
+  WORKFLOW_ASSIGNEE_SELECTION_PREVIOUS_NODE = 2;
+}
+
+enum ThinkingSelection {
+  WORKFLOW_THINKING_SELECTION_UNSPECIFIED = 0;
+  WORKFLOW_THINKING_SELECTION_CONFIGURED = 1;
+  WORKFLOW_THINKING_SELECTION_PREVIOUS_NODE = 2;
+}
+
+enum ContextMode {
+  WORKFLOW_CONTEXT_MODE_UNSPECIFIED = 0;
+  WORKFLOW_CONTEXT_MODE_NEW_SESSION = 1;
+  WORKFLOW_CONTEXT_MODE_CONTINUE_SESSION = 2;
+  WORKFLOW_CONTEXT_MODE_COMPACT_AND_CONTINUE_SESSION = 3;
+}
+
+enum ContextSourceKind {
+  WORKFLOW_CONTEXT_SOURCE_KIND_UNSPECIFIED = 0;
+  WORKFLOW_CONTEXT_SOURCE_KIND_IMMEDIATE_SOURCE = 1;
+  WORKFLOW_CONTEXT_SOURCE_KIND_SELECTED_NODE = 2;
+  WORKFLOW_CONTEXT_SOURCE_KIND_PREVIOUS_TARGET = 3;
+  WORKFLOW_CONTEXT_SOURCE_KIND_PREVIOUS_TARGET_OR_NEW = 4;
+}
+
+enum ParameterPurpose {
+  WORKFLOW_PARAMETER_PURPOSE_UNSPECIFIED = 0;
+  WORKFLOW_PARAMETER_PURPOSE_ORDINARY = 1;
+  WORKFLOW_PARAMETER_PURPOSE_TARGET_ASSIGNEE = 2;
+  WORKFLOW_PARAMETER_PURPOSE_TARGET_THINKING = 3;
+}
+
+enum SelectorApplicabilityReason {
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_UNSPECIFIED = 0;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_ELIGIBLE = 1;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_TOPOLOGY = 2;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_CONTEXT_SOURCE = 3;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_NO_CALLABLE_ROLES = 4;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_NO_THINKING_SUPPORT = 5;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_UNAVAILABLE_CONFIGURATION = 6;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_SOLE_CALLABLE_ROLE = 7;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_NO_THINKING_LEVELS = 8;
+  WORKFLOW_SELECTOR_APPLICABILITY_REASON_SOLE_THINKING_LEVEL = 9;
+}
+
+enum GraphEntityType {
+  WORKFLOW_GRAPH_ENTITY_TYPE_UNSPECIFIED = 0;
+  WORKFLOW_GRAPH_ENTITY_TYPE_EDGE = 1;
+  WORKFLOW_GRAPH_ENTITY_TYPE_NODE = 2;
+  WORKFLOW_GRAPH_ENTITY_TYPE_NODE_GROUP = 3;
+  WORKFLOW_GRAPH_ENTITY_TYPE_TRANSITION_GROUP = 4;
+}
+
+enum RequestValidationCode {
+  REQUEST_VALIDATION_CODE_UNSPECIFIED = 0;
+  REQUEST_VALIDATION_CODE_REQUIRED = 1;
+  REQUEST_VALIDATION_CODE_INVALID_KEY = 2;
+  REQUEST_VALIDATION_CODE_INVALID_VALUE = 3;
+  REQUEST_VALIDATION_CODE_INVALID_MODE = 4;
+  REQUEST_VALIDATION_CODE_TOO_LONG = 5;
+}
+
+enum ValidationErrorCode {
+  VALIDATION_ERROR_CODE_UNSPECIFIED = 0;
+  VALIDATION_ERROR_CODE_MISSING_WORKFLOW_ID = 1;
+  VALIDATION_ERROR_CODE_MISSING_NODE_ID = 2;
+  VALIDATION_ERROR_CODE_DUPLICATE_NODE_ID = 3;
+  VALIDATION_ERROR_CODE_MISSING_NODE_KEY = 4;
+  VALIDATION_ERROR_CODE_INVALID_NODE_KEY = 5;
+  VALIDATION_ERROR_CODE_DUPLICATE_NODE_KEY = 6;
+  VALIDATION_ERROR_CODE_MISSING_START_NODE = 7;
+  VALIDATION_ERROR_CODE_MULTIPLE_START_NODES = 8;
+  VALIDATION_ERROR_CODE_INVALID_START_NODE = 9;
+  VALIDATION_ERROR_CODE_INVALID_START_OUTGOING_SHAPE = 10;
+  VALIDATION_ERROR_CODE_TERMINAL_HAS_OUTGOING_EDGE = 11;
+  VALIDATION_ERROR_CODE_TERMINAL_IS_EXECUTABLE = 12;
+  VALIDATION_ERROR_CODE_JOIN_IS_EXECUTABLE = 13;
+  VALIDATION_ERROR_CODE_INVALID_JOIN_NODE = 14;
+  VALIDATION_ERROR_CODE_INVALID_JOIN_OUTGOING_SHAPE = 15;
+  VALIDATION_ERROR_CODE_NODE_UNREACHABLE_FROM_START = 16;
+  VALIDATION_ERROR_CODE_NON_TERMINAL_CANNOT_REACH_TERMINAL = 17;
+  VALIDATION_ERROR_CODE_MISSING_TRANSITION_GROUP_ID = 18;
+  VALIDATION_ERROR_CODE_DUPLICATE_TRANSITION_GROUP_ID = 19;
+  VALIDATION_ERROR_CODE_EMPTY_TRANSITION_GROUP = 20;
+  VALIDATION_ERROR_CODE_MISSING_TRANSITION_ID = 21;
+  VALIDATION_ERROR_CODE_INVALID_TRANSITION_ID = 22;
+  VALIDATION_ERROR_CODE_DUPLICATE_TRANSITION_ID = 23;
+  VALIDATION_ERROR_CODE_EDGE_TRANSITION_GROUP_MISSING = 24;
+  VALIDATION_ERROR_CODE_MISSING_EDGE_ID = 25;
+  VALIDATION_ERROR_CODE_DUPLICATE_EDGE_ID = 26;
+  VALIDATION_ERROR_CODE_MISSING_EDGE_KEY = 27;
+  VALIDATION_ERROR_CODE_INVALID_EDGE_KEY = 28;
+  VALIDATION_ERROR_CODE_DUPLICATE_EDGE_KEY = 29;
+  VALIDATION_ERROR_CODE_EDGE_TARGET_MISSING = 30;
+  VALIDATION_ERROR_CODE_CROSS_WORKFLOW_REFERENCE = 31;
+  VALIDATION_ERROR_CODE_INVALID_OUTPUT_FIELD = 32;
+  VALIDATION_ERROR_CODE_DUPLICATE_OUTPUT_FIELD = 33;
+  VALIDATION_ERROR_CODE_OUTPUT_FIELD_DESCRIPTION_REQUIRED = 34;
+  VALIDATION_ERROR_CODE_OUTPUT_SCHEMA_TOO_LARGE = 35;
+  VALIDATION_ERROR_CODE_INVALID_INPUT_FIELD = 36;
+  VALIDATION_ERROR_CODE_DUPLICATE_INPUT_FIELD = 37;
+  VALIDATION_ERROR_CODE_INPUT_FIELD_DESCRIPTION_REQUIRED = 38;
+  VALIDATION_ERROR_CODE_INPUT_SCHEMA_TOO_LARGE = 39;
+  VALIDATION_ERROR_CODE_INVALID_PARAMETER = 40;
+  VALIDATION_ERROR_CODE_DUPLICATE_PARAMETER = 41;
+  VALIDATION_ERROR_CODE_PARAMETER_DESCRIPTION_REQUIRED = 42;
+  VALIDATION_ERROR_CODE_PARAMETER_SCHEMA_TOO_LARGE = 43;
+  VALIDATION_ERROR_CODE_TRANSITION_PROMPT_REQUIRED = 44;
+  VALIDATION_ERROR_CODE_TRANSITION_PROMPT_FORBIDDEN = 45;
+  VALIDATION_ERROR_CODE_UNKNOWN_OUTPUT_REQUIREMENT = 46;
+  VALIDATION_ERROR_CODE_INVALID_INPUT_BINDING = 47;
+  VALIDATION_ERROR_CODE_INVALID_TEMPLATE_PLACEHOLDER = 48;
+  VALIDATION_ERROR_CODE_PROVISION_FIELD_OVERLAP = 49;
+  VALIDATION_ERROR_CODE_MISSING_JOIN_INPUT_PROVIDER = 50;
+  VALIDATION_ERROR_CODE_DUPLICATE_JOIN_INPUT_PROVIDER = 51;
+  VALIDATION_ERROR_CODE_INVALID_JOIN_INPUT_PROVIDER = 52;
+  VALIDATION_ERROR_CODE_INVALID_FIRST_NODE_INPUT = 53;
+  VALIDATION_ERROR_CODE_INVALID_CONTEXT_MODE = 54;
+  VALIDATION_ERROR_CODE_INVALID_ASSIGNEE_SELECTION = 55;
+  VALIDATION_ERROR_CODE_INVALID_THINKING_SELECTION = 56;
+  VALIDATION_ERROR_CODE_INVALID_PARAMETER_PURPOSE = 57;
+  VALIDATION_ERROR_CODE_MISSING_PROTECTED_PARAMETER = 58;
+  VALIDATION_ERROR_CODE_DUPLICATE_PROTECTED_PARAMETER = 59;
+  VALIDATION_ERROR_CODE_INVALID_CONTEXT_SOURCE = 60;
+  VALIDATION_ERROR_CODE_INVALID_CONTINUE_SESSION_ROLE = 61;
+  VALIDATION_ERROR_CODE_ASSIGNEE_SELECTION_INAPPLICABLE = 62;
+  VALIDATION_ERROR_CODE_ASSIGNEE_SELECTION_UNAVAILABLE = 63;
+  VALIDATION_ERROR_CODE_THINKING_SELECTION_INAPPLICABLE = 64;
+  VALIDATION_ERROR_CODE_THINKING_SELECTION_UNAVAILABLE = 65;
+  VALIDATION_ERROR_CODE_INVALID_FANOUT_JOIN_TOPOLOGY = 66;
+  VALIDATION_ERROR_CODE_INVALID_NODE_GROUP = 67;
+  VALIDATION_ERROR_CODE_UNSUPPORTED_CONTEXT_MODE = 68;
+  VALIDATION_ERROR_CODE_UNSUPPORTED_APPROVAL_EXECUTION = 69;
+  VALIDATION_ERROR_CODE_UNSUPPORTED_JOIN_EXECUTION = 70;
+  VALIDATION_ERROR_CODE_UNSUPPORTED_JOIN_BINDING = 71;
+  VALIDATION_ERROR_CODE_AGENT_ROLE_REQUIRED = 72;
+  VALIDATION_ERROR_CODE_AGENT_ROLE_MISSING = 73;
+  VALIDATION_ERROR_CODE_AGENT_ROLE_REQUIRED_TOOL_DISABLED = 74;
+  VALIDATION_ERROR_CODE_INVALID_NODE_KIND = 75;
+  VALIDATION_ERROR_CODE_INVALID_DISPLAY_NAME = 76;
+  VALIDATION_ERROR_CODE_INVALID_EXECUTION_TARGET_POLICY = 77;
+  VALIDATION_ERROR_CODE_EXECUTION_TARGET_CUSTOM_REF_REQUIRED = 78;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_MISSING = 79;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_RELATIVE_CHECK_SKIPPED = 80;
+  VALIDATION_ERROR_CODE_SCRIPT_WORKTREE_ROOT_MISSING = 81;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_NOT_FOUND = 82;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_INACCESSIBLE = 83;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_IS_DIRECTORY = 84;
+  VALIDATION_ERROR_CODE_SCRIPT_PATH_NOT_EXECUTABLE = 85;
+}
+
+enum ProjectEventResource {
+  WORKFLOW_PROJECT_EVENT_RESOURCE_UNSPECIFIED = 0;
+  WORKFLOW_PROJECT_EVENT_RESOURCE_WORKFLOW = 1;
+  WORKFLOW_PROJECT_EVENT_RESOURCE_WORKFLOW_LINK = 2;
+  WORKFLOW_PROJECT_EVENT_RESOURCE_TASK = 3;
+  WORKFLOW_PROJECT_EVENT_RESOURCE_LABEL = 4;
+}
+
+enum ProjectEventAction {
+  WORKFLOW_PROJECT_EVENT_ACTION_UNSPECIFIED = 0;
+  WORKFLOW_PROJECT_EVENT_ACTION_CREATED = 1;
+  WORKFLOW_PROJECT_EVENT_ACTION_UPDATED = 2;
+  WORKFLOW_PROJECT_EVENT_ACTION_RENAMED = 3;
+  WORKFLOW_PROJECT_EVENT_ACTION_REORDERED = 4;
+  WORKFLOW_PROJECT_EVENT_ACTION_DELETED = 5;
+  WORKFLOW_PROJECT_EVENT_ACTION_GRAPH_SAVED = 6;
+  WORKFLOW_PROJECT_EVENT_ACTION_LINKED = 7;
+  WORKFLOW_PROJECT_EVENT_ACTION_DEFAULT_CHANGED = 8;
+  WORKFLOW_PROJECT_EVENT_ACTION_UNLINKED = 9;
+  WORKFLOW_PROJECT_EVENT_ACTION_STARTED = 10;
+  WORKFLOW_PROJECT_EVENT_ACTION_INTERRUPTED = 11;
+  WORKFLOW_PROJECT_EVENT_ACTION_RESUMED = 12;
+  WORKFLOW_PROJECT_EVENT_ACTION_APPROVED = 13;
+  WORKFLOW_PROJECT_EVENT_ACTION_MOVED = 14;
+  WORKFLOW_PROJECT_EVENT_ACTION_CANCELED = 15;
+  WORKFLOW_PROJECT_EVENT_ACTION_COMPLETED = 16;
+  WORKFLOW_PROJECT_EVENT_ACTION_COMMENT_ADDED = 17;
+  WORKFLOW_PROJECT_EVENT_ACTION_COMMENT_UPDATED = 18;
+  WORKFLOW_PROJECT_EVENT_ACTION_COMMENT_DELETED = 19;
+  WORKFLOW_PROJECT_EVENT_ACTION_QUESTION_WAITING = 20;
+  WORKFLOW_PROJECT_EVENT_ACTION_QUESTION_CLEARED = 21;
+  WORKFLOW_PROJECT_EVENT_ACTION_LABELS_CHANGED = 22;
+  WORKFLOW_PROJECT_EVENT_ACTION_DEPENDENCIES_CHANGED = 23;
+}
+
+message RequestValidationDetails {
+  RequestValidationCode code = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string field = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message ExecutionTargetConfiguration {
+  ExecutionTargetMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string custom_ref = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.execution_target_custom_ref_trimmed"
+      message: "custom_ref must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.execution_target_configuration"
+    message: "custom_ref is required only for custom_ref mode"
+    expression:
+      "(this.mode == 4 && has(this.custom_ref)) || "
+      "(this.mode != 4 && !has(this.custom_ref))"
+  };
+}
+
+message DraftExecutionTargetConfiguration {
+  ExecutionTargetMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string custom_ref = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.draft_execution_target_custom_ref_trimmed"
+      message: "custom_ref must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.draft_execution_target_configuration"
+    message: "custom_ref is allowed only for custom_ref mode"
+    expression: "this.mode == 4 || !has(this.custom_ref)"
+  };
+}
+
+message WorkflowListProjectLink {
+  bool default = 1;
+}
+
+message WorkflowRecord {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 120
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.workflow_record_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string description = 3;
+  int64 version = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  ExecutionTargetConfiguration execution_target_policy = 5 [(buf.validate.field).required = true];
+  optional WorkflowListProjectLink project_link = 6;
+}
+
+message OutputField {
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 64
+  }];
+  string description = 2 [(buf.validate.field).string.max_len = 1000];
+}
+
+message Parameter {
+  string key = 1 [
+    (buf.validate.field).string.(kent.api.shared.workflow_key) = true,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.parameter_key_reserved"
+      message: "key is reserved"
+      expression: "this != 'commentary' && this != 'transition'"
+    }
+  ];
+  string description = 2 [(buf.validate.field).string.max_len = 1000];
+  ParameterPurpose purpose = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.ordinary_parameter_description"
+    message: "ordinary parameters require a non-blank description"
+    expression: "this.purpose != 1 || this.description.trim() != ''"
+  };
+}
+
+message JoinInputProvider {
+  string input_name = 1 [(buf.validate.field).string.min_len = 1];
+  string provider_edge_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message DraftJoinInputProvider {
+  string input_name = 1;
+  string provider_edge_id = 2;
+}
+
+message OutputRequirement {
+  string field_name = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message InputBinding {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+  string source = 2 [(buf.validate.field).string.min_len = 1];
+  string field = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+message ContextSource {
+  ContextSourceKind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string node_key = 2 [(buf.validate.field).string.(kent.api.shared.workflow_key) = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.context_source"
+    message: "selected_node requires node_key and other context sources forbid it"
+    expression:
+      "(this.kind == 2 && has(this.node_key)) || "
+      "(this.kind != 2 && !has(this.node_key))"
+  };
+}
+
+message WorkflowNodeGroup {
+  string group_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string group_key = 3 [(buf.validate.field).string.min_len = 1];
+  string display_name = 4 [(buf.validate.field).string.min_len = 1];
+  int32 sort_order = 5;
+}
+
+message WorkflowNode {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string key = 3 [(buf.validate.field).string.min_len = 1];
+  NodeKind kind = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string display_name = 5 [(buf.validate.field).string.min_len = 1];
+  optional string group_id = 6 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string group_key = 7;
+  optional string subagent_role = 8 [(buf.validate.field).string.min_len = 1];
+  optional CompletionMode completion_mode = 9 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string script_path = 10 [(buf.validate.field).string.min_len = 1];
+  repeated JoinInputProvider join_input_providers = 11 [(buf.validate.field).repeated.max_items = 200];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.workflow_node_kind_fields"
+    message: "node-specific fields must match the node kind"
+    expression:
+      "(this.kind == 2 || (!has(this.completion_mode) && !has(this.subagent_role))) && "
+      "(this.kind == 3 || !has(this.script_path)) && "
+      "(this.kind == 4 || size(this.join_input_providers) == 0)"
+  };
+}
+
+message WorkflowTransitionGroup {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string source_node_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string transition_id = 4 [(buf.validate.field).string.min_len = 1];
+  string display_name = 5 [(buf.validate.field).string.min_len = 1];
+  string description = 6 [(buf.validate.field).string.max_len = 1000];
+}
+
+message WorkflowEdge {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string transition_group_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string key = 4 [(buf.validate.field).string.min_len = 1];
+  string target_node_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  AssigneeSelection assignee_selection = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ThinkingSelection thinking_selection = 7 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool requires_approval = 8;
+  ContextMode context_mode = 9 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ContextSource context_source = 10 [(buf.validate.field).required = true];
+  string prompt_template = 11;
+  repeated Parameter parameters = 12 [(buf.validate.field).repeated.max_items = 200];
+  repeated InputBinding input_bindings = 13 [(buf.validate.field).repeated.max_items = 200];
+  repeated OutputRequirement output_requirements = 14 [(buf.validate.field).repeated.max_items = 200];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.edge_parameter_keys_unique"
+    message: "parameter keys and protected purposes must be unique"
+    expression:
+      "this.parameters.map(parameter, parameter.key).unique() && "
+      "this.parameters.filter(parameter, parameter.purpose != 1).map(parameter, parameter.purpose).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.edge_selection_parameters"
+    message: "previous-node selectors require their protected parameters"
+    expression:
+      "(this.assignee_selection != 2 || this.parameters.exists(parameter, parameter.purpose == 2)) && "
+      "(this.thinking_selection != 2 || this.parameters.exists(parameter, parameter.purpose == 3))"
+  };
+}
+
+message SelectorApplicability {
+  bool available = 1;
+  bool parameter_visible = 2;
+  SelectorApplicabilityReason reason = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.selector_applicability"
+    message: "selector applicability flags must match the reason"
+    expression:
+      "(this.reason == 1 && this.available && this.parameter_visible) || "
+      "(this.reason in [7, 8, 9] && this.available && !this.parameter_visible) || "
+      "(this.reason in [2, 3, 4, 5, 6] && !this.available)"
+  };
+}
+
+message DerivedNodeWiring {
+  string node_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated OutputField possible_provision_fields = 2 [(buf.validate.field).repeated.max_items = 200];
+  repeated OutputField join_output_fields = 3 [(buf.validate.field).repeated.max_items = 200];
+}
+
+message DerivedTransitionGroupWiring {
+  string transition_group_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated OutputField required_provision_fields = 2 [(buf.validate.field).repeated.max_items = 200];
+}
+
+message DerivedEdgeWiring {
+  string edge_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated InputBinding input_bindings = 2 [(buf.validate.field).repeated.max_items = 200];
+  repeated OutputField required_provision_fields = 3 [(buf.validate.field).repeated.max_items = 200];
+  repeated OutputField required_provider_fields = 4 [(buf.validate.field).repeated.max_items = 200];
+  SelectorApplicability assignee_selection_applicability = 5 [(buf.validate.field).required = true];
+  SelectorApplicability thinking_selection_applicability = 6 [(buf.validate.field).required = true];
+}
+
+message DerivedWiring {
+  repeated DerivedNodeWiring nodes = 1 [(buf.validate.field).repeated.max_items = 200];
+  repeated DerivedTransitionGroupWiring transition_groups = 2 [(buf.validate.field).repeated.max_items = 1000];
+  repeated DerivedEdgeWiring edges = 3 [(buf.validate.field).repeated.max_items = 1000];
+  repeated WorkflowValidationError diagnostics = 4;
+}
+
+message WorkflowDefinition {
+  repeated WorkflowNodeGroup node_groups = 1 [(buf.validate.field).repeated.max_items = 200];
+  WorkflowRecord workflow = 2 [(buf.validate.field).required = true];
+  repeated WorkflowNode nodes = 3 [(buf.validate.field).repeated.max_items = 200];
+  repeated WorkflowTransitionGroup transition_groups = 4 [(buf.validate.field).repeated.max_items = 1000];
+  repeated WorkflowEdge edges = 5 [(buf.validate.field).repeated.max_items = 1000];
+  DerivedWiring derived_wiring = 6 [(buf.validate.field).required = true];
+}
+
+message GraphDraftNodeGroup {
+  string id = 1;
+  string key = 2;
+  string display_name = 3;
+}
+
+message GraphDraftNode {
+  string id = 1;
+  string key = 2;
+  NodeKind kind = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string display_name = 4;
+  optional string group_id = 5 [(buf.validate.field).string.min_len = 1];
+  string group_key = 6;
+  optional string subagent_role = 7 [(buf.validate.field).string.min_len = 1];
+  optional CompletionMode completion_mode = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional string script_path = 9 [(buf.validate.field).string.min_len = 1];
+  repeated DraftJoinInputProvider join_input_providers = 10 [(buf.validate.field).repeated.max_items = 200];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.draft_node_kind_fields"
+    message: "node-specific fields must match the node kind"
+    expression:
+      "(this.kind == 2 || (!has(this.completion_mode) && !has(this.subagent_role))) && "
+      "(this.kind == 3 || !has(this.script_path)) && "
+      "(this.kind == 4 || size(this.join_input_providers) == 0)"
+  };
+}
+
+message GraphDraftTransitionGroup {
+  string id = 1;
+  string source_node_id = 2;
+  string transition_id = 3;
+  string display_name = 4;
+  string description = 5 [(buf.validate.field).string.max_len = 1000];
+}
+
+message GraphDraftEdge {
+  string id = 1;
+  string transition_group_id = 2;
+  string key = 3;
+  string target_node_id = 4;
+  AssigneeSelection assignee_selection = 5 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ThinkingSelection thinking_selection = 6 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  bool requires_approval = 7;
+  ContextMode context_mode = 8 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ContextSource context_source = 9 [(buf.validate.field).required = true];
+  string prompt_template = 10;
+  repeated Parameter parameters = 11 [(buf.validate.field).repeated.max_items = 200];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.draft_edge_parameter_keys_unique"
+    message: "parameter keys and protected purposes must be unique"
+    expression:
+      "this.parameters.map(parameter, parameter.key).unique() && "
+      "this.parameters.filter(parameter, parameter.purpose != 1).map(parameter, parameter.purpose).unique()"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.draft_edge_selection_parameters"
+    message: "previous-node selectors require their protected parameters"
+    expression:
+      "(this.assignee_selection != 2 || this.parameters.exists(parameter, parameter.purpose == 2)) && "
+      "(this.thinking_selection != 2 || this.parameters.exists(parameter, parameter.purpose == 3))"
+  };
+}
+
+message GraphDraft {
+  repeated GraphDraftNodeGroup node_groups = 1 [(buf.validate.field).repeated.max_items = 200];
+  repeated GraphDraftNode nodes = 2 [(buf.validate.field).repeated.max_items = 200];
+  repeated GraphDraftTransitionGroup transition_groups = 3 [(buf.validate.field).repeated.max_items = 1000];
+  repeated GraphDraftEdge edges = 4 [(buf.validate.field).repeated.max_items = 1000];
+}
+
+message GraphMetadata {
+  string name = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 120
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.graph_metadata_name"
+      message: "name must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  string description = 2 [
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.graph_metadata_description"
+      message: "description must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional DraftExecutionTargetConfiguration execution_target_policy = 3;
+}
+
+message GraphSaveConfirmation {
+  int64 expected_removed_node_group_count = 1 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_removed_node_count = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_removed_transition_group_count = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_removed_edge_count = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_node_task_reference_count = 5 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_edge_task_reference_count = 6 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message GraphEntityReference {
+  GraphEntityType entity_type = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string entity_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message GraphSaveImpact {
+  int64 removed_node_group_count = 1 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 removed_node_count = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 removed_transition_group_count = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 removed_edge_count = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  repeated GraphEntityReference removed_entities = 5;
+  int64 node_task_reference_count = 6 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 edge_task_reference_count = 7 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 active_current_node_count = 8 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 pending_approval_count = 9 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 start_node_change_count = 10 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 last_terminal_change_count = 11 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 task_referenced_node_kind_change_count = 12 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message GraphSaveBlocker {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  int64 count = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  repeated GraphEntityReference affected_entities = 4;
+}
+
+message WorkflowValidationErrorDetails {
+  string field_name = 1;
+  string input_name = 2;
+  string placeholder = 3;
+  optional string provider_edge_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string role = 5 [(buf.validate.field).string.min_len = 1];
+  optional string required_tool = 6 [(buf.validate.field).string.min_len = 1];
+}
+
+message WorkflowValidationError {
+  ValidationErrorCode code = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  optional string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional string node_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string transition_group_id = 5 [(buf.validate.field).string.min_len = 1];
+  optional string edge_id = 6 [(buf.validate.field).string.min_len = 1];
+  optional WorkflowValidationErrorDetails details = 7;
+  repeated string related_ids = 8 [(buf.validate.field).repeated.items.string.min_len = 1];
+  bool blocks_context = 9;
+}
+
+message ValidateResponse {
+  bool valid = 1;
+  repeated WorkflowValidationError errors = 2;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.validate_response"
+    message: "valid must be false exactly when a blocking error is present"
+    expression: "this.valid == !this.errors.exists(error, error.blocks_context)"
+  };
+}
+
+message ModeValidationResult {
+  ValidationMode mode = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ValidateResponse result = 2 [(buf.validate.field).required = true];
+}
+
+message CreateRequest {
+  string name = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 120
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.create_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string description = 2;
+}
+
+message CreateSuccess {
+  WorkflowRecord workflow = 1 [(buf.validate.field).required = true];
+}
+
+message CreateAndLinkProjectRequest {
+  string name = 1 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 120
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.create_link_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string description = 2;
+  string project_id = 3 [(buf.validate.field).string.min_len = 1];
+  optional ProjectLinkDefaultMode default_policy = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ProjectWorkflowLink {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  bool default = 4;
+}
+
+message CreateAndLinkProjectSuccess {
+  WorkflowRecord workflow = 1 [(buf.validate.field).required = true];
+  ProjectWorkflowLink link = 2 [(buf.validate.field).required = true];
+}
+
+message UpdateRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 120
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.update_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string description = 3;
+}
+
+message GetSuccess {
+  WorkflowDefinition definition = 1 [(buf.validate.field).required = true];
+}
+
+message ListRequest {
+  optional int32 offset = 1 [(buf.validate.field).int32.gte = 0];
+  optional int32 limit = 2 [(buf.validate.field).int32 = {
+    gte: 1
+    lte: 100
+  }];
+  string query = 3;
+  optional string project_id = 4 [(buf.validate.field).string.min_len = 1];
+  optional string workflow_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ListSuccess {
+  repeated WorkflowRecord workflows = 1 [(buf.validate.field).repeated.max_items = 100];
+  optional string project_id = 2 [(buf.validate.field).string.min_len = 1];
+  optional int32 next_offset = 3 [(buf.validate.field).int32.gte = 0];
+}
+
+message GetRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message LinkProjectRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional ProjectLinkDefaultMode default_policy = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message LinkProjectSuccess {
+  ProjectWorkflowLink link = 1 [(buf.validate.field).required = true];
+}
+
+message ListProjectLinksRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ListProjectLinksSuccess {
+  repeated ProjectWorkflowLink links = 1;
+}
+
+message SetDefaultProjectLinkRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message SetDefaultProjectLinkSuccess {
+  ProjectWorkflowLink link = 1 [(buf.validate.field).required = true];
+}
+
+message UnlinkProjectRequest {
+  string link_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string replacement_default_link_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message UnlinkTaskReference {
+  string task_id = 1 [(buf.validate.field).string.min_len = 1];
+  string short_id = 2 [(buf.validate.field).string.min_len = 1];
+  string title = 3;
+}
+
+message UnlinkProjectBlocker {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  int32 count = 3 [(buf.validate.field).int32.gte = 0];
+  repeated UnlinkTaskReference tasks = 4 [(buf.validate.field).repeated.max_items = 10];
+}
+
+message UnlinkProjectSuccess {
+  string link_id = 1 [(buf.validate.field).string.min_len = 1];
+  bool unlinked = 2;
+  repeated UnlinkProjectBlocker blockers = 3;
+}
+
+message DeletePreviewRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message DeleteImpact {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  int64 version = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 project_count = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 link_count = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 default_replacement_project_count = 5 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 task_count = 6 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 current_node_count = 7 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 pending_approval_count = 8 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 blocked_task_count = 9 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message DeletePreviewSuccess {
+  DeleteImpact impact = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  bool confirmed = 2;
+  int64 expected_version = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_project_count = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_link_count = 5 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  int64 expected_task_count = 6 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  bool cleanup_artifacts = 7;
+}
+
+message DeleteBlocker {
+  string code = 1 [(buf.validate.field).string.min_len = 1];
+  string message = 2 [(buf.validate.field).string.min_len = 1];
+  int64 count = 3 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+}
+
+message DeleteSuccess {
+  bool deleted = 1;
+  DeleteImpact impact = 2 [(buf.validate.field).required = true];
+  repeated DeleteBlocker blockers = 3;
+}
+
+message ValidateRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional ValidationMode mode = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+}
+
+message ScriptPathValidateRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string node_id = 2 [(buf.validate.field).string.min_len = 1];
+  string script_path = 3;
+}
+
+message GraphValidateDraftRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  optional GraphMetadata metadata = 2;
+  GraphDraft graph = 3 [(buf.validate.field).required = true];
+  repeated ValidationMode modes = 4 [
+    (buf.validate.field).repeated = {
+      min_items: 1
+      max_items: 3
+      unique: true
+    },
+    (buf.validate.field).repeated.items.enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message GraphValidateDraftSuccess {
+  repeated ModeValidationResult results = 1 [
+    (buf.validate.field).repeated = {
+      min_items: 1
+      max_items: 3
+    }
+  ];
+  DerivedWiring derived_wiring = 2 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.graph_validation_modes_unique"
+    message: "validation result modes must be unique"
+    expression: "this.results.map(result, result.mode).unique()"
+  };
+}
+
+message GraphDeriveWiringRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  GraphDraft graph = 2 [(buf.validate.field).required = true];
+}
+
+message GraphDeriveWiringSuccess {
+  DerivedWiring derived_wiring = 1 [(buf.validate.field).required = true];
+}
+
+message GraphSavePreviewRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  int64 expected_version = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  optional GraphMetadata metadata = 3;
+  GraphDraft graph = 4 [(buf.validate.field).required = true];
+}
+
+message GraphSaveRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  int64 expected_version = 2 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  optional GraphMetadata metadata = 3;
+  GraphDraft graph = 4 [(buf.validate.field).required = true];
+  optional GraphSaveConfirmation confirmation = 5;
+}
+
+message GraphSavePreviewSuccess {
+  int64 current_version = 1 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  bool changed = 2;
+  repeated ModeValidationResult validation_results = 3 [(buf.validate.field).repeated.max_items = 3];
+  GraphSaveImpact impact = 4 [(buf.validate.field).required = true];
+  repeated GraphSaveBlocker blockers = 5;
+  bool can_save = 6;
+  bool confirmation_required = 7;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.graph_save_preview_validation_modes_unique"
+    message: "validation result modes must be unique"
+    expression: "this.validation_results.map(result, result.mode).unique()"
+  };
+}
+
+message GraphSaveSuccess {
+  bool saved = 1;
+  bool changed = 2;
+  optional WorkflowDefinition definition = 3;
+  int64 current_version = 4 [(buf.validate.field).int64 = {
+    gte: 0
+    lte: 9007199254740991
+  }];
+  repeated ModeValidationResult validation_results = 5 [(buf.validate.field).repeated.max_items = 3];
+  GraphSaveImpact impact = 6 [(buf.validate.field).required = true];
+  repeated GraphSaveBlocker blockers = 7;
+  bool can_save = 8;
+  bool confirmation_required = 9;
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.graph_save_definition"
+    message: "a saved graph requires a definition and an unsaved graph forbids one"
+    expression: "this.saved == has(this.definition)"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.graph_save_validation_modes_unique"
+    message: "validation result modes must be unique"
+    expression: "this.validation_results.map(result, result.mode).unique()"
+  };
+}
+
+message ProjectLabel {
+  string id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  // NFC normalization and the Unicode letter/number plus punctuation alphabet
+  // remain owned by the Project label domain boundary; Protovalidate has no
+  // equivalent Unicode normalization/category predicate.
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_label_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message ProjectLabelCatalog {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated ProjectLabel labels = 2 [
+    (buf.validate.field).repeated.max_items = 100
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.project_label_ids_unique"
+    message: "label IDs must be unique"
+    expression: "this.labels.map(label, label.id).unique()"
+  };
+}
+
+message ProjectLabelCatalogRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ProjectLabelCatalogSuccess {
+  ProjectLabelCatalog catalog = 1 [(buf.validate.field).required = true];
+}
+
+message ProjectLabelCreateRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_label_create_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message ProjectLabelCreateSuccess {
+  ProjectLabel label = 1 [(buf.validate.field).required = true];
+}
+
+message ProjectLabelRenameRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string name = 3 [
+    (buf.validate.field).string = {
+      min_len: 1
+      max_len: 64
+    },
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_label_rename_name_nonblank"
+      message: "name must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message ProjectLabelRenameSuccess {
+  ProjectLabel label = 1 [(buf.validate.field).required = true];
+}
+
+message ProjectLabelDeleteRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ProjectLabelDeleteSuccess {
+  string label_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ProjectLabelReorderRequest {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  repeated string label_ids = 2 [
+    (buf.validate.field).repeated = {
+      max_items: 100
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ProjectLabelReorderSuccess {
+  ProjectLabelCatalog catalog = 1 [(buf.validate.field).required = true];
+}
+
+message LabelInvalidNameDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string field = 2 [(buf.validate.field).string.const = "name"];
+}
+
+message LabelNameConflictDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LabelCatalogLimitDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  int32 limit = 2 [(buf.validate.field).int32.const = 100];
+}
+
+message LabelProjectNotFoundDetails {
+  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message LabelNotFoundDetails {
+  optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string label_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message LabelInvalidMutationDetails {
+  optional string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string field = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message WorkflowNotFoundDetails {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message ReplacementDefaultInvalidDetails {
+  string link_id = 1 [(buf.validate.field).string.min_len = 1];
+  optional string replacement_default_link_id = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message CreateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message CreateAndLinkProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message UpdateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GetError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLinkError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLinksListError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message SetDefaultProjectLinkError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    kent.api.project.ProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message UnlinkProjectError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    ReplacementDefaultInvalidDetails replacement_default_invalid = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "replacement_default_invalid"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message DeletePreviewError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message DeleteError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ValidateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ValidateScriptPathError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GraphValidateDraftError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GraphDeriveWiringError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GraphSavePreviewError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message GraphSaveError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLabelCatalogError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    LabelProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLabelCreateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    LabelInvalidNameDetails invalid_name = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_name"
+    }];
+    LabelNameConflictDetails name_conflict = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "name_conflict"
+    }];
+    LabelCatalogLimitDetails catalog_limit = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "catalog_limit"
+    }];
+    LabelProjectNotFoundDetails project_not_found = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    LabelInvalidMutationDetails invalid_mutation = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_mutation"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLabelRenameError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    LabelInvalidNameDetails invalid_name = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_name"
+    }];
+    LabelNameConflictDetails name_conflict = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "name_conflict"
+    }];
+    LabelNotFoundDetails label_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "label_not_found"
+    }];
+    LabelProjectNotFoundDetails project_not_found = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    LabelInvalidMutationDetails invalid_mutation = 6 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_mutation"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 7 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLabelDeleteError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    LabelNotFoundDetails label_not_found = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "label_not_found"
+    }];
+    LabelInvalidMutationDetails invalid_mutation = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_mutation"
+    }];
+    LabelProjectNotFoundDetails project_not_found = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 5 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectLabelReorderError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    LabelInvalidMutationDetails invalid_mutation = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_mutation"
+    }];
+    LabelProjectNotFoundDetails project_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "project_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message CreateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    CreateSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    CreateError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message CreateAndLinkProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    CreateAndLinkProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    CreateAndLinkProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message UpdateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GetSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    UpdateError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ListResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ListSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GetResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GetSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GetError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message LinkProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    LinkProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLinkError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ListProjectLinksResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ListProjectLinksSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLinksListError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SetDefaultProjectLinkResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    SetDefaultProjectLinkSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SetDefaultProjectLinkError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message UnlinkProjectResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    UnlinkProjectSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    UnlinkProjectError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message DeletePreviewResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    DeletePreviewSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    DeletePreviewError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message DeleteResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    DeleteSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    DeleteError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ValidateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ValidateResponse success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ValidateError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ValidateScriptPathResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ValidateResponse success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ValidateScriptPathError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GraphValidateDraftResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GraphValidateDraftSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GraphValidateDraftError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GraphDeriveWiringResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GraphDeriveWiringSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GraphDeriveWiringError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GraphSavePreviewResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GraphSavePreviewSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GraphSavePreviewError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message GraphSaveResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    GraphSaveSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    GraphSaveError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectLabelCatalogResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectLabelCatalogSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLabelCatalogError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectLabelCreateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectLabelCreateSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLabelCreateError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectLabelRenameResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectLabelRenameSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLabelRenameError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectLabelDeleteResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectLabelDeleteSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLabelDeleteError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectLabelReorderResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    ProjectLabelReorderSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectLabelReorderError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectSubscribeRequest {
+  optional string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_subscribe_project_id_trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+}
+
+message WorkflowSubscribeRequest {
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+}
+
+message WorkflowSubscriptionStartError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectSubscriptionStartError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    RequestValidationDetails invalid_request = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "invalid_request"
+    }];
+    WorkflowNotFoundDetails workflow_not_found = 3 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "workflow_not_found"
+    }];
+    kent.api.shared.InternalFailureDetails internal_failure = 4 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message ProjectSubscriptionStartResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    ProjectSubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message WorkflowSubscriptionStartResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    WorkflowSubscriptionStartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message ProjectEvent {
+  optional string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_event_project_id_trimmed"
+      message: "project_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  ProjectEventResource resource = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  ProjectEventAction action = 4 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string primary_entity_id = 5 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.workflow_definition.project_event_primary_id_trimmed"
+      message: "primary_entity_id must not have surrounding whitespace"
+      expression: "this == this.trim()"
+    }
+  ];
+  repeated string related_ids = 6 [
+    (buf.validate.field).repeated.unique = true,
+    (buf.validate.field).repeated.items.string.min_len = 1
+  ];
+  google.protobuf.Timestamp occurred_at = 7 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.project_event_scope"
+    message: "event scope must match the resource"
+    expression:
+      "(this.resource == 1 && has(this.workflow_id)) || "
+      "(this.resource in [2, 3] && has(this.project_id) && has(this.workflow_id)) || "
+      "(this.resource == 4 && has(this.project_id) && !has(this.workflow_id))"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.project_event_action"
+    message: "event action must match the resource"
+    expression:
+      "(this.resource == 1 && this.action in [2, 5, 6]) || "
+      "(this.resource == 2 && this.action in [7, 8, 9]) || "
+      "(this.resource == 3 && this.action in [1, 2, 5, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23]) || "
+      "(this.resource == 4 && this.action in [1, 3, 4, 5])"
+  };
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_definition.project_event_related_ids"
+    message: "related_ids must be trimmed and must not repeat primary_entity_id"
+    expression:
+      "this.related_ids.all(id, id == id.trim()) && "
+      "!this.related_ids.exists(id, id == this.primary_entity_id)"
+  };
+}
+
+service WorkflowDefinitionService {
+  rpc Create(CreateRequest) returns (CreateResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.create"
+    };
+  }
+  rpc CreateAndLinkProject(CreateAndLinkProjectRequest) returns (CreateAndLinkProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.createAndLinkProject"
+    };
+  }
+  rpc Update(UpdateRequest) returns (UpdateResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.update"
+    };
+  }
+  rpc List(ListRequest) returns (ListResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.list"
+    };
+  }
+  rpc Get(GetRequest) returns (GetResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.get"
+    };
+  }
+  rpc DeletePreview(DeletePreviewRequest) returns (DeletePreviewResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.deletePreview"
+    };
+  }
+  rpc Delete(DeleteRequest) returns (DeleteResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.delete"
+    };
+  }
+  rpc Validate(ValidateRequest) returns (ValidateResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.validate"
+    };
+  }
+  rpc ValidateScriptPath(ScriptPathValidateRequest) returns (ValidateScriptPathResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.scriptPath.validate"
+    };
+  }
+}
+
+service WorkflowGraphService {
+  rpc ValidateDraft(GraphValidateDraftRequest) returns (GraphValidateDraftResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.graph.validateDraft"
+    };
+  }
+  rpc DeriveWiring(GraphDeriveWiringRequest) returns (GraphDeriveWiringResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.graph.deriveWiring"
+    };
+  }
+  rpc SavePreview(GraphSavePreviewRequest) returns (GraphSavePreviewResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.graph.savePreview"
+    };
+  }
+  rpc Save(GraphSaveRequest) returns (GraphSaveResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.graph.save"
+    };
+  }
+}
+
+service ProjectLinkService {
+  rpc Link(LinkProjectRequest) returns (LinkProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.linkProject"
+    };
+  }
+  rpc List(ListProjectLinksRequest) returns (ListProjectLinksResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.listProjectLinks"
+    };
+  }
+  rpc SetDefault(SetDefaultProjectLinkRequest) returns (SetDefaultProjectLinkResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.setDefaultProjectLink"
+    };
+  }
+  rpc Unlink(UnlinkProjectRequest) returns (UnlinkProjectResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.unlinkProject"
+    };
+  }
+}
+
+service ProjectLabelService {
+  rpc Create(ProjectLabelCreateRequest) returns (ProjectLabelCreateResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.project.label.create"
+    };
+  }
+  rpc List(ProjectLabelCatalogRequest) returns (ProjectLabelCatalogResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.project.label.list"
+    };
+  }
+  rpc Rename(ProjectLabelRenameRequest) returns (ProjectLabelRenameResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.project.label.rename"
+    };
+  }
+  rpc Delete(ProjectLabelDeleteRequest) returns (ProjectLabelDeleteResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.project.label.delete"
+    };
+  }
+  rpc Reorder(ProjectLabelReorderRequest) returns (ProjectLabelReorderResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "workflow.project.label.reorder"
+    };
+  }
+}
+
+service WorkflowSubscriptionService {
+  rpc Subscribe(WorkflowSubscribeRequest) returns (WorkflowSubscriptionStartResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_NONE
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {
+        package: "kent.api.workflow_definition"
+        service: "WorkflowSubscriptionService"
+        method: "Event"
+      }
+      completion: {
+        package: "kent.api.workflow_definition"
+        service: "WorkflowSubscriptionService"
+        method: "Complete"
+      }
+      legacy_wire_name: "workflow.subscribe"
+    };
+  }
+  rpc Event(ProjectEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "workflow.event"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "workflow.complete"
+    };
+  }
+}
+
+service ProjectSubscriptionService {
+  rpc Subscribe(ProjectSubscribeRequest) returns (ProjectSubscriptionStartResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_PROJECT_VIEW
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {
+        package: "kent.api.workflow_definition"
+        service: "ProjectSubscriptionService"
+        method: "Event"
+      }
+      completion: {
+        package: "kent.api.workflow_definition"
+        service: "ProjectSubscriptionService"
+        method: "Complete"
+      }
+      legacy_wire_name: "workflow.subscribeProject"
+    };
+  }
+  rpc Event(ProjectEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "workflow.project"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "workflow.project.complete"
+    };
+  }
+}

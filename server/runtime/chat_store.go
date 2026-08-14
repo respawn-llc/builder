@@ -76,14 +76,15 @@ type TranscriptWindowSnapshot struct {
 }
 
 type storedToolCompletion struct {
-	CallID        string                   `json:"call_id"`
-	Name          string                   `json:"name"`
-	IsError       bool                     `json:"is_error"`
-	Output        json.RawMessage          `json:"output"`
-	Summary       *string                  `json:"summary,omitempty"`
-	CondensedText *string                  `json:"condensed_text,omitempty"`
-	Presentation  *transcript.ToolCallMeta `json:"presentation,omitempty"`
-	ProviderItems []llm.ResponseItem       `json:"provider_items,omitempty"`
+	CallID         string                   `json:"call_id"`
+	Name           string                   `json:"name"`
+	IsError        bool                     `json:"is_error"`
+	Output         json.RawMessage          `json:"output"`
+	Summary        *string                  `json:"summary,omitempty"`
+	CondensedText  *string                  `json:"condensed_text,omitempty"`
+	Presentation   *transcript.ToolCallMeta `json:"presentation,omitempty"`
+	ProviderItems  []llm.ResponseItem       `json:"provider_items,omitempty"`
+	QuestionAnswer *tools.AskQuestionAnswer `json:"question_answer,omitempty"`
 }
 
 type chatStore struct {
@@ -349,13 +350,14 @@ func toolCallSnapshotFromItems(items []llm.ResponseItem, callID string) (llm.Too
 func (s *chatStore) restoreToolCompletionRecord(record session.ToolCompletionRecord, provenances ...*TranscriptCommittedRowProvenance) error {
 	completion := storedToolCompletionFromSessionRecord(record)
 	s.recordToolCompletionWithProviderItems(tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        completion.Output,
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
+		CallID:         completion.CallID,
+		Name:           toolspec.ID(completion.Name),
+		IsError:        completion.IsError,
+		Output:         completion.Output,
+		Summary:        completion.Summary,
+		CondensedText:  completion.CondensedText,
+		Presentation:   completion.Presentation,
+		QuestionAnswer: completion.QuestionAnswer,
 	}, completion.ProviderItems, provenances...)
 	return nil
 }

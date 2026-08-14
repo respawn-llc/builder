@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/launch"
 	"core/server/llm"
 	"core/server/runtime"
@@ -18,6 +20,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/invariant"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -25,19 +28,39 @@ type SessionStoreResolver interface {
 	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
 }
 
+type PersistedSessionResolver interface {
+	ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error)
+}
+
 type ExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
 }
 
+type chatContextWorkspaceResolver interface {
+	Resolve(workspaceRoot string) (config.App, error)
+}
+
+type chatContextAuthReader interface {
+	Load(context.Context) (auth.State, error)
+}
+
+type currentRuntimeReader interface {
+	WithCurrentRuntime(context.Context, runtimeids.SessionID, func(context.Context, *runtime.Engine) error) error
+}
+
 type Service struct {
-	sessions         SessionStoreResolver
-	snapshots        *resolvedSessionSnapshotSource
-	targets          ExecutionTargetResolver
-	app              config.App
-	auth             servicecontract.AuthStatusService
-	git              *worktree.GitInspector
-	cacheWarningMu   sync.RWMutex
-	cacheWarningMode config.CacheWarningMode
+	sessions          SessionStoreResolver
+	persisted         PersistedSessionResolver
+	snapshots         *resolvedSessionSnapshotSource
+	targets           ExecutionTargetResolver
+	app               config.App
+	auth              servicecontract.AuthStatusService
+	git               *worktree.GitInspector
+	cacheWarningMu    sync.RWMutex
+	cacheWarningMode  config.CacheWarningMode
+	contextWorkspaces chatContextWorkspaceResolver
+	contextAuth       chatContextAuthReader
+	contextRuntimes   currentRuntimeReader
 }
 
 func (s *Service) WithExecutionEnvironmentConfig(app config.App) *Service {
@@ -72,8 +95,134 @@ func NewService(
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 	}
+	if persisted, ok := sessions.(PersistedSessionResolver); ok {
+		svc.persisted = persisted
+	}
+	if authority != nil {
+		svc.contextRuntimes = authority
+	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
+}
+
+func (s *Service) SubscribeQuestionHistory(
+	ctx context.Context,
+	req serverapi.QuestionHistorySubscribeRequest,
+) (serverapi.QuestionHistorySubscription, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.QuestionHistorySubscribeRequest]) (serverapi.QuestionHistorySubscription, error) {
+		return s.SubscribeQuestionHistoryValidated(ctx, validated)
+	})
+}
+
+func (s *Service) SubscribeQuestionHistoryValidated(
+	ctx context.Context,
+	validated servicecontract.Validated[serverapi.QuestionHistorySubscribeRequest],
+) (serverapi.QuestionHistorySubscription, error) {
+	if s == nil || s.persisted == nil {
+		return nil, errSessionStoreResolverRequired
+	}
+	req := validated.Value()
+	record, err := s.persisted.ResolvePersistedSession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	cursor, err := session.OpenQuestionHistoryCursor(record.SessionDir, req.MaxHandoffs)
+	if err != nil {
+		return nil, err
+	}
+	return &questionHistorySubscription{cursor: cursor}, nil
+}
+
+func (s *Service) WithChatContextWorkspaceResolver(resolver chatContextWorkspaceResolver) *Service {
+	if s != nil {
+		s.contextWorkspaces = resolver
+	}
+	return s
+}
+
+func (s *Service) WithChatContextAuthReader(reader chatContextAuthReader) *Service {
+	if s != nil {
+		s.contextAuth = reader
+	}
+	return s
+}
+
+func (s *Service) ReadSessionChatContext(ctx context.Context, sessionID runtimeids.SessionID) (serverapi.ChatContext, error) {
+	if s == nil || s.sessions == nil {
+		return serverapi.ChatContext{}, errors.New("session store resolver is required")
+	}
+	if s.contextRuntimes != nil {
+		var live serverapi.ChatContext
+		err := s.contextRuntimes.WithCurrentRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
+			var readErr error
+			live, readErr = readWithContext(callbackCtx, func() (serverapi.ChatContext, error) {
+				return chatcontext.Project(engine.LiveChatContextSnapshot()), nil
+			})
+			return readErr
+		})
+		if err == nil {
+			return live, nil
+		}
+		if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
+			return serverapi.ChatContext{}, err
+		}
+	}
+	return s.readDormantSessionChatContext(ctx, sessionID)
+}
+
+func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID runtimeids.SessionID) (serverapi.ChatContext, error) {
+	if s.targets == nil {
+		return serverapi.ChatContext{}, errors.New("Session execution-target resolver is required")
+	}
+	if s.contextWorkspaces == nil {
+		return serverapi.ChatContext{}, errors.New("fresh workspace config resolver is required")
+	}
+	store, err := s.sessions.ResolveSessionStore(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	snapshot := store.ContextSnapshot()
+	target, err := s.targets.ResolveSessionExecutionTarget(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	executionRoot, err := clientui.SessionExecutionWorkspaceRoot(target, target.WorkspaceRoot)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	app, err := s.contextWorkspaces.Resolve(executionRoot)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	current, err := launch.ResolveReadOnlySessionContextSettings(app, snapshot.Meta, false)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	provider, err := llm.ResolveEffectiveProviderCapabilities(
+		ctx,
+		snapshot.Meta.Locked,
+		current.Settings,
+		s.contextAuth,
+	)
+	if err != nil {
+		return serverapi.ChatContext{}, err
+	}
+	usedTokens := int64(0)
+	if snapshot.Meta.UsageState != nil {
+		usedTokens = int64(snapshot.Meta.UsageState.InputTokens)
+	}
+	completedCount := int64(0)
+	if snapshot.Facts.CompletedCompactionCount != nil {
+		completedCount = int64(*snapshot.Facts.CompletedCompactionCount)
+	}
+	manualEligible := snapshot.Facts.ManualCompactEligible != nil && *snapshot.Facts.ManualCompactEligible
+	return chatcontext.Project(chatcontext.ProjectionInput{
+		Policy:                   chatcontext.ResolvePolicy(current.Settings, provider.Capabilities, snapshot.Meta.Locked),
+		UsedTokens:               usedTokens,
+		AutoCompactionEnabled:    current.AutoCompactionEnabled,
+		CompletedCompactionCount: completedCount,
+		ManualCompactEligible:    manualEligible,
+	}), nil
 }
 
 func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
@@ -402,3 +551,4 @@ func (s *Service) resolveSnapshot(ctx context.Context, sessionID string) (sessio
 }
 
 var _ servicecontract.SessionViewService = (*Service)(nil)
+var _ chatcontext.SessionOwner = (*Service)(nil)

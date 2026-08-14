@@ -40,8 +40,10 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, nil)
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, nil)
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if err := writer.Commit(); err != nil {
@@ -85,8 +87,10 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLock
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, candidate)
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, candidate)
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if err := writer.Commit(); err != nil {
@@ -140,8 +144,10 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if _, err := writer.ExecContext(
@@ -171,7 +177,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
 }
 
-func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *testing.T) {
+func TestManualMoveExecutableRejectsConcurrentScriptPathDriftWithoutMutation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	const validatedScriptPath = "scripts/validated"
 	absoluteScriptPath := filepath.Join(binding.CanonicalRoot, validatedScriptPath)
@@ -215,8 +221,10 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
-		moved <- manualMoveApplyResult{result: result, err: err}
+		applied := manualMoveApplyResult{err: errors.New("ApplyManualMove test helper exited without a result")}
+		defer func() { moved <- applied }()
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		applied = manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
 	if _, err := writer.ExecContext(
@@ -229,7 +237,7 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	if err := writer.Commit(); err != nil {
 		t.Fatalf("commit competing workflow change: %v", err)
 	}
-	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
+	assertManualMoveRejectedWithoutMutation(t, ctx, moveStore, task.ID, source.Reference, <-moved)
 }
 
 func assertManualMoveTargetShapeDriftRejected(
@@ -243,6 +251,21 @@ func assertManualMoveTargetShapeDriftRejected(
 	t.Helper()
 	if !errors.Is(applied.err, errManualMoveTargetShapeChanged) {
 		t.Fatalf("ApplyManualMove error = %T %v, want target-shape drift", applied.err, applied.err)
+	}
+	assertManualMoveRejectedWithoutMutation(t, ctx, store, taskID, source, applied)
+}
+
+func assertManualMoveRejectedWithoutMutation(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	taskID workflow.TaskID,
+	source workflow.CurrentNodeReference,
+	applied manualMoveApplyResult,
+) {
+	t.Helper()
+	if applied.err == nil {
+		t.Fatal("ApplyManualMove accepted concurrent target drift")
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, taskID)
 	if err != nil {

@@ -130,13 +130,25 @@
 - A successful batch response contains every submitted prompt identity exactly once and no other prompt identity. Each result is typed Resolved or Skipped. Result order has no meaning.
 - A declined ordinary Question produces the same canceled/error Ask Question outcome as terminal cancellation, with no completed answer or synthetic user message. A declined Approval creates no separate decision row.
 - Resolved-prompt updates carry prompt identity only. They never expose answer or decline content.
+- Answered-Question history comes only from the Session event log. Kent does not store a database copy of Question text or answers.
+- The Question-history command may read backward through the event log across its requested number of history-replacement windows. This command is an explicit exception to the normal prohibition on full-history transcript reads.
+- Question-history reading does not block Session work and provides no consistency guarantee while the event log changes. It may return stale or duplicate Questions.
+- A read or decode failure stops Question-history reading. Human output retains Questions already emitted; streaming JSON may remain partial and invalid.
+- Question-history delivery reuses the generic subscription transport. The server emits start metadata, zero or more Questions, and final omission metadata in that order; clients consume those typed events without a separate lifecycle-validation state machine. Generic transport completion is operation success, and a transport failure remains an operational failure even after final omission metadata.
+- Question-history reading ignores provider-history items carried by history replacements. It reads self-contained Question completion events only.
+- New Sessions store structured Question answers and their answer commit time in event-log schema v2.
+- Event-log schema v2 limits event-envelope field names, top-level event-payload field names, and tool names to 4,096 UTF-8 bytes. Writing or decoding an oversized discriminator fails visibly. This limit does not apply to Question text, answers, Commentary, provider history, or other payload content.
+- Event-log schema v1 Sessions remain openable, resumable, and writable without migration. Question history uses their normalized presented Question text and verbatim flattened completion output, and does not infer selected options, Commentary, or answer time.
+- Event-log schema v1 preserves existing discriminator lengths. If bounded Question-history inspection encounters a legacy discriminator that exceeds the v2 limit, the read stops with a visible decode failure instead of silently omitting the record.
+- A forked or cloned Session inherits its source Session's event-log schema version.
+- Kent 3.0 removes the event-log v1 Question-history fallback.
 
 ## Sessions, Location, And Transcript Bounds
 
 - Sessions can stop and resume. The persistence root is configurable and defaults to `~/.kent`; their durable location model is Project, Workspace, then Worktree.
 - Moving a Session to a Workspace in another Project is accepted only while its RuntimeActivity is idle or it has no Active Session Runtime. Every other live state rejects the move immediately without waiting for current work.
 - An accepted cross-Project move retires an idle Active Session Runtime before moving the Session. Opening the Session in the destination Project creates a fresh learned-Workspace cache.
-- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself.
+- Full transcript history can reach dozens of gigabytes. Production must never load the full session log into memory or walk it from start to end, except when forking or cloning through the selected fork point because copying that history is the operation itself, or when the Question-history command performs its explicitly requested backward history read.
 - Transcript access for active and dormant Sessions is limited to the requested bounded page or recent tail plus live streaming output. Model context retains only the bounded active segment established by compaction, never the full transcript.
 - Opening a Session strictly decodes the newest event-log tail. Normal opens do not reconcile the event log with SQLite.
 - Repair inspects at most the newest 16 MiB backwards to locate the malformed incomplete final JSONL record's line start. Kent removes only that incomplete record without inferring facts from partial JSON or from the preceding complete record. Every preceding complete record remains authoritative, including records from the same Agent Step or append attempt.
@@ -177,9 +189,14 @@
 - `debug=true` or `KENT_DEBUG=1` enables fail-fast diagnostic behavior for developer-caused invariant violations. Production contains those failures according to the failure-classification contract; critical infrastructure failures terminate in every mode.
 - Thinking levels pass through unchanged. Kent provides recognized choices such as `low`, `medium`, `high`, `xhigh`, and `max` only when the selected model/provider supports them; otherwise it preserves the user value.
 - `model_context_window` is model-specific and user-overridable. Reviewer and subagent context windows must be at least `40000`. `context_compaction_threshold_tokens` must be lower than `model_context_window`; invalid values fail configuration validation.
+- A resumed Session preserves its established context window and provider-capability contract across runs. Its automatic-compaction threshold and Compaction Mode are not persisted in that contract: each activation resolves them from the current persisted-Agent-role configuration and constrains the threshold to the preserved window. These Context-policy facts do not rotate prompt-cache lineage or otherwise invalidate provider caches; their persisted window/provider representation is restart continuity, not a separate cache lock.
+- When settings do not explicitly select provider capabilities and no Session provider contract is established, Kent resolves the effective provider variant from the server's non-refreshing effective authentication mode. OAuth uses the ChatGPT Codex variant; persisted or environment API-key and other non-OAuth first-party OpenAI use the OpenAI variant. Lazy Chat, dormant Context, and every Session plan use that same projection. It reads local auth state and environment overrides without refreshing credentials, making a network request, or saving auth state. An auth-method change affects the next read or plan and does not reconfigure an already-live Session runtime; credential refresh remains request-time auth ownership.
 - `max_subagent_depth` is a root-level TOML setting with normal global-then-workspace precedence. It defaults to `2`, accepts `0` through `30`, and is checked when a child is launched. `0` disables model-originated child launches; other invalid values fail configuration validation. Values above `30` explain that Kent does not support recursion chains that deep.
 - OpenAI Responses `store` is configurable and defaults to `false`.
 - `provider_identifier` defaults to `kent`, must be a non-empty HTTP product token, and supplies the OpenAI-family `originator` header and `<provider_identifier>/<Kent version>` user agent for main, reviewer, Workflow, and subagent model requests. It takes effect after restart for resumed Sessions. OAuth bootstrap, subscription status, and update checks do not use it.
+- Backend HTTP clients advertise and decode zstd and gzip responses from third-party services. A supported compressed response is decoded even when the request supplied its own `Accept-Encoding` value. Local server-to-client communication does not use HTTP content compression.
+- A model-provider request body is compressed only when the selected provider protocol requires a content coding, its uncompressed length is known and at least 1,024 bytes, and the body is replayable. Nil, empty, unknown-length, and non-replayable bodies are not compressed. ChatGPT Codex requests through OpenAI OAuth use zstd level 3. OpenAI API-key, OpenAI-compatible, and Anthropic requests do not use request compression.
+- Kent preserves an explicitly supplied `Accept-Encoding` or `Content-Encoding` header and does not stack another content coding. Kent does not retry a rejected request without compression.
 - `tools.web_search` defaults to enabled; `web_search` is `native` or `off`. `tools.view_image` defaults to enabled and is advertised only to multimodal-capable models.
 
 ## Model Requests And Cache Continuity
@@ -227,6 +244,7 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - Local compaction permits no tool calls. Each attempt that receives one records a model-visible and user-visible instruction not to call tools and to retry; Kent retries up to three times, then fails compaction and stops the model loop. Local summaries use automatic tool choice; post-compaction Workflow work uses the Node's ordinary generation policy.
 - If compaction both exceeds provider context length and receives the corresponding provider error, Kent retries the compaction request with cumulative supported historical tool-payload collapse targets of 10%, 20%, and 40% of the model context window. Shell output and patch input become exactly `<collapsed>`; calls and their output relationships remain, while reasoning and unsupported payloads remain unchanged. A successful repair records the collapse count and estimated omitted tokens for the operator.
 - Completing compaction alone adds no UI-only transcript entry; transcript-visible summaries are ordinary transcript content.
+- Persisting the Context read's completed-compaction count or manual-Compact eligibility is best-effort. A failed metadata write does not fail an otherwise successful compaction or Agent Step; Kent reports the failure through its operational diagnostics and adds no retry or recovery flow for these facts.
 
 ## Goals
 
@@ -268,7 +286,7 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
 - Entering, leaving, or deleting a worktree when it switches the calling Session is scheduled for the next between-step idle point before queued user work. The command returns an accepted result without waiting for the current step. If no model step is active, the transition may apply immediately but retains its scheduled reminder behavior. At most one such transition can be pending per Exact Execution Scope; a matching retry returns the original result and a different transition is rejected.
 - Later failure does not alter the accepted worktree command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
-- Resuming a Session reapplies its recorded subagent role when available; a missing role does not block explicit continuation.
+- Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion
 

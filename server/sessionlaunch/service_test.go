@@ -26,6 +26,27 @@ import (
 
 type failingAuthStateReader struct{}
 
+type nonRefreshingAuthStateReader struct {
+	loaded       auth.State
+	current      auth.State
+	loadCalls    int
+	currentCalls int
+}
+
+func (r *nonRefreshingAuthStateReader) Load(context.Context) (auth.State, error) {
+	r.loadCalls++
+	return r.loaded, nil
+}
+
+func (r *nonRefreshingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
+	r.currentCalls++
+	return r.current, nil
+}
+
+func (r *nonRefreshingAuthStateReader) StoredState(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
+}
+
 var serviceTestPersistence = sessiontest.NewPersistence()
 
 func createLaunchTestSession(t *testing.T, containerDir, name, workspace string) *session.Store {
@@ -37,12 +58,136 @@ func createLaunchTestSession(t *testing.T, containerDir, name, workspace string)
 	return store
 }
 
+func (failingAuthStateReader) Load(context.Context) (auth.State, error) {
+	return auth.EmptyState(), nil
+}
+
 func (failingAuthStateReader) CurrentState(context.Context) (auth.State, error) {
 	return auth.State{}, errors.New("auth unavailable")
 }
 
 func (failingAuthStateReader) StoredState(context.Context) (auth.State, error) {
 	return auth.EmptyState(), nil
+}
+
+func TestPlanLaunchSessionResolvesEffectiveAuthAfterFinalNamedRoleSelection(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	cfg.Settings.Subagents = map[string]config.SubagentRole{
+		"worker": {
+			Settings: func() config.Settings {
+				settings := cfg.Settings
+				settings.Model = "worker-model"
+				settings.OpenAIBaseURL = "https://compatible.example/v1"
+				settings.ThinkingLevel = "high"
+				settings.Reviewer.Model = "worker-model"
+				settings.Reviewer.ThinkingLevel = "high"
+				settings.Subagents = nil
+				return settings
+			}(),
+			Sources: map[string]string{
+				"model":           "file",
+				"openai_base_url": "file",
+				"thinking_level":  "file",
+			},
+		},
+	}
+	containerDir := t.TempDir()
+	reader := &nonRefreshingAuthStateReader{
+		loaded:  auth.State{Method: auth.Method{Type: auth.MethodAPIKey}},
+		current: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir).WithAuthStateReader(reader)
+	role := "worker"
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "context-policy-named-role",
+		Mode:            serverapi.SessionLaunchModeHeadless,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+		Overrides:       serverapi.RunPromptOverrides{AgentRole: &role},
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeLocal {
+		t.Fatalf("CompactionMode = %q, want API-key compatible-provider local fallback; refreshing OAuth would select native", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 1 || reader.currentCalls != 1 {
+		t.Fatalf("auth calls Load/CurrentState = %d/%d, want non-refreshing policy read after existing readiness read", reader.loadCalls, reader.currentCalls)
+	}
+}
+
+func TestPlanLaunchSessionLoadsEffectiveAuthWhenLockedProviderContractIsAbsent(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	containerDir := t.TempDir()
+	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
+	if err := store.MarkModelDispatchLocked(session.LockedContract{
+		Model:         cfg.Settings.Model,
+		ContextWindow: cfg.Settings.ModelContextWindow,
+	}); err != nil {
+		t.Fatalf("MarkModelDispatchLocked: %v", err)
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded:  auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+		current: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, containerDir).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "locked-without-provider-contract",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeNative {
+		t.Fatalf("CompactionMode = %q, want OAuth provider-native mode", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 1 {
+		t.Fatalf("effective auth Load calls = %d, want 1", reader.loadCalls)
+	}
+}
+
+func TestPlanLaunchSessionSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               "custom",
+		SupportsResponsesCompact: false,
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, t.TempDir()).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "explicit-provider-capabilities",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeLocal {
+		t.Fatalf("CompactionMode = %q, want explicit-capability local fallback", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 0 {
+		t.Fatalf("effective auth Load calls = %d, want 0", reader.loadCalls)
+	}
 }
 
 func sessionLaunchStringPtr(value string) *string {
@@ -439,38 +584,39 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		t.Fatalf("ordinary caller target: %v", err)
 	}
 }
-func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T) {
+func TestServicePlanSessionPreservesLockedAgentRoleAndTools(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
 	containerDir := t.TempDir()
 	store := createLaunchTestSession(t, containerDir, "workspace-a", workspace)
-	role := "worker"
-	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
+	persistedRole := "old_role"
+	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &persistedRole}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
 	if err := store.MarkModelDispatchLocked(session.LockedContract{Model: "locked-model", EnabledTools: []string{"shell"}}); err != nil {
 		t.Fatalf("MarkModelDispatchLocked: %v", err)
 	}
 	cfg := loadSessionLaunchTestConfig(t, workspace, persistenceRoot)
-	roleSettings := cfg.Settings
-	roleSettings.ThinkingLevel = "high"
+	persistedSettings := cfg.Settings
+	persistedSettings.ThinkingLevel = "low"
 	cfg.Settings.Subagents = map[string]config.SubagentRole{
-		role: {
-			Settings:         roleSettings,
+		persistedRole: {
+			Settings:         persistedSettings,
 			Sources:          map[string]string{"thinking_level": "file"},
 			AgentCallable:    true,
 			AgentCallableSet: true,
 		},
 	}
 	service := newSessionLaunchTestService(cfg, containerDir)
+	requestedRole := "removed_role"
 
 	resp, err := service.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-		ClientRequestID: "locked-named-tools",
+		ClientRequestID: "locked-role-and-tools",
 		Mode:            serverapi.SessionLaunchModeInteractive,
 		Intent:          serverapi.OpenExistingSessionLaunchIntent(mustSessionLaunchIntentID(t, store.Meta().SessionID)),
 		Overrides: serverapi.RunPromptOverrides{
-			AgentRole: &role,
+			AgentRole: &requestedRole,
 			Tools:     "patch,edit",
 		},
 	})
@@ -479,6 +625,15 @@ func TestServicePlanSessionRetainsLockedToolsForPreparedNamedTarget(t *testing.T
 	}
 	if strings.Join(resp.Plan.EnabledToolIDs, ",") != "exec_command" {
 		t.Fatalf("enabled tools = %+v, want the persisted locked tool set", resp.Plan.EnabledToolIDs)
+	}
+	continuation := store.Meta().Continuation
+	if continuation == nil ||
+		continuation.AgentRole == nil ||
+		*continuation.AgentRole != persistedRole {
+		t.Fatalf("continuation = %+v, want preserved %q role", continuation, persistedRole)
+	}
+	if resp.Plan.ActiveSettings.ThinkingLevel != "low" {
+		t.Fatalf("thinking level = %q, want persisted role value low", resp.Plan.ActiveSettings.ThinkingLevel)
 	}
 }
 

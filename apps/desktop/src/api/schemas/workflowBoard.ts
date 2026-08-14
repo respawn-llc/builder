@@ -21,7 +21,6 @@ import type {
   WorkflowBoard,
   ProjectWorkflowLink,
 } from "../models";
-import type { TaskListPage } from "../workflowLabels";
 import { retainedPreviousWorktreeSchema, type RetainedPreviousWorktree } from "../worktreeSetup";
 import {
   attentionItemSchema,
@@ -43,6 +42,7 @@ import { emptyArray } from "./workflowHelpers";
 import { workflowExecutionTargetSchema } from "./workflowExecutionTarget";
 import { labelIDListSchema } from "./workflowLabels";
 import { taskDependenciesSchema } from "./taskDependencies";
+export { projectTaskGroupCountsSchema, taskListPageSchema } from "./projectTasks";
 export {
   taskDependenciesSchema,
   taskDependencyAddResponseSchema,
@@ -82,58 +82,6 @@ function offsetPageSchema<T>(itemSchema: z.ZodType<T>): z.ZodType<OffsetPage<T>>
       nextOffset: value.next_offset ?? null,
     }));
 }
-
-export const taskListPageSchema: z.ZodType<TaskListPage> = z
-  .object({
-    scope: z
-      .object({
-        project_id: z.string().min(1),
-        workflow_id: workflowIDSchema.optional(),
-      })
-      .strict(),
-    matching_workflow_cardinality: z.enum(["none", "one", "multiple"]),
-    next_offset: z.number().int().positive().nullable().optional(),
-    generated_at_unix_ms: z.number(),
-    tasks: z.array(
-      z
-        .object({
-          task_id: z.string().min(1),
-          short_id: z.string().min(1),
-          workflow_id: workflowIDSchema,
-          workflow_name: z.string().min(1).optional(),
-          title: z.string(),
-          created_at_unix_ms: z.number(),
-          updated_at_unix_ms: z.number(),
-          column_keys: z.array(z.string()).optional(),
-          status: taskStatusSchema,
-          label_ids: labelIDListSchema,
-        })
-        .strict()
-        .transform((value) => ({
-          id: value.task_id,
-          shortID: value.short_id,
-          workflowID: value.workflow_id,
-          workflowName: value.workflow_name ?? null,
-          title: value.title,
-          createdAt: value.created_at_unix_ms,
-          updatedAt: value.updated_at_unix_ms,
-          columnKeys: value.column_keys ?? null,
-          status: value.status,
-          labelIDs: value.label_ids,
-        })),
-    ),
-  })
-  .strict()
-  .transform((value) => ({
-    scope: {
-      projectID: value.scope.project_id,
-      workflowID: value.scope.workflow_id ?? null,
-    },
-    matchingWorkflowCardinality: value.matching_workflow_cardinality,
-    nextOffset: value.next_offset ?? null,
-    generatedAt: value.generated_at_unix_ms,
-    tasks: value.tasks,
-  }));
 
 const unavailableCauseSchema = z.enum([
   "invalid_revision",
@@ -230,17 +178,37 @@ export const taskStartResponseSchema: z.ZodType<TaskStartResponse> = z.discrimin
 
 export const taskResumeResponseSchema: z.ZodType<TaskResumeResponse> = z.discriminatedUnion("outcome", [
   appliedCurrentNodesResponseSchema,
+  z
+    .object({
+      outcome: z.literal("no_op"),
+      no_op: z
+        .object({
+          current_nodes: z.array(currentNodeSchema).min(1),
+        })
+        .strict(),
+    })
+    .strict()
+    .transform((value) => ({
+      outcome: value.outcome,
+      noOp: { currentNodes: value.no_op.current_nodes },
+    })),
   selectionRequiredResponseSchema,
 ]);
 
-type TaskMoveMutationResult = Readonly<{ currentNodes: readonly TaskCurrentNode[];
-  retainedPreviousWorktree: RetainedPreviousWorktree | null }>;
+type TaskMoveMutationResult = Readonly<{
+  currentNodes: readonly TaskCurrentNode[];
+  retainedPreviousWorktree: RetainedPreviousWorktree | null;
+}>;
 const taskMoveResultSchema: z.ZodType<TaskMoveMutationResult> = z
-  .object({ current_nodes: z.array(currentNodeSchema).min(1),
-    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable() })
+  .object({
+    current_nodes: z.array(currentNodeSchema).min(1),
+    retained_previous_worktree: retainedPreviousWorktreeSchema.nullable(),
+  })
   .strict()
-  .transform((value) => ({ currentNodes: value.current_nodes,
-    retainedPreviousWorktree: value.retained_previous_worktree }));
+  .transform((value) => ({
+    currentNodes: value.current_nodes,
+    retainedPreviousWorktree: value.retained_previous_worktree,
+  }));
 
 const taskMoveNoOpResponseSchema = z
   .object({ outcome: z.literal("no_op"), no_op: taskMoveResultSchema })
@@ -248,8 +216,10 @@ const taskMoveNoOpResponseSchema = z
   .transform((value) => ({ outcome: value.outcome, noOp: value.no_op }));
 
 const taskMovePreviewNoOpResponseSchema = z
-  .object({ outcome: z.literal("no_op"), no_op:
-    z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict() })
+  .object({
+    outcome: z.literal("no_op"),
+    no_op: z.object({ current_nodes: z.array(currentNodeSchema).min(1) }).strict(),
+  })
   .strict()
   .transform((value) => ({ outcome: value.outcome, noOp: { currentNodes: value.no_op.current_nodes } }));
 
@@ -269,7 +239,6 @@ const manualMoveBlockerSchema = z.enum([
   "invalid_workflow",
   "no_source_position",
   "unsupported_destination",
-  "waiting_question",
   "lifecycle_conflict",
   "context_session_unavailable",
   "no_usable_transition",

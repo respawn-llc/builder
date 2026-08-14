@@ -83,7 +83,9 @@ CREATE TABLE "sessions" (
     metadata_json TEXT NOT NULL DEFAULT '{}'
 , previous_session_id TEXT
     CHECK (previous_session_id IS NULL OR length(trim(previous_session_id)) > 0), parent_agent_session_id TEXT
-    CHECK (parent_agent_session_id IS NULL OR length(trim(parent_agent_session_id)) > 0), task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL);
+    CHECK (parent_agent_session_id IS NULL OR length(trim(parent_agent_session_id)) > 0), task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL, completed_compaction_count INTEGER
+CHECK (completed_compaction_count IS NULL OR completed_compaction_count >= 0), manual_compact_eligible INTEGER
+CHECK (manual_compact_eligible IS NULL OR manual_compact_eligible IN (0, 1)));
 
 CREATE TABLE task_active_fanout_branches (
     task_id TEXT NOT NULL REFERENCES task_active_fanouts(task_id) ON DELETE CASCADE,

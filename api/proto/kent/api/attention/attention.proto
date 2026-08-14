@@ -1,0 +1,196 @@
+syntax = "proto3";
+
+package kent.api.attention;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/attention;attentionpb";
+
+enum Kind {
+  ATTENTION_KIND_UNSPECIFIED = 0;
+  ATTENTION_KIND_QUESTION = 1;
+  ATTENTION_KIND_APPROVAL = 2;
+}
+
+enum Source {
+  ATTENTION_SOURCE_UNSPECIFIED = 0;
+  ATTENTION_SOURCE_LIVE = 1;
+  ATTENTION_SOURCE_SNAPSHOT = 2;
+}
+
+message NotificationID {
+  Kind kind = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string uuid = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
+}
+
+message QuestionState {
+  repeated string prepared_ask_ids = 1 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated string materialized_ask_ids = 2 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated string current_unresolved_ask_ids = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+  repeated string skipped_ask_ids = 4 [(buf.validate.field).repeated.items.string.min_len = 1];
+  string preview = 5;
+  int32 display_count = 6 [(buf.validate.field).int32.gte = 0];
+  int32 materialized_count = 7 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.attention.question_state"
+    message: "question state must contain a consistent non-empty ask batch"
+    expression:
+      "size(this.prepared_ask_ids) > 0 && "
+      "this.prepared_ask_ids.all(id, id.trim() != '') && "
+      "this.materialized_ask_ids.all(id, id.trim() != '') && "
+      "this.current_unresolved_ask_ids.all(id, id.trim() != '') && "
+      "this.skipped_ask_ids.all(id, id.trim() != '') && "
+      "this.display_count > 0 && "
+      "this.materialized_count == size(this.materialized_ask_ids) && "
+      "this.materialized_ask_ids.all(id, id in this.prepared_ask_ids) && "
+      "this.current_unresolved_ask_ids.all(id, id in this.materialized_ask_ids) && "
+      "this.skipped_ask_ids.all(id, id in this.prepared_ask_ids) && "
+      "this.display_count == size(this.prepared_ask_ids) - size(this.skipped_ask_ids)"
+  };
+}
+
+message ApprovalState {
+  string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.attention.approval_message_nonblank"
+      message: "approval message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message Notification {
+  NotificationID id = 1 [(buf.validate.field).required = true];
+  Source source = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  uint64 revision = 4 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  string session_id = 5 [(buf.validate.field).string.min_len = 1];
+  oneof state {
+    option (buf.validate.oneof).required = true;
+    QuestionState question = 6;
+    ApprovalState approval = 7;
+  }
+
+  option (buf.validate.message).cel = {
+    id: "kent.attention.notification_kind"
+    message: "notification id kind must match its state"
+    expression:
+      "(this.id.kind == 1 && has(this.question)) || "
+      "(this.id.kind == 2 && has(this.approval))"
+  };
+}
+
+message Resolved {
+  Source source = 1 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  NotificationID id = 2 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+}
+
+message SnapshotComplete {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message NotificationEvent {
+  uint64 sequence = 1 [(buf.validate.field).uint64 = {
+    gte: 1
+    lte: 9007199254740991
+  }];
+  oneof payload {
+    option (buf.validate.oneof).required = true;
+    Notification pending = 2;
+    Resolved resolved = 3;
+    SnapshotComplete snapshot_complete = 4;
+  }
+}
+
+message SubscribeRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.attention.subscribe_session_id_nonblank"
+      message: "session ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  bool include_pending_prompt_snapshot = 2;
+}
+
+message StartError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [(kent.api.shared.kent_result_field) = {
+      role: RESULT_FIELD_ROLE_ERROR_DETAIL
+      error_code: "internal_failure"
+    }];
+  }
+}
+
+message StartResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    StartError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service SessionService {
+  rpc Subscribe(SubscribeRequest) returns (StartResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_SUBSCRIPTION
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_ATTACHED_SESSION
+      direction: DIRECTION_CLIENT_TO_SERVER
+      event: {package: "kent.api.attention" service: "SessionService" method: "Event"}
+      completion: {package: "kent.api.attention" service: "SessionService" method: "Complete"}
+      legacy_wire_name: "attention.sessionNotification.subscribe"
+    };
+  }
+  rpc Event(NotificationEvent) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "attention.sessionNotification"
+    };
+  }
+  rpc Complete(kent.api.shared.StreamCompletion) returns (google.protobuf.Empty) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_NOTIFICATION
+      authentication_stage: AUTHENTICATION_STAGE_NONE
+      scope_policy: SCOPE_POLICY_NOTIFICATION
+      direction: DIRECTION_SERVER_TO_CLIENT
+      legacy_wire_name: "attention.sessionNotification.complete"
+    };
+  }
+}

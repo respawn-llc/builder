@@ -26,10 +26,8 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if !state.handshakeDone {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return sendResponse(ctx, conn, responseForError(req.ID, err))
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
@@ -94,11 +92,9 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			_ = sendResponse(ctx, conn, responseForError(req.ID, err))
-			return
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
+		return
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
@@ -126,11 +122,7 @@ func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx cont
 			return nil
 		},
 		func(ctx context.Context, validated rpccontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
-			subscription, err := trusted.SubscribeSessionTranscriptValidated(ctx, validated, *state.attachedSession)
-			if err != nil || state.clientCapabilities.TranscriptLiveRunFinished {
-				return subscription, err
-			}
-			return &legacyTranscriptSubscription{inner: subscription}, nil
+			return trusted.SubscribeSessionTranscriptValidated(ctx, validated, *state.attachedSession)
 		},
 		func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 			return protocol.SessionTranscriptEventParams{Message: message}
@@ -138,47 +130,46 @@ func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx cont
 	)
 }
 
-type legacyTranscriptSubscription struct {
-	inner      serverapi.TranscriptSubscription
-	suppressed uint64
-}
-
-type legacyTranscriptSequenceError struct {
-	Sequence   uint64
-	Suppressed uint64
-}
-
-func (e *legacyTranscriptSequenceError) Error() string {
-	return fmt.Sprintf(
-		"legacy transcript sequence %d is below suppressed message count %d",
-		e.Sequence,
-		e.Suppressed,
-	)
-}
-
-func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
-	for {
-		message, err := s.inner.Next(ctx)
-		if err != nil {
-			return clientui.TranscriptMessage{}, err
-		}
-		if message.Kind() == clientui.TranscriptMessageLiveRunFinished {
-			s.suppressed++
-			continue
-		}
-		if message.Sequence < s.suppressed {
-			return clientui.TranscriptMessage{}, &legacyTranscriptSequenceError{
-				Sequence:   message.Sequence,
-				Suppressed: s.suppressed,
-			}
-		}
-		message.Sequence -= s.suppressed
-		return message, nil
+func (g *Gateway) serveQuestionHistorySubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	trusted, ok := g.deps.SessionViewClient().(rpccontract.QuestionHistoryTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Question History trusted service is required")))
+		return
 	}
-}
-
-func (s *legacyTranscriptSubscription) Close() error {
-	return s.inner.Close()
+	serveGatewaySubscription(
+		g,
+		conn,
+		ctx,
+		state,
+		route,
+		req,
+		func(validated rpccontract.Validated[serverapi.QuestionHistorySubscribeRequest]) error {
+			if state.attachedSession == nil || state.attachedSession.String() != validated.Value().SessionID {
+				return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
+			}
+			return nil
+		},
+		func(ctx context.Context, validated rpccontract.Validated[serverapi.QuestionHistorySubscribeRequest]) (serverapi.QuestionHistorySubscription, error) {
+			return trusted.SubscribeQuestionHistoryValidated(ctx, validated)
+		},
+		func(event serverapi.QuestionHistoryEvent) protocol.SessionQuestionHistoryEventParams {
+			wire := protocol.SessionQuestionHistoryEvent{
+				Kind:           string(event.Kind),
+				LargeHistory:   event.LargeHistory,
+				HistoryOmitted: event.HistoryOmitted,
+			}
+			if event.Question != nil {
+				wire.Question = &protocol.SessionQuestionHistoryQuestion{
+					Question:             event.Question.Question,
+					Answer:               event.Question.Answer,
+					SelectedOptionNumber: event.Question.SelectedOptionNumber,
+					Commentary:           event.Question.Commentary,
+					At:                   event.Question.At,
+				}
+			}
+			return protocol.SessionQuestionHistoryEventParams{Event: wire}
+		},
+	)
 }
 
 func serveGatewaySubscription[Req any, Event any, Wire any, Sub gatewaySubscription[Event]](

@@ -160,6 +160,38 @@ describe("KanbanColumn retained replacement boundary", () => {
     expect(screen.queryByRole("button", { name: "board.resume" })).not.toBeInTheDocument();
   });
 
+  it("optimistically swaps only the pending Task action", () => {
+    const secondCard = { ...card, id: "task-2", shortID: "KNT-2", title: "Second Task" };
+    render(
+      <KanbanColumn
+        actionsDisabled={false}
+        cards={[card, secondCard]}
+        column={{ ...column, taskCount: 2 }}
+        dragDisabled={false}
+        dropState="idle"
+        hasMoreCards={false}
+        initialBoundary={undefined}
+        isFirstActive
+        isLoadingMoreCards={false}
+        nextBoundary={undefined}
+        onCardClick={vi.fn()}
+        onCardDragEnd={vi.fn()}
+        onCardDragStart={vi.fn()}
+        onDeleteTask={vi.fn()}
+        onDropTask={vi.fn()}
+        onInterruptTask={vi.fn()}
+        onLoadMoreCards={vi.fn()}
+        onResumeTask={vi.fn()}
+        pendingResumeTaskIDs={new Set(["task-1"])}
+        replacementBoundary={undefined}
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: "board.resume" })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "board.resume" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "board.interrupt" })).toBeDisabled();
+  });
+
   it("does not restore a drag after the selected Workflow becomes invalid", async () => {
     const rootRef = { current: null };
     const { result, rerender } = renderHook(({ disabled }) => useBoardDragLifecycle({ disabled, rootRef }), {

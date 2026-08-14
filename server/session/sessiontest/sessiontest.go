@@ -64,7 +64,8 @@ func WriteUnsupportedEventLogVersion(
 }
 
 type Persistence struct {
-	records *recordstore.Store[session.PersistedSessionRecord]
+	records         *recordstore.Store[session.PersistedSessionRecord]
+	contextWriteErr error
 }
 
 func NewPersistence() *Persistence {
@@ -76,14 +77,54 @@ func (p *Persistence) Options() []session.StoreOption {
 		session.WithPersistenceObserver(p),
 		session.WithAppendProjector(p.ProjectAppend),
 		session.WithPersistedSessionResolver(p),
+		session.WithSessionContextFactWriter(p),
 	}
 }
 
 func (p *Persistence) ObservePersistedStore(_ context.Context, snapshot session.PersistedStoreSnapshot) error {
+	contextFacts := snapshot.ContextFacts.Clone()
+	if existing, ok := p.records.Get(snapshot.Meta.SessionID); ok {
+		contextFacts = existing.ContextFacts.Clone()
+	}
 	p.records.Put(snapshot.Meta.SessionID, session.PersistedSessionRecord{
-		SessionDir: snapshot.SessionDir,
-		Meta:       cloneMeta(&snapshot.Meta),
+		SessionDir:   snapshot.SessionDir,
+		Meta:         cloneMeta(&snapshot.Meta),
+		ContextFacts: contextFacts,
 	})
+	return nil
+}
+
+func (p *Persistence) WriteSessionContextFacts(
+	_ context.Context,
+	sessionID string,
+	facts session.SessionContextFacts,
+) error {
+	if p.contextWriteErr != nil {
+		return p.contextWriteErr
+	}
+	record, ok := p.records.Get(sessionID)
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	record.ContextFacts = facts.Clone()
+	p.records.Put(sessionID, record)
+	return nil
+}
+
+func (p *Persistence) WriteManualCompactEligibility(
+	_ context.Context,
+	sessionID string,
+	eligible bool,
+) error {
+	if p.contextWriteErr != nil {
+		return p.contextWriteErr
+	}
+	record, ok := p.records.Get(sessionID)
+	if !ok {
+		return session.ErrSessionNotFound
+	}
+	record.ContextFacts.ManualCompactEligible = &eligible
+	p.records.Put(sessionID, record)
 	return nil
 }
 
@@ -120,6 +161,7 @@ func (p *Persistence) ResolvePersistedSession(_ context.Context, sessionID strin
 
 func clonePersistedSessionRecord(record session.PersistedSessionRecord) session.PersistedSessionRecord {
 	record.Meta = cloneMeta(record.Meta)
+	record.ContextFacts = record.ContextFacts.Clone()
 	return record
 }
 

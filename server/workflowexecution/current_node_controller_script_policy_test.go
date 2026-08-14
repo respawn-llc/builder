@@ -171,10 +171,8 @@ func TestCurrentNodeControllerFailedScriptDoesNotReleaseAgentCapacity(t *testing
 		started: make(chan workflow.CurrentNodeReference, 2),
 	}
 	controller, err = NewCurrentNodeController(store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
-		AgentConcurrency: 1,
-		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
-			waitErr: errors.New("assignment preparation failed"),
-		},
+		AgentConcurrency:  1,
+		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{},
 	})
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
@@ -422,7 +420,15 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 			PostCompletionEligible: true,
 		},
 	}
-	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	successorKey, err := successor.Key()
+	if err != nil {
+		t.Fatalf("successor key: %v", err)
+	}
+	steerer := &recordingCurrentNodeAssignmentSteerer{
+		byReference: map[workflow.CurrentNodeReferenceKey]currentNodeAssignmentSteerOutcome{
+			successorKey: {waitErr: cause},
+		},
+	}
 	var controller *CurrentNodeController
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
 		ExecutionFinalized: sessionruntime.ExecutionFinalizedFunc(func(scope sessionruntime.ExecutionScope) {
@@ -461,7 +467,6 @@ func TestExecutionFinalizationInterruptsUnassignedHeldSuccessor(t *testing.T) {
 		{CurrentNode: queuedScript, NodeKind: workflow.NodeKindScript},
 	})
 	sourceScope := singleLiveScope(t, authority, source)
-	steerer.setWaitError(cause)
 	if _, err := controller.CompleteCurrentNode(context.Background(), workflowruntime.CompletionRequest{
 		ScopeID:      sourceScope,
 		TransitionID: "next",

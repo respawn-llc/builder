@@ -34,7 +34,6 @@ type ProjectViewRemote interface {
 
 type DialProjectView func(context.Context, config.App) (ProjectViewRemote, error)
 type DialWorkspace func(context.Context, config.App, string, string) (*client.Remote, error)
-type Supports func(protocol.CapabilityFlags) bool
 type Accept func(protocol.ServerIdentity) bool
 
 type HeadlessRequest struct {
@@ -44,7 +43,6 @@ type HeadlessRequest struct {
 	DialProjectView  DialProjectView
 	DialWorkspace    DialWorkspace
 	Accept           Accept
-	Supports         Supports
 	// RootID, when non-empty, is pinned on the attached remote so every
 	// (re)connect handshake must report a matching persistence root id.
 	RootID string
@@ -56,7 +54,6 @@ type InteractiveRequest struct {
 	DialProjectView DialProjectView
 	DialWorkspace   DialWorkspace
 	Accept          Accept
-	Supports        Supports
 	RequireBound    bool
 	// RootID, when non-empty, is pinned on the attached remote so every
 	// (re)connect handshake must report a matching persistence root id.
@@ -77,10 +74,6 @@ func DialHeadless(ctx context.Context, req HeadlessRequest) (*client.Remote, boo
 		return nil, false, nil
 	}
 	if req.Accept != nil && !req.Accept(projectViews.Identity()) {
-		_ = projectViews.Close()
-		return nil, false, nil
-	}
-	if req.Supports != nil && !req.Supports(projectViews.Identity().Capabilities) {
 		_ = projectViews.Close()
 		return nil, false, nil
 	}
@@ -156,10 +149,6 @@ func DialInteractive(ctx context.Context, req InteractiveRequest) (*client.Remot
 		_ = projectViews.Close()
 		return nil, false
 	}
-	if req.Supports != nil && !req.Supports(projectViews.Identity().Capabilities) {
-		_ = projectViews.Close()
-		return nil, false
-	}
 	// Pin the expected root before the first discovery RPC so a dropped control
 	// connection cannot reconnect over the fallback TCP endpoint and resolve a
 	// binding from a different root before validation runs.
@@ -196,14 +185,6 @@ func DialInteractive(ctx context.Context, req InteractiveRequest) (*client.Remot
 		return nil, false
 	}
 	return remote, true
-}
-
-func SupportsRunPrompt(flags protocol.CapabilityFlags) bool {
-	return flags.RunPrompt && flags.AuthBootstrap && flags.ProjectAttach
-}
-
-func SupportsRuntimeLiveControl(flags protocol.CapabilityFlags) bool {
-	return flags.RuntimeLiveControl && flags.RuntimeControl && flags.AuthBootstrap
 }
 
 func HeadlessWorkspaceRegistrationError(workspaceRoot string) error {

@@ -56,6 +56,7 @@ const (
 	MessageTypeHeadlessMode                   = clientui.MessageTypeHeadlessMode
 	MessageTypeHeadlessModeExit               = clientui.MessageTypeHeadlessModeExit
 	MessageTypeWorkflowMode                   = clientui.MessageTypeWorkflowMode
+	MessageTypeWorkflowModeExit               = clientui.MessageTypeWorkflowModeExit
 	MessageTypeWorktreeMode                   = clientui.MessageTypeWorktreeMode
 	MessageTypeWorktreeModeExit               = clientui.MessageTypeWorktreeModeExit
 	MessageTypeGoal                           = clientui.MessageTypeGoal

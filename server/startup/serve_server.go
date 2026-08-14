@@ -16,6 +16,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/onboarding"
@@ -357,53 +358,6 @@ func newServerIdentity(cfg config.App) protocol.ServerIdentity {
 		ServerID:          fmt.Sprintf(config.Command+":%d", os.Getpid()),
 		PID:               os.Getpid(),
 		PersistenceRootID: config.PersistenceRootHash(cfg.PersistenceRoot),
-		Capabilities:      serverCapabilityFlags(apicontract.Routes()),
-	}
-}
-
-func serverCapabilityFlags(routes []apicontract.Route) protocol.CapabilityFlags {
-	methods := make(map[string]struct{}, len(routes))
-	dependencies := make(map[apicontract.Dependency]struct{}, len(routes))
-	for _, route := range routes {
-		methods[route.Method] = struct{}{}
-		dependencies[route.Dependency] = struct{}{}
-	}
-	hasMethod := func(method string) bool {
-		_, ok := methods[method]
-		return ok
-	}
-	hasDependency := func(dependency apicontract.Dependency) bool {
-		_, ok := dependencies[dependency]
-		return ok
-	}
-	methodHasDependency := func(method string, dependency apicontract.Dependency) bool {
-		for _, route := range routes {
-			if route.Method == method && route.Dependency == dependency {
-				return true
-			}
-		}
-		return false
-	}
-	return protocol.CapabilityFlags{
-		JSONRPCWebSocket:       hasMethod(protocol.MethodHandshake),
-		AuthBootstrap:          hasDependency(apicontract.DependencyAuthBootstrap),
-		ProjectAttach:          methodHasDependency(protocol.MethodAttachProject, apicontract.DependencyProtocolAttach),
-		SessionAttach:          methodHasDependency(protocol.MethodAttachSession, apicontract.DependencyProtocolAttach),
-		HealthEndpoint:         true,
-		ReadinessEndpoint:      true,
-		RunPrompt:              hasDependency(apicontract.DependencyRunPrompt),
-		SessionPlan:            hasMethod(protocol.MethodSessionPlan),
-		SessionLifecycle:       hasDependency(apicontract.DependencySessionLifecycle),
-		SessionTranscript:      hasDependency(apicontract.DependencySessionTranscript),
-		SessionRuntime:         hasDependency(apicontract.DependencySessionRuntime),
-		RuntimeControl:         hasDependency(apicontract.DependencyRuntimeControl),
-		RuntimeLiveControl:     hasDependency(apicontract.DependencyRuntimeControl) && transport.RuntimeLiveControlRoutesExecutable(),
-		PromptControl:          hasDependency(apicontract.DependencyPromptControl),
-		AttentionNotifications: hasDependency(apicontract.DependencyAttentionNotification),
-		OnboardingFinalize:     hasDependency(apicontract.DependencyOnboardingFinalize),
-		PromptCommands: hasDependency(apicontract.DependencyPromptCommandCatalog) &&
-			hasDependency(apicontract.DependencyRuntimeControl) &&
-			hasMethod(protocol.MethodRuntimeSubmitUserTurn),
 	}
 }
 
@@ -532,9 +486,13 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	if err != nil {
 		return d.activationError(resp, err)
 	}
-	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, core.Options{
-		RootLease: d.rootLease,
-	})
+	appCore, err := core.NewWithContextOptions(
+		ctx,
+		refreshed.Config,
+		d.authSupport,
+		runtimeSupport,
+		coreOptionsForBootstrap(d.bootstrap, d.rootLease),
+	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return d.activationError(resp, err)
@@ -563,22 +521,17 @@ func (d *startupGatewayDependencies) activeCore() *core.Core {
 	return d.core
 }
 
-func (d *startupGatewayDependencies) RouteDependencyAvailable(dep apicontract.Dependency) error {
-	switch dep {
-	case apicontract.DependencyProtocol, apicontract.DependencyServerStatus, apicontract.DependencyAuthBootstrap, apicontract.DependencyAuthStatus, apicontract.DependencyCapabilityFacts, apicontract.DependencyOnboardingFinalize:
+func (d *startupGatewayDependencies) RequireCoreActive() error {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.core != nil {
 		return nil
-	default:
-		d.mu.RLock()
-		defer d.mu.RUnlock()
-		if d.core != nil {
-			return nil
-		}
-		if d.activation != nil {
-			diagnostic := d.activation.Error()
-			return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, d.activation)
-		}
-		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
+	if d.activation != nil {
+		diagnostic := d.activation.Error()
+		return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{Diagnostic: &diagnostic}, d.activation)
+	}
+	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 }
 
 type startupReadinessState struct {
@@ -769,6 +722,12 @@ func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionView
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) ChatSettingsClient() apicontract.ChatSettingsService {
+	if c := d.activeCore(); c != nil {
+		return c.ChatSettingsClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()
@@ -798,6 +757,24 @@ func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ct
 		return c.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, workspaceRoot)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, workspaceID)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) SessionChatContextOwner() chatcontext.SessionOwner {
+	if c := d.activeCore(); c != nil {
+		return c.SessionChatContextOwner()
+	}
+	return nil
 }
 func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {

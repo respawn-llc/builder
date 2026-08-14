@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"core/server/chatcontext"
 	"core/shared/apicontract"
 	"core/shared/protocol"
 	"core/shared/runtimeids"
@@ -116,9 +117,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if params.ProtocolVersion != protocol.Version {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
 		}
-		if params.ClientCapabilities != nil {
-			state.clientCapabilities = *params.ClientCapabilities
-		}
 		state.handshakeDone = true
 		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
 	},
@@ -191,6 +189,50 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		})
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
+	protocol.MethodChatContextGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+			if params.Target.IsWorkspaceChat() {
+				authReady, err := newRoutePolicyExecutor(g).serverAuthReady(ctx, state)
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				if !authReady {
+					return serverapi.ChatContextResponse{}, serverapi.ErrServerAuthRequired
+				}
+				projectID, err := g.activeProjectID(ctx, state)
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				var owner chatcontext.WorkspaceOwner
+				if strings.TrimSpace(state.attachedWorkspaceID) == "" {
+					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, state.attachedWorkspaceRoot)
+				} else {
+					owner, err = g.deps.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, state.attachedWorkspaceID)
+				}
+				if err != nil {
+					return serverapi.ChatContextResponse{}, err
+				}
+				if owner == nil {
+					return serverapi.ChatContextResponse{}, errors.New("workspace Chat Context owner is required")
+				}
+				contextFacts, err := owner.ReadWorkspaceChatContext(ctx)
+				return serverapi.ChatContextResponse{Context: contextFacts}, err
+			}
+			sessionID, selected := params.Target.SessionID()
+			if !selected {
+				return serverapi.ChatContextResponse{}, errors.New("validated Chat Context target is required")
+			}
+			if err := g.requireSessionInActiveProject(ctx, state, sessionID.String()); err != nil {
+				return serverapi.ChatContextResponse{}, err
+			}
+			owner := g.deps.SessionChatContextOwner()
+			if owner == nil {
+				return serverapi.ChatContextResponse{}, errors.New("Session Chat Context owner is required")
+			}
+			contextFacts, err := owner.ReadSessionChatContext(ctx, sessionID)
+			return serverapi.ChatContextResponse{Context: contextFacts}, err
+		})
+	},
 	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
 			projectID, err := g.activeProjectID(ctx, state)
@@ -261,22 +303,50 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			)
 		})
 	},
-	protocol.MethodProjectList:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjects),
-	protocol.MethodProjectHomeList:               gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectHomeListRequest, serverapi.ProjectHomeListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectHome),
-	protocol.MethodProjectResolvePath:            gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectResolvePathRequest, serverapi.ProjectResolvePathResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ResolveProjectPath),
-	protocol.MethodProjectPlanWorkspaceBinding:   gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectBindingPlanRequest, serverapi.ProjectBindingPlanResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.PlanWorkspaceBinding),
-	protocol.MethodProjectCreate:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectCreateRequest, serverapi.ProjectCreateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.CreateProject),
-	protocol.MethodProjectEditGet:                gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectEdit),
-	protocol.MethodProjectUpdate:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectUpdateRequest, serverapi.ProjectUpdateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UpdateProject),
-	protocol.MethodProjectSetDefaultWorkspace:    gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.SetDefaultWorkspace),
-	protocol.MethodProjectWorkspaceList:          gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectWorkspaces),
-	protocol.MethodProjectWorkspaceGet:           gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectWorkspace),
-	protocol.MethodProjectUnlinkWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UnlinkWorkspaceFromProject),
-	protocol.MethodProjectDelete:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDeleteRequest, serverapi.ProjectDeleteResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.DeleteProject),
-	protocol.MethodProjectAttachWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.AttachWorkspaceToProject),
-	protocol.MethodProjectRebindWorkspace:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.RebindWorkspace),
-	protocol.MethodProjectGetOverview:            gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectOverview),
-	protocol.MethodSessionPage:                   gatewayClientCall[apicontract.ProjectViewService, serverapi.SessionPageRequest, serverapi.SessionPageResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListSessionPage),
+	protocol.MethodProjectList:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectListRequest, serverapi.ProjectListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjects),
+	protocol.MethodProjectHomeList:             gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectHomeListRequest, serverapi.ProjectHomeListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectHome),
+	protocol.MethodProjectResolvePath:          gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectResolvePathRequest, serverapi.ProjectResolvePathResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ResolveProjectPath),
+	protocol.MethodProjectPlanWorkspaceBinding: gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectBindingPlanRequest, serverapi.ProjectBindingPlanResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.PlanWorkspaceBinding),
+	protocol.MethodProjectCreate:               gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectCreateRequest, serverapi.ProjectCreateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.CreateProject),
+	protocol.MethodProjectEditGet:              gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectEditGetRequest, serverapi.ProjectEditGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectEdit),
+	protocol.MethodProjectUpdate:               gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectUpdateRequest, serverapi.ProjectUpdateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UpdateProject),
+	protocol.MethodProjectSetDefaultWorkspace:  gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.SetDefaultWorkspace),
+	protocol.MethodProjectWorkspaceList:        gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectWorkspaces),
+	protocol.MethodProjectWorkspaceGet:         gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectWorkspace),
+	protocol.MethodProjectUnlinkWorkspace:      gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UnlinkWorkspaceFromProject),
+	protocol.MethodProjectDelete:               gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDeleteRequest, serverapi.ProjectDeleteResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.DeleteProject),
+	protocol.MethodProjectAttachWorkspace:      gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.AttachWorkspaceToProject),
+	protocol.MethodProjectRebindWorkspace:      gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.RebindWorkspace),
+	protocol.MethodProjectGetOverview:          gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectOverview),
+	protocol.MethodSessionPage:                 gatewayClientCall[apicontract.ProjectViewService, serverapi.SessionPageRequest, serverapi.SessionPageResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListSessionPage),
+	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
+			switch params.Target.TargetKind {
+			case serverapi.ChatSettingsReadTargetLazy:
+				activeProjectID, err := g.activeProjectID(ctx, state)
+				if err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
+					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
+				}
+			case serverapi.ChatSettingsReadTargetSession:
+				if err := g.requireSessionInActiveProject(ctx, state, params.Target.Session.String()); err != nil {
+					return serverapi.ChatSettingsReadResponse{}, err
+				}
+			default:
+				return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
+			}
+			response, err := g.deps.ChatSettingsClient().ReadChatSettings(ctx, params)
+			if err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			if err := response.ValidateForTarget(params.Target); err != nil {
+				return serverapi.ChatSettingsReadResponse{}, err
+			}
+			return response, nil
+		})
+	},
 	protocol.MethodWorkflowCreate:                gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateWorkflow),
 	protocol.MethodWorkflowCreateAndLinkProject:  gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.CreateAndLinkWorkflowToProject),
 	protocol.MethodWorkflowUpdate:                gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.UpdateWorkflow),

@@ -272,9 +272,21 @@ The editor shows draft validation and execution validation. Draft validation cat
 
 Graph edits can be blocked when active tasks would be affected. Prefer cleaning the board from in progress task when editing workflows.
 
-Create tasks from a project board. Each task belongs to one project and one linked workflow. The project supplies workspaces and execution environment; the workflow supplies the board shape and automation path.
+Project Tasks spans every workflow linked to the project. Each task belongs to one project and one linked workflow; the project supplies workspaces and execution environment, while the workflow supplies the automation path.
 
-New tasks start in Backlog and follow the project's default workflow unless you choose another linked workflow.
+Tasks are grouped by their workflow state:
+
+- **Active** contains tasks that are queued, running, interrupted, active, waiting for a question, or waiting for approval.
+- **Backlog** contains tasks that have not started.
+- **Done** contains completed tasks.
+
+Task creation follows the project's workflow links:
+
+- With no linked workflows, use **Link Workflow** before creating a task.
+- With one linked workflow, **New Task** creates the task in that workflow, whether or not it is the default.
+- With multiple linked workflows, **New Task** uses the linked default workflow. If no linked default exists, use **Link Workflow** instead.
+
+Activating a task opens Task Detail. Activating Labels opens the assignment chooser without opening Task Detail.
 
 Choose the source workspace before starting automation. Agents run in the environment where the Kent server runs, so that environment must have the repository, toolchains, credentials, and local files the workflow needs.
 
@@ -343,7 +355,7 @@ kent task create --project . --title "Fix flaky tests" --body "Investigate and r
 kent task create --project . --workflow "$workflow_uuid" --title "Fix flaky tests" --body "Investigate and repair the failure."
 ```
 
-Task listing is always project-scoped. Omitting `--workflow` lists tasks across every workflow linked to the project; supplying it narrows the result. Project-wide rows omit workflow columns. `--column` and `--sort column` require explicit workflow narrowing.
+Task listing is always project-scoped. Omitting `--workflow` lists tasks across every workflow linked to the project; supplying it narrows the result. Project-wide rows include workflow information when multiple workflows match and omit it when exactly one matches. `--column` and `--sort column` require explicit workflow narrowing.
 
 ```bash
 kent task list --project .

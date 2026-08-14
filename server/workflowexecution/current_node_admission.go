@@ -86,6 +86,7 @@ type currentNodeAgentCapacityLease struct {
 type currentNodeQueuedStart struct {
 	reference          workflow.CurrentNodeReference
 	taskPromptDelivery workflowruntime.TaskPromptDelivery
+	requiresAssignment bool
 	assignment         *CurrentNodeClassifiedAssignment
 	assignmentWait     CurrentNodeAssignmentSteer
 	holdFor            *runtimeids.ExecutionScopeID
@@ -161,8 +162,9 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err != nil {
 		return err
 	}
-	if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment &&
-		start.assignment == nil {
+	if start.assignment == nil &&
+		(start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment ||
+			start.policy == currentNodeAdmissionAutomaticAgent) {
 		prepared, err := c.steerAssignment(ctx, reference)
 		if err != nil {
 			return err
@@ -732,6 +734,12 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		c.releaseReservation(key, start.policy, start.agentCapacityLease)
 		c.finishAdmissionWorker(start)
 	}()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
 	if start.assignmentWait != nil {
 		decision := classifyCurrentNodeAssignment(
 			c.workerContext,
@@ -742,7 +750,8 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		key := start.referenceKey()
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(key)
-		if decision.diagnostic != nil {
+		canceled := context.Cause(c.workerContext) != nil
+		if decision.diagnostic != nil && !canceled {
 			c.workerDiagnostics = errors.Join(
 				c.workerDiagnostics,
 				fmt.Errorf(
@@ -758,13 +767,13 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 				c.replaceTransferredUserInterruption(start, decision.diagnostic)
 				return
 			}
-			if context.Cause(c.workerContext) != nil {
+			if canceled {
 				return
 			}
 			c.handleAdmissionFailure(start, false, decision.diagnostic)
 			return
 		}
-		if interrupted || context.Cause(c.workerContext) != nil {
+		if interrupted || canceled {
 			return
 		}
 		start.assignment = decision.assignment
@@ -780,6 +789,14 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			return
 		}
 		start.holdFor = nil
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed = c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return
 	}
 	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
 		c.mu.Lock()
@@ -1190,6 +1207,7 @@ func currentNodeExplicitStarts(nodes []workflow.CurrentNode) ([]currentNodeQueue
 		starts = append(starts, currentNodeQueuedStart{
 			reference:          currentNode.Reference,
 			taskPromptDelivery: workflowruntime.TaskPromptDeliveryResume,
+			requiresAssignment: currentNode.AgentExecutionSelection != nil,
 		})
 	}
 	return starts, nil

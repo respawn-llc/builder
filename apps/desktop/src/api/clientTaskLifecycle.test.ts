@@ -3,6 +3,7 @@ import {
   taskApproveResponseSchema,
   taskMovePreviewResponseSchema,
   taskMoveResponseSchema,
+  taskResumeResponseSchema,
   taskStartResponseSchema,
 } from "./schemas/workflowBoard";
 import { FakeRpcTransport } from "@/test-support/api";
@@ -143,6 +144,20 @@ describe("task lifecycle client", () => {
     });
   });
 
+  it("maps an already-resumed Task response as a no-op", () => {
+    expect(
+      taskResumeResponseSchema.parse({
+        outcome: "no_op",
+        no_op: {
+          current_nodes: [{ node_id: "node-1", transition_branch_key: null, session_id: "session-1" }],
+        },
+      }),
+    ).toMatchObject({
+      outcome: "no_op",
+      noOp: { currentNodes: [{ nodeID: "node-1", sessionID: "session-1" }] },
+    });
+  });
+
   it("parses every Manual Move preview outcome and same-current no-op", () => {
     expect(taskMoveResponseSchema.parse({ outcome: "no_op", no_op: { current_nodes:
       [{ node_id: "node-1", transition_branch_key: null, session_id: null }], retained_previous_worktree: null } }))
@@ -173,9 +188,9 @@ describe("task lifecycle client", () => {
     expect(
       taskMovePreviewResponseSchema.parse({
         outcome: "blocked",
-        blocked: { reason: "waiting_question" },
+        blocked: { reason: "lifecycle_conflict" },
       }),
-    ).toEqual({ outcome: "blocked", blocked: { reason: "waiting_question" } });
+    ).toEqual({ outcome: "blocked", blocked: { reason: "lifecycle_conflict" } });
   });
 
   it("rejects malformed lifecycle responses and empty applied Current Nodes", () => {

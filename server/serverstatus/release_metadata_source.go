@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"core/server/httpcompression"
 	brand "core/shared/config"
 )
 
@@ -84,7 +85,7 @@ func newDefaultGitHubReleaseMetadataSource() *githubReleaseMetadataSource {
 
 func newGitHubReleaseMetadataSource(client *http.Client, latestURL string) *githubReleaseMetadataSource {
 	if client == nil {
-		client = &http.Client{}
+		client = httpcompression.NewClient(nil)
 	}
 	return &githubReleaseMetadataSource{client: client, latestURL: latestURL}
 }

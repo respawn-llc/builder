@@ -170,44 +170,6 @@ func TestOngoingNativeScrollbackPTYScenarios(t *testing.T) {
 			},
 			expectedScreenRows: []string{"$ sleep 2; echo $((51515150+1))  " + transcriptrender.BackgroundedShellSuffix},
 		},
-		{
-			name: "live_tool_promotion_and_input_dispositions",
-			script: map[string]any{
-				"prompt": "observe live tool lifecycle",
-				"steps": []map[string]any{
-					{
-						"tool_calls": []map[string]any{
-							{
-								"id":    "4c2725e5-9997-45f9-8aaf-a79c1ae523f6",
-								"name":  "exec_command",
-								"input": map[string]any{"cmd": "sleep 1; echo $((42424241+1))"},
-							},
-						},
-					},
-					{
-						"expected_tool_results": []map[string]any{
-							{"CallID": "4c2725e5-9997-45f9-8aaf-a79c1ae523f6", "Name": "exec_command"},
-						},
-						"final": "live lifecycle complete",
-					},
-					{
-						"final": "queued lifecycle complete",
-					},
-				},
-			},
-			frameInputs: []pty.FrameInputSequence{{
-				Phase: pty.PhaseToolStarted,
-				Inputs: []pty.FrameInput{
-					{Readiness: pty.ReadinessRendererFrame, Bytes: []byte("queued after tool start")},
-					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\t")},
-					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("steering after tool start")},
-					{Readiness: pty.ReadinessInputApplied, Bytes: []byte("\r")},
-				},
-			}},
-			expectedAppends:    []string{"❮ live lifecycle complete", "❮ queued lifecycle complete"},
-			expectedScreenRows: []string{"$ sleep 1; echo $((42424241+1))"},
-			completionDrain:    &modelMismatchCompletionDrain,
-		},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {

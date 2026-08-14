@@ -301,6 +301,10 @@ func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequ
 	return callUnscopedRPC[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](c, ctx, protocol.MethodAuthGetStatus, req)
 }
 
+func (c *Remote) GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+	return callControlRPC[serverapi.ChatContextRequest, serverapi.ChatContextResponse](c, ctx, protocol.MethodChatContextGet, req)
+}
+
 func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
 	return callUnscopedRPC[serverapi.ProjectListRequest, serverapi.ProjectListResponse](c, ctx, protocol.MethodProjectList, req)
 }
@@ -678,6 +682,10 @@ func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTa
 	return callUnscopedRPC[serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](c, ctx, protocol.MethodWorkflowTaskList, req)
 }
 
+func (c *Remote) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	return callUnscopedRPC[serverapi.WorkflowProjectTaskGroupCountsRequest, serverapi.WorkflowProjectTaskGroupCountsResponse](c, ctx, protocol.MethodWorkflowProjectTaskGroupCounts, req)
+}
+
 func (c *Remote) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
 	response, err := callDedicatedRPC[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](
 		c,
@@ -745,6 +753,26 @@ func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkspaceChatMaterializeResponse{}, err
 	}
 	return resp, nil
+}
+
+func (c *Remote) ReadChatSettings(
+	ctx context.Context,
+	req serverapi.ChatSettingsReadRequest,
+) (serverapi.ChatSettingsReadResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	var response serverapi.ChatSettingsReadResponse
+	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if err := response.ValidateForTarget(req.Target); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, invalidResponseError(
+			"Chat settings",
+			err,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -1118,6 +1146,7 @@ func dialConfiguredRemote(ctx context.Context, cfg config.App, intent *remoteAtt
 
 var _ apicontract.ProjectViewService = (*Remote)(nil)
 var _ apicontract.AuthStatusService = (*Remote)(nil)
+var _ apicontract.ChatContextService = (*Remote)(nil)
 var _ apicontract.SessionLaunchService = (*Remote)(nil)
 var _ apicontract.SessionViewService = (*Remote)(nil)
 var _ apicontract.SessionLifecycleService = (*Remote)(nil)

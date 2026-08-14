@@ -35,6 +35,7 @@ const (
 	metaContextKindHeadlessExit
 	metaContextKindActiveGoalContinuation
 	metaContextKindWorkflow
+	metaContextKindWorkflowExit
 	metaContextKindWorktree
 	metaContextKindWorktreeExit
 )
@@ -817,6 +818,12 @@ func classifyMetaContextMessage(message llm.Message) (metaContextClassification,
 			key:         "workflow",
 			sourcePath:  sourcePath,
 			messageType: llm.MessageTypeWorkflowMode,
+		}, true
+	case llm.MessageTypeWorkflowModeExit:
+		return metaContextClassification{
+			kind:        metaContextKindWorkflowExit,
+			key:         "workflow_exit",
+			messageType: llm.MessageTypeWorkflowModeExit,
 		}, true
 	case llm.MessageTypeWorktreeMode:
 		return metaContextClassification{

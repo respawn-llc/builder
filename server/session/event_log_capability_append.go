@@ -24,6 +24,22 @@ type EventRecordAppendInput struct {
 	generatedRecoveredWarning bool
 }
 
+func projectEventPayloadForVersion(version int, payload EventRecordPayload) (EventRecordPayload, error) {
+	switch version {
+	case EventLogVersionV2:
+		return payload, nil
+	case EventLogVersionV1:
+		completion, ok := payload.(ToolCompletionRecord)
+		if !ok || completion.QuestionAnswer == nil {
+			return payload, nil
+		}
+		completion.QuestionAnswer = nil
+		return completion, nil
+	default:
+		return nil, fmt.Errorf("unsupported event log version %d", version)
+	}
+}
+
 type EventRecordAppendResult struct {
 	Record EventRecord
 	CommitReceipt
@@ -242,8 +258,18 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	for index, input := range inputs {
 		sequence++
 		committedAtUnixMs := input.committedAtUnixMs
+		payload, err := projectEventPayloadForVersion(log.version, input.Payload)
+		if err != nil {
+			s.mu.Unlock()
+			return recordAppendOutcome{}, fmt.Errorf(
+				"project event record %d for event-log v%d: %w",
+				index,
+				log.version,
+				err,
+			)
+		}
 		if !input.preserveCommittedAt {
-			eligible, err := eventPayloadEligibleForCommittedTime(input.Payload)
+			eligible, err := eventPayloadEligibleForCommittedTime(payload)
 			if err != nil {
 				s.mu.Unlock()
 				return recordAppendOutcome{}, fmt.Errorf(
@@ -256,7 +282,12 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 				committedAtUnixMs = &appendTimeUnixMs
 			}
 		}
-		record, err := newEventRecord(sequence, input.StepID, input.Payload, committedAtUnixMs)
+		record, err := newEventRecord(
+			sequence,
+			input.StepID,
+			payload,
+			committedAtUnixMs,
+		)
 		if err != nil {
 			s.mu.Unlock()
 			return recordAppendOutcome{}, fmt.Errorf(
@@ -313,6 +344,15 @@ func (s *Store) appendProjectionFromRecordsLocked(
 		LastSequence:  records[len(records)-1].Seq(),
 		AppendedAt:    appendedAt,
 	}
+	assignmentProjection := Meta{
+		ActiveWorkflowAssignment:      cloneMessageRecord(s.meta.ActiveWorkflowAssignment),
+		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(s.meta.ActiveWorkflowAssignmentState),
+	}
+	if err := advanceActiveWorkflowAssignmentFromRecords(&assignmentProjection, records); err != nil {
+		return AppendProjection{}, err
+	}
+	projection.activeWorkflowAssignment = cloneMessageRecord(assignmentProjection.ActiveWorkflowAssignment)
+	projection.activeWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(assignmentProjection.ActiveWorkflowAssignmentState)
 	for index, record := range records {
 		payload, err := record.Payload()
 		if err != nil {
@@ -358,4 +398,6 @@ func applyAppendProjectionToMeta(meta *Meta, projection AppendProjection) {
 	if projection.AppendedAt.After(meta.UpdatedAt) {
 		meta.UpdatedAt = projection.AppendedAt
 	}
+	meta.ActiveWorkflowAssignment = cloneMessageRecord(projection.activeWorkflowAssignment)
+	meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(projection.activeWorkflowAssignmentState)
 }

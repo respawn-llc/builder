@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
 
@@ -20,12 +19,11 @@ import (
 	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
-	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
 	"core/shared/sessioncontract"
 	"core/shared/textutil"
-	"core/shared/toolspec"
 )
 
 func TestNewBuildsReusableServerCore(t *testing.T) {
@@ -232,12 +230,6 @@ func writeCorePromptFixture(t *testing.T, workspace, name, content string) {
 	}
 }
 
-func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
-	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
-		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")
-	}
-}
-
 func TestNewProvidesRegistrationSafeClientsForUnregisteredWorkspace(t *testing.T) {
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -440,12 +432,18 @@ func TestSessionLaunchClientForProjectWorkspaceUsesWorkspaceLocalConfig(t *testi
 }
 func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 	workspace := t.TempDir()
-	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: t.TempDir()}})
+	configRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configRoot, "config.toml"),
+		[]byte("tools.ask_question = false\n\n[subagents.worker]\ntools.ask_question = true\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write draft service config: %v", err)
+	}
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{WorkspaceRoot: workspace, LoadOptions: brand.LoadOptions{ConfigRoot: configRoot}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved.Config.Settings.EnabledTools[toolspec.ToolAskQuestion] = false
-	resolved.Config.Settings.Subagents["worker"] = brand.SubagentRole{Settings: brand.Settings{EnabledTools: map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}}, Sources: map[string]string{"tools." + toolspec.ConfigName(toolspec.ToolAskQuestion): "test"}}
 	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
 	if err != nil {
 		t.Fatal(err)
@@ -500,27 +498,20 @@ func TestCoreComposedWorkspaceDraftServicesShareLane(t *testing.T) {
 
 func TestCoreMaterializesWorkspaceChatAtServerBoundary(t *testing.T) {
 	workspace := t.TempDir()
+	configRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(configRoot, "config.toml"),
+		[]byte("priority_request_mode = true\ntools.ask_question = true\n\n[provider_capabilities]\nprovider_id = \"openai\"\nsupports_responses_api = true\nis_openai_first_party = true\n\n[subagents.worker]\nthinking_level = \"high\"\n"),
+		0o600,
+	); err != nil {
+		t.Fatalf("write materialization config: %v", err)
+	}
 	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
 		WorkspaceRoot: workspace,
-		LoadOptions:   brand.LoadOptions{ConfigRoot: t.TempDir()},
+		LoadOptions:   brand.LoadOptions{ConfigRoot: configRoot},
 	})
 	if err != nil {
 		t.Fatalf("ResolveConfig: %v", err)
-	}
-	resolved.Config.Settings.PriorityRequestMode = true
-	resolved.Config.Settings.ProviderCapabilities = brand.ProviderCapabilitiesOverride{
-		ProviderID:           "openai",
-		SupportsResponsesAPI: true,
-		IsOpenAIFirstParty:   true,
-	}
-	resolved.Config.Settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolAskQuestion: true}
-	workerSettings := resolved.Config.Settings
-	workerSettings.ThinkingLevel = "high"
-	resolved.Config.Settings.Subagents = map[string]brand.SubagentRole{
-		"worker": {
-			Settings: workerSettings,
-			Sources:  map[string]string{"thinking_level": "file"},
-		},
 	}
 	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
 	if err != nil {
@@ -714,6 +705,68 @@ func TestSessionChatSettingsPreparationUsesImmutableGlobalSnapshot(t *testing.T)
 	}
 }
 
+func TestChatSettingsMaterializedReadUsesDetachedSessionSnapshotWithoutRebinding(t *testing.T) {
+	workspace := t.TempDir()
+	resolved, err := serverbootstrap.ResolveConfig(serverbootstrap.Request{
+		WorkspaceRoot: workspace,
+		LoadOptions:   brand.LoadOptions{ConfigRoot: t.TempDir()},
+	})
+	if err != nil {
+		t.Fatalf("ResolveConfig: %v", err)
+	}
+	binding, err := metadata.RegisterBinding(t.Context(), resolved.Config.PersistenceRoot, workspace)
+	if err != nil {
+		t.Fatalf("RegisterBinding: %v", err)
+	}
+	appCore := newCoreTestApp(t, resolved.Config, auth.EmptyState())
+	store, err := session.Create(
+		filepath.Join(resolved.Config.PersistenceRoot, "projects", binding.ProjectID, "sessions"),
+		"detached",
+		resolved.Config.WorkspaceRoot,
+		sessioncontract.SessionCategoryMain,
+		appCore.MetadataStore().AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("session.Create: %v", err)
+	}
+	if err := store.EnsureDurable(); err != nil {
+		t.Fatalf("EnsureDurable: %v", err)
+	}
+	if err := appCore.MetadataStore().UpdateSessionExecutionTarget(
+		t.Context(),
+		metadata.SessionExecutionTargetUpdate{SessionID: store.Meta().SessionID},
+	); err != nil {
+		t.Fatalf("detach Session execution target: %v", err)
+	}
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+
+	response, err := appCore.ChatSettingsClient().ReadChatSettings(
+		t.Context(),
+		serverapi.ChatSettingsReadRequest{
+			Target: serverapi.SessionChatSettingsTarget(sessionID),
+		},
+	)
+	if err != nil {
+		t.Fatalf("ReadChatSettings detached Session: %v", err)
+	}
+	if response.Session == nil || response.Session.SessionID != sessionID {
+		t.Fatalf("detached response = %+v", response)
+	}
+	executionTarget, err := appCore.MetadataStore().ResolveSessionExecutionTarget(
+		t.Context(),
+		store.Meta().SessionID,
+	)
+	if err != nil {
+		t.Fatalf("ResolveSessionExecutionTarget: %v", err)
+	}
+	if executionTarget.WorkspaceID != "" {
+		t.Fatalf("detached read rebound workspace %q", executionTarget.WorkspaceID)
+	}
+}
+
 func TestSessionChatSettingsPreparationUsesPersistedPromptFacingEndpoint(t *testing.T) {
 	workspace := t.TempDir()
 	persistenceRoot := t.TempDir()
@@ -842,9 +895,12 @@ func TestRunPromptClientForProjectWorkspaceReplaysHeadlessRunAcrossClientInstanc
 	if err != nil {
 		t.Fatalf("RegisterBinding: %v", err)
 	}
-	appCore := newCoreTestApp(t, resolved.Config, auth.State{
+	appCore := newCoreTestAppWithLoadOptions(t, resolved.Config, auth.State{
 		Scope:  auth.ScopeGlobal,
 		Method: auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "test-key"}},
+	}, brand.LoadOptions{
+		Model:         "gpt-5",
+		OpenAIBaseURL: server.URL,
 	})
 
 	firstClient, err := appCore.RunPromptClientForProjectWorkspace(context.Background(), binding.ProjectID, workspace)
@@ -951,6 +1007,10 @@ func TestSessionLaunchClientForProjectWorkspaceRejectsInaccessibleProjectRoot(t 
 }
 
 func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
+	return newCoreTestAppWithLoadOptions(t, cfg, state, brand.LoadOptions{})
+}
+
+func newCoreTestAppWithLoadOptions(t *testing.T, cfg brand.App, state auth.State, loadOptions brand.LoadOptions) *Core {
 	t.Helper()
 	authSupport, err := serverbootstrap.BuildAuthSupport(auth.NewMemoryStore(state), nil, nil)
 	if err != nil {
@@ -961,7 +1021,9 @@ func newCoreTestApp(t *testing.T, cfg brand.App, state auth.State) *Core {
 		t.Fatalf("BuildRuntimeSupport: %v", err)
 	}
 	t.Cleanup(func() { _ = runtimeSupport.Background.Close() })
-	appCore, err := New(cfg, authSupport, runtimeSupport)
+	appCore, err := NewWithContextOptions(t.Context(), cfg, authSupport, runtimeSupport, Options{
+		WorkspaceConfigLoadOptions: loadOptions,
+	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

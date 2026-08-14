@@ -416,9 +416,6 @@ func handshakeRPC(ctx context.Context, conn rpcwire.Conn) (protocol.ServerIdenti
 	var resp protocol.HandshakeResponse
 	if err := callRPC(ctx, conn, "handshake", protocol.MethodHandshake, protocol.HandshakeRequest{
 		ProtocolVersion: protocol.Version,
-		ClientCapabilities: &protocol.ClientCapabilities{
-			TranscriptLiveRunFinished: true,
-		},
 	}, &resp); err != nil {
 		return protocol.ServerIdentity{}, err
 	}
@@ -627,6 +624,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	}
 	if resp.Code == protocol.ErrCodePromptCommands && len(resp.Data) > 0 {
 		return serverapi.DecodePromptCommandError(resp.Data, message)
+	}
+	if resp.Code == protocol.ErrCodeChatSettingsAgentPreparation {
+		return serverapi.DecodeChatSettingsAgentPreparationError(resp.Data, message)
 	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}

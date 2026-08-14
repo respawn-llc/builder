@@ -84,6 +84,7 @@ export type WorkflowExecutionTargetActionResponse<TApplied> =
 export type TaskStartResponse = WorkflowExecutionTargetActionResponse<TaskStartApplied>;
 export type TaskResumeResponse =
   | Readonly<{ outcome: "applied"; applied: TaskResumeApplied }>
+  | Readonly<{ outcome: "no_op"; noOp: TaskResumeApplied }>
   | Readonly<{
       outcome: "selection_required";
       selectionRequired: WorkflowExecutionTargetSelectionRequirement;
@@ -97,7 +98,6 @@ export type TaskMovePreviewBlocker =
   | "invalid_workflow"
   | "no_source_position"
   | "unsupported_destination"
-  | "waiting_question"
   | "lifecycle_conflict"
   | "context_session_unavailable"
   | "no_usable_transition"

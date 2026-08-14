@@ -1049,6 +1049,109 @@ func (q *Queries) CountOtherNonTerminalTasksByManagedWorktree(ctx context.Contex
 	return ref_count, err
 }
 
+const countProjectTaskGroups = `-- name: CountProjectTaskGroups :one
+WITH
+args AS (
+    SELECT
+        CAST(?1 AS TEXT) AS project_id,
+        CAST(?2 AS TEXT) AS live_task_states_json
+),
+live_task_states AS (
+    SELECT
+        CAST(json_extract(value, '$.task_id') AS TEXT) AS task_id,
+        CAST(json_extract(value, '$.has_running') AS INTEGER) AS has_running,
+        CAST(json_extract(value, '$.has_queued') AS INTEGER) AS has_queued,
+        CAST(json_extract(value, '$.waiting_question') AS INTEGER) AS waiting_question,
+        CAST(json_extract(value, '$.has_waiting_approval') AS INTEGER) AS has_waiting_approval
+    FROM json_each((SELECT live_task_states_json FROM args))
+),
+effective_status AS (
+    SELECT
+        durable.task_id,
+        durable.is_done,
+        CASE
+            WHEN durable.is_done != 0 THEN 'done'
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 'waiting_question'
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 'waiting_approval'
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 'running'
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 'queued'
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 'active'
+            ELSE durable.kind
+        END AS kind,
+        CASE
+            WHEN durable.is_done != 0 THEN 1
+            WHEN COALESCE(live.waiting_question, 0) != 0 THEN 2
+            WHEN COALESCE(live.has_waiting_approval, 0) != 0
+              OR durable.kind = 'waiting_approval' THEN 3
+            WHEN COALESCE(live.has_running, 0) != 0 THEN 5
+            WHEN COALESCE(live.has_queued, 0) != 0 THEN 6
+            WHEN durable.kind IN ('running', 'queued', 'waiting_question') THEN 8
+            ELSE durable.primary_status_rank
+        END AS primary_status_rank,
+        durable.node_ids_json,
+        CASE
+            WHEN durable.is_done != 0 THEN durable.attention_types_json
+            ELSE (
+                SELECT json_group_array(attention_type)
+                FROM (
+                    SELECT CAST(existing_attention.value AS TEXT) AS attention_type
+                    FROM json_each(durable.attention_types_json) existing_attention
+                    WHERE existing_attention.value != 'question'
+                    UNION
+                    SELECT 'question'
+                    WHERE COALESCE(live.waiting_question, 0) != 0
+                    UNION
+                    SELECT 'approval'
+                    WHERE COALESCE(live.has_waiting_approval, 0) != 0
+                    ORDER BY attention_type ASC
+                )
+            )
+        END AS attention_types_json
+    FROM workflow_task_status_records durable
+    LEFT JOIN live_task_states live ON live.task_id = durable.task_id
+),
+
+eligible_rows AS (
+    SELECT status.kind
+    FROM args
+    CROSS JOIN project_workflow_links pwl
+    CROSS JOIN tasks t INDEXED BY tasks_project_workflow_link_idx
+    JOIN effective_status status ON status.task_id = t.id
+    WHERE pwl.project_id = args.project_id
+      AND t.project_workflow_link_id = pwl.id
+)
+SELECT
+    CAST(COUNT(*) FILTER (WHERE kind IN ('waiting_question', 'waiting_approval', 'interrupted', 'running', 'queued', 'active')) AS INTEGER) AS active_count,
+    CAST(COUNT(*) FILTER (WHERE kind IN ('backlog')) AS INTEGER) AS backlog_count,
+    CAST(COUNT(*) FILTER (WHERE kind IN ('done')) AS INTEGER) AS done_count
+FROM eligible_rows
+`
+
+type CountProjectTaskGroupsParams struct {
+	ProjectID          string
+	LiveTaskStatesJson string
+}
+
+type CountProjectTaskGroupsRow struct {
+	ActiveCount  int64
+	BacklogCount int64
+	DoneCount    int64
+}
+
+func (q *Queries) CountProjectTaskGroups(ctx context.Context, arg CountProjectTaskGroupsParams) (metadataOperationResult0 CountProjectTaskGroupsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return CountProjectTaskGroupsRow{}, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "CountProjectTaskGroups", metadataOperationErr)
+	}()
+	row := q.db.QueryRowContext(ctx, countProjectTaskGroups, arg.ProjectID, arg.LiveTaskStatesJson)
+	var i CountProjectTaskGroupsRow
+	err := row.Scan(&i.ActiveCount, &i.BacklogCount, &i.DoneCount)
+	return i, err
+}
+
 const countProjectWorkspaces = `-- name: CountProjectWorkspaces :one
 SELECT CAST(COUNT(*) AS INTEGER) AS workspace_count
 FROM workspaces
@@ -2607,6 +2710,8 @@ SELECT
     s.locked_json,
     s.usage_state_json,
     s.metadata_json,
+    s.completed_compaction_count,
+    s.manual_compact_eligible,
     COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root
 FROM sessions s
 LEFT JOIN workspaces w ON w.id = s.workspace_id
@@ -2615,22 +2720,24 @@ LIMIT 1
 `
 
 type GetSessionRecordByIDRow struct {
-	ID                   string
-	ArtifactRelpath      string
-	Name                 string
-	FirstPromptPreview   string
-	InputDraft           string
-	PreviousSessionID    sql.NullString
-	ParentAgentSessionID sql.NullString
-	Category             sql.NullString
-	CreatedAtUnixMs      int64
-	UpdatedAtUnixMs      int64
-	ModelRequestCount    int64
-	ContinuationJson     string
-	LockedJson           string
-	UsageStateJson       string
-	MetadataJson         string
-	WorkspaceRoot        string
+	ID                       string
+	ArtifactRelpath          string
+	Name                     string
+	FirstPromptPreview       string
+	InputDraft               string
+	PreviousSessionID        sql.NullString
+	ParentAgentSessionID     sql.NullString
+	Category                 sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	ModelRequestCount        int64
+	ContinuationJson         string
+	LockedJson               string
+	UsageStateJson           string
+	MetadataJson             string
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
+	WorkspaceRoot            string
 }
 
 func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (metadataOperationResult0 GetSessionRecordByIDRow, metadataOperationErr error) {
@@ -2658,6 +2765,8 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (m
 		&i.LockedJson,
 		&i.UsageStateJson,
 		&i.MetadataJson,
+		&i.CompletedCompactionCount,
+		&i.ManualCompactEligible,
 		&i.WorkspaceRoot,
 	)
 	return i, err
@@ -6656,27 +6765,28 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 	return items, nil
 }
 
-const listTaskAssignedLabelIDsByTasks = `-- name: ListTaskAssignedLabelIDsByTasks :many
-SELECT tla.task_id, pl.id AS label_id
+const listTaskAssignedLabelsByTasks = `-- name: ListTaskAssignedLabelsByTasks :many
+SELECT tla.task_id, pl.id AS label_id, pl.name AS label_name
 FROM task_label_assignments tla
 JOIN project_labels pl ON pl.id = tla.label_id
 WHERE tla.task_id IN (/*SLICE:task_ids*/?)
 ORDER BY tla.task_id ASC, pl.ordinal ASC, pl.id ASC
 `
 
-type ListTaskAssignedLabelIDsByTasksRow struct {
-	TaskID  string
-	LabelID string
+type ListTaskAssignedLabelsByTasksRow struct {
+	TaskID    string
+	LabelID   string
+	LabelName string
 }
 
-func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListTaskAssignedLabelIDsByTasksRow, metadataOperationErr error) {
+func (q *Queries) ListTaskAssignedLabelsByTasks(ctx context.Context, taskIds []string) (metadataOperationResult0 []ListTaskAssignedLabelsByTasksRow, metadataOperationErr error) {
 	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
 		return nil, metadataOperationErr
 	}
 	defer func() {
-		metadataOperationErr = q.completeOperation(ctx, "ListTaskAssignedLabelIDsByTasks", metadataOperationErr)
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskAssignedLabelsByTasks", metadataOperationErr)
 	}()
-	query := listTaskAssignedLabelIDsByTasks
+	query := listTaskAssignedLabelsByTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
 		for _, v := range taskIds {
@@ -6691,10 +6801,10 @@ func (q *Queries) ListTaskAssignedLabelIDsByTasks(ctx context.Context, taskIds [
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListTaskAssignedLabelIDsByTasksRow
+	var items []ListTaskAssignedLabelsByTasksRow
 	for rows.Next() {
-		var i ListTaskAssignedLabelIDsByTasksRow
-		if err := rows.Scan(&i.TaskID, &i.LabelID); err != nil {
+		var i ListTaskAssignedLabelsByTasksRow
+		if err := rows.Scan(&i.TaskID, &i.LabelID, &i.LabelName); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -8874,7 +8984,6 @@ matching_workflows AS (
           WHERE eligible.project_workflow_link_id = task_link.id
           LIMIT 1
       )
-    LIMIT 2
 ),
 page_rows AS (
     SELECT "rows".id, "rows".project_id, "rows".project_workflow_link_id, "rows".workflow_id, "rows".workflow_name, "rows".workflow_revision_seen, "rows".task_seq, "rows".short_id, "rows".title, "rows".body, "rows".source_url, "rows".source_workspace_id, "rows".managed_worktree_id, "rows".execution_target_mode, "rows".execution_target_requested_ref, "rows".execution_target_resolved_ref, "rows".execution_target_commit_oid, "rows".execution_target_provenance, "rows".created_at_unix_ms, "rows".updated_at_unix_ms, "rows".metadata_json, "rows".column_rank, "rows".column_keys_json, "rows".kind, "rows".primary_status_rank, "rows".node_ids_json, "rows".attention_types_json, "rows".title_sort, "rows".label_ordinals, "rows".labels_unlabeled, "rows".sort_1_value, "rows".sort_2_value, "rows".sort_3_value, "rows".sort_4_value, "rows".sort_5_value, "rows".sort_6_value, "rows".sort_7_value   FROM scored_rows rows
@@ -10531,6 +10640,34 @@ func (q *Queries) TouchWorkflowDependencySurvivors(ctx context.Context, arg Touc
 	return result.RowsAffected()
 }
 
+const updateSessionContextFacts = `-- name: UpdateSessionContextFacts :execrows
+UPDATE sessions
+SET
+    completed_compaction_count = ?1,
+    manual_compact_eligible = ?2
+WHERE id = ?3
+`
+
+type UpdateSessionContextFactsParams struct {
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
+	SessionID                string
+}
+
+func (q *Queries) UpdateSessionContextFacts(ctx context.Context, arg UpdateSessionContextFactsParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateSessionContextFacts", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, updateSessionContextFacts, arg.CompletedCompactionCount, arg.ManualCompactEligible, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateSessionExecutionTargetByID = `-- name: UpdateSessionExecutionTargetByID :execrows
 UPDATE sessions
 SET
@@ -10560,6 +10697,31 @@ func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg Upda
 		arg.CwdRelpath,
 		arg.SessionID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateSessionManualCompactEligibility = `-- name: UpdateSessionManualCompactEligibility :execrows
+UPDATE sessions
+SET manual_compact_eligible = ?1
+WHERE id = ?2
+`
+
+type UpdateSessionManualCompactEligibilityParams struct {
+	ManualCompactEligible sql.NullInt64
+	SessionID             string
+}
+
+func (q *Queries) UpdateSessionManualCompactEligibility(ctx context.Context, arg UpdateSessionManualCompactEligibilityParams) (metadataOperationResult0 int64, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return 0, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "UpdateSessionManualCompactEligibility", metadataOperationErr)
+	}()
+	result, err := q.db.ExecContext(ctx, updateSessionManualCompactEligibility, arg.ManualCompactEligible, arg.SessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -11008,7 +11170,9 @@ INSERT INTO sessions (
     continuation_json,
     locked_json,
     usage_state_json,
-    metadata_json
+    metadata_json,
+    completed_compaction_count,
+    manual_compact_eligible
 ) VALUES (
     ?1,
     ?2,
@@ -11029,7 +11193,9 @@ INSERT INTO sessions (
     ?17,
     ?18,
     ?19,
-    ?20
+    ?20,
+    ?21,
+    ?22
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -11051,26 +11217,28 @@ ON CONFLICT(id) DO UPDATE SET
 `
 
 type UpsertSessionParams struct {
-	ID                   string
-	ProjectID            string
-	WorkspaceID          sql.NullString
-	WorktreeID           sql.NullString
-	ArtifactRelpath      string
-	Name                 string
-	FirstPromptPreview   string
-	InputDraft           string
-	PreviousSessionID    sql.NullString
-	ParentAgentSessionID sql.NullString
-	Category             sql.NullString
-	CreatedAtUnixMs      int64
-	UpdatedAtUnixMs      int64
-	ModelRequestCount    int64
-	LaunchVisible        int64
-	CwdRelpath           string
-	ContinuationJson     string
-	LockedJson           string
-	UsageStateJson       string
-	MetadataJson         string
+	ID                       string
+	ProjectID                string
+	WorkspaceID              sql.NullString
+	WorktreeID               sql.NullString
+	ArtifactRelpath          string
+	Name                     string
+	FirstPromptPreview       string
+	InputDraft               string
+	PreviousSessionID        sql.NullString
+	ParentAgentSessionID     sql.NullString
+	Category                 sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	ModelRequestCount        int64
+	LaunchVisible            int64
+	CwdRelpath               string
+	ContinuationJson         string
+	LockedJson               string
+	UsageStateJson           string
+	MetadataJson             string
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
 }
 
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (metadataOperationErr error) {
@@ -11101,6 +11269,8 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (m
 		arg.LockedJson,
 		arg.UsageStateJson,
 		arg.MetadataJson,
+		arg.CompletedCompactionCount,
+		arg.ManualCompactEligible,
 	)
 	return err
 }

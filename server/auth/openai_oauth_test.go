@@ -1,8 +1,11 @@
 package auth
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -90,6 +93,38 @@ func TestParsePollInterval(t *testing.T) {
 				t.Fatalf("value=%d want=%d", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultOAuthHTTPClientNegotiatesAndDecodesCompressedResponse(t *testing.T) {
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+		_ = writer.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed.Bytes())
+	}))
+	defer server.Close()
+
+	options := normalizeOpenAIOAuthOptions(OpenAIOAuthOptions{})
+	response, err := options.HTTPClient.Get(server.URL)
+	if err != nil {
+		t.Fatalf("default OAuth HTTP client GET: %v", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read decoded response: %v", err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("decoded body = %q, want %q", body, `{"ok":true}`)
+	}
+	if acceptEncoding != "zstd,gzip" {
+		t.Fatalf("Accept-Encoding = %q, want zstd,gzip", acceptEncoding)
 	}
 }
 

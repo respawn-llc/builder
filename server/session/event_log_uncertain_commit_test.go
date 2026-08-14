@@ -248,7 +248,7 @@ func uncertainCommitAppendFixture(
 		}
 		records[index] = record
 	}
-	encoded, err := encodeCurrentEventRecordLines(records, false)
+	encoded, err := encodeCurrentEventRecordLines(records, false, EventLogVersionV2)
 	if err != nil {
 		t.Fatalf("encode fixture records: %v", err)
 	}

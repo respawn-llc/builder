@@ -127,6 +127,41 @@
 - After Kent accepts an answer, the command reads the selected Session's authoritative pending Questions and access requests again.
 - When another prompt is pending in that Session, the command writes `Next question: <question text>` followed by suggestions or access options.
 - Otherwise it writes `Done, session resumed`.
+- `kent questions list [--session <session-id>] [--max-handoffs <count>] [--json]` lists successfully answered ordinary Questions from one Session.
+- `kent question list`, `kent question history`, `kent questions history`, and `kent run questions <session-id>` are equivalent hidden aliases.
+- The Run alias accepts `--max-handoffs` and `--json` before its positional Session ID.
+- An explicit Session selector takes precedence over the invoking agent's Session ID. When neither is available, the command fails because a Session ID is required.
+- The command may target the invoking agent's own Session.
+- Question history does not accept a Task selector. Help directs operators to use `kent task sessions` to choose a Session when starting from a Task.
+- Question history excludes unanswered, canceled, interrupted, declined, malformed, and unpairable Questions. It excludes internal Approvals and access requests.
+- Question history reads newest to oldest and emits every eligible Question in the selected history windows.
+- `--max-handoffs` defaults to 25 and rejects values below 1. The count includes the current unfinished window, so `--max-handoffs 1` reads only that window.
+- Every history replacement starts an older window, regardless of replacement mode.
+- The command has no Question-count limit.
+- Human output streams each Question as it is read. Exactly one blank line separates output blocks.
+- Each v2 human Question block contains the normalized presented Question body, `Answer: <answer>`, optional `Commentary: <commentary>`, and `At: YYYY-MM-DD HH:MM:SS` in the machine's local time.
+- A selected-option Answer starts with its one-based option number and the full normalized presented Suggestion text. Optional Commentary contains only the separately authored freeform commentary.
+- A freeform-only response appears as Answer without an option number or Commentary line.
+- Presented multiline Question, Answer, and Commentary text remains verbatim. Existing Question normalization may remove leading and trailing whitespace from Question bodies and Suggestions. Labels do not indent or escape continuation lines.
+- `At` is the time the answer became committed.
+- For an event-log v1 Session, human output uses the normalized presented Question body and the persisted flattened completion output verbatim as Answer. It omits Commentary and `At`.
+- Human mode immediately emits `[Session history is large, this command may take a while to finish]` before scanning when the Session event log is at least 1 GiB.
+- When the selected handoff count omits older history, human mode emits `[Older Question history omitted; increase --max-handoffs to include more]` after the streamed Questions.
+- No answered Questions is a successful human result containing `No answered questions found`.
+- On a read or decode failure, human mode keeps already emitted Questions, reports the error on standard error, and exits with failure.
+- On interruption, human mode keeps already emitted Questions, writes `Interrupted` to standard error, and exits with status 130.
+- JSON output is one object containing `history_omitted` and `questions`. It omits human performance warnings.
+- Each JSON Question contains `question`, `answer`, `selected_option_number`, `commentary`, and `at`. A present `at` is the answer commit time in the standard JSON representation of an RFC 3339 UTC timestamp, including fractional seconds when present.
+- A freeform-only JSON Question has `null` selected-option number and Commentary. An option answer without Commentary has `null` Commentary.
+- An event-log v1 JSON Question uses the persisted flattened completion output verbatim as `answer` and has `null` selected-option number, Commentary, and `at`.
+- No answered Questions is a successful JSON result with an empty `questions` array.
+- JSON output streams in bounded memory without a temporary spool. It opens the result object and `questions` array before reading all Questions, appends `history_omitted` when the server reports completion, and closes the object only on successful transport completion.
+- A read, decode, or transport failure may leave a partial invalid JSON document on standard output. The command reports the error on standard error and exits with failure.
+- JSON interruption may leave a partial invalid JSON document, writes `Interrupted` to standard error, and exits with status 130.
+- Question-history help warns that JSON output can be slow.
+- An unknown Session fails with the ordinary Session-not-found error.
+- An existing Session with a valid empty event log succeeds with no answered Questions.
+- A missing or unreadable event log is an operational failure.
 
 ## Goal And Service Commands
 

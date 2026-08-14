@@ -52,17 +52,25 @@ func (e InvalidSessionCategoryError) Unwrap() error {
 type Store struct {
 	mu                      sync.Mutex
 	mutationMu              sync.Mutex
+	contextFactsMu          sync.Mutex
 	sessionDir              string
 	eventsFP                string
 	meta                    Meta
+	contextFacts            SessionContextFacts
+	initialContextFacts     SessionContextFacts
 	conversationFreshness   ConversationFreshness
 	persisted               bool
 	metadataVersion         uint64
 	persistedMetaVersion    uint64
 	options                 storeOptions
 	materializedEventLog    *currentEventLog
+	eventLogCreationVersion *int
 	eventLogMaterialization *eventLogMaterializationSnapshot
 	eventLogFailure         *EventLogPersistenceError
+}
+
+func eventLogVersionPointer(version int) *int {
+	return &version
 }
 
 type persistenceObservation struct {
@@ -265,19 +273,18 @@ func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceConta
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		},
-		conversationFreshness: ConversationFreshnessFresh,
-		persisted:             false,
+		contextFacts:            independentSessionContextFacts(),
+		initialContextFacts:     independentSessionContextFacts(),
+		conversationFreshness:   ConversationFreshnessFresh,
+		persisted:               false,
+		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}, nil
 }
 
 func Open(sessionDir string, options ...StoreOption) (*Store, error) {
 	storeOpts := normalizeStoreOptions(options...)
 	return resolveAndOpenPersistedSession(storeOpts, func() (PersistedSessionRecord, error) {
-		resolvedMeta, err := resolvePersistedSessionMetaForDir(sessionDir, storeOpts)
-		if err != nil {
-			return PersistedSessionRecord{}, err
-		}
-		return PersistedSessionRecord{SessionDir: sessionDir, Meta: resolvedMeta}, nil
+		return resolvePersistedSessionRecordForDir(sessionDir, storeOpts)
 	})
 }
 
@@ -293,7 +300,7 @@ func resolveAndOpenPersistedSession(storeOpts storeOptions, resolve func() (Pers
 	if err != nil {
 		return nil, err
 	}
-	return openPersistedSession(record.SessionDir, record.Meta, storeOpts)
+	return openPersistedSession(record, storeOpts)
 }
 
 // OpenResolved opens an authoritative persisted-session record without
@@ -305,29 +312,38 @@ func OpenResolved(record PersistedSessionRecord, options ...StoreOption) (*Store
 	if err := validatePersistedSessionRecord(record.Meta.SessionID, record); err != nil {
 		return nil, err
 	}
-	return openPersistedSession(record.SessionDir, record.Meta, normalizeStoreOptions(options...))
+	return openPersistedSession(record, normalizeStoreOptions(options...))
 }
 
 func openPersistedSession(
-	sessionDir string,
-	resolvedMeta *Meta,
+	record PersistedSessionRecord,
 	storeOpts storeOptions,
 ) (_ *Store, resultErr error) {
 	s := &Store{
-		sessionDir: sessionDir,
-		eventsFP:   filepath.Join(sessionDir, eventsFile),
-		persisted:  true,
-		options:    storeOpts,
+		sessionDir:              record.SessionDir,
+		eventsFP:                filepath.Join(record.SessionDir, eventsFile),
+		persisted:               true,
+		options:                 storeOpts,
+		eventLogCreationVersion: eventLogVersionPointer(EventLogVersionV2),
 	}
-	if resolvedMeta == nil {
+	if record.Meta == nil {
 		return nil, errPersistedSessionResolverRequired
 	}
-	s.meta = cloneMeta(*resolvedMeta)
+	s.meta = cloneMeta(*record.Meta)
+	s.contextFacts = normalizeSessionContextFacts(record.ContextFacts)
+	s.initialContextFacts = s.contextFacts.Clone()
 	if err := normalizeMetaContinuation(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session continuation: %w", err)
 	}
 	if err := normalizeMetaChatSettings(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session Chat settings: %w", err)
+	}
+	if s.meta.ActiveWorkflowAssignment != nil {
+		assignment, err := normalizeMessageRecord(*s.meta.ActiveWorkflowAssignment)
+		if err != nil {
+			return nil, fmt.Errorf("validate active workflow assignment: %w", err)
+		}
+		s.meta.ActiveWorkflowAssignment = &assignment
 	}
 	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
@@ -335,7 +351,7 @@ func openPersistedSession(
 	if err := validateMetaCategory(&s.meta); err != nil {
 		return nil, err
 	}
-	lock, lockPath, err := acquireEventLogPersistenceLock(sessionDir)
+	lock, lockPath, err := acquireEventLogPersistenceLock(record.SessionDir)
 	if err != nil {
 		return nil, err
 	}
@@ -373,28 +389,36 @@ func resolvePersistedSessionRecord(persistenceRoot, sessionID string, storeOpts 
 }
 
 func resolvePersistedSessionMetaForDir(sessionDir string, storeOpts storeOptions) (*Meta, error) {
+	record, err := resolvePersistedSessionRecordForDir(sessionDir, storeOpts)
+	if err != nil {
+		return nil, err
+	}
+	return record.Meta, nil
+}
+
+func resolvePersistedSessionRecordForDir(sessionDir string, storeOpts storeOptions) (PersistedSessionRecord, error) {
 	if storeOpts.resolver == nil {
-		return nil, errPersistedSessionResolverRequired
+		return PersistedSessionRecord{}, errPersistedSessionResolverRequired
 	}
 	cleanDir := filepath.Clean(sessionDir)
 	sessionID := filepath.Base(cleanDir)
 	record, err := storeOpts.resolver.ResolvePersistedSession(context.Background(), sessionID)
 	if err != nil {
-		return nil, err
+		return PersistedSessionRecord{}, err
 	}
 	if err := validatePersistedSessionRecord(sessionID, record); err != nil {
-		return nil, err
+		return PersistedSessionRecord{}, err
 	}
 	scopedIdentity, err := config.CanonicalPathIdentity(cleanDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve scoped session dir identity %q: %w", cleanDir, err)
+		return PersistedSessionRecord{}, fmt.Errorf("resolve scoped session dir identity %q: %w", cleanDir, err)
 	}
 	authoritativeIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolve authoritative session dir identity %q: %w", record.SessionDir, err)
+		return PersistedSessionRecord{}, fmt.Errorf("resolve authoritative session dir identity %q: %w", record.SessionDir, err)
 	}
 	if scopedIdentity != authoritativeIdentity {
-		return nil, fmt.Errorf(
+		return PersistedSessionRecord{}, fmt.Errorf(
 			"session %q scoped dir %q does not match authoritative dir %q: %w",
 			sessionID,
 			cleanDir,
@@ -402,7 +426,7 @@ func resolvePersistedSessionMetaForDir(sessionDir string, storeOpts storeOptions
 			errResolverRecordSessionDirMismatch,
 		)
 	}
-	return record.Meta, nil
+	return record, nil
 }
 
 func validatePersistedSessionRecord(sessionID string, record PersistedSessionRecord) error {
@@ -530,6 +554,35 @@ func (s *Store) Meta() Meta {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return cloneMeta(s.meta)
+}
+
+func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
+	meta := s.Meta()
+	return PromptFacingMetadataSnapshot{
+		Name:                          meta.Name,
+		FirstPromptPreview:            meta.FirstPromptPreview,
+		Continuation:                  cloneContinuationContext(meta.Continuation),
+		ChatSettings:                  cloneChatSettingsOverrides(meta.ChatSettings),
+		PromptCacheLineageGeneration:  meta.PromptCacheLineageGeneration,
+		Locked:                        cloneLockedContract(meta.Locked),
+		ActiveWorkflowAssignment:      cloneMessageRecord(meta.ActiveWorkflowAssignment),
+		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(meta.ActiveWorkflowAssignmentState),
+	}
+}
+
+func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapshot) error {
+	return s.mutateAndPersist(func() error {
+		s.meta.Name = snapshot.Name
+		s.meta.FirstPromptPreview = snapshot.FirstPromptPreview
+		s.meta.Continuation = cloneContinuationContext(snapshot.Continuation)
+		s.meta.ChatSettings = cloneChatSettingsOverrides(snapshot.ChatSettings)
+		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
+		s.meta.Locked = cloneLockedContract(snapshot.Locked)
+		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
+		s.meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(snapshot.ActiveWorkflowAssignmentState)
+		s.meta.UpdatedAt = time.Now().UTC()
+		return nil
+	})
 }
 
 func (s *Store) metaSnapshot() metaSnapshot {
@@ -1312,7 +1365,10 @@ func (s *Store) ensurePersistedLocked() error {
 	if err := os.MkdirAll(s.sessionDir, 0o755); err != nil {
 		return fmt.Errorf("create session dir: %w", err)
 	}
-	if _, err := createCurrentEventLog(s.eventsFP); err != nil {
+	if s.eventLogCreationVersion == nil {
+		return errors.New("event-log creation version is required")
+	}
+	if _, err := createCurrentEventLogVersion(s.eventsFP, *s.eventLogCreationVersion); err != nil {
 		return fmt.Errorf("initialize current event log: %w", err)
 	}
 	if err := initializeEventLogPersistenceLock(s.sessionDir); err != nil {
@@ -1330,8 +1386,9 @@ func (s *Store) persistenceSnapshotLocked() *PersistedStoreSnapshot {
 		return nil
 	}
 	snapshot := PersistedStoreSnapshot{
-		SessionDir: s.sessionDir,
-		Meta:       cloneMeta(s.meta),
+		SessionDir:   s.sessionDir,
+		Meta:         cloneMeta(s.meta),
+		ContextFacts: s.initialContextFacts.Clone(),
 	}
 	return &snapshot
 }

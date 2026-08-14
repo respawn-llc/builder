@@ -124,10 +124,11 @@ func (d *TaskDetail) task(ctx context.Context, task sqlitegen.TaskRecord) (serve
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
-	labelIDsByTask, err := loadTaskLabelIDsByTask(ctx, d.queries, []string{task.ID})
+	labelsByTask, err := loadTaskLabelsByTask(ctx, d.queries, []string{task.ID})
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err
 	}
+	labelIDsByTask := taskLabelIDsByTask(labelsByTask)
 	projectState, err := d.queries.GetProjectKeyState(ctx, task.ProjectID)
 	if err != nil {
 		return serverapi.WorkflowTaskDetail{}, err

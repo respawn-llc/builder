@@ -402,7 +402,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -467,7 +467,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -545,7 +545,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -678,7 +678,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove backward: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
 		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
 	})
@@ -749,17 +749,9 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 		TargetNodeID: workflow.NodeIDOf(plan),
 	})
 	implementationB := implementationBMove.Mutation.Created[0]
-	if implementationB.SessionID != nil {
-		t.Fatalf("planned Implementation B = %+v, want unbound", implementationB)
+	if implementationB.SessionID == nil {
+		t.Fatalf("assigned Implementation B = %+v, want fresh Session", implementationB)
 	}
-	associateAndBindCurrentNodeSessionForTest(
-		t,
-		ctx,
-		store,
-		binding,
-		cfg,
-		implementationB.Reference,
-	)
 	if _, err := store.CurrentTaskSessionForNode(ctx, firstReview.Reference); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("CurrentTaskSessionForNode Review after B binds = %v, want sql.ErrNoRows", err)
 	}
@@ -777,11 +769,13 @@ func TestManualMoveCreatesFreshRetainedTargetAfterPlannedSourceBinds(t *testing.
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
-	if len(moved.Mutation.Created) != 1 || moved.Mutation.Created[0].SessionID != nil {
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID == retainedReviewSessionID {
 		t.Fatalf(
 			"manual Review = %+v, want fresh instead of historical %q",
 			moved.Mutation.Created,
@@ -853,12 +847,10 @@ func TestManualMoveRetainedTargetUsesCurrentAssociationBeforePlannedSourceBinds(
 			"audit": {"summary": "audit A"},
 		},
 	}).Mutation.Created[0]
-	if reviewFromAudit.SessionID != nil {
-		t.Fatalf("planned Review from Audit = %+v, want fresh", reviewFromAudit)
+	if reviewFromAudit.SessionID == nil {
+		t.Fatalf("assigned Review from Audit = %+v, want fresh Session", reviewFromAudit)
 	}
-	retainedReviewSessionID := associateAndBindCurrentNodeSessionForTest(
-		t, ctx, store, binding, cfg, reviewFromAudit.Reference,
-	)
+	retainedReviewSessionID := *reviewFromAudit.SessionID
 	replaceSerialCurrentNodeBindingFixture(
 		t,
 		ctx,
@@ -898,7 +890,7 @@ WHERE task_id = ?
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, nil)
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, nil)
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
@@ -1000,15 +992,18 @@ WHERE task_id = ?
 	if err != nil {
 		t.Fatalf("PrepareManualMove Review: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, noneManualMoveExecutionTargetCandidate(binding))
 	if err != nil {
 		t.Fatalf("ApplyManualMove Review: %v", err)
 	}
-	if len(moved.Mutation.Created) != 1 || moved.Mutation.Created[0].SessionID != nil {
+	if len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].SessionID == nil ||
+		*moved.Mutation.Created[0].SessionID == retainedReviewSessionID {
 		t.Fatalf("manual Review = %+v, want fresh instead of retained %q", moved.Mutation.Created, retainedReviewSessionID)
 	}
-	if moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceDeferredSelf {
-		t.Fatalf("manual Review source = %q, want deferred self", moved.Mutation.Created[0].ContinuationSource.Kind())
+	sourceSessionID, exact := moved.Mutation.Created[0].ContinuationSource.ExactSessionID()
+	if !exact || sourceSessionID != *moved.Mutation.Created[0].SessionID {
+		t.Fatalf("manual Review source = %v, want assigned fresh Session", moved.Mutation.Created[0].ContinuationSource)
 	}
 }
 
@@ -1140,7 +1135,7 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("PreviewManualMove error = %T %v, want RetainedTargetUnavailableError", err, err)
 	}
-	_, err = store.ApplyManualMove(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
+	_, err = applyManualMoveForStoreTest(t, ctx, store, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
 	if !errors.As(err, &unavailable) {
 		t.Fatalf("ApplyManualMove error = %T %v, want RetainedTargetUnavailableError", err, err)
 	}
@@ -1170,12 +1165,12 @@ func TestManualMoveRetainedTargetWithoutHistoryFailsStrictAndCreatesFallbackWith
 	if err != nil {
 		t.Fatalf("PrepareManualMove fallback retry: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, preparedFallback, noneManualMoveExecutionTargetCandidate(binding))
 	if err != nil {
 		t.Fatalf("ApplyManualMove fallback: %v", err)
 	}
 	if len(moved.Mutation.Created) != 1 ||
-		moved.Mutation.Created[0].SessionID != nil ||
+		moved.Mutation.Created[0].SessionID == nil ||
 		moved.Mutation.Created[0].ContinuationSource.Kind() != workflow.MaterializedContinuationSourceExact {
 		t.Fatalf("fallback manual move = %+v, want fresh target with selected-source proof", moved)
 	}
@@ -1313,7 +1308,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,

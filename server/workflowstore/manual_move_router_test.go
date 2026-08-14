@@ -140,7 +140,7 @@ func applyManualMoveFixture(t *testing.T, ctx context.Context, store *Store, bin
 	if err != nil {
 		t.Fatalf("prepare manual move: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, noneManualMoveExecutionTargetCandidate(binding))
 	if err != nil {
 		t.Fatalf("apply manual move: %v", err)
 	}

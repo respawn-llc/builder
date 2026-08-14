@@ -25,10 +25,9 @@ var (
 	ErrWorkflowApprovalPending = errors.New("workflow task has a pending session approval")
 )
 
-// WithWorkflowManualMoveSelection atomically selects every exact workflow
-// execution for a Task and closes Question admission before releasing
-// Authority ownership. The callback must establish the controller's
-// interruption fence; no prompt store is closed when it returns an error.
+// WithWorkflowManualMoveSelection selects one Task's exact workflow executions
+// and closes Question admission without retaining Authority-wide ownership
+// while the controller establishes its interruption fence.
 func (a *Authority) WithWorkflowManualMoveSelection(
 	taskID workflow.TaskID,
 	operation func(WorkflowInterruptSelection) error,
@@ -43,12 +42,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		return errors.New("workflow manual move selection operation is required")
 	}
 	a.mu.Lock()
-	unlocked := false
-	defer func() {
-		if !unlocked {
-			a.mu.Unlock()
-		}
-	}()
 	executions := make([]*execution, 0)
 	for _, execution := range a.byScope {
 		ref, workflowScoped := execution.scope.Workflow()
@@ -59,6 +52,14 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	sort.Slice(executions, func(i, j int) bool {
 		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
 	})
+	a.mu.Unlock()
+	lockExactExecutions(executions)
+	defer unlockExactExecutions(executions)
+	a.mu.Lock()
+	if !a.exactExecutionsLiveLocked(executions) {
+		a.mu.Unlock()
+		return ErrExecutionNoLongerLive
+	}
 	locked := make([]*execution, 0, len(executions))
 	selection := WorkflowInterruptSelection{}
 	for _, execution := range executions {
@@ -75,7 +76,7 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		execution.prompts.mu.Lock()
 		locked = append(locked, execution)
 	}
-	hasQuestion := false
+	a.mu.Unlock()
 	hasApproval := false
 	for _, execution := range locked {
 		for _, entry := range execution.prompts.pending {
@@ -84,17 +85,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 			}
 			if entry.snapshot.Request.Approval {
 				hasApproval = true
-			} else {
-				hasQuestion = true
 			}
 		}
 	}
-	if hasQuestion || hasApproval {
+	if hasApproval {
 		for _, execution := range locked {
 			execution.prompts.mu.Unlock()
-		}
-		if hasQuestion {
-			return ErrWorkflowQuestionPending
 		}
 		return ErrWorkflowApprovalPending
 	}
@@ -118,8 +114,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 	for _, execution := range locked {
 		execution.prompts.mu.Unlock()
 	}
-	a.mu.Unlock()
-	unlocked = true
 	var publicationErr error
 	for _, item := range closures {
 		publicationErr = errors.Join(publicationErr, item.store.publishClosure(item.closure))
@@ -131,8 +125,8 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 }
 
 // WithWorkflowInterruptSelection linearizes Task Interrupt selection against
-// exact-scope phase changes and retirement. A queued scope or a scope waiting
-// for a Question never authorizes Interrupt.
+// phase changes and retirement only for the selected Task's exact executions.
+// A queued scope or a scope waiting for a Question never authorizes Interrupt.
 func (a *Authority) WithWorkflowInterruptSelection(
 	taskID workflow.TaskID,
 	sessionID *runtimeids.SessionID,
@@ -151,18 +145,47 @@ func (a *Authority) WithWorkflowInterruptSelection(
 		return errors.New("workflow interrupt selection operation is required")
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	selection := WorkflowInterruptSelection{}
-	a.forEachWorkflowExecutionLocked(func(execution *execution) {
+	executions := make([]*execution, 0)
+	for _, execution := range a.byScope {
 		ref, workflowScoped := execution.scope.Workflow()
 		if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-			return
+			continue
 		}
 		if sessionID != nil {
 			resource, agent := execution.scope.Resource()
 			if !agent || resource.SessionID() != *sessionID {
-				return
+				continue
+			}
+		}
+		executions = append(executions, execution)
+	}
+	sort.Slice(executions, func(i, j int) bool {
+		return executions[i].scope.ID().String() < executions[j].scope.ID().String()
+	})
+	a.mu.Unlock()
+	lockExactExecutions(executions)
+	defer unlockExactExecutions(executions)
+	a.mu.Lock()
+	if !a.exactExecutionsLiveLocked(executions) {
+		a.mu.Unlock()
+		return ErrExecutionNoLongerLive
+	}
+
+	promptLocked := make([]*execution, 0, len(executions))
+	selection := WorkflowInterruptSelection{}
+	hasQuestion := false
+	hasApproval := false
+	for _, execution := range executions {
+		execution.prompts.mu.RLock()
+		promptLocked = append(promptLocked, execution)
+		for _, entry := range execution.prompts.pending {
+			if entry == nil {
+				panic(fmt.Sprintf("workflow execution scope %s has a nil pending prompt", execution.scope.ID()))
+			}
+			if !entry.snapshot.Request.Approval {
+				hasQuestion = true
+			} else {
+				hasApproval = true
 			}
 		}
 		handle := executionHandle{execution: execution}
@@ -172,29 +195,34 @@ func (a *Authority) WithWorkflowInterruptSelection(
 				selection.Queued = append(selection.Queued, handle)
 			}
 		case executionPhaseRunning:
-			if !execution.prompts.hasPending() {
+			if len(execution.prompts.pending) == 0 {
 				selection.Interruptible = append(selection.Interruptible, handle)
 			}
 		default:
-			panic("workflow execution has an invalid interrupt phase")
-		}
-	})
-	if sessionID == nil {
-		for _, execution := range a.byScope {
 			if execution.phase != executionPhaseFinalizing {
-				continue
+				panic("workflow execution has an invalid interrupt phase")
 			}
-			ref, workflowScoped := execution.scope.Workflow()
-			if !workflowScoped || ref.CurrentNode.TaskID != taskID {
-				continue
+			if sessionID == nil {
+				if execution.scope.Kind() != ExecutionScopeScript {
+					panic("workflow execution finalizing phase is not a script")
+				}
+				selection.Finalizing = append(selection.Finalizing, handle)
 			}
-			if execution.scope.Kind() != ExecutionScopeScript {
-				panic("workflow execution finalizing phase is not a script")
-			}
-			selection.Finalizing = append(selection.Finalizing, executionHandle{execution: execution})
 		}
 	}
+	a.mu.Unlock()
+	defer func() {
+		for index := len(promptLocked) - 1; index >= 0; index-- {
+			promptLocked[index].prompts.mu.RUnlock()
+		}
+	}()
 	if len(selection.Interruptible) == 0 {
+		if hasQuestion {
+			return ErrWorkflowQuestionPending
+		}
+		if hasApproval {
+			return ErrWorkflowApprovalPending
+		}
 		return ErrExecutionNoLongerLive
 	}
 	return operation(selection)

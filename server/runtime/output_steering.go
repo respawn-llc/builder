@@ -49,6 +49,7 @@ type steeringItem struct {
 	missingToolOutputRepair     *steeringMissingToolOutputRepair
 	queuedFlush                 *steeringQueuedUserMessageFlush
 	queuedRestore               *steeringQueuedUserMessageRestore
+	compactionActivity          *steeringCompactionActivity
 	event                       *Event
 	streaming                   *steeringStreamingOutput
 	cacheWarning                *steeringCacheWarning
@@ -202,6 +203,12 @@ type steeringQueuedUserMessageFlush struct {
 
 type steeringQueuedUserMessageRestore struct {
 	items []queuedUserMessage
+}
+
+type steeringCompactionActivity struct {
+	active bool
+	mode   string
+	count  int
 }
 
 type steeringMessageEventPolicy uint8
@@ -385,6 +392,17 @@ func steerEventIntent(evt Event) steeringIntent {
 	return steeringIntent{
 		priority: steeringPriorityRuntimeEvent,
 		items:    []steeringItem{{event: &copyEvent}},
+	}
+}
+
+func steerCompactionActivityIntent(active bool, mode string, count int) steeringIntent {
+	return steeringIntent{
+		priority: steeringPriorityRuntimeEvent,
+		items: []steeringItem{{compactionActivity: &steeringCompactionActivity{
+			active: active,
+			mode:   strings.TrimSpace(mode),
+			count:  count,
+		}}},
 	}
 }
 
@@ -627,6 +645,15 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
+	if item.compactionActivity != nil {
+		activity := item.compactionActivity
+		if activity.active {
+			e.compactionRuntimeState().SetActive(stepID, activity.mode, activity.count)
+		} else {
+			e.compactionRuntimeState().ClearActive(stepID)
+		}
+		return nil
+	}
 	if item.missingToolOutputRepair != nil {
 		repair := item.missingToolOutputRepair
 		repaired, err := e.repairMissingToolOutputsByAppendingRaw(repair.repairStepID, repair.disposition)
@@ -899,14 +926,6 @@ func (e *Engine) applySteeringItem(stepID string, item steeringItem) error {
 				return err
 			}
 			return e.emitRawAtRevision(evt, revision)
-		}
-		switch evt.Kind {
-		case EventCompactionStarted:
-			if evt.Compaction != nil {
-				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
-			}
-		case EventCompactionCompleted, EventCompactionFailed:
-			e.compactionRuntimeState().ClearActive(evt.StepID)
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
 			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
