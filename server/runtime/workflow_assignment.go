@@ -105,12 +105,17 @@ func (e *Engine) SteerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnap
 	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	if snapshot.thinking != nil {
-		if err := e.setThinkingValue(*snapshot.thinking); err != nil {
-			return WorkflowAssignmentSteer{}, err
-		}
+	if err := e.RestoreWorkflowAssignmentSnapshotThinking(snapshot); err != nil {
+		return WorkflowAssignmentSteer{}, err
 	}
 	return e.steerWorkflowAssignmentMessage(snapshot.restorationMessage())
+}
+
+func (e *Engine) RestoreWorkflowAssignmentSnapshotThinking(snapshot WorkflowAssignmentSnapshot) error {
+	if snapshot.thinking == nil {
+		return nil
+	}
+	return e.setThinkingValue(*snapshot.thinking)
 }
 
 func (e *Engine) steerWorkflowAssignmentMessage(message llm.Message) (WorkflowAssignmentSteer, error) {
@@ -152,10 +157,14 @@ func CapturePersistedWorkflowAssignment(
 	if store == nil {
 		return WorkflowAssignmentSnapshot{}, false, errors.New("session store is required")
 	}
+	activeAssignment, err := store.ActiveWorkflowAssignmentProjection()
+	if err != nil {
+		return WorkflowAssignmentSnapshot{}, false, err
+	}
 	meta := store.Meta()
 	snapshot := WorkflowAssignmentSnapshot{}
-	if meta.ActiveWorkflowAssignment != nil {
-		message, err := llmMessageFromSessionRecord(*meta.ActiveWorkflowAssignment)
+	if activeAssignment != nil {
+		message, err := llmMessageFromSessionRecord(*activeAssignment)
 		if err != nil {
 			return WorkflowAssignmentSnapshot{}, false, err
 		}

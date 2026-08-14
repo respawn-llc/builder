@@ -242,9 +242,9 @@ func (s *Starter) prepareCurrentNodeAgentAssignment(
 }
 
 type manualMoveAssignmentRestoration struct {
-	currentContext *workflowstore.CurrentNodeStartContext
-	projectID      string
-	snapshot       *runtime.WorkflowAssignmentSnapshot
+	projectID           string
+	snapshot            runtime.WorkflowAssignmentSnapshot
+	assignmentCommitted bool
 }
 
 func (s *Starter) PrepareManualMoveAssignments(
@@ -266,25 +266,15 @@ func (s *Starter) PrepareManualMoveAssignments(
 			}
 		}
 		for sessionID, restoration := range restorations {
-			switch {
-			case restoration.currentContext != nil:
-				cause = errors.Join(cause, s.restoreManualMoveOriginAssignment(ctx, *restoration.currentContext))
-			case restoration.snapshot != nil:
-				cause = errors.Join(cause, s.restoreManualMoveAssignmentSnapshot(
-					ctx,
-					restoration.projectID,
-					sessionID,
-					*restoration.snapshot,
-				))
-			default:
-				cause = errors.Join(cause, errors.New("manual move assignment restoration is invalid"))
-			}
+			cause = errors.Join(cause, s.restoreManualMoveAssignmentSnapshot(
+				ctx,
+				restoration.projectID,
+				sessionID,
+				restoration.snapshot,
+				restoration.assignmentCommitted,
+			))
 		}
 		return cause
-	}
-	originBySession, err := s.manualMoveOriginContextsBySession(ctx, inputs)
-	if err != nil {
-		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 	}
 	for _, input := range inputs {
 		requiresAssignment := input.CurrentNode.AgentExecutionSelection != nil
@@ -302,8 +292,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 			if policyErr != nil {
 				return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(policyErr)
 			}
-			_, currentOrigin := originBySession[*input.CurrentNode.SessionID]
-			if !policy.cloneRetainedSession && !currentOrigin {
+			if !policy.cloneRetainedSession {
 				snapshot, found, snapshotErr := s.captureManualMoveAssignmentSnapshot(
 					ctx,
 					input.Task.ProjectID,
@@ -318,6 +307,10 @@ func (s *Starter) PrepareManualMoveAssignments(
 					)
 				}
 				priorAssignment = &snapshot
+				restorations[*input.CurrentNode.SessionID] = manualMoveAssignmentRestoration{
+					projectID: input.Task.ProjectID,
+					snapshot:  snapshot,
+				}
 			}
 		}
 		key, err := input.CurrentNode.Reference.Key()
@@ -344,16 +337,15 @@ func (s *Starter) PrepareManualMoveAssignments(
 			CurrentNode: input.CurrentNode.Reference,
 			SessionID:   assignment.SessionID(),
 		})
-		if origin, exists := originBySession[assignment.SessionID()]; exists {
-			originCopy := origin
-			restorations[assignment.SessionID()] = manualMoveAssignmentRestoration{currentContext: &originCopy}
-		} else if priorAssignment != nil &&
-			input.CurrentNode.SessionID != nil &&
-			assignment.SessionID() == *input.CurrentNode.SessionID {
-			restorations[assignment.SessionID()] = manualMoveAssignmentRestoration{
-				projectID: input.Task.ProjectID,
-				snapshot:  priorAssignment,
+		if priorAssignment != nil {
+			restoration, exists := restorations[assignment.SessionID()]
+			if !exists {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(
+					fmt.Errorf("retained Session %q assignment identity changed during preparation", assignment.SessionID()),
+				)
 			}
+			restoration.assignmentCommitted = true
+			restorations[assignment.SessionID()] = restoration
 		}
 	}
 	return workflowstore.ManualMoveTargetAssignmentPreparation{
@@ -361,55 +353,6 @@ func (s *Starter) PrepareManualMoveAssignments(
 		Diagnostic:  errors.Join(diagnostics...),
 		Abort:       cleanupPrepared,
 	}, steers, nil
-}
-
-func (s *Starter) manualMoveOriginContextsBySession(
-	ctx context.Context,
-	inputs []workflowstore.CurrentNodeStartContext,
-) (map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext, error) {
-	result := make(map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext)
-	if len(inputs) == 0 {
-		return result, nil
-	}
-	currentNodes, err := s.store.ListCurrentNodes(ctx, inputs[0].Task.ID)
-	if err != nil {
-		return nil, err
-	}
-	for _, currentNode := range currentNodes {
-		if currentNode.SessionID == nil {
-			continue
-		}
-		input, err := s.store.ResolveCurrentNodeStartContext(ctx, currentNode.Reference)
-		if err != nil {
-			return nil, err
-		}
-		if input.Node.Kind == workflow.NodeKindAgent {
-			result[*currentNode.SessionID] = input
-		}
-	}
-	return result, nil
-}
-
-func (s *Starter) restoreManualMoveOriginAssignment(
-	ctx context.Context,
-	input workflowstore.CurrentNodeStartContext,
-) error {
-	restoreCtx := context.WithoutCancel(ctx)
-	prepared, err := s.prepareCurrentNodeAgentAssignment(restoreCtx, input, false)
-	if err != nil {
-		return fmt.Errorf("restore Manual Move origin %v assignment: %w", input.CurrentNode.Reference, err)
-	}
-	receipt, waitErr := prepared.Wait(restoreCtx)
-	if !receipt.Committed {
-		if assignment, ok := prepared.(*currentNodeAgentAssignmentSteer); ok {
-			waitErr = assignment.cleanupUncommitted(waitErr)
-		}
-		return errors.Join(
-			fmt.Errorf("restore Manual Move origin %v assignment was not committed", input.CurrentNode.Reference),
-			waitErr,
-		)
-	}
-	return waitErr
 }
 
 func (s *Starter) captureManualMoveAssignmentSnapshot(
@@ -454,8 +397,22 @@ func (s *Starter) restoreManualMoveAssignmentSnapshot(
 	projectID string,
 	sessionID runtimeids.SessionID,
 	snapshot runtime.WorkflowAssignmentSnapshot,
+	assignmentCommitted bool,
 ) error {
 	restoreCtx := context.WithoutCancel(ctx)
+	if !assignmentCommitted {
+		runtimeErr := s.runtimeAuthority.WithCurrentRuntime(
+			restoreCtx,
+			sessionID,
+			func(_ context.Context, engine *runtime.Engine) error {
+				return engine.RestoreWorkflowAssignmentSnapshotThinking(snapshot)
+			},
+		)
+		if runtimeErr != nil && !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+			return fmt.Errorf("restore Manual Move Session %q thinking: %w", sessionID, runtimeErr)
+		}
+		return nil
+	}
 	descriptor, err := session.NewScopedOpenSessionDescriptor(
 		sessionID,
 		filepath.Join(s.cfg.PersistenceRoot, "projects", projectID, "sessions"),

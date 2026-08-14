@@ -217,18 +217,24 @@ type Meta struct {
 	Goal                            *GoalState                       `json:"goal,omitempty"`
 	Locked                          *LockedContract                  `json:"locked,omitempty"`
 	ActiveWorkflowAssignment        *MessageRecord                   `json:"active_workflow_assignment,omitempty"`
+	ActiveWorkflowAssignmentState   *ActiveWorkflowAssignmentState   `json:"active_workflow_assignment_state,omitempty"`
 }
+
+// ActiveWorkflowAssignmentState marks an authoritative projection, including
+// the valid state where no executable Workflow assignment is active.
+type ActiveWorkflowAssignmentState struct{}
 
 // PromptFacingMetadataSnapshot captures metadata that Session planning may
 // change before a Workflow assignment commits.
 type PromptFacingMetadataSnapshot struct {
-	Name                         string
-	FirstPromptPreview           string
-	Continuation                 *ContinuationContext
-	ChatSettings                 *ChatSettingsOverrides
-	PromptCacheLineageGeneration int
-	Locked                       *LockedContract
-	ActiveWorkflowAssignment     *MessageRecord
+	Name                          string
+	FirstPromptPreview            string
+	Continuation                  *ContinuationContext
+	ChatSettings                  *ChatSettingsOverrides
+	PromptCacheLineageGeneration  int
+	Locked                        *LockedContract
+	ActiveWorkflowAssignment      *MessageRecord
+	ActiveWorkflowAssignmentState *ActiveWorkflowAssignmentState
 }
 
 type PendingModelRecovery struct {
