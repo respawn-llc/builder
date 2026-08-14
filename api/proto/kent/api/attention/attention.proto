@@ -40,10 +40,34 @@ message QuestionState {
   string preview = 5;
   int32 display_count = 6 [(buf.validate.field).int32.gte = 0];
   int32 materialized_count = 7 [(buf.validate.field).int32.gte = 0];
+
+  option (buf.validate.message).cel = {
+    id: "kent.attention.question_state"
+    message: "question state must contain a consistent non-empty ask batch"
+    expression:
+      "size(this.prepared_ask_ids) > 0 && "
+      "this.prepared_ask_ids.all(id, id.trim() != '') && "
+      "this.materialized_ask_ids.all(id, id.trim() != '') && "
+      "this.current_unresolved_ask_ids.all(id, id.trim() != '') && "
+      "this.skipped_ask_ids.all(id, id.trim() != '') && "
+      "this.display_count > 0 && "
+      "this.materialized_count == size(this.materialized_ask_ids) && "
+      "this.materialized_ask_ids.all(id, id in this.prepared_ask_ids) && "
+      "this.current_unresolved_ask_ids.all(id, id in this.materialized_ask_ids) && "
+      "this.skipped_ask_ids.all(id, id in this.prepared_ask_ids) && "
+      "this.display_count == size(this.prepared_ask_ids) - size(this.skipped_ask_ids)"
+  };
 }
 
 message ApprovalState {
-  string message = 1;
+  string message = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.attention.approval_message_nonblank"
+      message: "approval message must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message Notification {
@@ -52,7 +76,10 @@ message Notification {
     defined_only: true
     not_in: [0]
   }];
-  google.protobuf.Timestamp occurred_at = 3 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
   uint64 revision = 4 [(buf.validate.field).uint64 = {
     gte: 1
     lte: 9007199254740991
@@ -79,7 +106,10 @@ message Resolved {
     not_in: [0]
   }];
   NotificationID id = 2 [(buf.validate.field).required = true];
-  google.protobuf.Timestamp occurred_at = 3 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp occurred_at = 3 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
 }
 
 message SnapshotComplete {
@@ -100,7 +130,14 @@ message NotificationEvent {
 }
 
 message SubscribeRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.attention.subscribe_session_id_nonblank"
+      message: "session ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool include_pending_prompt_snapshot = 2;
 }
 

@@ -428,6 +428,162 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	}
 }
 
+func TestSessionAttentionAndTranscriptGeneratedValidationMatchesDomainValues(t *testing.T) {
+	validUUID := "123e4567-e89b-42d3-a456-426614174000"
+	versionOneUUID := "123e4567-e89b-12d3-a456-426614174000"
+	validTime := timestamppb.New(time.Unix(1_700_000_000, 0))
+
+	validQuestion := &attentionpb.QuestionState{
+		PreparedAskIds:          []string{"ask-1", "ask-2"},
+		MaterializedAskIds:      []string{"ask-1"},
+		CurrentUnresolvedAskIds: []string{"ask-1"},
+		SkippedAskIds:           []string{"ask-2"},
+		DisplayCount:            1,
+		MaterializedCount:       1,
+	}
+	if err := protoapi.ValidateGeneratedMessage(validQuestion); err != nil {
+		t.Fatalf("valid question attention state: %v", err)
+	}
+	for name, mutate := range map[string]func(*attentionpb.QuestionState){
+		"empty prepared batch": func(state *attentionpb.QuestionState) {
+			state.PreparedAskIds = nil
+		},
+		"blank ask identity": func(state *attentionpb.QuestionState) {
+			state.PreparedAskIds[0] = " "
+		},
+		"zero display count": func(state *attentionpb.QuestionState) {
+			state.DisplayCount = 0
+		},
+		"materialized count mismatch": func(state *attentionpb.QuestionState) {
+			state.MaterializedCount = 2
+		},
+		"materialized ask outside prepared batch": func(state *attentionpb.QuestionState) {
+			state.MaterializedAskIds[0] = "ask-3"
+		},
+		"unresolved ask outside materialized batch": func(state *attentionpb.QuestionState) {
+			state.CurrentUnresolvedAskIds[0] = "ask-2"
+		},
+		"skipped ask outside prepared batch": func(state *attentionpb.QuestionState) {
+			state.SkippedAskIds[0] = "ask-3"
+		},
+		"display count mismatch": func(state *attentionpb.QuestionState) {
+			state.SkippedAskIds = nil
+		},
+	} {
+		t.Run("question state/"+name, func(t *testing.T) {
+			state := proto.Clone(validQuestion).(*attentionpb.QuestionState)
+			mutate(state)
+			if err := protoapi.ValidateGeneratedMessage(state); err == nil {
+				t.Fatalf("accepted question state with %s", name)
+			}
+		})
+	}
+
+	for name, message := range map[string]proto.Message{
+		"blank approval message": &attentionpb.ApprovalState{Message: " "},
+		"blank subscription session ID": &attentionpb.SubscribeRequest{
+			SessionId: " ",
+		},
+		"zero pending event timestamp": &attentionpb.Notification{
+			Id: &attentionpb.NotificationID{
+				Kind: attentionpb.Kind_ATTENTION_KIND_APPROVAL,
+				Uuid: validUUID,
+			},
+			Source:     attentionpb.Source_ATTENTION_SOURCE_LIVE,
+			OccurredAt: timestamppb.New(time.Time{}),
+			Revision:   1,
+			SessionId:  "session-1",
+			State: &attentionpb.Notification_Approval{
+				Approval: &attentionpb.ApprovalState{Message: "approve"},
+			},
+		},
+		"zero resolved event timestamp": &attentionpb.Resolved{
+			Source: attentionpb.Source_ATTENTION_SOURCE_LIVE,
+			Id: &attentionpb.NotificationID{
+				Kind: attentionpb.Kind_ATTENTION_KIND_APPROVAL,
+				Uuid: validUUID,
+			},
+			OccurredAt: timestamppb.New(time.Time{}),
+		},
+		"blank committed tool call ID": &transcriptpb.ToolRow{
+			StepId:     validUUID,
+			ToolCallId: " ",
+			ToolName:   "shell",
+		},
+		"blank committed tool name": &transcriptpb.ToolRow{
+			StepId:     validUUID,
+			ToolCallId: "call-1",
+			ToolName:   " ",
+		},
+		"blank live tool call ID": &transcriptpb.ToolStart{
+			StepId:     validUUID,
+			ToolCallId: " ",
+			ToolName:   "shell",
+		},
+		"blank live tool name": &transcriptpb.ToolStart{
+			StepId:     validUUID,
+			ToolCallId: "call-1",
+			ToolName:   " ",
+		},
+		"blank aborted tool call ID": &transcriptpb.ToolAbort{
+			StepId:     validUUID,
+			ToolCallId: " ",
+			Reason:     transcriptpb.ToolAbortReason_TOOL_ABORT_REASON_CANCELED,
+		},
+		"non-v4 flushed queue item ID": &transcriptpb.UserMessageFlushed{
+			StepId:       validUUID,
+			QueueItemIds: []string{versionOneUUID},
+		},
+		"blank queued-message restore text": &transcriptpb.QueuedMessageState{
+			QueueItemId: validUUID,
+			Status:      transcriptpb.QueuedMessageStatus_QUEUED_MESSAGE_STATUS_ACCEPTED,
+			Text:        stringPointer(" "),
+		},
+		"blank compaction mode": &transcriptpb.CompactionStatus{
+			StepId: validUUID,
+			State:  transcriptpb.CompactionState_COMPACTION_STATE_STARTED,
+			Mode:   " ",
+		},
+		"unknown tool-output repair kind": &transcriptpb.ToolOutputRepair{
+			Kind:  "bogus",
+			Count: 1,
+		},
+		"blank cache-warning scope": &transcriptpb.CacheWarning{
+			Scope:      " ",
+			Reason:     "non_postfix",
+			Visibility: transcriptpb.EntryVisibility_ENTRY_VISIBILITY_ONGOING,
+		},
+		"blank cache-warning reason": &transcriptpb.CacheWarning{
+			Scope:      "conversation",
+			Reason:     " ",
+			Visibility: transcriptpb.EntryVisibility_ENTRY_VISIBILITY_ONGOING,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := protoapi.ValidateGeneratedMessage(message); err == nil {
+				t.Fatalf("accepted %s", name)
+			}
+		})
+	}
+
+	validNotification := &attentionpb.Notification{
+		Id: &attentionpb.NotificationID{
+			Kind: attentionpb.Kind_ATTENTION_KIND_QUESTION,
+			Uuid: validUUID,
+		},
+		Source:     attentionpb.Source_ATTENTION_SOURCE_LIVE,
+		OccurredAt: validTime,
+		Revision:   1,
+		SessionId:  "session-1",
+		State: &attentionpb.Notification_Question{
+			Question: validQuestion,
+		},
+	}
+	if err := protoapi.ValidateGeneratedMessage(validNotification); err != nil {
+		t.Fatalf("valid session attention notification: %v", err)
+	}
+}
+
 func TestWorkflowOwnedAttentionRoutesAndVariantsAreOwnedByWorkflowTaskSlice(t *testing.T) {
 	for _, legacyName := range []string{
 		protocol.MethodAttentionNotificationSubscribe,

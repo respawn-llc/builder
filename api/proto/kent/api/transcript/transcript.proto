@@ -258,8 +258,22 @@ message ToolRow {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
-  string tool_name = 3 [(buf.validate.field).string.min_len = 1];
+  string tool_call_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.tool_row_call_id_nonblank"
+      message: "tool call ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string tool_name = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.tool_row_name_nonblank"
+      message: "tool name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool is_error = 4;
 }
 
@@ -298,8 +312,22 @@ message ReviewerErrorRow {
 }
 
 message CacheWarning {
-  string scope = 1 [(buf.validate.field).string.min_len = 1];
-  string reason = 2 [(buf.validate.field).string.min_len = 1];
+  string scope = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.cache_warning_scope_nonblank"
+      message: "cache-warning scope must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string reason = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.cache_warning_reason_nonblank"
+      message: "cache-warning reason must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional int32 lost_input_tokens = 3 [(buf.validate.field).int32.gte = 1];
   EntryVisibility visibility = 4 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
 }
@@ -310,7 +338,12 @@ message CompactionNotice {
 }
 
 message ToolOutputRepair {
-  string kind = 1 [(buf.validate.field).string.min_len = 1];
+  string kind = 1 [(buf.validate.field).string = {
+    in: [
+      "fresh_resource",
+      "live_provider_rejection"
+    ]
+  }];
   int32 count = 2 [(buf.validate.field).int32.gte = 1];
 }
 
@@ -518,8 +551,22 @@ message ToolStart {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
-  string tool_name = 3 [(buf.validate.field).string.min_len = 1];
+  string tool_call_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.tool_start_call_id_nonblank"
+      message: "tool call ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string tool_name = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.tool_start_name_nonblank"
+      message: "tool name must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ToolAbort {
@@ -527,7 +574,14 @@ message ToolAbort {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  string tool_call_id = 2 [(buf.validate.field).string.min_len = 1];
+  string tool_call_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.tool_abort_call_id_nonblank"
+      message: "tool call ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   ToolAbortReason reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional Diagnostic diagnostic = 4;
   option (buf.validate.message).cel = {
@@ -542,11 +596,14 @@ message UserMessageFlushed {
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
-  repeated string queue_item_ids = 2 [(buf.validate.field).repeated = {
-    min_items: 1
-    unique: true
-    items: {string: {uuid: true}}
-  }];
+  repeated string queue_item_ids = 2 [
+    (buf.validate.field).repeated = {
+      min_items: 1
+      unique: true
+    },
+    (buf.validate.field).repeated.items.string.uuid = true,
+    (buf.validate.field).repeated.items.string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message QueuedMessageState {
@@ -556,7 +613,14 @@ message QueuedMessageState {
   ];
   QueuedMessageStatus status = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional QueuedMessageFailureReason failure_reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  optional string text = 4 [(buf.validate.field).string.min_len = 1];
+  optional string text = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.queued_message_text_nonblank"
+      message: "queued-message restore text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   option (buf.validate.message).cel = {
     id: "kent.transcript.queued_message_payload"
     message: "queued message payload must match status"
@@ -600,7 +664,14 @@ message CompactionStatus {
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
   ];
   CompactionState state = 2 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
-  string mode = 3 [(buf.validate.field).string.min_len = 1];
+  string mode = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.compaction_mode_nonblank"
+      message: "compaction mode must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   int32 count = 4 [(buf.validate.field).int32.gte = 0];
   optional Diagnostic diagnostic = 5;
   option (buf.validate.message).cel = {

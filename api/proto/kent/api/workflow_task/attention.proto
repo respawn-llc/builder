@@ -724,28 +724,11 @@ message AttentionNotification {
       "(this.kind == 4 && has(this.interrupted_current_node))"
   };
   option (buf.validate.message).cel = {
-    id: "kent.workflow_task.notification_question_state"
-    message: "question notification state must contain a consistent non-empty ask batch"
-    expression:
-      "!has(this.question) || "
-      "(size(this.question.prepared_ask_ids) > 0 && "
-      "this.question.prepared_ask_ids.all(id, id.trim() != '') && "
-      "this.question.materialized_ask_ids.all(id, id.trim() != '') && "
-      "this.question.current_unresolved_ask_ids.all(id, id.trim() != '') && "
-      "this.question.skipped_ask_ids.all(id, id.trim() != '') && "
-      "this.question.display_count > 0 && "
-      "this.question.materialized_count == size(this.question.materialized_ask_ids) && "
-      "this.question.materialized_ask_ids.all(id, id in this.question.prepared_ask_ids) && "
-      "this.question.current_unresolved_ask_ids.all(id, id in this.question.materialized_ask_ids) && "
-      "this.question.skipped_ask_ids.all(id, id in this.question.prepared_ask_ids) && "
-      "this.question.display_count == size(this.question.prepared_ask_ids) - size(this.question.skipped_ask_ids))"
-  };
-  option (buf.validate.message).cel = {
-    id: "kent.workflow_task.notification_approval_state"
-    message: "Session approval notifications require a non-blank message and a Session Prompt target"
+    id: "kent.workflow_task.notification_approval_target"
+    message: "Session approval notifications require a Session Prompt target"
     expression:
       "!has(this.approval) || "
-      "(this.approval.message.trim() != '' && has(this.target.session_prompt))"
+      "has(this.target.session_prompt)"
   };
   option (buf.validate.message).cel = {
     id: "kent.workflow_task.notification_workflow_approval_state"
