@@ -17,7 +17,7 @@ export function ProgressChip({ label, maximum, size = "label", value, ...appeara
   validateProgress(maximum, value);
   return (
     <Chip aria-label={label} size={size} {...appearance}>
-      <ProgressChipContent label={label} maximum={maximum} value={value} />
+      <ProgressChipContent label={label} maximum={maximum} size={size} value={value} />
     </Chip>
   );
 }
@@ -32,7 +32,7 @@ export function ProgressInteractiveChip({
   validateProgress(maximum, value);
   return (
     <InteractiveChip aria-label={label} size={size} {...behavior}>
-      <ProgressChipContent label={label} maximum={maximum} value={value} />
+      <ProgressChipContent label={label} maximum={maximum} size={size} value={value} />
     </InteractiveChip>
   );
 }
@@ -50,7 +50,12 @@ function validateProgress(maximum: number, value: number): void {
   }
 }
 
-function ProgressChipContent({ label, maximum, value }: ProgressProps) {
+function ProgressChipContent({
+  label,
+  maximum,
+  size,
+  value,
+}: ProgressProps & Readonly<{ size: "compact" | "default" | "label" }>) {
   const circumference = 2 * Math.PI * 7;
   const completedLength = circumference * (value / maximum);
   return (
@@ -60,7 +65,7 @@ function ProgressChipContent({ label, maximum, value }: ProgressProps) {
         aria-valuemax={maximum}
         aria-valuemin={0}
         aria-valuenow={value}
-        className="size-4 shrink-0"
+        className={size === "compact" ? "size-[13px] shrink-0" : "size-4 shrink-0"}
         role="progressbar"
         viewBox="0 0 18 18"
       >

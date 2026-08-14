@@ -1,4 +1,4 @@
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import { cx } from "@/ui";
 
@@ -12,25 +12,27 @@ export function OverlappingCrossfade({
     contentKey: string;
   }> | null>(null);
 
-  useLayoutEffect(() => {
-    if (previous.current.contentKey !== contentKey) {
-      setOutgoing(previous.current);
-    }
-  }, [contentKey]);
-
-  useLayoutEffect(() => {
+  if (previous.current.contentKey !== contentKey) {
+    const nextOutgoing = previous.current;
     previous.current = { children, contentKey };
-  });
+    if (outgoing?.contentKey !== nextOutgoing.contentKey) {
+      setOutgoing(nextOutgoing);
+    }
+  } else {
+    previous.current = { children, contentKey };
+  }
 
   return (
     <div className="relative h-full min-h-0">
       {outgoing === null ? null : (
         <div
           className="pointer-events-none absolute inset-0 z-0 animate-[detail-pane-crossfade-out_var(--motion-normal)_both]"
-          key={`outgoing:${outgoing.contentKey}`}
+          key={outgoing.contentKey}
           onAnimationEnd={(event) => {
             if (event.target === event.currentTarget) {
-              setOutgoing(null);
+              setOutgoing((current) =>
+                current?.contentKey === outgoing.contentKey ? null : current,
+              );
             }
           }}
         >

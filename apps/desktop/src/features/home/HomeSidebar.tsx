@@ -7,12 +7,13 @@ import { errorMessage } from "@/api";
 import { useAppNavigation, useOwnedSidebarRoots, type SidebarMode } from "@/app-facade";
 import { WorkflowRow, useWorkflowPages } from "@/shared/workflow-library";
 import { cx, directionalBoundary, InfiniteListBoundary, VirtualizedInfiniteList } from "@/ui";
-import type { HomePrimaryTab } from "./HomePrimaryPane";
 import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectRow } from "./ProjectRow";
 import type { useProjectPages } from "./useHomeData";
 
-export function HomePrototypeSidebar({
+export type HomeSidebarCategory = "projects" | "workflows";
+
+export function HomeSidebar({
   disabled,
   onCategorySelect,
   onChooseWorkspace,
@@ -25,14 +26,14 @@ export function HomePrototypeSidebar({
   selectedProjectID,
 }: Readonly<{
   disabled: boolean;
-  onCategorySelect: (category: HomePrimaryTab) => void;
+  onCategorySelect: (category: HomeSidebarCategory) => void;
   onChooseWorkspace: () => void;
   onCreateWorkflow: () => void;
   onProjectSelect: (projectID: string) => void;
   projectItems: readonly ProjectSummary[];
   projectsQuery: ReturnType<typeof useProjectPages>;
   sidebarMode: SidebarMode;
-  selectedCategory: HomePrimaryTab;
+  selectedCategory: HomeSidebarCategory;
   selectedProjectID: string | null;
 }>) {
   const { t } = useTranslation();
@@ -88,7 +89,7 @@ export function HomePrototypeSidebar({
         <OverlappingCrossfade contentKey={selectedCategory}>
           {selectedCategory === "projects" ? (
             <VirtualizedInfiniteList
-              className="home-prototype-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
+              className="home-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
               empty={empty}
               estimateSize={() => 54}
               getItemKey={(project) => project.id}
@@ -115,7 +116,7 @@ export function HomePrototypeSidebar({
             />
           ) : (
             <VirtualizedInfiniteList
-              className="home-prototype-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
+              className="home-sidebar-scroll h-full min-h-0 overflow-auto hide-scrollbar contain-strict [-webkit-overflow-scrolling:touch]"
               empty={empty}
               estimateSize={() => 54}
               getItemKey={(workflow) => workflow.id}

@@ -1,11 +1,11 @@
-import { GitFork } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { useTranslation } from "react-i18next";
 
 import type { ProjectTaskGroupDefinition, TaskListItem } from "@/api";
 import { TaskDependencyProgressInteractiveChip } from "@/shared/task-dependencies";
 import { TaskStatusIcon } from "@/shared/task-status";
-import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
+import { Spinner, type VirtualizedInfiniteListBoundaryState } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
@@ -34,6 +34,7 @@ export type ProjectTaskListEntry =
       count: number;
       ariaLabel: string;
       expanded: boolean;
+      definitions: readonly ProjectTaskGroupDefinition[];
       onToggle: () => void;
       className?: string | undefined;
     }>
@@ -75,21 +76,24 @@ export function projectTaskColumnEntry(
         key: "status",
         ariaLabel: t("task.status"),
         content: <ProjectTaskStatusLegend definitions={definitions} />,
-        className: "grid place-items-center",
+        className: "flex h-full items-center justify-center",
       },
+      {
+        key: "id",
+        content: t("home.prototype.idColumn"),
+      },
+      { key: "title", content: t("home.prototype.titleColumn") },
       {
         key: "dependencies",
         ariaLabel: t("home.prototype.dependenciesColumn"),
-        content: <GitFork aria-hidden="true" size={15} strokeWidth={1.8} />,
-        className: "grid place-items-center",
+        content: <GitBranch aria-hidden="true" size={14} strokeWidth={1.7} />,
+        className: "flex h-full items-center justify-center",
       },
-      { key: "id", content: t("home.prototype.idColumn") },
-      { key: "title", content: t("home.prototype.titleColumn") },
-      { key: "workflow", content: t("home.prototype.workflowColumn") },
       { key: "labels", content: t("labels.filter") },
+      { key: "workflow", content: t("home.prototype.workflowColumn") },
     ],
     className: projectTaskGridClassName(
-      "border-b border-[var(--color-outline)] bg-[var(--color-background)]",
+      "min-h-9 rounded-[var(--radius-s)] text-xs font-medium text-[var(--color-muted)]",
     ),
   };
 }
@@ -98,8 +102,11 @@ export function projectTaskEntry({
   group,
   labelEditorTaskID,
   onLabelsActivate,
+  onResumeTask,
   onTaskActivate,
+  pendingResume,
   projectID,
+  resumeDisabled,
   task,
   taskDetailID,
   t,
@@ -107,8 +114,11 @@ export function projectTaskEntry({
   group: ProjectTaskGroup;
   labelEditorTaskID: string | null;
   onLabelsActivate: (taskID: string) => void;
+  onResumeTask: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
+  pendingResume: boolean;
   projectID: string;
+  resumeDisabled: boolean;
   task: TaskListItem;
   taskDetailID: string | null;
   t: ReturnType<typeof useTranslation>["t"];
@@ -132,37 +142,38 @@ export function projectTaskEntry({
       onTaskActivate(task.id);
     },
     className: projectTaskGridClassName(
-      "cursor-pointer border-b border-[var(--color-outline)] px-[var(--space-3)] transition-colors duration-100 motion-reduce:transition-none hover:bg-[var(--color-island-2)] aria-selected:bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-island-1))] aria-selected:shadow-[inset_3px_0_0_var(--color-primary)]",
+      "project-task-row min-h-10 cursor-pointer rounded-[var(--radius-s)] text-[13px] leading-5 outline-none transition-[background-color,scale] duration-100 ease-out motion-reduce:transition-none hover:bg-[color-mix(in_srgb,var(--color-island-2)_78%,transparent)] focus-visible:ring-[2px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] active:[scale:0.997] active:bg-[var(--color-island-3)] aria-selected:bg-[color-mix(in_srgb,var(--color-primary)_11%,var(--color-island-1))]",
     ),
     cells: [
       {
         key: "status",
         ariaLabel: `${t("task.status")}: ${t(`task.statusKinds.${task.status.kind}`)}`,
-        className: "grid place-items-center",
-        content: (
+        className: "flex h-full items-center justify-center",
+        content: task.status.kind === "interrupted" ? (
+          <button
+            aria-label={`${t("board.resume")}: ${task.shortID}`}
+            className="inline-grid size-6 place-items-center rounded-full outline-none transition-colors hover:bg-[var(--color-island-3)] focus-visible:ring-[2px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
+            data-testid={`project-task-status-${task.id}`}
+            disabled={resumeDisabled || pendingResume}
+            onClick={(event) => {
+              event.stopPropagation();
+              onResumeTask(task.id);
+            }}
+            title={t("board.resume")}
+            type="button"
+          >
+            {pendingResume ? <Spinner size="sm" /> : <TaskStatusIcon status={task.status.kind} />}
+          </button>
+        ) : (
           <span data-testid={`project-task-status-${task.id}`}>
             <TaskStatusIcon status={task.status.kind} />
           </span>
         ),
       },
       {
-        key: "dependencies",
-        className: "grid place-items-center",
-        content:
-          task.dependencyProgress === null ? null : (
-            <TaskDependencyProgressInteractiveChip
-              onClick={(event: MouseEvent<HTMLButtonElement>) => {
-                event.stopPropagation();
-                onTaskActivate(task.id);
-              }}
-              progress={task.dependencyProgress}
-            />
-          ),
-      },
-      {
         key: "id",
         ariaLabel: task.shortID,
-        className: "min-w-0 overflow-hidden font-mono",
+        className: "min-w-0 overflow-hidden font-mono text-xs text-[var(--color-muted)]",
         content: (
           <span
             className="block overflow-hidden text-ellipsis whitespace-nowrap [direction:rtl] text-left"
@@ -175,7 +186,7 @@ export function projectTaskEntry({
       },
       {
         key: "title",
-        className: "min-w-0 truncate",
+        className: "min-w-0 truncate text-[var(--color-on-island)]",
         content: (
           <span className="block truncate" title={task.title}>
             {task.title}
@@ -183,21 +194,23 @@ export function projectTaskEntry({
         ),
       },
       {
-        key: "workflow",
-        className: "min-w-0 truncate",
-        content: (
-          <span
-            className="block truncate"
-            data-testid={`project-task-workflow-${task.id}`}
-            title={task.workflowName ?? undefined}
-          >
-            {task.workflowName}
-          </span>
-        ),
+        key: "dependencies",
+        className: "flex h-full items-center justify-center",
+        content:
+          task.dependencyProgress === null ? null : (
+            <TaskDependencyProgressInteractiveChip
+              onClick={(event: MouseEvent<HTMLButtonElement>) => {
+                event.stopPropagation();
+                onTaskActivate(task.id);
+              }}
+              progress={task.dependencyProgress}
+              size="compact"
+            />
+          ),
       },
       {
         key: "labels",
-        className: "min-w-0",
+        className: "flex h-full min-w-0 items-center",
         content: (
           <ProjectTaskLabelsCell
             onOpenChange={(open) => {
@@ -212,10 +225,23 @@ export function projectTaskEntry({
           />
         ),
       },
+      {
+        key: "workflow",
+        className: "min-w-0 truncate text-xs text-[var(--color-muted)]",
+        content: (
+          <span
+            className="block truncate"
+            data-testid={`project-task-workflow-${task.id}`}
+            title={task.workflowName ?? undefined}
+          >
+            {task.workflowName}
+          </span>
+        ),
+      },
     ],
   };
 }
 
 export function projectTaskGridClassName(extra: string): string {
-  return `grid min-w-[880px] grid-cols-[40px_96px_112px_minmax(140px,1fr)_minmax(130px,180px)_minmax(160px,240px)] items-center gap-[var(--space-2)] ${extra}`;
+  return `project-task-grid-row grid w-full items-center gap-x-[var(--space-3)] px-[var(--space-3)] ${extra}`;
 }

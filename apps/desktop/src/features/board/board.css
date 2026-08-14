@@ -143,20 +143,6 @@
   transform-origin: left top;
 }
 
-.board-hover-menu-morph {
-  --board-menu-padding: var(--space-1);
-  --board-menu-icon-row-size: 40px;
-  --board-menu-icon-gap: 0px;
-  --board-menu-content-gap: var(--space-2);
-  --board-menu-content-inline-padding: var(--space-0);
-  --board-menu-collapsed-height: calc(
-    var(--board-menu-icon-row-size) + (var(--board-menu-padding) * 2) + 2px
-  );
-  --board-menu-collapsed-width: calc(
-    (var(--board-menu-icon-row-size) * 1) + var(--board-menu-icon-gap) + (var(--board-menu-padding) * 2) + 2px
-  );
-}
-
 .workflow-issues-list li::before {
   position: absolute;
   left: 0;
@@ -288,24 +274,4 @@
       background-color var(--motion-morph);
   }
 
-  .board-hover-menu-morph {
-    transform-origin: left bottom;
-    transition:
-      width var(--motion-morph),
-      grid-template-rows var(--motion-morph),
-      padding var(--motion-morph),
-      background-color var(--motion-morph);
-  }
-
-  .board-hover-menu-content {
-    transition: opacity var(--motion-fast);
-  }
-
-  .board-hover-menu-expanded .board-hover-menu-content {
-    transition-delay: 180ms;
-  }
-
-  .board-hover-menu-collapsed .board-hover-menu-content {
-    transition-delay: 0ms;
-  }
 }

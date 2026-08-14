@@ -4,7 +4,7 @@
 
 - Desktop Sessions and Chat are thin remote-control surfaces. The Kent server is authoritative for Sessions, project and workspace scope, runtime activity, transcript history, drafts, Pending Work, prompts, goals, processes, worktrees, and durable state.
 - Desktop provides the session-browser and chat capabilities available in the terminal product unless this specification explicitly excludes a capability.
-- Unfinished Desktop Chat entry points and Home navigation remain unavailable in production builds until product activation. Development builds may expose those surfaces through one Desktop Chat availability gate.
+- Desktop Chat remains unavailable in production builds until product activation. Development builds expose its Home session navigation through one Desktop Chat availability gate. The gate controls no other Home, Task, Workflow, board, route, or control.
 - Session discovery is always scoped to a selected Project; there is no unbounded all-Project session list.
 - All desktop presentations of a Session control the same server-authoritative Session. Opening the same Session in another presentation neither creates separate runtime ownership nor forks client state.
 - Task Detail offers `Open Chat` in place of `Open in CLI`. It opens the referenced Session at its latest transcript position.

@@ -20,22 +20,52 @@ import {
   IslandTabs,
   VirtualizedInfiniteList,
 } from "@/ui";
+import { OverlappingCrossfade } from "./OverlappingCrossfade";
 import { ProjectTasksSurface } from "./ProjectTasksSurface";
 import { createProjectTasksViewMemory } from "./projectTasksViewMemory";
 
-type ProjectPrototypeTab = "tasks" | "sessions" | "subagents";
+type ProjectContentTab = "tasks" | "sessions" | "subagents";
 
-export function ProjectPrototypeDetail({
+export function HomeProjectContent({
   projectID,
+  sessionsVisible,
   sidebarMode,
 }: Readonly<{
   projectID: string;
+  sessionsVisible: boolean;
   sidebarMode: SidebarMode;
+}>) {
+  const [taskListViewMemory] = useState(createProjectTasksViewMemory);
+  if (!sessionsVisible) {
+    return (
+      <ProjectTasksSurface
+        projectID={projectID}
+        sidebarMode={sidebarMode}
+        viewMemory={taskListViewMemory}
+      />
+    );
+  }
+  return (
+    <ProjectContentTabs
+      projectID={projectID}
+      sidebarMode={sidebarMode}
+      taskListViewMemory={taskListViewMemory}
+    />
+  );
+}
+
+function ProjectContentTabs({
+  projectID,
+  sidebarMode,
+  taskListViewMemory,
+}: Readonly<{
+  projectID: string;
+  sidebarMode: SidebarMode;
+  taskListViewMemory: ReturnType<typeof createProjectTasksViewMemory>;
 }>) {
   const { t } = useTranslation();
   const { api } = useAppServices();
-  const [tab, setTab] = useState<ProjectPrototypeTab>("tasks");
-  const [taskListViewMemory] = useState(createProjectTasksViewMemory);
+  const [tab, setTab] = useState<ProjectContentTab>("tasks");
   const mainSessionsQuery = useInfiniteQuery({
     ...mainSessionCatalogInfiniteQueryOptions(api, projectID),
     enabled: tab === "sessions",
@@ -63,21 +93,23 @@ export function ProjectPrototypeDetail({
         />
       </div>
       <div className="min-h-0 flex-1">
-        {tab === "tasks" ? (
-          <ProjectTasksSurface
-            projectID={projectID}
-            sidebarMode={sidebarMode}
-            viewMemory={taskListViewMemory}
-          />
-        ) : (
-          <SessionPrototypeList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
-        )}
+        <OverlappingCrossfade contentKey={tab}>
+          {tab === "tasks" ? (
+            <ProjectTasksSurface
+              projectID={projectID}
+              sidebarMode={sidebarMode}
+              viewMemory={taskListViewMemory}
+            />
+          ) : (
+            <SessionList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
+          )}
+        </OverlappingCrossfade>
       </div>
     </div>
   );
 }
 
-function SessionPrototypeList({
+function SessionList({
   query,
 }: Readonly<{
   query: Readonly<{
@@ -135,7 +167,7 @@ function SessionPrototypeList({
       renderItem={(session) => (
         <HomeListCard
           ariaLabel={session.name ?? session.firstPromptPreview ?? session.id}
-          onClick={unavailablePrototypeAction}
+          onClick={unavailableSessionAction}
         >
           <span className="truncate text-sm text-[var(--color-muted)]">
             {formatRelativeTime(session.updatedAt)}
@@ -150,6 +182,6 @@ function SessionPrototypeList({
   );
 }
 
-function unavailablePrototypeAction(): void {
+function unavailableSessionAction(): void {
   return;
 }

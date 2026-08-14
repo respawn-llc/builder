@@ -1,59 +1,71 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 
 import { useHomeSidebarMode } from "./useHomeSidebarMode";
 
-it("switches Home sidebars between overlay and shift as available width changes", () => {
-  const media = controlledMediaQuery(false);
-  const original = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
-  Object.defineProperty(globalThis, "matchMedia", {
+it("switches Home sidebars between overlay and shift as available main-pane width changes", () => {
+  let availableWidthPx = 1_000;
+  let notifyResize: (() => void) | null = null;
+  const originalResizeObserver = Object.getOwnPropertyDescriptor(globalThis, "ResizeObserver");
+  const geometry = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(() => domRect(availableWidthPx));
+  Object.defineProperty(globalThis, "ResizeObserver", {
     configurable: true,
-    value: vi.fn(() => media.query),
+    value: class ControlledResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        notifyResize = () => {
+          callback([], this as unknown as ResizeObserver);
+        };
+      }
+
+      disconnect(): void {
+        return;
+      }
+
+      observe(): void {
+        return;
+      }
+
+      unobserve(): void {
+        return;
+      }
+    },
   });
 
   try {
-    const { result } = renderHook(useHomeSidebarMode);
-    expect(result.current).toBe("overlay");
+    render(<SidebarModeHarness />);
+    expect(screen.getByTestId("main-pane")).toHaveAttribute("data-sidebar-mode", "overlay");
 
+    availableWidthPx = 1_100;
     act(() => {
-      media.setMatches(true);
+      notifyResize?.();
     });
-    expect(result.current).toBe("shift");
+    expect(screen.getByTestId("main-pane")).toHaveAttribute("data-sidebar-mode", "shift");
   } finally {
-    if (original === undefined) {
-      Reflect.deleteProperty(globalThis, "matchMedia");
+    geometry.mockRestore();
+    if (originalResizeObserver === undefined) {
+      Reflect.deleteProperty(globalThis, "ResizeObserver");
     } else {
-      Object.defineProperty(globalThis, "matchMedia", original);
+      Object.defineProperty(globalThis, "ResizeObserver", originalResizeObserver);
     }
   }
 });
 
-function controlledMediaQuery(initialMatches: boolean): Readonly<{
-  query: MediaQueryList;
-  setMatches: (matches: boolean) => void;
-}> {
-  const target = new EventTarget();
-  let matches = initialMatches;
-  const query = {
-    addEventListener: target.addEventListener.bind(target),
-    addListener: ignoreLegacyMediaQueryListener,
-    dispatchEvent: target.dispatchEvent.bind(target),
-    get matches() {
-      return matches;
-    },
-    media: "(min-width: 1001px)",
-    onchange: null,
-    removeEventListener: target.removeEventListener.bind(target),
-    removeListener: ignoreLegacyMediaQueryListener,
-  } satisfies MediaQueryList;
-  return {
-    query,
-    setMatches(next) {
-      matches = next;
-      target.dispatchEvent(new Event("change"));
-    },
-  };
+function SidebarModeHarness() {
+  const { mainPaneRef, sidebarMode } = useHomeSidebarMode();
+  return <section data-sidebar-mode={sidebarMode} data-testid="main-pane" ref={mainPaneRef} />;
 }
 
-function ignoreLegacyMediaQueryListener(): void {
-  return;
+function domRect(width: number): DOMRect {
+  return {
+    bottom: 0,
+    height: 0,
+    left: 0,
+    right: width,
+    top: 0,
+    width,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  };
 }

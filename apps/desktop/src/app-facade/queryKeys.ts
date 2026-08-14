@@ -120,6 +120,7 @@ export const queryKeys = {
     errors,
   ],
   projectWorkflowLinks: (projectID: string) => ["project-workflow-links", projectID],
+  projectTaskWorkflows: (projectID: string) => ["project-workflow-links", projectID, "task-list"],
   projectLabels: (projectID: string) => ["project-labels", projectID],
   taskLabels: (taskID: string) => ["task-labels", taskID],
   projectBoardNodeCardsRoot: (projectID: string) => ["board-node-cards", projectID],

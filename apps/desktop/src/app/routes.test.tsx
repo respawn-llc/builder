@@ -22,3 +22,7 @@ it("normalizes omitted Home project selection", () => {
   expect(validate({})).toEqual({});
   expect(validate({ projectId: "project-1" })).toEqual({ projectId: "project-1" });
 });
+
+it("always exposes the standalone Project Task List route", () => {
+  expect(createAppRouter().routesById["/projects/$projectId/tasks"]).toBeDefined();
+});

@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 
-export function useBoardTaskLifecycleAction() {
+export function useTaskLifecycleAction() {
   const [pendingTaskIDs, setPendingTaskIDs] = useState<ReadonlySet<string>>(() => new Set());
   const pendingTaskIDsRef = useRef(pendingTaskIDs);
   const execute = useCallback(async (taskID: string, action: () => Promise<void>): Promise<void> => {

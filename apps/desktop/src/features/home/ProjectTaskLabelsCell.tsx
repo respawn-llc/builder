@@ -109,7 +109,7 @@ function TaskLabelTrigger({
       {...buttonProps}
       aria-expanded={open}
       aria-label={t("home.prototype.editTaskLabels", { shortID: task.shortID })}
-      className="block h-full w-full min-w-0 rounded-[var(--radius-s)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
+      className="flex h-full w-full min-w-0 items-center rounded-[var(--radius-s)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
       disabled={disabled}
       onClick={(event) => {
         event.stopPropagation();
@@ -126,11 +126,20 @@ function TaskLabelTrigger({
       ) : (
         <OneLineOverflowRow
           ariaLabel={t("labels.filter")}
+          className="w-full"
           items={task.labels.map((label) => ({
-            content: <Badge tone="neutral">{label.name}</Badge>,
+            content: (
+              <Badge className="py-[3px]" size="compact" tone="neutral">
+                {label.name}
+              </Badge>
+            ),
             id: label.id,
           }))}
-          renderOverflow={(hiddenCount) => <Badge tone="neutral">+{hiddenCount}</Badge>}
+          renderOverflow={(hiddenCount) => (
+            <Badge className="py-[3px]" size="compact" tone="neutral">
+              +{hiddenCount}
+            </Badge>
+          )}
         />
       )}
     </button>

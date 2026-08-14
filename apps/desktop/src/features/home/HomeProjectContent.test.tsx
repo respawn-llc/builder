@@ -3,7 +3,7 @@ import { useCallback } from "react";
 
 import { appI18n, initializeI18n } from "@/i18n";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
-import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
+import { HomeProjectContent } from "./HomeProjectContent";
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -51,17 +51,32 @@ vi.mock("./ProjectTasksSurface", () => ({
 beforeAll(async () => initializeI18n());
 
 it("restores Task-grid pixels after visiting another Project tab", () => {
-  render(<ProjectPrototypeDetail projectID="project-1" sidebarMode="shift" />);
+  render(<HomeProjectContent projectID="project-1" sessionsVisible sidebarMode="shift" />);
   const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   grid.scrollTop = 500;
-  grid.scrollLeft = 120;
+  grid.scrollLeft = 0;
   fireEvent.scroll(grid);
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.sessions") }));
+  const outgoingGrid = screen.getByRole("grid", {
+    name: appI18n.t("home.prototype.projectTasksGrid"),
+  });
+  const outgoingLayer = outgoingGrid.parentElement;
+  if (outgoingLayer === null) throw new Error("Expected an outgoing crossfade layer.");
+  fireEvent.animationEnd(outgoingLayer);
   expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.tasks") }));
   const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   expect(restoredGrid.scrollTop).toBe(500);
-  expect(restoredGrid.scrollLeft).toBe(120);
+  expect(restoredGrid.scrollLeft).toBe(0);
+});
+
+it("renders Tasks directly when Desktop Sessions are unavailable", () => {
+  render(<HomeProjectContent projectID="project-1" sessionsVisible={false} sidebarMode="shift" />);
+
+  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  expect(
+    screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") }),
+  ).toBeInTheDocument();
 });

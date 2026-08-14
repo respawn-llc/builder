@@ -10,6 +10,8 @@ export type ResolvedSidebarWidth = Readonly<{
 
 export const sidebarMaxWidthRatio = 0.85;
 export const sidebarMinWidthPx = 350;
+export const sidebarDismissThresholdPx = 400;
+export const sidebarProtectedMainMinWidthPx = 400;
 export const sidebarResizeStepPx = 32;
 
 export type SidebarSizePreference = Readonly<{
@@ -65,6 +67,27 @@ export function sidebarResizeBoundsForShellWidth(
     maxWidthPx,
     minWidthPx: Math.min(Math.max(sidebarMinWidthPx, Math.round(preference.minWidthPx)), maxWidthPx),
     shellWidthPx: roundedShellWidthPx,
+  };
+}
+
+export function sidebarShiftResizeBoundsForCurrentLayout(
+  shellWidthPx: number,
+  protectedMainWidthPx: number,
+  currentSidebarWidthPx: number,
+  preference: SidebarSizePreference = defaultSidebarSizePreference,
+): SidebarResizeBounds {
+  const shellBounds = sidebarResizeBoundsForShellWidth(shellWidthPx, preference);
+  const availableWidthPx = Math.max(
+    0,
+    normalizePx(protectedMainWidthPx, 0) +
+      normalizePx(currentSidebarWidthPx, 0) -
+      sidebarProtectedMainMinWidthPx,
+  );
+  const maxWidthPx = Math.min(shellBounds.maxWidthPx, availableWidthPx);
+  return {
+    maxWidthPx,
+    minWidthPx: Math.min(Math.max(sidebarMinWidthPx, Math.round(preference.minWidthPx)), maxWidthPx),
+    shellWidthPx: shellBounds.shellWidthPx,
   };
 }
 

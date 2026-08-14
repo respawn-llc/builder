@@ -15,12 +15,12 @@ import {
   TaskInitiatingActionDialogs,
   startTaskInitiatingAction,
   type TaskInitiatingActionDialogResult,
+  useTaskResumeAction,
 } from "@/shared/execution-target";
 import { ProjectLabelsProvider, useProjectLabelFilter } from "@/shared/labels";
 import { TaskDeleteConfirmationDialog } from "@/shared/task-delete";
 import { WorkflowValidationIssues } from "@/shared/workflow-validation";
 import { ErrorState, FloatingNoticeIsland, LoadingState } from "@/ui";
-import { BoardHoverMenu } from "./BoardHoverMenu";
 import { BoardHorizontalScrollbar } from "./BoardHorizontalScrollbar";
 import { BoardRailMotionController } from "./BoardRailMotionController";
 import { taskDeleteWindowOptions, type TaskDeleteTarget } from "./taskDeleteConfirmationModel";
@@ -32,7 +32,6 @@ import { classifyDrop } from "./BoardDropActions";
 import type { PendingBoardCardMove } from "./BoardCardMotionModel";
 import { ManualMoveDialog } from "./ManualMoveDialog";
 import { useBoardInitiatingActionController } from "./useBoardInitiatingActionController";
-import { useBoardResumeAction } from "./useBoardResumeAction";
 import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterRow } from "./BoardFilterRow";
@@ -260,7 +259,7 @@ function BoardContent({
     refreshErrorTitle: t("board.loadFailed"),
     startErrorTitle: t("board.startFailed"),
   });
-  const resumeAction = useBoardResumeAction(initiatingAction);
+  const resumeAction = useTaskResumeAction(initiatingAction);
   const manualMove = useManualMoveController({
     api,
     onPreviewBlocked: reportMovePreviewBlocked,
@@ -512,12 +511,6 @@ function BoardContent({
     void navigation.openProjectTasks(board.projectID).catch(reportNavigationError);
   }
 
-  function editWorkflow(workflowID: string): void {
-    void navigation
-      .openWorkflowEditor({ projectID: board.projectID, workflowID })
-      .catch(reportNavigationError);
-  }
-
   function openNewTask(): void {
     open({
       boardQueryWorkflowID,
@@ -604,14 +597,6 @@ function BoardContent({
         <BoardBackgroundRefreshNotice error={boardRefreshError} onRetry={onBoardRefreshRetry} />
       )}
       <BoardWorkflowIssuesNotice workflow={board.selectedWorkflow} />
-      <BoardHoverMenu
-        board={board}
-        canCreateTask={connection.phase === "connected"}
-        onNewTask={openNewTask}
-        onWorkflowEdit={editWorkflow}
-        onWorkflowLink={openLinkWorkflow}
-        onWorkflowSelect={selectWorkflow}
-      />
     </div>
   );
 }

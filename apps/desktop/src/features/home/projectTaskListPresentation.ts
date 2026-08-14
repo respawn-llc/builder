@@ -8,7 +8,12 @@ import {
   type ProjectTaskGroupData,
   type ProjectTaskListData,
 } from "./projectTaskListData";
-import { projectTaskColumnEntry, projectTaskEntry, type ProjectTaskListEntry } from "./ProjectTaskRow";
+import {
+  projectTaskColumnEntry,
+  projectTaskEntry,
+  projectTaskGridClassName,
+  type ProjectTaskListEntry,
+} from "./ProjectTaskRow";
 
 type ProjectTaskPresentationInput = Readonly<{
   data: ProjectTaskListData;
@@ -16,9 +21,12 @@ type ProjectTaskPresentationInput = Readonly<{
   groupCounts: ProjectTaskGroupCounts | undefined;
   labelEditorTaskID: string | null;
   onLabelsActivate: (taskID: string) => void;
+  onResumeTask: (taskID: string) => void;
   onTaskActivate: (taskID: string) => void;
   onToggle: (group: ProjectTaskGroup) => void;
+  pendingResumeTaskIDs: ReadonlySet<string>;
   projectID: string;
+  resumeDisabled: boolean;
   taskDetailID: string | null;
   t: TFunction;
 }>;
@@ -69,11 +77,18 @@ function groupEntries(
         count,
         group: input.t(`home.prototype.statusGroups.${group}`),
       }),
+      definitions: input.definitions,
       expanded: input.disclosure[group],
       onToggle: () => {
         input.onToggle(group);
       },
-      className: "border-b border-[var(--color-outline)] bg-[var(--color-island-2)] px-[var(--space-3)]",
+      className: projectTaskGridClassName(
+        `project-task-group-header h-10 rounded-[var(--radius-s)] transition-colors duration-100 motion-reduce:transition-none ${
+          input.disclosure[group]
+            ? "bg-[color-mix(in_srgb,var(--color-island-2)_82%,transparent)]"
+            : "bg-[color-mix(in_srgb,var(--color-island-1)_58%,transparent)]"
+        }`,
+      ),
     },
   ];
   if (!input.disclosure[group]) return entries;
@@ -99,8 +114,11 @@ function groupEntries(
         group,
         labelEditorTaskID: input.labelEditorTaskID,
         onLabelsActivate: input.onLabelsActivate,
+        onResumeTask: input.onResumeTask,
         onTaskActivate: input.onTaskActivate,
+        pendingResume: input.pendingResumeTaskIDs.has(task.id),
         projectID: input.projectID,
+        resumeDisabled: input.resumeDisabled,
         task,
         taskDetailID: input.taskDetailID,
         t: input.t,

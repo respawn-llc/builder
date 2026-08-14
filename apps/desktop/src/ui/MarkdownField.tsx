@@ -125,7 +125,14 @@ function MarkdownFieldCore({
   const showEditor = editing && !disabled;
 
   return (
-    <div className="grid h-full w-full min-h-0 min-w-0 max-w-full grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]">
+    <div
+      className={cx(
+        "grid h-full w-full min-h-0 min-w-0 max-w-full",
+        errorText === undefined
+          ? "grid-rows-[minmax(0,1fr)]"
+          : "grid-rows-[minmax(0,1fr)_auto] gap-[var(--space-2)]",
+      )}
+    >
       <div className="min-h-0 min-w-0 max-w-full">
         {showEditor ? (
           <MarkdownFieldEditor
@@ -287,7 +294,11 @@ function MarkdownFieldReadViewport({
   const expandLabel = readPresentation.kind === "collapsible" ? readPresentation.expandLabel : undefined;
 
   return (
-    <div className={cx("relative w-full min-h-0 min-w-0 max-w-full", !collapsed && "h-full")}>
+    <div
+      className={cx("relative w-full min-h-0 min-w-0 max-w-full", !collapsed && "h-full")}
+      data-collapsed={collapsed}
+      data-slot="markdown-field-read-root"
+    >
       <div
         aria-label={label}
         aria-readonly
@@ -303,6 +314,7 @@ function MarkdownFieldReadViewport({
         onPointerUp={(event) => {
           activateFromPointer(event, disabled, onEdit);
         }}
+        data-slot="markdown-field-read-viewport"
         ref={viewportRef}
         role="textbox"
         style={surfaceStyle}
