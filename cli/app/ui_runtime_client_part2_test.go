@@ -226,12 +226,8 @@ func TestRuntimeClientShowGoalPreservesSuspendedLiveStatus(t *testing.T) {
 	committed := &serverapi.RuntimeGoal{ID: "goal-committed", Objective: "committed goal", Status: "active"}
 	controls := &reconnectRetryRuntimeControlClient{showGoalResp: serverapi.RuntimeGoalShowResponse{Goal: committed}}
 	runtimeClient := newTestSessionRuntimeClientWithControls(controls)
-	liveGoal := &clientui.RuntimeGoal{
-		ID:        committed.ID,
-		Objective: committed.Objective,
-		Status:    clientui.RuntimeGoalStatusActive,
-		Suspended: true,
-	}
+	liveGoal := runtimeGoalFromAPI(committed)
+	liveGoal.Suspended = true
 	runtimeClient.storeMainView(clientui.RuntimeMainView{
 		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
 		Status:  clientui.RuntimeStatus{Goal: liveGoal},
@@ -313,14 +309,20 @@ func TestRuntimeClientInterruptDoesNotCommitRuntimeTuple(t *testing.T) {
 }
 
 func TestCloneRuntimeGoalReturnsIndependentCopy(t *testing.T) {
-	original := &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive, Suspended: true}
+	original := runtimeClientTestRuntimeGoal(
+		runtimeClientTestGoal("goal-1", "ship", clientui.RuntimeGoalStatusActive),
+		true,
+	)
 	cloned := cloneRuntimeGoal(original)
 	original.ID = "goal-2"
 	original.Objective = "mutated"
 	original.Status = clientui.RuntimeGoalStatusPaused
 	original.Suspended = false
 
-	want := &clientui.RuntimeGoal{ID: "goal-1", Objective: "ship", Status: clientui.RuntimeGoalStatusActive, Suspended: true}
+	want := runtimeClientTestRuntimeGoal(
+		runtimeClientTestGoal("goal-1", "ship", clientui.RuntimeGoalStatusActive),
+		true,
+	)
 	if !reflect.DeepEqual(cloned, want) {
 		t.Fatalf("clone = %+v, want %+v", cloned, want)
 	}
@@ -331,11 +333,7 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 	runtimeClient.storeMainView(clientui.RuntimeMainView{Session: clientui.RuntimeSessionView{SessionID: "session-1"}})
 
 	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
-		Goal: &clientui.TranscriptGoal{
-			ID:        "goal-1",
-			Objective: "ship feature",
-			Status:    clientui.RuntimeGoalStatusActive,
-		},
+		Goal: runtimeClientTestTranscriptGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusActive),
 	})),
 	); err != nil {
 		t.Fatalf("admit goal status: %v", err)
@@ -343,16 +341,12 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 	assertRuntimeClientGoalCached(
 		t,
 		runtimeClient,
-		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
-		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusActive},
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusActive), false),
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusActive), false),
 	)
 
 	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
-		Goal: &clientui.TranscriptGoal{
-			ID:        "goal-1",
-			Objective: "ship feature",
-			Status:    clientui.RuntimeGoalStatusPaused,
-		},
+		Goal: runtimeClientTestTranscriptGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusPaused),
 	})),
 	); err != nil {
 		t.Fatalf("admit paused goal status: %v", err)
@@ -360,8 +354,8 @@ func TestRuntimeClientGoalStatusEventPatchesCachedMainView(t *testing.T) {
 	assertRuntimeClientGoalCached(
 		t,
 		runtimeClient,
-		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
-		&clientui.RuntimeGoal{ID: "goal-1", Objective: "ship feature", Status: clientui.RuntimeGoalStatusPaused},
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusPaused), false),
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-1", "ship feature", clientui.RuntimeGoalStatusPaused), false),
 	)
 
 	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{}))); err != nil {
@@ -374,20 +368,14 @@ func TestRuntimeClientCanonicalGoalStatusReplacesCachedGoal(t *testing.T) {
 	runtimeClient := newTestSessionRuntimeClientWithControls(&reconnectRetryRuntimeControlClient{})
 	runtimeClient.storeMainView(clientui.RuntimeMainView{
 		Session: clientui.RuntimeSessionView{SessionID: "session-1"},
-		Status: clientui.RuntimeStatus{Goal: &clientui.RuntimeGoal{
-			ID:        "goal-old",
-			Objective: "old",
-			Status:    clientui.RuntimeGoalStatusActive,
-			Suspended: true,
-		}},
+		Status: clientui.RuntimeStatus{Goal: runtimeClientTestRuntimeGoal(
+			runtimeClientTestGoal("goal-old", "old", clientui.RuntimeGoalStatusActive),
+			true,
+		)},
 	})
 
 	if _, err := runtimeClient.admitTranscriptMessageState(clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{
-		Goal: &clientui.TranscriptGoal{
-			ID:        "goal-new",
-			Objective: "new",
-			Status:    clientui.RuntimeGoalStatusActive,
-		},
+		Goal: runtimeClientTestTranscriptGoal("goal-new", "new", clientui.RuntimeGoalStatusActive),
 	})),
 	); err != nil {
 		t.Fatalf("admit replacement goal status: %v", err)
@@ -395,9 +383,22 @@ func TestRuntimeClientCanonicalGoalStatusReplacesCachedGoal(t *testing.T) {
 	assertRuntimeClientGoalCached(
 		t,
 		runtimeClient,
-		&clientui.RuntimeGoal{ID: "goal-new", Objective: "new", Status: clientui.RuntimeGoalStatusActive},
-		&clientui.RuntimeGoal{ID: "goal-new", Objective: "new", Status: clientui.RuntimeGoalStatusActive},
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-new", "new", clientui.RuntimeGoalStatusActive), false),
+		runtimeClientTestRuntimeGoal(runtimeClientTestGoal("goal-new", "new", clientui.RuntimeGoalStatusActive), false),
 	)
+}
+
+func runtimeClientTestGoal(id, objective string, status clientui.RuntimeGoalStatus) *clientui.Goal {
+	now := time.Unix(1, 0).UTC()
+	return &clientui.Goal{ID: id, Objective: objective, Status: status, CreatedAt: now, UpdatedAt: now}
+}
+
+func runtimeClientTestRuntimeGoal(goal *clientui.Goal, suspended bool) *clientui.RuntimeGoal {
+	return &clientui.RuntimeGoal{Goal: goal, Suspended: suspended}
+}
+
+func runtimeClientTestTranscriptGoal(id, objective string, status clientui.RuntimeGoalStatus) *clientui.TranscriptGoal {
+	return &clientui.TranscriptGoal{Goal: runtimeClientTestGoal(id, objective, status)}
 }
 
 func assertRuntimeClientGoalCached(t *testing.T, runtimeClient *sessionRuntimeClient, got *clientui.RuntimeGoal, want *clientui.RuntimeGoal) {

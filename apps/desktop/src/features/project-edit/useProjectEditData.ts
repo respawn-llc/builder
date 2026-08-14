@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import type { ProjectBinding } from "@/api";
+import type { ProjectWorkspaceAttachResponse } from "@/api";
 import { errorMessage } from "@/api";
 import { invalidateProjectBoardQueries, invalidateProjectDeleteQueries } from "@/app-facade";
 import type { AppServices } from "@/app-facade";
@@ -49,7 +49,7 @@ export function useProjectWorkspaceAttach(projectID: string) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (workspaceRoot: string): Promise<ProjectBinding> =>
+    mutationFn: async (workspaceRoot: string): Promise<ProjectWorkspaceAttachResponse> =>
       api.attachWorkspace(projectID, workspaceRoot),
     onSuccess: async () => {
       await invalidateProjectWorkspaceOwners(queryClient, projectID);
@@ -164,7 +164,7 @@ async function invalidateProjectWorkspaceOwners(
 ): Promise<void> {
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: queryKeys.projects }),
-    queryClient.invalidateQueries({ queryKey: queryKeys.projectWorkspaceCatalog(projectID) }),
+    queryClient.invalidateQueries({ queryKey: queryKeys.projectEdit(projectID) }),
     invalidateProjectBoardQueries(queryClient, projectID),
   ]);
 }

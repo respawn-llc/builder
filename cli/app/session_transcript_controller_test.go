@@ -537,9 +537,13 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 		event = clientui.NewTranscriptEvent(clientui.TranscriptContextUsage{UsedTokens: 1200, WindowTokens: 2000})
 	case clientui.TranscriptMessageGoalStatus:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptGoalStatus{Goal: &clientui.TranscriptGoal{
-			ID:        "goal-1",
-			Objective: "finish review fixes",
-			Status:    clientui.RuntimeGoalStatusActive,
+			Goal: &clientui.Goal{
+				ID:        "goal-1",
+				Objective: "finish review fixes",
+				Status:    clientui.RuntimeGoalStatusActive,
+				CreatedAt: time.Unix(1, 0).UTC(),
+				UpdatedAt: time.Unix(1, 0).UTC(),
+			},
 		}})
 	case clientui.TranscriptMessageBackgroundActivity:
 		preview := "running tests"

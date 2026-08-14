@@ -606,7 +606,7 @@ func TestWorkflowGraphAddedIdentityAndDraftContracts(t *testing.T) {
 			GroupID: groupID, GroupKey: "group", DisplayName: "Group",
 		}},
 		Nodes: []serverapi.WorkflowNode{{
-			ID: "node-id", Key: "node", Kind: "agent", DisplayName: "Node", GroupID: &groupID,
+			ID: "node-id", Key: "node", Kind: "agent", DisplayName: "Node", GroupID: groupID,
 		}},
 		TransitionGroups: []serverapi.WorkflowTransitionGroup{{
 			ID: "transition-group-id", SourceNodeID: "node-id", TransitionID: "next",

@@ -34,12 +34,13 @@ import type {
   ProjectDeleteResponse,
   ProjectEdit,
   ProjectMutationResponse,
+  ProjectWorkspaceAttachResponse,
+  ProjectWorkspaceResult,
   ProjectPage,
   ProjectWorkflowLink,
   ServerReadiness,
   SessionCatalogPage,
   SessionCategory,
-  SessionPagePosition,
   TaskAttention,
   TaskApproveResponse,
   TaskComment,
@@ -62,7 +63,7 @@ import type {
   WorkflowPage,
   WorkflowRecord,
   WorkflowValidation,
-  WorkspaceList,
+  WorkspaceCatalogPage,
   WorkspaceUnlinkResponse,
 } from "./models";
 import type {
@@ -93,16 +94,16 @@ export interface ApiService {
 
   getReadiness(): Promise<ServerReadiness>;
   listProjects(pageToken: string): Promise<ProjectPage>;
-  listSessionPage(
+  listSessionPage(projectID: string, category: SessionCategory, offset: number): Promise<SessionCatalogPage>;
+  listWorkspaces(projectID: string, offset: number): Promise<WorkspaceCatalogPage>;
+  getProjectWorkspace(
     projectID: string,
-    category: SessionCategory,
-    position: SessionPagePosition,
-  ): Promise<SessionCatalogPage>;
-  listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
+    selector: Readonly<{ workspaceID: string } | { workspaceRoot: string }>,
+  ): Promise<ProjectWorkspaceResult>;
   getProjectEdit(projectID: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
   createProject(displayName: string, projectKey: string, workspaceRoot: string): Promise<ProjectBinding>;
-  attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectBinding>;
+  attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectWorkspaceAttachResponse>;
   updateProject(
     projectID: string,
     displayName: string,

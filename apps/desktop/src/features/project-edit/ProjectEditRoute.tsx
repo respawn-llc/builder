@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { Plus, Save } from "lucide-react";
 
-import type { ProjectEdit, WorkspaceSummary } from "@/api";
+import type { ProjectEdit, WorkspaceCatalogRow } from "@/api";
 import { errorMessage, isProjectMissingError } from "@/api";
 import type { SidebarPageNavigator } from "@/app-facade";
 import { workspaceCatalogInfiniteQueryOptions } from "@/app-facade";
@@ -32,7 +40,7 @@ import {
   type WorkspaceUnlinkTarget,
   workspaceUnlinkDialogWidth,
 } from "./ProjectEditParts";
-import { findWorkspaceByPath, projectKeyErrors, projectNameErrors } from "./ProjectEditUtils";
+import { projectKeyErrors, projectNameErrors } from "./ProjectEditUtils";
 import {
   useProjectDefaultWorkspaceSave,
   useProjectWorkspaceChangedEvents,
@@ -60,14 +68,13 @@ export function ProjectEditRoute({
   const catalog = useInfiniteQuery(workspaceCatalogInfiniteQueryOptions(api, projectId));
   const workspaceOccurrences = useMemo(
     () =>
-      catalog.data?.pages.flatMap((page, pageIndex) =>
+      catalog.data?.pages.flatMap((page) =>
         page.workspaces.map((workspace, index) => ({
-          occurrenceKey: `${String(catalog.data?.pageParams[pageIndex] ?? "first")}:${index.toString()}`,
-          defaultWorkspaceID: page.defaultWorkspaceID,
+          occurrenceKey: `${page.offset.toString()}:${index.toString()}`,
           workspace,
         })),
       ) ?? [],
-    [catalog.data],
+    [catalog.data?.pages],
   );
   const projectMissing = [query.error, catalog.error].some(isProjectMissingError);
   useSidebarBackWhen(projectMissing, navigator);
@@ -188,13 +195,7 @@ function ProjectEditContent({
   useProjectWorkspaceUnlinkRequests(nativeBridge, handleWorkspaceUnlinkRequest);
   useProjectWorkspaceChangedEvents(nativeBridge, projectID);
 
-  const chooseWorkspace = useChooseWorkspace(
-    nativeBridge,
-    attach,
-    workspaceOccurrences.map((occurrence) => occurrence.workspace),
-    pushToast,
-    t,
-  );
+  const chooseWorkspace = useChooseWorkspace(nativeBridge, attach, pushToast, t);
 
   const saveProject = useCallback(async (): Promise<void> => {
     try {
@@ -278,9 +279,7 @@ function ProjectEditContent({
         onLoadMore={onLoadMore}
         onLoadPrevious={onLoadPrevious}
         previousBoundary={previousBoundary}
-        onMakeDefault={(occurrence) =>
-          void saveDefaultWorkspace(occurrence.workspace, occurrence.defaultWorkspaceID)
-        }
+        onMakeDefault={(workspace) => void saveDefaultWorkspace(workspace)}
         onUnlink={(workspace) => {
           void unlinkDialog.open({
             projectID,
@@ -312,7 +311,12 @@ type ProjectEditMutation = ReturnType<typeof useProjectWorkspaceUnlink>;
 type ProjectAttachMutation = ReturnType<typeof useProjectWorkspaceAttach>;
 type ProjectDefaultMutation = ReturnType<typeof useProjectDefaultWorkspaceSave>;
 type ProjectEditTranslator = ReturnType<typeof useTranslation>["t"];
-type PushToast = (id: string, tone: "info" | "success" | "danger", body: string, title?: string) => void;
+type PushToast = (
+  id: string,
+  tone: "info" | "success" | "danger",
+  body: string,
+  title?: string,
+) => void;
 
 function useConfirmWorkspaceUnlink(
   unlink: ProjectEditMutation,
@@ -346,7 +350,6 @@ function useConfirmWorkspaceUnlink(
 function useChooseWorkspace(
   nativeBridge: ReturnType<typeof useAppServices>["nativeBridge"],
   attach: ProjectAttachMutation,
-  workspaces: readonly WorkspaceSummary[],
   pushToast: PushToast,
   t: ProjectEditTranslator,
 ) {
@@ -356,16 +359,18 @@ function useChooseWorkspace(
         title: t("projectEdit.chooseWorkspace"),
       });
       if (selected === null) return;
-      if (findWorkspaceByPath(workspaces, selected.path) !== undefined) {
-        pushToast("project-edit-workspace-duplicate", "info", t("projectEdit.workspaceAlreadyLinked"));
-        return;
-      }
-      await attach.mutateAsync(selected.path);
-      pushToast("project-edit-workspace-attached", "success", t("projectEdit.workspaceAttached"));
+      const response = await attach.mutateAsync(selected.path);
+      pushToast(
+        "project-edit-workspace-attached",
+        "success",
+        response.outcome === "already_attached"
+          ? t("projectEdit.workspaceAlreadyLinked")
+          : t("projectEdit.workspaceAttached"),
+      );
     } catch (error) {
       pushToast("project-edit-workspace-attach-error", "danger", errorMessage(error));
     }
-  }, [attach, nativeBridge.directories, pushToast, t, workspaces]);
+  }, [attach, nativeBridge.directories, pushToast, t]);
 }
 
 function useSaveDefaultWorkspace(
@@ -374,8 +379,8 @@ function useSaveDefaultWorkspace(
   t: ProjectEditTranslator,
 ) {
   return useCallback(
-    async (workspace: WorkspaceSummary, defaultWorkspaceID: string): Promise<void> => {
-      if (workspace.id === defaultWorkspaceID) return;
+    async (workspace: WorkspaceCatalogRow): Promise<void> => {
+      if (workspace.isDefault) return;
       try {
         await defaultSave.mutateAsync(workspace.id);
         pushToast("project-edit-default-saved", "success", t("projectEdit.defaultWorkspaceSaved"));
@@ -492,8 +497,8 @@ function ProjectWorkspaceList({
   nextBoundary: VirtualizedInfiniteListBoundaryState | undefined;
   onLoadMore: () => void;
   onLoadPrevious: () => void;
-  onMakeDefault: (occurrence: ProjectWorkspaceOccurrence) => void;
-  onUnlink: (workspace: WorkspaceSummary) => void;
+  onMakeDefault: (workspace: WorkspaceCatalogRow) => void;
+  onUnlink: (workspace: WorkspaceCatalogRow) => void;
   workspaceOccurrences: readonly ProjectWorkspaceOccurrence[];
   previousBoundary: VirtualizedInfiniteListBoundaryState | undefined;
 }>) {
@@ -533,18 +538,17 @@ function ProjectWorkspaceList({
       previousLoadItemKey={workspaceOccurrences[0]?.occurrenceKey}
       paddingEnd={16}
       paddingStart={16 + headerOffset}
-      renderItem={(occurrence) => (
+      renderItem={({ workspace }) => (
         <div className={`mx-auto w-full ${projectEditContentMaxWidthClassName}`}>
           <WorkspaceRow
-            defaultWorkspaceID={occurrence.defaultWorkspaceID}
             disabled={disabled}
             onMakeDefault={() => {
-              onMakeDefault(occurrence);
+              onMakeDefault(workspace);
             }}
             onUnlink={() => {
-              onUnlink(occurrence.workspace);
+              onUnlink(workspace);
             }}
-            workspace={occurrence.workspace}
+            workspace={workspace}
           />
         </div>
       )}
@@ -559,8 +563,7 @@ type ProjectEditMetadataState =
 
 type ProjectWorkspaceOccurrence = Readonly<{
   occurrenceKey: string;
-  defaultWorkspaceID: string;
-  workspace: WorkspaceSummary;
+  workspace: WorkspaceCatalogRow;
 }>;
 
 function projectCatalogBoundary(
