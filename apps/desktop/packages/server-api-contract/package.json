@@ -7,11 +7,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./gen/*": {
+      "types": "./dist/gen/*.d.ts",
+      "import": "./dist/gen/*.js"
     }
   },
   "scripts": {
-    "build": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false",
-    "typecheck": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false"
+    "build": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir ../../../.. --temp-dir .generated/protobuf/task protobuf:ts && node ./node_modules/typescript7/bin/tsc -b --pretty false",
+    "typecheck": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir ../../../.. --temp-dir .generated/protobuf/task protobuf:ts && node ./node_modules/typescript7/bin/tsc -b --pretty false"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.13.0",

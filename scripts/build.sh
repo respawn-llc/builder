@@ -56,7 +56,7 @@ run_desktop_build() {
 	local log_file
 	log_file="$(mktemp -t kent-frontend-build.XXXXXX.log)"
 	if ./scripts/install-frontend-dependencies.sh >"$log_file" 2>&1 </dev/null &&
-		./scripts/generate-protobuf.sh run ts -- pnpm --dir apps build >>"$log_file" 2>&1 </dev/null; then
+		pnpm --dir apps build >>"$log_file" 2>&1 </dev/null; then
 		rm -f "$log_file"
 		return
 	fi
@@ -116,7 +116,9 @@ run_server_build() {
 		ldflags+=(-X "core/shared/config.Version=${version}")
 	fi
 
-	./scripts/generate-protobuf.sh run go -- env CGO_ENABLED="${CGO_ENABLED:-0}" \
+	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
+		--temp-dir .generated/protobuf/task protobuf:go
+	env CGO_ENABLED="${CGO_ENABLED:-0}" \
 		go build \
 		-trimpath \
 		-buildvcs=false \

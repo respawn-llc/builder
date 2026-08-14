@@ -1,16 +1,7 @@
 version: v2
 clean: true
 plugins:
-  - local:
-      - go
-      - tool
-      - protoc-gen-go
+  - remote: buf.build/protocolbuffers/go:v1.36.11
     out: shared/protoapi/gen
     opt:
       - paths=source_relative
-  - local:
-      - go
-      - run
-      - ./protoc-gen-kent-go-registry
-    out: shared/protoapi/gen
-    strategy: all

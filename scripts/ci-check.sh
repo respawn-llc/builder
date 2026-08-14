@@ -52,7 +52,9 @@ run_frontend_lint() {
 
 run_vet() {
 	echo "==> go vet"
-	./scripts/generate-protobuf.sh run go -- go vet ./...
+	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
+		--temp-dir .generated/protobuf/task protobuf:go
+	go vet ./...
 }
 
 run_build() {
@@ -81,12 +83,8 @@ run_rust_policy() {
 
 run_protobuf() {
 	echo "==> Protobuf lint"
-	(
-		cd tools/protobuf
-		go tool buf lint "$repo_root" --config "$repo_root/buf.yaml"
-	)
-	echo "==> Protobuf deterministic generation"
-	./scripts/generate-protobuf.sh verify all
+	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
+		--temp-dir .generated/protobuf/task protobuf:lint protobuf
 }
 
 mode="${1:-all}"
