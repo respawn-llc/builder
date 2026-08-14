@@ -202,6 +202,9 @@ func (s *SessionLifecycleService) ResolveTransition(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionResolveTransitionResponse{}, err
 	}
+	if req.Transition.Action != serverapi.SessionTransitionActionForkRollback {
+		return s.resolveTransitionOnce(ctx, req)
+	}
 	memoReq := sessionTransitionMemoRequest{
 		SessionID:  strings.TrimSpace(req.SessionID),
 		Transition: req.Transition,
