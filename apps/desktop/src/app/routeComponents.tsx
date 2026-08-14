@@ -1,9 +1,9 @@
 import { getRouteApi, Outlet, useMatch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { BoardRoute } from "@/features/board";
-import { HomeRoute } from "@/features/home";
+import { createProjectTasksViewMemory, HomeRoute, ProjectTasksSurface } from "@/features/home";
 import { StartupGate } from "@/features/startup";
 import { StandaloneTaskRoute } from "@/features/task-detail";
 import { LoadingState } from "@/ui";
@@ -11,6 +11,7 @@ import { AppChrome } from "./AppChrome";
 import {
   readBrowserStorage,
   readLastProjectRoute,
+  SidebarRootOwner,
   writeBrowserStorage,
   writeLastProjectRoute,
 } from "@/app-facade";
@@ -29,7 +30,9 @@ const LazyWorkflowLibraryRoute = lazy(async () => {
 });
 
 const rootRouteApi = getRouteApi("__root__");
+const homeRouteApi = getRouteApi("/");
 const projectRouteApi = getRouteApi("/projects/$projectId");
+const projectTasksRouteApi = getRouteApi("/projects/$projectId/tasks");
 const workflowEditorRouteApi = getRouteApi("/workflows/$workflowId/editor");
 const taskRouteApi = getRouteApi("/tasks/$taskId");
 
@@ -62,7 +65,8 @@ export function RootRoute() {
 
 function RoutePersistence() {
   const navigate = rootRouteApi.useNavigate();
-  const isHomeRoute = useMatch({ from: "/", shouldThrow: false }) !== undefined;
+  const homeMatch = useMatch({ from: "/", shouldThrow: false });
+  const isUnselectedHomeRoute = homeMatch !== undefined && homeMatch.search.projectId === undefined;
   const projectMatch = useMatch({ from: "/projects/$projectId", shouldThrow: false });
   const projectId = projectMatch?.params.projectId ?? null;
   const workflowId = projectMatch?.search.workflowId;
@@ -70,7 +74,7 @@ function RoutePersistence() {
   useEffect(() => {
     if (claimRouteRestoreCheck()) {
       const restored = readLastProjectRoute();
-      if (isHomeRoute && restored !== null) {
+      if (isUnselectedHomeRoute && restored !== null) {
         // Session restore is startup state hydration, not a user-initiated destination change, so it
         // intentionally bypasses the animated app navigation API.
         void navigate({
@@ -84,7 +88,7 @@ function RoutePersistence() {
     if (projectId !== null) {
       writeLastProjectRoute({ projectId, workflowId });
     }
-  }, [isHomeRoute, projectId, workflowId, navigate]);
+  }, [isUnselectedHomeRoute, projectId, workflowId, navigate]);
 
   return null;
 }
@@ -117,10 +121,25 @@ export function ProjectRoute() {
   );
 }
 
+export function ProjectTasksRoute() {
+  const { t } = useTranslation();
+  const params = projectTasksRouteApi.useParams();
+  useWindowChromeTitle(t("home.prototype.tasks"));
+  const [viewMemory] = useState(createProjectTasksViewMemory);
+  return (
+    <SidebarRootOwner>
+      <section className="island-glass h-full min-h-0 overflow-hidden rounded-[var(--radius-xl)]">
+        <ProjectTasksSurface projectID={params.projectId} sidebarMode="shift" viewMemory={viewMemory} />
+      </section>
+    </SidebarRootOwner>
+  );
+}
+
 export function HomeShellRoute() {
   const { t } = useTranslation();
+  const search = homeRouteApi.useSearch();
   useWindowChromeTitle(t("home.projectsPane"));
-  return <HomeRoute />;
+  return <HomeRoute selectedProjectID={search.projectId ?? null} />;
 }
 
 export function WorkflowEditorShellRoute() {

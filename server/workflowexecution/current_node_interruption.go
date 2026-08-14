@@ -21,6 +21,7 @@ type currentNodeAdmissionWait struct {
 }
 
 type currentNodeInterruptCleanupState struct {
+	taskID         workflow.TaskID
 	stopHandles    []sessionruntime.ExecutionHandle
 	waitHandles    []sessionruntime.ExecutionHandle
 	references     []workflow.CurrentNodeReference
@@ -38,7 +39,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 	for _, handle := range state.stopHandles {
 		handle.RequestStop()
 	}
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.runTaskMutation(cleanupCtx, state.taskID, func(ctx context.Context) error {
 		detail := workflow.NewCurrentNodeInterruptionDetail(string(workflow.CurrentNodeInterruptionReasonUserInterrupt), nil)
 		_, err := interruptCurrentNodeReferences(ctx, c.store.InterruptCurrentNode, state.references, workflow.CurrentNodeInterruptionReasonUserInterrupt, detail)
 		return err
@@ -63,7 +64,7 @@ func (c *CurrentNodeController) cleanupInterrupt(state currentNodeInterruptClean
 		}
 		c.finishTaskInterruptAdmissionKey(wait.key)
 	}
-	verifyErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+	verifyErr := c.runTaskMutation(cleanupCtx, state.taskID, func(context.Context) error {
 		for _, handle := range state.waitHandles {
 			if _, live := c.authority.ExecutionByScope(handle.Scope().ID()); live {
 				return errors.New("workflow interruption left an affected exact execution scope")
@@ -96,7 +97,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, selector.TaskID, func(ctx context.Context) error {
 		err := c.authority.WithWorkflowInterruptSelection(selector.TaskID, selector.SessionID, func(selection sessionruntime.WorkflowInterruptSelection) error {
 			selected := append([]sessionruntime.WorkflowExecutionSelection(nil), selection.Interruptible...)
 			if selector.SessionID == nil {
@@ -165,6 +166,7 @@ func (c *CurrentNodeController) Interrupt(ctx context.Context, selector Interrup
 		return err
 	}
 	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		taskID:         selector.TaskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
@@ -214,7 +216,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
 		if beforeSelection != nil {
 			if err := beforeSelection(); err != nil {
 				return err
@@ -325,6 +327,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		return err
 	}
 	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+		taskID:         taskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,

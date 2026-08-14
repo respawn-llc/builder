@@ -9,6 +9,7 @@ import (
 	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 
 	"github.com/google/uuid"
@@ -17,10 +18,13 @@ import (
 const ReleaseTimeout = 3 * time.Second
 
 type Request struct {
-	SessionID      string
-	ActiveSettings config.Settings
-	EnabledTools   []toolspec.ID
-	Source         config.SourceReport
+	SessionID                string
+	ActiveSettings           config.Settings
+	EnabledTools             []toolspec.ID
+	QuestionsEnabled         bool
+	AutoCompactionEnabled    bool
+	ThinkingOverrideExplicit bool
+	Source                   config.SourceReport
 }
 
 type Activation struct {
@@ -90,10 +94,13 @@ func activate(ctx context.Context, service servicecontract.SessionRuntimeService
 
 func activateRequest(req Request, ownerID string) serverapi.SessionRuntimeActivateRequest {
 	return serverapi.SessionRuntimeActivateRequest{
-		SessionID:      req.SessionID,
-		OwnerID:        ownerID,
-		ActiveSettings: req.ActiveSettings,
-		EnabledToolIDs: toolspec.IDStrings(req.EnabledTools),
-		Source:         req.Source,
+		SessionID:                req.SessionID,
+		OwnerID:                  ownerID,
+		ActiveSettings:           req.ActiveSettings,
+		EnabledToolIDs:           toolspec.IDStrings(req.EnabledTools),
+		QuestionsEnabled:         textutil.Value(req.QuestionsEnabled),
+		AutoCompactionEnabled:    textutil.Value(req.AutoCompactionEnabled),
+		ThinkingOverrideExplicit: req.ThinkingOverrideExplicit,
+		Source:                   req.Source,
 	}
 }

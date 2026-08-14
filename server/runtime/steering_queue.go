@@ -706,6 +706,15 @@ func (q *steeringQueue) pendingWork() bool {
 	return q.draining || q.current != nil || len(q.pending) != 0
 }
 
+func (q *steeringQueue) humanAdmissionOrdinal() uint64 {
+	if q == nil {
+		return 0
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.nextHumanOrder
+}
+
 func (q *steeringQueue) pendingHumanMessages() []QueuedUserMessage {
 	if q == nil {
 		return nil

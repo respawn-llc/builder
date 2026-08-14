@@ -247,7 +247,10 @@ func transcriptMessagesFromRuntimeEvent(evt runtime.Event) []clientui.Transcript
 		return transcriptLiveRunFinishedMessages(evt)
 	case runtime.EventReviewerStarted, runtime.EventReviewerCompleted:
 		return transcriptReviewerStateMessages(evt)
-	case runtime.EventSleepGuardFailed, runtime.EventPromptHistoryPersistFailed, runtime.EventInFlightClearFailed:
+	case runtime.EventSleepGuardFailed,
+		runtime.EventPromptHistoryPersistFailed,
+		runtime.EventContextFactsPersistFailed,
+		runtime.EventInFlightClearFailed:
 		return transcriptOperationalDiagnosticMessages(evt)
 	case runtime.EventUserMessageFlushed:
 		messages := transcriptFeedStateMessages(evt)
@@ -660,6 +663,8 @@ func transcriptOperationalDiagnosticMessages(evt runtime.Event) []clientui.Trans
 		diagnostic.Code = clientui.OperationalDiagnosticSleepGuardFailed
 	case runtime.EventPromptHistoryPersistFailed:
 		diagnostic.Code = clientui.OperationalDiagnosticPromptHistoryPersistFailed
+	case runtime.EventContextFactsPersistFailed:
+		diagnostic.Code = clientui.OperationalDiagnosticContextFactsPersistFailed
 	case runtime.EventInFlightClearFailed:
 		diagnostic.Code = clientui.OperationalDiagnosticInFlightClearFailed
 	default:

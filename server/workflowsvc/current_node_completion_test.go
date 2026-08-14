@@ -376,7 +376,7 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
+	return applyManualMoveForWorkflowServiceTest(ctx, s.store, prepared, candidate)
 }
 
 func (s *currentNodeCompletionExecutionStub) Interrupt(context.Context, workflowexecution.InterruptSelector) error {

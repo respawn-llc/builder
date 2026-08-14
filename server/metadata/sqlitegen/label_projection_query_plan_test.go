@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestListTaskAssignedLabelIDsByTasksUsesBoundedTaskAssignmentIndex(t *testing.T) {
+func TestListTaskAssignedLabelsByTasksUsesBoundedTaskAssignmentIndex(t *testing.T) {
 	db := openSQLiteFixture(t, ":memory:")
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
@@ -26,14 +26,14 @@ CREATE TABLE task_label_assignments (
 	requireQueryUsesIndex(
 		t,
 		db,
-		listTaskAssignedLabelIDsByTasks,
+		listTaskAssignedLabelsByTasks,
 		"sqlite_autoindex_task_label_assignments_1",
 		"task-selected",
 	)
 	requireQueryUsesIndex(
 		t,
 		db,
-		listTaskAssignedLabelIDsByTasks,
+		listTaskAssignedLabelsByTasks,
 		"sqlite_autoindex_project_labels_1",
 		"task-selected",
 	)
@@ -49,16 +49,16 @@ INSERT INTO task_label_assignments (task_id, label_id) VALUES
 	('task-unselected', 'label-unrelated');`); err != nil {
 		t.Fatalf("seed query-plan fixture: %v", err)
 	}
-	rows, err := New(db).ListTaskAssignedLabelIDsByTasks(
+	rows, err := New(db).ListTaskAssignedLabelsByTasks(
 		context.Background(),
 		[]string{"task-selected", "task-selected-empty"},
 	)
 	if err != nil {
-		t.Fatalf("ListTaskAssignedLabelIDsByTasks: %v", err)
+		t.Fatalf("ListTaskAssignedLabelsByTasks: %v", err)
 	}
-	want := []ListTaskAssignedLabelIDsByTasksRow{
-		{TaskID: "task-selected", LabelID: "label-zulu"},
-		{TaskID: "task-selected", LabelID: "label-alpha"},
+	want := []ListTaskAssignedLabelsByTasksRow{
+		{TaskID: "task-selected", LabelID: "label-zulu", LabelName: "Zulu"},
+		{TaskID: "task-selected", LabelID: "label-alpha", LabelName: "alpha"},
 	}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("selected task label rows = %+v, want %+v", rows, want)

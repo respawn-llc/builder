@@ -1,14 +1,103 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"testing"
 
 	"core/server/auth"
+	"core/server/httpcompression"
 	"core/server/session"
 	"core/shared/config"
 )
+
+type effectiveProviderAuthReader struct {
+	state auth.State
+	err   error
+	calls int
+}
+
+func (r *effectiveProviderAuthReader) Load(context.Context) (auth.State, error) {
+	r.calls++
+	return r.state, r.err
+}
+
+func TestResolveEffectiveProviderCapabilitiesOwnsPrecedenceAndAuthLoading(t *testing.T) {
+	t.Run("effective auth derives unlocked capabilities", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{state: auth.State{
+			Method: auth.Method{Type: auth.MethodOAuth},
+		}}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{Model: "gpt-5.6-sol"},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 1 || got.AuthState.Method.Type != auth.MethodOAuth ||
+			got.Capabilities.ProviderID != "chatgpt-codex" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("explicit capabilities bypass failing auth", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{err: errors.New("auth unavailable")}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID: "custom",
+			}},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 0 || got.AuthState.Method.Type != auth.MethodNone ||
+			got.Capabilities.ProviderID != "custom" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("locked capabilities take precedence over settings and auth", func(t *testing.T) {
+		reader := &effectiveProviderAuthReader{err: errors.New("auth unavailable")}
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			&session.LockedContract{ProviderContract: session.LockedProviderCapabilities{
+				ProviderID: "locked",
+			}},
+			config.Settings{ProviderCapabilities: config.ProviderCapabilitiesOverride{
+				ProviderID: "configured",
+			}},
+			reader,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if reader.calls != 0 || got.Capabilities.ProviderID != "locked" {
+			t.Fatalf("resolution = %+v, auth calls = %d", got, reader.calls)
+		}
+	})
+
+	t.Run("missing reader is effective no auth", func(t *testing.T) {
+		got, err := ResolveEffectiveProviderCapabilities(
+			t.Context(),
+			nil,
+			config.Settings{Model: "gpt-5.6-sol"},
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("ResolveEffectiveProviderCapabilities: %v", err)
+		}
+		if got.AuthState.Method.Type != auth.MethodNone || got.Capabilities.ProviderID != "openai" {
+			t.Fatalf("resolution = %+v, want no-auth OpenAI", got)
+		}
+	})
+}
 
 func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	openai, err := InferProviderCapabilities("openai")
@@ -37,6 +126,45 @@ func TestInferProviderCapabilities_UsesRegistryContracts(t *testing.T) {
 	}
 	if !oauth.SupportsProviderVerbosity {
 		t.Fatalf("expected chatgpt-codex provider verbosity support, got %+v", oauth)
+	}
+}
+
+func TestRemoteCompactionProtocolsAreProviderOwned(t *testing.T) {
+	openAI, ok := lookupProviderVariantContract("openai")
+	if !ok || openAI.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
+		t.Fatalf("openai compaction protocol = %v, want Responses-trigger V2", openAI.Variant.RemoteCompactionProtocol)
+	}
+	codex, ok := lookupProviderVariantContract("chatgpt-codex")
+	if !ok || codex.Variant.RemoteCompactionProtocol != remoteCompactionResponsesTriggerV2 {
+		t.Fatalf("chatgpt-codex compaction protocol = %v, want Responses-trigger V2", codex.Variant.RemoteCompactionProtocol)
+	}
+	compatible, ok := lookupProviderVariantContract("openai-compatible")
+	if !ok || compatible.Variant.RemoteCompactionProtocol != remoteCompactionUnsupported {
+		t.Fatalf("openai-compatible compaction protocol = %v, want unsupported", compatible.Variant.RemoteCompactionProtocol)
+	}
+}
+
+func TestProviderVariantRequestCompressionDefaults(t *testing.T) {
+	tests := []struct {
+		providerID string
+		want       httpcompression.RequestContentCoding
+	}{
+		{providerID: "chatgpt-codex", want: httpcompression.ContentCodingZstd},
+		{providerID: "openai", want: httpcompression.ContentCodingIdentity},
+		{providerID: "openai-compatible", want: httpcompression.ContentCodingIdentity},
+		{providerID: "anthropic", want: httpcompression.ContentCodingIdentity},
+	}
+
+	for _, test := range tests {
+		t.Run(test.providerID, func(t *testing.T) {
+			registration, ok := lookupProviderVariantContract(test.providerID)
+			if !ok {
+				t.Fatalf("missing provider variant %q", test.providerID)
+			}
+			if registration.Variant.RequestCompression != test.want {
+				t.Fatalf("request compression = %q, want %q", registration.Variant.RequestCompression, test.want)
+			}
+		})
 	}
 }
 
@@ -74,6 +202,24 @@ func TestResolveRuntimeProviderCapabilities(t *testing.T) {
 			name:     "oauth defaults to chatgpt codex",
 			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
 			settings: config.Settings{Model: "gpt-5.6-sol"},
+			wantID:   "chatgpt-codex",
+		},
+		{
+			name:     "oauth explicit compatible endpoint uses compatible capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://proxy.example/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
+			name:     "oauth explicit first party API endpoint uses compatible capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://api.openai.com/v1"},
+			wantID:   "openai-compatible",
+		},
+		{
+			name:     "oauth explicit canonical codex endpoint uses codex capabilities",
+			auth:     auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+			settings: config.Settings{Model: "gpt-5.6-sol", OpenAIBaseURL: "https://chatgpt.com/backend-api/codex"},
 			wantID:   "chatgpt-codex",
 		},
 		{
@@ -138,24 +284,77 @@ func TestProviderCapabilitiesForSettingsRejectsUnsupportedProviderOverride(t *te
 	}
 }
 
+func TestHTTPTransportPreservesConfiguredCapabilitiesOverrideAcrossEndpointVariant(t *testing.T) {
+	transport := NewHTTPTransport(oauthStaticAuth{})
+	transport.BaseURL = "https://proxy.example/v1"
+	transport.BaseURLExplicit = true
+	transport.ProviderCapabilitiesOverride = &ProviderCapabilities{
+		ProviderID:                    "chatgpt-codex",
+		SupportsResponsesAPI:          true,
+		SupportsResponsesCompact:      true,
+		SupportsNativeWebSearch:       true,
+		SupportsReasoningEncrypted:    true,
+		SupportsServerSideContextEdit: true,
+		SupportsProviderVerbosity:     true,
+		IsOpenAIFirstParty:            true,
+	}
+
+	caps, err := transport.ProviderCapabilities(context.Background())
+	if err != nil {
+		t.Fatalf("ProviderCapabilities: %v", err)
+	}
+	if caps.ProviderID != "chatgpt-codex" || !caps.SupportsResponsesCompact || !caps.IsOpenAIFirstParty {
+		t.Fatalf("capabilities = %+v, want configured capabilities override", caps)
+	}
+}
+
 func TestResolveOpenAITransportProviderVariant_DefaultLoopbackAndRemoteCompatibleBaseURL(t *testing.T) {
-	if got, err := resolveOpenAITransportProviderVariant("", OpenAIAuthMode{}); err != nil || got != "openai" {
+	endpoint := func(raw string, explicit bool) ProviderTransportEndpoint {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse endpoint %q: %v", raw, err)
+		}
+		return ProviderTransportEndpoint{URL: parsed, Explicit: explicit}
+	}
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{}, OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com/v1/", OpenAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("https://api.openai.com/v1/", true), OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected normalized default base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://api.openai.com", OpenAIAuthMode{}); err != nil || got != "openai" {
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("https://api.openai.com", true), OpenAIAuthMode{}); err != nil || got != "openai" {
 		t.Fatalf("expected bare api.openai.com base url to resolve openai variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("http://127.0.0.1:8080/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("http://127.0.0.1:8080/v1", true), OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected loopback base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://example.openai.azure.com/openai/v1", OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("https://example.openai.azure.com/openai/v1", true), OpenAIAuthMode{}); err != nil || got != "openai-compatible" {
 		t.Fatalf("expected remote compatible base url to resolve openai-compatible variant, got variant=%q err=%v", got, err)
 	}
-	if got, err := resolveOpenAITransportProviderVariant("https://ignored.example/v1", OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
-		t.Fatalf("expected oauth mode to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
+		t.Fatalf("expected implicit oauth mode to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("https://proxy.example/backend-api/codex", true), OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+		t.Fatalf("expected custom explicit oauth endpoint to resolve compatible variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("http://127.0.0.1/backend-api/codex", true), OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+		t.Fatalf("expected loopback explicit oauth endpoint to resolve compatible variant, got variant=%q err=%v", got, err)
+	}
+	if got, err := resolveOpenAITransportProviderVariant(endpoint("https://chatgpt.com/backend-api/codex", true), OpenAIAuthMode{IsOAuth: true}); err != nil || got != "chatgpt-codex" {
+		t.Fatalf("expected canonical explicit oauth endpoint to resolve chatgpt-codex variant, got variant=%q err=%v", got, err)
+	}
+	for _, endpoint := range []string{
+		"https://chatgpt.com/backend-api/codex?proxy=true",
+		"https://chatgpt.com/backend-api/codex?",
+		"https://user:secret@chatgpt.com/backend-api/codex",
+	} {
+		parsed, err := url.Parse(endpoint)
+		if err != nil {
+			t.Fatalf("parse endpoint %q: %v", endpoint, err)
+		}
+		if got, err := resolveOpenAITransportProviderVariant(ProviderTransportEndpoint{URL: parsed, Explicit: true}, OpenAIAuthMode{IsOAuth: true}); err != nil || got != "openai-compatible" {
+			t.Fatalf("expected non-canonical explicit oauth endpoint %q to resolve compatible variant, got variant=%q err=%v", endpoint, got, err)
+		}
 	}
 }
 
@@ -188,9 +387,6 @@ func TestKnownNonFirstPartyProviderContractsRemainLocalCompactionOnly(t *testing
 		}
 		if caps.SupportsPromptCacheKey {
 			t.Fatalf("expected prompt cache key unsupported for %s, got %+v", providerID, caps)
-		}
-		if caps.SupportsRequestInputTokenCount {
-			t.Fatalf("expected exact input-token counting unsupported for %s, got %+v", providerID, caps)
 		}
 		if caps.SupportsNativeWebSearch {
 			t.Fatalf("expected native web search unsupported for %s, got %+v", providerID, caps)
@@ -345,28 +541,10 @@ func TestSupportsPromptCacheKeyProvider(t *testing.T) {
 
 func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *testing.T) {
 	tests := []struct {
-		name                       string
-		locked                     session.LockedProviderCapabilities
-		wantRequestInputTokenCount bool
-		wantPromptCacheKey         bool
+		name               string
+		locked             session.LockedProviderCapabilities
+		wantPromptCacheKey bool
 	}{
-		{
-			name: "explicit request input token count false is preserved",
-			locked: session.LockedProviderCapabilities{
-				ProviderID:                        "openai-compatible",
-				SupportsResponsesAPI:              true,
-				SupportsRequestInputTokenCount:    false,
-				HasSupportsRequestInputTokenCount: true,
-			},
-		},
-		{
-			name: "legacy request input token count inherits conservative compatible default",
-			locked: session.LockedProviderCapabilities{
-				ProviderID:                     "openai-compatible",
-				SupportsResponsesAPI:           true,
-				SupportsRequestInputTokenCount: false,
-			},
-		},
 		{
 			name: "explicit prompt cache false is preserved",
 			locked: session.LockedProviderCapabilities{
@@ -375,7 +553,6 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 				SupportsPromptCacheKey:    false,
 				HasSupportsPromptCacheKey: true,
 			},
-			wantRequestInputTokenCount: true,
 		},
 		{
 			name: "legacy prompt cache inherits openai support",
@@ -383,8 +560,7 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 				ProviderID:           "openai",
 				SupportsResponsesAPI: true,
 			},
-			wantRequestInputTokenCount: true,
-			wantPromptCacheKey:         true,
+			wantPromptCacheKey: true,
 		},
 	}
 	for _, tt := range tests {
@@ -392,9 +568,6 @@ func TestProviderCapabilitiesFromLockedHandlesExplicitAndLegacyCapabilities(t *t
 			caps, ok := ProviderCapabilitiesFromLocked(&session.LockedContract{ProviderContract: tt.locked})
 			if !ok {
 				t.Fatal("expected locked provider capabilities")
-			}
-			if caps.SupportsRequestInputTokenCount != tt.wantRequestInputTokenCount {
-				t.Fatalf("request input token count = %v, want %v, caps=%+v", caps.SupportsRequestInputTokenCount, tt.wantRequestInputTokenCount, caps)
 			}
 			if caps.SupportsPromptCacheKey != tt.wantPromptCacheKey {
 				t.Fatalf("prompt cache key = %v, want %v, caps=%+v", caps.SupportsPromptCacheKey, tt.wantPromptCacheKey, caps)

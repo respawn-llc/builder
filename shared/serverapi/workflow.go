@@ -1254,6 +1254,7 @@ type WorkflowTaskListSort struct {
 type WorkflowTaskListRequest struct {
 	ProjectID        *string                     `json:"project_id,omitempty"`
 	WorkflowID       *runtimeids.WorkflowID      `json:"workflow_id,omitempty"`
+	Group            *WorkflowProjectTaskGroup   `json:"group,omitempty"`
 	ColumnKeys       []string                    `json:"column_keys,omitempty"`
 	StatusKinds      []WorkflowTaskStatusKind    `json:"status_kinds,omitempty"`
 	AttentionKinds   []WorkflowTaskAttentionKind `json:"attention_kinds,omitempty"`
@@ -1285,17 +1286,72 @@ type WorkflowTaskListResponse struct {
 	Tasks                       []WorkflowTaskListItem                      `json:"tasks"`
 }
 
+type WorkflowProjectTaskGroupCountsRequest struct {
+	ProjectID string `json:"project_id"`
+}
+
+type WorkflowProjectTaskGroup string
+
+const (
+	WorkflowProjectTaskGroupActive  WorkflowProjectTaskGroup = "active"
+	WorkflowProjectTaskGroupBacklog WorkflowProjectTaskGroup = "backlog"
+	WorkflowProjectTaskGroupDone    WorkflowProjectTaskGroup = "done"
+)
+
+type WorkflowProjectTaskGroupDefinition struct {
+	Group       WorkflowProjectTaskGroup `json:"group"`
+	StatusKinds []WorkflowTaskStatusKind `json:"status_kinds"`
+}
+
+func WorkflowProjectTaskGroupDefinitions() []WorkflowProjectTaskGroupDefinition {
+	return []WorkflowProjectTaskGroupDefinition{
+		{Group: WorkflowProjectTaskGroupActive, StatusKinds: []WorkflowTaskStatusKind{
+			WorkflowTaskStatusKindWaitingQuestion,
+			WorkflowTaskStatusKindWaitingApproval,
+			WorkflowTaskStatusKindInterrupted,
+			WorkflowTaskStatusKindRunning,
+			WorkflowTaskStatusKindQueued,
+			WorkflowTaskStatusKindActive,
+		}},
+		{Group: WorkflowProjectTaskGroupBacklog, StatusKinds: []WorkflowTaskStatusKind{WorkflowTaskStatusKindBacklog}},
+		{Group: WorkflowProjectTaskGroupDone, StatusKinds: []WorkflowTaskStatusKind{WorkflowTaskStatusKindDone}},
+	}
+}
+
+func (g WorkflowProjectTaskGroup) StatusKinds() []WorkflowTaskStatusKind {
+	for _, definition := range WorkflowProjectTaskGroupDefinitions() {
+		if definition.Group == g {
+			return slices.Clone(definition.StatusKinds)
+		}
+	}
+	return nil
+}
+
+type WorkflowProjectTaskGroupCounts struct {
+	Active  int `json:"active"`
+	Backlog int `json:"backlog"`
+	Done    int `json:"done"`
+}
+
+type WorkflowProjectTaskGroupCountsResponse struct {
+	ProjectID         string                               `json:"project_id"`
+	Definitions       []WorkflowProjectTaskGroupDefinition `json:"definitions"`
+	Counts            WorkflowProjectTaskGroupCounts       `json:"counts"`
+	GeneratedAtUnixMs int64                                `json:"generated_at_unix_ms"`
+}
+
 type WorkflowTaskListItem struct {
-	TaskID          string                `json:"task_id"`
-	ShortID         string                `json:"short_id"`
-	WorkflowID      runtimeids.WorkflowID `json:"workflow_id"`
-	WorkflowName    *string               `json:"workflow_name,omitempty"`
-	Title           string                `json:"title"`
-	CreatedAtUnixMs int64                 `json:"created_at_unix_ms"`
-	UpdatedAtUnixMs int64                 `json:"updated_at_unix_ms"`
-	ColumnKeys      *[]string             `json:"column_keys,omitempty"`
-	Status          WorkflowTaskStatus    `json:"status"`
-	LabelIDs        []string              `json:"label_ids"`
+	TaskID             string                          `json:"task_id"`
+	ShortID            string                          `json:"short_id"`
+	WorkflowID         runtimeids.WorkflowID           `json:"workflow_id"`
+	WorkflowName       *string                         `json:"workflow_name,omitempty"`
+	Title              string                          `json:"title"`
+	CreatedAtUnixMs    int64                           `json:"created_at_unix_ms"`
+	UpdatedAtUnixMs    int64                           `json:"updated_at_unix_ms"`
+	ColumnKeys         *[]string                       `json:"column_keys,omitempty"`
+	Status             WorkflowTaskStatus              `json:"status"`
+	Labels             []WorkflowProjectLabel          `json:"labels"`
+	DependencyProgress *WorkflowTaskDependencyProgress `json:"dependency_progress,omitempty"`
 }
 
 type WorkflowTaskListScopeErrorReason string
@@ -2420,7 +2476,13 @@ func (r WorkflowTaskListItem) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
-	return validateLabelIDs("label_ids", r.LabelIDs)
+	if err := validateProjectLabels("labels", r.Labels); err != nil {
+		return err
+	}
+	if r.DependencyProgress != nil {
+		return r.DependencyProgress.Validate()
+	}
+	return nil
 }
 
 func (r WorkflowTaskCreateRequest) ValidateRPC() error {
@@ -2434,6 +2496,47 @@ func (r WorkflowTaskListResponse) Validate() error {
 	for index, task := range r.Tasks {
 		if err := task.Validate(); err != nil {
 			return prefixWorkflowProjectionValidationField("tasks", index, err)
+		}
+	}
+	return nil
+}
+
+func (r WorkflowProjectTaskGroupCountsRequest) Validate() error {
+	return validateRequired("project_id", r.ProjectID)
+}
+
+func (r WorkflowProjectTaskGroupCountsRequest) ValidateRPC() error {
+	return r.Validate()
+}
+
+func (r WorkflowProjectTaskGroupCountsResponse) Validate() error {
+	if err := validateRequired("project_id", r.ProjectID); err != nil {
+		return err
+	}
+	expectedDefinitions := WorkflowProjectTaskGroupDefinitions()
+	if len(r.Definitions) != len(expectedDefinitions) {
+		return workflowRequestError(WorkflowRequestErrorInvalidValue, "definitions", "definitions must contain every Project Task group")
+	}
+	for index, definition := range r.Definitions {
+		expected := expectedDefinitions[index]
+		if definition.Group != expected.Group || !slices.Equal(definition.StatusKinds, expected.StatusKinds) {
+			return workflowRequestError(
+				WorkflowRequestErrorInvalidValue,
+				fmt.Sprintf("definitions[%d]", index),
+				"Project Task group definition is invalid",
+			)
+		}
+	}
+	for _, count := range []struct {
+		field string
+		value int
+	}{
+		{field: "counts.active", value: r.Counts.Active},
+		{field: "counts.backlog", value: r.Counts.Backlog},
+		{field: "counts.done", value: r.Counts.Done},
+	} {
+		if count.value < 0 {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, count.field, count.field+" must not be negative")
 		}
 	}
 	return nil
@@ -3107,6 +3210,14 @@ func (r WorkflowTaskListRequest) validateAfterLabelFilter() error {
 	for index, status := range r.StatusKinds {
 		if _, valid := status.NativeState(); !valid {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, fmt.Sprintf("status_kinds[%d]", index), "status kind is invalid")
+		}
+	}
+	if r.Group != nil {
+		if r.Group.StatusKinds() == nil {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "group", "group is invalid")
+		}
+		if len(r.StatusKinds) > 0 {
+			return workflowRequestError(WorkflowRequestErrorInvalidValue, "group", "group cannot be combined with status_kinds")
 		}
 	}
 	for index, attention := range r.AttentionKinds {

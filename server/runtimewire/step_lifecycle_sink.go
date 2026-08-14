@@ -77,9 +77,7 @@ func (s stepLifecycleSink) publish(cause string, terminal bool, resolver runtime
 			QueueAccepting: true,
 		}
 	}
-	if err := s.publishSnapshot(sessionID, snapshot); err != nil {
-		return s.handlePublicationFailure(cause, terminal, resolver, snapshot, err)
-	}
+	s.publisher.PublishRuntimeReadModelUpdate(sessionID, snapshot)
 	return nil
 }
 
@@ -90,16 +88,6 @@ func (s stepLifecycleSink) feedSnapshot(sessionID string, resolver runtimeactivi
 	return runtimeactivity.BuildFeedSnapshot(sessionID, func() (runtimeactivity.ResolverSnapshot, error) {
 		return resolver, nil
 	})
-}
-
-func (s stepLifecycleSink) publishSnapshot(sessionID string, snapshot clientui.RuntimeReadModelUpdate) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = fmt.Errorf("publish runtime read-model update panicked: %v", recovered)
-		}
-	}()
-	s.publisher.PublishRuntimeReadModelUpdate(sessionID, snapshot)
-	return nil
 }
 
 func (s stepLifecycleSink) handlePublicationFailure(cause string, terminal bool, resolver runtimeactivity.ResolverSnapshot, proposed clientui.RuntimeReadModelUpdate, failure error) error {
@@ -120,9 +108,7 @@ func (s stepLifecycleSink) handlePublicationFailure(cause string, terminal bool,
 	if err != nil {
 		return err
 	}
-	if err := s.publishSnapshot(sessionID, recovery); err != nil {
-		return fmt.Errorf("publish terminal runtime activity recovery: %w", err)
-	}
+	s.publisher.PublishRuntimeReadModelUpdate(sessionID, recovery)
 	return nil
 }
 

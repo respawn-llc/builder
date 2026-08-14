@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/llm"
 	"core/server/metadata"
 	"core/server/session"
@@ -96,6 +97,19 @@ type SessionPlan struct {
 	ManagedWorktreeRoots                []string
 	Source                              config.SourceReport
 	BaseSource                          config.SourceReport
+	QuestionsEnabled                    bool
+	AutoCompactionEnabled               bool
+	ThinkingOverrideExplicit            bool
+}
+
+// ApplyContextPolicy resolves Context policy only after the plan's final Agent
+// role, settings overrides, and persisted Session continuity are known.
+func ApplyContextPolicy(plan SessionPlan, capabilities llm.ProviderCapabilities) SessionPlan {
+	plan.ActiveSettings = chatcontext.ApplyPolicy(
+		plan.ActiveSettings,
+		chatcontext.ResolvePolicy(plan.ActiveSettings, capabilities, plan.Locked),
+	)
+	return plan
 }
 
 func sessionPlanWithSnapshot(plan SessionPlan, store *session.Store, containerDir string) SessionPlan {
@@ -179,10 +193,11 @@ func optionalSessionName(name string) (*string, error) {
 // RunPrompt override. Session launch prepares it before any new session is
 // materialized; applying it later must not reload config or look up a role.
 type PreparedRunPromptOverrides struct {
-	OverrideConfig config.App
-	AgentRole      serverapi.RunPromptAgentRoleOverride
-	BaseTarget     *PreparedBaseTarget
-	NamedTarget    *PreparedSubagentTarget
+	OverrideConfig       config.App
+	AgentRole            serverapi.RunPromptAgentRoleOverride
+	BaseTarget           *PreparedBaseTarget
+	NamedTarget          *PreparedSubagentTarget
+	ProviderCapabilities *llm.ProviderCapabilities
 }
 
 type PreparedBaseTarget struct {
@@ -194,9 +209,10 @@ type PreparedBaseTarget struct {
 // RunPromptPreparationContext carries a selected session's immutable,
 // prompt-facing contract into pre-materialization target preparation.
 type RunPromptPreparationContext struct {
-	ModelLock     *session.LockedContract
-	ToolLock      *session.LockedContract
-	OmittedTarget *PreparedBaseTarget
+	ModelLock                       *session.LockedContract
+	ToolLock                        *session.LockedContract
+	OmittedTarget                   *PreparedBaseTarget
+	SkipProviderReadinessValidation bool
 }
 
 type PreparedSubagentTarget struct {
@@ -233,6 +249,56 @@ func ResolvePromptFacingSnapshotConfig(app config.App, store *session.Store, ski
 	}, nil
 }
 
+// ResolveReadOnlyPromptFacingSnapshotPlan reconstructs the current persisted
+// Agent-role projection without backfills or other Store mutations.
+func ResolveReadOnlyPromptFacingSnapshotPlan(app config.App, store *session.Store, skipContinuationAgentRoleValidation bool) (SessionPlan, error) {
+	return resolvePromptFacingSnapshotPlan(app, store, skipContinuationAgentRoleValidation)
+}
+
+type ReadOnlySessionContextSettings struct {
+	Settings              config.Settings
+	AutoCompactionEnabled bool
+}
+
+// ResolveReadOnlySessionContextSettings projects current persisted Agent-role
+// and Chat settings from a bounded Meta snapshot.
+func ResolveReadOnlySessionContextSettings(app config.App, meta session.Meta, skipContinuationAgentRoleValidation bool) (ReadOnlySessionContextSettings, error) {
+	active, _, chatSettings, err := resolveReadOnlySessionContextSettings(app, meta, skipContinuationAgentRoleValidation)
+	if err != nil {
+		return ReadOnlySessionContextSettings{}, err
+	}
+	return ReadOnlySessionContextSettings{
+		Settings:              active,
+		AutoCompactionEnabled: chatSettings.AutoCompaction,
+	}, nil
+}
+
+func resolveReadOnlySessionContextSettings(
+	app config.App,
+	meta session.Meta,
+	skipContinuationAgentRoleValidation bool,
+) (config.Settings, config.SourceReport, session.ChatSettings, error) {
+	baseActive := EffectiveSettings(app.Settings, meta.Locked)
+	active, source := baseActive, app.Source
+	if meta.Continuation != nil {
+		var err error
+		active, source, err = applyPersistedSubagentRoleSettings(baseActive, source, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
+		if err != nil {
+			return config.Settings{}, config.SourceReport{}, session.ChatSettings{}, err
+		}
+		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
+			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
+				active.OpenAIBaseURL = baseURL
+			}
+		}
+	}
+	active, chatSettings, err := applySessionChatSettings(meta, active)
+	if err != nil {
+		return config.Settings{}, config.SourceReport{}, session.ChatSettings{}, err
+	}
+	return active, source, chatSettings, nil
+}
+
 // ResolvePromptFacingSnapshotPlan reconstructs the request-facing session plan
 // from a persisted store without creating or selecting a session. It is shared
 // by diagnostic paths that need the same settings, source, tools, and
@@ -263,18 +329,9 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 	meta := store.Meta()
 	baseActive := EffectiveSettings(app.Settings, meta.Locked)
 	baseSource := app.Source
-	active, source := baseActive, baseSource
-	if meta.Continuation != nil {
-		var err error
-		active, source, err = applyPersistedSubagentRoleSettings(baseActive, baseSource, meta.Continuation.AgentRole, meta.Locked == nil, !skipContinuationAgentRoleValidation)
-		if err != nil {
-			return SessionPlan{}, err
-		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
-			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
-				active.OpenAIBaseURL = baseURL
-			}
-		}
+	active, source, chatSettings, err := resolveReadOnlySessionContextSettings(app, meta, skipContinuationAgentRoleValidation)
+	if err != nil {
+		return SessionPlan{}, err
 	}
 	enabledTools, err := ActiveToolIDsForPlan(active, source, meta.Locked)
 	if err != nil {
@@ -299,6 +356,8 @@ func resolvePromptFacingSnapshotPlan(app config.App, store *session.Store, skipC
 		WorkspaceRoot:                       app.WorkspaceRoot,
 		Source:                              source,
 		BaseSource:                          baseSource,
+		QuestionsEnabled:                    chatSettings.Questions,
+		AutoCompactionEnabled:               chatSettings.AutoCompaction,
 	}, store, filepath.Dir(store.Dir())), nil
 }
 
@@ -569,11 +628,29 @@ func (p Planner) ApplyRunPromptOverridesWithStore(plan SessionPlan, store *sessi
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
+	capabilities, err := llm.ProviderCapabilitiesForSettings(authState, next.ActiveSettings)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	fastAvailable := llm.SupportsFastModeProvider(capabilities)
+	var chatSettings session.ChatSettings
+	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
+		store.Meta(),
+		next.ActiveSettings,
+		overrides,
+		&fastAvailable,
+	)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next.QuestionsEnabled = chatSettings.Questions
+	next.AutoCompactionEnabled = chatSettings.AutoCompaction
 	next, err = withRequiredRunPromptTools(next, options.RequiredTools)
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
 	next, err = withWorkflowThinking(next, options.WorkflowThinking)
+	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
 	return next, warnings, err
 }
 
@@ -699,6 +776,13 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 			}
 			prepared.BaseTarget = &target
 		}
+		if !preparation.SkipProviderReadinessValidation && prepared.BaseTarget != nil {
+			capabilities, capabilityErr := llm.ProviderCapabilitiesForSettings(authState, prepared.BaseTarget.Settings)
+			if capabilityErr != nil {
+				return PreparedRunPromptOverrides{}, capabilityErr
+			}
+			prepared.ProviderCapabilities = &capabilities
+		}
 		return prepared, nil
 	}
 	lookup := config.LookupSubagentRole(app.Settings, roleOverride.Role)
@@ -713,11 +797,27 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.OpenAIBaseURL = overrideConfig.Settings.OpenAIBaseURL
 	providerSettings.Subagents = nil
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
-	providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
-	if err != nil {
-		return PreparedRunPromptOverrides{}, err
+	providerID := persistedRoleProviderID(providerSettings)
+	if !preparation.SkipProviderReadinessValidation {
+		providerCaps, capabilityErr := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
+		if capabilityErr != nil {
+			return PreparedRunPromptOverrides{}, capabilityErr
+		}
+		providerID = strings.TrimSpace(providerCaps.ProviderID)
+		prepared.ProviderCapabilities = &providerCaps
 	}
-	target, err := prepareNamedTarget(app, overrideConfig, overrides, *lookup.NormalizedSelector, lookup.Role, strings.TrimSpace(providerCaps.ProviderID), preparation.ModelLock, preparation.ToolLock, applyBudget)
+	target, err := prepareNamedTarget(
+		app,
+		overrideConfig,
+		overrides,
+		*lookup.NormalizedSelector,
+		lookup.Role,
+		providerID,
+		preparation.ModelLock,
+		preparation.ToolLock,
+		!preparation.SkipProviderReadinessValidation,
+		applyBudget,
+	)
 	if err != nil {
 		return PreparedRunPromptOverrides{}, err
 	}
@@ -753,7 +853,16 @@ func preparePreparedBaseTarget(target PreparedBaseTarget, overrideConfig config.
 	return PreparedBaseTarget{Settings: resolved, Source: source, EnabledTools: append([]toolspec.ID(nil), enabledTools...)}, nil
 }
 
-func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, selector string, role config.SubagentRole, providerID string, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (PreparedSubagentTarget, error) {
+func prepareNamedTarget(
+	app, overrideConfig config.App,
+	overrides serverapi.RunPromptOverrides,
+	selector string,
+	role config.SubagentRole,
+	providerID string,
+	modelLock, toolLock *session.LockedContract,
+	validate bool,
+	applyBudget modelContextBudgetApplier,
+) (PreparedSubagentTarget, error) {
 	input := preparedSubagentIdentity{Selector: selector, Role: role, ProviderID: providerID}
 	baseSettings := EffectiveSettings(app.Settings, modelLock)
 	resolved, source, warning, err := resolvePreparedSubagentSettings(baseSettings, app.Source, input, modelLock == nil, false)
@@ -768,9 +877,11 @@ func prepareNamedTarget(app, overrideConfig config.App, overrides serverapi.RunP
 	if err != nil {
 		return PreparedSubagentTarget{}, err
 	}
-	resolved, err = validateRunPromptOverrideSettings(resolved, source)
-	if err != nil {
-		return PreparedSubagentTarget{}, err
+	if validate {
+		resolved, err = validateRunPromptOverrideSettings(resolved, source)
+		if err != nil {
+			return PreparedSubagentTarget{}, err
+		}
 	}
 	return PreparedSubagentTarget{
 		Selector:     selector,
@@ -829,7 +940,52 @@ func (p Planner) ApplyPreparedRunPromptOverridesWithStore(plan SessionPlan, stor
 	if store == nil {
 		return SessionPlan{}, nil, errors.New("session store is required")
 	}
-	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
+	next, warnings, err := p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyDerivedModelContextBudgetOverrides)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	var chatSettings session.ChatSettings
+	var fastAvailable *bool
+	if prepared.ProviderCapabilities != nil {
+		value := llm.SupportsFastModeProvider(*prepared.ProviderCapabilities)
+		fastAvailable = &value
+	}
+	next.ActiveSettings, chatSettings, err = applySessionChatSettingsWithRunOverrides(
+		store.Meta(),
+		next.ActiveSettings,
+		overrides,
+		fastAvailable,
+	)
+	if err != nil {
+		return SessionPlan{}, nil, err
+	}
+	next.QuestionsEnabled = chatSettings.Questions
+	next.AutoCompactionEnabled = chatSettings.AutoCompaction
+	next.ThinkingOverrideExplicit = strings.TrimSpace(overrides.ThinkingLevel) != ""
+	return next, warnings, nil
+}
+
+func applySessionChatSettingsWithRunOverrides(
+	meta session.Meta,
+	active config.Settings,
+	overrides serverapi.RunPromptOverrides,
+	fastAvailable *bool,
+) (config.Settings, session.ChatSettings, error) {
+	settings, err := ResolveSessionChatSettings(meta, active)
+	if err != nil {
+		return config.Settings{}, session.ChatSettings{}, err
+	}
+	var thinkingOverride *string
+	if strings.TrimSpace(overrides.ThinkingLevel) != "" {
+		thinkingOverride = textutil.Value(active.ThinkingLevel)
+	}
+	return applyResolvedSessionChatSettings(
+		active,
+		settings,
+		thinkingOverride,
+		fastAvailable != nil,
+		fastAvailable,
+	)
 }
 
 func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, prepared PreparedRunPromptOverrides, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {

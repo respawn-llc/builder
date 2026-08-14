@@ -40,7 +40,7 @@ func TestManualMoveToNonExecutableWaitsForConcurrentWriterBeforeRevalidation(t *
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, nil)
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, nil)
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -85,7 +85,7 @@ func TestManualMoveToExecutableWaitsForConcurrentWriterBeforeRevalidationAndLock
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, candidate)
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, candidate)
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -140,7 +140,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)
@@ -215,7 +215,7 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	defer cancel()
 	moved := make(chan manualMoveApplyResult, 1)
 	go func() {
-		result, err := moveStore.ApplyManualMove(moveCtx, prepared, noneManualMoveExecutionTargetCandidate(binding))
+		result, err := applyManualMoveForStoreTest(t, moveCtx, moveStore, prepared, noneManualMoveExecutionTargetCandidate(binding))
 		moved <- manualMoveApplyResult{result: result, err: err}
 	}()
 	assertManualMoveWaitsForWriter(t, moved)

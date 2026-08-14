@@ -7,8 +7,9 @@ import "context"
 // scoped session directory. Meta should be nil only when metadata truly does
 // not exist for an otherwise valid record.
 type PersistedSessionRecord struct {
-	SessionDir string
-	Meta       *Meta
+	SessionDir   string
+	Meta         *Meta
+	ContextFacts SessionContextFacts
 }
 
 // PersistedSessionResolver resolves authoritative persisted session metadata.

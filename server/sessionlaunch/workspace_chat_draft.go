@@ -4,42 +4,46 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/llm"
 	"core/server/metadata"
-	"core/server/runtime"
+	"core/server/session"
 	"core/shared/config"
-	"core/shared/serverapi"
-	"core/shared/toolspec"
+	"core/shared/runtimeids"
 )
 
 type WorkspaceChatDraft = metadata.WorkspaceChatDraftDocument
 type WorkspaceChatDraftResolverInput struct {
-	Settings      config.Settings
-	Source        config.SourceReport
-	AuthState     auth.State
-	FastModeState *runtime.FastModeState
+	Settings                        config.Settings
+	Source                          config.SourceReport
+	AuthState                       auth.State
+	SkipProviderReadinessValidation bool
 }
 type WorkspaceChatDraftTransform func(WorkspaceChatDraftResolution) (WorkspaceChatDraft, error)
 type workspaceChatDraftLimits struct {
 	draft           WorkspaceChatDraft
+	settings        config.Settings
 	fast, questions bool
 	thinking        map[string]struct{}
 }
 type WorkspaceChatDraftResolution struct {
-	Draft     WorkspaceChatDraft
-	Baselines map[string]WorkspaceChatDraft
-	limits    map[string]workspaceChatDraftLimits
+	Draft                    WorkspaceChatDraft
+	Baselines                map[string]WorkspaceChatDraft
+	GoalAvailability         session.GoalAvailability
+	PersistedQuestionsPolicy bool
+	PersistedThinking        string
+	CompactionMode           config.CompactionMode
+	Catalog                  launch.PreparedChatAgentCatalog
+	limits                   map[string]workspaceChatDraftLimits
 }
 type workspaceChatDraftPersistence interface {
 	ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error)
 	ReplaceWorkspaceChatDraft(context.Context, string, *WorkspaceChatDraft) error
 }
 type WorkspaceChatDraftInputResolver func(context.Context) (WorkspaceChatDraftResolverInput, error)
+type WorkspaceChatMaterializer func(context.Context, WorkspaceChatDraftResolution) (runtimeids.SessionID, error)
 type WorkspaceChatDraftOwner struct {
 	persistence workspaceChatDraftPersistence
 	lanes       *metadata.MutationLaneRegistry[string]
@@ -51,6 +55,50 @@ func NewWorkspaceChatDraftOwner(p workspaceChatDraftPersistence) *WorkspaceChatD
 	}
 	return &WorkspaceChatDraftOwner{persistence: p, lanes: metadata.NewMutationLaneRegistry[string]()}
 }
+
+func (o *WorkspaceChatDraftOwner) MaterializeWorkspaceChat(
+	ctx context.Context,
+	id string,
+	resolve WorkspaceChatDraftInputResolver,
+	materialize WorkspaceChatMaterializer,
+) (runtimeids.SessionID, error) {
+	var err error
+	if id, err = o.workspaceID(id); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if resolve == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat draft resolver is required")
+	}
+	if materialize == nil {
+		return runtimeids.SessionID{}, errors.New("workspace Chat materializer is required")
+	}
+	lane, err := o.lanes.Acquire(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	defer lane.Release()
+	input, err := resolve(ctx)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	stored, err := o.persistence.ReadWorkspaceChatDraft(ctx, id)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	resolution, err := ResolveWorkspaceChatDraft(input, stored)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	sessionID, err := materialize(ctx, resolution)
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if sessionID.IsZero() || !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("materialized Session id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
+}
+
 func (o *WorkspaceChatDraftOwner) workspaceID(id string) (string, error) {
 	if o == nil || o.persistence == nil || o.lanes == nil {
 		return "", errors.New("workspace Chat draft owner is required")
@@ -149,7 +197,7 @@ func normalizeWorkspaceChatDraftAgent(agent string) string {
 	return config.NormalizeSubagentRole(agent)
 }
 func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *WorkspaceChatDraft) (WorkspaceChatDraftResolution, error) {
-	limits, err := resolveWorkspaceChatDraftBaselines(input)
+	catalog, limits, err := resolveWorkspaceChatDraftBaselines(input)
 	if err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
@@ -161,22 +209,33 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	for agent, limit := range limits {
 		baselines[agent] = limit.draft
 	}
+	finish := func(draft WorkspaceChatDraft, questions bool, thinking string) (WorkspaceChatDraftResolution, error) {
+		return workspaceChatDraftResolution(
+			draft, questions, thinking, input.Settings.CompactionMode, baselines, catalog, limits,
+		)
+	}
 	if stored == nil {
-		return WorkspaceChatDraftResolution{Draft: defaults.draft, Baselines: baselines, limits: limits}, nil
+		return finish(defaults.draft, defaults.draft.Questions, defaults.draft.Thinking)
 	}
 	draft := *stored
 	if err := draft.Validate(); err != nil {
 		return WorkspaceChatDraftResolution{}, err
 	}
 	draft.Agent = normalizeWorkspaceChatDraftAgent(draft.Agent)
+	persistedQuestions := draft.Questions
+	persistedThinking := strings.TrimSpace(draft.Thinking)
 	limit, ok := limits[draft.Agent]
 	if !ok {
 		message := draft.Message
 		draft = defaults.draft
 		draft.Message = message
+		persistedQuestions = draft.Questions
+		persistedThinking = draft.Thinking
 	} else {
-		if _, ok := limit.thinking[draft.Thinking]; !ok {
+		if _, ok := limit.thinking[persistedThinking]; !ok {
 			draft.Thinking = limit.draft.Thinking
+		} else {
+			draft.Thinking = persistedThinking
 		}
 		if draft.Fast && !limit.fast {
 			draft.Fast = false
@@ -185,51 +244,78 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 			draft.Questions = false
 		}
 	}
-	return WorkspaceChatDraftResolution{Draft: draft, Baselines: baselines, limits: limits}, nil
+	return finish(draft, persistedQuestions, persistedThinking)
 }
-func resolveWorkspaceChatDraftBaselines(input WorkspaceChatDraftResolverInput) (map[string]workspaceChatDraftLimits, error) {
-	selectors := append([]string{config.DefaultSubagentRole}, config.AvailableSubagentRoleNames(input.Settings, false)...)
-	result := make(map[string]workspaceChatDraftLimits, len(selectors))
-	for _, selector := range selectors {
-		selector = normalizeWorkspaceChatDraftAgent(selector)
-		if selector == "" {
-			return nil, errors.New("workspace Chat draft selector is invalid")
-		}
-		if _, exists := result[selector]; exists {
-			continue
-		}
-		role := selector
-		prepared, err := launch.PrepareRunPromptOverridesWithContext(config.App{Settings: input.Settings, Source: input.Source}, serverapi.RunPromptOverrides{AgentRole: &role}, input.AuthState, launch.RunPromptPreparationContext{})
-		if err != nil {
-			return nil, err
-		}
-		target := prepared.BaseTarget
-		if selector != config.DefaultSubagentRole {
-			target = nil
-			if prepared.NamedTarget != nil {
-				target = &launch.PreparedBaseTarget{Settings: prepared.NamedTarget.Settings, Source: prepared.NamedTarget.Source, EnabledTools: prepared.NamedTarget.EnabledTools}
-			}
-		}
-		if target == nil {
-			return nil, fmt.Errorf("prepare workspace Chat draft Agent %q returned no target", selector)
-		}
-		capabilities, err := llm.ProviderCapabilitiesForSettings(input.AuthState, target.Settings)
-		if err != nil {
-			return nil, err
-		}
-		supervisor, valid := runtime.NormalizeReviewerFrequency(target.Settings.Reviewer.Frequency)
-		if !valid || strings.TrimSpace(target.Settings.ThinkingLevel) == "" {
-			return nil, errors.New("workspace Chat draft settings are invalid")
-		}
-		thinking := strings.TrimSpace(target.Settings.ThinkingLevel)
-		thinkingLevels := make(map[string]struct{})
-		for _, level := range append(llm.SupportedThinkingLevelsModel(target.Settings.Model), thinking) {
+
+func workspaceChatDraftResolution(
+	draft WorkspaceChatDraft,
+	persistedQuestions bool,
+	persistedThinking string,
+	compactionMode config.CompactionMode,
+	baselines map[string]WorkspaceChatDraft,
+	catalog launch.PreparedChatAgentCatalog,
+	limits map[string]workspaceChatDraftLimits,
+) (WorkspaceChatDraftResolution, error) {
+	limit, ok := limits[normalizeWorkspaceChatDraftAgent(draft.Agent)]
+	if !ok {
+		return WorkspaceChatDraftResolution{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved capability", draft.Agent)
+	}
+	availability := session.GoalAgentCapabilityMissing
+	if limit.questions {
+		availability = session.GoalAvailable
+	}
+	return WorkspaceChatDraftResolution{
+		Draft:                    draft,
+		Baselines:                baselines,
+		GoalAvailability:         availability,
+		PersistedQuestionsPolicy: persistedQuestions,
+		PersistedThinking:        persistedThinking,
+		CompactionMode:           compactionMode,
+		Catalog:                  catalog,
+		limits:                   limits,
+	}, nil
+}
+func resolveWorkspaceChatDraftBaselines(
+	input WorkspaceChatDraftResolverInput,
+) (
+	launch.PreparedChatAgentCatalog,
+	map[string]workspaceChatDraftLimits,
+	error,
+) {
+	catalog, err := launch.PrepareChatAgentCatalog(
+		config.App{Settings: input.Settings, Source: input.Source},
+		input.AuthState,
+		input.SkipProviderReadinessValidation,
+	)
+	if err != nil {
+		return launch.PreparedChatAgentCatalog{}, nil, err
+	}
+	entries := catalog.Entries()
+	result := make(map[string]workspaceChatDraftLimits, len(entries))
+	for _, entry := range entries {
+		selector := entry.Choice.Role
+		preparedSettings := entry.Settings
+		thinkingLevels := make(map[string]struct{}, len(preparedSettings.SupportedThinkingValues))
+		for _, level := range preparedSettings.SupportedThinkingValues {
 			thinkingLevels[level] = struct{}{}
 		}
-		questions, fast := slices.Contains(target.EnabledTools, toolspec.ToolAskQuestion), llm.SupportsFastModeProvider(capabilities)
-		result[selector] = workspaceChatDraftLimits{draft: WorkspaceChatDraft{Agent: selector, Supervisor: supervisor, Thinking: thinking, Fast: input.FastModeState != nil && input.FastModeState.Enabled() && fast, Questions: runtime.DefaultQuestionsEnabled && questions, AutoCompaction: runtime.DefaultAutoCompactionEnabled}, fast: fast, questions: questions, thinking: thinkingLevels}
+		baseline := preparedSettings.Baseline
+		result[selector] = workspaceChatDraftLimits{
+			draft: WorkspaceChatDraft{
+				Agent:          selector,
+				Supervisor:     baseline.Supervisor,
+				Thinking:       baseline.Thinking,
+				Fast:           baseline.Fast,
+				Questions:      baseline.Questions,
+				AutoCompaction: baseline.AutoCompaction,
+			},
+			settings:  entry.ResolvedSettings,
+			fast:      preparedSettings.FastAvailable,
+			questions: preparedSettings.QuestionsAvailable,
+			thinking:  thinkingLevels,
+		}
 	}
-	return result, nil
+	return catalog, result, nil
 }
 func workspaceChatDraftSettingsEqual(a, b WorkspaceChatDraft) bool {
 	return a.Agent == b.Agent && a.Supervisor == b.Supervisor && a.Thinking == b.Thinking && a.Fast == b.Fast && a.Questions == b.Questions && a.AutoCompaction == b.AutoCompaction

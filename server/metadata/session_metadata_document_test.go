@@ -27,6 +27,10 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 			CreatedAt: createdAt,
 			UpdatedAt: createdAt,
 		},
+		ActiveWorkflowAssignment: &session.MessageRecord{
+			Role: session.MessageRoleDeveloper,
+		},
+		ActiveWorkflowAssignmentState: &session.ActiveWorkflowAssignmentState{},
 	}
 
 	encoded, err := marshalJSON(document)

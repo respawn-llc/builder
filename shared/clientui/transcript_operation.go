@@ -21,6 +21,7 @@ type OperationalDiagnosticCode string
 const (
 	OperationalDiagnosticSleepGuardFailed           OperationalDiagnosticCode = "sleep_guard_failed"
 	OperationalDiagnosticPromptHistoryPersistFailed OperationalDiagnosticCode = "prompt_history_persist_failed"
+	OperationalDiagnosticContextFactsPersistFailed  OperationalDiagnosticCode = "context_facts_persist_failed"
 	OperationalDiagnosticInFlightClearFailed        OperationalDiagnosticCode = "in_flight_clear_failed"
 )
 
@@ -75,6 +76,7 @@ func (d TranscriptOperationalDiagnostic) Validate() error {
 	switch d.Code {
 	case OperationalDiagnosticSleepGuardFailed,
 		OperationalDiagnosticPromptHistoryPersistFailed,
+		OperationalDiagnosticContextFactsPersistFailed,
 		OperationalDiagnosticInFlightClearFailed:
 	default:
 		return fmt.Errorf("unknown operational diagnostic code %q", d.Code)

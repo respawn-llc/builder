@@ -15,7 +15,7 @@ export function useWorkspaces(projectID: string) {
 export function useCreateTask(
   projectID: string,
   boardQueryWorkflowID: string | undefined,
-  selectedWorkflowID: string,
+  selectedWorkflowID: string | undefined,
 ) {
   const { api } = useAppServices();
   const queryClient = useQueryClient();

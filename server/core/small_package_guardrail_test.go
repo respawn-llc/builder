@@ -101,6 +101,7 @@ func listRepoPackages(t *testing.T, repoRoot string) []smallPackageInfo {
 }
 
 var allowedSmallPackages = map[string]string{
+	"cmd/architectureguard":                   "narrow CI command that invokes reusable repository architecture checks without coupling them to server startup",
 	"cmd/dumpmetadataschema":                  "narrow developer-only metadata schema audit command that reuses the authoritative metadata migration and generated-query paths",
 	"cmd/dumpmodelrequest":                    "temporary standalone model-request inspector command that keeps diagnostic request serialization out of production server startup paths",
 	"cli/app/internal/projectbinding":         "interactive project binding workflow seam after absorbing project picker behavior",
@@ -109,7 +110,9 @@ var allowedSmallPackages = map[string]string{
 	"cli/app/internal/runtimestate":           "DTO-only reducer boundary; package-level tests enforce stdlib plus shared/clientui imports only",
 	"cli/app/internal/serverattach":           "deep headless RunPrompt attachment policy owner after removing generic target resolution and daemon-launch fallback paths",
 	"cli/app/internal/startupconfig":          "narrow CLI startup config-resolution seam after absorbing serve-command env construction",
+	"internal/architectureguard":              "reusable architecture checks shared by CI command execution and focused package tests",
 	"internal/testharness/filemode":           "test-only cross-package filesystem assertions and fault setup kept out of production APIs so file-backed behavior tests share one implementation",
+	"internal/testharness/httpclient":         "test-only HTTP transport adapter shared by provider and release-metadata tests without adding production mocking seams",
 	"internal/testharness/recordstore":        "test-only synchronized record storage shared across package-local and external session fixtures without introducing a production API or Go import cycle",
 	"internal/testharness/runtimewirefixture": "shared runtimewire event fixture package used by app/runtimewire tests without duplicating router-facing event construction",
 	"internal/testharness/workflowfixture":    "one-file Store graph-save fixture shared across Core, Workflow Runner, Workflow View, and Worktree tests; merging into testsetup creates a workflowstore test import cycle",
@@ -119,7 +122,6 @@ var allowedSmallPackages = map[string]string{
 	"server/metadata/sqlitelifecyclegen":      "generated SQLite lifecycle seam isolated from sqlc output because sqlc does not emit transaction-scoped PRAGMA statements",
 	"server/projectview":                      "cohesive project read-model service owner with substantial service tests",
 	"server/runlog":                           "shared run-logging and runtime-event formatting helpers extracted from runprompt so sessionruntime and workflowrunner consume them without the runprompt import cycle",
-	"server/sessionlaunch":                    "session launch service seam kept separate from session runtime to avoid runprompt/runtime cycles",
 	"server/session/sessiontest":              "test-only helper package exposing full event-history collectors kept out of the production session surface so production code cannot materialize whole histories",
 	"server/workflow/label":                   "workflow-owned label identity and name-validation module shared by persistence without coupling the workflow root package to label comparison consumers",
 	"server/workflow/labelcomparisongen":      "repo-owned generator command that materializes the versioned desktop label comparison adapter from the shared fixture corpus",
@@ -132,6 +134,7 @@ var allowedSmallPackages = map[string]string{
 	"shared/labelcontract":                    "versioned Project-label comparison and bounds contract shared by the workflow domain, server API, desktop generator, and CLI without introducing a server-to-API dependency",
 	"shared/llmerrors":                        "shared provider-error contract surfaced by CLI and server",
 	"shared/modelcontract":                    "shared model identifier contract needed by server/llm and shared clients",
+	"shared/protoapi":                         "narrow protobuf message bridge below generated API packages and transport clients",
 	"shared/rollbacktarget":                   "shared session rollback target contract used by CLI and server session lifecycle",
 	"shared/sessionenv":                       "shared session environment contract used by CLI commands and shell env construction",
 	"shared/toolspec":                         "shared model-facing tool spec contract required below runtime, runtimewire, and clients",

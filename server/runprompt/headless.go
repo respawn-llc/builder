@@ -19,6 +19,7 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 
 	"github.com/google/uuid"
 )
@@ -190,13 +191,15 @@ func (l *headlessPromptLauncher) prepareRuntime(ctx context.Context, plan launch
 		startLogLines = append(startLogLines, "config.source "+line)
 	}
 	runtimePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:          plan.ActiveSettings,
-		EnabledTools:      plan.EnabledTools,
-		FilesystemContext: askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
-		Sources:           plan.Source.Sources,
-		Headless:          true,
-		FastMode:          l.boot.FastModeState,
-		StartLogLines:     startLogLines,
+		Settings:              plan.ActiveSettings,
+		EnabledTools:          plan.EnabledTools,
+		FilesystemContext:     askquestion.FilesystemContext{Access: filesystemContext.Access, ManagedWorktree: managedWorktreePathContext},
+		Sources:               plan.Source.Sources,
+		Headless:              true,
+		FastMode:              l.boot.FastModeState,
+		QuestionsEnabled:      textutil.Value(plan.QuestionsEnabled),
+		AutoCompactionEnabled: textutil.Value(plan.AutoCompactionEnabled),
+		StartLogLines:         startLogLines,
 		OnLoggingFailure: func(message string) {
 			if progress != nil {
 				progress.PublishRunPromptProgress(serverapi.RunPromptProgress{

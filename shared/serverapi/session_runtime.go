@@ -10,11 +10,14 @@ import (
 )
 
 type SessionRuntimeActivateRequest struct {
-	SessionID      string              `json:"session_id"`
-	OwnerID        string              `json:"owner_id,omitempty"`
-	ActiveSettings config.Settings     `json:"active_settings"`
-	EnabledToolIDs []string            `json:"enabled_tool_ids"`
-	Source         config.SourceReport `json:"source"`
+	SessionID                string              `json:"session_id"`
+	OwnerID                  string              `json:"owner_id,omitempty"`
+	ActiveSettings           config.Settings     `json:"active_settings"`
+	EnabledToolIDs           []string            `json:"enabled_tool_ids"`
+	QuestionsEnabled         *bool               `json:"questions_enabled"`
+	AutoCompactionEnabled    *bool               `json:"auto_compaction_enabled"`
+	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
+	Source                   config.SourceReport `json:"source"`
 }
 
 type SessionRuntimeAttachment struct {
@@ -48,6 +51,12 @@ const (
 func (r SessionRuntimeActivateRequest) Validate() error {
 	if err := validateScopedSessionID(r.SessionID); err != nil {
 		return err
+	}
+	if r.QuestionsEnabled == nil {
+		return errors.New("questions_enabled is required")
+	}
+	if r.AutoCompactionEnabled == nil {
+		return errors.New("auto_compaction_enabled is required")
 	}
 	return nil
 }

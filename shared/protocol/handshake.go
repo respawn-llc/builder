@@ -8,6 +8,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 const (
@@ -19,6 +20,7 @@ const (
 	MethodAuthAcknowledgeNoAuth                         = "auth.acknowledgeNoAuth"
 	MethodAuthGetStatus                                 = "auth.getStatus"
 	MethodCapabilityFactsGet                            = "capability.facts.get"
+	MethodChatContextGet                                = "chat.context.get"
 	MethodPromptCommandCatalogGet                       = "promptCommands.catalog.get"
 	MethodOnboardingFinalize                            = "onboarding.finalize"
 	MethodAttachProject                                 = "project.attach"
@@ -83,6 +85,7 @@ const (
 	MethodWorkflowTaskCommentDelete                     = "workflow.task.comment.delete"
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
+	MethodWorkflowProjectTaskGroupCounts                = "workflow.task.groupCounts"
 	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
 	MethodWorkflowBoardNodeCardsList                    = "workflow.board.nodeCards.list"
@@ -96,6 +99,8 @@ const (
 	MethodWorkflowTaskObserve                           = "workflow.task.observe"
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionWorkspaceChatDraft                     = "session.workspaceChatDraft"
+	MethodSessionWorkspaceChatMaterialize               = "session.materializeWorkspaceChat"
+	MethodChatSettingsRead                              = "chat.settings.read"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"
@@ -167,6 +172,9 @@ const (
 	MethodProcessSubscribeOutput                        = "process.subscribeOutput"
 	MethodProcessOutputEvent                            = "process.output"
 	MethodProcessOutputComplete                         = "process.output.complete"
+	MethodSessionQuestionHistorySubscribe               = "session.questionHistory.subscribe"
+	MethodSessionQuestionHistoryEvent                   = "session.questionHistory.event"
+	MethodSessionQuestionHistoryComplete                = "session.questionHistory.complete"
 )
 
 type HandshakeRequest struct {
@@ -804,6 +812,25 @@ type SessionTranscriptEventParams struct {
 
 type ProcessOutputEventParams struct {
 	Chunk clientui.ProcessOutputChunk `json:"chunk"`
+}
+
+type SessionQuestionHistoryEventParams struct {
+	Event SessionQuestionHistoryEvent `json:"event"`
+}
+
+type SessionQuestionHistoryEvent struct {
+	Kind           string                          `json:"kind"`
+	LargeHistory   *bool                           `json:"large_history,omitempty"`
+	Question       *SessionQuestionHistoryQuestion `json:"question,omitempty"`
+	HistoryOmitted *bool                           `json:"history_omitted,omitempty"`
+}
+
+type SessionQuestionHistoryQuestion struct {
+	Question             string                        `json:"question"`
+	Answer               string                        `json:"answer"`
+	SelectedOptionNumber *int                          `json:"selected_option_number"`
+	Commentary           *string                       `json:"commentary"`
+	At                   *transcript.CommittedAtUnixMs `json:"at"`
 }
 
 type AttentionNotificationEventParams struct {

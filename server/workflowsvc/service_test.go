@@ -781,17 +781,17 @@ func TestServiceWorkflowDeleteRevalidatesWorkflowTasksAtCommit(t *testing.T) {
 	}
 }
 
-func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *testing.T) {
+func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentTaskMutation(t *testing.T) {
 	t.Run("graph save", func(t *testing.T) {
 		ctx, service, binding := newWorkflowServiceTestContext(t)
 		workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
 		linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
-		createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+		task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
 		definition, err := service.GetWorkflow(ctx, serverapi.WorkflowGetRequest{WorkflowID: workflowID})
 		if err != nil {
 			t.Fatalf("GetWorkflow: %v", err)
 		}
-		waitForWorkflowMutationPermit(t, service, func() error {
+		waitForTaskMutationLane(t, service, workflow.TaskID(task.Task.ID), func() error {
 			_, err := service.SaveWorkflowGraph(ctx, serverapi.WorkflowGraphSaveRequest{
 				WorkflowID:      workflowID,
 				ExpectedVersion: definition.Definition.Workflow.Version,
@@ -801,12 +801,12 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 		}, nil)
 	})
 	t.Run("workflow delete", func(t *testing.T) {
-		ctx, service, _, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
+		ctx, service, _, workflowID, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 		preview, err := service.PreviewWorkflowDelete(ctx, serverapi.WorkflowDeletePreviewRequest{WorkflowID: workflowID})
 		if err != nil {
 			t.Fatalf("PreviewWorkflowDelete: %v", err)
 		}
-		waitForWorkflowMutationPermit(t, service, func() error {
+		waitForTaskMutationLane(t, service, workflow.TaskID(taskID), func() error {
 			_, err := service.DeleteWorkflow(ctx, serverapi.WorkflowDeleteRequest{
 				WorkflowID:           workflowID,
 				Confirmed:            true,
@@ -820,10 +820,10 @@ func TestServiceGraphSaveAndWorkflowDeleteWaitForConcurrentWorkflowMutation(t *t
 	})
 }
 
-func TestServiceWorkflowTaskDeleteWaitsForConcurrentWorkflowMutation(t *testing.T) {
+func TestServiceWorkflowTaskDeleteWaitsForConcurrentTaskMutation(t *testing.T) {
 	ctx, service, _, _, taskID := newWorkflowServiceOrdinaryTaskFixture(t)
 
-	waitForWorkflowMutationPermit(t, service, func() error {
+	waitForTaskMutationLane(t, service, workflow.TaskID(taskID), func() error {
 		return service.DeleteWorkflowTask(ctx, serverapi.WorkflowTaskDeleteRequest{TaskID: taskID})
 	}, func() {
 		if _, err := service.GetWorkflowTask(ctx, serverapi.WorkflowTaskGetRequest{TaskID: taskID}); err != nil {
@@ -855,7 +855,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.mutationPermit,
+		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -1453,7 +1453,7 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.mutationPermit,
+		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -2178,13 +2178,19 @@ func (s *manualMoveExecutionStub) Interrupt(_ context.Context, selector workflow
 	return s.interruptErr
 }
 
-func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation func() error, whileBlocked func()) {
+func waitForTaskMutationLane(
+	t *testing.T,
+	service *Service,
+	taskID workflow.TaskID,
+	operation func() error,
+	whileBlocked func(),
+) {
 	t.Helper()
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	held := make(chan error, 1)
 	go func() {
-		held <- service.mutationPermit.Run(context.Background(), func(context.Context) error {
+		held <- service.taskMutations.Run(context.Background(), taskID, func(context.Context) error {
 			close(entered)
 			<-release
 			return nil
@@ -2197,7 +2203,7 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}()
 	select {
 	case err := <-finished:
-		t.Fatalf("workflow mutation escaped the shared permit: %v", err)
+		t.Fatalf("Task mutation escaped its lane: %v", err)
 	case <-time.After(25 * time.Millisecond):
 	}
 	if whileBlocked != nil {
@@ -2205,10 +2211,10 @@ func waitForWorkflowMutationPermit(t *testing.T, service *Service, operation fun
 	}
 	close(release)
 	if err := <-held; err != nil {
-		t.Fatalf("hold workflow mutation permit: %v", err)
+		t.Fatalf("hold Task mutation lane: %v", err)
 	}
 	if err := <-finished; err != nil {
-		t.Fatalf("workflow mutation after permit release: %v", err)
+		t.Fatalf("Task mutation after lane release: %v", err)
 	}
 }
 
@@ -3296,7 +3302,7 @@ func TestNewRejectsEveryMissingReadModelCapability(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewMutationPermit()); err == nil {
+			if _, err := New(service.store, tt.readModels, service.roleResolver, workflowexecution.NewTaskMutationCoordinator()); err == nil {
 				t.Fatal("New accepted a missing read-model capability")
 			}
 		})
@@ -3330,7 +3336,7 @@ func newWorkflowServiceTestServiceWithRoleResolver(t *testing.T, resolver workfl
 		t.Fatalf("workflowstore.New: %v", err)
 	}
 	readModels := newWorkflowServiceReadModels(t, metadataStore, store, resolver, nil, nil)
-	service, err := New(store, readModels, resolver, workflowexecution.NewMutationPermit(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
+	service, err := New(store, readModels, resolver, workflowexecution.NewTaskMutationCoordinator(), WithCurrentNodeExecution(&currentNodeCompletionExecutionStub{store: store}))
 	if err != nil {
 		t.Fatalf("workflowsvc.New: %v", err)
 	}

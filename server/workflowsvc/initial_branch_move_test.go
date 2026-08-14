@@ -239,7 +239,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 				},
 			},
 		}
-		moved, err := service.store.ApplyManualMove(ctx, prepared, candidate)
+		moved, err := applyManualMoveForWorkflowServiceTest(ctx, service.store, prepared, candidate)
 		if err != nil {
 			t.Errorf("apply concurrent Manual Move: %v", err)
 			return

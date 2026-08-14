@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"core/server/chatcontext"
 	"core/server/llm"
 	"core/server/session"
 	"core/server/tools"
@@ -186,6 +187,7 @@ type Engine struct {
 	modelRequestsState   *modelRequestRuntimeState
 	currentNodeExecution *currentNodeExecutionState
 	compactionPlanner    *compactionPlanner
+	contextPolicy        chatcontext.Policy
 	collaboratorsOnce    sync.Once
 
 	phaseProtocol  phaseProtocolEnforcer
@@ -287,11 +289,22 @@ func New(
 		invariantPolicy:      invariant.OperationalPolicy(cfg.Debug),
 		workflowControl:      newWorkflowControlState(),
 	}
+	eng.compactionRuntimeState().SetContextFacts(store.ContextFacts())
 	providerCapabilities, err := eng.providerCapabilities(context.Background())
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider capabilities during runtime construction: %w", err)
 	}
 	eng.cfg.ProviderCapabilitiesOverride = &providerCapabilities
+	policySettings := config.Settings{
+		ModelContextWindow:               eng.cfg.ContextWindowTokens,
+		ContextCompactionThresholdTokens: eng.cfg.AutoCompactTokenLimit,
+		CompactionMode:                   config.CompactionMode(eng.cfg.CompactionMode),
+	}
+	eng.contextPolicy = chatcontext.ResolvePolicy(policySettings, providerCapabilities, store.Meta().Locked)
+	effectivePolicySettings := chatcontext.ApplyPolicy(policySettings, eng.contextPolicy)
+	eng.cfg.ContextWindowTokens = effectivePolicySettings.ModelContextWindow
+	eng.cfg.AutoCompactTokenLimit = effectivePolicySettings.ContextCompactionThresholdTokens
+	eng.cfg.CompactionMode = string(effectivePolicySettings.CompactionMode)
 	eng.ensureLifecycle()
 	eng.ensureOrchestrationCollaborators()
 

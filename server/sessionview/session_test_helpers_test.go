@@ -44,6 +44,17 @@ func (r testSessionResolver) ResolveSessionStore(_ context.Context, sessionID st
 	return r.store, nil
 }
 
+func (r testSessionResolver) ResolvePersistedSession(_ context.Context, sessionID string) (session.PersistedSessionRecord, error) {
+	if r.store == nil {
+		return session.PersistedSessionRecord{}, errors.New("session store is required")
+	}
+	if strings.TrimSpace(sessionID) != strings.TrimSpace(r.store.Meta().SessionID) {
+		return session.PersistedSessionRecord{}, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
+	}
+	meta := r.store.Meta()
+	return session.PersistedSessionRecord{SessionDir: r.store.Dir(), Meta: &meta}, nil
+}
+
 type sessionViewRuntimeFixture struct {
 	authority *sessionruntime.Authority
 	activity  *registry.RuntimeRegistry

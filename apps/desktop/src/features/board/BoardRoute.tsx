@@ -37,6 +37,7 @@ import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterRow } from "./BoardFilterRow";
 import { BoardQueryProvider } from "./BoardQueryContext";
+import { completeBoardWorkflowLink } from "./boardWorkflowLinkCompletion";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 
@@ -266,9 +267,7 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    connection.phase !== "connected" ||
-    initiatingAction.pending !== null ||
-    manualMove.actionsDisabled;
+    connection.phase !== "connected" || initiatingAction.pending !== null || manualMove.actionsDisabled;
   const dragDisabled = boardDragDisabled(
     actionsDisabled,
     initiatingAction.running,
@@ -528,6 +527,9 @@ function BoardContent({
     open({
       kind: "linkWorkflow",
       mode: "overlay",
+      onCompleted: async (completion) => {
+        await completeBoardWorkflowLink(navigation, board.projectID, completion);
+      },
       projectID: board.projectID,
       selectedWorkflowID: board.selectedWorkflow.id,
     });

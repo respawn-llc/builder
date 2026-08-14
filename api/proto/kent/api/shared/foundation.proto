@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package kent.api.shared;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/descriptor.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/shared;sharedpb";
+
+message FoundationImports {
+  google.protobuf.Empty empty = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  google.protobuf.Duration duration = 3;
+  string constrained_text = 4 [(buf.validate.field).string.min_len = 1];
+}
+
+message InternalFailureDetails {
+  optional string operation = 1 [(buf.validate.field).string.min_len = 1];
+  optional string cause = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+enum TranscriptCloseReason {
+  TRANSCRIPT_CLOSE_REASON_UNSPECIFIED = 0;
+  TRANSCRIPT_CLOSE_REASON_SUBSCRIBER_OVERFLOW = 1;
+  TRANSCRIPT_CLOSE_REASON_CONTRACT_VIOLATION = 2;
+}
+
+message StreamCompletion {
+  optional int32 code = 1 [(buf.validate.field).int32.lt = 0];
+  optional string message = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.shared.stream_completion_message_nonblank"
+      message: "message must be non-blank when present"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional TranscriptCloseReason transcript_close_reason = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  option (buf.validate.message).cel = {
+    id: "kent.shared.stream_completion_shape"
+    message: "stream completion must be empty success or code/message failure"
+    expression:
+      "(!has(this.code) && !has(this.message) && !has(this.transcript_close_reason)) || "
+      "(has(this.code) && has(this.message))"
+  };
+}
+
+message Envelope {
+  oneof frame {
+    option (buf.validate.oneof).required = true;
+
+    Call call = 1;
+    Result result = 2;
+    NotificationEvent notification_event = 3;
+    TransportFailure transport_failure = 4;
+  }
+}
+
+message Call {
+  string operation = 1 [(buf.validate.field).string.min_len = 1];
+  optional string correlation = 2 [(buf.validate.field).string.min_len = 1];
+  optional bytes payload = 3;
+}
+
+message Result {
+  string operation = 1 [(buf.validate.field).string.min_len = 1];
+  optional string correlation = 2 [(buf.validate.field).string.min_len = 1];
+  optional bytes payload = 3;
+}
+
+message NotificationEvent {
+  string operation = 1 [(buf.validate.field).string.min_len = 1];
+  optional bytes payload = 2;
+}
+
+enum TransportFailureCode {
+  TRANSPORT_FAILURE_CODE_UNSPECIFIED = 0;
+  TRANSPORT_FAILURE_CODE_MALFORMED_ENVELOPE = 1;
+  TRANSPORT_FAILURE_CODE_UNKNOWN_OPERATION = 2;
+  TRANSPORT_FAILURE_CODE_WRONG_DIRECTION = 3;
+  TRANSPORT_FAILURE_CODE_INVALID_PAYLOAD = 4;
+}
+
+message TransportFailure {
+  TransportFailureCode code = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional string correlation = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+enum OperationKind {
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_KIND_UNARY = 1;
+  OPERATION_KIND_SUBSCRIPTION = 2;
+  OPERATION_KIND_PROGRESS = 3;
+  OPERATION_KIND_NOTIFICATION = 4;
+}
+
+enum AuthenticationStage {
+  AUTHENTICATION_STAGE_UNSPECIFIED = 0;
+  AUTHENTICATION_STAGE_NONE = 1;
+  AUTHENTICATION_STAGE_PRE_SERVER = 2;
+  AUTHENTICATION_STAGE_SERVER = 3;
+}
+
+enum ScopePolicy {
+  SCOPE_POLICY_UNSPECIFIED = 0;
+  SCOPE_POLICY_NONE = 1;
+  SCOPE_POLICY_ATTACH_PROJECT = 2;
+  SCOPE_POLICY_ATTACH_SESSION = 3;
+  SCOPE_POLICY_PROJECT_VIEW = 4;
+  SCOPE_POLICY_PROJECT_WORKSPACE = 5;
+  SCOPE_POLICY_PROJECT_WORKSPACE_BINDING = 6;
+  SCOPE_POLICY_SESSION_ACTIVE_PROJECT = 7;
+  SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET = 8;
+  SCOPE_POLICY_SESSION_ATTACHED_PROJECT = 9;
+  SCOPE_POLICY_ATTACHED_SESSION = 10;
+  SCOPE_POLICY_GOAL_SESSION = 11;
+  SCOPE_POLICY_RUNTIME_LIVE_SESSION_REQUIRED = 12;
+  SCOPE_POLICY_RUNTIME_LIVE_SESSION_OPTIONAL = 13;
+  SCOPE_POLICY_PROCESS_ACTIVE_PROJECT = 14;
+  SCOPE_POLICY_PROCESS_LIST_ACTIVE_PROJECT = 15;
+  SCOPE_POLICY_NOTIFICATION = 16;
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_CLIENT_TO_SERVER = 1;
+  DIRECTION_SERVER_TO_CLIENT = 2;
+}
+
+enum UnaryConnection {
+  UNARY_CONNECTION_UNSPECIFIED = 0;
+  UNARY_CONNECTION_MULTIPLEXED = 1;
+  UNARY_CONNECTION_DEDICATED = 2;
+}
+
+enum ResultFieldRole {
+  RESULT_FIELD_ROLE_UNSPECIFIED = 0;
+  RESULT_FIELD_ROLE_SUCCESS = 1;
+  RESULT_FIELD_ROLE_ERROR = 2;
+  RESULT_FIELD_ROLE_ERROR_CODE = 3;
+  RESULT_FIELD_ROLE_ERROR_DETAIL = 4;
+}
+
+message KentResultFieldOptions {
+  ResultFieldRole role = 1 [(buf.validate.field).enum.defined_only = true];
+  optional string error_code = 2;
+}
+
+message OperationAssociation {
+  string package = 1;
+  string service = 2;
+  string method = 3;
+}
+
+message KentMethodOptions {
+  OperationKind kind = 1 [(buf.validate.field).enum.defined_only = true];
+  AuthenticationStage authentication_stage = 2 [(buf.validate.field).enum.defined_only = true];
+  ScopePolicy scope_policy = 3 [(buf.validate.field).enum.defined_only = true];
+  Direction direction = 4 [(buf.validate.field).enum.defined_only = true];
+  optional OperationAssociation event = 5;
+  optional OperationAssociation completion = 6;
+  UnaryConnection unary_connection = 7 [(buf.validate.field).enum.defined_only = true];
+  optional string legacy_wire_name = 8;
+}
+
+extend google.protobuf.MethodOptions {
+  KentMethodOptions kent_method = 50000;
+}
+
+extend google.protobuf.FieldOptions {
+  KentResultFieldOptions kent_result_field = 50001;
+}

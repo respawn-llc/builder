@@ -10,16 +10,50 @@ import (
 	"testing"
 	"time"
 
+	"core/internal/testharness/testsetup"
+	servercore "core/server/core"
+	"core/server/session"
+	"core/server/sessionruntime"
+	"core/server/workflow"
+	"core/server/workflowexecution"
+	"core/server/workflowruntime"
+	"core/server/workflowstore"
 	"core/shared/apicontract"
 	"core/shared/protocol"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 
 	"golang.org/x/net/websocket"
+	sqlitedriver "modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type gatewayConcurrencyWorkflowService struct {
 	apicontract.WorkflowService
-	getWorkflowTask func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
+	getWorkflowTask      func(context.Context, serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error)
+	completeWorkflowTask func(context.Context, serverapi.WorkflowTaskCompleteRequest) (serverapi.WorkflowTaskCompleteResponse, error)
+	startWorkflowTask    func(context.Context, serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error)
+	resumeWorkflowTask   func(context.Context, serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error)
+}
+
+func (s *gatewayConcurrencyWorkflowService) StartWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskStartRequest,
+) (serverapi.WorkflowTaskStartResponse, error) {
+	if s.startWorkflowTask == nil {
+		return s.WorkflowService.StartWorkflowTask(ctx, req)
+	}
+	return s.startWorkflowTask(ctx, req)
+}
+
+func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskResumeRequest,
+) (serverapi.WorkflowTaskResumeResponse, error) {
+	if s.resumeWorkflowTask == nil {
+		return s.WorkflowService.ResumeWorkflowTask(ctx, req)
+	}
+	return s.resumeWorkflowTask(ctx, req)
 }
 
 func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
@@ -29,10 +63,151 @@ func (s *gatewayConcurrencyWorkflowService) GetWorkflowTask(
 	return s.getWorkflowTask(ctx, req)
 }
 
+func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTask(
+	ctx context.Context,
+	req serverapi.WorkflowTaskCompleteRequest,
+) (serverapi.WorkflowTaskCompleteResponse, error) {
+	if s.completeWorkflowTask == nil {
+		return s.WorkflowService.CompleteWorkflowTask(ctx, req)
+	}
+	return s.completeWorkflowTask(ctx, req)
+}
+
 type gatewayConcurrencyDependencies struct {
 	GatewayDependencies
 	workflow apicontract.WorkflowService
 	debug    bool
+}
+
+type gatewayAutomaticFatalSteerer struct {
+	cause error
+}
+
+func (s gatewayAutomaticFatalSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return nil, s.cause
+}
+
+func (gatewayAutomaticFatalSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
+type gatewayFailingRunner struct {
+	cause error
+}
+
+func (r gatewayFailingRunner) PrepareAgentPublication(
+	context.Context,
+	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
+	workflowruntime.TaskPromptDelivery,
+	workflowexecution.CurrentNodeAssignmentSteer,
+	workflowruntime.Controller,
+) (workflowexecution.CurrentNodeAgentPublication, error) {
+	return nil, r.cause
+}
+
+func (gatewayFailingRunner) PrepareScriptPublication(
+	context.Context,
+	workflow.CurrentNodeReference,
+	runtimeids.CurrentNodeOperationID,
+	workflowruntime.Controller,
+) (workflowexecution.CurrentNodeScriptPublication, error) {
+	return nil, nil
+}
+
+type gatewayCommittedAssignmentSteerer struct{}
+
+func (gatewayCommittedAssignmentSteerer) SteerCurrentNodeAssignment(
+	context.Context,
+	workflow.CurrentNodeReference,
+) (workflowexecution.CurrentNodeAssignmentSteer, error) {
+	return gatewayCommittedAssignment{}, nil
+}
+
+func (gatewayCommittedAssignmentSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
+}
+
+type gatewayCommittedAssignment struct{}
+
+func (gatewayCommittedAssignment) Wait(context.Context) (session.CommitReceipt, error) {
+	return session.CommitReceipt{Committed: true}, nil
+}
+
+func gatewayWorkflowStore(t *testing.T, appCore *servercore.Core) *workflowstore.Store {
+	t.Helper()
+	store, err := workflowstore.New(
+		appCore.MetadataStore(),
+		workflowstore.WithRoleResolver(testsetup.QuestionsEnabled("coder")),
+	)
+	if err != nil {
+		t.Fatalf("workflowstore.New: %v", err)
+	}
+	return store
+}
+
+func installCurrentNodeInterruptionFailure(t *testing.T, deps *servercore.Core) {
+	t.Helper()
+	if _, err := deps.MetadataStore().DB().ExecContext(context.Background(), `
+CREATE TRIGGER current_node_interruption_failure
+BEFORE UPDATE OF scheduling_state ON task_current_nodes
+WHEN OLD.scheduling_state <> 'interrupted'
+ AND NEW.scheduling_state = 'interrupted'
+BEGIN
+	SELECT RAISE(ABORT, 'current node interruption persistence failed');
+END;
+`); err != nil {
+		t.Fatalf("install Current Node interruption SQL failure: %v", err)
+	}
+}
+
+func requireGatewayResponse(t *testing.T, conn *websocket.Conn, requestID string) {
+	t.Helper()
+	var response protocol.Response
+	if err := websocket.JSON.Receive(conn, &response); err != nil {
+		t.Fatalf("receive Gateway response %q: %v", requestID, err)
+	}
+	if response.ID != requestID || response.Error != nil {
+		if response.Error != nil {
+			t.Fatalf("Gateway response error = %+v, want successful response %q", *response.Error, requestID)
+		}
+		t.Fatalf("Gateway response = %+v, want successful response %q", response, requestID)
+	}
+}
+
+func requireControllerPersistenceFailure(
+	t *testing.T,
+	controller *workflowexecution.CurrentNodeController,
+	taskID workflow.TaskID,
+	operationFailure error,
+) {
+	t.Helper()
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		err := controller.EnsureTaskQuiescent(taskID)
+		if !errors.Is(err, operationFailure) {
+			return false
+		}
+		var sqliteErr *sqlitedriver.Error
+		return errors.As(err, &sqliteErr) &&
+			sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_TRIGGER
+	}, "controller did not expose the operation and real SQLite interruption failures")
 }
 
 func (d *gatewayConcurrencyDependencies) WorkflowClient() apicontract.WorkflowService {
@@ -187,55 +362,7 @@ func TestGatewayConcurrentUnaryResponsesAreCorrelated(t *testing.T) {
 	}
 }
 
-func TestGatewayOrdinaryHandlerPanicClosesOnlyItsConnection(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-
-	panicEntered := make(chan struct{})
-	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService: appCore.WorkflowClient(),
-		getWorkflowTask: func(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-			if req.TaskID == "panic" {
-				close(panicEntered)
-				panic("gateway test panic")
-			}
-			return serverapi.WorkflowTaskGetResponse{}, errors.New("unexpected workflow task lookup")
-		},
-	}
-	deps := &gatewayConcurrencyDependencies{
-		GatewayDependencies: appCore,
-		workflow:            workflow,
-	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptest.NewServer(gateway.Handler())
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	handshakeGateway(t, conn)
-	defer func() { _ = conn.Close() }()
-	sendGatewayRequest(t, conn, "panic", protocol.MethodWorkflowTaskGet, serverapi.WorkflowTaskGetRequest{TaskID: "panic"})
-	select {
-	case <-panicEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for panic route")
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatalf("SetReadDeadline: %v", err)
-	}
-	var response protocol.Response
-	if err := websocket.JSON.Receive(conn, &response); err == nil {
-		t.Fatal("panic request unexpectedly returned a response")
-	}
-
-	next := dialGateway(t, server)
-	defer func() { _ = next.Close() }()
-	handshakeGateway(t, next)
-}
-
-func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
+func TestGatewayOrdinaryHandlerPanicPropagates(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()
 
@@ -265,28 +392,12 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	stopped := false
 	defer func() {
 		recovered := recover()
-		diagnostic, ok := recovered.(gatewayRequestPanicDiagnostic)
-		if !ok {
-			t.Fatalf("recovered panic = %#v, want gatewayRequestPanicDiagnostic", recovered)
-		}
-		if diagnostic.Operation != gatewayOrdinaryRequestOperation {
-			t.Fatalf("diagnostic operation = %q, want %q", diagnostic.Operation, gatewayOrdinaryRequestOperation)
-		}
-		if diagnostic.Method != protocol.MethodWorkflowTaskGet {
-			t.Fatalf("diagnostic method = %q, want %q", diagnostic.Method, protocol.MethodWorkflowTaskGet)
-		}
-		if diagnostic.RequestID != "panic" {
-			t.Fatalf("diagnostic request id = %q, want panic", diagnostic.RequestID)
-		}
-		cause, ok := diagnostic.Cause.(error)
+		cause, ok := recovered.(error)
 		if !ok || !errors.Is(cause, panicCause) {
-			t.Fatalf("diagnostic cause = %#v, want original panic cause", diagnostic.Cause)
+			t.Fatalf("recovered panic = %#v, want original panic cause", recovered)
 		}
-		if diagnostic.Stack == "" {
-			t.Fatal("diagnostic stack is empty")
-		}
-		if !stopped {
-			t.Fatal("debug panic did not close the connection")
+		if stopped {
+			t.Fatal("ordinary request stop callback ran after panic")
 		}
 	}()
 	gateway.serveOrdinaryGatewayRequest(nil, context.Background(), state, req, gatewayRequestSchedule{
@@ -294,6 +405,137 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	}, func() {
 		stopped = true
 	})
+}
+
+func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		resume bool
+	}{
+		{name: "initial Start"},
+		{name: "explicit Resume", resume: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			appCore, _ := newGatewayTestCore(t, true, true)
+			defer func() { _ = appCore.Close() }()
+			task := createGatewaySearchableTask(t, appCore)
+			taskID := workflow.TaskID(task.ID)
+			workflowStore := gatewayWorkflowStore(t, appCore)
+			operationFailure := errors.New("explicit admission failed")
+			var steerer workflowexecution.CurrentNodeAssignmentSteerer = gatewayAutomaticFatalSteerer{
+				cause: operationFailure,
+			}
+			runner := gatewayFailingRunner{cause: errors.New("runner must not start")}
+			if test.resume {
+				started, err := workflowStore.StartTask(context.Background(), taskID)
+				if err != nil {
+					t.Fatalf("StartTask: %v", err)
+				}
+				if err := workflowStore.InterruptCurrentNode(
+					context.Background(),
+					started.Mutation.Created[0].Reference,
+					workflow.CurrentNodeInterruptionReasonUserInterrupt,
+					workflow.NewCurrentNodeInterruptionDetail(
+						string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+						nil,
+					),
+				); err != nil {
+					t.Fatalf("seed interrupted Current Node: %v", err)
+				}
+				steerer = gatewayCommittedAssignmentSteerer{}
+				runner = gatewayFailingRunner{cause: operationFailure}
+			}
+			installCurrentNodeInterruptionFailure(t, appCore)
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+			controller, err := workflowexecution.NewCurrentNodeController(
+				workflowStore,
+				runner,
+				authority,
+				workflowexecution.NewTaskMutationCoordinator(),
+				workflowexecution.CurrentNodeControllerConfig{
+					AgentConcurrency:  1,
+					AssignmentSteerer: steerer,
+				},
+			)
+			if err != nil {
+				t.Fatalf("NewCurrentNodeController: %v", err)
+			}
+			defer func() { _ = authority.Close(context.Background()) }()
+
+			workflowClient := &gatewayConcurrencyWorkflowService{
+				WorkflowService: appCore.WorkflowClient(),
+				startWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskStartRequest) (serverapi.WorkflowTaskStartResponse, error) {
+					started, startErr := controller.StartTask(
+						ctx,
+						taskID,
+						workflowexecution.TaskStartPreparation{
+							Prepare: func(context.Context) error { return nil },
+							Commit:  func(context.Context) error { return nil },
+						},
+						func(workflowexecution.TaskPreparationFinalization) {},
+					)
+					if len(started.Mutation.Created) == 0 {
+						return serverapi.WorkflowTaskStartResponse{}, startErr
+					}
+					response := serverapi.WorkflowTaskStartResponse{
+						Outcome: serverapi.WorkflowTaskActionOutcomeApplied,
+						Applied: &serverapi.WorkflowTaskStartApplied{
+							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+								NodeID: string(started.Mutation.Created[0].Reference.NodeID),
+							}},
+						},
+					}
+					return response, startErr
+				},
+				resumeWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
+					resumed, resumeErr := controller.ResumeTask(ctx, taskID)
+					if len(resumed.CurrentNodes) == 0 {
+						return serverapi.WorkflowTaskResumeResponse{}, resumeErr
+					}
+					response := serverapi.WorkflowTaskResumeResponse{
+						Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+						Applied: &serverapi.WorkflowTaskResumeApplied{
+							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
+								NodeID: string(resumed.CurrentNodes[0].Reference.NodeID),
+							}},
+						},
+					}
+					return response, resumeErr
+				},
+			}
+			gateway, err := NewGateway(
+				&gatewayConcurrencyDependencies{GatewayDependencies: appCore, workflow: workflowClient},
+				protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"},
+			)
+			if err != nil {
+				t.Fatalf("NewGateway: %v", err)
+			}
+			server := httptest.NewServer(gateway.Handler())
+			defer server.Close()
+			conn := dialGateway(t, server)
+			handshakeGateway(t, conn)
+			if test.resume {
+				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskResume, serverapi.WorkflowTaskResumeRequest{
+					TaskID:           task.ID,
+					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				})
+			} else {
+				sendGatewayRequest(t, conn, "explicit", protocol.MethodWorkflowTaskStart, serverapi.WorkflowTaskStartRequest{
+					TaskID:           task.ID,
+					SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+				})
+			}
+			requireGatewayResponse(t, conn, "explicit")
+			_ = conn.Close()
+
+			requireControllerPersistenceFailure(t, controller, taskID, operationFailure)
+			next := dialGateway(t, server)
+			handshakeGateway(t, next)
+			_ = next.Close()
+
+			_ = controller.Close()
+		})
+	}
 }
 
 func TestGatewayCloseCancelsAndDrainsHandlersBeforeRuntimeCleanup(t *testing.T) {

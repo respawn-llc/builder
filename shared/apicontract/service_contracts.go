@@ -31,6 +31,10 @@ type CapabilityFactsService interface {
 	GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error)
 }
 
+type ChatContextService interface {
+	GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error)
+}
+
 type PromptCommandCatalogService interface {
 	GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error)
 }
@@ -127,6 +131,11 @@ type SessionTranscriptService interface {
 type SessionLaunchService interface {
 	PlanSession(ctx context.Context, req serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error)
 	WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error)
+	MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error)
+}
+
+type ChatSettingsService interface {
+	ReadChatSettings(ctx context.Context, req serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error)
 }
 
 type SessionLifecycleService interface {
@@ -146,6 +155,7 @@ type SessionViewService interface {
 	GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error)
 	GetLatestCommittedAssistantFinalAnswer(ctx context.Context, req serverapi.SessionLatestCommittedAssistantFinalAnswerRequest) (serverapi.SessionLatestCommittedAssistantFinalAnswerResponse, error)
 	GetSessionExecutionEnvironment(ctx context.Context, req serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error)
+	SubscribeQuestionHistory(ctx context.Context, req serverapi.QuestionHistorySubscribeRequest) (serverapi.QuestionHistorySubscription, error)
 }
 
 type WorktreeService interface {
@@ -208,6 +218,7 @@ type WorkflowService interface {
 	DeleteWorkflowTaskComment(ctx context.Context, req serverapi.WorkflowTaskCommentDeleteRequest) error
 	ListWorkflowTaskActivity(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
 	ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
+	GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error)
 	SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
 	SubscribeWorkflow(ctx context.Context, req serverapi.WorkflowSubscribeRequest) (serverapi.WorkflowSubscription, error)
 	SubscribeWorkflowProject(ctx context.Context, req serverapi.WorkflowProjectSubscribeRequest) (serverapi.WorkflowProjectSubscription, error)

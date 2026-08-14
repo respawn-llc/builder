@@ -1,6 +1,8 @@
 package authservice
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -57,11 +59,18 @@ func TestStatusServiceLoadsAuthStateOnce(t *testing.T) {
 }
 
 func TestFetchUsagePayloadUsesTypedOAuthHeaders(t *testing.T) {
-	var authorization, accountHeader string
+	var authorization, accountHeader, acceptEncoding string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authorization = r.Header.Get("Authorization")
 		accountHeader = r.Header.Get("ChatGPT-Account-Id")
-		_ = json.NewEncoder(w).Encode(usagePayload{PlanType: "pro"})
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		payload, _ := json.Marshal(usagePayload{PlanType: "pro"})
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		_, _ = writer.Write(payload)
+		_ = writer.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed.Bytes())
 	}))
 	defer server.Close()
 
@@ -77,6 +86,9 @@ func TestFetchUsagePayloadUsesTypedOAuthHeaders(t *testing.T) {
 	}
 	if authorization != "Bearer access-token" || accountHeader != "acct-1" {
 		t.Fatalf("headers = authorization %q account %q", authorization, accountHeader)
+	}
+	if acceptEncoding != "zstd,gzip" {
+		t.Fatalf("Accept-Encoding = %q, want zstd,gzip", acceptEncoding)
 	}
 }
 
@@ -212,15 +224,14 @@ func TestStatusServiceUsesRequestedEffectiveProviderForSubscription(t *testing.T
 	selection := authstatus.ProviderSelection(config.Settings{
 		OpenAIBaseURL: "https://session.example/v1",
 	})
-	provider := serverapi.OpenAIAuthProviderFacts()
 	effective, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{Provider: &selection})
 	if err != nil {
 		t.Fatalf("effective GetAuthStatus: %v", err)
 	}
 	if effective.Resolution.Facts == nil ||
-		!reflect.DeepEqual(effective.Resolution.Facts.Provider, provider) ||
-		!effective.Subscription.Applicable ||
-		effective.Subscription.Failure == nil {
+		effective.Resolution.Facts.Provider.Identifier != "openai-compatible" ||
+		effective.Resolution.Facts.Provider.Kind != serverapi.AuthProviderKindOpenAICompatible ||
+		effective.Subscription.Applicable {
 		t.Fatalf("effective subscription response = %+v", effective)
 	}
 }

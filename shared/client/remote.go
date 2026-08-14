@@ -302,6 +302,22 @@ func (c *Remote) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequ
 	return response, nil
 }
 
+func (c *Remote) GetChatContext(ctx context.Context, req serverapi.ChatContextRequest) (serverapi.ChatContextResponse, error) {
+	return callValidatedControlRPC[serverapi.ChatContextRequest, serverapi.ChatContextResponse](c, ctx, protocol.MethodChatContextGet, req)
+}
+
+func callValidatedControlRPC[Request any, Response interface{ Validate() error }](c *Remote, ctx context.Context, method string, req Request) (Response, error) {
+	response, err := callControlRPC[Request, Response](c, ctx, method, req)
+	if err != nil {
+		return response, err
+	}
+	if err := response.Validate(); err != nil {
+		var zero Response
+		return zero, invalidResponseError(method, err)
+	}
+	return response, nil
+}
+
 func (c *Remote) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
 	return callUnscopedRPC[serverapi.ProjectListRequest, serverapi.ProjectListResponse](c, ctx, protocol.MethodProjectList, req)
 }
@@ -596,6 +612,11 @@ func (c *Remote) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowTa
 	return validateWorkflowResponse("list workflow tasks", response, err)
 }
 
+func (c *Remote) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	response, err := callUnscopedRPC[serverapi.WorkflowProjectTaskGroupCountsRequest, serverapi.WorkflowProjectTaskGroupCountsResponse](c, ctx, protocol.MethodWorkflowProjectTaskGroupCounts, req)
+	return validateWorkflowResponse("get workflow project task group counts", response, err)
+}
+
 func (c *Remote) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {
 	response, err := callDedicatedRPC[serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](
 		c,
@@ -660,7 +681,44 @@ func (c *Remote) PlanSession(ctx context.Context, req serverapi.SessionPlanReque
 
 func (c *Remote) WorkspaceChatDraft(ctx context.Context, req serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	var resp serverapi.WorkspaceChatDraftResponse
-	return resp, c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp)
+	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatDraft, req, &resp); err != nil {
+		return resp, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatDraftResponse{}, invalidResponseError("workspace Chat draft", err)
+	}
+	return resp, nil
+}
+
+func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	var resp serverapi.WorkspaceChatMaterializeResponse
+	if err := c.call(ctx, protocol.MethodSessionWorkspaceChatMaterialize, req, &resp); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, err
+	}
+	if err := resp.Validate(); err != nil {
+		return serverapi.WorkspaceChatMaterializeResponse{}, invalidResponseError("workspace Chat materialization", err)
+	}
+	return resp, nil
+}
+
+func (c *Remote) ReadChatSettings(
+	ctx context.Context,
+	req serverapi.ChatSettingsReadRequest,
+) (serverapi.ChatSettingsReadResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	var response serverapi.ChatSettingsReadResponse
+	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if err := response.ValidateForTarget(req.Target); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, invalidResponseError(
+			"Chat settings",
+			err,
+		)
+	}
+	return response, nil
 }
 
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
@@ -1046,6 +1104,7 @@ func dialConfiguredRemote(ctx context.Context, cfg config.App, intent *remoteAtt
 
 var _ apicontract.ProjectViewService = (*Remote)(nil)
 var _ apicontract.AuthStatusService = (*Remote)(nil)
+var _ apicontract.ChatContextService = (*Remote)(nil)
 var _ apicontract.SessionLaunchService = (*Remote)(nil)
 var _ apicontract.SessionViewService = (*Remote)(nil)
 var _ apicontract.SessionLifecycleService = (*Remote)(nil)

@@ -120,6 +120,7 @@ const (
 	TranscriptMessageHeadlessMode                   TranscriptMessageType = "headless_mode"
 	TranscriptMessageHeadlessModeExit               TranscriptMessageType = "headless_mode_exit"
 	TranscriptMessageWorkflowMode                   TranscriptMessageType = "workflow_mode"
+	TranscriptMessageWorkflowModeExit               TranscriptMessageType = "workflow_mode_exit"
 	TranscriptMessageWorktreeMode                   TranscriptMessageType = "worktree_mode"
 	TranscriptMessageWorktreeModeExit               TranscriptMessageType = "worktree_mode_exit"
 	TranscriptMessageGoal                           TranscriptMessageType = "goal"
@@ -540,6 +541,7 @@ func (t TranscriptMessageType) Validate() error {
 		TranscriptMessageHeadlessMode,
 		TranscriptMessageHeadlessModeExit,
 		TranscriptMessageWorkflowMode,
+		TranscriptMessageWorkflowModeExit,
 		TranscriptMessageWorktreeMode,
 		TranscriptMessageWorktreeModeExit,
 		TranscriptMessageGoal,

@@ -56,7 +56,7 @@ func TestEventLogV1HeaderRejectsUnsupportedContractAndVersion(t *testing.T) {
 		},
 		{
 			name: "version",
-			line: []byte(`{"contract":"kent.session.events","version":2}`),
+			line: []byte(`{"contract":"kent.session.events","version":3}`),
 		},
 	}
 	for _, test := range tests {

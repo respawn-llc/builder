@@ -52,7 +52,6 @@ run_desktop_build() {
 		echo "pnpm is required to build desktop assets. Install pnpm or omit the desktop target." >&2
 		exit 2
 	fi
-
 	local log_file
 	log_file="$(mktemp -t kent-frontend-build.XXXXXX.log)"
 	if ./scripts/install-frontend-dependencies.sh >"$log_file" 2>&1 </dev/null &&

@@ -139,6 +139,13 @@ func GoalFromSessionState(goal *session.GoalState, suspended bool) *clientui.Run
 	}
 }
 
+func GoalAvailabilityFromSession(availability session.GoalAvailability) clientui.GoalAvailability {
+	if availability == session.GoalAvailable {
+		return clientui.GoalAvailabilityAvailable
+	}
+	return clientui.GoalAvailabilityAgentCapabilityMissing
+}
+
 func SessionViewFromRuntime(engine *runtime.Engine) (clientui.RuntimeSessionView, error) {
 	if engine == nil {
 		return clientui.RuntimeSessionView{}, nil

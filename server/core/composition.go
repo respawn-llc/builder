@@ -13,6 +13,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -52,14 +53,20 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 }
 
 type Options struct {
-	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	RootLease            *RootLockLease
+	RuntimeClientFactory       runtimewire.RuntimeClientFactory
+	RootLease                  *RootLockLease
+	WorkspaceConfigLoadOptions config.LoadOptions
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	workspaceConfigResolver := chatcontext.NewFixedRootWorkspaceResolver(
+		cfg.PersistenceRoot,
+		cfg.WorkspaceRoot,
+		opts.WorkspaceConfigLoadOptions,
+	)
 	rootLease := opts.RootLease
 	ownsIncomingRootLease := rootLease != nil
 	if rootLease == nil {
@@ -170,7 +177,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		},
 	})
 	projectService.WithRuntimeAuthority(runtimeAuthority)
-	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, storeOptions...)
+	sessionStoreResolver := registry.NewGlobalPersistenceSessionResolver(cfg.PersistenceRoot, metadataStore, storeOptions...)
 	promptControlService := promptcontrol.NewPromptControlService(authorityPromptResponder{authority: runtimeAuthority})
 	runtimeRegistry.WithExecutionTargetResolver(metadataStore.ResolveOptionalSessionExecutionTarget)
 	if runtimeSupport.Background != nil {
@@ -204,6 +211,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
+		WithChatContextWorkspaceResolver(workspaceConfigResolver).
+		WithChatContextAuthReader(authSupport.AuthManager).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
@@ -264,11 +273,10 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		return nil, fmt.Errorf("workflow bundle: task dependencies: %w", err)
 	}
 	runtimeRegistry.WithWorkflowEventPublisher(workflowStore.PublishWorkflowEvent)
-	workflowMutationPermit := workflowexecution.NewMutationPermit()
+	workflowTaskMutations := workflowexecution.NewTaskMutationCoordinator()
 	workflowRuntimeStarter, err = workflowrunner.NewStarter(cfg, metadataStore, workflowStore, authSupport.AuthManager, runtimeRegistry, workflowrunner.StarterOptions{
 		RuntimeClientFactory: opts.RuntimeClientFactory,
 		RuntimeAuthority:     runtimeAuthority,
-		MutationPermit:       workflowMutationPermit,
 		TaskDependencies:     workflowTaskDependencyCounter,
 	})
 	if err != nil {
@@ -279,7 +287,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		workflowStore,
 		workflowRuntimeStarter,
 		runtimeAuthority,
-		workflowMutationPermit,
+		workflowTaskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  cfg.Settings.Workflow.Concurrency,
 			Attention:         workflowAttentionFinalizer,
@@ -329,7 +337,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: task detail: %w", err)
 	}
-	projectService.WithWorkflowExecution(workflowMutationPermit, workflowController, workflowStore)
+	projectService.WithWorkflowExecution(workflowTaskMutations, workflowController, workflowStore)
 	workflowService, err := workflowsvc.New(workflowStore, workflowsvc.ReadModels{
 		Definitions:      workflowDefinitions,
 		Board:            workflowBoard,
@@ -340,13 +348,14 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		Activity:         workflowActivity,
 		Attention:        workflowAttention,
 		Approvals:        approvalService,
-	}, workflowRoleResolver, workflowMutationPermit, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
+	}, workflowRoleResolver, workflowTaskMutations, workflowsvc.WithExecutionTargetInfrastructure(taskExecutionTargetInfrastructure{service: worktreeService, git: gitInspector}), workflowsvc.WithTaskWorktreeDeleter(taskWorktreeDeleter{service: worktreeService}), workflowsvc.WithCurrentNodeExecution(workflowController), workflowsvc.WithWorkflowAttentionFinalizer(workflowAttentionFinalizer), workflowsvc.WithWorkflowTaskSetupEventPublisher(worktreeService))
 	if err != nil {
 		cleanupNewFailure()
 		return nil, fmt.Errorf("workflow bundle: service: %w", err)
 	}
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
+		workspaceConfigResolver: workspaceConfigResolver,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,
 		runtimeSupport:          runtimeSupport,

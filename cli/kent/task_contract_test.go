@@ -11,6 +11,7 @@ import (
 
 	"core/shared/apicontract"
 	"core/shared/config"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -221,7 +222,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		ProjectID:     "project-1",
 		WorkflowOwner: taskListExpectedWorkflowFromRequest,
 	}
-	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, true); code != 0 || stderr.Len() != 0 {
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, true); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("JSON exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	var output struct {
@@ -237,7 +238,7 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := writeTaskListResponse(t.Context(), &stdout, &stderr, stub, response, expected, false); code != 0 ||
+	if code := writeTaskListResponse(&stdout, &stderr, response, expected, false); code != 0 ||
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("human exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -254,6 +255,38 @@ func TestTaskListAndCommentPaginationSuccess(t *testing.T) {
 		stdout.Len() != 0 ||
 		stderr.Len() == 0 {
 		t.Fatalf("comment exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	workflowName := "Delivery"
+	projection, err := taskListProjectionFromResponse(
+		serverapi.WorkflowTaskListResponse{
+			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
+			Tasks: []serverapi.WorkflowTaskListItem{{
+				TaskID:       "task-1",
+				ShortID:      "KENT-1",
+				WorkflowID:   workflowID,
+				WorkflowName: &workflowName,
+				Title:        "One Workflow",
+				Status:       taskContractStatus(serverapi.WorkflowTaskStatusKindActive),
+				Labels:       []serverapi.WorkflowProjectLabel{{ID: "label-1", Name: "Priority"}},
+			}},
+		},
+		taskListExpectedScope{
+			ProjectID:     "project-1",
+			WorkflowOwner: taskListExpectedWorkflowFromRequest,
+		},
+	)
+	if err != nil {
+		t.Fatalf("project Task-list projection: %v", err)
+	}
+	if len(projection.Rows) != 1 ||
+		projection.Rows[0].WorkflowName != nil ||
+		!slices.Equal(projection.Rows[0].LabelNames, []string{"Priority"}) {
+		t.Fatalf("one-Workflow row = %+v", projection.Rows)
 	}
 }
 

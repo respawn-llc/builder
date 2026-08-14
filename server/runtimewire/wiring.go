@@ -19,6 +19,7 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -44,6 +45,8 @@ type RuntimeWiringOptions struct {
 	OnEvent                             func(evt runtime.Event)
 	Headless                            bool
 	FastMode                            *runtime.FastModeState
+	QuestionsEnabled                    *bool
+	AutoCompactionEnabled               *bool
 	Sources                             map[string]string
 	Client                              llm.Client
 	ClientFactory                       RuntimeClientFactory
@@ -144,7 +147,7 @@ func NewRuntimeWiringWithBackground(
 			Provider:                     llm.Provider(strings.TrimSpace(mainProvider.ProviderOverride)),
 			Model:                        mainProvider.Model,
 			Auth:                         mainAuth,
-			HTTPClient:                   llm.NewHTTPClient(time.Duration(active.Timeouts.ModelRequestSeconds) * time.Second),
+			HTTPClient:                   llm.NewProviderHTTPClient(mainProvider.OpenAIBaseURL, time.Duration(active.Timeouts.ModelRequestSeconds)*time.Second),
 			OpenAIBaseURL:                mainProvider.OpenAIBaseURL,
 			ModelVerbosity:               string(mainProvider.ModelVerbosity),
 			ProviderIdentifier:           &mainProvider.ProviderIdentifier,
@@ -173,7 +176,7 @@ func NewRuntimeWiringWithBackground(
 			Provider:                     llm.Provider(strings.TrimSpace(reviewerProvider.ProviderOverride)),
 			Model:                        reviewerProvider.Model,
 			Auth:                         reviewerAuth,
-			HTTPClient:                   llm.NewHTTPClient(time.Duration(active.Reviewer.TimeoutSeconds) * time.Second),
+			HTTPClient:                   llm.NewProviderHTTPClient(reviewerProvider.OpenAIBaseURL, time.Duration(active.Reviewer.TimeoutSeconds)*time.Second),
 			OpenAIBaseURL:                reviewerProvider.OpenAIBaseURL,
 			ModelVerbosity:               string(reviewerProvider.ModelVerbosity),
 			ProviderIdentifier:           &reviewerProvider.ProviderIdentifier,
@@ -235,8 +238,8 @@ func NewRuntimeWiringWithBackground(
 		LocalCompactionCarryoverLimit:   20_000,
 		CompactionMode:                  string(active.CompactionMode),
 		CacheWarningMode:                active.CacheWarningMode,
-		AutoCompactionEnabled:           boolRef(runtime.DefaultAutoCompactionEnabled),
-		QuestionsEnabled:                boolRef(runtime.DefaultQuestionsEnabled),
+		AutoCompactionEnabled:           textutil.Pointer(opts.AutoCompactionEnabled),
+		QuestionsEnabled:                textutil.Pointer(opts.QuestionsEnabled),
 		HeadlessMode:                    opts.Headless,
 		ToolPreambles:                   active.ToolPreambles,
 		WorkflowPrompt:                  opts.WorkflowPrompt,

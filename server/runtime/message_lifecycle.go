@@ -198,7 +198,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if replacement.CompactionNumber != nil && *replacement.CompactionNumber > 0 {
 				e.compactionRuntimeState().SetCount(*replacement.CompactionNumber)
 			} else {
-				e.compactionRuntimeState().IncrementCount()
+				count := e.compactionRuntimeState().IncrementCount()
+				e.persistCompletedCompactionFactsBestEffort(stepID, count)
 			}
 			rollbackLocator.ObserveHistoryReplacement(replacement)
 			recoveredHandoff.ClearSatisfiedByCompaction()

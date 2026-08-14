@@ -16,6 +16,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/core"
 	"core/server/metadata"
 	"core/server/onboarding"
@@ -481,9 +482,13 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	if err != nil {
 		return d.activationError(resp, err)
 	}
-	appCore, err := core.NewWithContextOptions(ctx, refreshed.Config, d.authSupport, runtimeSupport, core.Options{
-		RootLease: d.rootLease,
-	})
+	appCore, err := core.NewWithContextOptions(
+		ctx,
+		refreshed.Config,
+		d.authSupport,
+		runtimeSupport,
+		coreOptionsForBootstrap(d.bootstrap, d.rootLease),
+	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return d.activationError(resp, err)
@@ -724,6 +729,12 @@ func (d *startupGatewayDependencies) SessionViewClient() apicontract.SessionView
 	}
 	return nil
 }
+func (d *startupGatewayDependencies) ChatSettingsClient() apicontract.ChatSettingsService {
+	if c := d.activeCore(); c != nil {
+		return c.ChatSettingsClient()
+	}
+	return nil
+}
 func (d *startupGatewayDependencies) SessionLifecycleClient() apicontract.SessionLifecycleService {
 	if c := d.activeCore(); c != nil {
 		return c.SessionLifecycleClient()
@@ -753,6 +764,24 @@ func (d *startupGatewayDependencies) SessionLaunchClientForProjectWorkspaceID(ct
 		return c.SessionLaunchClientForProjectWorkspaceID(ctx, projectID, workspaceID)
 	}
 	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspace(ctx, projectID, workspaceRoot)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
+	if c := d.activeCore(); c != nil {
+		return c.WorkspaceChatContextOwnerForProjectWorkspaceID(ctx, projectID, workspaceID)
+	}
+	return nil, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
+}
+func (d *startupGatewayDependencies) SessionChatContextOwner() chatcontext.SessionOwner {
+	if c := d.activeCore(); c != nil {
+		return c.SessionChatContextOwner()
+	}
+	return nil
 }
 func (d *startupGatewayDependencies) RunPromptClientForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (apicontract.RunPromptService, error) {
 	if c := d.activeCore(); c != nil {

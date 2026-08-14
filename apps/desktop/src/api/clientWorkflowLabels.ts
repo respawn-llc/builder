@@ -1,5 +1,6 @@
-import type { TaskListInput, TaskMutationInput } from "./clientInputs";
+import type { ProjectTaskGroupCountsInput, TaskListInput, TaskMutationInput } from "./clientInputs";
 import { parseRpcResponse as parse } from "./clientParse";
+import { decodeWorkflowTaskCreateSelectionError } from "./errors";
 import { compactJsonObject, type JsonObject } from "./json";
 import {
   projectLabelCatalogSchema,
@@ -7,13 +8,18 @@ import {
   projectLabelMutationSchema,
   taskLabelAssignmentSchema,
 } from "./schemas/workflowLabels";
-import { taskCreateResponseSchema, taskListPageSchema } from "./schemas/workflowBoard";
+import {
+  projectTaskGroupCountsSchema,
+  taskCreateResponseSchema,
+  taskListPageSchema,
+} from "./schemas/workflowBoard";
 import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import { canonicalTaskLabelFilter } from "./workflowLabels";
 import type {
   ProjectLabel,
   ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
   TaskLabelAssignment,
   TaskLabelFilter,
   TaskListPage,
@@ -134,29 +140,33 @@ export async function updateTaskLabels(
 }
 
 export async function createTask(transport: RpcTransport, input: TaskMutationInput): Promise<string> {
-  const response = parse(
-    "workflow.task.create",
-    taskCreateResponseSchema,
-    await transport.call(
+  try {
+    const response = parse(
       "workflow.task.create",
-      compactJsonObject({
-        project_id: input.projectID,
-        workflow_id: workflowIDSchema.parse(input.workflowID),
-        title: input.title,
-        body: input.body,
-        source_workspace_id: input.sourceWorkspaceID,
-        label_ids: input.labelIDs,
-        dependency_intent:
-          input.dependencyIntent === undefined
-            ? undefined
-            : {
-                related_task_id: input.dependencyIntent.relatedTaskID,
-                new_task_role: input.dependencyIntent.newTaskRole,
-              },
-      }),
-    ),
-  );
-  return response.task.id;
+      taskCreateResponseSchema,
+      await transport.call(
+        "workflow.task.create",
+        compactJsonObject({
+          project_id: input.projectID,
+          workflow_id: input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+          title: input.title,
+          body: input.body,
+          source_workspace_id: input.sourceWorkspaceID,
+          label_ids: input.labelIDs,
+          dependency_intent:
+            input.dependencyIntent === undefined
+              ? undefined
+              : {
+                  related_task_id: input.dependencyIntent.relatedTaskID,
+                  new_task_role: input.dependencyIntent.newTaskRole,
+                },
+        }),
+      ),
+    );
+    return response.task.id;
+  } catch (error) {
+    throw decodeWorkflowTaskCreateSelectionError(error) ?? error;
+  }
 }
 
 export async function listTasks(transport: RpcTransport, input: TaskListInput): Promise<TaskListPage> {
@@ -167,8 +177,8 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
       "workflow.task.list",
       compactJsonObject({
         project_id: input.projectID,
-        workflow_id:
-          input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+        workflow_id: input.workflowID === undefined ? undefined : workflowIDSchema.parse(input.workflowID),
+        group: input.group,
         column_keys: input.columnKeys ?? [],
         status_kinds: input.statusKinds ?? [],
         attention_kinds: input.attentionKinds ?? [],
@@ -178,5 +188,18 @@ export async function listTasks(transport: RpcTransport, input: TaskListInput): 
         limit: input.limit ?? 40,
       }),
     ),
+  );
+}
+
+export async function getProjectTaskGroupCounts(
+  transport: RpcTransport,
+  input: ProjectTaskGroupCountsInput,
+): Promise<ProjectTaskGroupCounts> {
+  return parse(
+    "workflow.task.groupCounts",
+    projectTaskGroupCountsSchema,
+    await transport.call("workflow.task.groupCounts", {
+      project_id: input.projectID,
+    }),
   );
 }

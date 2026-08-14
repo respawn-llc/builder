@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/runprompt"
@@ -35,6 +36,10 @@ func (unregisteredSessionLaunchClient) PlanSession(context.Context, serverapi.Se
 
 func (unregisteredSessionLaunchClient) WorkspaceChatDraft(context.Context, serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
 	return serverapi.WorkspaceChatDraftResponse{}, serverapi.ErrWorkspaceNotRegistered
+}
+
+func (unregisteredSessionLaunchClient) MaterializeWorkspaceChat(context.Context, serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
+	return serverapi.WorkspaceChatMaterializeResponse{}, serverapi.ErrWorkspaceNotRegistered
 }
 
 type unregisteredRunPromptClient struct{}
@@ -114,6 +119,22 @@ func (s *Core) SessionLaunchClientForProjectWorkspace(ctx context.Context, proje
 		return nil, err
 	}
 	return s.sessionLaunchClientForProjectContext(projectCtx), nil
+}
+
+func (s *Core) WorkspaceChatContextOwnerForProjectWorkspaceID(ctx context.Context, projectID string, workspaceID string) (chatcontext.WorkspaceOwner, error) {
+	projectCtx, err := s.resolveProjectContext(ctx, projectID, workspaceID, "")
+	if err != nil {
+		return nil, err
+	}
+	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
+}
+
+func (s *Core) WorkspaceChatContextOwnerForProjectWorkspace(ctx context.Context, projectID string, workspaceRoot string) (chatcontext.WorkspaceOwner, error) {
+	projectCtx, err := s.resolveProjectContext(ctx, projectID, "", workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return s.sessionLaunchServiceForProjectContext(projectCtx), nil
 }
 
 func (s *Core) RunPromptClientForProject(ctx context.Context, projectID string) (apicontract.RunPromptService, error) {
@@ -242,12 +263,14 @@ func (s *Core) configForWorkspace(workspaceRoot string) (config.App, error) {
 			return projectCfg, nil
 		}
 	}
-	projectCfg, err := config.Load(workspaceRoot, config.LoadOptions{})
-	if err != nil {
-		return config.App{}, err
+	return s.reloadWorkspaceConfig(workspaceRoot)
+}
+
+func (s *Core) reloadWorkspaceConfig(workspaceRoot string) (config.App, error) {
+	if s == nil {
+		return config.App{}, errors.New("core is required")
 	}
-	projectCfg.PersistenceRoot = s.safeBundles().Projects.cfg.PersistenceRoot
-	return projectCfg, nil
+	return s.safeBundles().Projects.freshWorkspace.Resolve(workspaceRoot)
 }
 
 func (s *Core) sessionLaunchClientForProjectContext(projectCtx projectContext) apicontract.SessionLaunchService {
@@ -280,7 +303,15 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	if cached := s.safeBundles().Sessions.sessionServices[scopeKey]; cached != nil {
 		return cached
 	}
-	service := sessionlaunch.NewService(launch.Planner{
+	service := s.newSessionLaunchService(projectCtx).
+		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
+		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...)
+	s.safeBundles().Sessions.sessionServices[scopeKey] = service
+	return service
+}
+
+func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch.Service {
+	return sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
 		ContainerDir:             projectCtx.projectSession,
 		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
@@ -288,15 +319,12 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
 		ReloadConfig: func() (config.App, error) {
-			return s.configForWorkspace(projectCtx.projectRoot)
+			return s.reloadWorkspaceConfig(projectCtx.projectRoot)
 		},
 	}).
-		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID, s.safeBundles().Runtime.fastModeState).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
-	s.safeBundles().Sessions.sessionServices[scopeKey] = service
-	return service
 }
 
 func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apicontract.RunPromptService {
@@ -394,6 +422,17 @@ func (s *Core) SessionViewClient() apicontract.SessionViewService {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionViews
+}
+
+func (s *Core) SessionChatContextOwner() chatcontext.SessionOwner {
+	if s == nil {
+		return nil
+	}
+	return s.safeBundles().Sessions.sessionContextOwner
+}
+
+func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
+	return chatSettingsService{core: s}
 }
 
 func (s *Core) ProjectID() string {

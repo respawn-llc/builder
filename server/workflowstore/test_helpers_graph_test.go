@@ -172,6 +172,98 @@ func createTestSession(t *testing.T, ctx context.Context, store *Store, binding 
 	return sessionStore.Meta().SessionID
 }
 
+func applyManualMoveForStoreTest(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+) (ManualMoveResult, error) {
+	t.Helper()
+	return applyManualMoveForStoreTestWithPreparation(t, ctx, store, prepared, executionTarget, nil)
+}
+
+func applyManualMoveForStoreTestWithPreparation(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	prepared ManualMovePreparation,
+	executionTarget *ExecutionTargetCandidate,
+	observe func([]CurrentNodeStartContext),
+) (ManualMoveResult, error) {
+	t.Helper()
+	return store.ApplyManualMoveWithTargetAssignments(
+		ctx,
+		prepared,
+		executionTarget,
+		func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			if observe != nil {
+				observe(inputs)
+			}
+			return prepareManualMoveTargetAssignments(inputs, func(input CurrentNodeStartContext) (runtimeids.SessionID, error) {
+				if input.CurrentNode.SessionID != nil {
+					return *input.CurrentNode.SessionID, nil
+				}
+				cfg := config.App{
+					PersistenceRoot: store.metadata.PersistenceRoot(),
+					WorkspaceRoot:   input.ExecutionRoot.SourceWorkspaceRoot,
+				}
+				freshSessionID, err := runtimeids.ParseSessionID(createTestSession(
+					t,
+					ctx,
+					store,
+					metadata.Binding{
+						ProjectID:     input.Task.ProjectID,
+						WorkspaceID:   input.ExecutionRoot.SourceWorkspaceID,
+						CanonicalRoot: input.ExecutionRoot.SourceWorkspaceRoot,
+					},
+					cfg,
+				))
+				if err != nil {
+					return runtimeids.SessionID{}, err
+				}
+				return freshSessionID, nil
+			})
+		},
+	)
+}
+
+func prepareManualMoveTargetAssignments(
+	inputs []CurrentNodeStartContext,
+	sessionFor func(CurrentNodeStartContext) (runtimeids.SessionID, error),
+) (ManualMoveTargetAssignmentPreparation, error) {
+	assignments := make([]ManualMoveTargetAssignment, 0, len(inputs))
+	for _, input := range inputs {
+		if input.CurrentNode.AgentExecutionSelection == nil {
+			if input.Node.Kind != workflow.NodeKindScript {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+			}
+			continue
+		}
+		if input.Node.Kind != workflow.NodeKindAgent {
+			return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+		}
+		sessionID, err := sessionFor(input)
+		if err != nil {
+			return ManualMoveTargetAssignmentPreparation{}, err
+		}
+		assignments = append(assignments, ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   sessionID,
+		})
+	}
+	return ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+}
+
+func manualMoveTargetAssignmentsForSession(
+	inputs []CurrentNodeStartContext,
+	sessionID runtimeids.SessionID,
+) (ManualMoveTargetAssignmentPreparation, error) {
+	return prepareManualMoveTargetAssignments(inputs, func(CurrentNodeStartContext) (runtimeids.SessionID, error) {
+		return sessionID, nil
+	})
+}
+
 func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID runtimeids.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
 	t.Helper()
 	link, err := store.LinkWorkflow(ctx, projectID, workflowID, isDefault)

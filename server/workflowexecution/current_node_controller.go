@@ -25,6 +25,17 @@ type CurrentNodeAssignmentSteerer interface {
 	SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error)
 }
 
+type CurrentNodeManualMoveAssignmentPreparer interface {
+	PrepareManualMoveAssignments(
+		context.Context,
+		[]workflowstore.CurrentNodeStartContext,
+	) (
+		workflowstore.ManualMoveTargetAssignmentPreparation,
+		map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+		error,
+	)
+}
+
 type CurrentNodeAssignmentSteer interface {
 	Wait(context.Context) (session.CommitReceipt, error)
 }
@@ -113,8 +124,8 @@ type currentNodeOperation struct {
 }
 
 // CurrentNodeController is the sole workflowruntime.Controller. Its mutex,
-// mutation permit, and Authority operations define the ordering for all
-// lifecycle, admission, interruption, and completion operations.
+// per-Task mutation coordinator, and Authority operations define the ordering
+// for lifecycle, admission, interruption, and completion operations.
 type CurrentNodeController struct {
 	store interface {
 		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
@@ -125,7 +136,6 @@ type CurrentNodeController struct {
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
@@ -137,7 +147,7 @@ type CurrentNodeController struct {
 	runner    CurrentNodePublicationRunner
 	steerer   CurrentNodeAssignmentSteerer
 	authority *sessionruntime.Authority
-	permit    *MutationPermit
+	mutations *TaskMutationCoordinator
 	attention CurrentNodeAttentionLifecycle
 
 	agentConcurrency int
@@ -180,7 +190,6 @@ func NewCurrentNodeController(
 		ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 		PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 		ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-		ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
 		InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 		RecoverExecutableCurrentNodes(context.Context, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) ([]workflow.CurrentNodeReference, error)
@@ -191,7 +200,7 @@ func NewCurrentNodeController(
 	},
 	runner CurrentNodePublicationRunner,
 	authority *sessionruntime.Authority,
-	permit *MutationPermit,
+	mutations *TaskMutationCoordinator,
 	cfg CurrentNodeControllerConfig,
 ) (*CurrentNodeController, error) {
 	if store == nil {
@@ -206,8 +215,8 @@ func NewCurrentNodeController(
 	if authority == nil {
 		return nil, errors.New("session runtime authority is required")
 	}
-	if permit == nil {
-		return nil, errors.New("workflow mutation permit is required")
+	if mutations == nil {
+		return nil, errors.New("task mutation coordinator is required")
 	}
 	if cfg.AgentConcurrency <= 0 {
 		return nil, errors.New("workflow agent concurrency must be positive")
@@ -218,7 +227,7 @@ func NewCurrentNodeController(
 		runner:                runner,
 		steerer:               cfg.AssignmentSteerer,
 		authority:             authority,
-		permit:                permit,
+		mutations:             mutations,
 		attention:             cfg.Attention,
 		agentConcurrency:      cfg.AgentConcurrency,
 		workerContext:         workerContext,
@@ -387,7 +396,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	var starts []currentNodeQueuedStart
 	var settledStarts []currentNodeQueuedStart
 	var pending []*pendingCurrentNodeAssignmentSteer
-	err = c.permit.Run(ctx, func(ctx context.Context) error {
+	err = c.runTaskMutation(ctx, workflowRef.CurrentNode.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		operation := c.operations[key]
 		if operation == nil || operation.ref.OperationID != workflowRef.OperationID || operation.completion != nil {
@@ -519,7 +528,7 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 	}
 	var phase currentNodePostTurnFinalization
 	shutdown := false
-	if err := c.permit.Run(context.WithoutCancel(ctx), func(context.Context) error {
+	if err := c.runPostTurnTaskMutation(context.WithoutCancel(ctx), operationRef.CurrentNode.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.closed || c.closing {
@@ -594,7 +603,7 @@ func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(
 
 	settleCtx := context.WithoutCancel(ctx)
 	var starts []currentNodeQueuedStart
-	if err := c.permit.Run(settleCtx, func(context.Context) error {
+	if err := c.runPostTurnTaskMutation(settleCtx, operationRef.CurrentNode.TaskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		operation := c.operations[key]
@@ -690,7 +699,7 @@ func (c *CurrentNodeController) FailCurrentNodeScope(
 		return err
 	}
 	reference := workflowRef.CurrentNode
-	if err := c.permit.Run(ctx, func(ctx context.Context) error {
+	if err := c.runTaskMutation(ctx, reference.TaskID, func(ctx context.Context) error {
 		return c.authority.WithExactExecutions([]sessionruntime.ExecutionHandle{handle}, func() error {
 			c.mu.Lock()
 			operation := c.operations[key]
@@ -805,7 +814,7 @@ func (c *CurrentNodeController) releaseSettledCurrentNodeStarts(starts []current
 	if needsAssignmentSteer {
 		steered, steerErr := c.steerStartsAssignments(waitCtx, starts)
 		if steerErr != nil {
-			c.handleCurrentNodeStartFailures(steered, false, steerErr)
+			c.handleCurrentNodeStartFailures(automaticFailureRecoveryStarts(starts, steered), false, steerErr)
 			return
 		}
 		starts = steered
@@ -816,7 +825,7 @@ func (c *CurrentNodeController) releaseSettledCurrentNodeStarts(starts []current
 			c.continueCurrentNodeAssignmentStarts(starts, nil)
 			return
 		}
-		c.handleCurrentNodeStartFailures(outcome.committed, false, outcome.err)
+		c.handleCurrentNodeStartFailures(automaticFailureRecoveryStarts(starts, outcome.committed), false, outcome.err)
 		return
 	}
 	c.enqueueStarts(starts)
@@ -828,7 +837,7 @@ func (c *CurrentNodeController) releaseSettledCurrentNodeStarts(starts []current
 func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workflow.CurrentNodeReference) error {
 	ctx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
 	defer cancel()
-	interrupted, err := RunMutation(ctx, c.permit, func(ctx context.Context) (bool, error) {
+	interrupted, err := runCurrentNodeTaskMutation(ctx, c, reference.TaskID, func(ctx context.Context) (bool, error) {
 		c.mu.Lock()
 		closed := c.closed || c.closing
 		c.mu.Unlock()
@@ -866,50 +875,48 @@ func (c *CurrentNodeController) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closing = true
+	runningPreparations := append([]*taskPreparationBatch(nil), c.preparationRunning...)
+	for _, batch := range runningPreparations {
+		batch.cancel(preparationShutdownCause())
+	}
+	c.mu.Unlock()
 	c.workerCancel()
+	c.lifecycleBarrier.Lock()
 	var (
-		startedShutdown     bool
-		queuedPreparations  []*taskPreparationBatch
-		runningPreparations []*taskPreparationBatch
-		workflowExecutions  []sessionruntime.WorkflowExecutionRef
+		queuedPreparations []*taskPreparationBatch
+		workflowExecutions []sessionruntime.WorkflowExecutionRef
 	)
-	if err := c.permit.Run(context.Background(), func(context.Context) error {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.closed {
-			return nil
+	c.mu.Lock()
+	c.closed = true
+	c.closing = false
+	queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
+	c.preparationQueue = nil
+	c.explicitQueue = nil
+	c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
+	c.automaticQueue.clear()
+	c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
+	workflowExecutions = make([]sessionruntime.WorkflowExecutionRef, 0, len(c.operations))
+	for _, operation := range c.operations {
+		c.releaseAgentCapacityLocked(operation.agentCapacityLease)
+		c.interrupts.finishOperation(operation.ref.OperationID)
+		if operation.workflow != nil {
+			workflowExecutions = append(workflowExecutions, *operation.workflow)
 		}
-		startedShutdown = true
-		c.closed = true
-		queuedPreparations = append([]*taskPreparationBatch(nil), c.preparationQueue...)
-		c.preparationQueue = nil
-		runningPreparations = append([]*taskPreparationBatch(nil), c.preparationRunning...)
-		c.explicitQueue = nil
-		c.explicitQueued = make(map[workflow.CurrentNodeReferenceKey]struct{})
-		c.automaticQueue.clear()
-		c.queued = make(map[workflow.CurrentNodeReferenceKey]struct{})
-		workflowExecutions = make([]sessionruntime.WorkflowExecutionRef, 0, len(c.operations))
-		for _, operation := range c.operations {
-			c.releaseAgentCapacityLocked(operation.agentCapacityLease)
-			c.interrupts.finishOperation(operation.ref.OperationID)
-			if operation.workflow != nil {
-				workflowExecutions = append(workflowExecutions, *operation.workflow)
-			}
-		}
-		c.operations = make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation)
-		for _, batch := range queuedPreparations {
-			closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
-		}
-		for _, batch := range runningPreparations {
-			batch.cancel(preparationShutdownCause())
-		}
-		return nil
-	}); err != nil {
-		return err
 	}
-	if !startedShutdown {
-		return nil
+	c.operations = make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation)
+	for _, batch := range queuedPreparations {
+		closeQueuedTaskPreparationBatch(batch, preparationShutdownCause())
 	}
+	c.mu.Unlock()
+	c.lifecycleBarrier.Unlock()
 
 	handles := make([]sessionruntime.ExecutionHandle, 0, len(workflowExecutions))
 	for _, workflowRef := range workflowExecutions {
@@ -935,6 +942,101 @@ func (c *CurrentNodeController) Close() error {
 	workerErr := c.workerErr
 	c.mu.Unlock()
 	return errors.Join(errors.Join(stopErrs...), workerErr)
+}
+
+func (c *CurrentNodeController) runTaskMutation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	operation func(context.Context) error,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	active, _ := ctx.Value(currentNodeLifecycleContextKey{}).(*CurrentNodeController)
+	if active == c {
+		return c.mutations.Run(ctx, taskID, operation)
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed := c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return errors.New("current node workflow controller is closed")
+	}
+	return c.mutations.Run(ctx, taskID, func(ctx context.Context) error {
+		return operation(context.WithValue(ctx, currentNodeLifecycleContextKey{}, c))
+	})
+}
+
+func (c *CurrentNodeController) runPostTurnTaskMutation(
+	ctx context.Context,
+	taskID workflow.TaskID,
+	operation func(context.Context) error,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	active, _ := ctx.Value(currentNodeLifecycleContextKey{}).(*CurrentNodeController)
+	if active == c {
+		return c.mutations.Run(ctx, taskID, operation)
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	return c.mutations.Run(ctx, taskID, func(ctx context.Context) error {
+		return operation(context.WithValue(ctx, currentNodeLifecycleContextKey{}, c))
+	})
+}
+
+func (c *CurrentNodeController) runTaskMutations(
+	ctx context.Context,
+	taskIDs []workflow.TaskID,
+	operation func(context.Context) error,
+) error {
+	if c == nil {
+		return errors.New("current node workflow controller is required")
+	}
+	unique := make([]workflow.TaskID, 0, len(taskIDs))
+	seen := make(map[workflow.TaskID]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		if _, exists := seen[taskID]; exists {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		unique = append(unique, taskID)
+	}
+	active, _ := ctx.Value(currentNodeLifecycleContextKey{}).(*CurrentNodeController)
+	if active == c {
+		return c.mutations.RunMany(ctx, unique, operation)
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed := c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return errors.New("current node workflow controller is closed")
+	}
+	return c.mutations.RunMany(ctx, unique, func(ctx context.Context) error {
+		return operation(context.WithValue(ctx, currentNodeLifecycleContextKey{}, c))
+	})
+}
+
+type currentNodeLifecycleContextKey struct{}
+
+func runCurrentNodeTaskMutation[T any](
+	ctx context.Context,
+	controller *CurrentNodeController,
+	taskID workflow.TaskID,
+	operation func(context.Context) (T, error),
+) (T, error) {
+	var result T
+	err := controller.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
+		var err error
+		result, err = operation(ctx)
+		return err
+	})
+	return result, err
 }
 
 func (c *CurrentNodeController) requireLiveScope(scopeID runtimeids.ExecutionScopeID) error {

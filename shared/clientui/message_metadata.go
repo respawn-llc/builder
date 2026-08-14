@@ -30,6 +30,7 @@ const (
 	MessageTypeHeadlessMode                   MessageType = "headless_mode"
 	MessageTypeHeadlessModeExit               MessageType = "headless_mode_exit"
 	MessageTypeWorkflowMode                   MessageType = "workflow_mode"
+	MessageTypeWorkflowModeExit               MessageType = "workflow_mode_exit"
 	MessageTypeWorktreeMode                   MessageType = "worktree_mode"
 	MessageTypeWorktreeModeExit               MessageType = "worktree_mode_exit"
 	MessageTypeGoal                           MessageType = "goal"

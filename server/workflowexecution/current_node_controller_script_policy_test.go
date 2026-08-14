@@ -408,7 +408,7 @@ func TestExecutionFinalizationDoesNotMakeUnassignedHeldSuccessorResumable(t *tes
 		},
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
-	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: steerer,
 	})

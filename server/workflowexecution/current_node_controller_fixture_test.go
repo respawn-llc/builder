@@ -24,6 +24,7 @@ import (
 	"core/shared/config"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
+	"core/shared/textutil"
 )
 
 func newCurrentNodeControllerForTest(
@@ -47,7 +48,7 @@ func newCurrentNodeControllerWithAttentionForTest(
 	t.Helper()
 	controller, err := NewCurrentNodeController(store, currentNodeTestPublicationRunner{
 		runner: runner, authority: authority,
-	}, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	}, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  concurrency,
 		Attention:         attention,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
@@ -63,13 +64,13 @@ func newCurrentNodeControllerWithConfigForTest(
 	store *currentNodeControllerStore,
 	runner currentNodeTestRunner,
 	authority *sessionruntime.Authority,
-	permit *MutationPermit,
+	mutations *TaskMutationCoordinator,
 	cfg CurrentNodeControllerConfig,
 ) *CurrentNodeController {
 	t.Helper()
 	controller, err := NewCurrentNodeController(store, currentNodeTestPublicationRunner{
 		runner: runner, authority: authority,
-	}, authority, permit, cfg)
+	}, authority, mutations, cfg)
 	if err != nil {
 		t.Fatalf("new current node controller: %v", err)
 	}
@@ -599,6 +600,7 @@ type currentNodeControllerStore struct {
 	interruptStarted      chan struct{}
 	interruptRelease      chan struct{}
 	interruptOnce         sync.Once
+	interruptionErr       error
 	idleResolved          *workflow.CurrentNode
 	idleResolvedSequence  []workflow.CurrentNode
 }
@@ -751,6 +753,9 @@ func (s *currentNodeControllerStore) ResumeCurrentNode(_ context.Context, refere
 }
 
 func (s *currentNodeControllerStore) InterruptAdmittedCurrentNode(_ context.Context, reference workflow.CurrentNodeReference, reason workflow.CurrentNodeInterruptionReason, detail workflow.CurrentNodeInterruptionDetail) error {
+	if s.interruptionErr != nil {
+		return s.interruptionErr
+	}
 	key, err := reference.Key()
 	if err != nil {
 		return err
@@ -1068,7 +1073,9 @@ func (f currentNodeQuestionFixture) startAgentExecutionWithClient(
 	settings.ModelContextWindow = 200_000
 	settings.Reviewer.Frequency = "off"
 	plan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings: settings,
+		Settings:              settings,
+		QuestionsEnabled:      textutil.Value(true),
+		AutoCompactionEnabled: textutil.Value(true),
 		FilesystemContext: func() askquestion.FilesystemContext {
 			context, err := runtimewire.NewFilesystemContext(f.cfg.WorkspaceRoot, f.cfg.WorkspaceRoot, metadata.ProjectWorkspaceBoundary{ProjectID: "test"})
 			if err != nil {

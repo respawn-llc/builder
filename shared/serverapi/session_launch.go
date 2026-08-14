@@ -262,14 +262,17 @@ func (r *SessionPlanRequest) UnmarshalJSON(data []byte) error {
 }
 
 type SessionPlan struct {
-	SessionID           string              `json:"session_id"`
-	ActiveSettings      config.Settings     `json:"active_settings"`
-	EnabledToolIDs      []string            `json:"enabled_tool_ids,omitempty"`
-	ConfiguredModelName string              `json:"configured_model_name,omitempty"`
-	SessionName         *string             `json:"session_name"`
-	PromptHistory       []string            `json:"prompt_history,omitempty"`
-	ModelContractLocked bool                `json:"model_contract_locked,omitempty"`
-	Source              config.SourceReport `json:"source"`
+	SessionID                string              `json:"session_id"`
+	ActiveSettings           config.Settings     `json:"active_settings"`
+	EnabledToolIDs           []string            `json:"enabled_tool_ids,omitempty"`
+	ConfiguredModelName      string              `json:"configured_model_name,omitempty"`
+	SessionName              *string             `json:"session_name"`
+	PromptHistory            []string            `json:"prompt_history,omitempty"`
+	ModelContractLocked      bool                `json:"model_contract_locked,omitempty"`
+	QuestionsEnabled         bool                `json:"questions_enabled"`
+	AutoCompactionEnabled    bool                `json:"auto_compaction_enabled"`
+	ThinkingOverrideExplicit bool                `json:"thinking_override_explicit"`
+	Source                   config.SourceReport `json:"source"`
 }
 
 func (p SessionPlan) Validate() error {

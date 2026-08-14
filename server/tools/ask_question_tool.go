@@ -404,10 +404,15 @@ func (t *AskQuestionTool) Call(ctx context.Context, c Call) (Result, error) {
 	if condensedErr != nil {
 		return Result{}, condensedErr
 	}
-	return Result{
+	result := Result{
 		CallID: c.ID, Name: c.Name, Output: body,
 		CondensedText: textutil.OptionalExactString(condensed),
-	}, nil
+	}
+	if answer, ok := resolution.(AskQuestionAnswer); ok {
+		answerCopy := answer
+		result.QuestionAnswer = &answerCopy
+	}
+	return result, nil
 }
 
 // ShouldSkipRemainingQuestionBatch reports whether prepared ask_question

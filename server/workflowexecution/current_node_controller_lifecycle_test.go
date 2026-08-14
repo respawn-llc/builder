@@ -80,7 +80,7 @@ func TestResumeTaskReturnsConflictBeforeMutationWhenRetainedSessionExecutionIsAc
 	}
 }
 
-func TestPostTurnCompactionReleasesMutationPermitWhileApprovalFenceIsActive(t *testing.T) {
+func TestPostTurnCompactionReleasesTaskMutationLaneWhileApprovalFenceIsActive(t *testing.T) {
 	source := currentNodeReferenceForControllerTest(t, "task-post-turn-fence", "node-source")
 	controller, operationRef, sessionID := newPostTurnFinalizationControllerForReferenceTest(
 		t,
@@ -323,7 +323,7 @@ func newPostTurnFinalizationControllerForReferenceTest(
 	}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	controller := &CurrentNodeController{
-		permit:     NewMutationPermit(),
+		mutations:  NewTaskMutationCoordinator(),
 		authority:  authority,
 		operations: make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation),
 	}
@@ -599,7 +599,7 @@ func TestCurrentNodeControllerSteersApprovalTargetBeforeStartingIt(t *testing.T)
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	steerer := &recordingCurrentNodeAssignmentSteerer{}
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: steerer,
 	})
@@ -642,7 +642,7 @@ func TestCurrentNodeControllerDoesNotMakeUnassignedApprovalTargetResumable(t *te
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
 	cause := errors.New("assignment append failed")
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{err: cause},
 	})
@@ -805,7 +805,7 @@ func TestCurrentNodeControllerHoldsSuccessorUntilSourceScopeRetires(t *testing.T
 		started: make(chan workflow.CurrentNodeReference, 4),
 	}
 	assignmentDeadline := make(chan time.Time, 1)
-	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller = newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: deadlineRecordingCurrentNodeAssignmentSteerer{
 			reference: successor,

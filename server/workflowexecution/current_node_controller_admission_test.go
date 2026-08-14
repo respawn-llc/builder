@@ -176,6 +176,38 @@ func TestCurrentNodeAdmissionCommitCertainty(t *testing.T) {
 	_ = classifyCurrentNodeAdmission(session.CommitReceipt{}, errors.New("commit result unavailable"))
 }
 
+func TestAutomaticCurrentNodeStartFailureIsProcessFatalWhenInterruptionCannotPersist(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-automatic-fatal", "node-successor")
+	startFailure := errors.New("automatic successor assignment failed")
+	interruptionFailure := errors.New("current node interruption persistence failed")
+	controller := &CurrentNodeController{
+		store:     &currentNodeControllerStore{interruptionErr: interruptionFailure},
+		mutations: NewTaskMutationCoordinator(),
+	}
+
+	defer func() {
+		recovered := recover()
+		fatal, ok := recovered.(*CurrentNodeAutomaticInterruptionPersistencePanic)
+		if !ok {
+			t.Fatalf("recovered panic = %#v, want automatic interruption persistence panic", recovered)
+		}
+		if fatal.Operation != "ready_start" ||
+			!fatal.Reference.Equal(reference) ||
+			fatal.ExpectedScheduling != workflow.CurrentNodeSchedulingReady ||
+			!errors.Is(fatal.OriginalFailure, startFailure) ||
+			!errors.Is(fatal.InterruptionFailure, interruptionFailure) {
+			t.Fatalf("fatal panic = %+v, want exact automatic successor failure", fatal)
+		}
+		var processFatal interface{ ProcessFatalPanic() } = fatal
+		processFatal.ProcessFatalPanic()
+	}()
+
+	controller.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{
+		reference: reference,
+		policy:    currentNodeAdmissionAutomaticAgent,
+	}}, false, startFailure)
+}
+
 func TestCurrentNodeControllerRunnerFailuresInterruptAdmittedCurrentNode(t *testing.T) {
 	for name, cause := range map[string]error{
 		"ordinary failure":         errors.New("provider unavailable"),
@@ -224,7 +256,7 @@ func TestCurrentNodeControllerExecutionLossBeforeAdmissionInterruptsReadyCurrent
 	attention := &currentNodeAttentionRecorder{}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		Attention:        attention,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
@@ -466,7 +498,7 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &countingCurrentNodeRunner{}
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewMutationPermit(), CurrentNodeControllerConfig{
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, NewTaskMutationCoordinator(), CurrentNodeControllerConfig{
 		AgentConcurrency: 1,
 		AssignmentSteerer: &recordingCurrentNodeAssignmentSteerer{
 			err: errors.New("Resume must not steer an assignment"),
@@ -895,8 +927,8 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 		entered: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	permit := NewMutationPermit()
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, permit, CurrentNodeControllerConfig{
+	taskMutations := NewTaskMutationCoordinator()
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
@@ -933,7 +965,7 @@ func TestCurrentNodeControllerStartTaskPublishesAdmissionOwnershipBeforeDeleteCa
 	}
 	deleteCheck := make(chan error, 1)
 	go func() {
-		deleteCheck <- permit.Run(context.Background(), func(context.Context) error {
+		deleteCheck <- taskMutations.Run(context.Background(), taskID, func(context.Context) error {
 			return controller.EnsureTaskQuiescent(taskID)
 		})
 	}()
@@ -977,8 +1009,8 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	}}}
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	runner := &blockingCurrentNodeRunner{entered: make(chan struct{}), release: make(chan struct{})}
-	permit := NewMutationPermit()
-	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, permit, CurrentNodeControllerConfig{
+	taskMutations := NewTaskMutationCoordinator()
+	controller := newCurrentNodeControllerWithConfigForTest(t, store, runner, authority, taskMutations, CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: noOpCurrentNodeAssignmentSteerer{},
 	})
@@ -1025,12 +1057,12 @@ func TestCurrentNodeControllerStartTaskReturnsBeforePreparation(t *testing.T) {
 	<-preparationStarted
 	permitAvailable := make(chan error, 1)
 	go func() {
-		permitAvailable <- permit.Run(context.Background(), func(context.Context) error { return nil })
+		permitAvailable <- taskMutations.Run(context.Background(), workflow.TaskID("unrelated-task"), func(context.Context) error { return nil })
 	}()
 	select {
 	case err := <-permitAvailable:
 		if err != nil {
-			t.Fatalf("unrelated mutation permit: %v", err)
+			t.Fatalf("unrelated Task mutation lane: %v", err)
 		}
 	case <-time.After(250 * time.Millisecond):
 		t.Fatal("preparation blocked unrelated workflow mutations")

@@ -69,15 +69,18 @@ type Store struct {
 }
 
 type sessionMetadataDocument struct {
-	WorkspaceRoot                   string                         `json:"workspace_root"`
-	WorkspaceContainer              string                         `json:"workspace_container"`
-	ConversationEstablished         bool                           `json:"conversation_established"`
-	PromptCacheLineageGeneration    int                            `json:"prompt_cache_lineage_generation"`
-	HeadlessActive                  bool                           `json:"headless_active"`
-	CompactionSoonReminderIssued    bool                           `json:"compaction_soon_reminder_issued"`
-	GeneratedRecoveredWarningIssued bool                           `json:"generated_recovered_warning_issued"`
-	WorktreeReminder                *session.WorktreeReminderState `json:"worktree_reminder"`
-	Goal                            *session.GoalState             `json:"goal"`
+	WorkspaceRoot                   string                                 `json:"workspace_root"`
+	WorkspaceContainer              string                                 `json:"workspace_container"`
+	ChatSettings                    *session.ChatSettingsOverrides         `json:"chat_settings,omitempty"`
+	ConversationEstablished         bool                                   `json:"conversation_established"`
+	PromptCacheLineageGeneration    int                                    `json:"prompt_cache_lineage_generation"`
+	HeadlessActive                  bool                                   `json:"headless_active"`
+	CompactionSoonReminderIssued    bool                                   `json:"compaction_soon_reminder_issued"`
+	GeneratedRecoveredWarningIssued bool                                   `json:"generated_recovered_warning_issued"`
+	WorktreeReminder                *session.WorktreeReminderState         `json:"worktree_reminder"`
+	Goal                            *session.GoalState                     `json:"goal"`
+	ActiveWorkflowAssignment        *session.MessageRecord                 `json:"active_workflow_assignment,omitempty"`
+	ActiveWorkflowAssignmentState   *session.ActiveWorkflowAssignmentState `json:"active_workflow_assignment_state,omitempty"`
 }
 
 var (
@@ -259,7 +262,67 @@ func (s *Store) AuthoritativeSessionStoreOptions() []session.StoreOption {
 	return []session.StoreOption{
 		session.WithPersistenceObserver(sessionObserver{store: s}),
 		session.WithPersistedSessionResolver(s),
+		session.WithSessionContextFactWriter(s),
 	}
+}
+
+func (s *Store) WorkspaceChatMaterializationStoreOptions(workspaceID string) []session.StoreOption {
+	if s == nil {
+		return nil
+	}
+	return []session.StoreOption{
+		session.WithPersistenceObserver(workspaceChatMaterializationObserver{
+			store:       s,
+			workspaceID: strings.TrimSpace(workspaceID),
+		}),
+		session.WithPersistedSessionResolver(s),
+		session.WithSessionContextFactWriter(s),
+	}
+}
+
+func (s *Store) WriteSessionContextFacts(ctx context.Context, sessionID string, facts session.SessionContextFacts) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	if facts.CompletedCompactionCount == nil || facts.ManualCompactEligible == nil {
+		return errors.New("complete Session Context facts are required")
+	}
+	rows, err := s.queries.UpdateSessionContextFacts(ctx, sqlitegen.UpdateSessionContextFactsParams{
+		CompletedCompactionCount: sql.NullInt64{Int64: int64(*facts.CompletedCompactionCount), Valid: true},
+		ManualCompactEligible:    sql.NullInt64{Int64: boolToInt64(*facts.ManualCompactEligible), Valid: true},
+		SessionID:                strings.TrimSpace(sessionID),
+	})
+	if err != nil {
+		return fmt.Errorf("update Session Context facts: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func (s *Store) WriteManualCompactEligibility(ctx context.Context, sessionID string, eligible bool) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	rows, err := s.queries.UpdateSessionManualCompactEligibility(ctx, sqlitegen.UpdateSessionManualCompactEligibilityParams{
+		ManualCompactEligible: sql.NullInt64{Int64: boolToInt64(eligible), Valid: true},
+		SessionID:             strings.TrimSpace(sessionID),
+	})
+	if err != nil {
+		return fmt.Errorf("update Session manual-Compact eligibility: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) EnsureWorkspaceBinding(ctx context.Context, workspaceRoot string) (Binding, error) {
@@ -2430,6 +2493,81 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session snapshot import tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.upsertSessionSnapshotWithQueries(
+		ctx,
+		s.queries.WithTx(tx),
+		snapshot,
+		sessionSnapshotUpsertOptions{},
+	); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session snapshot import tx: %w", err)
+	}
+	return nil
+}
+
+type sessionSnapshotUpsertOptions struct {
+	workspaceID        string
+	forceLaunchVisible bool
+}
+
+func (s *Store) upsertWorkspaceChatMaterializationSnapshot(
+	ctx context.Context,
+	workspaceID string,
+	snapshot session.PersistedStoreSnapshot,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	trimmedWorkspaceID := strings.TrimSpace(workspaceID)
+	if trimmedWorkspaceID == "" {
+		return errors.New("workspace id is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin workspace Chat materialization tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	q := s.queries.WithTx(tx)
+	if err := s.upsertSessionSnapshotWithQueries(
+		ctx,
+		q,
+		snapshot,
+		sessionSnapshotUpsertOptions{
+			workspaceID:        trimmedWorkspaceID,
+			forceLaunchVisible: true,
+		},
+	); err != nil {
+		return err
+	}
+	rows, err := q.ReplaceWorkspaceChatDraft(ctx, sqlitegen.ReplaceWorkspaceChatDraftParams{
+		ChatDraftJson: sql.NullString{},
+		ID:            trimmedWorkspaceID,
+	})
+	if err != nil {
+		return fmt.Errorf("consume workspace Chat draft: %w", err)
+	}
+	if rows != 1 {
+		return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, trimmedWorkspaceID)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit workspace Chat materialization tx: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) upsertSessionSnapshotWithQueries(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	snapshot session.PersistedStoreSnapshot,
+	options sessionSnapshotUpsertOptions,
+) error {
 	category, err := nullableSessionCategory(snapshot.Meta.SessionID, snapshot.Meta.Category)
 	if err != nil {
 		return err
@@ -2441,6 +2579,11 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		}
 		snapshot.Meta.Continuation = continuation
 	}
+	chatSettings, err := session.NormalizeChatSettingsOverrides(snapshot.Meta.ChatSettings)
+	if err != nil {
+		return fmt.Errorf("validate session Chat settings: %w", err)
+	}
+	snapshot.Meta.ChatSettings = chatSettings
 	relpath, err := relativePathWithinRoot(s.persistenceRoot, snapshot.SessionDir)
 	if err != nil {
 		return err
@@ -2457,12 +2600,6 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin session snapshot import tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
 		return fmt.Errorf("lock session snapshot import: %w", err)
 	}
@@ -2476,7 +2613,41 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	persistedWorktreeReminder := snapshot.Meta.WorktreeReminder
 	worktreeID := sql.NullString{}
 	cwdRelpath := "."
-	if targetErr == nil {
+	if options.workspaceID != "" {
+		workspace, err := q.GetWorkspaceByID(ctx, options.workspaceID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: %q", serverapi.ErrWorkspaceNotRegistered, options.workspaceID)
+		}
+		if err != nil {
+			return fmt.Errorf("get materialization workspace: %w", err)
+		}
+		sameRoot, err := canonicalWorkspaceRootsEqual(snapshot.Meta.WorkspaceRoot, workspace.CanonicalRootPath)
+		if err != nil {
+			return err
+		}
+		if !sameRoot ||
+			(targetErr == nil &&
+				(existingTarget.ProjectID != workspace.ProjectID ||
+					existingTarget.WorkspaceID != workspace.ID)) {
+			return fmt.Errorf(
+				"%w: workspace %q same_root=%t session %q",
+				serverapi.ErrWorkspaceNotRegistered,
+				options.workspaceID,
+				sameRoot,
+				strings.TrimSpace(snapshot.Meta.SessionID),
+			)
+		}
+		binding = bindingFromWorkspaceFields(
+			workspace.ProjectID,
+			"",
+			"",
+			workspace.ID,
+			workspace.CanonicalRootPath,
+		)
+		workspaceRoot = workspace.CanonicalRootPath
+		workspaceContainer = filepath.Base(workspace.CanonicalRootPath)
+		persistedWorktreeReminder = nil
+	} else if targetErr == nil {
 		binding.ProjectID = existingTarget.ProjectID
 		binding.WorkspaceID = existingTarget.WorkspaceID
 		authoritativeRoot := strings.TrimSpace(existingTarget.WorkspaceRoot)
@@ -2509,6 +2680,7 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 	metadataJSON, err := marshalJSON(sessionMetadataDocument{
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
+		ChatSettings:                    snapshot.Meta.ChatSettings,
 		ConversationEstablished:         snapshot.Meta.ConversationEstablished,
 		PromptCacheLineageGeneration:    snapshot.Meta.PromptCacheLineageGeneration,
 		HeadlessActive:                  snapshot.Meta.HeadlessActive,
@@ -2516,43 +2688,58 @@ func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.Pers
 		GeneratedRecoveredWarningIssued: snapshot.Meta.GeneratedRecoveredWarningIssued,
 		WorktreeReminder:                persistedWorktreeReminder,
 		Goal:                            snapshot.Meta.Goal,
+		ActiveWorkflowAssignment:        snapshot.Meta.ActiveWorkflowAssignment,
+		ActiveWorkflowAssignmentState:   snapshot.Meta.ActiveWorkflowAssignmentState,
 	})
 	if err != nil {
 		return err
 	}
 	launchVisible := int64(0)
-	if sessionLaunchVisible(snapshot.Meta) {
+	if options.forceLaunchVisible || sessionLaunchVisible(snapshot.Meta) {
 		launchVisible = 1
 	}
 	if err := q.UpsertSession(ctx, sqlitegen.UpsertSessionParams{
-		ID:                   snapshot.Meta.SessionID,
-		ProjectID:            binding.ProjectID,
-		WorkspaceID:          sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
-		WorktreeID:           worktreeID,
-		ArtifactRelpath:      relpath,
-		Name:                 snapshot.Meta.Name,
-		FirstPromptPreview:   snapshot.Meta.FirstPromptPreview,
-		InputDraft:           snapshot.Meta.InputDraft,
-		PreviousSessionID:    nullableSessionID(snapshot.Meta.PreviousSessionID),
-		ParentAgentSessionID: nullableSessionID(snapshot.Meta.ParentAgentSessionID),
-		Category:             category,
-		CreatedAtUnixMs:      snapshot.Meta.CreatedAt.UTC().UnixMilli(),
-		UpdatedAtUnixMs:      snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
-		LastSequence:         snapshot.Meta.LastSequence,
-		ModelRequestCount:    snapshot.Meta.ModelRequestCount,
-		LaunchVisible:        launchVisible,
-		CwdRelpath:           cwdRelpath,
-		ContinuationJson:     continuationJSON,
-		LockedJson:           lockedJSON,
-		UsageStateJson:       usageStateJSON,
-		MetadataJson:         metadataJSON,
+		ID:                       snapshot.Meta.SessionID,
+		ProjectID:                binding.ProjectID,
+		WorkspaceID:              sql.NullString{String: binding.WorkspaceID, Valid: strings.TrimSpace(binding.WorkspaceID) != ""},
+		WorktreeID:               worktreeID,
+		ArtifactRelpath:          relpath,
+		Name:                     snapshot.Meta.Name,
+		FirstPromptPreview:       snapshot.Meta.FirstPromptPreview,
+		InputDraft:               snapshot.Meta.InputDraft,
+		PreviousSessionID:        nullableSessionID(snapshot.Meta.PreviousSessionID),
+		ParentAgentSessionID:     nullableSessionID(snapshot.Meta.ParentAgentSessionID),
+		Category:                 category,
+		CreatedAtUnixMs:          snapshot.Meta.CreatedAt.UTC().UnixMilli(),
+		UpdatedAtUnixMs:          snapshot.Meta.UpdatedAt.UTC().UnixMilli(),
+		LastSequence:             snapshot.Meta.LastSequence,
+		ModelRequestCount:        snapshot.Meta.ModelRequestCount,
+		LaunchVisible:            launchVisible,
+		CwdRelpath:               cwdRelpath,
+		ContinuationJson:         continuationJSON,
+		LockedJson:               lockedJSON,
+		UsageStateJson:           usageStateJSON,
+		MetadataJson:             metadataJSON,
+		CompletedCompactionCount: nullableContextFactInt(snapshot.ContextFacts.CompletedCompactionCount),
+		ManualCompactEligible:    nullableContextFactBool(snapshot.ContextFacts.ManualCompactEligible),
 	}); err != nil {
 		return fmt.Errorf("upsert session snapshot: %w", err)
 	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit session snapshot import tx: %w", err)
-	}
 	return nil
+}
+
+func nullableContextFactInt(value *int) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*value), Valid: true}
+}
+
+func nullableContextFactBool(value *bool) sql.NullInt64 {
+	if value == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: boolToInt64(*value), Valid: true}
 }
 
 func canonicalWorkspaceRootsEqual(left string, right string) (bool, error) {
@@ -2699,6 +2886,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
 		Continuation:                    continuation,
+		ChatSettings:                    metadataPayload.ChatSettings,
 		CreatedAt:                       timeFromStoredTimestamp(row.CreatedAtUnixMs),
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,
@@ -2710,6 +2898,8 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		GeneratedRecoveredWarningIssued: metadataPayload.GeneratedRecoveredWarningIssued,
 		WorktreeReminder:                metadataPayload.WorktreeReminder,
 		Goal:                            metadataPayload.Goal,
+		ActiveWorkflowAssignment:        metadataPayload.ActiveWorkflowAssignment,
+		ActiveWorkflowAssignmentState:   metadataPayload.ActiveWorkflowAssignmentState,
 		UsageState:                      usageState,
 		Locked:                          locked,
 	}, nil
@@ -2983,6 +3173,11 @@ type sessionObserver struct {
 	store *Store
 }
 
+type workspaceChatMaterializationObserver struct {
+	store       *Store
+	workspaceID string
+}
+
 func (o sessionObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
 	if o.store == nil {
 		return nil
@@ -2995,4 +3190,11 @@ func (o sessionObserver) ObserveEventLogReconciliation(ctx context.Context, reco
 		return nil
 	}
 	return o.store.reconcileSessionEventLog(ctx, reconciliation)
+}
+
+func (o workspaceChatMaterializationObserver) ObservePersistedStore(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
+	if o.store == nil {
+		return errors.New("metadata store is required")
+	}
+	return o.store.upsertWorkspaceChatMaterializationSnapshot(ctx, o.workspaceID, snapshot)
 }

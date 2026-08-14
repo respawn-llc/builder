@@ -2,6 +2,7 @@ package workflowexecution
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -17,6 +18,31 @@ const (
 	explicitAdmissionConcurrency                                               = 8
 	reasonCurrentNodeRuntimeStartFailed workflow.CurrentNodeInterruptionReason = "workflow_runtime_start_failed"
 )
+
+type CurrentNodeAutomaticInterruptionPersistencePanic struct {
+	Operation           string
+	Reference           workflow.CurrentNodeReference
+	ExpectedScheduling  workflow.CurrentNodeSchedulingState
+	OriginalFailure     error
+	InterruptionFailure error
+}
+
+func (p *CurrentNodeAutomaticInterruptionPersistencePanic) Error() string {
+	if p == nil {
+		return "automatic Current Node interruption persistence failed"
+	}
+	return fmt.Sprintf(
+		"automatic Current Node interruption persistence failed operation=%q task_id=%q current_node=%v expected_scheduling=%q original_failure=%v interruption_failure=%v",
+		p.Operation,
+		p.Reference.TaskID,
+		p.Reference,
+		p.ExpectedScheduling,
+		p.OriginalFailure,
+		p.InterruptionFailure,
+	)
+}
+
+func (*CurrentNodeAutomaticInterruptionPersistencePanic) ProcessFatalPanic() {}
 
 type currentNodeAdmissionPolicy uint8
 
@@ -268,7 +294,7 @@ func (c *CurrentNodeController) admitPreparedScript(
 	defer publication.Cancel()
 	var handle sessionruntime.ExecutionHandle
 	var launch func()
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.runTaskMutation(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(start.reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -361,7 +387,7 @@ func (c *CurrentNodeController) admitPreparedAgent(
 	}()
 	var handle sessionruntime.ExecutionHandle
 	var launch func()
-	err := c.permit.Run(ctx, func(ctx context.Context) error {
+	err := c.runTaskMutation(ctx, start.reference.TaskID, func(ctx context.Context) error {
 		c.mu.Lock()
 		if err := c.ensureTaskAvailableLocked(start.reference.TaskID); err != nil {
 			c.mu.Unlock()
@@ -638,7 +664,7 @@ func (c *CurrentNodeController) continueCurrentNodeAssignmentStarts(
 		}
 		cause := errors.Join(priorErr, outcome.err)
 		if cause != nil {
-			c.handleCurrentNodeStartFailures(outcome.committed, false, cause)
+			c.handleCurrentNodeStartFailures(automaticFailureRecoveryStarts(starts, outcome.committed), false, cause)
 			return
 		}
 		c.enqueueStarts(starts)
@@ -796,7 +822,7 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		if !errors.As(err, &failure) {
 			failure = currentNodeAdmissionError{cause: err}
 		}
-		c.handleAdmissionFailure(start.reference, failure.admitted, failure.cause)
+		c.handleAdmissionFailure(start, failure.admitted, failure.cause)
 	}
 }
 
@@ -953,8 +979,8 @@ func (c *CurrentNodeController) finishAdmissionWorker(start currentNodeQueuedSta
 	}
 }
 
-func (c *CurrentNodeController) handleAdmissionFailure(reference workflow.CurrentNodeReference, admitted bool, cause error) {
-	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{{reference: reference}}, admitted, cause)
+func (c *CurrentNodeController) handleAdmissionFailure(start currentNodeQueuedStart, admitted bool, cause error) {
+	c.handleCurrentNodeStartFailures([]currentNodeQueuedStart{start}, admitted, cause)
 }
 
 func (c *CurrentNodeController) handleCurrentNodeStartFailures(
@@ -985,7 +1011,11 @@ func (c *CurrentNodeController) recoverCurrentNodeStartFailures(
 	admitted bool,
 	cause error,
 ) error {
-	return c.permit.Run(ctx, func(ctx context.Context) error {
+	taskIDs := make([]workflow.TaskID, 0, len(starts))
+	for _, start := range starts {
+		taskIDs = append(taskIDs, start.reference.TaskID)
+	}
+	return c.runTaskMutations(ctx, taskIDs, func(ctx context.Context) error {
 		return c.interruptCurrentNodeStartFailures(ctx, starts, admitted, cause)
 	})
 }
@@ -996,10 +1026,6 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	admitted bool,
 	cause error,
 ) error {
-	references := make([]workflow.CurrentNodeReference, 0, len(starts))
-	for _, start := range starts {
-		references = append(references, start.reference)
-	}
 	interrupt := c.store.InterruptCurrentNode
 	if admitted {
 		interrupt = c.store.InterruptAdmittedCurrentNode
@@ -1012,17 +1038,71 @@ func (c *CurrentNodeController) interruptCurrentNodeStartFailures(
 	if errors.As(cause, &preparationErr) {
 		detail = preparationErr.InterruptionDetail()
 	}
-	interrupted, err := interruptCurrentNodeReferences(
-		ctx,
-		interrupt,
-		references,
-		reasonCurrentNodeRuntimeStartFailed,
-		detail,
-	)
-	for _, reference := range interrupted {
-		c.publishPendingInterruptedCurrentNode(ctx, reference, reasonCurrentNodeRuntimeStartFailed)
+	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(starts))
+	var interruptErrs []error
+	for _, start := range starts {
+		key, err := start.reference.Key()
+		if err != nil {
+			return err
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		err = interrupt(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed, detail)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			if start.policy.isAutomatic() {
+				operation := "ready_start"
+				expectedScheduling := workflow.CurrentNodeSchedulingReady
+				if admitted {
+					operation = "admitted_start"
+					expectedScheduling = workflow.CurrentNodeSchedulingAdmitted
+				}
+				panicCurrentNodeAutomaticInterruptionPersistence(
+					operation,
+					start,
+					expectedScheduling,
+					cause,
+					err,
+				)
+			}
+			interruptErrs = append(interruptErrs, err)
+			continue
+		}
+		c.publishPendingInterruptedCurrentNode(ctx, start.reference, reasonCurrentNodeRuntimeStartFailed)
 	}
-	return err
+	return errors.Join(interruptErrs...)
+}
+
+func automaticFailureRecoveryStarts(
+	starts []currentNodeQueuedStart,
+	committed []currentNodeQueuedStart,
+) []currentNodeQueuedStart {
+	for _, start := range starts {
+		if start.policy.isAutomatic() {
+			return starts
+		}
+	}
+	return committed
+}
+
+func panicCurrentNodeAutomaticInterruptionPersistence(
+	operation string,
+	start currentNodeQueuedStart,
+	expectedScheduling workflow.CurrentNodeSchedulingState,
+	originalFailure error,
+	interruptionFailure error,
+) {
+	panic(&CurrentNodeAutomaticInterruptionPersistencePanic{
+		Operation:           operation,
+		Reference:           start.reference,
+		ExpectedScheduling:  expectedScheduling,
+		OriginalFailure:     originalFailure,
+		InterruptionFailure: interruptionFailure,
+	})
 }
 
 func automaticQueuedStarts(intents []CurrentNodeAutomaticIntent) []currentNodeQueuedStart {

@@ -291,6 +291,12 @@ func routeSessionID(params any) (string, bool) {
 	switch p := params.(type) {
 	case protocol.AttachSessionRequest:
 		return p.SessionID, true
+	case serverapi.ChatContextRequest:
+		sessionID, selected := p.Target.SessionID()
+		if !selected {
+			return "", true
+		}
+		return sessionID.String(), true
 	case serverapi.SessionMainViewRequest:
 		return p.SessionID, true
 	case serverapi.SessionTranscriptPageRequest:
@@ -382,6 +388,8 @@ func routeSessionID(params any) (string, bool) {
 	case serverapi.ApprovalListPendingBySessionRequest:
 		return p.SessionID, true
 	case serverapi.TranscriptSubscribeRequest:
+		return p.SessionID, true
+	case serverapi.QuestionHistorySubscribeRequest:
 		return p.SessionID, true
 	case serverapi.AttentionSessionNotificationSubscribeRequest:
 		return p.SessionID, true

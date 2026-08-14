@@ -2,6 +2,7 @@ package startup
 
 import (
 	"context"
+	"strings"
 
 	"core/server/auth"
 	"core/server/authservice"
@@ -85,12 +86,31 @@ func startCoreWithBootstrap(ctx context.Context, bootstrapReq serverbootstrap.Re
 	if err != nil {
 		return nil, err
 	}
-	appCore, err := core.NewWithContext(ctx, cfg, authSupport, runtimeSupport)
+	appCore, err := core.NewWithContextOptions(
+		ctx,
+		cfg,
+		authSupport,
+		runtimeSupport,
+		coreOptionsForBootstrap(bootstrapReq, nil),
+	)
 	if err != nil {
 		_ = runtimeSupport.Background.Close()
 		return nil, err
 	}
 	return appCore, nil
+}
+
+func coreOptionsForBootstrap(req serverbootstrap.Request, rootLease *core.RootLockLease) core.Options {
+	loadOptions := req.LoadOptions
+	if req.OpenAIBaseURLExplicit {
+		loadOptions.OpenAIBaseURL = strings.TrimSpace(req.OpenAIBaseURL)
+	} else {
+		loadOptions.OpenAIBaseURL = ""
+	}
+	return core.Options{
+		RootLease:                  rootLease,
+		WorkspaceConfigLoadOptions: loadOptions,
+	}
 }
 
 func buildRequest(req Request, authHandler AuthHandler) serverbootstrap.Request {

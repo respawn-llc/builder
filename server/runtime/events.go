@@ -43,6 +43,7 @@ const (
 	EventBackgroundUpdated          EventKind = "background_updated"
 	EventSleepGuardFailed           EventKind = "sleep_guard_failed"
 	EventPromptHistoryPersistFailed EventKind = "prompt_history_persist_failed"
+	EventContextFactsPersistFailed  EventKind = "context_facts_persist_failed"
 	EventGoalStatusUpdated          EventKind = "goal_status_updated"
 	EventQueuedUserMessageStatus    EventKind = "queued_user_message_status"
 	EventHumanInputInterrupted      EventKind = "human_input_interrupted"

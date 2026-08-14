@@ -6,18 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/metadata"
 	"core/shared/apicontract"
-	"core/shared/invariant"
 	"core/shared/llmerrors"
 	"core/shared/protocol"
 	"core/shared/rpcwire"
@@ -39,7 +37,6 @@ const canceledByClientMessage = "request canceled by client"
 type Gateway struct {
 	deps     GatewayDependencies
 	identity protocol.ServerIdentity
-	debug    bool
 }
 
 type GatewayDependencies interface {
@@ -89,12 +86,16 @@ type GatewayProjectDependencies interface {
 
 type GatewaySessionDependencies interface {
 	SessionBelongsToProject(context.Context, string, string) error
+	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
 	SessionTranscriptClient() apicontract.SessionTranscriptService
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	WorkspaceChatContextOwnerForProjectWorkspace(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	WorkspaceChatContextOwnerForProjectWorkspaceID(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	SessionChatContextOwner() chatcontext.SessionOwner
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
 	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
 }
@@ -152,27 +153,6 @@ type gatewayRequestSchedule struct {
 	progressRoute apicontract.Route
 }
 
-const gatewayOrdinaryRequestOperation = "gateway.ordinary_request"
-
-type gatewayRequestPanicDiagnostic struct {
-	Operation string
-	Method    string
-	RequestID string
-	Cause     any
-	Stack     string
-}
-
-func (p gatewayRequestPanicDiagnostic) Error() string {
-	return fmt.Sprintf(
-		"gateway request panic operation=%q method=%q request_id=%q cause=%v\nstack:\n%s",
-		p.Operation,
-		p.Method,
-		p.RequestID,
-		p.Cause,
-		p.Stack,
-	)
-}
-
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
 func RuntimeLiveControlRoutesExecutable() bool {
@@ -216,6 +196,7 @@ type gatewaySubscriptionHandler func(g *Gateway, conn rpcwire.Conn, ctx context.
 var gatewaySubscriptionHandlerEntries = map[string]gatewaySubscriptionHandler{
 	protocol.MethodSessionSubscribeTranscript:            (*Gateway).serveSessionTranscriptSubscription,
 	protocol.MethodProcessSubscribeOutput:                (*Gateway).serveProcessOutputSubscription,
+	protocol.MethodSessionQuestionHistorySubscribe:       (*Gateway).serveQuestionHistorySubscription,
 	protocol.MethodAttentionNotificationSubscribe:        (*Gateway).serveAttentionNotificationSubscription,
 	protocol.MethodAttentionSessionNotificationSubscribe: (*Gateway).serveSessionAttentionNotificationSubscription,
 	protocol.MethodPromptFollowUpWatch:                   (*Gateway).servePromptFollowUpSubscription,
@@ -257,11 +238,7 @@ func NewGateway(deps GatewayDependencies, identity protocol.ServerIdentity) (*Ga
 	if strings.TrimSpace(identity.ProtocolVersion) == "" {
 		return nil, errors.New("server identity is required")
 	}
-	debugMode := invariant.NewPolicy().Mode() == invariant.ModePanic
-	if debugDeps, ok := deps.(interface{ DebugEnabled() bool }); ok {
-		debugMode = debugMode || debugDeps.DebugEnabled()
-	}
-	return &Gateway{deps: deps, identity: identity, debug: debugMode}, nil
+	return &Gateway{deps: deps, identity: identity}, nil
 }
 
 func isNilGatewayDependencies(deps GatewayDependencies) bool {
@@ -382,28 +359,6 @@ func (g *Gateway) serveGatewayRequest(conn rpcwire.Conn, ctx context.Context, st
 }
 
 func (g *Gateway) serveOrdinaryGatewayRequest(conn rpcwire.Conn, ctx context.Context, state *connectionState, req protocol.Request, schedule gatewayRequestSchedule, stop func()) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			stack := string(debug.Stack())
-			slog.Error(
-				"gateway request handler panicked",
-				"method", req.Method,
-				"request_id", req.ID,
-				"panic", recovered,
-				"stack", stack,
-			)
-			stop()
-			if g.debug {
-				panic(gatewayRequestPanicDiagnostic{
-					Operation: gatewayOrdinaryRequestOperation,
-					Method:    req.Method,
-					RequestID: req.ID,
-					Cause:     recovered,
-					Stack:     stack,
-				})
-			}
-		}
-	}()
 	if !g.serveGatewayRequest(conn, ctx, state, req, schedule) {
 		stop()
 	}

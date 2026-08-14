@@ -1,7 +1,10 @@
 package serverstatus
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"core/internal/testharness/httpclient"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -24,9 +27,34 @@ func TestGitHubReleaseMetadataSourceReturnsValidatedRelease(t *testing.T) {
 	}
 }
 
+func TestDefaultGitHubReleaseMetadataSourceNegotiatesAndDecodesCompressedResponse(t *testing.T) {
+	var acceptEncoding string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		acceptEncoding = r.Header.Get("Accept-Encoding")
+		var compressed bytes.Buffer
+		writer := gzip.NewWriter(&compressed)
+		_, _ = writer.Write([]byte(`{"tag_name":"v1.2.3"}`))
+		_ = writer.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		_, _ = w.Write(compressed.Bytes())
+	}))
+	defer server.Close()
+
+	metadata, err := newGitHubReleaseMetadataSource(nil, server.URL).LatestRelease(context.Background())
+	if err != nil {
+		t.Fatalf("LatestRelease: %v", err)
+	}
+	if metadata.Version != "1.2.3" {
+		t.Fatalf("version = %q, want 1.2.3", metadata.Version)
+	}
+	if acceptEncoding != "zstd,gzip" {
+		t.Fatalf("Accept-Encoding = %q, want zstd,gzip", acceptEncoding)
+	}
+}
+
 func TestGitHubReleaseMetadataSourceClassifiesTransportFailure(t *testing.T) {
 	cause := errors.New("network unavailable")
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: httpclient.RoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, cause
 	})}
 
@@ -61,10 +89,4 @@ func TestGitHubReleaseMetadataSourceBoundsInvalidMetadata(t *testing.T) {
 	if !errors.As(err, &metadataError) {
 		t.Fatalf("error = %v, want metadata error", err)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
 }

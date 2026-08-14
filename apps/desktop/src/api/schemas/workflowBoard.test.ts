@@ -5,6 +5,8 @@ import {
   taskMovePreviewResponseSchema,
   workflowBoardSchema,
 } from "./workflowBoard";
+import { boardColumnSchema } from "./common";
+import { taskListPageSchema } from "./projectTasks";
 
 const workspace = {
   workspace_id: "workspace-default",
@@ -70,6 +72,46 @@ const card = {
 };
 
 describe("workflow board schemas", () => {
+  it("rejects invalid task-list groups", () => {
+    const input = {
+      scope: { project_id: "project-1" },
+      matching_workflow_cardinality: "none",
+      generated_at_unix_ms: 1,
+      tasks: [],
+    };
+    expect(() => taskListPageSchema.parse({ ...input, group: "future" })).toThrow();
+  });
+
+  it("preserves explicit nullable Node Group membership", () => {
+    const column = {
+      node: {
+        node_id: "10000000-0000-4000-8000-000000000001",
+        key: "backlog",
+        kind: "start",
+        display_name: "Backlog",
+        assignee_role: "",
+        output_fields: [],
+      },
+      group_id: null,
+      sort_order: 0,
+      is_backlog: true,
+      is_done: false,
+      task_count: 0,
+    };
+
+    expect(boardColumnSchema.parse(column).groupID).toBeNull();
+    expect(
+      boardColumnSchema.parse({
+        ...column,
+        group_id: "20000000-0000-4000-8000-000000000001",
+      }).groupID,
+    ).toBe("20000000-0000-4000-8000-000000000001");
+    expect(() => boardColumnSchema.parse({ ...column, group_id: "" })).toThrow();
+    const missing = { ...column };
+    Reflect.deleteProperty(missing, "group_id");
+    expect(() => boardColumnSchema.parse(missing)).toThrow();
+  });
+
   it("preserves pending-ask recommendation presence and rejects invalid indexes", () => {
     const pendingAsk = {
       PromptID: "ask-1",
@@ -193,17 +235,17 @@ describe("workflow board schemas", () => {
       throw new Error("expected base choice");
     }
     const parsed = taskMovePreviewResponseSchema.parse({
-        ...base,
-        transition: {
-          ...base.transition,
-          choices: [
-            {
-              ...baseChoice,
-              required_values: [{ ...baseChoice.required_values[0], description: null }],
-            },
-          ],
-        },
-      });
+      ...base,
+      transition: {
+        ...base.transition,
+        choices: [
+          {
+            ...baseChoice,
+            required_values: [{ ...baseChoice.required_values[0], description: null }],
+          },
+        ],
+      },
+    });
     if (parsed.outcome !== "transition") {
       throw new Error("expected transition preview");
     }

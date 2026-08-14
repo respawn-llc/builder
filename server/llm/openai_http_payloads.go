@@ -180,6 +180,31 @@ func (openAIRequestPayloadBuilder) BuildCompact(request OpenAICompactionRequest)
 	return out, nil
 }
 
+func (b openAIRequestPayloadBuilder) BuildCompactV2(request OpenAICompactionRequest) (responses.ResponseNewParams, error) {
+	if strings.TrimSpace(request.Model) == "" {
+		return responses.ResponseNewParams{}, fmt.Errorf("compaction model is required")
+	}
+	input, err := buildResponsesInput(request.InputItems)
+	if err != nil {
+		return responses.ResponseNewParams{}, err
+	}
+	trigger := responses.NewResponseInputItemCompactionTriggerParam()
+	input = append(input, responses.ResponseInputItemUnionParam{OfCompactionTrigger: &trigger})
+	out := responses.ResponseNewParams{
+		Model:             request.Model,
+		Store:             openai.Bool(b.store),
+		ParallelToolCalls: openai.Bool(false),
+		ToolChoice: responses.ResponseNewParamsToolChoiceUnion{
+			OfToolChoiceMode: openai.Opt(responses.ToolChoiceOptionsAuto),
+		},
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
+	}
+	if instructions := strings.TrimSpace(request.Instructions); instructions != "" {
+		out.Instructions = openai.String(instructions)
+	}
+	return out, nil
+}
+
 func (b openAIRequestPayloadBuilder) buildTools(requestTools []Tool, enableNativeWebSearch bool) ([]responses.ToolUnionParam, error) {
 	tools := make([]responses.ToolUnionParam, 0, len(requestTools)+1)
 	for _, tool := range requestTools {

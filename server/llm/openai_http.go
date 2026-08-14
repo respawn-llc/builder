@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,7 @@ import (
 	"core/server/auth"
 	"core/shared/config"
 	"core/shared/llmerrors"
+	"core/shared/textutil"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -92,10 +92,12 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	providerCaps := t.providerCapabilitiesForVariant(variant)
+	compressionOption := requestCompressionOption(variant)
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
@@ -108,6 +110,7 @@ func (t *HTTPTransport) Generate(ctx context.Context, request OpenAIRequest) (Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -154,15 +157,17 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	providerCaps := t.providerCapabilitiesForVariant(variant)
 
 	payload, err := t.buildPayload(request, mode, providerCaps)
 	if err != nil {
 		return OpenAIResponse{}, err
 	}
+	compressionOption := requestCompressionOption(variant)
 
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
@@ -170,6 +175,7 @@ func (t *HTTPTransport) GenerateStreamWithEvents(ctx context.Context, request Op
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, compressionOption)
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 
@@ -296,53 +302,103 @@ func (t *HTTPTransport) Compact(ctx context.Context, request OpenAICompactionReq
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
+	providerCaps := t.providerCapabilitiesForVariant(variant)
+	switch variant.RemoteCompactionProtocol {
+	case remoteCompactionResponsesTriggerV2:
+		return t.compactResponsesTriggerV2(ctx, request, authHeader, mode, variant, providerCaps, windowTokens)
+	default:
+		return OpenAICompactionResponse{}, fmt.Errorf("provider %q does not support remote compaction", providerCaps.ProviderID)
+	}
+}
 
-	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, ProviderCapabilities{}).BuildCompact(request)
+func (t *HTTPTransport) compactResponsesTriggerV2(
+	ctx context.Context,
+	request OpenAICompactionRequest,
+	authHeader string,
+	mode OpenAIAuthMode,
+	variant ProviderVariantContract,
+	providerCaps ProviderCapabilities,
+	windowTokens int,
+) (OpenAICompactionResponse, error) {
+	payload, err := newOpenAIRequestPayloadBuilder(t.Store, t.ModelVerbosity, providerCaps).BuildCompactV2(request)
 	if err != nil {
 		return OpenAICompactionResponse{}, err
 	}
-
 	service := responses.NewResponseService(
 		option.WithBaseURL(t.serviceBaseURL(mode)),
-		option.WithHTTPClient(t.Client),
+		option.WithHTTPClient(t.streamingHTTPClient()),
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, requestCompressionOption(variant))
 	var rawResp *http.Response
-	var rawBody []byte
-	reqOpts = append(reqOpts,
-		option.WithResponseInto(&rawResp),
-		option.WithResponseBodyInto(&rawBody),
-	)
+	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
+	watchdog := newStreamIdleWatchdog(ctx, t.Client.Timeout)
+	defer watchdog.stop()
+	stream := service.NewStreaming(watchdog.ctx, payload, reqOpts...)
+	defer func() { _ = stream.Close() }()
 
-	decoded, err := service.Compact(ctx, payload, reqOpts...)
-	if err != nil {
-		return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "openai responses compact request failed")
-	}
-	if len(bytes.TrimSpace(rawBody)) > 0 {
-		var parsed responses.CompactedResponse
-		if err := json.Unmarshal(rawBody, &parsed); err != nil {
-			return OpenAICompactionResponse{}, fmt.Errorf("openai responses compact request failed: invalid compact response body: %w", err)
+	accumulator := newResponseStreamAccumulator(StreamCallbacks{}, windowTokens)
+	for stream.Next() {
+		watchdog.ping()
+		accumulator.Consume(stream.Current())
+		if err := accumulator.Err(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp)); err != nil {
+			return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
 		}
-		decoded = &parsed
 	}
-	if decoded == nil {
-		return OpenAICompactionResponse{}, fmt.Errorf("openai responses compact request failed: empty response")
+	if err := stream.Err(); err != nil {
+		if errors.Is(context.Cause(watchdog.ctx), ErrModelStreamStalled) {
+			return OpenAICompactionResponse{}, fmt.Errorf("model stream stalled: %w", ErrModelStreamStalled)
+		}
+		return OpenAICompactionResponse{}, newOpenAIRequestErrorMapper(providerCaps.ProviderID).Map(err, rawResp, "read responses compaction stream events")
 	}
+	if !accumulator.hasCompleted() {
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(
+			providerCaps.ProviderID,
+			newOpenAIResponseStatus(rawResp),
+			errors.New(openAIResponsesStreamEndedBeforeTerminalMessage),
+		)
+	}
+	response, err := responseFromStreamAccumulator(accumulator, providerCaps.ProviderID, rawResp)
+	if err != nil {
+		return OpenAICompactionResponse{}, err
+	}
+	checkpoint, err := requireSingleEncryptedCompactionOutput(response.OutputItems)
+	if err != nil {
+		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), err)
+	}
+	return OpenAICompactionResponse{OutputItems: []ResponseItem{checkpoint}, Usage: response.Usage}, nil
+}
 
-	outputItems, _, _, _, _, _, _, parseErr := parseOutputItems(decoded.Output)
-	if parseErr != nil {
-		return OpenAICompactionResponse{}, newOpenAIProviderContractError(providerCaps.ProviderID, newOpenAIResponseStatus(rawResp), parseErr)
+func requireSingleEncryptedCompactionOutput(items []ResponseItem) (ResponseItem, error) {
+	counts := make(map[ResponseItemType]int)
+	compactions := make([]ResponseItem, 0, 1)
+	for _, item := range items {
+		counts[item.Type]++
+		if item.Type == ResponseItemTypeCompaction {
+			compactions = append(compactions, item)
+		}
 	}
-	return OpenAICompactionResponse{
-		OutputItems:       outputItems,
-		Usage:             usageFromSDK(decoded.Usage, windowTokens),
-		TrimmedItemsCount: nil,
-	}, nil
+	if len(compactions) != 1 {
+		return ResponseItem{}, fmt.Errorf(
+			"Responses compaction V2 requires exactly one compaction output (compaction_count=%d output_count=%d types=%v)",
+			len(compactions),
+			len(items),
+			counts,
+		)
+	}
+	if _, ok := textutil.OptionalTrimmed(compactions[0].EncryptedContent); !ok {
+		return ResponseItem{}, fmt.Errorf(
+			"Responses compaction V2 compaction output is missing encrypted_content (compaction_count=1 output_count=%d types=%v)",
+			len(items),
+			counts,
+		)
+	}
+	return compactions[0], nil
 }
 
 func (t *HTTPTransport) CountRequestInputTokens(ctx context.Context, request OpenAIRequest) (int, error) {
@@ -354,10 +410,11 @@ func (t *HTTPTransport) CountRequestInputTokens(ctx context.Context, request Ope
 	if err != nil {
 		return 0, err
 	}
-	providerCaps, err := t.providerCapabilitiesForMode(mode)
+	variant, err := t.providerVariantForMode(mode)
 	if err != nil {
 		return 0, err
 	}
+	providerCaps := t.providerCapabilitiesForVariant(variant)
 
 	payload, err := t.buildInputTokenCountParams(request, providerCaps)
 	if err != nil {
@@ -370,6 +427,7 @@ func (t *HTTPTransport) CountRequestInputTokens(ctx context.Context, request Ope
 		option.WithMaxRetries(0),
 	)
 	reqOpts := t.buildRequestOptions(authHeader, mode, request.SessionID)
+	reqOpts = append(reqOpts, requestCompressionOption(variant))
 	var rawResp *http.Response
 	reqOpts = append(reqOpts, option.WithResponseInto(&rawResp))
 

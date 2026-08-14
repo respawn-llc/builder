@@ -314,6 +314,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		humanAdmissionOrdinal := e.steering.humanAdmissionOrdinal()
 
 		var reasoningSteerErr error
 		resp, err := e.generateWithMissingToolOutputRepair(
@@ -474,6 +475,14 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if _, err := s.flushPendingUserInjections(stepID, options); err != nil {
 					return stepLoopResult{}, err
 				}
+				continue
+			}
+			if e.steering.humanAdmissionOrdinal() != humanAdmissionOrdinal {
+				nextStepID, err := s.beginNextAgentStep(ctx)
+				if err != nil {
+					return stepLoopResult{}, err
+				}
+				stepID = nextStepID
 				continue
 			}
 			flushed, err := s.flushPendingUserInjections(stepID, options)
@@ -871,7 +880,6 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 }
 
 func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) error {
-	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
 	lifecycle, ok := s.engine.stepLifecycle.(*defaultExclusiveStepLifecycle)
 	if !ok {
 		return nil
@@ -880,6 +888,7 @@ func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) err
 	if current == nil {
 		return ErrActiveStepInactive
 	}
+	s.engine.persistManualCompactEligibilityBestEffort(current.StepID, true)
 	return lifecycle.closeAgentStep(current.StepID)
 }
 

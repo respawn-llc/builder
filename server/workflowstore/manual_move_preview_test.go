@@ -396,7 +396,7 @@ func TestManualMovePreviewHidesAuthorizedSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -461,7 +461,7 @@ func TestManualMoveAppliesAutomaticSoleRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -539,7 +539,7 @@ func TestManualMoveValidatesAndAppliesManyRoleSelection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,
@@ -662,7 +662,7 @@ func TestManualMoveBackwardUsesRetainedImmediateSourceSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareManualMove backward: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{Mode: workflow.ExecutionTargetModeNone, Provenance: ExecutionTargetProvenanceResolved},
 		Root:     ExecutionRoot{SourceWorkspaceID: binding.WorkspaceID, SourceWorkspaceRoot: binding.CanonicalRoot},
 	})
@@ -731,7 +731,7 @@ func TestManualMovePreviewAndApplyUsesUnscopedRetainedSessionForParallelTask(t *
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
-	moved, err := store.ApplyManualMove(ctx, prepared, &ExecutionTargetCandidate{
+	moved, err := applyManualMoveForStoreTest(t, ctx, store, prepared, &ExecutionTargetCandidate{
 		Snapshot: ExecutionTargetSnapshot{
 			Mode:       workflow.ExecutionTargetModeNone,
 			Provenance: ExecutionTargetProvenanceResolved,

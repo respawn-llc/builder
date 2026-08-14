@@ -293,14 +293,13 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 			t.Errorf("close runtime authority: %v", err)
 		}
 	})
-	permit := workflowexecution.NewMutationPermit()
+	taskMutations := workflowexecution.NewTaskMutationCoordinator()
 	dependencyCounter, err := workflowview.NewTaskDependencyCounter(metadataStore)
 	if err != nil {
 		t.Fatalf("new Task dependency counter: %v", err)
 	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
 		RuntimeAuthority:      fixture.authority,
-		MutationPermit:        permit,
 		TaskDependencies:      dependencyCounter,
 		CompletionDiagnostics: fixture.diagnostics,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
@@ -318,7 +317,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		t.Fatalf("new starter: %v", err)
 	}
 	fixture.starter = starter
-	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, permit, workflowexecution.CurrentNodeControllerConfig{
+	controller, err = workflowexecution.NewCurrentNodeController(store, starter, fixture.authority, taskMutations, workflowexecution.CurrentNodeControllerConfig{
 		AgentConcurrency:  1,
 		AssignmentSteerer: starter,
 	})
@@ -1685,7 +1684,10 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 	if err != nil {
 		t.Fatalf("open workflow Session descriptor: %v", err)
 	}
+	var questionsEnabled, autoCompactionEnabled bool
 	if err := f.authority.WithRetainedWorkflowRuntime(context.Background(), sessionID, func(_ context.Context, engine *agentruntime.Engine) error {
+		questionsEnabled = engine.QuestionsEnabled()
+		autoCompactionEnabled = engine.AutoCompactionEnabled()
 		engine.ExitRetainedWorkflowControl()
 		return nil
 	}); err != nil {
@@ -1738,11 +1740,13 @@ func TestResumeRetainsEstablishedSessionContractAndAttachedRuntime(t *testing.T)
 		t.Fatalf("workflow runtime roots = %+v, want sibling %q", interactiveFilesystemContext.Access.ProjectWorkspace.Roots, canonicalSiblingWorkspace)
 	}
 	interactivePlan, err := sessionruntime.NewAgentRuntimePlan(sessionruntime.AgentRuntimePlanOptions{
-		Settings:          initialRuntime.ActiveSettings,
-		EnabledTools:      initialRuntime.EnabledTools,
-		FilesystemContext: interactiveFilesystemContext,
-		Sources:           initialRuntime.Sources,
-		Client:            f.client,
+		Settings:              initialRuntime.ActiveSettings,
+		EnabledTools:          initialRuntime.EnabledTools,
+		FilesystemContext:     interactiveFilesystemContext,
+		Sources:               initialRuntime.Sources,
+		QuestionsEnabled:      textutil.Value(questionsEnabled),
+		AutoCompactionEnabled: textutil.Value(autoCompactionEnabled),
+		Client:                f.client,
 	})
 	if err != nil {
 		t.Fatalf("build attached Session runtime: %v", err)

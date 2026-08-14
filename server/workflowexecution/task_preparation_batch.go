@@ -139,33 +139,37 @@ func (c *CurrentNodeController) runTaskPreparationBatch(batch *taskPreparationBa
 	defer close(batch.done)
 	c.lifecycleBarrier.RLock()
 	defer c.lifecycleBarrier.RUnlock()
+	lifecycleCtx := context.WithValue(batch.ctx, currentNodeLifecycleContextKey{}, c)
 	c.mu.Lock()
 	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if closed {
-		c.finishCanceledTaskPreparationBatch(batch)
+		c.finishCanceledTaskPreparationBatch(lifecycleCtx, batch)
 		return
 	}
-	if err := batch.preparation.Prepare(batch.ctx); err != nil {
-		if batch.ctx.Err() != nil {
-			c.finishCanceledTaskPreparationBatch(batch)
+	if err := batch.preparation.Prepare(lifecycleCtx); err != nil {
+		if lifecycleCtx.Err() != nil {
+			c.finishCanceledTaskPreparationBatch(lifecycleCtx, batch)
 			return
 		}
-		c.finishFailedTaskPreparationBatch(batch, err)
+		c.finishFailedTaskPreparationBatch(lifecycleCtx, batch, err)
 		return
 	}
-	c.finishPreparedTaskPreparationBatch(batch)
+	c.finishPreparedTaskPreparationBatch(lifecycleCtx, batch)
 }
 
-func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(batch *taskPreparationBatch) {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+func (c *CurrentNodeController) finishPreparedTaskPreparationBatch(
+	lifecycleCtx context.Context,
+	batch *taskPreparationBatch,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(lifecycleCtx), interruptCleanupTimeout)
 	defer cancel()
 	var (
 		interrupted []workflow.CurrentNodeReference
 		commitErr   error
 		canceled    bool
 	)
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.runTaskMutation(cleanupCtx, batch.taskID, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
 			c.mu.Lock()
 			if c.runningTaskPreparationLocked(batch.taskID) == batch {
@@ -240,14 +244,18 @@ func (c *CurrentNodeController) handoffTaskPreparationBatch(batch *taskPreparati
 	return nil
 }
 
-func (c *CurrentNodeController) finishFailedTaskPreparationBatch(batch *taskPreparationBatch, cause error) {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+func (c *CurrentNodeController) finishFailedTaskPreparationBatch(
+	lifecycleCtx context.Context,
+	batch *taskPreparationBatch,
+	cause error,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(lifecycleCtx), interruptCleanupTimeout)
 	defer cancel()
 	var (
 		interrupted []workflow.CurrentNodeReference
 		canceled    bool
 	)
-	persistenceErr := c.permit.Run(cleanupCtx, func(ctx context.Context) error {
+	persistenceErr := c.runTaskMutation(cleanupCtx, batch.taskID, func(ctx context.Context) error {
 		if batch.ctx.Err() != nil {
 			c.mu.Lock()
 			if c.runningTaskPreparationLocked(batch.taskID) == batch {
@@ -344,10 +352,13 @@ func (c *CurrentNodeController) publishFailedTaskPreparationBatch(
 	c.wakeAdmissionWorker()
 }
 
-func (c *CurrentNodeController) finishCanceledTaskPreparationBatch(batch *taskPreparationBatch) {
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), interruptCleanupTimeout)
+func (c *CurrentNodeController) finishCanceledTaskPreparationBatch(
+	lifecycleCtx context.Context,
+	batch *taskPreparationBatch,
+) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(lifecycleCtx), interruptCleanupTimeout)
 	defer cancel()
-	retireErr := c.permit.Run(cleanupCtx, func(context.Context) error {
+	retireErr := c.runTaskMutation(cleanupCtx, batch.taskID, func(context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.runningTaskPreparationLocked(batch.taskID) != batch {

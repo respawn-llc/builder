@@ -14,8 +14,11 @@ type MutationLaneRegistry[K comparable] struct {
 }
 
 type mutationLaneEntry struct {
-	token chan struct{}
-	refs  int
+	mu        sync.Mutex
+	changed   chan struct{}
+	readers   int
+	exclusive bool
+	refs      int
 }
 
 // MutationLaneLease owns one key's mutation lane until Release is called.
@@ -23,6 +26,7 @@ type MutationLaneLease[K comparable] struct {
 	registry *MutationLaneRegistry[K]
 	key      K
 	entry    *mutationLaneEntry
+	shared   bool
 	released bool
 }
 
@@ -31,6 +35,16 @@ func NewMutationLaneRegistry[K comparable]() *MutationLaneRegistry[K] {
 }
 
 func (r *MutationLaneRegistry[K]) Acquire(ctx context.Context, key K) (*MutationLaneLease[K], error) {
+	return r.acquire(ctx, key, false)
+}
+
+// AcquireShared allows operations for the same key to overlap while remaining
+// mutually exclusive with ordinary Acquire callers.
+func (r *MutationLaneRegistry[K]) AcquireShared(ctx context.Context, key K) (*MutationLaneLease[K], error) {
+	return r.acquire(ctx, key, true)
+}
+
+func (r *MutationLaneRegistry[K]) acquire(ctx context.Context, key K, shared bool) (*MutationLaneLease[K], error) {
 	if r == nil {
 		return nil, errors.New("mutation lane registry is required")
 	}
@@ -43,20 +57,17 @@ func (r *MutationLaneRegistry[K]) Acquire(ctx context.Context, key K) (*Mutation
 	}
 	entry := r.entries[key]
 	if entry == nil {
-		entry = &mutationLaneEntry{token: make(chan struct{}, 1)}
-		entry.token <- struct{}{}
+		entry = &mutationLaneEntry{changed: make(chan struct{})}
 		r.entries[key] = entry
 	}
 	entry.refs++
 	r.mu.Unlock()
 
-	select {
-	case <-ctx.Done():
+	if err := entry.acquire(ctx, shared); err != nil {
 		r.releaseReference(key, entry)
-		return nil, ctx.Err()
-	case <-entry.token:
+		return nil, err
 	}
-	return &MutationLaneLease[K]{registry: r, key: key, entry: entry}, nil
+	return &MutationLaneLease[K]{registry: r, key: key, entry: entry, shared: shared}, nil
 }
 
 func (l *MutationLaneLease[K]) Release() {
@@ -69,12 +80,48 @@ func (l *MutationLaneLease[K]) Release() {
 		panic(fmt.Sprintf("release mutation lane lease invariant violated: key=%v released twice", l.key))
 	}
 	l.released = true
-	select {
-	case l.entry.token <- struct{}{}:
-	default:
-		panic(fmt.Sprintf("release mutation lane lease invariant violated: key=%v token already available", l.key))
-	}
+	l.entry.release(l.shared)
 	l.registry.releaseReferenceLocked(l.key, l.entry)
+}
+
+func (e *mutationLaneEntry) acquire(ctx context.Context, shared bool) error {
+	for {
+		e.mu.Lock()
+		if (shared && !e.exclusive) || (!shared && !e.exclusive && e.readers == 0) {
+			if shared {
+				e.readers++
+			} else {
+				e.exclusive = true
+			}
+			e.mu.Unlock()
+			return nil
+		}
+		changed := e.changed
+		e.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+func (e *mutationLaneEntry) release(shared bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if shared {
+		if e.readers <= 0 {
+			panic("release shared mutation lane invariant violated")
+		}
+		e.readers--
+	} else {
+		if !e.exclusive {
+			panic("release exclusive mutation lane invariant violated")
+		}
+		e.exclusive = false
+	}
+	close(e.changed)
+	e.changed = make(chan struct{})
 }
 
 func (r *MutationLaneRegistry[K]) releaseReference(key K, entry *mutationLaneEntry) {

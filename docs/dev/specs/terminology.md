@@ -190,6 +190,8 @@ A workflow executable node that runs a local executable on the Kent server inste
 
 The model, provider, generation settings, enabled tools, and native web-search mode that a Session uses for one contract generation. These values stay fixed until a product operation creates a new contract generation. `compact_and_continue_session` establishes a fresh target-node generation when that target starts, including when the selected history was compacted eagerly after an earlier assignment completed. Ordinary compaction can refresh system and reviewer instructions within the existing contract generation. Developer context remains part of the transcript.
 
+The automatic-compaction threshold and Compaction Mode are activation policy, not Session Contract fields. A Session preserves its context window and provider-capability facts across runs for continuity, but those facts and the activation policy do not independently invalidate prompt caches or rotate cache lineage.
+
 ### Runtime Parameter Contract
 
 The possible and required Transition Parameters for an executable Current Node. Kent derives this contract from the latest Workflow definition when work starts or resumes. Kent does not retain an obsolete contract as execution history.
@@ -197,6 +199,14 @@ The possible and required Transition Parameters for an executable Current Node. 
 ### Session
 
 A durable Kent conversation associated with an Agent Node on a Task and, during parallel work, its Transition Branch Key. A Task can retain many Sessions because of loops, parallel branches, retries, or Context-Preservation choices. Script Nodes have no Session.
+
+### Compaction Mode
+
+The implementation used to compact a Session's context. The modes are disabled, local, and provider-native.
+
+### Compaction Trigger
+
+The condition or request that initiates compaction, such as a manual request, automatic threshold, pre-submit requirement, handoff, or Workflow post-completion requirement.
 
 ### Node Transition
 

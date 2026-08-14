@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"core/server/auth"
-	"core/server/runtime"
+	"core/server/session"
 	"core/shared/config"
+	"core/shared/serverapi"
 	"core/shared/toolspec"
 )
 
@@ -17,7 +18,7 @@ func draftSettings(model, thinking string) config.Settings {
 	return s
 }
 func draftInput(s config.Settings) WorkspaceChatDraftResolverInput {
-	return WorkspaceChatDraftResolverInput{Settings: s, AuthState: auth.EmptyState(), FastModeState: runtime.NewFastModeState(false)}
+	return WorkspaceChatDraftResolverInput{Settings: s, AuthState: auth.EmptyState()}
 }
 func addWorker(s *config.Settings, thinking string) {
 	s.Subagents = map[string]config.SubagentRole{"worker": {Settings: config.Settings{Model: "worker-model", ProviderOverride: "anthropic", ThinkingLevel: thinking, Reviewer: config.ReviewerSettings{Frequency: "all"}}, Sources: map[string]string{"model": "file", "provider_override": "file", "thinking_level": "file", "reviewer.frequency": "file"}}}
@@ -48,8 +49,68 @@ func TestWorkspaceChatDraftResolution(t *testing.T) {
 	}
 }
 
+func TestWorkspaceChatDraftDefaultFastUsesLoadedConfiguration(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	settings.PriorityRequestMode = true
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:           "openai",
+		SupportsResponsesAPI: true,
+		IsOpenAIFirstParty:   true,
+	}
+	resolved, err := ResolveWorkspaceChatDraft(draftInput(settings), nil)
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceChatDraft: %v", err)
+	}
+	if !resolved.Draft.Fast {
+		t.Fatal("workspace Chat Fast default = false, want loaded configuration value true")
+	}
+}
+
+func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *testing.T) {
+	settings := draftSettings("gpt-5.6-sol", "medium")
+	settings.EnabledTools = map[toolspec.ID]bool{toolspec.ToolExecCommand: true}
+	stored := &WorkspaceChatDraft{
+		Agent:          "default",
+		Supervisor:     "edits",
+		Thinking:       "medium",
+		Questions:      true,
+		AutoCompaction: true,
+	}
+	resolved, err := ResolveWorkspaceChatDraft(draftInput(settings), stored)
+	if err != nil {
+		t.Fatalf("ResolveWorkspaceChatDraft: %v", err)
+	}
+	if resolved.Draft.Questions {
+		t.Fatal("existing effective draft capability repair changed")
+	}
+	if !resolved.PersistedQuestionsPolicy {
+		t.Fatal("persisted Questions policy was not retained")
+	}
+	projected, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: resolved.Catalog,
+		Agent:   resolved.Draft.Agent,
+		Settings: session.ChatSettings{
+			Supervisor:     resolved.Draft.Supervisor,
+			Thinking:       resolved.Draft.Thinking,
+			Fast:           resolved.Draft.Fast,
+			Questions:      resolved.PersistedQuestionsPolicy,
+			AutoCompaction: resolved.Draft.AutoCompaction,
+		},
+		CompactionMode: resolved.CompactionMode,
+	})
+	if err != nil {
+		t.Fatalf("ProjectChatSettings: %v", err)
+	}
+	if projected.Questions.Capable || !projected.Questions.Enabled ||
+		projected.Questions.Editability != serverapi.ChatSettingsEditable {
+		t.Fatalf("Questions projection = %+v", projected.Questions)
+	}
+}
+
 type draftPersistence struct {
-	draft *WorkspaceChatDraft
+	draft  *WorkspaceChatDraft
+	reads  int
+	writes int
 }
 
 func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*WorkspaceChatDraft, error) {
@@ -60,6 +121,7 @@ func (f *draftPersistence) ReadWorkspaceChatDraft(context.Context, string) (*Wor
 	return &d, nil
 }
 func (f *draftPersistence) ReplaceWorkspaceChatDraft(_ context.Context, _ string, d *WorkspaceChatDraft) error {
+	f.writes++
 	f.draft = d
 	return nil
 }

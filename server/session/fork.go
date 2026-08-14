@@ -164,6 +164,7 @@ func streamChildFromParent(
 	if err != nil {
 		return nil, 0, err
 	}
+	child.eventLogCreationVersion = eventLogVersionPointer(parentLog.log.version)
 	keepChild := false
 	defer func() {
 		if !keepChild {
@@ -279,7 +280,7 @@ func streamReplayIntoChild(parentLog MaterializedEventLog, childLog Materialized
 			}
 			record = rebasedRecord
 		}
-		recordBytes, err := replayRecordByteSize(record)
+		recordBytes, err := replayRecordByteSizeForVersion(record, childLog.log.version)
 		if err != nil {
 			return err
 		}
@@ -339,7 +340,26 @@ func rebaseHistoryReplacementRollbackCandidate(
 }
 
 func replayRecordByteSize(record EventRecord) (int, error) {
-	encoded, err := encodeEventRecordV1(record)
+	return replayRecordByteSizeForVersion(record, EventLogVersionV1)
+}
+
+func replayRecordByteSizeForVersion(record EventRecord, version int) (int, error) {
+	payload, err := record.Payload()
+	if err != nil {
+		return 0, err
+	}
+	payload, err = projectEventPayloadForVersion(version, payload)
+	if err != nil {
+		return 0, err
+	}
+	projected, err := newEventRecord(record.Seq(), record.StepID(), payload, record.CommittedAtUnixMs())
+	if err != nil && version == EventLogVersionV1 {
+		projected, err = newEventRecord(record.Seq(), record.StepID(), payload, nil)
+	}
+	if err != nil {
+		return 0, err
+	}
+	encoded, err := encodeEventRecordForVersion(version, projected)
 	if err != nil {
 		return 0, fmt.Errorf("encode replay record %d for bounded chunking: %w", record.Seq(), err)
 	}
@@ -435,16 +455,18 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 		sourceMeta = source.Meta()
 	}
 	child.mutationMu.Lock()
-	defer child.mutationMu.Unlock()
 	child.mu.Lock()
-	defer child.mu.Unlock()
 	if child.persisted {
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return fmt.Errorf("session creation context is immutable after durability")
 	}
 	child.meta.PreviousSessionID = nil
 	child.meta.ParentAgentSessionID = nil
 	if kind == SessionCreationSourceIndependent {
 		child.meta.UpdatedAt = time.Now().UTC()
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return nil
 	}
 	if opts.InheritLockedContract {
@@ -463,6 +485,8 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 	}
 	sourceID, err := runtimeids.ParseSessionID(sourceMeta.SessionID)
 	if err != nil {
+		child.mu.Unlock()
+		child.mutationMu.Unlock()
 		return fmt.Errorf("invalid creation source session id: %w", err)
 	}
 	switch kind {
@@ -481,6 +505,12 @@ func InitializeCreationContext(child *Store, source *Store, kind SessionCreation
 		child.meta.Continuation = nil
 	}
 	child.meta.UpdatedAt = time.Now().UTC()
+	child.initialContextFacts = SessionContextFacts{}
+	child.mu.Unlock()
+	child.contextFactsMu.Lock()
+	child.contextFacts = SessionContextFacts{}
+	child.contextFactsMu.Unlock()
+	child.mutationMu.Unlock()
 	return nil
 }
 

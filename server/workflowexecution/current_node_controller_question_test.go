@@ -275,7 +275,7 @@ func TestCurrentNodeControllerAnswersOnlyDurablyBoundExactPromptScope(t *testing
 	}
 }
 
-func TestCurrentNodeControllerReleasesMutationPermitAfterAcceptingAnswer(t *testing.T) {
+func TestCurrentNodeControllerReleasesTaskMutationLaneAfterAcceptingAnswer(t *testing.T) {
 	fixture := newCurrentNodeQuestionFixture(t)
 	reference := currentNodeReferenceForControllerTest(t, "task-question-permit", "node-question")
 	firstID := uuid.NewString()

@@ -111,7 +111,11 @@ export { Toaster } from "./Sonner";
 export { Popover, PopoverClose, PopoverContent, PopoverTrigger } from "./radix/popover";
 export { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./radix/tooltip";
 export { dismissStatusToast, showStatusToast } from "./statusToast";
-export { VirtualizedInfiniteList } from "./VirtualizedInfiniteList";
+export {
+  VirtualizedInfiniteList,
+  type VirtualizedInfiniteListProps,
+  type VirtualizedItemVisibilityTrigger,
+} from "./VirtualizedInfiniteList";
 export {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,

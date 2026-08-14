@@ -598,6 +598,9 @@ func protocolError(resp *protocol.ResponseError) error {
 	if resp.Code == protocol.ErrCodePromptCommands && len(resp.Data) > 0 {
 		return serverapi.DecodePromptCommandError(resp.Data, message)
 	}
+	if resp.Code == protocol.ErrCodeChatSettingsAgentPreparation {
+		return serverapi.DecodeChatSettingsAgentPreparationError(resp.Data, message)
+	}
 	if resp.Code == protocol.ErrCodeRequestCanceled {
 		return requestCanceledError{message: message}
 	}

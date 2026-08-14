@@ -215,7 +215,7 @@ func newReducerPostTurnOperationForTest(
 ) (*CurrentNodeController, workflow.CurrentNodeOperationRef, runtimeids.SessionID, workflow.CurrentNodeReferenceKey) {
 	t.Helper()
 	controller := &CurrentNodeController{
-		permit:              NewMutationPermit(),
+		mutations:           NewTaskMutationCoordinator(),
 		operations:          make(map[workflow.CurrentNodeReferenceKey]*currentNodeOperation),
 		agentCapacityActive: 1,
 	}
@@ -282,7 +282,7 @@ func TestCurrentNodeOperationReducerAcceptsCompletionAndRetirementInEitherOrder(
 				sessionID: &sessionID, reference: reference,
 			}
 			controller := &CurrentNodeController{
-				permit:              NewMutationPermit(),
+				mutations:           NewTaskMutationCoordinator(),
 				operations:          map[workflow.CurrentNodeReferenceKey]*currentNodeOperation{},
 				agentCapacityActive: 1,
 			}
