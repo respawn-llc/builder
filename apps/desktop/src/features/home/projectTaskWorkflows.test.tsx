@@ -6,10 +6,10 @@ import type { WorkflowListInput, WorkflowRecord } from "@/api";
 import { projectTaskWorkflowItems, useProjectTaskWorkflowPages } from "./projectTaskWorkflows";
 
 const projectID = "project-1";
-type ProjectTaskWorkflowFixture = {
+interface ProjectTaskWorkflowFixture {
   requests: number[];
   workflows: WorkflowRecord[];
-};
+}
 
 const fixture = vi.hoisted<ProjectTaskWorkflowFixture>(() => ({
   requests: [],
