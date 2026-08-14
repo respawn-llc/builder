@@ -120,6 +120,7 @@ export type {
   TaskAttention,
   TaskCommentAuthorKind,
   CommentPage,
+  CreatedTaskSummary,
   OffsetPage,
   TaskDetail,
   TaskDependencies,

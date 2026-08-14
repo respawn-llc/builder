@@ -18,6 +18,7 @@ type TaskMutationFields = Readonly<{
   body: string;
   sourceWorkspaceID: string;
   labelIDs: readonly string[];
+  dependencyIntents: readonly TaskDependencyCreateIntent[];
 }>;
 
 export type TaskDependencyCreateIntent = Readonly<{
@@ -29,12 +30,10 @@ export type TaskMutationInput =
   | (TaskMutationFields &
       Readonly<{
         workflowID: string;
-        dependencyIntent?: TaskDependencyCreateIntent | undefined;
       }>)
   | (TaskMutationFields &
       Readonly<{
         workflowID?: undefined;
-        dependencyIntent?: undefined;
       }>);
 
 export type TaskListInput = Readonly<{

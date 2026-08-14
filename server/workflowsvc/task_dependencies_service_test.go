@@ -104,6 +104,59 @@ func TestServiceTaskDependencyMutationEventsAreTypedAndIdempotent(t *testing.T) 
 	assertNoWorkflowEvent(t, sub)
 }
 
+func TestServiceTaskCreatePublishesOneDependencyEventForEveryAffectedTask(t *testing.T) {
+	ctx, service, projectID, workflowID, _ := newWorkflowServiceOrdinaryTaskFixture(t)
+	blocked, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: projectID, WorkflowID: &workflowID, Title: "blocked", LabelIDs: []string{},
+	})
+	if err != nil {
+		t.Fatalf("create blocked: %v", err)
+	}
+	blocker, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: projectID, WorkflowID: &workflowID, Title: "blocker", LabelIDs: []string{},
+	})
+	if err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	sub, err := service.SubscribeWorkflowProject(ctx, serverapi.WorkflowProjectSubscribeRequest{ProjectID: projectID})
+	if err != nil {
+		t.Fatalf("subscribe project: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+
+	created, err := service.CreateWorkflowTask(ctx, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  projectID,
+		WorkflowID: &workflowID,
+		Title:      "mixed",
+		LabelIDs:   []string{},
+		DependencyIntents: []serverapi.WorkflowTaskDependencyCreateIntent{
+			{RelatedTaskID: blocked.Task.ID, NewTaskRole: serverapi.WorkflowTaskDependencyRoleBlocker},
+			{RelatedTaskID: blocker.Task.ID, NewTaskRole: serverapi.WorkflowTaskDependencyRoleBlocked},
+		},
+	})
+	if err != nil {
+		t.Fatalf("create with dependencies: %v", err)
+	}
+	createdEvent := nextWorkflowProjectEvent(t, sub)
+	if createdEvent.Action != serverapi.WorkflowProjectEventActionCreated ||
+		createdEvent.PrimaryEntityID != created.Task.ID {
+		t.Fatalf("created event = %+v", createdEvent)
+	}
+	dependencyEvent := nextWorkflowProjectEvent(t, sub)
+	if dependencyEvent.Action != serverapi.WorkflowProjectEventActionDependenciesChanged ||
+		dependencyEvent.PrimaryEntityID != created.Task.ID {
+		t.Fatalf("dependency event = %+v", dependencyEvent)
+	}
+	gotRelated := map[string]bool{}
+	for _, taskID := range dependencyEvent.RelatedIDs {
+		gotRelated[taskID] = true
+	}
+	if len(gotRelated) != 2 || !gotRelated[blocked.Task.ID] || !gotRelated[blocker.Task.ID] {
+		t.Fatalf("dependency event related IDs = %+v, want both affected Tasks", dependencyEvent.RelatedIDs)
+	}
+	assertNoWorkflowEvent(t, sub)
+}
+
 func assertNoWorkflowEvent(t *testing.T, sub serverapi.WorkflowProjectSubscription) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)

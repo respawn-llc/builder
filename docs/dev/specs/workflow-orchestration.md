@@ -128,6 +128,9 @@
 - Kent validates and applies one relationship mutation atomically.
 - A relationship validation failure changes neither Task nor relationship
   state.
+- Task creation may request multiple incoming and outgoing Task Dependencies.
+- Kent validates Task creation and every requested Task Dependency as one operation, then atomically creates the Task and all requested relationships.
+- A validation failure during Task creation creates neither the Task nor any requested relationship.
 - Concurrent relationship additions cannot exceed either cardinality limit.
 - Typed relationship errors identify the violated rule and the affected Tasks.
 - A Task Dependency is satisfied if and only if its Blocker Task has

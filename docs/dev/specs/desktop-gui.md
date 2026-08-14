@@ -373,10 +373,14 @@
 - Dependency Add opens a compact picker with project-scoped full Task search.
 - The picker places a New Task plus action beside and after its search field, with compact existing-Task results below.
 - The picker smoothly morphs its height as search results and state feedback appear or disappear, subject to reduced-motion preference.
-- Selecting New Task pushes the ordinary New Task form with the relationship intent hidden and preconfigured.
+- Selecting New Task from Task Detail pushes the ordinary New Task form and adds the originating relationship as a removable prepared relationship.
 - Selecting an existing Task adds it in the chosen `Blocked by` or `Blocks` direction without opening Task Detail.
-- The picker excludes the open Task and Tasks already related to it.
-- Successful related-Task creation atomically creates the Task and relationship, then replaces New Task with the created Task Detail.
+- The picker remains open after an existing Task is added and removes that Task from its eligible results.
+- Reaching a direction's 50-Task limit closes its open picker and leaves the accessible disabled Add control visible.
+- The picker excludes the open Task when present and Tasks already related or prepared in the chosen direction.
+- A Task prepared in one direction remains eligible in the opposite direction; Task creation applies the ordinary reciprocal-relationship validation.
+- Desktop must dismiss the preceding New Task creation-error notification before sending each New Task creation request.
+- Successful New Task creation must only pop the current sidebar destination.
 - Back returns to the preceding sidebar destination.
 - Back is hidden at the root.
 - X closes the complete sidebar stack.
@@ -401,25 +405,31 @@
 - Relationship Remove keeps its independent availability while another Task Detail save is pending.
 - Pop out opens only the current Task and closes its originating sidebar after the separate window opens.
 - A pop-out completion from a replaced destination leaves the replacement sidebar open.
-- Each relationship row has an accessible trailing Remove action rendered as a
-  minimal uncircled red `X`.
+- Each relationship row has an accessible trailing Remove action rendered as a minimal uncircled red `X`.
 - Remove acts immediately without confirmation.
 - Dependency actions use icon-only controls outside confirmation dialogs.
 - The `Blocked by` picker's New Task action opens the ordinary New Task form for a new Blocker Task.
 - The `Blocks` picker's New Task action opens the ordinary New Task form for a new Blocked Task.
 - Related-Task creation uses the open Task's Project and Workflow.
-- Related-Task creation defaults source workspace to the open Task's source
-  workspace and keeps the ordinary source-workspace selector available.
-- The New Task form shows no dependency field, picker, relationship copy, or
-  other dependency-specific visible state.
-- Submitting related-Task creation atomically creates the Backlog Task and the
-  directed Task Dependency.
-- A related-Task creation failure creates neither Task nor relationship and
-  preserves the ordinary New Task recovery path.
-- Canceling related-Task creation creates neither Task nor relationship.
+- Related-Task creation defaults source workspace to the open Task's source workspace and keeps the ordinary source-workspace selector available.
+- Every New Task form places Dependencies immediately after Labels.
+- Desktop New Task exists only as a sidebar destination; it has no fallback dialog or separate native-window route.
+- New Task Dependencies uses the same two visible subsections, selected-row presentation, and Add controls as Task Detail.
+- New Task permits up to 50 prepared `Blocked by` Tasks and 50 prepared `Blocks` Tasks.
+- New Task labels dependency progress as a preview and derives it from the selected Blocker Task statuses available in the form without separate polling or refresh orchestration.
+- The New Task dependency picker's New Task action pushes another New Task destination without a relationship to its unsaved parent.
+- Selecting a prepared relationship row uses ordinary Task Detail sidebar navigation. When that Task is not retained, Back restores the authored New Task Draft. When that Task is already retained, including the originating Task, Desktop returns to the retained Task Detail, discards New Task and its Draft, and has no Back return to that Draft.
+- A stacked child New Task keeps Back and X available while Task creation is pending.
+- Leaving a stacked child while creation is pending does not cancel creation. A late success creates the child Task but does not navigate or add it to the restored parent Draft.
+- Canceling a stacked New Task returns to the complete parent Draft with its picker closed.
+- Successful creation of an active stacked New Task returns to the complete parent Draft with its picker closed and adds the created Task as a prepared relationship in the requested direction.
+- The restored parent Draft includes title, description, source workspace, Labels, and prepared relationships. Field validation is recomputed on the next submission.
+- Submitting New Task atomically creates the Backlog Task and every prepared directed Task Dependency.
+- A New Task creation failure creates neither Task nor any relationship, preserves the complete form, and presents the server error in a user-facing notification.
+- Canceling New Task creates neither Task nor relationship.
 - The Add control is unavailable with an accessible explanation when its
   relationship direction has reached the 50-Task limit.
-- Kent rechecks the limit when related-Task creation is submitted.
+- Kent rechecks the limit when New Task is submitted.
 - Dependency changes refresh open Task Detail and visible board cards from
   server-authoritative state.
 

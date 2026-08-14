@@ -16,6 +16,7 @@ import {
 import { workflowIDSchema } from "./schemas/workflowID";
 import type { RpcTransport } from "./transport";
 import { canonicalTaskLabelFilter } from "./workflowLabels";
+import type { CreatedTaskSummary } from "./models";
 import type {
   ProjectLabel,
   ProjectLabelCatalog,
@@ -139,7 +140,10 @@ export async function updateTaskLabels(
   );
 }
 
-export async function createTask(transport: RpcTransport, input: TaskMutationInput): Promise<string> {
+export async function createTask(
+  transport: RpcTransport,
+  input: TaskMutationInput,
+): Promise<CreatedTaskSummary> {
   try {
     const response = parse(
       "workflow.task.create",
@@ -153,17 +157,14 @@ export async function createTask(transport: RpcTransport, input: TaskMutationInp
           body: input.body,
           source_workspace_id: input.sourceWorkspaceID,
           label_ids: input.labelIDs,
-          dependency_intent:
-            input.dependencyIntent === undefined
-              ? undefined
-              : {
-                  related_task_id: input.dependencyIntent.relatedTaskID,
-                  new_task_role: input.dependencyIntent.newTaskRole,
-                },
+          dependency_intents: input.dependencyIntents.map((intent) => ({
+            related_task_id: intent.relatedTaskID,
+            new_task_role: intent.newTaskRole,
+          })),
         }),
       ),
     );
-    return response.task.id;
+    return response;
   } catch (error) {
     throw decodeWorkflowTaskCreateSelectionError(error) ?? error;
   }
