@@ -54,8 +54,148 @@ func TestReopenedSessionAfterSuccessfulTriggerHandoffRequeuesPendingHandoff(t *t
 		t.Fatalf("restored handoff compaction generation = %d, want 1", generation)
 	}
 
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("restored handoff future-message records = %d, want 1", futureMessages)
+	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 0 {
+		t.Fatalf("restored handoff future-message records = %d, want 0 for atomic replacement", futureMessages)
+	}
+}
+
+func TestHandoffReplacementStoresFutureMessageAtomically(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	engine := mustNewHandoffTestEngine(t, store, &fakeClient{}, Config{})
+	persistSuccessfulTriggerHandoff(t, engine, "atomic-handoff-call")
+
+	summaryClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
+		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
+	}}}
+	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), summaryClient, Config{})
+	var applied bool
+	err := withActiveTestRun(t, restored, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+		var applyErr error
+		applied, applyErr = restored.applyPendingHandoffIfNeeded(ctx, stepID)
+		return applyErr
+	})
+	if err != nil {
+		t.Fatalf("apply restored handoff: %v", err)
+	}
+	if !applied {
+		t.Fatal("restored handoff did not compact")
+	}
+
+	window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(16)
+	if err != nil {
+		t.Fatalf("read handoff replacement records: %v", err)
+	}
+	var replacement session.HistoryReplacementRecord
+	replacementIndex := -1
+	for index, record := range window.Records {
+		if candidate, ok := mustSessionEventPayload(record).(session.HistoryReplacementRecord); ok {
+			replacementIndex = index
+			replacement = candidate
+		}
+	}
+	if replacement.Items == nil {
+		t.Fatalf("handoff replacement is absent: %+v", window.Records)
+	}
+	if replacement.PendingHandoffFutureMessage != nil {
+		t.Fatalf("atomic handoff replacement persisted pending future message: %q", *replacement.PendingHandoffFutureMessage)
+	}
+	futureItems := 0
+	for _, item := range replacement.Items {
+		if item.MessageType != nil && *item.MessageType == session.MessageTypeHandoffFutureMessage {
+			futureItems++
+		}
+	}
+	if futureItems != 1 {
+		t.Fatalf("atomic handoff replacement future-agent items = %d, want 1", futureItems)
+	}
+	for _, record := range window.Records[replacementIndex+1:] {
+		if message, ok := mustSessionEventPayload(record).(session.MessageRecord); ok &&
+			message.MessageType != nil &&
+			*message.MessageType == session.MessageTypeHandoffFutureMessage {
+			t.Fatalf("atomic handoff replacement appended a second typed future-agent event: %+v", record)
+		}
+	}
+
+	if err := restored.Close(); err != nil {
+		t.Fatalf("close restored handoff engine: %v", err)
+	}
+	reopened := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
+	if pending := reopened.handoffRuntimeState().RequestSnapshot(); pending != nil {
+		t.Fatalf("reopened atomic handoff queued a duplicate request: %+v", pending)
+	}
+	if got := countHandoffFutureMessages(reopened.transcriptRuntimeState().SnapshotItems()); got != 1 {
+		t.Fatalf("reopened atomic handoff future-agent items = %d, want 1", got)
+	}
+}
+
+func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name             string
+		replacementItems []llm.ResponseItem
+		appendTypedEvent bool
+	}{
+		{
+			name: "pending only",
+			replacementItems: llm.ItemsFromMessages([]llm.Message{{
+				Role:        llm.RoleUser,
+				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
+				Content:     textutil.Value("summary"),
+			}}),
+		},
+		{
+			name: "pending followed by typed future message",
+			replacementItems: llm.ItemsFromMessages([]llm.Message{
+				{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
+			}),
+			appendTypedEvent: true,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			mustAppendTestEvent(t, store, "legacy-handoff", historyReplacementPayload{
+				Engine:                      "local",
+				Mode:                        string(compactionModeManual),
+				CompactionNumber:            textutil.Value(1),
+				PendingHandoffFutureMessage: textutil.Value("continue"),
+				Items:                       testCase.replacementItems,
+			})
+			if testCase.appendTypedEvent {
+				mustAppendTestEvent(t, store, "legacy-handoff", llm.Message{
+					Role:        llm.RoleDeveloper,
+					MessageType: textutil.Value(llm.MessageTypeHandoffFutureMessage),
+					Content:     textutil.Value("continue"),
+				})
+			}
+			restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
+			if testCase.appendTypedEvent {
+				if got := countHandoffFutureMessages(restored.transcriptRuntimeState().SnapshotItems()); got != 1 {
+					t.Fatalf("reopened typed legacy future messages = %d, want 1", got)
+				}
+				return
+			}
+
+			err := withActiveTestRun(t, restored, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
+				_, applyErr := restored.applyPendingHandoffIfNeeded(ctx, stepID)
+				return applyErr
+			})
+			if err != nil {
+				t.Fatalf("append recovered legacy future message: %v", err)
+			}
+			if got := countHandoffFutureMessageRecords(t, store); got != 1 {
+				t.Fatalf("legacy recovered future-message records = %d, want 1", got)
+			}
+			if err := restored.Close(); err != nil {
+				t.Fatalf("close recovered legacy engine: %v", err)
+			}
+			reopened := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
+			if got := countHandoffFutureMessages(reopened.transcriptRuntimeState().SnapshotItems()); got != 1 {
+				t.Fatalf("reopened recovered legacy future messages = %d, want 1", got)
+			}
+		})
 	}
 }
 
@@ -232,98 +372,34 @@ func TestManualCompactionClearsQueuedTriggerHandoff(t *testing.T) {
 	)
 }
 
-func TestReopenedSessionAfterTriggerHandoffFutureMessageAppendFailureRetriesWithoutRecompaction(t *testing.T) {
+func TestReopenedSessionAfterTriggerHandoffUsesAtomicFutureMessageReplacement(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
-	var (
-		blockFutureAppend bool
-		blocker           *testEventLogAppendBlocker
-		blockErr          error
-		blockerRestored   bool
-	)
-	t.Cleanup(func() {
-		if blocker != nil && !blockerRestored {
-			if err := blocker.Restore(); err != nil {
-				t.Errorf("restore blocked event log: %v", err)
-			}
-		}
-	})
 	client := &fakeClient{responses: []llm.Response{{
 		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		Usage:     llm.Usage{InputTokens: 200, WindowTokens: 2_000},
 	}}}
-	engine := mustNewHandoffTestEngine(t, store, client, Config{
-		OnEvent: func(event Event) {
-			if !blockFutureAppend ||
-				event.Kind != EventConversationUpdated ||
-				event.CommittedTranscriptChanged {
-				return
-			}
-			blockFutureAppend = false
-			blocker, blockErr = blockTestEventLogAppends(store)
-		},
-	})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("input")}},
-	)); err != nil {
-		t.Fatalf("persist seed message: %v", err)
-	}
-	persistSuccessfulTriggerHandoff(t, engine, "future-message-retry-handoff-call")
+	engine := mustNewHandoffTestEngine(t, store, client, Config{})
+	persistSuccessfulTriggerHandoff(t, engine, "future-message-atomic-handoff-call")
 	engine.handoffRuntimeState().QueueRequest("summarize", "continue")
 
-	blockFutureAppend = true
 	var applied bool
 	err := withActiveTestRun(t, engine, ActiveKindUserTurn, func(ctx context.Context, stepID string) error {
 		var applyErr error
 		applied, applyErr = engine.applyPendingHandoffIfNeeded(ctx, stepID)
 		return applyErr
 	})
-	if err == nil {
-		t.Fatal("handoff future-message append unexpectedly succeeded")
-	}
-	if applied {
-		t.Fatal("handoff future-message append unexpectedly reported compaction")
-	}
-	if blockErr != nil || blocker == nil {
-		t.Fatalf("block future-message append: blocker=%v error=%v", blocker, blockErr)
-	}
-	if generation := engine.CompactionCount(); generation != 1 {
-		t.Fatalf("committed handoff compaction generation = %d, want 1", generation)
+	if err != nil || !applied {
+		t.Fatalf("atomic handoff outcome = applied:%v error:%v", applied, err)
 	}
 	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending != nil {
-		t.Fatalf("committed handoff compaction retained pending request: %+v", pending)
+		t.Fatalf("atomic handoff retained pending request: %+v", pending)
 	}
-	if err := blocker.Restore(); err != nil {
-		t.Fatalf("restore event log: %v", err)
+	if got := countHandoffFutureMessages(engine.transcriptRuntimeState().SnapshotItems()); got != 1 {
+		t.Fatalf("atomic handoff future-agent items = %d, want 1", got)
 	}
-	blockerRestored = true
-
-	resumedClient := &fakeClient{responses: []llm.Response{{
-		Assistant: llm.Message{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("complete"),
-		},
-		Usage: llm.Usage{InputTokens: 300, WindowTokens: 2_000},
-	}}}
-	restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), resumedClient, Config{})
-	if pending := restored.handoffRuntimeState().RequestSnapshot(); pending != nil {
-		t.Fatalf("reopened session requeued completed handoff: %+v", pending)
-	}
-	if _, err := restored.SubmitUserMessage(context.Background(), "continue"); err != nil {
-		t.Fatalf("submit after reopen: %v", err)
-	}
-	if generation := restored.CompactionCount(); generation != 1 {
-		t.Fatalf("future-message retry re-ran handoff compaction: generation = %d, want 1", generation)
-	}
-	if len(resumedClient.calls) == 0 {
-		t.Fatal("future-message retry did not produce a model request")
-	}
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("reopened retry future-message records = %d, want 1", futureMessages)
+	if got := countHandoffFutureMessageRecords(t, store); got != 0 {
+		t.Fatalf("atomic handoff appended future-message records = %d, want 0", got)
 	}
 }
 
@@ -362,7 +438,7 @@ func TestPendingHandoffFutureMessageConsumesCommittedObserverFailure(t *testing.
 	}
 }
 
-func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLingeringCallOutput(t *testing.T) {
+func TestReopenedSessionAfterTriggerHandoffUsesStableRequestSessionAndOmitsLingeringCallOutput(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)
 	sessionID := store.Meta().SessionID
@@ -419,8 +495,8 @@ func TestReopenedSessionAfterTriggerHandoffUsesRotatedRequestSessionAndOmitsLing
 	if len(resumedClient.calls) == 0 {
 		t.Fatal("reopened handoff session did not produce a model request")
 	}
-	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 1 {
-		t.Fatalf("reopened handoff future-message records = %d, want 1", futureMessages)
+	if futureMessages := countHandoffFutureMessageRecords(t, store); futureMessages != 0 {
+		t.Fatalf("reopened handoff future-message records = %d, want 0 for atomic replacement", futureMessages)
 	}
 }
 
@@ -463,6 +539,18 @@ func countHandoffFutureMessageRecords(t *testing.T, store *session.Store) int {
 			continue
 		}
 		count++
+	}
+	return count
+}
+
+func countHandoffFutureMessages(items []llm.ResponseItem) int {
+	count := 0
+	for _, item := range items {
+		if item.Type == llm.ResponseItemTypeMessage &&
+			item.MessageType != nil &&
+			*item.MessageType == llm.MessageTypeHandoffFutureMessage {
+			count++
+		}
 	}
 	return count
 }

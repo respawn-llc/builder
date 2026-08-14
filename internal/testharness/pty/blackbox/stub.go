@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -704,26 +703,12 @@ func hasMatchingSessionCacheKey(body []byte, headers http.Header) bool {
 		return false
 	}
 	cacheKey, err := parseSessionCacheKey(*request.PromptCacheKey)
-	return err == nil && session.Compaction == nil && cacheKey.SessionID.String() == session.SessionID.String() && cacheKey.Supervisor == session.Supervisor
+	return err == nil && cacheKey.SessionID.String() == session.SessionID.String() && cacheKey.Supervisor == session.Supervisor
 }
 
 type sessionCacheKey struct {
 	SessionID  runtimeids.SessionID
 	Supervisor bool
-	Compaction *int
-}
-
-type sessionCacheKeySegmentKind uint8
-
-const (
-	sessionCacheKeySegmentSupervisor sessionCacheKeySegmentKind = iota
-	sessionCacheKeySegmentLineageContract
-	sessionCacheKeySegmentCompaction
-)
-
-type sessionCacheKeySegment struct {
-	Kind  sessionCacheKeySegmentKind
-	Value int
 }
 
 func parseSessionCacheKey(raw string) (sessionCacheKey, error) {
@@ -736,53 +721,18 @@ func parseSessionCacheKey(raw string) (sessionCacheKey, error) {
 		return sessionCacheKey{}, err
 	}
 	key := sessionCacheKey{SessionID: sessionID}
-	for _, segment := range parts[1:] {
-		if segment == "" {
-			return sessionCacheKey{}, errors.New("invalid empty session cache key suffix")
+	switch len(parts) {
+	case 1:
+		return key, nil
+	case 2:
+		if parts[1] != "supervisor" {
+			return sessionCacheKey{}, errors.New("invalid session cache key suffix")
 		}
-		parsed, err := parseSessionCacheKeySegment(segment)
-		if err != nil {
-			return sessionCacheKey{}, err
-		}
-		switch parsed.Kind {
-		case sessionCacheKeySegmentSupervisor:
-			if key.Supervisor {
-				return sessionCacheKey{}, errors.New("duplicate supervisor session cache key suffix")
-			}
-			key.Supervisor = true
-		case sessionCacheKeySegmentLineageContract:
-		case sessionCacheKeySegmentCompaction:
-			if key.Compaction != nil {
-				return sessionCacheKey{}, errors.New("duplicate compacted session cache key suffix")
-			}
-			count := parsed.Value
-			key.Compaction = &count
-		}
-	}
-	return key, nil
-}
-
-func parseSessionCacheKeySegment(segment string) (sessionCacheKeySegment, error) {
-	if segment == "supervisor" {
-		return sessionCacheKeySegment{Kind: sessionCacheKeySegmentSupervisor}, nil
-	}
-
-	parts := strings.Split(segment, "-")
-	var kind sessionCacheKeySegmentKind
-	switch {
-	case len(parts) == 2 && parts[0] == "contract":
-		kind = sessionCacheKeySegmentLineageContract
-	case len(parts) == 2 && parts[0] == "compact":
-		kind = sessionCacheKeySegmentCompaction
+		key.Supervisor = true
+		return key, nil
 	default:
-		return sessionCacheKeySegment{}, errors.New("invalid session cache key suffix")
+		return sessionCacheKey{}, errors.New("invalid session cache key suffix")
 	}
-
-	value, err := strconv.Atoi(parts[len(parts)-1])
-	if err != nil || value <= 0 {
-		return sessionCacheKeySegment{}, errors.New("invalid session cache key suffix value")
-	}
-	return sessionCacheKeySegment{Kind: kind, Value: value}, nil
 }
 
 type responseInputItem struct {

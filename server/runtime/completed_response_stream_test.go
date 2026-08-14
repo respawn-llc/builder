@@ -1280,7 +1280,7 @@ func TestCompletedResponseFinalizationUsesActiveSegmentCoordinatesAfterCompactio
 	}
 	if err := engine.steer(
 		"compaction",
-		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, nil),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, nil),
 	); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}

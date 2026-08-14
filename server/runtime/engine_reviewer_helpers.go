@@ -70,9 +70,13 @@ func sanitizeReviewerSuggestions(in []string) []string {
 
 func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder metaContextBuilder, headless bool) ([]llm.Message, error) {
 	metaMessages, transcriptSource := splitMetaContextMessages(messages)
-	metaMessages = filterReviewerMetaMessages(metaMessages)
+	sessionMode, err := metaContextSessionModeForMessages(metaMessages)
+	if err != nil {
+		return nil, err
+	}
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
+		SessionMode:               sessionMode,
 		IncludeAgents:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
@@ -81,7 +85,7 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 	if err != nil {
 		return nil, err
 	}
-	metaMessages = metaResult.OrderedMetaMessages()
+	metaMessages = metaResult.Projection().Messages()
 	out := make([]llm.Message, 0, len(metaMessages)+2+len(transcriptSource))
 	out = append(out, metaMessages...)
 	out = append(out, llm.Message{Role: llm.RoleDeveloper, Content: textutil.Value(reviewerMetaBoundaryMessage)})
@@ -91,9 +95,13 @@ func buildReviewerRequestMessagesWithBuilder(messages []llm.Message, builder met
 
 func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder metaContextBuilder, headless bool) ([]llm.ResponseItem, error) {
 	metaMessages, transcriptSource := splitMetaContextItems(items)
-	metaMessages = filterReviewerMetaMessages(metaMessages)
+	sessionMode, err := metaContextSessionModeForMessages(metaMessages)
+	if err != nil {
+		return nil, err
+	}
 	metaResult, err := builder.Build(metaContextBuildOptions{
 		ExistingMessages:          metaMessages,
+		SessionMode:               sessionMode,
 		IncludeAgents:             true,
 		IncludeEnvironment:        true,
 		IncludeHeadless:           headless,
@@ -102,7 +110,7 @@ func buildReviewerRequestItemsWithBuilder(items []llm.ResponseItem, builder meta
 	if err != nil {
 		return nil, err
 	}
-	out := reviewerItemsFromMessages(metaResult.OrderedMetaMessages())
+	out := reviewerItemsFromMessages(metaResult.Projection().Messages())
 	out = append(out, reviewerItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(reviewerMetaBoundaryMessage)}})...)
 	out = append(out, buildReviewerTranscriptItems(transcriptSource)...)
 	return out, nil
@@ -409,22 +417,6 @@ func reviewerSessionID(sessionID string) string {
 		return ""
 	}
 	return trimmed + "/supervisor"
-}
-
-func filterReviewerMetaMessages(messages []llm.Message) []llm.Message {
-	if len(messages) == 0 {
-		return nil
-	}
-	out := make([]llm.Message, 0, len(messages))
-	for _, message := range messages {
-		if message.Role == llm.RoleDeveloper &&
-			message.MessageType != nil &&
-			*message.MessageType == llm.MessageTypeSubagents {
-			continue
-		}
-		out = append(out, message)
-	}
-	return out
 }
 
 func pluralizeEnglish(count int, singular, plural string) string {

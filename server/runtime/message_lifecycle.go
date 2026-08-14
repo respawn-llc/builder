@@ -203,6 +203,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if replacement.PendingHandoffFutureMessage != nil {
 				recoveredHandoff.SeedFutureMessage(*replacement.PendingHandoffFutureMessage)
 			}
+			e.resetPromptCacheObservationBaselines()
 			reminderIssued = false
 		}
 		e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(

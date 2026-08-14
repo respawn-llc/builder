@@ -134,8 +134,8 @@ func (s *ResponsesStub) serveScripted(
 
 func parseScriptedLineage(raw string) (scriptedLineage, error) {
 	key, err := parseSessionCacheKey(raw)
-	if err != nil || key.Compaction != nil {
-		return scriptedLineage{}, errors.New("scripted Responses requires an uncompacted Session lineage")
+	if err != nil {
+		return scriptedLineage{}, errors.New("scripted Responses requires a stable Session cache identity")
 	}
 	return scriptedLineage{sessionID: key.SessionID.String(), supervisor: key.Supervisor}, nil
 }
@@ -284,7 +284,8 @@ func decodeProviderResponseItem(raw json.RawMessage) (llm.ResponseItem, error) {
 		return llm.ResponseItem{}, err
 	}
 	item := llm.ResponseItem{
-		Type: envelope.Type, Name: textutil.OptionalTrimmedString(envelope.Name),
+		Type:   envelope.Type,
+		Name:   textutil.OptionalTrimmedString(envelope.Name),
 		CallID: textutil.OptionalTrimmedString(envelope.CallID),
 		Raw:    json.RawMessage(textutil.CompactNoHTMLEscape(raw)),
 	}

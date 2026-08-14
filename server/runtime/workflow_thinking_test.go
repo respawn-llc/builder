@@ -75,9 +75,6 @@ func TestWorkflowThinkingSetterPreservesCacheAndContractBoundaries(t *testing.T)
 		t.Fatalf("SetWorkflowThinkingValue: %v", err)
 	}
 	after := store.Meta()
-	if after.PromptCacheLineageGeneration != before.PromptCacheLineageGeneration {
-		t.Fatalf("cache lineage generation changed from %d to %d", before.PromptCacheLineageGeneration, after.PromptCacheLineageGeneration)
-	}
 	if after.Locked == nil || !reflect.DeepEqual(after.Locked, before.Locked) {
 		t.Fatalf("locked contract changed after thinking mutation: before=%+v after=%+v", before.Locked, after.Locked)
 	}
@@ -105,9 +102,6 @@ func TestWorkflowThinkingClearPreservesCacheAndContractBoundaries(t *testing.T) 
 		t.Fatalf("ThinkingLevel = %q, want cleared", got)
 	}
 	after := store.Meta()
-	if after.PromptCacheLineageGeneration != before.PromptCacheLineageGeneration {
-		t.Fatalf("cache lineage generation changed from %d to %d", before.PromptCacheLineageGeneration, after.PromptCacheLineageGeneration)
-	}
 	if after.Locked == nil || !reflect.DeepEqual(after.Locked, before.Locked) {
 		t.Fatalf("locked contract changed after thinking clear: before=%+v after=%+v", before.Locked, after.Locked)
 	}

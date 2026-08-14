@@ -567,7 +567,6 @@ func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
 		FirstPromptPreview:            meta.FirstPromptPreview,
 		Continuation:                  cloneContinuationContext(meta.Continuation),
 		ChatSettings:                  cloneChatSettingsOverrides(meta.ChatSettings),
-		PromptCacheLineageGeneration:  meta.PromptCacheLineageGeneration,
 		Locked:                        cloneLockedContract(meta.Locked),
 		ActiveWorkflowAssignment:      cloneMessageRecord(meta.ActiveWorkflowAssignment),
 		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(meta.ActiveWorkflowAssignmentState),
@@ -580,7 +579,6 @@ func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapsho
 		s.meta.FirstPromptPreview = snapshot.FirstPromptPreview
 		s.meta.Continuation = cloneContinuationContext(snapshot.Continuation)
 		s.meta.ChatSettings = cloneChatSettingsOverrides(snapshot.ChatSettings)
-		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
 		s.meta.Locked = cloneLockedContract(snapshot.Locked)
 		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
 		s.meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(snapshot.ActiveWorkflowAssignmentState)
@@ -1211,8 +1209,7 @@ func (s *Store) MarkModelDispatchLocked(contract LockedContract) error {
 }
 
 func (s *Store) ResetLockedContractForCompactionBoundary() error {
-	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(meta *Meta) {
-		meta.PromptCacheLineageGeneration++
+	_, err := s.mutateMetaAndReplaceLockedContractWithCommitStatus(func(*Meta) {
 	}, func(*LockedContract) *LockedContract {
 		return nil
 	}, false)

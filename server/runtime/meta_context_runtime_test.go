@@ -1,0 +1,218 @@
+package runtime
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"core/prompts"
+	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
+	"core/server/workflowruntime"
+	"core/shared/runtimeids"
+	"core/shared/textutil"
+)
+
+func TestFreshHeadlessRequestMatchesPostCompactionMetaOrder(t *testing.T) {
+	previousHeadlessPrompt := prompts.HeadlessModePrompt
+	prompts.HeadlessModePrompt = "headless mode instructions"
+	t.Cleanup(func() {
+		prompts.HeadlessModePrompt = previousHeadlessPrompt
+	})
+
+	engine := mustNewExecTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		Config{Model: "gpt-5", HeadlessMode: true},
+	)
+	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeSkills,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeEnvironment,
+	})
+}
+
+func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5"},
+	)
+	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
+		llm.MessageTypeSkills,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeEnvironment,
+	})
+}
+
+func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	store := mustCreateTestSession(t)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5", HeadlessMode: true},
+	)
+	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeSkills,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeEnvironment,
+	})
+	if !store.Meta().HeadlessActive {
+		t.Fatal("fresh headless Workflow request did not persist Headless mode")
+	}
+}
+
+func TestWorkflowHeadlessStateRetriesPersistenceAfterCommittedContext(t *testing.T) {
+	previousHeadlessPrompt := prompts.HeadlessModePrompt
+	prompts.HeadlessModePrompt = "headless mode instructions"
+	t.Cleanup(func() {
+		prompts.HeadlessModePrompt = previousHeadlessPrompt
+	})
+
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5", HeadlessMode: true},
+	)
+	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+		steeringPriorityRuntimeContext,
+		steeringMessageEventDefault,
+		true,
+		[]llm.Message{{
+			Role:        llm.RoleDeveloper,
+			MessageType: textutil.Value(llm.MessageTypeHeadlessMode),
+			Content:     textutil.Value("headless mode instructions"),
+		}},
+	)); err != nil {
+		t.Fatalf("persist committed headless context: %v", err)
+	}
+	engine.baseMetaInjected = true
+
+	persistErr := errors.New("headless state persistence failed")
+	gate.FailNext(persistErr)
+	if err := engine.ensureMetaContextForRequest(context.Background(), "first-retry"); !errors.Is(err, persistErr) {
+		t.Fatalf("first headless-state reconciliation error = %v, want %v", err, persistErr)
+	}
+	reopened := mustOpenTestSession(t, store.Dir())
+	if reopened.Meta().HeadlessActive {
+		t.Fatal("headless state became durable after injected persistence failure")
+	}
+
+	if err := engine.ensureMetaContextForRequest(context.Background(), "second-retry"); err != nil {
+		t.Fatalf("retry headless-state reconciliation: %v", err)
+	}
+	if !store.Meta().HeadlessActive {
+		t.Fatal("headless state remained stale after retry")
+	}
+	reopened = mustOpenTestSession(t, store.Dir())
+	if !reopened.Meta().HeadlessActive {
+		t.Fatal("headless state remained stale on disk after retry")
+	}
+	headlessCount := 0
+	for _, message := range engine.transcriptRuntimeState().SnapshotMessages() {
+		if message.MessageType != nil && *message.MessageType == llm.MessageTypeHeadlessMode {
+			headlessCount++
+		}
+	}
+	if headlessCount != 1 {
+		t.Fatalf("headless context count after persistence retry = %d, want 1", headlessCount)
+	}
+}
+
+func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicateContext(t *testing.T) {
+	t.Parallel()
+	observerErr := errors.New("fresh meta-context observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5"},
+	)
+	gate.FailNext(observerErr)
+
+	if err := engine.ensureMetaContextForRequest(context.Background(), "fresh"); !errors.Is(err, observerErr) {
+		t.Fatalf("first fresh meta-context error = %v, want %v", err, observerErr)
+	}
+	if engine.baseMetaInjected {
+		t.Fatal("fresh meta-context marked injected before the complete projection committed")
+	}
+
+	if err := engine.ensureMetaContextForRequest(context.Background(), "retry"); err != nil {
+		t.Fatalf("retry fresh meta-context: %v", err)
+	}
+	if !engine.baseMetaInjected {
+		t.Fatal("fresh meta-context remained uninjected after committed retry")
+	}
+	if trigger := engine.currentNodeExecutionSnapshot().delivery.trigger(workflowTaskPromptTriggerTaskDelivery); trigger != workflowTaskPromptTriggerTaskDelivery {
+		t.Fatalf("workflow delivery trigger after retry = %v, want ordinary task delivery", trigger)
+	}
+
+	counts := make(map[llm.MessageType]int)
+	for _, message := range engine.transcriptRuntimeState().SnapshotMessages() {
+		if message.MessageType != nil {
+			counts[*message.MessageType]++
+		}
+	}
+	if counts[llm.MessageTypeWorkflowMode] != 1 || counts[llm.MessageTypeEnvironment] != 1 {
+		t.Fatalf("fresh workflow meta-context counts = %+v, want one Workflow and one Environment", counts)
+	}
+}
+
+func assertFreshRequestMatchesCompactionProjection(t *testing.T, engine *Engine, want []llm.MessageType) {
+	t.Helper()
+	if err := engine.ensureMetaContextForRequest(context.Background(), "fresh"); err != nil {
+		t.Fatalf("ensure fresh meta context: %v", err)
+	}
+	freshRequest, err := engine.buildRequest(context.Background(), "fresh", true)
+	if err != nil {
+		t.Fatalf("build fresh request: %v", err)
+	}
+	projection, err := engine.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
+	if err != nil {
+		t.Fatalf("build compaction meta context: %v", err)
+	}
+
+	assertMetaContextTypes(t, requestMessages(freshRequest), want)
+	assertMetaContextTypes(t, projection.Messages(), want)
+}

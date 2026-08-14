@@ -631,30 +631,15 @@ func (e *Engine) ContinuationAgentRole() *string {
 	return session.ContinuationAgentRole(e.store.Meta())
 }
 
-func conversationPromptCacheKey(sessionID string, compactionCount int) string {
-	return conversationPromptCacheKeyForLineage(sessionID, 0, compactionCount)
-}
-
-func conversationPromptCacheKeyForLineage(sessionID string, lineageGeneration, compactionCount int) string {
-	trimmed := strings.TrimSpace(sessionID)
-	if trimmed == "" {
-		return ""
-	}
-	if lineageGeneration > 0 {
-		trimmed = fmt.Sprintf("%s/contract-%d", trimmed, lineageGeneration)
-	}
-	if compactionCount <= 0 {
-		return trimmed
-	}
-	return fmt.Sprintf("%s/compact-%d", trimmed, compactionCount)
+func conversationPromptCacheKey(sessionID string) string {
+	return strings.TrimSpace(sessionID)
 }
 
 func (e *Engine) conversationPromptCacheKey(sessionID string) string {
 	if e == nil || e.store == nil {
 		return ""
 	}
-	meta := e.store.Meta()
-	return conversationPromptCacheKeyForLineage(sessionID, meta.PromptCacheLineageGeneration, e.compactionRuntimeState().Count())
+	return conversationPromptCacheKey(sessionID)
 }
 
 func (e *Engine) PreviousSessionID() *runtimeids.SessionID {

@@ -161,7 +161,7 @@ func TestHistoryReplacementProjectsPreservedUserContextWithoutReplayingUserTurns
 
 	if err := engine.steer(
 		"compaction",
-		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, items),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {
 		t.Fatalf("persist history replacement: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestEligibleHistoryReplacementTimestampParityAcrossPersistedAndLiveProjecti
 	})
 	if err := engine.steer(
 		"eligible replacement",
-		steerHistoryReplacementIntent("local", compactionModeAuto, 1, "", nil, items),
+		steerHistoryReplacementIntent("local", compactionModeAuto, 1, nil, items),
 	); err != nil {
 		t.Fatalf("persist eligible history replacement: %v", err)
 	}
