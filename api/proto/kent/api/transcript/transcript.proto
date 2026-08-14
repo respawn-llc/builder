@@ -203,9 +203,30 @@ message CommittedRowLocator {
 
 message UserRow {
   string step_id = 1 [(buf.validate.field).string.uuid = true];
-  string text = 2 [(buf.validate.field).string.min_len = 1];
-  optional string condensed_text = 3 [(buf.validate.field).string.min_len = 1];
-  optional string rollback_target_id = 4 [(buf.validate.field).string.min_len = 1];
+  string text = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.user_row_text_nonblank"
+      message: "user row text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string condensed_text = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.user_row_condensed_text_nonblank"
+      message: "condensed user row text must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string rollback_target_id = 4 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.user_row_rollback_target_nonblank"
+      message: "rollback target ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   optional int64 committed_at_unix_ms = 5 [(buf.validate.field).int64 = {
     gte: -8640000000000000
     lte: 8640000000000000

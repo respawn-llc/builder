@@ -33,7 +33,11 @@ import {
 import {
   schema_kent_api_attention_attention as attention,
   schema_kent_api_prompt_prompt as prompt,
+  schema_kent_api_prompt_command_validation as promptCommandValidation,
   schema_kent_api_run_prompt_run_prompt as runPrompt,
+  schema_kent_api_runtime_runtime as runtime,
+  schema_kent_api_session_launch_session_lifecycle as sessionLifecycle,
+  schema_kent_api_session_launch_validation as sessionLaunchValidation,
   schema_kent_api_shared_foundation as foundation,
   schema_kent_api_shared_validation as sharedValidation,
   schema_kent_api_server_server as server,
@@ -107,7 +111,11 @@ const {
 } = runPrompt;
 
 const validator = createValidator({
-  registry: createRegistry(sharedValidation.canonical_uuid_v4),
+  registry: createRegistry(
+    promptCommandValidation.canonical_name,
+    sessionLaunchValidation.scoped_session_id,
+    sharedValidation.canonical_uuid_v4,
+  ),
 });
 const javaScriptSafeIntegerMaximum = 9007199254740991n;
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -138,6 +146,17 @@ test("new schema slice executes generated validation in TypeScript", () => {
     recommendedOptionIndex: 2,
     createdAt: timestamp,
   })));
+  assert.throws(() => validateGeneratedMessage(
+    runtime.PromptCommandInputSchema,
+    create(runtime.PromptCommandInputSchema, { name: "bogus" }),
+  ));
+  assert.throws(() => validateGeneratedMessage(
+    sessionLifecycle.SessionRetargetWorkspaceRequestSchema,
+    create(sessionLifecycle.SessionRetargetWorkspaceRequestSchema, {
+      sessionId: "../session",
+      workspaceRoot: "/workspace",
+    }),
+  ));
 
   validateGeneratedMessage(QueuedMessageStateSchema, create(QueuedMessageStateSchema, {
     queueItemId: validUUID,

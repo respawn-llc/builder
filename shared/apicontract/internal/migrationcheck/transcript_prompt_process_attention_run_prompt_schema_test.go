@@ -122,6 +122,26 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(message); err == nil {
 		t.Fatal("accepted live transcript event at hydration sequence")
 	}
+	for name, row := range map[string]*transcriptpb.UserRow{
+		"text": {
+			StepId: validUUID,
+			Text:   " ",
+		},
+		"condensed text": {
+			StepId:        validUUID,
+			Text:          "message",
+			CondensedText: stringPointer(" "),
+		},
+		"rollback target ID": {
+			StepId:           validUUID,
+			Text:             "message",
+			RollbackTargetId: stringPointer(" "),
+		},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(row); err == nil {
+			t.Fatalf("accepted user row with blank %s", name)
+		}
+	}
 
 	attention := &attentionpb.Notification{
 		Id: &attentionpb.NotificationID{
