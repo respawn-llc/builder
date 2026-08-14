@@ -507,6 +507,7 @@ function VirtualizedInfiniteListContent<TItem>({
             <div
               {...wrapperProps}
               className={cx(
+                sticky ? "sticky top-0 z-[1] w-full" : "absolute top-0 left-0 w-full",
                 virtualizedRowClassName({
                   count,
                   index: virtualItem.index,
@@ -519,15 +520,14 @@ function VirtualizedInfiniteListContent<TItem>({
               key={virtualItem.key}
               ref={virtualizer.measureElement}
               role={itemRole}
-              style={{
-                ...wrapperProps?.style,
-                position: sticky ? "sticky" : "absolute",
-                top: 0,
-                width: "100%",
-                ...(sticky
-                  ? { zIndex: 1 }
-                  : { left: 0, transform: `translateY(${virtualItem.start.toString()}px)` }),
-              }}
+              style={
+                sticky
+                  ? wrapperProps?.style
+                  : {
+                      ...wrapperProps?.style,
+                      transform: `translateY(${virtualItem.start.toString()}px)`,
+                    }
+              }
             >
               {renderRow(virtualItem.index)}
             </div>
