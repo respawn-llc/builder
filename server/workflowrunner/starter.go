@@ -302,6 +302,9 @@ func (s *Starter) PrepareManualMoveAssignments(
 			CurrentNode: input.CurrentNode.Reference,
 			SessionID:   assignment.SessionID(),
 		})
+		if input.CurrentNode.SessionID != nil && assignment.SessionID() == *input.CurrentNode.SessionID {
+			restoreContexts[assignment.SessionID()] = input
+		}
 		if origin, exists := originBySession[assignment.SessionID()]; exists {
 			restoreContexts[assignment.SessionID()] = origin
 		}
@@ -413,6 +416,17 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 		return preparedCurrentNodeAgentSession{}, err
 	}
 	var retainedSnapshot *session.PromptFacingMetadataSnapshot
+	var retainedDescriptor session.SessionDescriptor
+	restoreRetainedMetadata := func(cause error) error {
+		if retainedSnapshot == nil {
+			return cause
+		}
+		restoreCtx := context.WithoutCancel(ctx)
+		restoreErr := s.withSessionStore(restoreCtx, retainedDescriptor, func(_ context.Context, store *session.Store) error {
+			return store.RestorePromptFacingMetadata(*retainedSnapshot)
+		})
+		return errors.Join(cause, restoreErr)
+	}
 	policy, err := resolveCurrentNodeSessionPolicy(input)
 	if err != nil {
 		return preparedCurrentNodeAgentSession{}, err
@@ -425,6 +439,7 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 		if descriptorErr != nil {
 			return preparedCurrentNodeAgentSession{}, descriptorErr
 		}
+		retainedDescriptor = descriptor
 		if err := s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
 			snapshot := store.PromptFacingMetadataSnapshot()
 			retainedSnapshot = &snapshot
@@ -435,19 +450,15 @@ func (s *Starter) prepareCurrentNodeAgentSession(
 	}
 	plan, disposable, err := s.planCurrentNodeSession(ctx, input, root, sessionPrepared)
 	if err != nil {
-		return preparedCurrentNodeAgentSession{}, err
+		return preparedCurrentNodeAgentSession{}, restoreRetainedMetadata(err)
 	}
 	sessionBound := false
 	cleanup := func(err error) error {
+		if retainedSnapshot != nil {
+			return restoreRetainedMetadata(err)
+		}
 		if !disposable {
-			if retainedSnapshot == nil {
-				return err
-			}
-			cleanupCtx := context.WithoutCancel(ctx)
-			restoreErr := s.withSessionStore(cleanupCtx, plan.Descriptor, func(_ context.Context, store *session.Store) error {
-				return store.RestorePromptFacingMetadata(*retainedSnapshot)
-			})
-			return errors.Join(err, restoreErr)
+			return err
 		}
 		cleanupCtx := context.WithoutCancel(ctx)
 		if sessionBound && input.CurrentNode.SessionID != nil {
