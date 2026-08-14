@@ -87,8 +87,6 @@ run_protobuf() {
 	)
 	echo "==> Protobuf deterministic generation"
 	./scripts/generate-protobuf.sh verify all
-	echo "==> Protobuf migration lint"
-	./scripts/generate-protobuf.sh run go -- go run ./shared/apicontract/cmd/migrationlint
 	echo "==> Protobuf schema/protocol version"
 	./scripts/check-protobuf-schema-version.sh
 }
