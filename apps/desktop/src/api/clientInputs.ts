@@ -63,9 +63,12 @@ export type BoardNodeCardsInput = Readonly<{
   offset?: number | undefined;
 }>;
 
+export const workflowPageSize = 40;
+
 export type WorkflowListInput = Readonly<{
   offset?: number | undefined;
   limit?: number | undefined;
+  projectID?: string | undefined;
   query?: string | undefined;
 }>;
 

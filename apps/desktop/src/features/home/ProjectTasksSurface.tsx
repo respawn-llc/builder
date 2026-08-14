@@ -1,5 +1,5 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronRight, Circle, CircleDot, Plus } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, ChevronRight, Circle, CircleDot } from "lucide-react";
 import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -9,7 +9,6 @@ import {
   invalidateProjectTaskSearches,
   queryKeys,
   reportNonCancelledError,
-  useAppNavigation,
   useAppServices,
   useConnectionSnapshot,
   useOwnedSidebarRoots,
@@ -31,7 +30,6 @@ import {
   directionalBoundary,
   EmptyState,
   InfiniteListBoundary,
-  InteractiveChip,
   Spinner,
   VirtualizedInfiniteList,
   type VirtualizedInfiniteListBoundaryState,
@@ -56,6 +54,12 @@ import { projectTasksPresentation } from "./projectTaskListPresentation";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { projectTaskColumnCount, type ProjectTaskListEntry } from "./ProjectTaskRow";
 import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
+import {
+  projectTaskWorkflowItems,
+  useProjectTaskNewTaskAvailable,
+  useProjectTaskWorkflowPages,
+} from "./projectTaskWorkflows";
+import { ProjectWorkflowStrip } from "./ProjectWorkflowStrip";
 
 export function ProjectTasksSurface({
   projectID,
@@ -76,33 +80,7 @@ export function ProjectTasksSurface({
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
   const [paginationEnabled, setPaginationEnabled] = useState(false);
-  const workflowsQuery = useQuery({
-    queryKey: queryKeys.projectTaskWorkflows(projectID),
-    queryFn: async (): Promise<readonly ProjectTaskWorkflowItem[]> => {
-      const links = await api.listProjectWorkflowLinks(projectID);
-      const definitions = await Promise.all(
-        links.map(async (link) => {
-          const definition = await queryClient.fetchQuery({
-            queryKey: queryKeys.workflowDefinition(link.workflowID),
-            queryFn: async () => api.getWorkflow(link.workflowID),
-          });
-          return definition;
-        }),
-      );
-      return links.map((link, index) => {
-        const workflow = definitions[index]?.workflow;
-        if (workflow?.id !== link.workflowID) {
-          throw new Error(`Workflow definition does not match Project link ${link.id}.`);
-        }
-        return {
-          id: workflow.id,
-          name: workflow.name,
-          description: workflow.description,
-          isProjectDefault: link.isDefault,
-        };
-      });
-    },
-  });
+  const workflowsQuery = useProjectTaskWorkflowPages(projectID);
   const data = useProjectTaskListData({
     expanded: disclosure,
     projectID,
@@ -142,15 +120,33 @@ export function ProjectTasksSurface({
   const resumeAction = useTaskResumeAction(initiatingAction);
   const columnLayout = useProjectTaskColumnLayout(data);
   useProjectTaskListEvents({ enabled: true, projectID });
+  const workflowsEstablished = workflowsQuery.data !== undefined;
   const workflowsBoundary = directionalBoundary({
-    failed: workflowsQuery.isError,
-    loading: workflowsQuery.isPending,
+    failed: !workflowsEstablished && workflowsQuery.isError,
+    loading: !workflowsEstablished && workflowsQuery.isPending,
     loadingLabel: t("states.loading"),
     message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
     onRetry: () => void workflowsQuery.refetch(),
     retryLabel: t("app.retry"),
   });
-  const workflows = workflowsQuery.data ?? [];
+  const previousWorkflowsBoundary = directionalBoundary({
+    failed: workflowsQuery.isFetchPreviousPageError,
+    loading: workflowsQuery.isFetchingPreviousPage,
+    loadingLabel: t("states.loading"),
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
+    onRetry: () => void workflowsQuery.fetchPreviousPage(),
+    retryLabel: t("app.retry"),
+  });
+  const nextWorkflowsBoundary = directionalBoundary({
+    failed: workflowsQuery.isFetchNextPageError,
+    loading: workflowsQuery.isFetchingNextPage,
+    loadingLabel: t("app.loadingMore"),
+    message: workflowsQuery.isError ? errorMessage(workflowsQuery.error) : "",
+    onRetry: () => void workflowsQuery.fetchNextPage(),
+    retryLabel: t("app.retry"),
+  });
+  const workflows = projectTaskWorkflowItems(workflowsQuery.data);
+  const newTaskAvailable = useProjectTaskNewTaskAvailable(projectID, workflowsQuery.data);
   const openLinkWorkflow = () => {
     open({
       kind: "linkWorkflow",
@@ -159,7 +155,12 @@ export function ProjectTasksSurface({
         await Promise.all([
           queryClient.invalidateQueries({
             queryKey: queryKeys.projectWorkflowLinks(projectID),
+            exact: true,
             refetchType: "active",
+          }),
+          queryClient.resetQueries({
+            queryKey: queryKeys.projectTaskWorkflows(projectID),
+            exact: true,
           }),
           queryClient.invalidateQueries({
             queryKey: queryKeys.projectBoardsRoot(projectID),
@@ -284,8 +285,29 @@ export function ProjectTasksSurface({
         scrollRestorationReady={scrollRestorationReady}
         taskCount={presentation.taskCount}
         viewMemory={viewMemory}
-        workflows={workflows}
+        newTaskAvailable={newTaskAvailable}
+        workflowCount={workflows.length}
         workflowsBoundary={workflowsBoundary}
+        workflowStrip={
+          <ProjectWorkflowStrip
+            hasNextPage={workflowsQuery.hasNextPage}
+            hasPreviousPage={workflowsQuery.hasPreviousPage}
+            initialBoundary={workflowsBoundary}
+            isFetchingNextPage={workflowsQuery.isFetchingNextPage}
+            isFetchingPreviousPage={workflowsQuery.isFetchingPreviousPage}
+            nextBoundary={nextWorkflowsBoundary}
+            onLinkWorkflow={openLinkWorkflow}
+            onLoadNext={() => {
+              void workflowsQuery.fetchNextPage();
+            }}
+            onLoadPrevious={() => {
+              void workflowsQuery.fetchPreviousPage();
+            }}
+            previousBoundary={previousWorkflowsBoundary}
+            projectID={projectID}
+            workflows={workflows}
+          />
+        }
         paginationEnabled={paginationEnabled}
       />
       <TaskInitiatingActionDialogs
@@ -320,8 +342,10 @@ function ProjectTasksContent({
   scrollRestorationReady,
   taskCount,
   viewMemory,
-  workflows,
+  workflowCount,
   workflowsBoundary,
+  workflowStrip,
+  newTaskAvailable,
   paginationEnabled,
 }: Readonly<{
   columnLayout: ProjectTaskColumnLayout;
@@ -334,8 +358,10 @@ function ProjectTasksContent({
   scrollRestorationReady: boolean;
   taskCount: number | null;
   viewMemory: ProjectTasksViewMemory;
-  workflows: readonly ProjectTaskWorkflowItem[];
+  workflowCount: number;
   workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  workflowStrip: ReactNode;
+  newTaskAvailable: boolean;
   paginationEnabled: boolean;
 }>) {
   const { t } = useTranslation();
@@ -343,16 +369,10 @@ function ProjectTasksContent({
   const { containerRef, widthPx } = useProjectTaskListWidth();
   const visibleColumns = resolveProjectTaskVisibleColumns(widthPx, columnLayout);
   const workflowsResolved = workflowsBoundary === undefined;
-  const newTaskAvailable = projectTaskNewTaskAvailable(workflows);
   const memory = viewMemory.read();
   return (
-    <TasksShell
-      workflows={workflows}
-      workflowsBoundary={workflowsBoundary}
-      onLinkWorkflow={onLinkWorkflow}
-      projectID={projectID}
-    >
-      {workflowsResolved && workflows.length === 0 ? (
+    <TasksShell workflowStrip={workflowStrip}>
+      {workflowsResolved && workflowCount === 0 ? (
         <ProjectTasksEmpty
           actionLabel={t("workflowLibrary.linkWorkflow")}
           body={t("home.prototype.noLinkedWorkflowsBody")}
@@ -413,10 +433,6 @@ function ProjectTasksContent({
       )}
     </TasksShell>
   );
-}
-
-function projectTaskNewTaskAvailable(workflows: readonly ProjectTaskWorkflowItem[]): boolean {
-  return workflows.length === 1 || workflows.some((workflow) => workflow.isProjectDefault);
 }
 
 function projectTaskEntryWrapperProps(entry: ProjectTaskListEntry): HTMLAttributes<HTMLDivElement> {
@@ -550,45 +566,14 @@ function projectTaskVisibilityTriggers(
 
 function TasksShell({
   children,
-  onLinkWorkflow,
-  projectID,
-  workflows,
-  workflowsBoundary,
+  workflowStrip,
 }: Readonly<{
   children: ReactNode;
-  onLinkWorkflow: () => void;
-  projectID: string;
-  workflows: readonly ProjectTaskWorkflowItem[];
-  workflowsBoundary: VirtualizedInfiniteListBoundaryState | undefined;
+  workflowStrip: ReactNode;
 }>) {
-  const { t } = useTranslation();
-  const navigation = useAppNavigation();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 gap-[var(--space-2)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] hide-scrollbar">
-        {workflowsBoundary === undefined ? (
-          <>
-            {workflows.map((workflow) => (
-              <InteractiveChip
-                className="shrink-0"
-                key={workflow.id}
-                onClick={() => void navigation.openProject(projectID, workflow.id)}
-                title={workflow.description}
-              >
-                {workflow.name}
-              </InteractiveChip>
-            ))}
-            <InteractiveChip className="shrink-0" onClick={onLinkWorkflow}>
-              <Plus aria-hidden="true" size={14} strokeWidth={1.8} />
-              {t("workflowLibrary.linkWorkflow")}
-            </InteractiveChip>
-          </>
-        ) : (
-          <div className="min-w-64">
-            <InfiniteListBoundary direction="initial" state={workflowsBoundary} />
-          </div>
-        )}
-      </div>
+      {workflowStrip}
       <div className="relative mx-[var(--space-4)] mb-[var(--space-3)] min-h-0 flex-1 overflow-hidden">
         {children}
       </div>
@@ -620,10 +605,3 @@ function ProjectTasksEmpty({
     />
   );
 }
-
-type ProjectTaskWorkflowItem = Readonly<{
-  description: string;
-  id: string;
-  isProjectDefault: boolean;
-  name: string;
-}>;

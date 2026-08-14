@@ -207,7 +207,12 @@ export function useProjectTaskListEvents({
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: queryKeys.projectWorkflowLinks(projectID),
+        exact: true,
         refetchType: "active",
+      }),
+      queryClient.resetQueries({
+        queryKey: queryKeys.projectTaskWorkflows(projectID),
+        exact: true,
       }),
       queryClient.invalidateQueries({
         queryKey: queryKeys.projectBoardsRoot(projectID),

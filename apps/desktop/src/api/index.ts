@@ -23,6 +23,7 @@ export type {
   WorkflowProjectLinkInput,
   WorkflowScriptPathValidateInput,
 } from "./clientInputs";
+export { workflowPageSize } from "./clientInputs";
 export type {
   AttentionNotification,
   AttentionNotificationEvent,

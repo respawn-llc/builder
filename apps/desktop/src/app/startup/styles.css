@@ -646,7 +646,6 @@
 
 .project-task-list-scroll {
   overscroll-behavior: contain;
-  scroll-behavior: smooth;
   -webkit-mask-image: linear-gradient(
     to bottom,
     black 0,
@@ -681,7 +680,9 @@
     height: 100%;
   }
 
-  .task-detail-description-island [data-slot="markdown-field-read-viewport"] {
+  .task-detail-description-island
+    [data-slot="markdown-field-read-root"][data-collapsed="false"]
+    [data-slot="markdown-field-read-viewport"] {
     max-height: none !important;
   }
 }
@@ -695,6 +696,10 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
+  .project-task-list-scroll {
+    scroll-behavior: smooth;
+  }
+
   .app-sidebar-page[data-direction="push"] {
     animation: sidebar-page-push var(--motion-fast) both;
   }

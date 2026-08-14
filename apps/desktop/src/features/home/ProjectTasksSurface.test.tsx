@@ -104,27 +104,17 @@ vi.mock("@/app-facade", async (importOriginal) => ({
   useAppNavigation: () => ({ openProject: vi.fn() }),
   useAppServices: () => ({
     api: {
-      listProjectWorkflowLinks: async (projectID: string) =>
-        fixture.board.data.workflows.map((workflow, index) => ({
-          id: `link-${index.toString()}`,
-          projectID,
-          workflowID: workflow.id,
-          isDefault: workflow.isProjectDefault,
+      listWorkflows: async () => ({
+        nextOffset: null,
+        workflows: fixture.board.data.workflows.map((workflow) => ({
+          description: workflow.description ?? "",
+          executionTargetPolicy: { customRef: null, mode: "default_branch" as const },
+          id: workflow.id,
+          name: workflow.name,
+          projectLink: { isDefault: workflow.isProjectDefault },
+          version: 1,
         })),
-      getWorkflow: async (workflowID: string) => {
-        const workflow = fixture.board.data.workflows.find((candidate) => candidate.id === workflowID);
-        if (workflow === undefined) {
-          throw new Error(`Missing Workflow ${workflowID}.`);
-        }
-        return {
-          workflow: {
-            id: workflow.id,
-            name: workflow.name,
-            description: workflow.description ?? "",
-            version: 1,
-          },
-        };
-      },
+      }),
       getTaskLabels: async (taskID: string) => {
         fixture.assignmentRequests += 1;
         return { taskID, labelIDs: [] };
@@ -580,7 +570,20 @@ function withQueryClient(children: React.ReactNode) {
   vi.spyOn(queryClient, "invalidateQueries").mockImplementation(async (filters) => {
     fixture.invalidations.push(filters);
   });
-  queryClient.setQueryData(queryKeys.projectTaskWorkflows("project-1"), fixture.board.data.workflows);
+  queryClient.setQueryData(queryKeys.projectTaskWorkflows("project-1"), {
+    pageParams: [0],
+    pages: [
+      {
+        nextOffset: null,
+        workflows: fixture.board.data.workflows.map((workflow) => ({
+          description: workflow.description ?? "",
+          id: workflow.id,
+          isProjectDefault: workflow.isProjectDefault,
+          name: workflow.name,
+        })),
+      },
+    ],
+  });
   return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
