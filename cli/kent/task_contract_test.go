@@ -46,6 +46,48 @@ func (s *taskPaginationStub) ListWorkflowTasks(
 	return s.taskListResponse, nil
 }
 
+func TestProjectWorkflowTaskResumeAcceptsAppliedAndNoOp(t *testing.T) {
+	currentNodes := []serverapi.WorkflowTaskCurrentNode{{NodeID: "node-1"}}
+	for _, test := range []struct {
+		name                    string
+		response                serverapi.WorkflowTaskResumeResponse
+		wantSetupCompletionWait bool
+	}{
+		{
+			name: "applied",
+			response: serverapi.WorkflowTaskResumeResponse{
+				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
+				Applied: &serverapi.WorkflowTaskResumeApplied{CurrentNodes: currentNodes},
+			},
+			wantSetupCompletionWait: true,
+		},
+		{
+			name: "no-op",
+			response: serverapi.WorkflowTaskResumeResponse{
+				Outcome: serverapi.WorkflowExecutionTargetActionOutcomeNoOp,
+				NoOp:    &serverapi.WorkflowTaskResumeNoOp{CurrentNodes: currentNodes},
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := projectWorkflowTaskResume(test.response)
+			if err != nil {
+				t.Fatalf("projectWorkflowTaskResume: %v", err)
+			}
+			if !slices.Equal(result.applied.CurrentNodes, currentNodes) {
+				t.Fatalf("current nodes = %+v, want %+v", result.applied.CurrentNodes, currentNodes)
+			}
+			if result.requiresSetupCompletion != test.wantSetupCompletionWait {
+				t.Fatalf(
+					"requires setup completion = %t, want %t",
+					result.requiresSetupCompletion,
+					test.wantSetupCompletionWait,
+				)
+			}
+		})
+	}
+}
+
 func TestTaskListPureFilterSortAndPaginationContracts(t *testing.T) {
 	values, err := parseTaskListFilterValues([]string{"active,done", "active"}, "status")
 	if err != nil || !slices.Equal(values, []string{"active", "done"}) {
@@ -264,7 +306,7 @@ func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testi
 	workflowName := "Delivery"
 	projection, err := taskListProjectionFromResponse(
 		serverapi.WorkflowTaskListResponse{
-			Scope: serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 			Tasks: []serverapi.WorkflowTaskListItem{{
 				TaskID:       "task-1",
