@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"core/shared/rollbacktarget"
 	"github.com/go-faster/jx"
 )
 
@@ -196,7 +197,14 @@ func inspectHistoryReplacementRecordStream(reader io.Reader) error {
 				"last_committed_assistant_final_answer":
 				return inspectOptionalEventRecordType(decoder, jx.String, field)
 			case "latest_rollback_candidate":
-				return inspectOptionalEventRecordType(decoder, jx.Object, field)
+				value, err := inspectOptionalRollbackCandidate(
+					decoder,
+					inspectionReader,
+				)
+				if err != nil {
+					return err
+				}
+				replacement.LatestRollbackCandidate = value
 			case "items":
 				return inspectOptionalEventRecordType(decoder, jx.Array, field)
 			default:
@@ -217,6 +225,56 @@ func inspectHistoryReplacementRecordStream(reader io.Reader) error {
 		return fmt.Errorf("validate history replacement payload: %w", err)
 	}
 	return nil
+}
+
+func inspectOptionalRollbackCandidate(
+	decoder *jx.Decoder,
+	inspectionReader *eventRecordInspectionReader,
+) (*rollbacktarget.CandidateLocator, error) {
+	switch actual := decoder.Next(); actual {
+	case jx.Null:
+		if err := decoder.Skip(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	case jx.Object:
+	default:
+		if err := decoder.Skip(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf(
+			"history replacement field %q must be %s or null",
+			"latest_rollback_candidate",
+			jx.Object,
+		)
+	}
+	candidate := rollbacktarget.CandidateLocator{}
+	if err := inspectEventRecordObject(
+		decoder,
+		inspectionReader,
+		func(decoder *jx.Decoder, field string) error {
+			switch field {
+			case "user_message_seq":
+				value, err := decoder.Int64()
+				if err != nil {
+					return err
+				}
+				candidate.UserMessageSeq = value
+			case "candidate_page_end_byte":
+				value, err := decoder.Int64()
+				if err != nil {
+					return err
+				}
+				candidate.CandidatePageEndByte = value
+			default:
+				return decoder.Skip()
+			}
+			return nil
+		},
+	); err != nil {
+		return nil, err
+	}
+	return &candidate, nil
 }
 
 func inspectOptionalEventRecordInt(decoder *jx.Decoder) (*int, error) {

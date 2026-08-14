@@ -156,6 +156,10 @@ func TestQuestionHistoryCursorRejectsCorruptReplacementAtBoundary(t *testing.T) 
 			name: "duplicate payload",
 			line: []byte(`{"seq":2,"kind":"history_replaced","payload":{"engine":"local"},"payload":{"mode":"handoff","items":[]}}`),
 		},
+		{
+			name: "invalid rollback candidate",
+			line: []byte(`{"seq":2,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","latest_rollback_candidate":{"user_message_seq":0,"candidate_page_end_byte":0},"items":[]}}`),
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -216,7 +220,7 @@ func TestQuestionHistoryCursorStreamsLargeReplacementBoundaryWithoutMaterializin
 	if _, err := fp.Write(append(header, '\n')); err != nil {
 		t.Fatalf("write header: %v", err)
 	}
-	if _, err := fp.WriteString(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","items":[{"type":"other","raw":"`); err != nil {
+	if _, err := fp.WriteString(`{"seq":1,"kind":"history_replaced","payload":{"engine":"local","mode":"handoff","latest_rollback_candidate":{"user_message_seq":1,"candidate_page_end_byte":1},"items":[{"type":"other","raw":"`); err != nil {
 		t.Fatalf("write replacement prefix: %v", err)
 	}
 	chunk := bytes.Repeat([]byte{'x'}, int(eventLogScanChunkSize))
