@@ -86,6 +86,14 @@ func (r failingSessionStoreResolver) ResolveSessionStore(context.Context, string
 	return nil, r.err
 }
 
+type missingRuntimeMainViewSnapshotProvider struct {
+	runtimeReadModelSnapshotProvider
+}
+
+func (missingRuntimeMainViewSnapshotProvider) RuntimeMainViewSnapshot(string) (clientui.RuntimeMainView, bool) {
+	return clientui.RuntimeMainView{}, false
+}
+
 func (c *serviceBlockingLLM) Generate(ctx context.Context, _ llm.Request) (llm.Response, error) {
 	c.once.Do(func() { close(c.started) })
 	select {
@@ -143,6 +151,107 @@ func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t 
 	}
 	if response.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
 		t.Fatalf("live activity = %+v, want registered idle", response.MainView.Activity)
+	}
+}
+
+func TestServiceGetSessionMainViewReturnsPublishedProjectionWhileRuntimeMutationIsAdmitted(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
+	service := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
+	before, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
+		SessionID: store.Meta().SessionID,
+	})
+	if err != nil {
+		t.Fatalf("get completed Main View: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	mutationDone := make(chan error, 1)
+	go func() {
+		mutationDone <- fixture.authority.WithCurrentRuntime(
+			t.Context(),
+			fixture.sessionID,
+			func(_ context.Context, engine *runtime.Engine) error {
+				close(entered)
+				<-release
+				return engine.SetSessionName("later Runtime mutation")
+			},
+		)
+	}()
+	<-entered
+
+	result := make(chan struct {
+		response serverapi.SessionMainViewResponse
+		err      error
+	}, 1)
+	go func() {
+		response, readErr := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
+			SessionID: store.Meta().SessionID,
+		})
+		result <- struct {
+			response serverapi.SessionMainViewResponse
+			err      error
+		}{response: response, err: readErr}
+	}()
+	select {
+	case read := <-result:
+		if read.err != nil {
+			t.Fatalf("get Main View while Runtime mutation is admitted: %v", read.err)
+		}
+		if read.response.MainView.Version != before.MainView.Version {
+			t.Fatalf("Main View version = %+v, want prior completed %+v", read.response.MainView.Version, before.MainView.Version)
+		}
+		if read.response.MainView.Session.ConversationFreshness != before.MainView.Session.ConversationFreshness ||
+			read.response.MainView.Status.ConversationFreshness != before.MainView.Status.ConversationFreshness {
+			t.Fatalf(
+				"Main View Conversation Freshness changed: before=%+v after=%+v",
+				before.MainView,
+				read.response.MainView,
+			)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Main View waited for WithCurrentRuntime")
+	}
+	close(release)
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("complete admitted Runtime mutation: %v", err)
+	}
+}
+
+func TestServiceGetSessionMainViewFallsBackToPersistedViewWhenLiveProjectionIsMissing(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
+	live, err := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil).
+		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("get completed live Main View: %v", err)
+	}
+	if !live.MainView.Status.AutoCompactionEnabled {
+		t.Fatalf("live Main View did not establish distinct Runtime status: %+v", live.MainView.Status)
+	}
+	activity := missingRuntimeMainViewSnapshotProvider{runtimeReadModelSnapshotProvider: fixture.activity}
+	response, err := NewService(newTestSessionResolver(store), activity, fixture.authority, nil).
+		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("get persisted Main View fallback: %v", err)
+	}
+	if response.MainView.Status.AutoCompactionEnabled {
+		t.Fatalf("missing live projection returned mutable Runtime status: %+v", response.MainView.Status)
+	}
+	if response.MainView.Session.ConversationFreshness != clientui.ConversationFreshnessFresh ||
+		response.MainView.Status.ConversationFreshness != clientui.ConversationFreshnessFresh {
+		t.Fatalf("persisted Main View Conversation Freshness = %+v", response.MainView)
+	}
+	if err := response.MainView.Version.Validate(); err != nil {
+		t.Fatalf("persisted Main View version = %+v, want retained client revision", response.MainView.Version)
 	}
 }
 
