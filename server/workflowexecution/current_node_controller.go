@@ -861,7 +861,7 @@ func (c *CurrentNodeController) ExecutionFinalized(scope sessionruntime.Executio
 	}
 	interrupted := c.interrupts.scopeFenced(scope.ID())
 	c.interrupts.finishScope(scope.ID())
-	closed := c.closed
+	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if !closed {
 		c.wakeAdmissionWorker()
@@ -914,7 +914,7 @@ func (c *CurrentNodeController) interruptOutcomeLessFinalization(reference workf
 	defer cancel()
 	interrupted, err := runCurrentNodeTaskMutation(ctx, c, reference.TaskID, func(ctx context.Context) (bool, error) {
 		c.mu.Lock()
-		closed := c.closed
+		closed := c.closed || c.closing
 		c.mu.Unlock()
 		if closed {
 			return false, nil

@@ -638,14 +638,14 @@ func TestGatewayExplicitAdmissionInterruptionPersistenceFailureRemainsNonFatal(t
 				},
 				resumeWorkflowTask: func(ctx context.Context, _ serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error) {
 					resumed, resumeErr := controller.ResumeTask(ctx, taskID)
-					if len(resumed) == 0 {
+					if len(resumed.CurrentNodes) == 0 {
 						return serverapi.WorkflowTaskResumeResponse{}, resumeErr
 					}
 					response := serverapi.WorkflowTaskResumeResponse{
 						Outcome: serverapi.WorkflowExecutionTargetActionOutcomeApplied,
 						Applied: &serverapi.WorkflowTaskResumeApplied{
 							CurrentNodes: []serverapi.WorkflowTaskCurrentNode{{
-								NodeID: string(resumed[0].Reference.NodeID),
+								NodeID: string(resumed.CurrentNodes[0].Reference.NodeID),
 							}},
 						},
 					}

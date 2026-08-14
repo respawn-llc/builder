@@ -122,7 +122,7 @@ func (c *CurrentNodeController) queueTaskPreparationBatchLocked(batch *taskPrepa
 func (c *CurrentNodeController) takeTaskPreparationBatch() (*taskPreparationBatch, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closed ||
+	if c.closed || c.closing ||
 		len(c.preparationQueue) == 0 ||
 		c.inFlightAdmissionCountLocked(currentNodeAdmissionExplicitOverride)+len(c.preparationRunning) >= explicitAdmissionConcurrency {
 		return nil, false
@@ -140,7 +140,7 @@ func (c *CurrentNodeController) runTaskPreparationBatch(batch *taskPreparationBa
 	c.lifecycleBarrier.RLock()
 	defer c.lifecycleBarrier.RUnlock()
 	c.mu.Lock()
-	closed := c.closed
+	closed := c.closed || c.closing
 	c.mu.Unlock()
 	if closed {
 		c.finishCanceledTaskPreparationBatch(batch)

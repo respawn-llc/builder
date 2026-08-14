@@ -432,6 +432,15 @@ func newTaskMutationAuthorizationExecutionStub(service *Service) *taskMutationAu
 		currentNodeCompletionExecutionStub: currentNodeCompletionExecutionStub{
 			store:                 service.store,
 			manualMoveAssignments: workflowServiceManualMoveAssignments(service),
+			resumePreflight: workflowexecution.TaskResumePreflight{
+				Outcome: workflowexecution.TaskResumePreflightResumable,
+				CurrentNodes: []workflow.CurrentNode{{
+					Reference: workflow.CurrentNodeReference{
+						TaskID: workflow.TaskID("authorization-preflight"),
+						NodeID: workflow.NodeID("authorization-preflight"),
+					},
+				}},
+			},
 		},
 	}
 }
@@ -441,14 +450,17 @@ func (s *taskMutationAuthorizationExecutionStub) Interrupt(_ context.Context, se
 	return nil
 }
 
-func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *taskMutationAuthorizationExecutionStub) ResumeTask(_ context.Context, taskID workflow.TaskID) (workflowexecution.TaskResumeResult, error) {
 	s.resumedTaskIDs = append(s.resumedTaskIDs, taskID)
-	return []workflow.CurrentNode{{
-		Reference: workflow.CurrentNodeReference{
-			TaskID: taskID,
-			NodeID: workflow.NodeID("authorized-resume"),
-		},
-	}}, nil
+	return workflowexecution.TaskResumeResult{
+		Outcome: workflowexecution.TaskResumeApplied,
+		CurrentNodes: []workflow.CurrentNode{{
+			Reference: workflow.CurrentNodeReference{
+				TaskID: taskID,
+				NodeID: workflow.NodeID("authorized-resume"),
+			},
+		}},
+	}, nil
 }
 
 func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
@@ -456,7 +468,7 @@ func (s *taskMutationAuthorizationExecutionStub) ResumeTaskWithPreparation(
 	taskID workflow.TaskID,
 	_ workflowexecution.TaskStartPreparation,
 	_ workflowexecution.TaskPreparationFinalizer,
-) ([]workflow.CurrentNode, error) {
+) (workflowexecution.TaskResumeResult, error) {
 	return s.ResumeTask(context.Background(), taskID)
 }
 

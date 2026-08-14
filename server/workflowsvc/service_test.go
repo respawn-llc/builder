@@ -1305,8 +1305,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 		response.SelectionRequired.Reason != serverapi.WorkflowExecutionTargetSelectionReasonConfiguredTargetUnavailable {
 		t.Fatalf("resume response = %+v, want configured target selection", response)
 	}
-	if execution.resumeEligibilityCalls != 0 {
-		t.Fatalf("Resume eligibility calls = %d, want none before configured-target selection", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 1 {
+		t.Fatalf("Resume preflight calls = %d, want one before configured-target selection", execution.resumeEligibilityCalls)
 	}
 	targetContext, err := service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1331,8 +1331,8 @@ func TestServiceTaskResumeReselectsUnavailableUnlockedTarget(t *testing.T) {
 	if response.Outcome != serverapi.WorkflowExecutionTargetActionOutcomeApplied || response.Applied == nil {
 		t.Fatalf("resume response = %+v, want applied", response)
 	}
-	if execution.resumeEligibilityCalls != 1 {
-		t.Fatalf("Resume eligibility calls = %d, want one after selected target", execution.resumeEligibilityCalls)
+	if execution.resumeEligibilityCalls != 2 {
+		t.Fatalf("Resume preflight calls = %d, want one per request", execution.resumeEligibilityCalls)
 	}
 	targetContext, err = service.store.GetTaskExecutionTargetContext(ctx, workflow.TaskID(task.Task.ID))
 	if err != nil {
@@ -1417,6 +1417,80 @@ func TestServiceTaskResumeNoOpsWhenTaskAlreadyResumed(t *testing.T) {
 		response.NoOp == nil ||
 		len(response.NoOp.CurrentNodes) != 1 {
 		t.Fatalf("ResumeWorkflowTask = %+v, want no-op with current ready node", response)
+	}
+}
+
+func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, workflowID)
+	task := createDefaultWorkflowServiceTask(t, ctx, service, binding.ProjectID)
+	if _, err := service.store.StartTask(ctx, workflow.TaskID(task.Task.ID)); err != nil {
+		t.Fatalf("StartTask: %v", err)
+	}
+	currentNodes, err := service.store.ListCurrentNodes(ctx, workflow.TaskID(task.Task.ID))
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	for _, currentNode := range currentNodes {
+		if err := service.store.InterruptCurrentNode(
+			ctx,
+			currentNode.Reference,
+			workflow.CurrentNodeInterruptionReasonUserInterrupt,
+			workflow.NewCurrentNodeInterruptionDetail(
+				string(workflow.CurrentNodeInterruptionReasonUserInterrupt),
+				nil,
+			),
+		); err != nil {
+			t.Fatalf("InterruptCurrentNode: %v", err)
+		}
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller, err := workflowexecution.NewCurrentNodeController(
+		service.store,
+		initialBranchControllerRunner{},
+		authority,
+		service.taskMutations,
+		workflowexecution.CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: initialBranchControllerSteerer{},
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewCurrentNodeController: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+	service.currentNodeExecution = controller
+	request := serverapi.WorkflowTaskResumeRequest{
+		TaskID:           task.Task.ID,
+		SetupOperationID: serverapi.NewWorktreeSetupOperationID(),
+		ExecutionTarget: &serverapi.WorkflowExecutionTargetSelection{
+			Mode: serverapi.WorkflowExecutionTargetModeNone,
+		},
+	}
+
+	responses := make(chan serverapi.WorkflowTaskResumeResponse, 2)
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			response, resumeErr := service.ResumeWorkflowTask(ctx, request)
+			responses <- response
+			errs <- resumeErr
+		}()
+	}
+	outcomes := map[serverapi.WorkflowExecutionTargetActionOutcome]int{}
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("ResumeWorkflowTask: %v", err)
+		}
+		outcomes[(<-responses).Outcome]++
+	}
+	if outcomes[serverapi.WorkflowExecutionTargetActionOutcomeApplied] != 1 ||
+		outcomes[serverapi.WorkflowExecutionTargetActionOutcomeNoOp] != 1 {
+		t.Fatalf("concurrent Resume outcomes = %+v, want one applied and one no_op", outcomes)
 	}
 }
 

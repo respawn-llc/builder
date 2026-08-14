@@ -723,8 +723,6 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 	key := start.referenceKey()
 	ownsWorker := true
 	defer c.admissionWG.Done()
-	c.lifecycleBarrier.RLock()
-	defer c.lifecycleBarrier.RUnlock()
 	defer c.wakeAdmissionWorker()
 	defer close(start.done)
 	defer func() { c.finishTaskInterruptAdmission(start.reference, ownsWorker) }()
@@ -790,6 +788,14 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			return
 		}
 		start.holdFor = nil
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed = c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return
 	}
 	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
 		c.mu.Lock()
