@@ -6,7 +6,6 @@ import {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
 } from "./virtualizedPixelOffsetRequest";
-import { resolveVirtualizedRowLayout } from "./virtualizedInfiniteListRows";
 
 const virtualizer = vi.hoisted(() => ({
   getOffsetForIndex: vi.fn(),
@@ -29,6 +28,30 @@ const virtualizer = vi.hoisted(() => ({
 const testEstimateSize = () => 40;
 const testGetItemKey = (item: string) => item;
 const testRenderItem = (item: string) => item;
+
+function viewportCoordinates(element: HTMLElement, scrollport: HTMLElement) {
+  const style = getComputedStyle(element);
+  const normalLeft = element.offsetLeft - scrollport.scrollLeft;
+  const normalTop = element.offsetTop - scrollport.scrollTop;
+  if (style.position !== "sticky") {
+    return { left: normalLeft, top: normalTop };
+  }
+  return {
+    left: clampStickyAxis(normalLeft, style.left),
+    top: clampStickyAxis(normalTop, style.top),
+  };
+}
+
+function clampStickyAxis(normalPosition: number, inset: string): number {
+  if (inset.length === 0 || inset === "auto") {
+    return normalPosition;
+  }
+  const constrainedPosition = Number.parseFloat(inset);
+  if (!Number.isFinite(constrainedPosition)) {
+    throw new Error(`Expected a resolved sticky inset, received ${JSON.stringify(inset)}`);
+  }
+  return Math.max(normalPosition, constrainedPosition);
+}
 
 vi.mock("@tanstack/react-virtual", () => ({
   defaultRangeExtractor: ({ startIndex, endIndex }: Readonly<{ startIndex: number; endIndex: number }>) =>
@@ -323,6 +346,7 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
         isFetchingNextPage={false}
         itemRole="row"
         items={["header", "task"]}
+        getItemWrapperProps={(item) => ({ "aria-label": `${item} wrapper` })}
         loadingLabel="Loading"
         onLoadMore={() => undefined}
         renderItem={(item) => <div role={item === "header" ? "columnheader" : "gridcell"}>{item}</div>}
@@ -333,15 +357,13 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
 
     const grid = screen.getByRole("grid");
     grid.scrollLeft = 120;
+    grid.scrollTop = 20;
     fireEvent.scroll(grid);
 
-    const headerLayout = resolveVirtualizedRowLayout(true);
-    const taskLayout = resolveVirtualizedRowLayout(false);
-    expect(headerLayout.horizontalCoordinateSpace).toBe("scroll-content");
-    expect(headerLayout.horizontalCoordinateSpace).toBe(taskLayout.horizontalCoordinateSpace);
-    expect(headerLayout.horizontalPlacement).toBe("flow");
-    expect(taskLayout.horizontalPlacement).toBe("content-start");
-    expect(headerLayout.verticalBehavior).toBe("sticky");
+    const headerPosition = viewportCoordinates(screen.getByLabelText("header wrapper"), grid);
+    const taskPosition = viewportCoordinates(screen.getByLabelText("task wrapper"), grid);
+    expect(headerPosition.left).toBe(taskPosition.left);
+    expect(headerPosition.top).toBe(0);
   });
 
   it("loads independent visible items once for their current request generation", () => {

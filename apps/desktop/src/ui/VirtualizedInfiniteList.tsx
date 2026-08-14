@@ -37,10 +37,8 @@ import {
 import {
   fallbackVirtualizedRowStyle,
   renderVirtualizedRow,
-  resolveVirtualizedRowLayout,
   virtualizedRowClassName,
   virtualizedRowKey,
-  virtualizedRowLayoutClassName,
 } from "./virtualizedInfiniteListRows";
 
 export type { VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
@@ -505,12 +503,10 @@ function VirtualizedInfiniteListContent<TItem>({
           const itemKey = item === undefined ? undefined : getItemKey(item);
           const wrapperProps = item === undefined ? undefined : getItemWrapperProps?.(item, itemIndex);
           const sticky = itemKey !== undefined && stickyItemKeys?.has(itemKey) === true;
-          const layout = resolveVirtualizedRowLayout(sticky);
           return (
             <div
               {...wrapperProps}
               className={cx(
-                virtualizedRowLayoutClassName(layout),
                 virtualizedRowClassName({
                   count,
                   index: virtualItem.index,
@@ -523,14 +519,15 @@ function VirtualizedInfiniteListContent<TItem>({
               key={virtualItem.key}
               ref={virtualizer.measureElement}
               role={itemRole}
-              style={
-                layout.verticalBehavior === "sticky"
-                  ? wrapperProps?.style
-                  : {
-                      ...wrapperProps?.style,
-                      transform: `translateY(${virtualItem.start.toString()}px)`,
-                    }
-              }
+              style={{
+                ...wrapperProps?.style,
+                position: sticky ? "sticky" : "absolute",
+                top: 0,
+                width: "100%",
+                ...(sticky
+                  ? { zIndex: 1 }
+                  : { left: 0, transform: `translateY(${virtualItem.start.toString()}px)` }),
+              }}
             >
               {renderRow(virtualItem.index)}
             </div>
