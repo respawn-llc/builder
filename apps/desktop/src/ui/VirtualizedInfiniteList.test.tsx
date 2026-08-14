@@ -6,6 +6,7 @@ import {
   createVirtualizedPixelOffsetRequest,
   type VirtualizedPixelOffsetRequest,
 } from "./virtualizedPixelOffsetRequest";
+import { resolveVirtualizedRowLayout } from "./virtualizedInfiniteListRows";
 
 const virtualizer = vi.hoisted(() => ({
   getOffsetForIndex: vi.fn(),
@@ -337,9 +338,15 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
 
     expect(grid.scrollLeft).toBe(120);
     expect(screen.getAllByRole("row")).toHaveLength(2);
-    expect(screen.getByLabelText("header wrapper")).toHaveClass("sticky", "top-0");
-    expect(screen.getByLabelText("header wrapper")).not.toHaveClass("left-0");
-    expect(screen.getByLabelText("task wrapper")).toHaveClass("absolute", "left-0");
+
+    const headerLayout = resolveVirtualizedRowLayout(true);
+    const taskLayout = resolveVirtualizedRowLayout(false);
+    expect(headerLayout.horizontalCoordinateSpace).toBe("scroll-content");
+    expect(headerLayout.horizontalCoordinateSpace).toBe(taskLayout.horizontalCoordinateSpace);
+    expect(headerLayout.horizontalPlacement).toBe("flow");
+    expect(taskLayout.horizontalPlacement).toBe("content-start");
+    expect(headerLayout.verticalBehavior).toBe("sticky");
+    expect(taskLayout.verticalBehavior).toBe("virtualized");
   });
 
   it("loads independent visible items once for their current request generation", () => {

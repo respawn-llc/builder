@@ -4,6 +4,28 @@ import { cx } from "./classes";
 import { InfiniteListBoundary, type VirtualizedInfiniteListBoundaryState } from "./InfiniteListBoundary";
 import { Spinner } from "./Spinner";
 
+export type VirtualizedRowLayout = Readonly<{
+  horizontalCoordinateSpace: "scroll-content";
+  horizontalPlacement: "content-start" | "flow";
+  verticalBehavior: "sticky" | "virtualized";
+}>;
+
+export function resolveVirtualizedRowLayout(sticky: boolean): VirtualizedRowLayout {
+  return {
+    horizontalCoordinateSpace: "scroll-content",
+    horizontalPlacement: sticky ? "flow" : "content-start",
+    verticalBehavior: sticky ? "sticky" : "virtualized",
+  };
+}
+
+export function virtualizedRowLayoutClassName(layout: VirtualizedRowLayout): string {
+  return cx(
+    layout.verticalBehavior === "sticky" ? "sticky top-0 z-[1]" : "absolute top-0",
+    layout.horizontalPlacement === "content-start" && "left-0",
+    "w-full",
+  );
+}
+
 export function fallbackVirtualizedRowStyle({
   count,
   index,
