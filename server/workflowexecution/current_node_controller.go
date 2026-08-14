@@ -244,26 +244,31 @@ func NewCurrentNodeController(
 func (c *CurrentNodeController) CompleteAgentCurrentNode(
 	ctx context.Context,
 	req workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
-	_, operation, err := c.completeAgentCurrentNode(ctx, req)
+) (workflowruntime.CompletionOutcome, error) {
+	completed, operation, diagnostic, err := c.completeAgentCurrentNode(ctx, req)
 	if err != nil {
-		return workflowruntime.CompletionResult{}, err
+		return workflowruntime.RejectedCompletionOutcome(err), err
 	}
-	return workflowruntime.CompletionResult{
-		TransitionID: workflow.TransitionID(req.TransitionID),
-		State:        "applied",
-		Operation:    operation,
-	}, nil
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
+		Result: workflowruntime.CompletionResult{
+			TransitionID:    workflow.TransitionID(req.TransitionID),
+			State:           "applied",
+			Operation:       operation,
+			CommittedResult: completed,
+		},
+		Diagnostic: diagnostic,
+	}), nil
 }
 
 func (c *CurrentNodeController) CompleteScriptCurrentNode(
 	ctx context.Context,
 	req workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
+) (workflowruntime.CompletionOutcome, error) {
 	if req.ScopeID.IsZero() {
-		return workflowruntime.CompletionResult{}, errors.New("Script completion requires an Exact Execution Scope")
+		err := errors.New("Script completion requires an Exact Execution Scope")
+		return workflowruntime.RejectedCompletionOutcome(err), err
 	}
-	_, operation, err := c.completeLiveCurrentNode(
+	completed, operation, diagnostic, err := c.completeLiveCurrentNode(
 		ctx,
 		req.ScopeID,
 		req.TransitionID,
@@ -274,13 +279,17 @@ func (c *CurrentNodeController) CompleteScriptCurrentNode(
 		},
 	)
 	if err != nil {
-		return workflowruntime.CompletionResult{}, err
+		return workflowruntime.RejectedCompletionOutcome(err), err
 	}
-	return workflowruntime.CompletionResult{
-		TransitionID: workflow.TransitionID(req.TransitionID),
-		State:        "applied",
-		Operation:    operation,
-	}, nil
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
+		Result: workflowruntime.CompletionResult{
+			TransitionID:    workflow.TransitionID(req.TransitionID),
+			State:           "applied",
+			Operation:       operation,
+			CommittedResult: completed,
+		},
+		Diagnostic: diagnostic,
+	}), nil
 }
 
 func (c *CurrentNodeController) CompleteSessionCurrentNode(
@@ -291,18 +300,20 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 	transitionID string,
 	outputValues map[string]string,
 	commentary string,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowruntime.CompletionOutcome, error) {
 	if c == nil {
-		return workflowstore.CurrentNodeCompletionResult{}, errors.New("current node workflow controller is required")
+		err := errors.New("current node workflow controller is required")
+		return workflowruntime.RejectedCompletionOutcome(err), err
 	}
 	if sessionID.IsZero() {
-		return workflowstore.CurrentNodeCompletionResult{}, errors.New("session id is required")
+		err := errors.New("session id is required")
+		return workflowruntime.RejectedCompletionOutcome(err), err
 	}
 	handle, live := c.authority.SessionExecution(sessionID)
 	if !live || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent {
-		return workflowstore.CurrentNodeCompletionResult{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowruntime.RejectedCompletionOutcome(sessionruntime.ErrExecutionNoLongerLive), sessionruntime.ErrExecutionNoLongerLive
 	}
-	completed, _, err := c.completeAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
+	return c.CompleteAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
 		Provenance: workflowruntime.AgentCompletionProvenance{
 			ScopeID: handle.Scope().ID(),
 			RunID:   runID,
@@ -313,24 +324,23 @@ func (c *CurrentNodeController) CompleteSessionCurrentNode(
 		OutputValues: outputValues,
 		Commentary:   commentary,
 	})
-	return completed, err
 }
 
 func (c *CurrentNodeController) completeAgentCurrentNode(
 	ctx context.Context,
 	req workflowruntime.AgentCompletionRequest,
-) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error, error) {
 	if c == nil {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, errors.New("current node workflow controller is required")
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, errors.New("current node workflow controller is required")
 	}
 	if req.Provenance.ScopeID.IsZero() || req.Provenance.RunID.IsZero() ||
 		req.Provenance.StepID.IsZero() || req.SessionID.IsZero() {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, errors.New("Agent completion requires Scope, Session, Run, and Step provenance")
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, errors.New("Agent completion requires Scope, Session, Run, and Step provenance")
 	}
 	handle, live := c.authority.SessionExecution(req.SessionID)
 	if !live || handle.Scope().Kind() != sessionruntime.ExecutionScopeAgent ||
 		handle.Scope().ID() != req.Provenance.ScopeID {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, sessionruntime.ErrExecutionNoLongerLive
 	}
 	return c.completeLiveCurrentNode(
 		ctx,
@@ -359,20 +369,21 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	validateAndCommit func(
 		func() (workflowruntime.CompletionDecision, error),
 	) (workflowruntime.CompletionDecision, error),
-) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error) {
+) (workflowstore.CurrentNodeCompletionResult, workflow.CurrentNodeOperationRef, error, error) {
 	handle, live := c.authority.ExecutionByScope(scopeID)
 	if !live {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, sessionruntime.ErrExecutionNoLongerLive
 	}
 	workflowRef, workflowScoped := handle.Scope().Workflow()
 	if !workflowScoped {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, sessionruntime.ErrExecutionNoLongerLive
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, sessionruntime.ErrExecutionNoLongerLive
 	}
 	key, err := workflowRef.CurrentNode.Key()
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, err
 	}
 	var completed workflowstore.CurrentNodeCompletionResult
+	var completionDiagnostic error
 	var starts []currentNodeQueuedStart
 	var pending []*pendingCurrentNodeAssignmentSteer
 	err = c.permit.Run(ctx, func(ctx context.Context) error {
@@ -413,6 +424,16 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 				return decision, completionErr
 			}
 			completed = outcome.CurrentNodeCompletionResult
+			completionDiagnostic = outcome.PostCommitDiagnostic
+			decision.Accepted = &workflowruntime.AcceptedCompletion{
+				Result: workflowruntime.CompletionResult{
+					TransitionID:    workflow.TransitionID(transitionID),
+					State:           "applied",
+					Operation:       workflowRef.Operation(),
+					CommittedResult: completed,
+				},
+				Diagnostic: completionDiagnostic,
+			}
 			starts = automaticQueuedStarts(completed.AutomaticIntents)
 			c.mu.Lock()
 			exact = c.operations[key]
@@ -469,9 +490,9 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 		return c.resolvePendingCurrentNodeAssignmentSteers(ctx, starts, pending)
 	})
 	if err != nil {
-		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, err
+		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, err
 	}
-	return completed, workflowRef.Operation(), nil
+	return completed, workflowRef.Operation(), completionDiagnostic, nil
 }
 
 func (c *CurrentNodeController) FinalizeCurrentNodePostTurn(

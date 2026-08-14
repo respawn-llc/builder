@@ -600,19 +600,20 @@ type workflowCompletionAccountingController struct {
 func (c *workflowCompletionAccountingController) CompleteAgentCurrentNode(
 	_ context.Context,
 	request workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
+) (workflowruntime.CompletionOutcome, error) {
 	c.completionMu.Lock()
 	c.completionRequests = append(c.completionRequests, request)
 	c.completionMu.Unlock()
 	c.completions.Add(1)
-	return workflowruntime.CompletionResult{}, nil
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{}), nil
 }
 
 func (c *workflowCompletionAccountingController) CompleteScriptCurrentNode(
 	context.Context,
 	workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
-	return workflowruntime.CompletionResult{}, errors.New("unexpected Script completion")
+) (workflowruntime.CompletionOutcome, error) {
+	err := errors.New("unexpected Script completion")
+	return workflowruntime.RejectedCompletionOutcome(err), err
 }
 
 func (c *workflowCompletionAccountingController) CompletionRequests() []workflowruntime.AgentCompletionRequest {

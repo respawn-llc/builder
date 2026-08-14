@@ -85,26 +85,26 @@ func (e *Engine) completeWorkflowCurrentNode(
 	ctx context.Context,
 	stepID string,
 	parsed workflowruntime.ParsedCompletion,
-) (workflowruntime.CompletionResult, error) {
+) (workflowruntime.CompletionOutcome, error) {
 	execution, active := e.currentNodeExecutionConfig()
 	if !active || execution.Controller == nil {
-		return workflowruntime.CompletionResult{}, errors.New("current node execution is unavailable")
+		return workflowruntime.CompletionOutcome{}, errors.New("current node execution is unavailable")
 	}
 	sessionID, err := e.workflowSessionID()
 	if err != nil {
-		return workflowruntime.CompletionResult{}, err
+		return workflowruntime.CompletionOutcome{}, err
 	}
 	run := e.ActiveRun()
 	if run == nil || run.StepID != stepID {
-		return workflowruntime.CompletionResult{}, ErrActiveStepInactive
+		return workflowruntime.CompletionOutcome{}, ErrActiveStepInactive
 	}
 	runID, err := runtimeids.ParseRunID(run.RunID)
 	if err != nil {
-		return workflowruntime.CompletionResult{}, fmt.Errorf("active Workflow run identity: %w", err)
+		return workflowruntime.CompletionOutcome{}, fmt.Errorf("active Workflow run identity: %w", err)
 	}
 	parsedStepID, err := runtimeids.ParseStepID(stepID)
 	if err != nil {
-		return workflowruntime.CompletionResult{}, fmt.Errorf("active Workflow step identity: %w", err)
+		return workflowruntime.CompletionOutcome{}, fmt.Errorf("active Workflow step identity: %w", err)
 	}
 	return execution.Controller.CompleteAgentCurrentNode(ctx, workflowruntime.AgentCompletionRequest{
 		Provenance: workflowruntime.AgentCompletionProvenance{
@@ -143,7 +143,13 @@ func (e *Engine) ApplyWorkflowAgentCompletion(
 		if err != nil {
 			return err
 		}
-		recorded, err := e.recordWorkflowTerminalState(workflowCompletionSource(execution.CompletionMode))
+		if decision.Accepted == nil {
+			return errors.New("committed Workflow completion returned no accepted outcome")
+		}
+		recorded, err := e.recordWorkflowTerminalState(
+			workflowCompletionSource(execution.CompletionMode),
+			*decision.Accepted,
+		)
 		if err != nil {
 			return err
 		}

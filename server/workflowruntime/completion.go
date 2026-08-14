@@ -159,13 +159,48 @@ type ScriptCompletionRequest struct {
 }
 
 type CompletionResult struct {
-	TransitionID workflow.TransitionID
-	State        string
-	Operation    workflow.CurrentNodeOperationRef
+	TransitionID    workflow.TransitionID
+	State           string
+	Operation       workflow.CurrentNodeOperationRef
+	CommittedResult workflowstore.CurrentNodeCompletionResult
+}
+
+type AcceptedCompletion struct {
+	Result     CompletionResult
+	Diagnostic error
+}
+
+type CompletionOutcomeKind uint8
+
+const (
+	CompletionOutcomeInvalid CompletionOutcomeKind = iota
+	CompletionOutcomeAccepted
+	CompletionOutcomeRejected
+)
+
+type CompletionOutcome struct {
+	Kind      CompletionOutcomeKind
+	Accepted  *AcceptedCompletion
+	Rejection error
+}
+
+func AcceptedCompletionOutcome(completion AcceptedCompletion) CompletionOutcome {
+	return CompletionOutcome{
+		Kind:     CompletionOutcomeAccepted,
+		Accepted: &completion,
+	}
+}
+
+func RejectedCompletionOutcome(err error) CompletionOutcome {
+	return CompletionOutcome{
+		Kind:      CompletionOutcomeRejected,
+		Rejection: err,
+	}
 }
 
 type CompletionDecision struct {
 	CommitReceipt        session.CommitReceipt
+	Accepted             *AcceptedCompletion
 	PostCommitDiagnostic error
 }
 
@@ -192,6 +227,33 @@ const (
 	DiagnosticOwnerScriptRunner       DiagnosticOwner = "script_runner"
 	DiagnosticOwnerControllerShutdown DiagnosticOwner = "controller_shutdown"
 )
+
+type WorkflowCompletionDiagnosticKind string
+
+const (
+	WorkflowCompletionDiagnosticCommittedCompletion WorkflowCompletionDiagnosticKind = "committed_completion"
+	WorkflowCompletionDiagnosticPostTurnSettlement  WorkflowCompletionDiagnosticKind = "post_turn_settlement"
+)
+
+type WorkflowCompletionDiagnostic struct {
+	Kind       WorkflowCompletionDiagnosticKind
+	Owner      DiagnosticOwner
+	Operation  workflow.CurrentNodeOperationRef
+	Diagnostic error
+}
+
+type WorkflowCompletionDiagnosticSink interface {
+	PublishWorkflowCompletionDiagnostic(context.Context, WorkflowCompletionDiagnostic) error
+}
+
+type WorkflowCompletionDiagnosticSinkFunc func(context.Context, WorkflowCompletionDiagnostic) error
+
+func (f WorkflowCompletionDiagnosticSinkFunc) PublishWorkflowCompletionDiagnostic(
+	ctx context.Context,
+	diagnostic WorkflowCompletionDiagnostic,
+) error {
+	return f(ctx, diagnostic)
+}
 
 type PostTurnSettlementKind string
 
@@ -232,8 +294,8 @@ type ViolationResult struct {
 }
 
 type Controller interface {
-	CompleteAgentCurrentNode(context.Context, AgentCompletionRequest) (CompletionResult, error)
-	CompleteScriptCurrentNode(context.Context, ScriptCompletionRequest) (CompletionResult, error)
+	CompleteAgentCurrentNode(context.Context, AgentCompletionRequest) (CompletionOutcome, error)
+	CompleteScriptCurrentNode(context.Context, ScriptCompletionRequest) (CompletionOutcome, error)
 	RecordProtocolViolation(context.Context, ViolationRequest) (ViolationResult, error)
 	ResetProtocolViolationBudget(context.Context, ViolationResetRequest) error
 }

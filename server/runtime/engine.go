@@ -628,12 +628,12 @@ func (e *Engine) submitUserMessageWithOutcome(ctx context.Context, text string, 
 	return outcome, err
 }
 
-func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message, err error) {
+func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (result WorkflowTurnResult, err error) {
 	if !e.currentNodeExecutionActive() {
-		return llm.Message{}, errors.New("workflow turn requires an active Current Node execution")
+		return WorkflowTurnResult{}, errors.New("workflow turn requires an active Current Node execution")
 	}
 	if e.closed.Load() {
-		return llm.Message{}, ErrEngineClosed
+		return WorkflowTurnResult{}, ErrEngineClosed
 	}
 
 	e.ensureOrchestrationCollaborators()
@@ -642,11 +642,15 @@ func (e *Engine) SubmitWorkflowTurn(ctx context.Context) (assistant llm.Message,
 			return err
 		}
 		msg, runErr := e.runStepLoop(stepCtx, stepID)
-		assistant = msg
+		result.Assistant = msg
 		return runErr
 	})
+	if terminal := e.WorkflowTerminalState(); terminal.Completed {
+		completion := terminal.Completion
+		result.Completion = &completion
+	}
 	e.surfaceRunError(err)
-	return assistant, err
+	return result, err
 }
 
 func (e *Engine) SubmitUserShellCommand(ctx context.Context, command string) (result tools.Result, err error) {

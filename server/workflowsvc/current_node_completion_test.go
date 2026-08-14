@@ -9,6 +9,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -371,7 +372,12 @@ func (s *currentNodeCompletionExecutionStub) CompleteSessionCurrentNode(
 	_ string,
 	_ map[string]string,
 	_ string,
-) (workflowstore.CurrentNodeCompletionResult, error) {
+) (workflowruntime.CompletionOutcome, error) {
 	s.sessionID = sessionID
-	return s.sessionResult, s.sessionErr
+	if s.sessionErr != nil {
+		return workflowruntime.RejectedCompletionOutcome(s.sessionErr), s.sessionErr
+	}
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
+		Result: workflowruntime.CompletionResult{CommittedResult: s.sessionResult},
+	}), nil
 }

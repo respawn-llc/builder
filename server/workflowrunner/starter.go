@@ -53,24 +53,26 @@ type WorkflowAttentionRegistry interface {
 }
 
 type Starter struct {
-	cfg                  config.App
-	metadata             *metadata.Store
-	store                RuntimeStore
-	authManager          *auth.Manager
-	attention            WorkflowAttentionRegistry
-	runtimeAuthority     *sessionruntime.Authority
-	storeOptions         []session.StoreOption
-	runtimeClientFactory runtimewire.RuntimeClientFactory
-	mutationPermit       *workflowexecution.MutationPermit
-	taskAwarenessSource  workflowruntime.TaskAwarenessSource
-	closed               atomic.Bool
+	cfg                   config.App
+	metadata              *metadata.Store
+	store                 RuntimeStore
+	authManager           *auth.Manager
+	attention             WorkflowAttentionRegistry
+	runtimeAuthority      *sessionruntime.Authority
+	storeOptions          []session.StoreOption
+	runtimeClientFactory  runtimewire.RuntimeClientFactory
+	mutationPermit        *workflowexecution.MutationPermit
+	taskAwarenessSource   workflowruntime.TaskAwarenessSource
+	completionDiagnostics workflowruntime.WorkflowCompletionDiagnosticSink
+	closed                atomic.Bool
 }
 
 type StarterOptions struct {
-	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	RuntimeAuthority     *sessionruntime.Authority
-	MutationPermit       *workflowexecution.MutationPermit
-	TaskDependencies     TaskDependencyCounter
+	RuntimeClientFactory  runtimewire.RuntimeClientFactory
+	RuntimeAuthority      *sessionruntime.Authority
+	MutationPermit        *workflowexecution.MutationPermit
+	TaskDependencies      TaskDependencyCounter
+	CompletionDiagnostics workflowruntime.WorkflowCompletionDiagnosticSink
 }
 
 func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStore, authManager *auth.Manager, attention WorkflowAttentionRegistry, opts StarterOptions) (*Starter, error) {
@@ -85,16 +87,17 @@ func NewStarter(cfg config.App, metadataStore *metadata.Store, store RuntimeStor
 		return nil, err
 	}
 	return &Starter{
-		cfg:                  cfg,
-		metadata:             metadataStore,
-		store:                store,
-		authManager:          authManager,
-		attention:            attention,
-		runtimeAuthority:     opts.RuntimeAuthority,
-		storeOptions:         metadataStore.AuthoritativeSessionStoreOptions(),
-		runtimeClientFactory: opts.RuntimeClientFactory,
-		mutationPermit:       opts.MutationPermit,
-		taskAwarenessSource:  taskAwarenessSource,
+		cfg:                   cfg,
+		metadata:              metadataStore,
+		store:                 store,
+		authManager:           authManager,
+		attention:             attention,
+		runtimeAuthority:      opts.RuntimeAuthority,
+		storeOptions:          metadataStore.AuthoritativeSessionStoreOptions(),
+		runtimeClientFactory:  opts.RuntimeClientFactory,
+		mutationPermit:        opts.MutationPermit,
+		taskAwarenessSource:   taskAwarenessSource,
+		completionDiagnostics: opts.CompletionDiagnostics,
 	}, nil
 }
 
@@ -532,19 +535,30 @@ func (s *Starter) currentNodeAgentRunner(
 ) sessionruntime.AgentRunner {
 	return func(runCtx context.Context, scope sessionruntime.ExecutionScope, bridge sessionruntime.AgentRuntimeBridge) error {
 		var turnEngine *runtime.Engine
+		var turnResult runtime.WorkflowTurnResult
 		turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
+			turnEngine = engine
 			if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-				_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+				result, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+				turnResult = result
 				if err != nil {
 					return err
 				}
-			} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
-				return err
+			} else {
+				result, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+				turnResult = result
+				if err != nil {
+					return err
+				}
 			}
-			turnEngine = engine
 			return nil
 		})
-		if turnErr == nil && turnEngine != nil {
+		if turnResult.Completion != nil && turnEngine != nil {
+			completion := *turnResult.Completion
+			settlement := workflowruntime.PostTurnSettlement{
+				Kind:            workflowruntime.PostTurnSettlementSucceeded,
+				DiagnosticOwner: workflowruntime.DiagnosticOwnerAgentRunner,
+			}
 			if finalizer, ok := controller.(workflowruntime.PostTurnFinalizer); ok {
 				sessionID, err := runtimeids.ParseSessionID(turnEngine.SessionID())
 				if err != nil {
@@ -554,11 +568,7 @@ func (s *Starter) currentNodeAgentRunner(
 				if err != nil {
 					return err
 				}
-				workflowRef, workflowScoped := scope.Workflow()
-				if !workflowScoped {
-					return errors.New("Workflow Agent execution has no operation correlation")
-				}
-				_, turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, workflowRef.Operation(), sessionID, workflowruntime.PostCompletionRuntime{
+				settlement, turnErr = finalizer.FinalizeCurrentNodePostTurn(runCtx, completion.Result.Operation, sessionID, workflowruntime.PostCompletionRuntime{
 					UsedTokens:          turnEngine.ContextUsage().UsedTokens,
 					PreCompactionTokens: preCompactionTokens,
 					CompactionMode:      turnEngine.CompactionMode(),
@@ -567,6 +577,28 @@ func (s *Starter) currentNodeAgentRunner(
 					},
 				})
 			}
+			s.publishCompletionDiagnostic(runCtx, workflowruntime.WorkflowCompletionDiagnostic{
+				Kind:       workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion,
+				Owner:      workflowruntime.DiagnosticOwnerAgentRunner,
+				Operation:  completion.Result.Operation,
+				Diagnostic: completion.Diagnostic,
+			})
+			if settlement.Diagnostic != nil &&
+				settlement.DiagnosticOwner == workflowruntime.DiagnosticOwnerAgentRunner {
+				s.publishCompletionDiagnostic(runCtx, workflowruntime.WorkflowCompletionDiagnostic{
+					Kind:       workflowruntime.WorkflowCompletionDiagnosticPostTurnSettlement,
+					Owner:      settlement.DiagnosticOwner,
+					Operation:  completion.Result.Operation,
+					Diagnostic: settlement.Diagnostic,
+				})
+			}
+			if turnErr != nil {
+				slog.Error("settle accepted Workflow completion failed",
+					"operation_id", completion.Result.Operation.OperationID,
+					"error", turnErr,
+				)
+			}
+			return nil
 		}
 		if turnErr == nil {
 			return nil
@@ -576,6 +608,35 @@ func (s *Starter) currentNodeAgentRunner(
 			reason = string(workflow.CurrentNodeInterruptionReasonRuntimeCanceled)
 		}
 		return errors.Join(turnErr, s.failCurrentNodeScope(context.WithoutCancel(runCtx), controller, scope, reason, turnErr))
+	}
+}
+
+func (s *Starter) publishCompletionDiagnostic(
+	ctx context.Context,
+	diagnostic workflowruntime.WorkflowCompletionDiagnostic,
+) {
+	if diagnostic.Diagnostic == nil {
+		return
+	}
+	if s.completionDiagnostics == nil {
+		slog.Error("Workflow completion diagnostic",
+			"kind", diagnostic.Kind,
+			"owner", diagnostic.Owner,
+			"operation_id", diagnostic.Operation.OperationID,
+			"error", diagnostic.Diagnostic,
+		)
+		return
+	}
+	if err := s.completionDiagnostics.PublishWorkflowCompletionDiagnostic(
+		context.WithoutCancel(ctx),
+		diagnostic,
+	); err != nil {
+		slog.Error("publish Workflow completion diagnostic failed",
+			"kind", diagnostic.Kind,
+			"owner", diagnostic.Owner,
+			"operation_id", diagnostic.Operation.OperationID,
+			"error", err,
+		)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"core/server/llm"
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
@@ -23,7 +24,13 @@ type WorkflowTerminalState struct {
 	Completed   bool
 	Generation  int64
 	Source      WorkflowCompletionSource
+	Completion  workflowruntime.AcceptedCompletion
 	CompletedAt time.Time
+}
+
+type WorkflowTurnResult struct {
+	Assistant  llm.Message
+	Completion *workflowruntime.AcceptedCompletion
 }
 
 func workflowCompletionSource(mode workflowruntime.CompletionMode) WorkflowCompletionSource {
@@ -75,7 +82,10 @@ func (e *Engine) WorkflowTerminalState() WorkflowTerminalState {
 	return e.workflowTerminal
 }
 
-func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) (bool, error) {
+func (e *Engine) recordWorkflowTerminalState(
+	source WorkflowCompletionSource,
+	completion workflowruntime.AcceptedCompletion,
+) (bool, error) {
 	switch source {
 	case WorkflowCompletionSourceTool,
 		WorkflowCompletionSourceStructuredOutput,
@@ -94,7 +104,9 @@ func (e *Engine) recordWorkflowTerminalState(source WorkflowCompletionSource) (b
 	}
 	e.workflowTerminal = WorkflowTerminalState{
 		Completed:   true,
+		Generation:  e.workflowTerminal.Generation + 1,
 		Source:      source,
+		Completion:  completion,
 		CompletedAt: time.Now(),
 	}
 	return true, nil

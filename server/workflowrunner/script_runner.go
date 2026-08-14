@@ -134,11 +134,26 @@ func (s *Starter) finalizeCurrentNodeScript(
 	if err != nil {
 		return s.failCurrentNodeScope(ctx, controller, scope, ReasonScriptCompletionFailed, err)
 	}
-	_, err = controller.CompleteScriptCurrentNode(ctx, workflowruntime.ScriptCompletionRequest{
+	outcome, err := controller.CompleteScriptCurrentNode(ctx, workflowruntime.ScriptCompletionRequest{
 		ScopeID: scope.ID(), TransitionID: parsed.TransitionID,
 		OutputValues: parsed.OutputValues, Commentary: parsed.Commentary,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
+		if outcome.Rejection != nil {
+			return outcome.Rejection
+		}
+		return errors.New("Script completion returned no accepted outcome")
+	}
+	s.publishCompletionDiagnostic(ctx, workflowruntime.WorkflowCompletionDiagnostic{
+		Kind:       workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion,
+		Owner:      workflowruntime.DiagnosticOwnerScriptRunner,
+		Operation:  outcome.Accepted.Result.Operation,
+		Diagnostic: outcome.Accepted.Diagnostic,
+	})
+	return nil
 }
 
 func scriptExecutionFailure(result sessionruntime.ScriptResult, runErr error) error {

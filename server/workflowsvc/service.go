@@ -12,6 +12,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
@@ -43,7 +44,7 @@ type Service struct {
 		InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 		Interrupt(context.Context, workflowexecution.InterruptSelector) error
 		EnsureTaskQuiescent(workflow.TaskID) error
-		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+		CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionOutcome, error)
 	}
 }
 
@@ -186,7 +187,7 @@ func WithCurrentNodeExecution(execution interface {
 	InterruptForManualMove(context.Context, workflow.TaskID, func() error) error
 	Interrupt(context.Context, workflowexecution.InterruptSelector) error
 	EnsureTaskQuiescent(workflow.TaskID) error
-	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowstore.CurrentNodeCompletionResult, error)
+	CompleteSessionCurrentNode(context.Context, runtimeids.SessionID, runtimeids.RunID, runtimeids.StepID, string, map[string]string, string) (workflowruntime.CompletionOutcome, error)
 }) Option {
 	return func(s *Service) {
 		s.currentNodeExecution = execution
@@ -1949,7 +1950,7 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 		if parseErr != nil {
 			return serverapi.WorkflowTaskCompleteResponse{}, parseErr
 		}
-		completed, err := s.currentNodeExecution.CompleteSessionCurrentNode(
+		outcome, err := s.currentNodeExecution.CompleteSessionCurrentNode(
 			ctx, sessionID, runID, stepID,
 			req.TransitionID, req.OutputValues, req.Commentary,
 		)
@@ -1959,6 +1960,13 @@ func (s *Service) completeWorkflowTask(ctx context.Context, req serverapi.Workfl
 			}
 			return serverapi.WorkflowTaskCompleteResponse{}, err
 		}
+		if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
+			if outcome.Rejection != nil {
+				return serverapi.WorkflowTaskCompleteResponse{}, outcome.Rejection
+			}
+			return serverapi.WorkflowTaskCompleteResponse{}, errors.New("current node completion returned no accepted outcome")
+		}
+		completed := outcome.Accepted.Result.CommittedResult
 		var taskID workflow.TaskID
 		if completed.PendingApproval != nil {
 			taskID = completed.PendingApproval.Source.TaskID

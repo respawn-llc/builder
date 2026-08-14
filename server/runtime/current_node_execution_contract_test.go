@@ -114,7 +114,10 @@ func TestCurrentNodeExecutionBindingClearsCompletedContract(t *testing.T) {
 		beforeClose.WorkflowID != execution.Instructions.WorkflowID {
 		t.Fatalf("WorkflowSessionState before completed binding close = %+v, want configured workflow identity", beforeClose)
 	}
-	if _, err := engine.recordWorkflowTerminalState(WorkflowCompletionSourceTool); err != nil {
+	if _, err := engine.recordWorkflowTerminalState(
+		WorkflowCompletionSourceTool,
+		workflowruntime.AcceptedCompletion{},
+	); err != nil {
 		t.Fatalf("record Workflow terminal state: %v", err)
 	}
 

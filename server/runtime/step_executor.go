@@ -960,11 +960,20 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, err)
 		return true, terminal, nudgeErr
 	}
-	if completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, stepID, parsed); completeErr != nil {
+	completion, completeErr := s.completeCurrentNodeExecutionFromParsed(ctx, stepID, parsed)
+	if completeErr != nil {
 		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, completeErr)
 		return true, terminal, nudgeErr
 	}
-	recorded, err := e.recordWorkflowTerminalState(workflowCompletionSource(mode))
+	if completion.Kind != workflowruntime.CompletionOutcomeAccepted || completion.Accepted == nil {
+		rejection := completion.Rejection
+		if rejection == nil {
+			rejection = errors.New("workflow completion returned no accepted outcome")
+		}
+		terminal, nudgeErr := s.appendWorkflowInvalidCompletionNudge(ctx, stepID, rejection)
+		return true, terminal, nudgeErr
+	}
+	recorded, err := e.recordWorkflowTerminalState(workflowCompletionSource(mode), *completion.Accepted)
 	if err != nil {
 		return true, false, err
 	}
@@ -974,9 +983,12 @@ func (s *defaultStepExecutor) handleWorkflowCompletionSubmission(ctx context.Con
 	return true, true, nil
 }
 
-func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(ctx context.Context, stepID string, parsed workflowruntime.ParsedCompletion) error {
-	_, completeErr := s.engine.completeWorkflowCurrentNode(ctx, stepID, parsed)
-	return completeErr
+func (s *defaultStepExecutor) completeCurrentNodeExecutionFromParsed(
+	ctx context.Context,
+	stepID string,
+	parsed workflowruntime.ParsedCompletion,
+) (workflowruntime.CompletionOutcome, error) {
+	return s.engine.completeWorkflowCurrentNode(ctx, stepID, parsed)
 }
 
 func (s *defaultStepExecutor) appendWorkflowInvalidCompletionNudge(ctx context.Context, stepID string, err error) (bool, error) {

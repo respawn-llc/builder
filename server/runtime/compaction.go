@@ -111,21 +111,21 @@ func (e *Engine) CompactContextForWorkflowPostCompletion(ctx context.Context) wo
 // consumes a committed Workflow Pre-Compaction boundary only after the target
 // turn succeeds. A failed target attempt therefore preserves the boundary for
 // the existing Resume path.
-func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (llm.Message, error) {
+func (e *Engine) SubmitWorkflowContinuationTurn(ctx context.Context) (WorkflowTurnResult, error) {
 	if e == nil {
-		return llm.Message{}, errors.New("runtime engine is required")
+		return WorkflowTurnResult{}, errors.New("runtime engine is required")
 	}
 	if !e.compactionRuntimeState().WorkflowPostCompletionBoundary() {
 		if err := e.CompactContextForWorkflowContinuation(ctx); err != nil {
-			return llm.Message{}, err
+			return WorkflowTurnResult{}, err
 		}
 	}
-	assistant, err := e.SubmitWorkflowTurn(ctx)
+	result, err := e.SubmitWorkflowTurn(ctx)
 	if err != nil {
-		return llm.Message{}, err
+		return WorkflowTurnResult{}, err
 	}
 	e.compactionRuntimeState().ApplyWorkflowPostCompletionActivity(workflowPostCompletionDurableActivity)
-	return assistant, nil
+	return result, nil
 }
 
 func (e *Engine) WorkflowPreCompactionTokenLimit() (int, error) {

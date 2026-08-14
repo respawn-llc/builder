@@ -325,7 +325,7 @@ func completeCurrentNodeLifecycleForTest(
 	scopeID runtimeids.ExecutionScopeID,
 	transitionID string,
 ) (workflowstore.CurrentNodeCompletionResult, error) {
-	result, _, err := controller.completeLiveCurrentNode(
+	result, _, _, err := controller.completeLiveCurrentNode(
 		ctx,
 		scopeID,
 		transitionID,

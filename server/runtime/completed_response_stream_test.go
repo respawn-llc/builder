@@ -929,8 +929,9 @@ type failingWorkflowCompletionController struct {
 func (c *failingWorkflowCompletionController) CompleteAgentCurrentNode(
 	context.Context,
 	workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
-	return workflowruntime.CompletionResult{}, errors.New("workflow completion unavailable")
+) (workflowruntime.CompletionOutcome, error) {
+	err := errors.New("workflow completion unavailable")
+	return workflowruntime.RejectedCompletionOutcome(err), err
 }
 
 func (c *failingWorkflowCompletionController) RecordProtocolViolation(
@@ -949,15 +950,16 @@ func (c *failingWorkflowCompletionController) RecordProtocolViolation(
 func (c *externallyCompletedWorkflowController) CompleteAgentCurrentNode(
 	context.Context,
 	workflowruntime.AgentCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
-	return workflowruntime.CompletionResult{}, nil
+) (workflowruntime.CompletionOutcome, error) {
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{}), nil
 }
 
 func (c *externallyCompletedWorkflowController) CompleteScriptCurrentNode(
 	context.Context,
 	workflowruntime.ScriptCompletionRequest,
-) (workflowruntime.CompletionResult, error) {
-	return workflowruntime.CompletionResult{}, errors.New("unexpected Script completion")
+) (workflowruntime.CompletionOutcome, error) {
+	err := errors.New("unexpected Script completion")
+	return workflowruntime.RejectedCompletionOutcome(err), err
 }
 
 func (c *externallyCompletedWorkflowController) RecordProtocolViolation(

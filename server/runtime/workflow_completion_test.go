@@ -26,6 +26,7 @@ import (
 type fakeWorkflowController struct {
 	completed              atomic.Int64
 	completeErr            error
+	completionDiagnostic   error
 	violations             atomic.Int64
 	protocolBudgetResets   atomic.Int64
 	protocolBudgetResetErr error
@@ -34,19 +35,26 @@ type fakeWorkflowController struct {
 	requests               []workflowruntime.AgentCompletionRequest
 }
 
-func (c *fakeWorkflowController) CompleteAgentCurrentNode(_ context.Context, req workflowruntime.AgentCompletionRequest) (workflowruntime.CompletionResult, error) {
+func (c *fakeWorkflowController) CompleteAgentCurrentNode(_ context.Context, req workflowruntime.AgentCompletionRequest) (workflowruntime.CompletionOutcome, error) {
 	c.mu.Lock()
 	c.requests = append(c.requests, req)
 	c.mu.Unlock()
 	if c.completeErr != nil {
-		return workflowruntime.CompletionResult{}, c.completeErr
+		return workflowruntime.RejectedCompletionOutcome(c.completeErr), c.completeErr
 	}
 	c.completed.Add(1)
-	return workflowruntime.CompletionResult{TransitionID: "transition-applied", State: "applied"}, nil
+	return workflowruntime.AcceptedCompletionOutcome(workflowruntime.AcceptedCompletion{
+		Result: workflowruntime.CompletionResult{
+			TransitionID: "transition-applied",
+			State:        "applied",
+		},
+		Diagnostic: c.completionDiagnostic,
+	}), nil
 }
 
-func (c *fakeWorkflowController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionResult, error) {
-	return workflowruntime.CompletionResult{}, errors.New("unexpected Script completion")
+func (c *fakeWorkflowController) CompleteScriptCurrentNode(context.Context, workflowruntime.ScriptCompletionRequest) (workflowruntime.CompletionOutcome, error) {
+	err := errors.New("unexpected Script completion")
+	return workflowruntime.RejectedCompletionOutcome(err), err
 }
 
 func (c *fakeWorkflowController) RecordProtocolViolation(_ context.Context, req workflowruntime.ViolationRequest) (workflowruntime.ViolationResult, error) {
@@ -158,6 +166,36 @@ func TestSubmitWorkflowTurnWaitsForTerminalBackgroundNoticeContinuation(t *testi
 	client.mu.Unlock()
 	if callCount != 2 {
 		t.Fatalf("model calls = %d, want background continuation then workflow turn", callCount)
+	}
+}
+
+func TestSubmitWorkflowTurnReturnsAcceptedCompletionDiagnosticWithoutTurnFailure(t *testing.T) {
+	diagnostic := errors.New("completion event publication failed")
+	controller := &fakeWorkflowController{completionDiagnostic: diagnostic}
+	engine := mustNewWorkflowTestEngine(
+		t,
+		mustCreateTestSession(t),
+		&fakeClient{responses: []llm.Response{commentaryResponse(
+			"complete",
+			completeNodeCall("call_complete", json.RawMessage(`{"commentary":"complete","summary":"done"}`)),
+		)}},
+		testWorkflowConfig(controller, config.WorkflowCompletionModeTool),
+		Config{},
+	)
+
+	result, err := engine.SubmitWorkflowTurn(context.Background())
+	if err != nil {
+		t.Fatalf("SubmitWorkflowTurn: %v", err)
+	}
+	if result.Completion == nil || !errors.Is(result.Completion.Diagnostic, diagnostic) {
+		t.Fatalf("turn completion = %+v, want accepted diagnostic %v", result.Completion, diagnostic)
+	}
+	if got := controller.violations.Load(); got != 0 {
+		t.Fatalf("protocol violations = %d, want zero", got)
+	}
+	terminal := engine.WorkflowTerminalState()
+	if !terminal.Completed || !errors.Is(terminal.Completion.Diagnostic, diagnostic) {
+		t.Fatalf("terminal state = %+v, want accepted diagnostic", terminal)
 	}
 }
 

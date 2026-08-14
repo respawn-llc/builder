@@ -411,11 +411,18 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 			}, err.Error())
 		}
 	}
-	completed, err := e.completeWorkflowCurrentNode(ctx, stepID, parsed)
+	outcome, err := e.completeWorkflowCurrentNode(ctx, stepID, parsed)
 	if err != nil {
 		return e.workflowCompletionRejectedResult(ctx, result, err)
 	}
-	recorded, err := e.recordWorkflowTerminalState(WorkflowCompletionSourceTool)
+	if outcome.Kind != workflowruntime.CompletionOutcomeAccepted || outcome.Accepted == nil {
+		rejection := outcome.Rejection
+		if rejection == nil {
+			rejection = errors.New("workflow completion returned no accepted outcome")
+		}
+		return e.workflowCompletionRejectedResult(ctx, result, rejection)
+	}
+	recorded, err := e.recordWorkflowTerminalState(WorkflowCompletionSourceTool, *outcome.Accepted)
 	if err != nil {
 		return tools.ErrorResult(tools.Call{
 			ID:    call.ID,
@@ -424,12 +431,12 @@ func (t *defaultToolExecutor) executeCompleteNodeTool(ctx context.Context, stepI
 		}, err.Error())
 	}
 	if !recorded {
-		result.Output = workflowruntime.ToolSuccessPayload(completed)
+		result.Output = workflowruntime.ToolSuccessPayload(outcome.Accepted.Result)
 		result.Summary = textutil.Value("workflow node completed")
 		result.Terminal = true
 		return result
 	}
-	result.Output = workflowruntime.ToolSuccessPayload(completed)
+	result.Output = workflowruntime.ToolSuccessPayload(outcome.Accepted.Result)
 	result.Summary = textutil.Value("workflow node completed")
 	result.Terminal = true
 	return result

@@ -27,6 +27,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowstore"
 	"core/server/workflowview"
 	"core/shared/config"
@@ -52,10 +53,46 @@ type currentNodeRunnerFixture struct {
 	workspace       string
 	client          currentNodeRunnerClient
 	persistenceGate *sessiontest.PersistenceGate
+	diagnostics     *recordingWorkflowCompletionDiagnosticSink
 
 	mu             sync.Mutex
 	clientRequests []runtimewire.RuntimeClientRequest
 	clientErr      error
+}
+
+type recordingWorkflowCompletionDiagnosticSink struct {
+	mu          sync.Mutex
+	diagnostics []workflowruntime.WorkflowCompletionDiagnostic
+}
+
+type failingCompletionEventPublisher struct {
+	err error
+}
+
+func (p failingCompletionEventPublisher) PublishWorkflowEvent(
+	_ context.Context,
+	event workflowstore.WorkflowEventRecord,
+) error {
+	if event.Action == serverapi.WorkflowProjectEventActionCompleted {
+		return p.err
+	}
+	return nil
+}
+
+func (s *recordingWorkflowCompletionDiagnosticSink) PublishWorkflowCompletionDiagnostic(
+	_ context.Context,
+	diagnostic workflowruntime.WorkflowCompletionDiagnostic,
+) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.diagnostics = append(s.diagnostics, diagnostic)
+	return nil
+}
+
+func (s *recordingWorkflowCompletionDiagnosticSink) snapshot() []workflowruntime.WorkflowCompletionDiagnostic {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]workflowruntime.WorkflowCompletionDiagnostic(nil), s.diagnostics...)
 }
 
 type currentNodeRunnerClient interface {
@@ -196,6 +233,7 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		workspaceID: binding.WorkspaceID,
 		workspace:   binding.CanonicalRoot,
 		client:      client,
+		diagnostics: &recordingWorkflowCompletionDiagnosticSink{},
 	}
 	storeOptions := metadataStore.AuthoritativeSessionStoreOptions()
 	if withPersistenceGate {
@@ -245,9 +283,10 @@ func newCurrentNodeRunnerFixtureWithClientAndPersistence(
 		t.Fatalf("new Task dependency counter: %v", err)
 	}
 	starter, err := NewStarter(cfg, metadataStore, store, nil, nil, StarterOptions{
-		RuntimeAuthority: fixture.authority,
-		MutationPermit:   permit,
-		TaskDependencies: dependencyCounter,
+		RuntimeAuthority:      fixture.authority,
+		MutationPermit:        permit,
+		TaskDependencies:      dependencyCounter,
+		CompletionDiagnostics: fixture.diagnostics,
 		RuntimeClientFactory: runtimewire.RuntimeClientFactoryFunc(func(_ context.Context, request runtimewire.RuntimeClientRequest) (llm.Client, error) {
 			fixture.mu.Lock()
 			fixture.clientRequests = append(fixture.clientRequests, request)
@@ -1181,6 +1220,104 @@ func TestPostTurnCompactionDiagnosticReleasesAssignedSuccessor(t *testing.T) {
 	}
 }
 
+func TestToolCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(t *testing.T) {
+	testCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(
+		t,
+		config.WorkflowCompletionModeTool,
+		ScriptedToolBatch(
+			"complete",
+			llm.ToolCall{
+				ID:    "complete-source",
+				Name:  string(toolspec.ToolCompleteNode),
+				Input: json.RawMessage(`{"transition":"next","commentary":"done"}`),
+			},
+		),
+	)
+}
+
+func TestStructuredCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(t *testing.T) {
+	testCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(
+		t,
+		config.WorkflowCompletionModeStructuredOutput,
+		ScriptedFinalAnswer(`{"transition":"next","commentary":"done"}`),
+	)
+}
+
+func testCompletionPostCommitDiagnosticRemainsAcceptedAndSettlesSuccessor(
+	t *testing.T,
+	completionMode config.WorkflowCompletionMode,
+	response ScriptedRuntimeStep,
+) {
+	t.Helper()
+	responseStarted := make(chan struct{})
+	responseRelease := make(chan struct{})
+	t.Cleanup(func() {
+		select {
+		case <-responseRelease:
+		default:
+			close(responseRelease)
+		}
+	})
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				close(responseStarted)
+				select {
+				case <-responseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: response.Response,
+		},
+		ScriptedRuntimeError(ErrScriptedRuntime),
+	)
+	f.starter.cfg.Settings.Workflow.CompletionMode = completionMode
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Accepted tool completion diagnostic",
+		workflow.ContextModeNewSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete source."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review successor."},
+	)
+	task := f.createTask(t, workflowID)
+	source := f.startTask(t, task)
+	select {
+	case <-responseStarted:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("source response did not start")
+	}
+	publicationErr := errors.New("completion event publication failed")
+	f.store.SetWorkflowEventPublisher(failingCompletionEventPublisher{err: publicationErr})
+	close(responseRelease)
+
+	target := f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && !nodes[0].Reference.Equal(source)
+	})[0].Reference
+	f.waitForTaskQuiescence(t, task.ID)
+	diagnostics := f.diagnostics.snapshot()
+	if len(diagnostics) != 1 ||
+		diagnostics[0].Kind != workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion ||
+		!errors.Is(diagnostics[0].Diagnostic, publicationErr) {
+		t.Fatalf("completion diagnostics = %+v, want one committed diagnostic", diagnostics)
+	}
+	interrupted, err := f.store.InterruptedExecutableCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list interrupted Current Nodes: %v", err)
+	}
+	for _, node := range interrupted {
+		if node.Reference.Equal(source) {
+			t.Fatalf("accepted completion interrupted source %v", source)
+		}
+	}
+	if target.NodeID == source.NodeID {
+		t.Fatalf("successor = %v, want one released target", target)
+	}
+}
+
 func TestWorkflowRunnerCompletedAgentRejectsStopDuringPostTurnFinalization(t *testing.T) {
 	client := NewCompactingScriptedClient(
 		llm.ProviderCapabilities{
@@ -2015,6 +2152,40 @@ func TestCurrentNodeScriptReceivesStructuredInputAndCompletes(t *testing.T) {
 	kent, ok := decoded["_kent"].(map[string]any)
 	if !ok || kent["task_id"] != string(task.ID) {
 		t.Fatalf("script _kent identity = %#v", decoded["_kent"])
+	}
+}
+
+func TestScriptCompletionPostCommitDiagnosticRemainsAccepted(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture is a POSIX shell script")
+	}
+	f := newCurrentNodeRunnerFixture(t)
+	publicationErr := errors.New("completion event publication failed")
+	f.store.SetWorkflowEventPublisher(failingCompletionEventPublisher{err: publicationErr})
+	scriptPath := filepath.Join(f.workspace, "complete-with-diagnostic.sh")
+	script := "#!/bin/sh\nprintf '%s' '{\"commentary\":\"done\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+	workflowID := createCurrentNodeScriptWorkflow(t, f.store, scriptPath)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	f.waitForCurrentNode(t, task.ID, func(nodes []workflow.CurrentNode) bool {
+		return len(nodes) == 1 && nodes[0].Scheduling == nil
+	})
+	f.waitForTaskQuiescence(t, task.ID)
+	diagnostics := f.diagnostics.snapshot()
+	if len(diagnostics) != 1 ||
+		diagnostics[0].Owner != workflowruntime.DiagnosticOwnerScriptRunner ||
+		!errors.Is(diagnostics[0].Diagnostic, publicationErr) {
+		t.Fatalf("Script completion diagnostics = %+v, want one runner-owned diagnostic", diagnostics)
+	}
+	interrupted, err := f.store.InterruptedExecutableCurrentNodes(context.Background(), task.ID)
+	if err != nil {
+		t.Fatalf("list interrupted Current Nodes: %v", err)
+	}
+	if len(interrupted) != 0 {
+		t.Fatalf("accepted Script completion interrupted Current Nodes: %+v", interrupted)
 	}
 }
 
