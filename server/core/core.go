@@ -64,6 +64,18 @@ type projectContext struct {
 	projectSession string
 }
 
+type sessionLaunchServiceScopeKind uint8
+
+const (
+	sessionLaunchServiceWorkspaceScope sessionLaunchServiceScopeKind = iota
+	sessionLaunchServiceDetachedScope
+)
+
+type sessionLaunchServiceScope struct {
+	kind    sessionLaunchServiceScopeKind
+	project projectContext
+}
+
 func (s *Core) ProjectExists(ctx context.Context, projectID string) error {
 	if s == nil || s.safeBundles().Persistence.metadataStore == nil {
 		return errors.New("metadata store is required")
@@ -279,7 +291,32 @@ func (s *Core) sessionLaunchServiceForProjectContext(projectCtx projectContext) 
 }
 
 func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectContext) *sessionlaunch.Service {
+	return s.sessionLaunchServiceForScopeLocked(sessionLaunchServiceScope{
+		kind:    sessionLaunchServiceWorkspaceScope,
+		project: projectCtx,
+	})
+}
+
+func (s *Core) sessionLaunchServiceForScope(scope sessionLaunchServiceScope) *sessionlaunch.Service {
+	if s == nil {
+		return nil
+	}
+	s.safeBundles().Sessions.mu.Lock()
+	defer s.safeBundles().Sessions.mu.Unlock()
+	return s.sessionLaunchServiceForScopeLocked(scope)
+}
+
+func (s *Core) sessionLaunchServiceForScopeLocked(scope sessionLaunchServiceScope) *sessionlaunch.Service {
+	projectCtx := scope.project
 	scopeKey := projectWorkspaceScopeKey(projectCtx)
+	switch scope.kind {
+	case sessionLaunchServiceWorkspaceScope:
+	case sessionLaunchServiceDetachedScope:
+		scopeKey = "detached\n" + strings.TrimSpace(projectCtx.projectID) + "\n" +
+			strings.TrimSpace(projectCtx.projectRoot)
+	default:
+		panic("invalid Session launch service scope")
+	}
 	if cached := s.safeBundles().Sessions.sessionServices[scopeKey]; cached != nil {
 		return cached
 	}
@@ -294,12 +331,15 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
 	}).
-		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
-		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithWorkflowTaskReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
+	if scope.kind == sessionLaunchServiceWorkspaceScope {
+		service.
+			WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
+			WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...)
+	}
 	s.safeBundles().Sessions.sessionServices[scopeKey] = service
 	return service
 }

@@ -4,12 +4,9 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 
-	"core/server/launch"
 	"core/server/sessionlaunch"
 	"core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -84,33 +81,10 @@ func (s chatSettingsService) materializedService(
 }
 
 func (s *Core) detachedChatSettingsService(projectCtx projectContext) *sessionlaunch.Service {
-	if s == nil {
-		return nil
-	}
-	key := "detached\n" + strings.TrimSpace(projectCtx.projectID) + "\n" +
-		strings.TrimSpace(projectCtx.projectRoot)
-	s.safeBundles().Sessions.mu.Lock()
-	defer s.safeBundles().Sessions.mu.Unlock()
-	if cached := s.safeBundles().Sessions.sessionServices[key]; cached != nil {
-		return cached
-	}
-	service := sessionlaunch.NewService(launch.Planner{
-		Config:                   projectCtx.config,
-		ContainerDir:             projectCtx.projectSession,
-		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
-		PersistedSessions:        s.safeBundles().Persistence.metadataStore,
-		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
-		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
-		ReloadConfig: func() (config.App, error) {
-			return s.configForWorkspace(projectCtx.projectRoot)
-		},
-	}).
-		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
-		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
-		WithWorkflowTaskReader(s.safeBundles().Persistence.metadataStore).
-		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
-	s.safeBundles().Sessions.sessionServices[key] = service
-	return service
+	return s.sessionLaunchServiceForScope(sessionLaunchServiceScope{
+		kind:    sessionLaunchServiceDetachedScope,
+		project: projectCtx,
+	})
 }
 
 var _ apicontract.ChatSettingsService = chatSettingsService{}

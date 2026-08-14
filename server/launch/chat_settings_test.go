@@ -186,6 +186,36 @@ func TestPrepareChatAgentCatalogUsesFinalNamedAgentProviderCapabilities(t *testi
 	}
 }
 
+func TestPrepareRunPromptFastRoleUsesCustomOpenAITransportContract(t *testing.T) {
+	settings := chatAgentCatalogSettings()
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{}
+	settings.OpenAIBaseURL = "http://127.0.0.1:8080/v1"
+	role := config.BuiltInSubagentRoleFast
+
+	prepared, err := PrepareRunPromptOverridesWithContext(
+		config.App{Settings: settings},
+		serverapi.RunPromptOverrides{AgentRole: &role},
+		auth.EmptyState(),
+		RunPromptPreparationContext{},
+	)
+	if err != nil {
+		t.Fatalf("PrepareRunPromptOverridesWithContext: %v", err)
+	}
+	if prepared.NamedTarget == nil {
+		t.Fatal("fast named target is missing")
+	}
+	if prepared.ProviderCapabilities.ProviderID != "openai-compatible" ||
+		prepared.FastAvailable ||
+		prepared.NamedTarget.Settings.PriorityRequestMode {
+		t.Fatalf(
+			"prepared fast target = provider %+v Fast=%t priority=%t",
+			prepared.ProviderCapabilities,
+			prepared.FastAvailable,
+			prepared.NamedTarget.Settings.PriorityRequestMode,
+		)
+	}
+}
+
 func TestPrepareChatAgentCatalogClassifiesAgentPreparationFailures(t *testing.T) {
 	settings := chatAgentCatalogSettings()
 	settings.Subagents = map[string]config.SubagentRole{
