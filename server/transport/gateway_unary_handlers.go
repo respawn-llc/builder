@@ -158,9 +158,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
-			if err := params.Validate(); err != nil {
-				return protocol.AttachResponse{}, err
-			}
 			if err := g.deps.ProjectExists(ctx, params.ProjectID); err != nil {
 				return protocol.AttachResponse{}, err
 			}
@@ -177,9 +174,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodAttachSession: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachSessionRequest) (protocol.AttachResponse, error) {
-			if err := params.Validate(); err != nil {
-				return protocol.AttachResponse{}, err
-			}
 			binding, err := g.resolveSessionAttachment(ctx, state, params.SessionID)
 			if err != nil {
 				return protocol.AttachResponse{}, err
