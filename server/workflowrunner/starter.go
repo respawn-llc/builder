@@ -241,6 +241,12 @@ func (s *Starter) prepareCurrentNodeAgentAssignment(
 	}, nil
 }
 
+type manualMoveAssignmentRestoration struct {
+	currentContext *workflowstore.CurrentNodeStartContext
+	projectID      string
+	snapshot       *runtime.WorkflowAssignmentSnapshot
+}
+
 func (s *Starter) PrepareManualMoveAssignments(
 	ctx context.Context,
 	inputs []workflowstore.CurrentNodeStartContext,
@@ -251,7 +257,7 @@ func (s *Starter) PrepareManualMoveAssignments(
 ) {
 	assignments := make([]workflowstore.ManualMoveTargetAssignment, 0, len(inputs))
 	steers := make(map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer, len(inputs))
-	restoreContexts := make(map[runtimeids.SessionID]workflowstore.CurrentNodeStartContext)
+	restorations := make(map[runtimeids.SessionID]manualMoveAssignmentRestoration)
 	var diagnostics []error
 	cleanupPrepared := func(cause error) error {
 		for _, steer := range steers {
@@ -259,8 +265,20 @@ func (s *Starter) PrepareManualMoveAssignments(
 				cause = assignment.cleanupUncommitted(cause)
 			}
 		}
-		for _, input := range restoreContexts {
-			cause = errors.Join(cause, s.restoreManualMoveOriginAssignment(ctx, input))
+		for sessionID, restoration := range restorations {
+			switch {
+			case restoration.currentContext != nil:
+				cause = errors.Join(cause, s.restoreManualMoveOriginAssignment(ctx, *restoration.currentContext))
+			case restoration.snapshot != nil:
+				cause = errors.Join(cause, s.restoreManualMoveAssignmentSnapshot(
+					ctx,
+					restoration.projectID,
+					sessionID,
+					*restoration.snapshot,
+				))
+			default:
+				cause = errors.Join(cause, errors.New("manual move assignment restoration is invalid"))
+			}
 		}
 		return cause
 	}
@@ -277,6 +295,30 @@ func (s *Starter) PrepareManualMoveAssignments(
 			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(
 				fmt.Errorf("current node %v execution shape is inconsistent", input.CurrentNode.Reference),
 			)
+		}
+		var priorAssignment *runtime.WorkflowAssignmentSnapshot
+		if input.CurrentNode.SessionID != nil {
+			policy, policyErr := resolveCurrentNodeSessionPolicy(input)
+			if policyErr != nil {
+				return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(policyErr)
+			}
+			_, currentOrigin := originBySession[*input.CurrentNode.SessionID]
+			if !policy.cloneRetainedSession && !currentOrigin {
+				snapshot, found, snapshotErr := s.captureManualMoveAssignmentSnapshot(
+					ctx,
+					input.Task.ProjectID,
+					*input.CurrentNode.SessionID,
+				)
+				if snapshotErr != nil {
+					return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(snapshotErr)
+				}
+				if !found {
+					return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(
+						fmt.Errorf("retained Session %q has no prior workflow assignment", input.CurrentNode.SessionID),
+					)
+				}
+				priorAssignment = &snapshot
+			}
 		}
 		key, err := input.CurrentNode.Reference.Key()
 		if err != nil {
@@ -302,11 +344,16 @@ func (s *Starter) PrepareManualMoveAssignments(
 			CurrentNode: input.CurrentNode.Reference,
 			SessionID:   assignment.SessionID(),
 		})
-		if input.CurrentNode.SessionID != nil && assignment.SessionID() == *input.CurrentNode.SessionID {
-			restoreContexts[assignment.SessionID()] = input
-		}
 		if origin, exists := originBySession[assignment.SessionID()]; exists {
-			restoreContexts[assignment.SessionID()] = origin
+			originCopy := origin
+			restorations[assignment.SessionID()] = manualMoveAssignmentRestoration{currentContext: &originCopy}
+		} else if priorAssignment != nil &&
+			input.CurrentNode.SessionID != nil &&
+			assignment.SessionID() == *input.CurrentNode.SessionID {
+			restorations[assignment.SessionID()] = manualMoveAssignmentRestoration{
+				projectID: input.Task.ProjectID,
+				snapshot:  priorAssignment,
+			}
 		}
 	}
 	return workflowstore.ManualMoveTargetAssignmentPreparation{
@@ -359,6 +406,78 @@ func (s *Starter) restoreManualMoveOriginAssignment(
 		}
 		return errors.Join(
 			fmt.Errorf("restore Manual Move origin %v assignment was not committed", input.CurrentNode.Reference),
+			waitErr,
+		)
+	}
+	return waitErr
+}
+
+func (s *Starter) captureManualMoveAssignmentSnapshot(
+	ctx context.Context,
+	projectID string,
+	sessionID runtimeids.SessionID,
+) (runtime.WorkflowAssignmentSnapshot, bool, error) {
+	descriptor, err := session.NewScopedOpenSessionDescriptor(
+		sessionID,
+		filepath.Join(s.cfg.PersistenceRoot, "projects", projectID, "sessions"),
+	)
+	if err != nil {
+		return runtime.WorkflowAssignmentSnapshot{}, false, err
+	}
+	var (
+		snapshot runtime.WorkflowAssignmentSnapshot
+		found    bool
+	)
+	err = s.withSessionStore(ctx, descriptor, func(_ context.Context, store *session.Store) error {
+		var captureErr error
+		snapshot, found, captureErr = runtime.CapturePersistedWorkflowAssignment(store)
+		return captureErr
+	})
+	return snapshot, found, err
+}
+
+func (s *Starter) restoreManualMoveAssignmentSnapshot(
+	ctx context.Context,
+	projectID string,
+	sessionID runtimeids.SessionID,
+	snapshot runtime.WorkflowAssignmentSnapshot,
+) error {
+	restoreCtx := context.WithoutCancel(ctx)
+	descriptor, err := session.NewScopedOpenSessionDescriptor(
+		sessionID,
+		filepath.Join(s.cfg.PersistenceRoot, "projects", projectID, "sessions"),
+	)
+	if err != nil {
+		return err
+	}
+	var steer runtime.WorkflowAssignmentSteer
+	admission, steerErr := s.runtimeAuthority.WithDormantSessionStore(
+		restoreCtx,
+		descriptor,
+		func(_ context.Context, store *session.Store) error {
+			var err error
+			steer, err = runtime.SteerPersistedWorkflowAssignmentSnapshot(store, snapshot)
+			return err
+		},
+	)
+	if steerErr == nil && admission.RuntimeAvailable {
+		steerErr = s.runtimeAuthority.WithCurrentRuntime(
+			restoreCtx,
+			sessionID,
+			func(_ context.Context, engine *runtime.Engine) error {
+				var err error
+				steer, err = engine.SteerWorkflowAssignmentSnapshot(snapshot)
+				return err
+			},
+		)
+	}
+	if steerErr != nil {
+		return fmt.Errorf("restore Manual Move Session %q assignment: %w", sessionID, steerErr)
+	}
+	receipt, waitErr := steer.Wait(restoreCtx)
+	if !receipt.Committed {
+		return errors.Join(
+			fmt.Errorf("restore Manual Move Session %q assignment was not committed", sessionID),
 			waitErr,
 		)
 	}
