@@ -482,7 +482,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 			Integrity:  transcript.RowIntegrityValid,
 			Kind:       clientui.TranscriptRowUser,
 			Locator:    transcript.CommittedRowLocator{EventSequence: int64(sequence), RowOrdinal: 1},
-			User:       &clientui.TranscriptUserRow{StepID: ongoingTestStepID(), Text: "hello"},
+			User:       &clientui.TranscriptUserRow{StepID: ongoingTestStepIDPointer(), Text: "hello"},
 		})
 	case clientui.TranscriptMessageRuntimeReadModelUpdate:
 		event = clientui.NewTranscriptEvent(clientui.RuntimeReadModelUpdate{
@@ -501,7 +501,7 @@ func ongoingTranscriptMessage(sequence uint64, kind clientui.TranscriptMessageKi
 		})
 	case clientui.TranscriptMessageUserMessageFlushed:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptUserMessageFlushed{
-			StepID: ongoingTestStepID(),
+			StepID: ongoingTestStepIDPointer(),
 		})
 	case clientui.TranscriptMessageSessionStatus:
 		event = clientui.NewTranscriptEvent(clientui.TranscriptSessionStatus{
@@ -593,6 +593,11 @@ func ongoingTestStepID() runtimeids.StepID {
 		panic(err)
 	}
 	return id
+}
+
+func ongoingTestStepIDPointer() *runtimeids.StepID {
+	stepID := ongoingTestStepID()
+	return &stepID
 }
 
 func ongoingTestQueueItemID() runtimeids.QueueItemID {

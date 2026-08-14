@@ -173,7 +173,7 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		NewTranscriptEvent(TranscriptReasoningTraceReset{StepID: stepID}),
 		NewTranscriptEvent(TranscriptToolStart{StepID: stepID, ToolCallID: "call-1", ToolName: "shell"}),
 		NewTranscriptEvent(TranscriptToolAbort{StepID: stepID, ToolCallID: "call-1", Reason: ToolAbortCanceled}),
-		NewTranscriptEvent(TranscriptUserMessageFlushed{StepID: stepID}),
+		NewTranscriptEvent(TranscriptUserMessageFlushed{StepID: &stepID}),
 		NewTranscriptEvent(TranscriptQueuedMessageState{QueueItemID: transcriptTestQueueItemID(t), Status: QueuedUserMessageAccepted, Text: &text}),
 		NewTranscriptEvent(TranscriptHumanInputInterrupted{Items: []TranscriptInterruptedHumanInputItem{{
 			QueueItemID: transcriptTestQueueItemID(t),
@@ -204,6 +204,52 @@ func TestTranscriptMessageJSONRoundTripsEveryVariant(t *testing.T) {
 		}
 		if decoded.Kind() != event.Kind() || reflect.TypeOf(decoded.Payload()) != reflect.TypeOf(event.Payload()) {
 			t.Fatalf("round-trip %q produced %T", event.Kind(), decoded.Payload())
+		}
+	}
+}
+
+func TestTranscriptRuntimeScopedStepAbsenceRoundTrips(t *testing.T) {
+	events := []TranscriptEvent{
+		NewTranscriptEvent(TranscriptCommittedRow{
+			Visibility: transcript.EntryVisibilityOngoing,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       TranscriptRowUser,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+			User:       &TranscriptUserRow{Text: "idle input"},
+		}),
+		NewTranscriptEvent(TranscriptCommittedRow{
+			Visibility: transcript.EntryVisibilityOngoingCollapsed,
+			Integrity:  transcript.RowIntegrityValid,
+			Kind:       TranscriptRowTool,
+			Locator:    transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1},
+			Tool:       &TranscriptToolRow{ToolCallID: "call-runtime", ToolName: "exec_command", Text: "done"},
+		}),
+		NewTranscriptEvent(TranscriptUserMessageFlushed{}),
+	}
+	for _, event := range events {
+		data, err := json.Marshal(NewTranscriptMessage(2, event))
+		if err != nil {
+			t.Fatalf("marshal Runtime-scoped %q: %v", event.Kind(), err)
+		}
+		var decoded TranscriptMessage
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal Runtime-scoped %q: %v", event.Kind(), err)
+		}
+		if err := decoded.Validate(); err != nil {
+			t.Fatalf("validate Runtime-scoped %q: %v", event.Kind(), err)
+		}
+		switch payload := decoded.Payload().(type) {
+		case TranscriptCommittedRow:
+			if payload.User != nil && payload.User.StepID != nil {
+				t.Fatalf("Runtime user Step ID round-tripped as present: %+v", payload.User.StepID)
+			}
+			if payload.Tool != nil && payload.Tool.StepID != nil {
+				t.Fatalf("Runtime tool Step ID round-tripped as present: %+v", payload.Tool.StepID)
+			}
+		case TranscriptUserMessageFlushed:
+			if payload.StepID != nil {
+				t.Fatalf("Runtime flush Step ID round-tripped as present: %+v", payload.StepID)
+			}
 		}
 	}
 }

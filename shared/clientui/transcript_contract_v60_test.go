@@ -66,11 +66,14 @@ func TestRuntimeFeedContractUsesPointersForOptionalScalarFacts(t *testing.T) {
 		field string
 	}{
 		{owner: TranscriptSessionIdentity{}, field: "SessionName"},
+		{owner: TranscriptUserRow{}, field: "StepID"},
 		{owner: TranscriptUserRow{}, field: "CondensedText"},
 		{owner: TranscriptUserRow{}, field: "RollbackTargetID"},
 		{owner: TranscriptAssistantRow{}, field: "StreamID"},
 		{owner: TranscriptAssistantRow{}, field: "CondensedText"},
+		{owner: TranscriptToolRow{}, field: "StepID"},
 		{owner: TranscriptToolRow{}, field: "ResultSummary"},
+		{owner: TranscriptUserMessageFlushed{}, field: "StepID"},
 		{owner: TranscriptToolRow{}, field: "CondensedText"},
 		{owner: TranscriptNoticeRow{}, field: "Background"},
 		{owner: TranscriptNoticeRow{}, field: "Worktree"},

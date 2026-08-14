@@ -8,7 +8,7 @@ import (
 
 func TestTranscriptUserFlushCarriesStepIdentity(t *testing.T) {
 	flushed := TranscriptUserMessageFlushed{
-		StepID: transcriptTestStepID(t),
+		StepID: transcriptTestStepIDPointer(t),
 	}
 	if err := flushed.Validate(); err != nil {
 		t.Fatalf("validate user-message flush: %v", err)
@@ -56,9 +56,13 @@ func TestTranscriptHumanInputInterruptedPreservesServerOrderAndVerbatimText(t *t
 	}
 }
 
-func TestTranscriptInputFactsRejectMissingIdentityAndStaleText(t *testing.T) {
-	if err := (TranscriptUserMessageFlushed{}).Validate(); err == nil {
-		t.Fatal("accepted user-message flush without step identity")
+func TestTranscriptInputFactsAllowRuntimeFlushAndRejectInvalidIdentityOrStaleText(t *testing.T) {
+	if err := (TranscriptUserMessageFlushed{}).Validate(); err != nil {
+		t.Fatalf("rejected Runtime user-message flush without exact Step provenance: %v", err)
+	}
+	zeroStepID := runtimeids.StepID{}
+	if err := (TranscriptUserMessageFlushed{StepID: &zeroStepID}).Validate(); err == nil {
+		t.Fatal("accepted user-message flush with invalid present Step identity")
 	}
 
 	submittedWithText := TranscriptQueuedMessageState{

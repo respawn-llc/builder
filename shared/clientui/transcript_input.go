@@ -25,7 +25,7 @@ const (
 )
 
 type TranscriptUserMessageFlushed struct {
-	StepID runtimeids.StepID
+	StepID *runtimeids.StepID
 }
 
 type TranscriptQueuedMessageState struct {
@@ -45,8 +45,8 @@ type TranscriptHumanInputInterrupted struct {
 }
 
 func (f TranscriptUserMessageFlushed) Validate() error {
-	if f.StepID.IsZero() {
-		return fmt.Errorf("user-message flush step id is required")
+	if f.StepID != nil && f.StepID.IsZero() {
+		return fmt.Errorf("user-message flush step id is invalid")
 	}
 	return nil
 }

@@ -93,7 +93,7 @@ func TestTranscriptEventPayloadsUseOneTypedConstructionPath(t *testing.T) {
 			StepID: transcriptTestStepID(t), ToolCallID: ToolCallID("call-1"), Reason: ToolAbortCanceled,
 		}), TranscriptMessageToolAbort},
 		{"user message flushed", NewTranscriptEvent(TranscriptUserMessageFlushed{
-			StepID: transcriptTestStepID(t),
+			StepID: transcriptTestStepIDPointer(t),
 		}), TranscriptMessageUserMessageFlushed},
 		{"queued message state", NewTranscriptEvent(TranscriptQueuedMessageState{
 			QueueItemID: transcriptTestQueueItemID(t),

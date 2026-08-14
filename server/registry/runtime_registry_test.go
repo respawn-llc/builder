@@ -581,7 +581,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 	registry.PublishAuthorityRuntimeEvent(staleRef, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
-		StepID:                     registryTestStepID,
+		StepID:                     textutil.Value(registryTestStepID),
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("stale authority event")},
 		CommittedTranscriptChanged: true,
 	})
@@ -590,7 +590,7 @@ func TestAuthorityEventFeedProjectsExactResourceGeneration(t *testing.T) {
 	}
 	registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:                       runtime.EventAssistantMessage,
-		StepID:                     registryTestStepID,
+		StepID:                     textutil.Value(registryTestStepID),
 		Message:                    llm.Message{Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("authority event")},
 		CommittedTranscriptChanged: true,
 		CommittedProvenance:        &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
@@ -647,7 +647,7 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	publishRunState(registry, engine.SessionID(), true)
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventRunStateChanged,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		RunState: &runtime.RunState{
 			Lifecycle:  runtime.RunningRunLifecycle(runtime.RunModeTurn),
 			RunID:      registryTestRunID,
@@ -660,7 +660,7 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventReasoningDelta,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		ReasoningDelta: &llm.ReasoningSummaryDelta{
 			SourceCoordinate: &llm.ReasoningSourceCoordinate{
 				OutputIndex: func() *int64 { value := int64(0); return &value }(),
@@ -683,20 +683,20 @@ func TestTranscriptHydrationRetiresStepOwnedStateWhenCanonicalRuntimeBecomesIdle
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventReviewerStarted,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 	}); err != nil {
 		t.Fatalf("publish active reviewer: %v", err)
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:       runtime.EventCompactionStarted,
-		StepID:     registryTestStepID,
+		StepID:     textutil.Value(registryTestStepID),
 		Compaction: &runtime.CompactionStatus{Mode: "auto", Count: 1},
 	}); err != nil {
 		t.Fatalf("publish active compaction: %v", err)
 	}
 	if err := registry.PublishAuthorityRuntimeEvent(ref, runtime.Event{
 		Kind:   runtime.EventToolCallStarted,
-		StepID: registryTestStepID,
+		StepID: textutil.Value(registryTestStepID),
 		ToolCall: &llm.ToolCall{
 			ID:    "tool-1",
 			Name:  "exec_command",

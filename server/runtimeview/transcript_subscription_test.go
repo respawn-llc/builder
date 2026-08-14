@@ -10,10 +10,12 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/textutil"
+	"core/shared/toolspec"
 	"core/shared/transcript"
 	patchformat "core/shared/transcript/patchformat"
 
@@ -337,6 +339,108 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	}
 	if got := hydration.CommittedRows[0].Visibility; got != clientui.EntryVisibilityHidden {
 		t.Fatalf("hydration visibility = %q, want hidden", got)
+	}
+}
+
+func TestRuntimeScopedUserFlushProjectsWithoutExactStep(t *testing.T) {
+	messages, err := TranscriptMessagesFromRuntimeEventChecked(runtime.Event{
+		Kind:             runtime.EventUserMessageFlushed,
+		UserMessage:      "idle input",
+		UserMessageBatch: []string{"idle input"},
+		UserMessageBatchQueuedItems: []runtime.QueuedUserMessageIdentity{{
+			QueueItemID: "10000000-0000-4000-8000-000000000020",
+		}},
+		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 1},
+	})
+	if err != nil {
+		t.Fatalf("project Runtime user flush: %v", err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("Runtime user flush messages = %+v, want committed row and flush", messages)
+	}
+	var userRow *clientui.TranscriptUserRow
+	var flushed *clientui.TranscriptUserMessageFlushed
+	for index := range messages {
+		if err := messages[index].Validate(); err != nil {
+			t.Fatalf("Runtime user flush message %d failed validation: %v", index, err)
+		}
+		switch messages[index].Kind() {
+		case clientui.TranscriptMessageCommittedRow:
+			row := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[index])
+			userRow = row.User
+		case clientui.TranscriptMessageUserMessageFlushed:
+			payload := transcriptPayload[clientui.TranscriptUserMessageFlushed](t, messages[index])
+			flushed = &payload
+		}
+	}
+	if userRow == nil || userRow.StepID != nil || flushed == nil || flushed.StepID != nil {
+		t.Fatalf("Runtime user/flush Step provenance = user:%+v flush:%+v, want absent", userRow, flushed)
+	}
+}
+
+func TestRuntimeScopedToolCompletionProjectsLiveAndHydratedWithoutExactStep(t *testing.T) {
+	result := tools.Result{
+		CallID: "call-runtime",
+		Name:   toolspec.ToolExecCommand,
+		Output: json.RawMessage(`{"output":"done"}`),
+	}
+	messages, err := TranscriptMessagesFromRuntimeEventChecked(runtime.Event{
+		Kind:                runtime.EventToolCallCompleted,
+		ToolResult:          &result,
+		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 2},
+	})
+	if err != nil {
+		t.Fatalf("project Runtime tool completion: %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("Runtime tool completion messages = %+v, want one committed row", messages)
+	}
+	if err := messages[0].Validate(); err != nil {
+		t.Fatalf("Runtime tool completion failed validation: %v", err)
+	}
+	liveRow := transcriptPayload[clientui.TranscriptCommittedRow](t, messages[0])
+	if liveRow.Tool == nil || liveRow.Tool.StepID != nil {
+		t.Fatalf("Runtime live tool Step provenance = %+v, want absent", liveRow.Tool)
+	}
+
+	hydration, err := TranscriptHydrationFromSnapshotChecked(runtime.TranscriptHydrationSnapshot{
+		CommittedRows: []runtime.TranscriptCommittedRowFact{
+			{
+				Visibility: transcript.EntryVisibilityOngoing,
+				Integrity:  transcript.RowIntegrityValid,
+				Kind:       runtime.TranscriptCommittedRowFactUser,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
+				Provenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 3},
+				User:       &runtime.TranscriptUserRowFact{Text: "idle input"},
+			},
+			{
+				Visibility: transcript.EntryVisibilityOngoingCollapsed,
+				Integrity:  transcript.RowIntegrityValid,
+				Kind:       runtime.TranscriptCommittedRowFactTool,
+				Locator:    transcript.CommittedRowLocator{EventSequence: 4, RowOrdinal: 1},
+				Provenance: &runtime.TranscriptCommittedRowProvenance{EventSequence: 4},
+				Tool: &runtime.TranscriptToolRowFact{
+					ToolCallID: "call-runtime",
+					ToolName:   string(toolspec.ToolExecCommand),
+					Text:       "done",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("hydrate Runtime-scoped rows: %v", err)
+	}
+	if len(hydration.CommittedRows) != 2 {
+		t.Fatalf("Runtime hydration rows = %+v, want user and tool", hydration.CommittedRows)
+	}
+	for index := range hydration.CommittedRows {
+		if err := hydration.CommittedRows[index].Validate(); err != nil {
+			t.Fatalf("Runtime hydration row %d failed validation: %v", index, err)
+		}
+	}
+	if hydration.CommittedRows[0].User == nil || hydration.CommittedRows[0].User.StepID != nil ||
+		hydration.CommittedRows[1].Tool == nil || hydration.CommittedRows[1].Tool.StepID != nil {
+		t.Fatalf("Runtime hydration Step provenance = %+v, want absent", hydration.CommittedRows)
 	}
 }
 

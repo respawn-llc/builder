@@ -3,6 +3,7 @@ package clientui
 import (
 	"testing"
 
+	"core/shared/runtimeids"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -21,6 +22,27 @@ func TestTranscriptCommittedAssistantRowCarriesStepAndOptionalStreamIdentity(t *
 	}
 	if err := row.Validate(); err != nil {
 		t.Fatalf("validate committed assistant row: %v", err)
+	}
+}
+
+func TestRuntimeScopedUserAndToolRowsAllowAbsentStepAndRejectInvalidPresentStep(t *testing.T) {
+	user := TranscriptUserRow{Text: "idle input"}
+	if err := user.Validate(); err != nil {
+		t.Fatalf("validate Runtime user row: %v", err)
+	}
+	tool := TranscriptToolRow{ToolCallID: "call-runtime", ToolName: "exec_command", Text: "done"}
+	if err := tool.Validate(); err != nil {
+		t.Fatalf("validate Runtime tool row: %v", err)
+	}
+
+	zeroStepID := runtimeids.StepID{}
+	user.StepID = &zeroStepID
+	tool.StepID = &zeroStepID
+	if err := user.Validate(); err == nil {
+		t.Fatal("accepted user row with invalid present Step identity")
+	}
+	if err := tool.Validate(); err == nil {
+		t.Fatal("accepted tool row with invalid present Step identity")
 	}
 }
 
@@ -74,7 +96,7 @@ func TestTranscriptCommittedRowRejectsImplicitVisibilityAndMismatchedPayload(t *
 		}(),
 		func() TranscriptCommittedRow {
 			row := base
-			row.User = &TranscriptUserRow{StepID: transcriptTestStepID(t), Text: "hello"}
+			row.User = &TranscriptUserRow{StepID: transcriptTestStepIDPointer(t), Text: "hello"}
 			return row
 		}(),
 		func() TranscriptCommittedRow {

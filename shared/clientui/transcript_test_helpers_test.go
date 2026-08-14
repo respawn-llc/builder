@@ -24,6 +24,12 @@ func transcriptTestStepID(t *testing.T) runtimeids.StepID {
 	return stepID
 }
 
+func transcriptTestStepIDPointer(t *testing.T) *runtimeids.StepID {
+	t.Helper()
+	stepID := transcriptTestStepID(t)
+	return &stepID
+}
+
 func transcriptTestRunID(t *testing.T) runtimeids.RunID {
 	t.Helper()
 	runID, err := runtimeids.ParseRunID("11111111-1111-4111-8111-111111111111")

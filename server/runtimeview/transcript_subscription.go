@@ -610,7 +610,7 @@ func transcriptUserMessageFlushedMessages(evt runtime.Event) []clientui.Transcri
 		mustTranscriptQueueItemID(item.QueueItemID, fmt.Sprintf("flushed queued message %d", index))
 	}
 	flushed := clientui.TranscriptUserMessageFlushed{
-		StepID: mustRuntimeTranscriptStepID(evt.StepID, "user-message flush"),
+		StepID: optionalRuntimeTranscriptStepID(evt.StepID, "user-message flush"),
 	}
 	return []clientui.TranscriptEvent{clientui.NewTranscriptEvent(flushed)}
 }
@@ -681,7 +681,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowUser
 		row.User = &clientui.TranscriptUserRow{
-			StepID:           mustRuntimeTranscriptStepID(fact.StepID, "committed user row"),
+			StepID:           optionalRuntimeTranscriptStepID(fact.StepID, "committed user row"),
 			Text:             fact.User.Text,
 			CondensedText:    optionalNonBlankString(fact.User.CondensedText),
 			RollbackTargetID: textutil.Pointer(fact.User.RollbackTargetID),
@@ -707,7 +707,7 @@ func transcriptRowFromFact(fact runtime.TranscriptCommittedRowFact) clientui.Tra
 		}
 		row.Kind = clientui.TranscriptRowTool
 		row.Tool = &clientui.TranscriptToolRow{
-			StepID:        mustRuntimeTranscriptStepID(fact.StepID, "committed tool row"),
+			StepID:        optionalRuntimeTranscriptStepID(fact.StepID, "committed tool row"),
 			ToolCallID:    clientui.ToolCallID(strings.TrimSpace(fact.Tool.ToolCallID)),
 			ToolName:      strings.TrimSpace(fact.Tool.ToolName),
 			Text:          fact.Tool.Text,
@@ -946,6 +946,14 @@ func mustRuntimeTranscriptStepID(raw *string, owner string) runtimeids.StepID {
 		panic(fmt.Sprintf("%s is missing its step id", owner))
 	}
 	return mustTranscriptStepID(*raw, owner)
+}
+
+func optionalRuntimeTranscriptStepID(raw *string, owner string) *runtimeids.StepID {
+	if raw == nil {
+		return nil
+	}
+	stepID := mustTranscriptStepID(*raw, owner)
+	return &stepID
 }
 
 func mustTranscriptAssistantStreamID(raw *uuid.UUID, owner string) runtimeids.AssistantStreamID {

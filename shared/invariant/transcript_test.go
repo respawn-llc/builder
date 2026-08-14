@@ -24,7 +24,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 			Visibility: clientui.EntryVisibilityOngoing,
 			Kind:       clientui.TranscriptRowUser,
 			Locator:    transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
-			User:       &clientui.TranscriptUserRow{StepID: stepID, Text: "user", RollbackTargetID: &rollbackTargetID},
+			User:       &clientui.TranscriptUserRow{StepID: &stepID, Text: "user", RollbackTargetID: &rollbackTargetID},
 		},
 		{
 			Visibility: clientui.EntryVisibilityOngoingCollapsed,
@@ -37,7 +37,7 @@ func TestValidateTranscriptCommittedRow(t *testing.T) {
 			Kind:       clientui.TranscriptRowTool,
 			Locator:    transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 			Tool: &clientui.TranscriptToolRow{
-				StepID:     stepID,
+				StepID:     &stepID,
 				ToolCallID: "tool-call",
 				ToolName:   "shell",
 			},
@@ -131,7 +131,7 @@ func TestValidateTranscriptPage(t *testing.T) {
 			CandidatePageEndByte: 15,
 		},
 		Entries: []clientui.TranscriptCommittedRow{
-			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, Locator: transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1}, User: &clientui.TranscriptUserRow{StepID: stepID, Text: "valid"}},
+			{Visibility: clientui.EntryVisibilityOngoing, Kind: clientui.TranscriptRowUser, Locator: transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1}, User: &clientui.TranscriptUserRow{StepID: &stepID, Text: "valid"}},
 			{Visibility: clientui.EntryVisibilityHidden, Kind: clientui.TranscriptRowNotice, Locator: transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1}, Notice: &clientui.TranscriptNoticeRow{
 				StepID:     &stepID,
 				Reason:     clientui.TranscriptNoticeLegacyUntypedNotice,
