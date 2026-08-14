@@ -10,47 +10,47 @@ import (
 )
 
 func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
-	}
-	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
-	}
-	project, err := s.metadata.SetProjectDefaultWorkspaceAndGetSummary(ctx, req.ProjectID, binding.WorkspaceID)
-	if err != nil {
-		return serverapi.ProjectDefaultWorkspaceSetResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
-	}
-	return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectDefaultWorkspaceSetRequest]) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
+		req := validated.Value()
+		if s == nil {
+			return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
+		}
+		binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+		if err != nil {
+			return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+		}
+		project, err := s.metadata.SetProjectDefaultWorkspaceAndGetSummary(ctx, req.ProjectID, binding.WorkspaceID)
+		if err != nil {
+			return serverapi.ProjectDefaultWorkspaceSetResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
+		}
+		return serverapi.ProjectDefaultWorkspaceSetResponse{Project: project}, nil
+	})
 }
 
 func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	if err := servicecontract.ValidateRequest(req, servicecontract.SemanticValidationRequired); err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	if s == nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
-	}
-	binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
-	}
-	runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
-		return withRuntimeBlockers(ctx, sessionIDs, s.workspaceActiveSessionBlockers, s.blockSessionStarts)
-	}
-	blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, binding.WorkspaceID, nil, runtimeBlocker)
-	if err != nil {
-		return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
-	}
-	resp := serverapi.ProjectWorkspaceUnlinkResponse{
-		ProjectID:   strings.TrimSpace(req.ProjectID),
-		WorkspaceID: binding.WorkspaceID,
-		Blockers:    blockers,
-	}
-	return resp, nil
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceUnlinkRequest]) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
+		req := validated.Value()
+		if s == nil {
+			return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
+		}
+		binding, err := s.metadata.ResolveProjectWorkspaceSelector(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+		if err != nil {
+			return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+		}
+		runtimeBlocker := func(ctx context.Context, sessionIDs []string) ([]serverapi.ProjectWorkspaceUnlinkBlocker, func(), error) {
+			return withRuntimeBlockers(ctx, sessionIDs, s.workspaceActiveSessionBlockers, s.blockSessionStarts)
+		}
+		blockers, err := s.metadata.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, req.ProjectID, binding.WorkspaceID, nil, runtimeBlocker)
+		if err != nil {
+			return serverapi.ProjectWorkspaceUnlinkResponse{}, wrapWorkspaceMutationError(req.ProjectID, binding.WorkspaceID, err)
+		}
+		resp := serverapi.ProjectWorkspaceUnlinkResponse{
+			ProjectID:   strings.TrimSpace(req.ProjectID),
+			WorkspaceID: binding.WorkspaceID,
+			Blockers:    blockers,
+		}
+		return resp, nil
+	})
 }
 
 func wrapWorkspaceMutationError(projectID string, workspaceID string, err error) error {

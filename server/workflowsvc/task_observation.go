@@ -18,31 +18,31 @@ import (
 )
 
 func (s *Service) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	if err := apicontract.ValidateRequest(req, apicontract.SemanticValidationRequired); err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, err
-	}
-	sub, err := s.events.subscribe(req.ProjectID, nil)
-	if err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, err
-	}
-	defer func() { _ = sub.Close() }()
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskObservationRequest]) (serverapi.WorkflowTaskObservationResponse, error) {
+		req := validated.Value()
+		sub, err := s.events.subscribe(req.ProjectID, nil)
+		if err != nil {
+			return serverapi.WorkflowTaskObservationResponse{}, err
+		}
+		defer func() { _ = sub.Close() }()
 
-	for {
-		response, ready, err := s.observeWorkflowTask(ctx, req)
-		if err != nil || ready {
-			return response, err
-		}
 		for {
-			event, err := sub.Next(ctx)
-			if err != nil {
-				return serverapi.WorkflowTaskObservationResponse{}, normalizeTaskObservationError(err)
+			response, ready, err := s.observeWorkflowTask(ctx, req)
+			if err != nil || ready {
+				return response, err
 			}
-			if event.Resource == serverapi.WorkflowProjectEventResourceTask &&
-				(event.PrimaryEntityID == req.TaskID || slices.Contains(event.RelatedIDs, req.TaskID)) {
-				break
+			for {
+				event, err := sub.Next(ctx)
+				if err != nil {
+					return serverapi.WorkflowTaskObservationResponse{}, normalizeTaskObservationError(err)
+				}
+				if event.Resource == serverapi.WorkflowProjectEventResourceTask &&
+					(event.PrimaryEntityID == req.TaskID || slices.Contains(event.RelatedIDs, req.TaskID)) {
+					break
+				}
 			}
 		}
-	}
+	})
 }
 
 func normalizeTaskObservationError(err error) error {

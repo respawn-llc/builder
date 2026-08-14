@@ -15,13 +15,16 @@ func (v countedRequestValidator) Validate() error {
 	return v.err
 }
 
-func TestValidateRequestRunsSemanticValidationOnceAndClassifiesFailure(t *testing.T) {
+func TestWithValidatedRunsSemanticValidationOnceAndClassifiesFailure(t *testing.T) {
 	calls := 0
 	cause := errors.New("invalid request")
 
-	err := ValidateRequest(
+	_, err := WithValidated(
 		countedRequestValidator{calls: &calls, err: cause},
 		SemanticValidationRequired,
+		func(Validated[countedRequestValidator]) (struct{}, error) {
+			return struct{}{}, nil
+		},
 	)
 
 	if calls != 1 {

@@ -36,11 +36,6 @@ func (v Validated[T]) Value() T {
 	return v.value
 }
 
-// ValidateRequest runs canonical request validation without issuing a trusted receipt.
-func ValidateRequest[T any](value T, policy ValidationPolicy) error {
-	return validateRequest(value, policy)
-}
-
 func WithValidated[T any, R any](
 	value T,
 	policy ValidationPolicy,
