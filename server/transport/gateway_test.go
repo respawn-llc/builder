@@ -415,37 +415,7 @@ func (c *countingSessionRuntimeClient) ActivateSessionRuntime(ctx context.Contex
 	return c.SessionRuntimeService.ActivateSessionRuntime(ctx, req)
 }
 
-func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeActivateRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
-	req := validated.Value()
-	if c.activateRequests != nil {
-		c.activateRequests <- req
-	}
-	if len(c.activateAttachments) != 0 {
-		attachment := c.activateAttachments[0]
-		c.activateAttachments = c.activateAttachments[1:]
-		if attachment == nil {
-			return serverapi.SessionRuntimeActivateResponse{}, nil
-		}
-		value := *attachment
-		value.SessionID = req.SessionID
-		return serverapi.SessionRuntimeActivateResponse{Attachment: value}, nil
-	}
-	return c.SessionRuntimeService.ActivateSessionRuntime(ctx, req)
-}
-
 func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-	c.releaseCount.Add(1)
-	if c.releaseRequests != nil {
-		c.releaseRequests <- req
-	}
-	if c.releaseResponse != nil {
-		return *c.releaseResponse, nil
-	}
-	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
-}
-
-func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(ctx context.Context, validated apicontract.Validated[serverapi.SessionRuntimeReleaseRequest], authorization apicontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
-	req := validated.Value()
 	c.releaseCount.Add(1)
 	if c.releaseRequests != nil {
 		c.releaseRequests <- req
@@ -994,10 +964,6 @@ type gatewayAuthStatusService func(context.Context, serverapi.AuthStatusRequest)
 
 func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
 	return service(ctx, request)
-}
-
-func (service gatewayAuthStatusService) GetAuthStatusValidated(ctx context.Context, request apicontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-	return service(ctx, request.Value())
 }
 
 type gatewayAuthStatusDependencies struct {

@@ -12,9 +12,7 @@ import (
 	"time"
 
 	"core/server/metadata"
-	"core/shared/apicontract"
 	"core/shared/clientui"
-	"core/shared/config"
 	"core/shared/serverapi"
 )
 
@@ -419,42 +417,6 @@ func TestListWorkspaceWorktreesProjectsMarkerlessTopology(t *testing.T) {
 	}
 	if strings.TrimSpace(response.Worktrees[0].Projection.Selector) == "" {
 		t.Fatalf("workspace projection = %+v, want selector", response.Worktrees[0].Projection)
-	}
-}
-
-func TestListWorkspaceWorktreesValidatedConsumesAuthorizedBinding(t *testing.T) {
-	env := newServiceTestEnv(t)
-	authorizedRoot := t.TempDir()
-	initGitRepo(t, authorizedRoot)
-	canonicalAuthorizedRoot, err := config.CanonicalWorkspaceRoot(authorizedRoot)
-	if err != nil {
-		t.Fatalf("CanonicalWorkspaceRoot: %v", err)
-	}
-	request := serverapi.WorktreeWorkspaceListRequest{
-		ProjectID:   "request-project",
-		WorkspaceID: "request-workspace",
-	}
-	authorized := apicontract.AuthorizedProjectWorkspaceBinding{
-		ProjectID:     env.binding.ProjectID,
-		WorkspaceID:   env.binding.WorkspaceID,
-		CanonicalRoot: canonicalAuthorizedRoot,
-	}
-
-	response, err := apicontract.WithValidated(
-		request,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.WorktreeWorkspaceListRequest]) (serverapi.WorktreeWorkspaceListResponse, error) {
-			return env.service.ListWorkspaceWorktreesValidated(env.ctx, validated, authorized)
-		},
-	)
-	if err != nil {
-		t.Fatalf("ListWorkspaceWorktreesValidated: %v", err)
-	}
-	if response.WorkspaceID != authorized.WorkspaceID || len(response.Worktrees) != 1 {
-		t.Fatalf("workspace list = %+v", response)
-	}
-	if root := topologyRoot(response.Worktrees[0].Topology); root != canonicalAuthorizedRoot {
-		t.Fatalf("workspace list root = %q, want authorized root %q", root, canonicalAuthorizedRoot)
 	}
 }
 

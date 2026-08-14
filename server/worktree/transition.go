@@ -10,7 +10,6 @@ import (
 
 	"core/server/metadata"
 	"core/server/session"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 
@@ -47,26 +46,14 @@ func (s *Service) replayPendingWorktreeTransition(request worktreeTransitionRequ
 }
 
 func (s *Service) EnterWorktree(ctx context.Context, req serverapi.WorktreeEnterRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.WorktreeEnterRequest]) (serverapi.WorktreeScheduledAcknowledgement, error) {
-			request := validated.Value()
-			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
-			if err != nil {
-				return serverapi.WorktreeScheduledAcknowledgement{}, err
-			}
-			return s.enterWorktree(ctx, request, workspaceCtx)
-		},
-	)
-}
-
-func (s *Service) EnterWorktreeValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorktreeEnterRequest],
-	authorization apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return s.enterWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	return s.enterWorktree(ctx, req, workspaceCtx)
 }
 
 func (s *Service) enterWorktree(
@@ -93,26 +80,14 @@ func (s *Service) enterWorktree(
 }
 
 func (s *Service) LeaveWorktree(ctx context.Context, req serverapi.WorktreeLeaveRequest) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.WorktreeLeaveRequest]) (serverapi.WorktreeScheduledAcknowledgement, error) {
-			request := validated.Value()
-			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
-			if err != nil {
-				return serverapi.WorktreeScheduledAcknowledgement{}, err
-			}
-			return s.leaveWorktree(ctx, request, workspaceCtx)
-		},
-	)
-}
-
-func (s *Service) LeaveWorktreeValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorktreeLeaveRequest],
-	authorization apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.WorktreeScheduledAcknowledgement, error) {
-	return s.leaveWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.WorktreeScheduledAcknowledgement{}, err
+	}
+	return s.leaveWorktree(ctx, req, workspaceCtx)
 }
 
 func (s *Service) leaveWorktree(

@@ -8,38 +8,26 @@ import (
 	"os"
 	"strings"
 
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
 
 func (s *Service) GetWorktreeStatus(ctx context.Context, req serverapi.WorktreeStatusRequest) (serverapi.WorktreeStatusResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.WorktreeStatusRequest]) (serverapi.WorktreeStatusResponse, error) {
-			if s == nil || s.metadata == nil || s.git == nil {
-				return serverapi.WorktreeStatusResponse{}, errors.New("worktree service dependencies are required")
-			}
-			target, err := s.metadata.ResolveSessionExecutionTarget(ctx, validated.Value().SessionID)
-			if err != nil {
-				return serverapi.WorktreeStatusResponse{}, fmt.Errorf(
-					"resolve worktree status target for session %q: %w",
-					strings.TrimSpace(validated.Value().SessionID),
-					err,
-				)
-			}
-			return s.getWorktreeStatus(ctx, target)
-		},
-	)
-}
-
-func (s *Service) GetWorktreeStatusValidated(
-	ctx context.Context,
-	_ apicontract.Validated[serverapi.WorktreeStatusRequest],
-	authorization apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.WorktreeStatusResponse, error) {
-	return s.getWorktreeStatus(ctx, authorization.ExecutionTarget)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeStatusResponse{}, err
+	}
+	if s == nil || s.metadata == nil || s.git == nil {
+		return serverapi.WorktreeStatusResponse{}, errors.New("worktree service dependencies are required")
+	}
+	target, err := s.metadata.ResolveSessionExecutionTarget(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.WorktreeStatusResponse{}, fmt.Errorf(
+			"resolve worktree status target for session %q: %w",
+			strings.TrimSpace(req.SessionID),
+			err,
+		)
+	}
+	return s.getWorktreeStatus(ctx, target)
 }
 
 func (s *Service) getWorktreeStatus(ctx context.Context, target clientui.SessionExecutionTarget) (serverapi.WorktreeStatusResponse, error) {

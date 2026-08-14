@@ -36,9 +36,8 @@ func (d *gatewayOnboardingUnavailableOverride) RouteDependencyAvailable(dep apic
 }
 
 type gatewayOnboardingService struct {
-	handler      func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
-	rawCalls     int
-	trustedCalls int
+	handler  func(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error)
+	rawCalls int
 }
 
 func (s *gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
@@ -48,14 +47,6 @@ func (s *gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req s
 	}
 	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, err
-	}
-	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
-}
-
-func (s *gatewayOnboardingService) FinalizeOnboardingValidated(ctx context.Context, req apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
-	s.trustedCalls++
-	if s.handler != nil {
-		return s.handler(ctx, req.Value())
 	}
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
 }

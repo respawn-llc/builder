@@ -13,33 +13,20 @@ import (
 	"core/server/metadata"
 	"core/server/session"
 	"core/server/sessionruntime"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
 func (s *Service) DeleteWorktree(ctx context.Context, req serverapi.WorktreeDeleteRequest) (serverapi.WorktreeDeleteResult, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.WorktreeDeleteRequest]) (serverapi.WorktreeDeleteResult, error) {
-			request := validated.Value()
-			workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, request.SessionID)
-			if err != nil {
-				return serverapi.WorktreeDeleteResult{}, err
-			}
-			return s.deleteWorktree(ctx, request, workspaceCtx)
-		},
-	)
-}
-
-func (s *Service) DeleteWorktreeValidated(
-	ctx context.Context,
-	req apicontract.Validated[serverapi.WorktreeDeleteRequest],
-	authorization apicontract.AuthorizedSessionInActiveProject,
-) (serverapi.WorktreeDeleteResult, error) {
-	return s.deleteWorktree(ctx, req.Value(), sessionWorkspaceContextFromAuthorization(authorization))
+	if err := req.Validate(); err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
+	workspaceCtx, err := s.resolveSessionWorkspaceContext(ctx, req.SessionID)
+	if err != nil {
+		return serverapi.WorktreeDeleteResult{}, err
+	}
+	return s.deleteWorktree(ctx, req, workspaceCtx)
 }
 
 func (s *Service) deleteWorktree(
