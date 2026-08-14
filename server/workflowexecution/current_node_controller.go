@@ -385,6 +385,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	var completed workflowstore.CurrentNodeCompletionResult
 	var completionDiagnostic error
 	var starts []currentNodeQueuedStart
+	var settledStarts []currentNodeQueuedStart
 	var pending []*pendingCurrentNodeAssignmentSteer
 	err = c.permit.Run(ctx, func(ctx context.Context) error {
 		c.mu.Lock()
@@ -478,6 +479,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 				panic("completed Current Node lost its admitted operation")
 			}
 			exact.heldStarts = starts
+			settledStarts = c.takeSettledOperationLocked(key, exact)
 			c.mu.Unlock()
 			return decision, nil
 		}); err != nil {
@@ -492,6 +494,7 @@ func (c *CurrentNodeController) completeLiveCurrentNode(
 	if err != nil {
 		return workflowstore.CurrentNodeCompletionResult{}, workflow.CurrentNodeOperationRef{}, nil, err
 	}
+	c.releaseSettledCurrentNodeStarts(settledStarts)
 	return completed, workflowRef.Operation(), completionDiagnostic, nil
 }
 

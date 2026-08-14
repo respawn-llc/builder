@@ -1041,3 +1041,170 @@ func TestCurrentNodeControllerCompletesSuccessfulScriptBeforeScopeRetirement(t *
 		t.Fatalf("successful script source was interrupted: %+v", interruption)
 	}
 }
+
+func TestCurrentNodeControllerSettlesNoOptimizationCompletionAfterEarlierRetirement(t *testing.T) {
+	shellPath, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh executable unavailable: %v", err)
+	}
+	source := currentNodeReferenceForControllerTest(t, "task-script-retirement-first", "node-source")
+	successor := currentNodeReferenceForControllerTest(t, "task-script-retirement-first", "node-successor")
+	store := &currentNodeControllerStore{
+		completion: workflowstore.CurrentNodeCompletionResult{
+			AutomaticIntents:       []workflowstore.CurrentNodeAutomaticIntent{{CurrentNode: successor, NodeKind: workflow.NodeKindScript}},
+			PostCompletionEligible: false,
+		},
+	}
+	var controller *CurrentNodeController
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+		WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+			controller.WorkflowExecutionRetired(outcome)
+		}),
+	})
+	runner := &recordingScriptRunner{
+		authority: authority,
+		command: sessionruntime.ScriptCommand{
+			Path: shellPath,
+			Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+		},
+		started: make(chan workflow.CurrentNodeReference, 2),
+	}
+	controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+		t.Fatalf("start Script current node: %v", err)
+	}
+	if started := <-runner.started; !started.Equal(source) {
+		t.Fatalf("started source = %v, want %v", started, source)
+	}
+	waitForRunningCurrentNode(t, authority, source)
+	sourceScope := singleLiveScope(t, authority, source)
+	sourceOperation := workflowOperationForScopeForTest(t, authority, sourceScope)
+	controller.WorkflowExecutionRetired(sessionruntime.WorkflowRetirementOutcome{
+		Operation:   sourceOperation,
+		Kind:        sessionruntime.ExecutionScopeScript,
+		Disposition: sessionruntime.WorkflowRetirementCompleted,
+	})
+	if _, err := completeCurrentNodeLifecycleForTest(
+		context.Background(),
+		controller,
+		sourceScope,
+		"next",
+	); err != nil {
+		t.Fatalf("complete retired Script source: %v", err)
+	}
+	select {
+	case started := <-runner.started:
+		if !started.Equal(successor) {
+			t.Fatalf("started successor = %v, want %v", started, successor)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("retirement-first no-optimization completion did not release its successor")
+	}
+	sourceKey, err := source.Key()
+	if err != nil {
+		t.Fatalf("source key: %v", err)
+	}
+	controller.mu.Lock()
+	retained := controller.operations[sourceKey]
+	controller.mu.Unlock()
+	if retained != nil {
+		t.Fatalf("retirement-first no-optimization operation retained: %+v", retained)
+	}
+}
+
+func TestCurrentNodeControllerSettlesNoOptimizationPendingApprovalInEitherOrder(t *testing.T) {
+	for _, retirementFirst := range []bool{true, false} {
+		order := "completion_before_retirement"
+		if retirementFirst {
+			order = "retirement_before_completion"
+		}
+		t.Run(order, func(t *testing.T) {
+			shellPath, err := exec.LookPath("sh")
+			if err != nil {
+				t.Skipf("sh executable unavailable: %v", err)
+			}
+			source := currentNodeReferenceForControllerTest(t, "task-script-approval-"+order, "node-source")
+			approval := workflow.PendingApproval{ID: workflow.NewApprovalID(), Source: source}
+			store := &currentNodeControllerStore{
+				completion: workflowstore.CurrentNodeCompletionResult{
+					PendingApproval:        &approval,
+					PostCompletionEligible: false,
+				},
+			}
+			var controller *CurrentNodeController
+			authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{
+				WorkflowExecutionRetired: sessionruntime.WorkflowExecutionRetiredFunc(func(outcome sessionruntime.WorkflowRetirementOutcome) {
+					controller.WorkflowExecutionRetired(outcome)
+				}),
+			})
+			runner := &recordingScriptRunner{
+				authority: authority,
+				command: sessionruntime.ScriptCommand{
+					Path: shellPath,
+					Args: []string{"-c", "trap 'exit 0' TERM; while :; do sleep 1; done"},
+				},
+				started: make(chan workflow.CurrentNodeReference, 1),
+			}
+			controller = newCurrentNodeControllerForTest(t, store, runner, authority, 1)
+			t.Cleanup(func() {
+				if err := controller.Close(); err != nil {
+					t.Errorf("close controller: %v", err)
+				}
+				if err := authority.Close(context.Background()); err != nil {
+					t.Errorf("close authority: %v", err)
+				}
+			})
+
+			if err := startCurrentNodeForControllerTest(context.Background(), controller, store, source); err != nil {
+				t.Fatalf("start Script current node: %v", err)
+			}
+			<-runner.started
+			waitForRunningCurrentNode(t, authority, source)
+			sourceScope := singleLiveScope(t, authority, source)
+			sourceOperation := workflowOperationForScopeForTest(t, authority, sourceScope)
+			retire := func() {
+				controller.WorkflowExecutionRetired(sessionruntime.WorkflowRetirementOutcome{
+					Operation:   sourceOperation,
+					Kind:        sessionruntime.ExecutionScopeScript,
+					Disposition: sessionruntime.WorkflowRetirementCompleted,
+				})
+			}
+			complete := func() {
+				if _, err := completeCurrentNodeLifecycleForTest(
+					context.Background(),
+					controller,
+					sourceScope,
+					"review",
+				); err != nil {
+					t.Fatalf("complete Script source: %v", err)
+				}
+			}
+			if retirementFirst {
+				retire()
+				complete()
+			} else {
+				complete()
+				retire()
+			}
+			sourceKey, err := source.Key()
+			if err != nil {
+				t.Fatalf("source key: %v", err)
+			}
+			controller.mu.Lock()
+			retained := controller.operations[sourceKey]
+			controller.mu.Unlock()
+			if retained != nil {
+				t.Fatalf("settled Pending Approval operation retained: %+v", retained)
+			}
+		})
+	}
+}
