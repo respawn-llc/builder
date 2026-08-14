@@ -102,7 +102,7 @@ vi.mock("@/app-facade", () => ({
   useDebouncedText: (value: string) => value,
   useAppServices: () => ({ api: {}, logger: { append: state.loggerAppend } }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
-  useStatusController: () => ({ push: state.statusPush }),
+  useStatusController: () => ({ dismiss: state.statusPush, push: state.statusPush }),
   useTaskSearch: () => ({
     displayedQuery: null,
     normalizedTooShort: false,
@@ -483,7 +483,6 @@ describe("New Task Workspace catalog integration", () => {
       selectedLabelIDs: [],
     };
     render(<NewTaskForm {...props} retainedState={retainedState} />);
-
     expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("");
     expect(screen.getByRole("textbox", { name: "task.body" })).toHaveValue("Body");
     expect(screen.getByTestId("dependency-row-task-restored")).toBeInTheDocument();
@@ -515,7 +514,6 @@ describe("New Task Workspace catalog integration", () => {
       target: { value: "Task" },
     });
     fireEvent.click(screen.getByRole("button", { name: "task.create" }));
-
     await vi.waitFor(() => {
       expect(state.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -549,12 +547,10 @@ describe("New Task Workspace catalog integration", () => {
         }}
       />,
     );
-
     await user.click(screen.getByTestId("dependency-add-blocked-by"));
     await user.click(screen.getByTestId("dependency-candidate-task-49"));
     expect(screen.getByTestId("dependency-candidate-task-50")).toBeInTheDocument();
     await user.click(screen.getByTestId("dependency-candidate-task-50"));
-
     expect(screen.getByTestId("dependency-row-task-49")).toBeInTheDocument();
     expect(screen.getByTestId("dependency-row-task-50")).toBeInTheDocument();
     expect(screen.queryByTestId("dependency-candidate-task-51")).not.toBeInTheDocument();
@@ -657,6 +653,13 @@ describe("New Task Workspace catalog integration", () => {
     expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("error");
     expect(state.loggerAppend.mock.lastCall?.[2]).toHaveProperty("reason", "reciprocal_dependency");
     expect(screen.getAllByTestId("dependency-row-task-related")).toHaveLength(2);
+    const [removeDependency] = screen.getAllByTestId("dependency-remove-task-related");
+    if (removeDependency === undefined) throw new Error("Expected a removable prepared dependency.");
+    await user.click(removeDependency);
+    fireEvent.submit(addDependency);
+    await vi.waitFor(() => {
+      expect(state.statusPush).toHaveBeenLastCalledWith("new-task-create-error");
+    });
   });
 });
 

@@ -195,7 +195,7 @@ function NewTaskFormContent({
 }>) {
   const { t } = useTranslation();
   const { api, logger } = useAppServices();
-  const { push } = useStatusController();
+  const { dismiss, push } = useStatusController();
   const connection = useConnectionSnapshot();
   const restored = useMemo(() => decodeNewTaskRetainedState(retainedState), [retainedState]);
   const authoredSourceWorkspaceID = restored?.formValues.sourceWorkspaceID ?? initialSourceWorkspaceID;
@@ -282,6 +282,7 @@ function NewTaskFormContent({
           newTaskRole: dependency.direction === "blocked-by" ? "blocked" : "blocker",
         })),
       });
+      dismiss("new-task-create-error");
       navigator.back(
         parentReturnDirection === undefined
           ? undefined
