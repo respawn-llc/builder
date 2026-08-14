@@ -850,11 +850,23 @@ func (e *Engine) generateWithMissingToolOutputRepair(ctx context.Context, stepID
 }
 
 func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return llm.Response{}, errors.New("model generation requires exact Step provenance")
+	}
+	return e.generateWithRetryClientForStep(ctx, &stepID, client, req, onDelta, onReasoningDelta, onAttemptReset)
+}
+
+func (e *Engine) generateRuntimeWithRetryClient(ctx context.Context, client llm.Client, req llm.Request) (llm.Response, error) {
+	return e.generateWithRetryClientForStep(ctx, nil, client, req, nil, nil, nil)
+}
+
+func (e *Engine) generateWithRetryClientForStep(ctx context.Context, stepID *string, client llm.Client, req llm.Request, onDelta func(llm.AssistantDelta), onReasoningDelta func(llm.ReasoningSummaryDelta), onAttemptReset func()) (llm.Response, error) {
 	prepared, err := e.modelRequests().RequestCache().Prepare(req)
 	if err != nil {
 		return llm.Response{}, err
 	}
-	if err := e.observePromptCacheRequest(stepID, prepared); err != nil {
+	if err := e.observePromptCacheRequestForStep(stepID, prepared); err != nil {
 		return llm.Response{}, err
 	}
 	var lastErr error
@@ -920,7 +932,7 @@ func (e *Engine) generateWithRetryClient(ctx context.Context, stepID string, cli
 			return llm.Response{}, ctx.Err()
 		}
 		if attemptErr == nil {
-			if err := e.observePromptCacheResponse(stepID, prepared, resp.Usage); err != nil {
+			if err := e.observePromptCacheResponseForStep(stepID, prepared, resp.Usage); err != nil {
 				return llm.Response{}, err
 			}
 			return resp, nil

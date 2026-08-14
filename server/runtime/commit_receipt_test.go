@@ -44,7 +44,7 @@ func TestPersistedWorkflowAssignmentFailureReporting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("build workflow assignment: %v", err)
 		}
-		receipt, waitErr := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+		receipt, waitErr := engine.steerRuntimeWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 			true,
 			[]llm.Message{message},
 		))
@@ -84,7 +84,7 @@ func TestPersistedWorkflowAssignmentDoesNotRepairExistingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build workflow assignment: %v", err)
 	}
-	receipt, err := SteerPersistedMessage(store, "", message)
+	receipt, err := SteerPersistedMessage(store, message)
 	if err != nil || !receipt.Committed {
 		t.Fatalf("seed existing workflow assignment = %+v, %v; want committed", receipt, err)
 	}
@@ -160,7 +160,7 @@ func persistedWorkflowAssignmentContextForTest(t *testing.T) PersistedWorkflowAs
 
 func seedPersistedWorkflowBaseContextForCommitReceiptTest(t *testing.T, store *session.Store) {
 	t.Helper()
-	receipt, err := SteerPersistedMessage(store, "", llm.Message{
+	receipt, err := SteerPersistedMessage(store, llm.Message{
 		Role:        llm.RoleDeveloper,
 		MessageType: textutil.Value(llm.MessageTypeEnvironment),
 		Content:     textutil.Value("test environment context"),

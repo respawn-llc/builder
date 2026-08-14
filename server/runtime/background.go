@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"core/server/llm"
+	"core/server/session"
 	"core/server/tools"
 	"core/shared/textutil"
 	"core/shared/toolspec"
@@ -51,12 +52,11 @@ func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
-		b.engine.surfaceRunError(err)
-		return
-	}
 	if queueNotice {
 		b.QueueBackgroundShellContinuation(evt)
+	}
+	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
+		b.engine.surfaceRunError(err)
 	}
 }
 
@@ -131,7 +131,7 @@ func (b *defaultBackgroundNoticeScheduler) queueDeveloperNotice(msg llm.Message)
 	b.pending = append(b.pending, notice)
 	b.mu.Unlock()
 	if b.engine.stepLifecycle.Snapshot() == nil {
-		if _, err := b.flushPendingNotices(""); err != nil {
+		if _, err := b.flushPendingNotices(nil); err != nil {
 			b.engine.surfaceRunError(err)
 		}
 	}
@@ -154,11 +154,17 @@ func (b *defaultBackgroundNoticeScheduler) restorePendingNotices(notices []queue
 	b.mu.Unlock()
 }
 
-func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID string) (int, error) {
+func (b *defaultBackgroundNoticeScheduler) flushPendingNotices(stepID *string) (int, error) {
 	pending := b.drainPendingNotices()
 	flushed := 0
 	for index, notice := range pending {
-		receipt, err := b.engine.steerWithCommitReceipt(stepID, notice.intent)
+		var receipt session.CommitReceipt
+		var err error
+		if stepID == nil {
+			receipt, err = b.engine.steerRuntimeWithCommitReceipt(notice.intent)
+		} else {
+			receipt, err = b.engine.steerWithCommitReceipt(*stepID, notice.intent)
+		}
 		if receipt.Committed {
 			flushed++
 		}

@@ -22,7 +22,7 @@ type exclusiveStepLifecycle interface {
 	InterruptCurrentAgentTurn(beforeCancel func(*RunSnapshot)) (*RunSnapshot, error)
 	IsBusy() bool
 	Snapshot() *RunSnapshot
-	WithActiveStep(fn func(stepID string) error) (bool, error)
+	ResolveActiveOutputStep(expectedStepID *string) (*string, error)
 	ApplyForActiveStep(stepID string, apply func() error) error
 	ApplyForExactGoalStep(runID string, stepID string, apply func() error) error
 	ValidateExactOutput(stepID string, allowClosing bool) error
@@ -33,7 +33,7 @@ type backgroundNoticeScheduler interface {
 	RecordBackgroundShellUpdate(BackgroundShellEvent) error
 	QueueBackgroundShellContinuation(BackgroundShellEvent)
 	QueueDeveloperNotice(msg llm.Message)
-	flushPendingNotices(stepID string) (int, error)
+	flushPendingNotices(stepID *string) (int, error)
 	HasPendingNotices() bool
 	ConsumePendingBackgroundNotice(sessionID string) bool
 }

@@ -204,11 +204,33 @@ func (e *Engine) steerBaseMetaContext(
 	builder metaContextBuilder,
 	invocationContext config.SubagentInvocationContext,
 ) error {
+	intents, err := buildBaseMetaContextIntents(builder, invocationContext)
+	if err != nil {
+		return err
+	}
+	return e.steer(stepID, intents...)
+}
+
+func (e *Engine) steerRuntimeBaseMetaContext(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) error {
+	intents, err := buildBaseMetaContextIntents(builder, invocationContext)
+	if err != nil {
+		return err
+	}
+	return e.steerRuntime(intents...)
+}
+
+func buildBaseMetaContextIntents(
+	builder metaContextBuilder,
+	invocationContext config.SubagentInvocationContext,
+) ([]steeringIntent, error) {
 	options := baseMetaContextBuildOptions(true)
 	options.SubagentInvocationContext = invocationContext
 	metaResult, err := builder.Build(options)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	intents := make([]steeringIntent, 0, 2)
 	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
@@ -222,7 +244,7 @@ func (e *Engine) steerBaseMetaContext(
 		true,
 		metaResult.OrderedBaseMessages(),
 	))
-	return e.steer(stepID, intents...)
+	return intents, nil
 }
 
 // steerHeadlessModeTransitionIfNeeded reconciles the launch mode with the

@@ -242,9 +242,32 @@ func (e *Engine) providerItemsForToolCompletion(r tools.Result) []llm.ResponseIt
 }
 
 func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text string) error {
+	return e.steerDiagnosticEntry(
+		diagnosticKey,
+		role,
+		text,
+		func(intent steeringIntent) error { return e.steer(stepID, intent) },
+	)
+}
+
+func (e *Engine) steerRuntimePersistedDiagnosticEntry(diagnosticKey, role, text string) error {
+	return e.steerDiagnosticEntry(
+		diagnosticKey,
+		role,
+		text,
+		func(intent steeringIntent) error { return e.steerRuntime(intent) },
+	)
+}
+
+func (e *Engine) steerDiagnosticEntry(
+	diagnosticKey string,
+	role string,
+	text string,
+	apply func(steeringIntent) error,
+) error {
 	diagnosticKey = strings.TrimSpace(diagnosticKey)
 	if diagnosticKey == "" {
-		return e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
+		return apply(steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       role,
 			Text:       text,
@@ -265,7 +288,7 @@ func (e *Engine) steerPersistedDiagnosticEntry(stepID, diagnosticKey, role, text
 		e.diagnosticDedupeStore().ClearLocal(diagnosticKey)
 		return nil
 	}
-	if err := e.steer(stepID, steerLocalEntryIntent(entry)); err != nil {
+	if err := apply(steerLocalEntryIntent(entry)); err != nil {
 		e.diagnosticDedupeStore().ClearLocal(diagnosticKey)
 		return err
 	}

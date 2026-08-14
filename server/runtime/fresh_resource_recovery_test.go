@@ -162,6 +162,8 @@ func TestFreshResourceRepairIgnoresStalePendingStartWhileLiveRepairDefers(t *tes
 	}
 
 	live, liveStore := newDanglingEngine(t, "live")
+	restoreLiveStep := setTestActiveStep(live, "step")
+	defer restoreLiveStep()
 	repaired, err = live.repairMissingToolOutputsByAppending(
 		textutil.Value("step"),
 		missingToolOutputRepairLiveProvider400,

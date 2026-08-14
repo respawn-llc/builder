@@ -87,10 +87,20 @@ type steeringQueueEntry struct {
 	replyOnce   sync.Once
 }
 
-func newOutputSteeringQueueEntry(stepID string, commitReceipt bool, intents ...steeringIntent) *steeringQueueEntry {
+func newExactOutputSteeringQueueEntry(stepID string, commitReceipt bool, intents ...steeringIntent) *steeringQueueEntry {
 	return &steeringQueueEntry{
 		output: &steeringOutputOperation{
 			stepID:        stepID,
+			intents:       append([]steeringIntent(nil), intents...),
+			commitReceipt: commitReceipt,
+		},
+		outputReply: make(chan steeringOutputReply, 1),
+	}
+}
+
+func newRuntimeOutputSteeringQueueEntry(commitReceipt bool, intents ...steeringIntent) *steeringQueueEntry {
+	return &steeringQueueEntry{
+		output: &steeringOutputOperation{
 			intents:       append([]steeringIntent(nil), intents...),
 			commitReceipt: commitReceipt,
 		},

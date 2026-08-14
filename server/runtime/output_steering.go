@@ -674,24 +674,56 @@ func steerCacheObservationIntent(records []session.EventRecordPayload, response 
 }
 
 func (e *Engine) steer(stepID string, intents ...steeringIntent) error {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return errors.New("exact Runtime output requires a Step ID")
+	}
 	if e.closed.Load() {
 		return ErrEngineClosed
 	}
-	_, err := e.enqueueOutputSteering(stepID, false, intents...)
+	_, err := e.enqueueExactOutputSteering(stepID, false, intents...)
 	return err
 }
 
 func (e *Engine) steerWithCommitReceipt(stepID string, intent steeringIntent) (session.CommitReceipt, error) {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return session.CommitReceipt{}, errors.New("exact Runtime output requires a Step ID")
+	}
+	if e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
 	if len(intent.items) != 1 {
 		return session.CommitReceipt{}, fmt.Errorf(
 			"commit receipt requires exactly one steering item (items=%d)",
 			len(intent.items),
 		)
 	}
-	return e.enqueueOutputSteering(stepID, true, intent)
+	return e.enqueueExactOutputSteering(stepID, true, intent)
 }
 
-func (e *Engine) enqueueOutputSteering(
+func (e *Engine) steerRuntime(intents ...steeringIntent) error {
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	_, err := e.enqueueRuntimeSteering(false, intents...)
+	return err
+}
+
+func (e *Engine) steerRuntimeWithCommitReceipt(intent steeringIntent) (session.CommitReceipt, error) {
+	if e.closed.Load() {
+		return session.CommitReceipt{}, ErrEngineClosed
+	}
+	if len(intent.items) != 1 {
+		return session.CommitReceipt{}, fmt.Errorf(
+			"commit receipt requires exactly one steering item (items=%d)",
+			len(intent.items),
+		)
+	}
+	return e.enqueueRuntimeSteering(true, intent)
+}
+
+func (e *Engine) enqueueExactOutputSteering(
 	stepID string,
 	commitReceipt bool,
 	intents ...steeringIntent,
@@ -699,16 +731,24 @@ func (e *Engine) enqueueOutputSteering(
 	if e == nil || e.steering == nil {
 		return session.CommitReceipt{}, errors.New("Runtime Steering is unavailable")
 	}
-	entry := newOutputSteeringQueueEntry(stepID, commitReceipt, intents...)
-	if strings.TrimSpace(stepID) != "" {
-		if err := e.stepLifecycle.ValidateExactOutput(stepID, exactOutputAllowsClosing(intents)); err != nil {
-			if completeErr := entry.completeOutput(steeringOutputReply{err: err}); completeErr != nil {
-				return session.CommitReceipt{}, e.runtimeInvariant("complete rejected exact Runtime output", completeErr)
-			}
-			return entry.waitOutput(context.Background())
+	entry := newExactOutputSteeringQueueEntry(stepID, commitReceipt, intents...)
+	if err := e.stepLifecycle.ValidateExactOutput(stepID, exactOutputAllowsClosing(intents)); err != nil {
+		if completeErr := entry.completeOutput(steeringOutputReply{err: err}); completeErr != nil {
+			return session.CommitReceipt{}, e.runtimeInvariant("complete rejected exact Runtime output", completeErr)
 		}
-		return e.applyExactOutputSteeringEntry(entry)
+		return entry.waitOutput(context.Background())
 	}
+	return e.applyExactOutputSteeringEntry(entry)
+}
+
+func (e *Engine) enqueueRuntimeSteering(
+	commitReceipt bool,
+	intents ...steeringIntent,
+) (session.CommitReceipt, error) {
+	if e == nil || e.steering == nil {
+		return session.CommitReceipt{}, errors.New("Runtime Steering is unavailable")
+	}
+	entry := newRuntimeOutputSteeringQueueEntry(commitReceipt, intents...)
 	wake, err := e.steering.append(entry)
 	if err != nil {
 		return session.CommitReceipt{}, err
@@ -720,22 +760,37 @@ func (e *Engine) enqueueOutputSteering(
 }
 
 func (e *Engine) steerCurrentStepOrRuntime(intent steeringIntent) error {
-	return e.steerActiveStepOrRuntime(nil, intent)
-}
-
-func (e *Engine) steerActiveStepOrRuntime(expectedStepID *string, intent steeringIntent) error {
-	applied, err := e.stepLifecycle.WithActiveStep(func(stepID string) error {
-		if expectedStepID != nil && stepID != *expectedStepID {
-			return ErrActiveStepInactive
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	stepID, err := e.stepLifecycle.ResolveActiveOutputStep(nil)
+	if err == nil && stepID != nil {
+		err = e.steer(*stepID, intent)
+		if err == nil || !errors.Is(err, ErrActiveStepInactive) {
+			return err
 		}
-		entry := newOutputSteeringQueueEntry(stepID, false, intent)
-		_, applyErr := e.applyExactOutputSteeringEntry(entry)
-		return applyErr
-	})
-	if applied {
+	} else if err != nil && !errors.Is(err, ErrActiveStepInactive) {
 		return err
 	}
-	return e.steer("", intent)
+	return e.steerRuntime(intent)
+}
+
+func (e *Engine) steerActiveStep(expectedStepID string, intent steeringIntent) error {
+	expectedStepID = strings.TrimSpace(expectedStepID)
+	if expectedStepID == "" {
+		return errors.New("exact Runtime output requires a Step ID")
+	}
+	if e.closed.Load() {
+		return ErrEngineClosed
+	}
+	stepID, err := e.stepLifecycle.ResolveActiveOutputStep(&expectedStepID)
+	if err != nil {
+		return err
+	}
+	if stepID == nil {
+		return ErrActiveStepInactive
+	}
+	return e.steer(*stepID, intent)
 }
 
 func (e *Engine) applyExactOutputSteeringEntry(entry *steeringQueueEntry) (session.CommitReceipt, error) {

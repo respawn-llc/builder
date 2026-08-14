@@ -181,7 +181,7 @@ func (e *Engine) ApplyGoalMutationDeferred(mutation GoalMutation) (GoalCommandRe
 		return e.enqueueGoalMutation(mutation)
 	}
 	var result GoalCommandResult
-	entry := newOutputSteeringQueueEntry("", false, steeringIntent{items: []steeringMutation{
+	entry := newRuntimeOutputSteeringQueueEntry(false, steeringIntent{items: []steeringMutation{
 		&steeringGoalMutation{mutation: mutation, result: &result},
 	}})
 	if _, err := e.steering.appendDeferred(entry); err != nil {
@@ -203,7 +203,7 @@ func (e *Engine) enqueueGoalMutation(mutation GoalMutation) (GoalCommandResult, 
 		mutation: mutation,
 		result:   &result,
 	}}}
-	_, err := e.enqueueOutputSteering("", false, intent)
+	_, err := e.enqueueRuntimeSteering(false, intent)
 	return result, err
 }
 
@@ -232,7 +232,7 @@ func (e *Engine) ScheduleExactAgentGoalMutation(
 		if execution.config == nil || execution.config.ScopeID != scopeID {
 			return ErrAgentGoalStepInactive
 		}
-		entry := newOutputSteeringQueueEntry("", false, steeringIntent{
+		entry := newRuntimeOutputSteeringQueueEntry(false, steeringIntent{
 			items: []steeringMutation{&steeringGoalMutation{mutation: mutation}},
 		})
 		var err error
@@ -626,7 +626,7 @@ func (e *Engine) surfaceRunError(err error) {
 		if message == "" {
 			message = err.Error()
 		}
-		_ = e.steer("", steerLocalEntryIntent(storedLocalEntry{
+		_ = e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityAuto,
 			Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 			Text:       "Failed to persist run error: " + appendErr.Error(),
@@ -657,7 +657,7 @@ func (e *Engine) steerRuntimeErrorFeedback(err error) (string, error) {
 	if message == "" {
 		message = err.Error()
 	}
-	return message, e.steer("", steerLocalEntryIntent(storedLocalEntry{
+	return message, e.steerRuntime(steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       message,
@@ -672,7 +672,7 @@ func (e *Engine) queueRuntimeErrorFeedback(err error) {
 	if message == "" {
 		message = err.Error()
 	}
-	entry := newOutputSteeringQueueEntry("", false, steerLocalEntryIntent(storedLocalEntry{
+	entry := newRuntimeOutputSteeringQueueEntry(false, steerLocalEntryIntent(storedLocalEntry{
 		Visibility: transcript.EntryVisibilityAuto,
 		Role:       string(transcript.EntryRoleDeveloperErrorFeedback),
 		Text:       message,
@@ -682,7 +682,7 @@ func (e *Engine) queueRuntimeErrorFeedback(err error) {
 		return
 	}
 	e.transcriptRuntimeState().SetStreamingError(message)
-	_, _ = e.steering.append(newOutputSteeringQueueEntry("", false,
+	_, _ = e.steering.append(newRuntimeOutputSteeringQueueEntry(false,
 		steerEventIntent(Event{Kind: EventStreamingErrorUpdated})))
 }
 

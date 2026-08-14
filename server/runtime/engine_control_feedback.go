@@ -17,7 +17,7 @@ func (e *Engine) appendCommittedEntryWithCommitReceipt(entry storedLocalEntry) (
 	if entry.Role == "" || entry.Text == "" {
 		return session.CommitReceipt{}, nil
 	}
-	return e.steerWithCommitReceipt("", steerLocalEntryIntent(entry))
+	return e.steerRuntimeWithCommitReceipt(steerLocalEntryIntent(entry))
 }
 
 func committedControlFeedbackMutation(text string) (steeringMutation, error) {
@@ -34,7 +34,7 @@ func committedControlFeedbackMutation(text string) (steeringMutation, error) {
 
 func (e *Engine) SetFastModeEnabledWithCommittedFeedback(enabled bool, feedback func(changed bool) string) (bool, session.CommitReceipt, error) {
 	var changed bool
-	receipt, err := e.steerWithCommitReceipt("", steerFastModeIntent(enabled, feedback, &changed))
+	receipt, err := e.steerRuntimeWithCommitReceipt(steerFastModeIntent(enabled, feedback, &changed))
 	return changed, receipt, err
 }
 
@@ -87,8 +87,7 @@ func (e *Engine) applyFastModeWithCommittedFeedback(
 
 func (e *Engine) SetQuestionsEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, changed bool) string) (bool, bool, session.CommitReceipt, error) {
 	var changed, resultEnabled bool
-	receipt, err := e.steerWithCommitReceipt(
-		"",
+	receipt, err := e.steerRuntimeWithCommitReceipt(
 		steerQuestionsIntent(enabled, feedback, &changed, &resultEnabled),
 	)
 	return changed, resultEnabled, receipt, err
@@ -125,8 +124,7 @@ func (e *Engine) applyQuestionsWithCommittedFeedback(
 func (e *Engine) SetReviewerEnabledWithCommittedFeedback(enabled bool, feedback func(enabled bool, mode string, changed bool) string) (bool, string, session.CommitReceipt, error) {
 	var changed bool
 	var mode string
-	receipt, err := e.steerWithCommitReceipt(
-		"",
+	receipt, err := e.steerRuntimeWithCommitReceipt(
 		steerReviewerModeIntent(enabled, feedback, &changed, &mode),
 	)
 	return changed, mode, receipt, err

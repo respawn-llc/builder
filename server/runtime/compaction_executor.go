@@ -271,16 +271,12 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairSte
 	window := localCompactionWindow(input)
 	repairStats := compactionOverflowRepairStats{}
 	contextWindowTokens := e.compactionPlannerState().contextWindowTokens(e.compactionPlanningSnapshot())
-	stepID := ""
-	if repairStepID != nil {
-		stepID = *repairStepID
-	}
 	// summarize mirrors the remote send closure: it repairs a missing-tool-output
 	// HTTP 400 (append + re-snapshot + retry) only on the first, uncollapsed
 	// window. After a collapse, output items are preserved, so a missing-output
 	// 400 is an invariant violation and panics; other 400s fall through.
 	summarize := func(w []llm.ResponseItem, canRepair bool) (string, []llm.ResponseItem, error) {
-		summary, err := e.localCompactionSummaryFromWindow(ctx, stepID, locked, systemPrompt, w, instructions, requestTools, mode)
+		summary, err := e.localCompactionSummaryFromWindow(ctx, repairStepID, locked, systemPrompt, w, instructions, requestTools, mode)
 		if !isMissingToolOutputProviderError(err, w) {
 			return summary, w, err
 		}
@@ -298,7 +294,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairSte
 			return summary, w, err
 		}
 		repairedWindow := localCompactionWindow(e.transcriptRuntimeState().SnapshotItems())
-		summary, err = e.localCompactionSummaryFromWindow(ctx, stepID, locked, systemPrompt, repairedWindow, instructions, requestTools, mode)
+		summary, err = e.localCompactionSummaryFromWindow(ctx, repairStepID, locked, systemPrompt, repairedWindow, instructions, requestTools, mode)
 		return summary, repairedWindow, err
 	}
 
@@ -325,7 +321,7 @@ func (e *Engine) localCompactionSummaryWithRepair(ctx context.Context, repairSte
 	return "", repairStats, errors.New("local compaction context repair retry exhausted")
 }
 
-func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID string, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode) (string, error) {
+func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID *string, locked session.LockedContract, systemPrompt string, window []llm.ResponseItem, instructions string, requestTools []llm.Tool, mode compactionMode) (string, error) {
 	items := append(llm.CloneResponseItems(window), llm.ItemsFromMessages([]llm.Message{{Role: llm.RoleDeveloper, Content: textutil.Value(instructions)}})...)
 	for attempt := 0; ; attempt++ {
 		req, err := llm.RequestFromLockedContract(locked, systemPrompt, items, requestTools, llm.ToolControls{ChoiceMode: llm.ToolChoiceModeAutomatic})
@@ -342,7 +338,12 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID st
 			}
 		}
 
-		resp, err := e.generateWithRetryClient(ctx, stepID, e.llm, req, nil, nil, nil)
+		var resp llm.Response
+		if stepID == nil {
+			resp, err = e.generateRuntimeWithRetryClient(ctx, e.llm, req)
+		} else {
+			resp, err = e.generateWithRetryClient(ctx, *stepID, e.llm, req, nil, nil, nil)
+		}
 		if err != nil {
 			return "", err
 		}

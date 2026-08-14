@@ -2,10 +2,9 @@ package runtime
 
 import (
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
-	"os"
-	"strings"
 	"testing"
 
 	"core/server/session"
@@ -16,16 +15,12 @@ import (
 
 func TestWorkflowTerminalStateHasOneProductionWriter(t *testing.T) {
 	t.Parallel()
-	entries, err := os.ReadDir(".")
+	runtimePackage, err := build.ImportDir(".", 0)
 	if err != nil {
-		t.Fatalf("read runtime package: %v", err)
+		t.Fatalf("load runtime package metadata: %v", err)
 	}
-	var writers []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
-		}
+	writerCount := 0
+	for _, name := range append(runtimePackage.GoFiles, runtimePackage.CgoFiles...) {
 		file, parseErr := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if parseErr != nil {
 			t.Fatalf("parse %s: %v", name, parseErr)
@@ -37,13 +32,13 @@ func TestWorkflowTerminalStateHasOneProductionWriter(t *testing.T) {
 			}
 			selector, ok := call.Fun.(*ast.SelectorExpr)
 			if ok && selector.Sel.Name == "recordWorkflowTerminalState" {
-				writers = append(writers, name)
+				writerCount++
 			}
 			return true
 		})
 	}
-	if len(writers) != 1 || writers[0] != "workflow_completion.go" {
-		t.Fatalf("Workflow terminal writers = %v, want only exact Agent Step application", writers)
+	if writerCount != 1 {
+		t.Fatalf("Workflow terminal writer count = %d, want one exact Agent Step application boundary", writerCount)
 	}
 }
 

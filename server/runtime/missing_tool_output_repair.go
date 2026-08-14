@@ -94,9 +94,13 @@ func (e *Engine) repairMissingToolOutputsByAppending(
 	intent := steeringIntent{items: []steeringMutation{repair}}
 	var err error
 	if disposition == missingToolOutputRepairLiveProvider400 {
-		err = e.steerActiveStepOrRuntime(repairStepID, intent)
+		stepID, present := textutil.OptionalValue(repairStepID)
+		if !present {
+			return 0, errors.New("live missing-tool-output repair requires exact Step provenance")
+		}
+		err = e.steerActiveStep(stepID, intent)
 	} else {
-		err = e.steer("", intent)
+		err = e.steerRuntime(intent)
 	}
 	return repair.repaired, err
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -172,6 +173,14 @@ func (t *requestCacheTracker) RecordResponse(response persistedCacheResponseObse
 }
 
 func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCacheRequestObservation) error {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return errors.New("cache request observation requires exact Step provenance")
+	}
+	return e.observePromptCacheRequestForStep(&stepID, prepared)
+}
+
+func (e *Engine) observePromptCacheRequestForStep(stepID *string, prepared preparedCacheRequestObservation) error {
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
@@ -179,7 +188,7 @@ func (e *Engine) observePromptCacheRequest(stepID string, prepared preparedCache
 	if err != nil {
 		return fmt.Errorf("adapt cache request record: %w", err)
 	}
-	if _, _, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record); err != nil {
+	if _, _, err := e.eventLog.AppendRecord(textutil.Pointer(stepID), record); err != nil {
 		return err
 	}
 	return nil
@@ -193,6 +202,14 @@ func cacheWarningEntryVisibility(mode config.CacheWarningMode) transcript.EntryV
 }
 
 func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCacheRequestObservation, usage llm.Usage) error {
+	stepID = strings.TrimSpace(stepID)
+	if stepID == "" {
+		return errors.New("cache response observation requires exact Step provenance")
+	}
+	return e.observePromptCacheResponseForStep(&stepID, prepared, usage)
+}
+
+func (e *Engine) observePromptCacheResponseForStep(stepID *string, prepared preparedCacheRequestObservation, usage llm.Usage) error {
 	if e == nil || e.modelRequests().RequestCache() == nil || strings.TrimSpace(prepared.request.CacheKey) == "" {
 		return nil
 	}
@@ -237,10 +254,12 @@ func (e *Engine) observePromptCacheResponse(stepID string, prepared preparedCach
 		return fmt.Errorf("adapt cache response record: %w", err)
 	}
 	records = append(records, responseRecord)
-	_, err = e.steerWithCommitReceipt(
-		stepID,
-		steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true),
-	)
+	intent := steerCacheObservationIntent(records, response, warning, cacheWarningEntryVisibility(e.cfg.CacheWarningMode), true)
+	if stepID == nil {
+		_, err = e.steerRuntimeWithCommitReceipt(intent)
+	} else {
+		_, err = e.steerWithCommitReceipt(*stepID, intent)
+	}
 	return err
 }
 

@@ -159,19 +159,21 @@ func (s *defaultExclusiveStepLifecycle) RunExactPreparation(
 	fn func(stepCtx context.Context, stepID string) error,
 ) error {
 	options := exclusiveStepOptions{ActiveKind: ActiveKindInspection}
-	stepCtx, stepID, err := s.begin(ctx, options)
-	if err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := validateExclusiveStepStart(ctx, options); err != nil {
 		return err
 	}
-	err = fn(stepCtx, stepID)
-	finished := s.snapshotWithFinishedAt(time.Now().UTC(), statusFromRunError(err))
-	s.beginTerminalPublication()
-	if finished != nil && s.engine.cfg.StepLifecycle != nil {
-		err = errors.Join(err, s.engine.cfg.StepLifecycle.StepEnded(
-			context.Background(),
-			stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished),
-		))
+	s.mu.Lock()
+	if s.active != nil || s.publicationDepth > 0 {
+		s.mu.Unlock()
+		return ErrAgentBusy
 	}
+	stepCtx, stepID := s.activateLocked(ctx, options)
+	s.mu.Unlock()
+	err := fn(stepCtx, stepID)
+	s.beginTerminalPublication()
 	s.finishTerminalPublication()
 	return err
 }
@@ -479,19 +481,23 @@ func (s *defaultExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	return cloneRunSnapshot(s.snapshotLocked())
 }
 
-func (s *defaultExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
-	if s == nil || fn == nil {
-		return false, nil
+func (s *defaultExclusiveStepLifecycle) ResolveActiveOutputStep(expectedStepID *string) (*string, error) {
+	if s == nil {
+		return nil, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active == nil || s.active.stepID == "" {
-		return false, nil
+		return nil, nil
 	}
-	if s.active.closing {
-		return true, ErrAgentBusy
+	if expectedStepID != nil && s.active.stepID != *expectedStepID {
+		return nil, ErrActiveStepInactive
 	}
-	return true, fn(s.active.stepID)
+	if s.active.closing || s.active.interrupted {
+		return nil, ErrActiveStepInactive
+	}
+	stepID := s.active.stepID
+	return &stepID, nil
 }
 
 func (s *defaultExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply func() error) error {

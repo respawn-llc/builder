@@ -26,7 +26,7 @@ func SteerPersistedGoalNotice(
 	if err != nil {
 		return session.CommitReceipt{}, err
 	}
-	return SteerPersistedMessage(store, "", message)
+	return SteerPersistedMessage(store, message)
 }
 
 func goalNoticeMessage(kind GoalNoticeKind, goal *session.GoalState) (llm.Message, error) {

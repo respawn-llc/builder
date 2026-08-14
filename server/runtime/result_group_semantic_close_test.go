@@ -282,7 +282,7 @@ func runSemanticCloseFailurePostJoinCase(
 	}()
 
 	<-handler.started
-	entry := newOutputSteeringQueueEntry("", false, steeringIntent{items: []steeringMutation{
+	entry := newRuntimeOutputSteeringQueueEntry(false, steeringIntent{items: []steeringMutation{
 		&steeringGoalMutation{mutation: GoalMutation{
 			Kind: GoalMutationSet, Objective: "must remain queued", Actor: session.GoalActorUser,
 		}},

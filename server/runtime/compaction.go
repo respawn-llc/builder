@@ -677,8 +677,7 @@ func (e *Engine) reportPreciseTokenCountSupportFailure(err error) {
 		message = "unknown exact token counting support failure"
 	}
 	entryText := fmt.Sprintf("Exact token counting availability check failed: %s. Falling back to a local token estimate.", message)
-	if persistErr := e.steerPersistedDiagnosticEntry(
-		"",
+	if persistErr := e.steerRuntimePersistedDiagnosticEntry(
 		preciseTokenCountSupportDiagnostic,
 		"error",
 		entryText,
@@ -696,8 +695,7 @@ func (e *Engine) reportPreciseTokenCountFailure(err error) {
 		message = "unknown exact token counting failure"
 	}
 	entryText := fmt.Sprintf("Exact token counting failed: %s. Falling back to a local token estimate.", message)
-	if persistErr := e.steerPersistedDiagnosticEntry(
-		"",
+	if persistErr := e.steerRuntimePersistedDiagnosticEntry(
 		preciseTokenCountFailureDiagnostic,
 		"error",
 		entryText,

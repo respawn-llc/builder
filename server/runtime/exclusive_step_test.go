@@ -103,14 +103,17 @@ func (s *stubExclusiveStepLifecycle) Snapshot() *RunSnapshot {
 	return cloneRunSnapshot(s.snapshot)
 }
 
-func (s *stubExclusiveStepLifecycle) WithActiveStep(fn func(stepID string) error) (bool, error) {
+func (s *stubExclusiveStepLifecycle) ResolveActiveOutputStep(expectedStepID *string) (*string, error) {
 	s.mu.Lock()
 	stepID := s.activeStepID
 	s.mu.Unlock()
-	if stepID == "" || fn == nil {
-		return false, nil
+	if stepID == "" {
+		return nil, nil
 	}
-	return true, fn(stepID)
+	if expectedStepID != nil && stepID != *expectedStepID {
+		return nil, ErrActiveStepInactive
+	}
+	return &stepID, nil
 }
 
 func (s *stubExclusiveStepLifecycle) ApplyForActiveStep(stepID string, apply func() error) error {
@@ -229,25 +232,15 @@ func TestExclusiveStepLifecycleClosesActiveStepQueueBeforeFinalDrain(t *testing.
 		t.Fatalf("begin returned ctx=%v stepID=%q, want active step", stepCtx, stepID)
 	}
 
-	called := false
-	active, err := lifecycle.WithActiveStep(func(string) error {
-		called = true
-		return nil
-	})
-	if err != nil || !active || !called {
-		t.Fatalf("WithActiveStep before close active=%t called=%t err=%v, want active callback", active, called, err)
+	activeStepID, err := lifecycle.ResolveActiveOutputStep(nil)
+	if err != nil || activeStepID == nil || *activeStepID != stepID {
+		t.Fatalf("ResolveActiveOutputStep before close = %v/%v, want %q", activeStepID, err, stepID)
 	}
 
 	lifecycle.closeActiveStepQueue(stepID)
-	active, err = lifecycle.WithActiveStep(func(string) error {
-		t.Fatal("active-step callback ran after queue close")
-		return nil
-	})
-	if !errors.Is(err, ErrAgentBusy) {
-		t.Fatalf("WithActiveStep after close error = %v, want ErrAgentBusy", err)
-	}
-	if !active {
-		t.Fatal("WithActiveStep after close active=false, want true with busy error")
+	activeStepID, err = lifecycle.ResolveActiveOutputStep(nil)
+	if activeStepID != nil || !errors.Is(err, ErrActiveStepInactive) {
+		t.Fatalf("ResolveActiveOutputStep after close = %v/%v, want inactive", activeStepID, err)
 	}
 	lifecycle.end()
 }
@@ -485,7 +478,11 @@ func TestExclusiveStepLifecycleAgentTurnInterruptMatchesOnlyAgentTurns(t *testin
 }
 
 func TestExclusiveStepExactPreparationDoesNotFinishAgentStepBoundary(t *testing.T) {
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	lifecycleSink := &callbackStepLifecycleSink{}
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model:         "gpt-5",
+		StepLifecycle: lifecycleSink,
+	})
 	lifecycle := &defaultExclusiveStepLifecycle{engine: engine}
 	engine.stepLifecycle = lifecycle
 	queuedDone := make(chan error, 1)
@@ -499,7 +496,7 @@ func TestExclusiveStepExactPreparationDoesNotFinishAgentStepBoundary(t *testing.
 			return err
 		}
 		go func() {
-			queuedDone <- engine.steer("", steerLocalEntryIntent(storedLocalEntry{Role: "info", Text: "queued"}))
+			queuedDone <- engine.steerRuntime(steerLocalEntryIntent(storedLocalEntry{Role: "info", Text: "queued"}))
 		}()
 		deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
 		for !engine.HasPendingSteering() {
@@ -515,6 +512,9 @@ func TestExclusiveStepExactPreparationDoesNotFinishAgentStepBoundary(t *testing.
 	}
 	if engine.ActiveRun() != nil {
 		t.Fatalf("exact preparation retained active run: %+v", engine.ActiveRun())
+	}
+	if lifecycleSink.seen(StepLifecycleTransitionBegan) || lifecycleSink.seen(StepLifecycleTransitionEnded) {
+		t.Fatal("exact preparation published through the live Step lifecycle sink")
 	}
 	if !engine.HasPendingSteering() {
 		t.Fatal("exact preparation drained ordinary Steering")
@@ -759,7 +759,7 @@ func TestContextCompactorUsesExclusiveStepLifecycle(t *testing.T) {
 		Usage:     llm.Usage{WindowTokens: 200000},
 	}}}
 	eng := mustNewTestEngine(t, store, client, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{Model: "gpt-5", CompactionMode: "local"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}})); err != nil {
 		t.Fatalf("append seed message: %v", err)
 	}
 

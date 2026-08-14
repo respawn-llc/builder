@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"core/server/llm"
 	"core/server/session"
@@ -31,6 +32,136 @@ func TestSteerBackgroundContinuationFailureUsesDeveloperErrorFeedback(t *testing
 	mustBlockTestEventLogAppends(t, store)
 	if err := engine.SteerBackgroundContinuationFailure(errors.New("retry failed")); err == nil {
 		t.Fatal("background continuation failure steering swallowed persistence error")
+	}
+}
+
+func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		closing     bool
+		interrupted bool
+	}{
+		{name: "closing", closing: true},
+		{name: "interrupted", interrupted: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			lifecycle := &defaultExclusiveStepLifecycle{
+				engine: engine,
+				active: &exclusiveRunState{
+					sequence:    1,
+					activeKind:  ActiveKindUserTurn,
+					cancel:      func() {},
+					runID:       "11111111-1111-4111-8111-111111111111",
+					stepID:      "22222222-2222-4222-8222-222222222222",
+					startedAt:   time.Now().UTC(),
+					closing:     test.closing,
+					interrupted: test.interrupted,
+				},
+			}
+			engine.stepLifecycle = lifecycle
+			engine.ensureOrchestrationCollaborators()
+
+			done := make(chan struct{})
+			go func() {
+				engine.HandleBackgroundShellUpdate(BackgroundShellEvent{
+					Type:  BackgroundShellEventCompleted,
+					ID:    "shell",
+					State: "completed",
+				}, true)
+				close(done)
+			}()
+			deadline := time.Now().Add(runtimeTestSynchronizationTimeout)
+			for !engine.HasPendingSteering() {
+				if !time.Now().Before(deadline) {
+					t.Fatal("timed out waiting for queued background update")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !engine.backgroundFlow.HasPendingNotices() {
+				t.Fatal("terminal background continuation was lost at the Step lifecycle edge")
+			}
+
+			lifecycle.end()
+			engine.drainSteeringIncludingDeferredHuman(true)
+			select {
+			case <-done:
+			case <-time.After(runtimeTestSynchronizationTimeout):
+				t.Fatal("queued background update did not complete after Runtime drain")
+			}
+		})
+	}
+}
+
+func TestExactOutputCallbackDoesNotHoldLifecycleLock(t *testing.T) {
+	callbackStarted := make(chan struct{})
+	releaseCallback := make(chan struct{})
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			if event.Kind != EventStreamingErrorUpdated {
+				return
+			}
+			close(callbackStarted)
+			<-releaseCallback
+		},
+	})
+	lifecycle := &defaultExclusiveStepLifecycle{
+		engine: engine,
+		active: &exclusiveRunState{
+			sequence:   1,
+			activeKind: ActiveKindUserTurn,
+			cancel:     func() {},
+			runID:      "11111111-1111-4111-8111-111111111111",
+			stepID:     "22222222-2222-4222-8222-222222222222",
+			startedAt:  time.Now().UTC(),
+		},
+	}
+	engine.stepLifecycle = lifecycle
+
+	steerDone := make(chan error, 1)
+	go func() {
+		steerDone <- engine.steerCurrentStepOrRuntime(
+			steerEventIntent(Event{Kind: EventStreamingErrorUpdated}),
+		)
+	}()
+	select {
+	case <-callbackStarted:
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("timed out waiting for exact output callback")
+	}
+
+	interruptDone := make(chan error, 1)
+	go func() {
+		_, err := lifecycle.InterruptCurrentAgentTurn(nil)
+		interruptDone <- err
+	}()
+	select {
+	case err := <-interruptDone:
+		if err != nil {
+			t.Fatalf("interrupt active Step: %v", err)
+		}
+	case <-time.After(runtimeTestSynchronizationTimeout):
+		t.Fatal("exact output callback held the lifecycle lock")
+	}
+	close(releaseCallback)
+	if err := <-steerDone; err != nil {
+		t.Fatalf("steer exact output: %v", err)
+	}
+}
+
+func TestCurrentStepOrRuntimeRejectsClosedEngineWithoutQueueing(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.closed.Store(true)
+
+	err := engine.steerCurrentStepOrRuntime(
+		steerEventIntent(Event{Kind: EventStreamingErrorUpdated}),
+	)
+	if !errors.Is(err, ErrEngineClosed) {
+		t.Fatalf("closed Runtime steering error = %v, want ErrEngineClosed", err)
+	}
+	if engine.HasPendingSteering() {
+		t.Fatal("closed Runtime accepted pending Steering")
 	}
 }
 

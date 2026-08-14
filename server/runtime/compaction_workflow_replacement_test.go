@@ -256,7 +256,7 @@ func TestWorkflowAssignmentApplicationPreservesPostCompletionBoundary(t *testing
 	if err != nil {
 		t.Fatalf("build workflow assignment: %v", err)
 	}
-	receipt, err := engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	receipt, err := engine.steerRuntimeWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{message},
 	))

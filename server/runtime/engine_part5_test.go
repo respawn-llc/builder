@@ -424,7 +424,7 @@ func TestSubmitUserMessageRejectedAfterClose(t *testing.T) {
 	if _, err := engine.SubmitUserMessage(context.Background(), "stale turn"); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("SubmitUserMessage after close err=%v, want ErrEngineClosed", err)
 	}
-	if err := engine.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("stale append")}})); !errors.Is(err, ErrEngineClosed) {
+	if err := engine.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{Role: llm.RoleUser, Content: textutil.Value("stale append")}})); !errors.Is(err, ErrEngineClosed) {
 		t.Fatalf("steer after close err=%v, want ErrEngineClosed", err)
 	}
 }

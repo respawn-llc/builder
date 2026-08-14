@@ -215,6 +215,8 @@ func TestLiveMissingToolOutputRepairWaitsForOutputSteeringBoundary(t *testing.T)
 	steerDanglingToolCall(t, engine, "step", llm.ToolCall{
 		ID: "serialized-repair", Name: "exec_command", Input: json.RawMessage(`{}`),
 	})
+	restoreStep := setTestActiveStep(engine, "step")
+	defer restoreStep()
 
 	type repairOutcome struct {
 		count int
@@ -340,6 +342,8 @@ func TestRepairMissingToolOutputsPersistSyntheticErrorPresentation(t *testing.T)
 	steerDanglingToolCall(t, eng, "step", llm.ToolCall{
 		ID: "missing", Name: "exec_command", Input: json.RawMessage(`{"cmd":"true"}`),
 	})
+	restoreStep := setTestActiveStep(eng, "step")
+	defer restoreStep()
 
 	if _, err := eng.repairMissingToolOutputsByAppending(textutil.Value("step"), missingToolOutputRepairLiveProvider400); err != nil {
 		t.Fatalf("repair: %v", err)
@@ -400,7 +404,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 		},
 	}
 	eng := mustNewExecTestEngine(t, store, client, Config{Model: "gpt-5"})
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    "call-shell",
@@ -410,7 +414,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("append shell tool call: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{
 			Role:       llm.RoleTool,
@@ -421,7 +425,7 @@ func TestCompactionMissingOutputAfterCollapsePanics(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("append shell tool output: %v", err)
 	}
-	if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{
 			ID:    "call-missing",

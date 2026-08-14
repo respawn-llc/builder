@@ -30,7 +30,7 @@ func TestPersistedWorktreeContextRejectsDuplicateSourcePath(t *testing.T) {
 		"/tmp/worktree",
 	))
 	eng := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{})
-	err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
+	err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{{
 		Role:            llm.RoleDeveloper,
 		MessageType:     textutil.Value(llm.MessageTypeWorktreeMode),
 		SourcePath:      textutil.Value(target.EffectiveCwd),

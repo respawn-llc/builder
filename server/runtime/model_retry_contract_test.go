@@ -92,14 +92,10 @@ func TestGenerateWithRetryRejectsNonRetriableModelErrorsWithoutRetry(t *testing.
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeClient{errors: []error{test.cause}}
 
-			_, err := engine.generateWithRetryClient(
+			_, err := engine.generateRuntimeWithRetryClient(
 				context.Background(),
-				"",
 				client,
 				llm.Request{Model: "gpt-5", ToolChoiceMode: llm.ToolChoiceModeAutomatic},
-				nil,
-				nil,
-				nil,
 			)
 			if !errors.Is(err, test.cause) {
 				t.Fatalf("generation error = %v, want original typed cause", err)

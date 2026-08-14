@@ -965,7 +965,7 @@ func TestGoalResumeWhileInterruptIsPublishingSchedulesRestart(t *testing.T) {
 	}()
 	waitGoalLoopContinuationEnforced(t, engine, false)
 
-	entry := newOutputSteeringQueueEntry("", false, steeringIntent{items: []steeringMutation{
+	entry := newRuntimeOutputSteeringQueueEntry(false, steeringIntent{items: []steeringMutation{
 		&steeringGoalMutation{mutation: GoalMutation{
 			Kind:      GoalMutationStatus,
 			Status:    session.GoalStatusActive,

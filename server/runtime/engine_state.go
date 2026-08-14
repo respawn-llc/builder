@@ -256,7 +256,7 @@ func (e *Engine) appendCommittedEntry(entry storedLocalEntry) error {
 
 func (e *Engine) SetStreamingError(text string) {
 	e.transcriptRuntimeState().SetStreamingError(text)
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
 func (e *Engine) ReportPromptHistoryPersistError(reason string) {
@@ -267,12 +267,12 @@ func (e *Engine) ReportPromptHistoryPersistError(reason string) {
 	if reason == "" {
 		return
 	}
-	_ = e.steer("", steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
+	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventPromptHistoryPersistFailed, Error: reason}))
 }
 
 func (e *Engine) ClearStreamingError() {
 	e.transcriptRuntimeState().ClearStreamingError()
-	_ = e.steer("", steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
+	_ = e.steerRuntime(steerEventIntent(Event{Kind: EventStreamingErrorUpdated}))
 }
 
 func (e *Engine) SetSessionName(name string) error {
@@ -284,7 +284,7 @@ func (e *Engine) SetThinkingLevel(level string) error {
 	if !ok {
 		return fmt.Errorf("invalid thinking level %q (expected low|medium|high|xhigh)", strings.TrimSpace(level))
 	}
-	_, err := e.enqueueOutputSteering("", false, steerThinkingLevelIntent(normalized))
+	_, err := e.enqueueRuntimeSteering(false, steerThinkingLevelIntent(normalized))
 	return err
 }
 
@@ -360,8 +360,7 @@ func (e *Engine) applyFastModeEnabled(enabled bool) bool {
 
 func (e *Engine) SetAutoCompactionEnabled(enabled bool) (bool, bool) {
 	var changed, resultEnabled bool
-	_, err := e.enqueueOutputSteering(
-		"",
+	_, err := e.enqueueRuntimeSteering(
 		false,
 		steerAutoCompactionIntent(enabled, &changed, &resultEnabled),
 	)

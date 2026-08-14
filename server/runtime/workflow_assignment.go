@@ -101,11 +101,11 @@ func PersistWorkflowAssignment(
 			deliveryContext.SkillPolicy,
 			time.Now(),
 		).withSubagents(deliveryContext.SubagentCatalogSettings, deliveryContext.EnabledTools)
-		if err := engine.steerBaseMetaContext("", builder, config.SubagentInvocationContextWorkflow); err != nil {
+		if err := engine.steerRuntimeBaseMetaContext(builder, config.SubagentInvocationContextWorkflow); err != nil {
 			return session.CommitReceipt{}, err
 		}
 	}
-	return engine.steerWithCommitReceipt("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
+	return engine.steerRuntimeWithCommitReceipt(steerMessagesWithPersistenceIntent(steeringMessageEventDefault,
 		true,
 		[]llm.Message{message},
 	))

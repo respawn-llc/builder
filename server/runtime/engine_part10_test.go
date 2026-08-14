@@ -445,7 +445,7 @@ func TestManualCompactionReinjectsOnlyActiveHeadlessState(t *testing.T) {
 				}
 			}
 			for _, message := range append(test.persistedMessages, llm.Message{Role: llm.RoleUser, Content: textutil.Value("continue")}) {
-				if err := eng.steer("", steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
+				if err := eng.steerRuntime(steerMessagesWithPersistenceIntent(steeringMessageEventDefault, true, []llm.Message{message})); err != nil {
 					t.Fatalf("append message: %v", err)
 				}
 			}
