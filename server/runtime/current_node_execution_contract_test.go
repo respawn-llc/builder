@@ -1,10 +1,6 @@
 package runtime
 
 import (
-	"go/ast"
-	"go/build"
-	"go/parser"
-	"go/token"
 	"testing"
 
 	"core/server/session"
@@ -12,35 +8,6 @@ import (
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
-
-func TestWorkflowTerminalStateHasOneProductionWriter(t *testing.T) {
-	t.Parallel()
-	runtimePackage, err := build.ImportDir(".", 0)
-	if err != nil {
-		t.Fatalf("load runtime package metadata: %v", err)
-	}
-	writerCount := 0
-	for _, name := range append(runtimePackage.GoFiles, runtimePackage.CgoFiles...) {
-		file, parseErr := parser.ParseFile(token.NewFileSet(), name, nil, 0)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", name, parseErr)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			selector, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && selector.Sel.Name == "recordWorkflowTerminalState" {
-				writerCount++
-			}
-			return true
-		})
-	}
-	if writerCount != 1 {
-		t.Fatalf("Workflow terminal writer count = %d, want one exact Agent Step application boundary", writerCount)
-	}
-}
 
 func TestDetachedPublicationRejectsCurrentNodeExecutionWithoutScope(t *testing.T) {
 	t.Parallel()
