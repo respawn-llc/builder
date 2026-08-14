@@ -138,6 +138,33 @@ afterEach(() => {
 });
 
 describe("LabelChooser", () => {
+  it("reports controlled open-state changes", async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    const view = render(
+      <LabelChooser
+        invocation={{ kind: "assignment", onSelectionChange: vi.fn(), selectedLabelIDs: [] }}
+        onOpenChange={onOpenChange}
+        open={false}
+        trigger={<button type="button">Open controlled chooser</button>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open controlled chooser" }));
+    expect(onOpenChange).toHaveBeenCalledWith(true);
+
+    view.rerender(
+      <LabelChooser
+        invocation={{ kind: "assignment", onSelectionChange: vi.fn(), selectedLabelIDs: [] }}
+        onOpenChange={onOpenChange}
+        open
+        trigger={<button type="button">Open controlled chooser</button>}
+      />,
+    );
+    await user.keyboard("{Escape}");
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+  });
+
   it("creates a filter label without changing the active filter", async () => {
     const user = userEvent.setup();
     const actions: LabelFilterAction[] = [];
@@ -243,6 +270,27 @@ describe("LabelChooser", () => {
     await waitFor(() => {
       expect(onSelectionChange).toHaveBeenCalledWith(createdLabelID, true);
     });
+  });
+
+  it("disables assignment choices while the assignment is unavailable", async () => {
+    const user = userEvent.setup();
+    const onSelectionChange = vi.fn();
+    render(
+      <LabelChooser
+        invocation={{
+          disabled: true,
+          kind: "assignment",
+          onSelectionChange,
+          selectedLabelIDs: [],
+        }}
+        trigger={<button type="button">Open unavailable assignment</button>}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Open unavailable assignment" }));
+    expect(screen.getByRole("button", { name: /^Alpha/ })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: /^Alpha/ }));
+    expect(onSelectionChange).not.toHaveBeenCalled();
   });
 
   it("keeps selection and search available while disabling creation at the 100-Label bound", async () => {

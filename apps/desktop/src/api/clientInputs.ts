@@ -8,13 +8,12 @@ import type {
 } from "./models";
 import type { WorkflowGraphDraft } from "./workflowGraphModels";
 import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
-import type { TaskLabelFilter } from "./workflowLabels";
+import type { ProjectTaskGroup, TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 
-export type TaskMutationInput = Readonly<{
+type TaskMutationFields = Readonly<{
   projectID: string;
-  workflowID: string;
   title: string;
   body: string;
   sourceWorkspaceID: string;
@@ -27,9 +26,20 @@ export type TaskDependencyCreateIntent = Readonly<{
   newTaskRole: "blocker" | "blocked";
 }>;
 
+export type TaskMutationInput =
+  | (TaskMutationFields &
+      Readonly<{
+        workflowID: string;
+      }>)
+  | (TaskMutationFields &
+      Readonly<{
+        workflowID?: undefined;
+      }>);
+
 export type TaskListInput = Readonly<{
   projectID: string;
   workflowID?: string | undefined;
+  group?: ProjectTaskGroup | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
   attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;
@@ -37,6 +47,10 @@ export type TaskListInput = Readonly<{
   sort?: readonly WorkflowTaskListSort[] | undefined;
   offset?: number | undefined;
   limit?: number | undefined;
+}>;
+
+export type ProjectTaskGroupCountsInput = Readonly<{
+  projectID: string;
 }>;
 
 export type BoardNodeCardsInput = Readonly<{

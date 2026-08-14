@@ -175,6 +175,71 @@ func TestOpenResolvedReportsIrreconcilableCommittedSuffixRecovery(t *testing.T) 
 	beforeArtifacts.assertUnchanged(t, recoveryPath, eventsPath, postMeta)
 }
 
+func TestOpenResolvedRecoversCommittedLegacyAppendBeforeMigration(t *testing.T) {
+	store := newSessionTestStore(t)
+	preMeta := store.Meta()
+	postMeta := cloneMeta(preMeta)
+	postMeta.LastSequence = 1
+	postMeta.ConversationEstablished = true
+	postMeta.UpdatedAt = preMeta.UpdatedAt.Add(time.Second)
+	writeSessionFixtureEvents(t, store.Dir(), []legacyTestEvent{{
+		Seq:       1,
+		Timestamp: time.Now().UTC(),
+		Kind:      string(EventKindMessage),
+		Payload: mustFixtureJSON(t, map[string]any{
+			"role":    string(MessageRoleUser),
+			"content": "committed before migration",
+		}),
+	}})
+	eventsPath := filepath.Join(store.Dir(), eventsFile)
+	events, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatalf("read legacy event log: %v", err)
+	}
+	writer := &Store{sessionDir: store.Dir(), meta: preMeta}
+	recovery, err := writer.newAppendRecoveryRecord(
+		preMeta,
+		postMeta,
+		appendRecoveryCommitted,
+		&appendRecoveryEvents{
+			StartOffset:   0,
+			EndOffset:     int64(len(events)),
+			EventCount:    1,
+			FirstSequence: 1,
+			LastSequence:  1,
+			SHA256:        digestBytes(events),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create legacy append recovery record: %v", err)
+	}
+	if err := writer.writeAppendRecoveryRecord(recovery); err != nil {
+		t.Fatalf("write legacy append recovery record: %v", err)
+	}
+
+	opened, err := OpenResolved(
+		PersistedSessionRecord{SessionDir: store.Dir(), Meta: &preMeta},
+		sessionTestPersistence.options()...,
+	)
+	if err != nil {
+		t.Fatalf("recover legacy append transaction: %v", err)
+	}
+	if opened.Meta().LastSequence != 1 {
+		t.Fatalf("recovered legacy sequence = %d, want 1", opened.Meta().LastSequence)
+	}
+	log, err := opened.MaterializeEventLog()
+	if err != nil {
+		t.Fatalf("migrate recovered legacy event log: %v", err)
+	}
+	window, err := log.ReadRecentRecords(1)
+	if err != nil {
+		t.Fatalf("read migrated legacy event: %v", err)
+	}
+	if len(window.Records) != 1 || window.Records[0].Seq() != 1 {
+		t.Fatalf("migrated legacy records = %#v", window.Records)
+	}
+}
+
 type recoveryDetailArtifacts struct {
 	recovery []byte
 	events   eventLogFileFingerprint

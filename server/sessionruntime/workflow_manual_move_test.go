@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestAuthorityManualMoveSelectionClosesPromptAdmissionBeforeRelease(t *testing.T) {
+func TestAuthorityManualMoveSelectionCancelsPendingQuestionsAndClosesPromptAdmission(t *testing.T) {
 	shellPath, err := exec.LookPath("sh")
 	if err != nil {
 		t.Skipf("sh executable unavailable: %v", err)
@@ -61,19 +61,36 @@ func TestAuthorityManualMoveSelectionClosesPromptAdmissionBeforeRelease(t *testi
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	awaitErr := make(chan error, 1)
+	exact := handle.(executionHandle)
+	pendingErr := make(chan error, 1)
+	go func() {
+		_, promptErr := exact.execution.prompts.Await(context.Background(), askquestion.AskQuestionRequest{
+			ID:       "manual-move-pending-question",
+			StepID:   uuid.NewString(),
+			Question: "Cancel me",
+		})
+		pendingErr <- promptErr
+	}()
+	deadline = time.Now().Add(3 * time.Second)
+	for !exact.execution.prompts.hasPending() {
+		if time.Now().After(deadline) {
+			t.Fatal("manual-move Question did not become pending")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	admissionErr := make(chan error, 1)
 	err = authority.WithWorkflowManualMoveSelection(taskID, func(selection WorkflowInterruptSelection) error {
 		if len(selection.Interruptible) != 1 {
 			return errors.New("want one interruptible workflow scope")
 		}
-		exact := handle.(executionHandle)
 		go func() {
 			_, promptErr := exact.execution.prompts.Await(context.Background(), askquestion.AskQuestionRequest{
 				ID:       "manual-move-admission-race",
 				StepID:   uuid.NewString(),
 				Question: "Must be rejected",
 			})
-			awaitErr <- promptErr
+			admissionErr <- promptErr
 		}()
 		return nil
 	})
@@ -81,7 +98,15 @@ func TestAuthorityManualMoveSelectionClosesPromptAdmissionBeforeRelease(t *testi
 		t.Fatalf("WithWorkflowManualMoveSelection: %v", err)
 	}
 	select {
-	case err := <-awaitErr:
+	case err := <-pendingErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("pending Question error = %v, want context cancellation", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending Question was not canceled by manual-move selection")
+	}
+	select {
+	case err := <-admissionErr:
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("prompt admission error = %v, want context cancellation", err)
 		}

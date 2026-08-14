@@ -8,6 +8,7 @@ import (
 
 	"core/shared/clientui"
 	"core/shared/runtimeids"
+	"core/shared/transcript"
 )
 
 const (
@@ -86,6 +87,7 @@ const (
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
 	MethodWorkflowTaskSessionList                       = "workflow.task.session.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
+	MethodWorkflowProjectTaskGroupCounts                = "workflow.task.groupCounts"
 	MethodWorkflowTaskSearch                            = "workflow.task.search"
 	MethodWorkflowBoardGet                              = "workflow.board.get"
 	MethodWorkflowBoardNodeCardsList                    = "workflow.board.nodeCards.list"
@@ -169,15 +171,13 @@ const (
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
+	MethodSessionQuestionHistorySubscribe               = "session.questionHistory.subscribe"
+	MethodSessionQuestionHistoryEvent                   = "session.questionHistory.event"
+	MethodSessionQuestionHistoryComplete                = "session.questionHistory.complete"
 )
 
 type HandshakeRequest struct {
-	ProtocolVersion    string              `json:"protocol_version"`
-	ClientCapabilities *ClientCapabilities `json:"client_capabilities,omitempty"`
-}
-
-type ClientCapabilities struct {
-	TranscriptLiveRunFinished bool `json:"transcript_live_run_finished"`
+	ProtocolVersion string `json:"protocol_version"`
 }
 
 type HandshakeResponse struct {
@@ -804,6 +804,25 @@ type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
 }
 
+type SessionQuestionHistoryEventParams struct {
+	Event SessionQuestionHistoryEvent `json:"event"`
+}
+
+type SessionQuestionHistoryEvent struct {
+	Kind           string                          `json:"kind"`
+	LargeHistory   *bool                           `json:"large_history,omitempty"`
+	Question       *SessionQuestionHistoryQuestion `json:"question,omitempty"`
+	HistoryOmitted *bool                           `json:"history_omitted,omitempty"`
+}
+
+type SessionQuestionHistoryQuestion struct {
+	Question             string                        `json:"question"`
+	Answer               string                        `json:"answer"`
+	SelectedOptionNumber *int                          `json:"selected_option_number"`
+	Commentary           *string                       `json:"commentary"`
+	At                   *transcript.CommittedAtUnixMs `json:"at"`
+}
+
 type AttentionNotificationEventParams struct {
 	Event clientui.AttentionNotificationEvent `json:"event"`
 }
@@ -889,9 +908,6 @@ type StreamCompleteParams struct {
 func (r HandshakeRequest) Validate() error {
 	if strings.TrimSpace(r.ProtocolVersion) == "" {
 		return errors.New("protocol_version is required")
-	}
-	if r.ClientCapabilities != nil && !r.ClientCapabilities.TranscriptLiveRunFinished {
-		return errors.New("client_capabilities must advertise at least one supported capability")
 	}
 	return nil
 }

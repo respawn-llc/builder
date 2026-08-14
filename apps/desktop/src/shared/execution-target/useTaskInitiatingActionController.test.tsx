@@ -1,3 +1,4 @@
+import { CancelledError } from "@tanstack/react-query";
 import { act, renderHook } from "@testing-library/react";
 import { vi } from "vitest";
 
@@ -12,6 +13,30 @@ import {
 } from "./index";
 
 describe("task initiating action controller", () => {
+  it("reports post-apply refresh failures but ignores cancellation", async () => {
+    const action = resumeTaskInitiatingAction("task-1");
+    const onAppliedError = vi.fn();
+    const refreshFailure = new Error("refresh failed");
+    let onAppliedFailure: unknown = refreshFailure;
+    const { result } = renderHook(() =>
+      useTaskInitiatingActionController({
+        execute: async () => appliedResume(action),
+        onApplied: async () => {
+          throw onAppliedFailure;
+        },
+        onAppliedError,
+      }),
+    );
+
+    await act(async () => result.current.run(action));
+    expect(onAppliedError).toHaveBeenCalledWith(refreshFailure);
+
+    onAppliedError.mockReset();
+    onAppliedFailure = new CancelledError();
+    await act(async () => result.current.run(action));
+    expect(onAppliedError).not.toHaveBeenCalled();
+  });
+
   it("keeps one action identity through dependency and target continuation", async () => {
     let callCount = 0;
     const execute = vi.fn(async (action: TaskInitiatingAction): Promise<TaskInitiatingActionResult> => {

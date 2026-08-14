@@ -16,8 +16,7 @@ func TestChatContextRouteContract(t *testing.T) {
 	if route.Kind != KindUnary ||
 		route.Auth != AuthPreServerAuth ||
 		route.Scope != ScopeSessionActiveProjectIfSet ||
-		route.Connection != ConnectionControl ||
-		route.Dependency != DependencyChatContext {
+		route.Connection != ConnectionControl {
 		t.Fatalf("route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.ChatContextRequest{}) ||

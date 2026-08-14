@@ -394,7 +394,8 @@
 - Stale live facts must not authorize a Workflow mutation. Lifecycle owners revalidate exact Runtime activity and Task Quiescence when applying an action.
 - After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without retaining the Task's lifecycle mutation ownership; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
-- Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
+- As part of that interruption, Manual Move cancels every pending Question on the Task.
+- A pending Approval in a Session blocks Manual Move until it resolves.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 
@@ -425,8 +426,7 @@
 - If unresolved legacy state reaches strict `previous_target`, a non-Agent `previous_target_or_new` target, or a final Join, production reports a typed actionable error without changing Workflow state. Debug operation fails fast.
 - Kent removes this unresolved-legacy compatibility handling in v2.6.2.
 - If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
-- `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
-- Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
+- Every valid `continue_session` reuse preserves the retained Session's Assignee, contract generation, and cache lineage.
 - Transition-selected Assignees never rotate or invalidate an established Session's prompt-cache lineage.
 - A retained Session may adopt the target Current Node's materialized thinking without rotating or invalidating its prompt-cache lineage.
 - `compact_and_continue_session` compacts the reused Session and establishes the target Current Node's materialized Assignee and thinking in a fresh contract generation, resolving current role configuration for model/provider setup, generation parameters, capabilities, enabled tools, native web-search mode, prompt snapshots, context budget, and cache lineage.
@@ -665,7 +665,7 @@
 - Current Nodes have no independent product identity.
 - Every Agent Current Node materializes and persists its effective Assignee and thinking when it is created.
 - During upgrade, the Session resolved as continuation context does not by itself determine the target Assignee.
-- An unstarted target that will establish a fresh or compacted Session contract, or that requires retained-context Assignee compatibility, materializes the required target Agent Node fallback. An unstarted target-owned retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
+- An unstarted target that will establish a fresh or compacted Session contract materializes the required target Agent Node fallback. An unstarted retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
 - A target execution already bound to a Session preserves that Session's Assignee. A pending Approval target has not started and therefore derives its Assignee only from its frozen Context-Preservation Mode and Context Source resolution.
 - Pre-feature state migrates with absent/no-thinking because it had no frozen thinking value. Migration does not validate preserved role availability against current configuration; an unavailable role becomes an ordinary Current Node start failure after startup.
 - Later Workflow edits do not change an admitted Agent Current Node's materialized Assignee or thinking.

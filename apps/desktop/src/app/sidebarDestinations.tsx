@@ -157,19 +157,22 @@ function NewTaskDestination({
       }),
     [destination.initialPreparedDependency, navigator, pending],
   );
-  return (
-    <NewTaskForm
-      boardQueryWorkflowID={destination.boardQueryWorkflowID}
-      className="w-full"
-      initialPreparedDependency={destination.initialPreparedDependency}
-      initialSourceWorkspaceID={destination.initialSourceWorkspaceID}
-      navigator={navigator}
-      onPendingChange={setPending}
-      parentReturnDirection={destination.parentReturnDirection}
-      projectID={destination.projectID}
-      retainedState={retainedState}
-      workflowID={destination.workflowID}
-    />
+  const formProps = {
+    boardQueryWorkflowID: destination.boardQueryWorkflowID,
+    className: "w-full",
+    initialPreparedDependency: destination.initialPreparedDependency,
+    initialSourceWorkspaceID: destination.initialSourceWorkspaceID,
+    navigator,
+    onCreated: destination.onCreated,
+    onPendingChange: setPending,
+    parentReturnDirection: destination.parentReturnDirection,
+    projectID: destination.projectID,
+    retainedState,
+  };
+  return destination.workflowID === undefined ? (
+    <NewTaskForm {...formProps} />
+  ) : (
+    <NewTaskForm {...formProps} workflowID={destination.workflowID} />
   );
 }
 
@@ -196,26 +199,32 @@ function LinkWorkflowDestinationView({
   destination: Extract<SidebarDestination, { kind: "linkWorkflow" }>;
   navigator: SidebarPageNavigator;
 }>): ReactElement {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
   usePublishSidebarHeaderAction(
     destination.creating === true ? null : (
       <LinkWorkflowCreateHeaderButton destination={destination} navigator={navigator} />
     ),
   );
-  const navigation = useAppNavigation();
-  const follow = (action: () => Promise<void>) => {
-    if (navigator.close() === "accepted") void action();
+  const complete = (completion: Parameters<typeof destination.onCompleted>[0]) => {
+    if (navigator.close() !== "accepted") return;
+    void (async () => destination.onCompleted(completion))().catch((error: unknown) => {
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "workflow-link-completion-error",
+        title: t("states.error"),
+        tone: "danger",
+      });
+    });
   };
   return (
     <LinkWorkflowSidebar
       onCreated={(workflowID) => {
-        follow(async () => {
-          await navigation.openWorkflowEditor({ projectID: destination.projectID, workflowID });
-        });
+        complete({ kind: "created", workflowID });
       }}
       onLinked={(workflowID) => {
-        follow(async () => {
-          await navigation.openProject(destination.projectID, workflowID);
-        });
+        complete({ kind: "linked", workflowID });
       }}
       creating={destination.creating === true}
       navigator={navigator}

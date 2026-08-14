@@ -9,7 +9,7 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { reportNonCancelledError, useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
@@ -37,6 +37,7 @@ import { useManualMoveController } from "./useManualMoveController";
 import "./board.css";
 import { BoardFilterRow } from "./BoardFilterRow";
 import { BoardQueryProvider } from "./BoardQueryContext";
+import { completeBoardWorkflowLink } from "./boardWorkflowLinkCompletion";
 import { useBoard, useBoardTaskActions, useProjectBoardSubscription } from "./useBoardData";
 import { useBoardLoadErrorReporter } from "./useBoardLoadErrorReporter";
 
@@ -60,7 +61,6 @@ const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
   unsupported_destination: "board.moveBlockedUnsupportedDestination",
-  waiting_question: "board.moveBlockedWaitingQuestion",
   lifecycle_conflict: "board.moveBlockedLifecycle",
   context_session_unavailable: "board.moveBlockedContextSession",
   no_usable_transition: "board.moveBlockedNoUsableTransition",
@@ -219,8 +219,10 @@ function BoardContent({
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
+      reportNonCancelledError(error, (failure) => {
+        const body = errorMessage(failure);
+        push({ id, tone: "danger", title, body, durationMs: Infinity });
+      });
     },
     [push],
   );
@@ -266,9 +268,7 @@ function BoardContent({
     runAction: runCardAction,
   });
   const actionsDisabled =
-    connection.phase !== "connected" ||
-    initiatingAction.pending !== null ||
-    manualMove.actionsDisabled;
+    connection.phase !== "connected" || initiatingAction.pending !== null || manualMove.actionsDisabled;
   const dragDisabled = boardDragDisabled(
     actionsDisabled,
     initiatingAction.running,
@@ -532,6 +532,9 @@ function BoardContent({
     open({
       kind: "linkWorkflow",
       mode: "overlay",
+      onCompleted: async (completion) => {
+        await completeBoardWorkflowLink(navigation, board.projectID, completion);
+      },
       projectID: board.projectID,
       selectedWorkflowID: board.selectedWorkflow.id,
     });

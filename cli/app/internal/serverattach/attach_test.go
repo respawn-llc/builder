@@ -53,14 +53,6 @@ func (s *projectViewRemoteStub) PlanWorkspaceBinding(ctx context.Context, req se
 	return serverapi.ProjectBindingPlanResponse{}, errors.New("unexpected PlanWorkspaceBinding call")
 }
 
-func compatibleCapabilities() protocol.CapabilityFlags {
-	return protocol.CapabilityFlags{
-		AuthBootstrap: true,
-		ProjectAttach: true,
-		RunPrompt:     true,
-	}
-}
-
 func boundPlanResponse() serverapi.ProjectBindingPlanResponse {
 	return serverapi.ProjectBindingPlanResponse{
 		Kind:    serverapi.ProjectBindingPlanKindBound,
@@ -70,7 +62,7 @@ func boundPlanResponse() serverapi.ProjectBindingPlanResponse {
 
 func boundProjectView(plan func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error)) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: compatibleCapabilities()},
+		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version},
 		plan:     plan,
 	}
 }
@@ -120,7 +112,7 @@ func TestAttachRunPromptWithoutReachableServer(t *testing.T) {
 
 func boundProjectViewWithRoot(rootID string) *projectViewRemoteStub {
 	return &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, Capabilities: compatibleCapabilities(), PersistenceRootID: rootID},
+		identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version, PersistenceRootID: rootID},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return boundPlanResponse(), nil
 		},
@@ -132,15 +124,12 @@ func TestAttachRunPromptReportsTypedPersistenceRootMismatch(t *testing.T) {
 		t.Run(reportedRoot, func(t *testing.T) {
 			req := testAttachRequest(func(context.Context, config.App) (remoteattach.ProjectViewRemote, error) {
 				projectViews := boundProjectViewWithRoot(reportedRoot)
-				projectViews.identity.ProtocolVersion = "legacy"
-				projectViews.identity.Capabilities = protocol.CapabilityFlags{}
 				return projectViews, nil
 			})
 			requireExplicitRoot(&req)
 			_, _, err := AttachRunPrompt(context.Background(), req)
 			if !errors.Is(err, ErrReachableServerRootMismatch) ||
-				errors.Is(err, ErrNoServerAvailable) ||
-				errors.Is(err, ErrServerIncompatible) {
+				errors.Is(err, ErrNoServerAvailable) {
 				t.Fatalf("err = %v, want root mismatch distinct from no server", err)
 			}
 			var mismatch *RootMismatchServerError
@@ -209,41 +198,6 @@ func dialWorkspaceServerWithRoot(t *testing.T, rootID string, attachProject bool
 		return client.DialRemoteURLForProject(ctx, wsURL, projectID)
 	}
 	return dial, server.Close, disconnected
-}
-
-func TestAttachRunPromptReportsTypedIncompatibleServerReason(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		identity    protocol.ServerIdentity
-		reasonParts []string
-	}{
-		{
-			name:     "missing capabilities",
-			identity: protocol.ServerIdentity{ProtocolVersion: protocol.Version},
-		},
-		{
-			name:        "protocol version mismatch",
-			identity:    protocol.ServerIdentity{ProtocolVersion: "0.0.0-legacy", ServerID: "kent:7", PID: 7, Capabilities: compatibleCapabilities()},
-			reasonParts: []string{"0.0.0-legacy", protocol.Version},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			req := testAttachRequest(func(context.Context, config.App) (ProjectViewRemote, error) {
-				return &projectViewRemoteStub{identity: tc.identity}, nil
-			})
-			_, _, err := AttachRunPrompt(context.Background(), req)
-			var incompatible *IncompatibleServerError
-			if !errors.Is(err, ErrServerIncompatible) || errors.Is(err, ErrNoServerAvailable) ||
-				!errors.As(err, &incompatible) || strings.TrimSpace(incompatible.Reason) == "" {
-				t.Fatalf("err = %v, want typed incompatibility distinct from no server", err)
-			}
-			for _, part := range tc.reasonParts {
-				if !strings.Contains(incompatible.Reason, part) {
-					t.Fatalf("reason = %q, want %q", incompatible.Reason, part)
-				}
-			}
-		})
-	}
 }
 
 func TestAttachRunPromptPropagatesHeadlessWorkspaceFailures(t *testing.T) {

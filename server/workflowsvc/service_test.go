@@ -21,6 +21,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
@@ -455,20 +456,19 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 		t.Fatalf("transition preview = %+v", transition)
 	}
 
-	execution.disposition = workflowexecution.ManualMoveDispositionWaitingQuestion
-	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
+	execution.disposition = workflowexecution.ManualMoveDispositionAutoInterruptible
+	interruptible, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
 		TaskID: task.Task.ID, TargetNodeID: terminalID,
 	})
 	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove waiting question: %v", err)
+		t.Fatalf("PreviewWorkflowTaskMove auto-interruptible: %v", err)
 	}
-	if blocked.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeBlocked ||
-		blocked.Blocked == nil ||
-		blocked.Blocked.Reason != serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion {
-		t.Fatalf("waiting-question preview = %+v", blocked)
+	if interruptible.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeDirect ||
+		interruptible.Direct == nil {
+		t.Fatalf("auto-interruptible preview = %+v, want direct move", interruptible)
 	}
 	execution.disposition = workflowexecution.ManualMoveDispositionLifecycleConflict
-	blocked, err = service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
+	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
 		TaskID: task.Task.ID, TargetNodeID: terminalID,
 	})
 	if err != nil {
@@ -1445,10 +1445,11 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 			t.Fatalf("InterruptCurrentNode: %v", err)
 		}
 	}
+	releaseRunner := make(chan struct{})
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	controller, err := workflowexecution.NewCurrentNodeController(
 		service.store,
-		initialBranchControllerRunner{},
+		workflowServiceConcurrentResumeRunner{release: releaseRunner},
 		authority,
 		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
@@ -1460,6 +1461,7 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		t.Fatalf("NewCurrentNodeController: %v", err)
 	}
 	t.Cleanup(func() {
+		close(releaseRunner)
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
@@ -1492,6 +1494,22 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		outcomes[serverapi.WorkflowExecutionTargetActionOutcomeNoOp] != 1 {
 		t.Fatalf("concurrent Resume outcomes = %+v, want one applied and one no_op", outcomes)
 	}
+}
+
+type workflowServiceConcurrentResumeRunner struct {
+	release <-chan struct{}
+}
+
+func (r workflowServiceConcurrentResumeRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	*workflowexecution.CurrentNodeClassifiedAssignment,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	<-r.release
+	return nil
 }
 
 func TestServiceTaskResumePromotesConcurrencyQueuedCurrentNodes(t *testing.T) {
@@ -1605,6 +1623,65 @@ func TestServiceTaskCreateMapsNoLinkedWorkflowsSelectionError(t *testing.T) {
 		selectionErr.ProjectID != binding.ProjectID ||
 		selectionErr.WorkflowID != nil {
 		t.Fatalf("selection error = %+v", selectionErr)
+	}
+}
+
+func TestServiceTaskCreateWithoutWorkflowSelectsSoleLinkedWorkflow(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	workflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    workflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Sole linked workflow",
+	})
+	if created.Task.WorkflowID != workflowID {
+		t.Fatalf("created Workflow = %s, want sole linked Workflow %s", created.Task.WorkflowID, workflowID)
+	}
+}
+
+func TestServiceTaskCreateWithoutWorkflowSelectsLinkedDefaultAmongMultiple(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	defaultWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	otherWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    otherWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, defaultWorkflowID)
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID: binding.ProjectID,
+		Title:     "Default linked workflow",
+	})
+	if created.Task.WorkflowID != defaultWorkflowID {
+		t.Fatalf("created Workflow = %s, want linked default Workflow %s", created.Task.WorkflowID, defaultWorkflowID)
+	}
+}
+
+func TestServiceTaskCreateWithExplicitWorkflowKeepsExactSelection(t *testing.T) {
+	ctx, service, binding := newWorkflowServiceTestContext(t)
+	defaultWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	explicitWorkflowID := createWorkflowServiceValidWorkflow(t, ctx, service)
+	linkDefaultWorkflowServiceProject(t, ctx, service, binding.ProjectID, defaultWorkflowID)
+	linkWorkflowServiceProject(t, ctx, service, serverapi.WorkflowLinkProjectRequest{
+		ProjectID:     binding.ProjectID,
+		WorkflowID:    explicitWorkflowID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+
+	created := createWorkflowServiceTask(t, ctx, service, serverapi.WorkflowTaskCreateRequest{
+		ProjectID:  binding.ProjectID,
+		WorkflowID: &explicitWorkflowID,
+		Title:      "Explicit linked workflow",
+	})
+	if created.Task.WorkflowID != explicitWorkflowID {
+		t.Fatalf("created Workflow = %s, want explicit Workflow %s", created.Task.WorkflowID, explicitWorkflowID)
 	}
 }
 

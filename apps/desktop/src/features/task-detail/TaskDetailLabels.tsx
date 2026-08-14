@@ -1,10 +1,10 @@
 import { Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage } from "@/api";
 import {
   LabelChooser,
   orderedAssignedLabels,
+  TaskLabelAssignmentFeedback,
   useProjectLabelCatalog,
   useTaskLabelAssignment,
 } from "@/shared/labels";
@@ -63,58 +63,10 @@ export function TaskDetailLabels({ disabled }: Readonly<{ disabled: boolean }>) 
               </Button>
             }
           />
-          <AssignmentLoadFailure />
-          <AssignmentFailures />
+          <TaskLabelAssignmentFeedback assignment={assignment} />
         </div>
       }
       valueClassName="flex-1"
     />
-  );
-}
-
-function AssignmentLoadFailure() {
-  const { t } = useTranslation();
-  const assignment = useTaskLabelAssignment();
-  if (assignment.error === null) {
-    return null;
-  }
-  return (
-    <FailureRow error={assignment.error} onRetry={assignment.retryLoad} title={t("labels.loadFailed")} />
-  );
-}
-
-function AssignmentFailures() {
-  const { t } = useTranslation();
-  const assignment = useTaskLabelAssignment();
-  const failures = assignment.failures;
-  if (failures.length === 0) {
-    return null;
-  }
-  return (
-    <div className="grid gap-[var(--space-1)]" role="alert">
-      {failures.map((failure) => (
-        <FailureRow
-          error={failure.error}
-          key={failure.labelID}
-          onRetry={() => {
-            assignment.retry(failure.labelID);
-          }}
-          title={t("labels.assignmentFailed")}
-        />
-      ))}
-    </div>
-  );
-}
-
-function FailureRow({ error, onRetry, title }: Readonly<{ error: unknown; onRetry(): void; title: string }>) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[var(--color-error)]">
-      <span>{title}</span>
-      <span className="min-w-0">{errorMessage(error)}</span>
-      <Button onClick={onRetry} variant="primary">
-        {t("app.retry")}
-      </Button>
-    </div>
   );
 }

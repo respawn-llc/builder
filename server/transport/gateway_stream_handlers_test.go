@@ -2,9 +2,11 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"core/shared/apicontract"
 	"core/shared/clientui"
@@ -64,57 +66,100 @@ func (c *promptFollowUpRegistrationConn) Send(context.Context, rpcwire.Frame) er
 func (*promptFollowUpRegistrationConn) Events() <-chan rpcwire.Event { return nil }
 func (*promptFollowUpRegistrationConn) Closed() <-chan struct{}      { return nil }
 func (*promptFollowUpRegistrationConn) Close() error                 { return nil }
-func TestLegacyTranscriptSubscriptionSuppressesLiveRunTerminalAndRenumbers(t *testing.T) {
-	inner := &scriptedGatewayTranscriptSubscription{
+func TestSessionTranscriptSubscriptionPublishesLiveRunFinishedWithoutRewritingSequence(t *testing.T) {
+	answer := "done"
+	now := time.Unix(1, 0).UTC()
+	subscription := &scriptedGatewayTranscriptSubscription{
 		messages: []clientui.TranscriptMessage{
-			clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptHydration{})),
-			clientui.NewTranscriptMessage(2, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{})),
-			clientui.NewTranscriptMessage(3, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{})),
+			clientui.NewTranscriptMessage(7, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{
+				Status:        clientui.LiveRunStatusCompleted,
+				ResultKind:    clientui.LiveRunResultAssistantFinalAnswer,
+				WorkPerformed: true,
+				FinalAnswer:   &answer,
+				StartedAt:     now,
+				FinishedAt:    now,
+			})),
+			clientui.NewTranscriptMessage(8, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{
+				Code:   clientui.OperationalDiagnosticSleepGuardFailed,
+				Detail: "sleep guard failed",
+			})),
 		},
 	}
-	subscription := &legacyTranscriptSubscription{inner: inner}
+	conn := &recordingGatewayConn{}
+	route, ok := apicontract.RouteByMethod(protocol.MethodSessionSubscribeTranscript)
+	if !ok {
+		t.Fatal("session transcript route is not registered")
+	}
+	gateway := &Gateway{deps: &gatewayTranscriptDependencies{
+		transcript: gatewayTranscriptServiceFunc(func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+			return subscription, nil
+		}),
+	}}
+	gateway.serveSessionTranscriptSubscription(
+		conn,
+		context.Background(),
+		&connectionState{},
+		route,
+		protocol.Request{
+			JSONRPC: protocol.JSONRPCVersion,
+			ID:      "subscribe",
+			Method:  protocol.MethodSessionSubscribeTranscript,
+			Params:  mustJSON(t, serverapi.TranscriptSubscribeRequest{SessionID: "session-1"}),
+		},
+	)
 
-	first, err := subscription.Next(context.Background())
-	if err != nil {
-		t.Fatalf("read hydration: %v", err)
+	var messages []clientui.TranscriptMessage
+	for _, frame := range conn.frames {
+		if frame.Method != protocol.MethodSessionTranscriptEvent {
+			continue
+		}
+		var params protocol.SessionTranscriptEventParams
+		if err := json.Unmarshal(frame.Params, &params); err != nil {
+			t.Fatalf("decode transcript event: %v", err)
+		}
+		messages = append(messages, params.Message)
 	}
-	if first.Sequence != 1 || first.Kind() != clientui.TranscriptMessageHydration {
-		t.Fatalf("hydration = %+v", first)
+	if len(messages) != 2 {
+		t.Fatalf("transcript messages = %+v, want live-run-finished and diagnostic", messages)
 	}
-
-	second, err := subscription.Next(context.Background())
-	if err != nil {
-		t.Fatalf("read diagnostic: %v", err)
+	if messages[0].Sequence != 7 || messages[0].Kind() != clientui.TranscriptMessageLiveRunFinished {
+		t.Fatalf("first transcript message = %+v, want seq=7 live-run-finished", messages[0])
 	}
-	if second.Sequence != 2 || second.Kind() != clientui.TranscriptMessageOperationalDiagnostic {
-		t.Fatalf("renumbered diagnostic = %+v", second)
+	if messages[1].Sequence != 8 || messages[1].Kind() != clientui.TranscriptMessageOperationalDiagnostic {
+		t.Fatalf("second transcript message = %+v, want seq=8 operational diagnostic", messages[1])
 	}
-	if err := subscription.Close(); err != nil {
-		t.Fatalf("close subscription: %v", err)
-	}
-	if !inner.closed {
-		t.Fatal("legacy wrapper did not close the underlying subscription")
+	if !subscription.closed {
+		t.Fatal("subscription was not closed")
 	}
 }
 
-func TestLegacyTranscriptSubscriptionRejectsSequenceBelowSuppressedCount(t *testing.T) {
-	inner := &scriptedGatewayTranscriptSubscription{
-		messages: []clientui.TranscriptMessage{
-			clientui.NewTranscriptMessage(1, clientui.NewTranscriptEvent(clientui.TranscriptLiveRunResult{})),
-			clientui.NewTranscriptMessage(0, clientui.NewTranscriptEvent(clientui.TranscriptOperationalDiagnostic{})),
-		},
-	}
-	subscription := &legacyTranscriptSubscription{inner: inner}
+type gatewayTranscriptServiceFunc func(context.Context, serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error)
 
-	_, err := subscription.Next(context.Background())
-	var sequenceErr *legacyTranscriptSequenceError
-	if !errors.As(err, &sequenceErr) {
-		t.Fatalf("Next error = %T, want legacyTranscriptSequenceError", err)
-	}
-	if sequenceErr.Sequence != 0 || sequenceErr.Suppressed != 1 {
-		t.Fatalf("sequence error = %+v", sequenceErr)
-	}
+func (f gatewayTranscriptServiceFunc) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+	return f(ctx, req)
 }
+
+type gatewayTranscriptDependencies struct {
+	GatewayDependencies
+	transcript apicontract.SessionTranscriptService
+}
+
+func (d *gatewayTranscriptDependencies) SessionTranscriptClient() apicontract.SessionTranscriptService {
+	return d.transcript
+}
+
+type recordingGatewayConn struct {
+	frames []rpcwire.Frame
+}
+
+func (c *recordingGatewayConn) Send(_ context.Context, frame rpcwire.Frame) error {
+	c.frames = append(c.frames, frame)
+	return nil
+}
+
+func (*recordingGatewayConn) Events() <-chan rpcwire.Event { return nil }
+func (*recordingGatewayConn) Closed() <-chan struct{}      { return nil }
+func (*recordingGatewayConn) Close() error                 { return nil }
 
 type scriptedGatewayTranscriptSubscription struct {
 	messages []clientui.TranscriptMessage

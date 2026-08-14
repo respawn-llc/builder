@@ -290,7 +290,14 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		if err := validatePreparedManualMoveTargetShape(definition, choice, executionTargetPreparation.targetShape); err != nil {
 			return ManualMoveResult{}, err
 		}
-		valueEnvironment, err := s.manualMoveValueEnvironment(ctx, q, definition, prepared.request.TaskID, currentNodes)
+		valueEnvironment, err := s.manualMoveValueEnvironment(
+			ctx,
+			q,
+			definition,
+			prepared.request.TaskID,
+			currentNodes,
+			prepared.request.TargetNodeID,
+		)
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
@@ -496,6 +503,7 @@ func (s *Store) prepareManualMoveAssignmentContexts(
 		definition,
 		prepared.request.TaskID,
 		currentNodes,
+		prepared.request.TargetNodeID,
 	)
 	if err != nil {
 		return nil, nil, 0, err

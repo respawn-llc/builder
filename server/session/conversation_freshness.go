@@ -2,6 +2,8 @@ package session
 
 import "strings"
 
+const askQuestionToolName = "ask_question"
+
 type ConversationFreshness uint8
 
 const (
@@ -75,6 +77,10 @@ func eventPayloadEligibleForCommittedTime(payload EventRecordPayload) (bool, err
 			}
 		}
 		return false, nil
+	case ToolCompletionRecord:
+		return payload.Name == askQuestionToolName &&
+			!payload.IsError &&
+			payload.QuestionAnswer != nil, nil
 	default:
 		return false, nil
 	}

@@ -46,6 +46,15 @@ kent task wait KENT-335
 kent task watch KENT-335
 ```
 
+List answered Questions from one Session, newest first:
+
+```bash
+kent questions list --session <session-id>
+kent questions list --session <session-id> --max-handoffs 1 --json
+```
+
+`--max-handoffs` defaults to 25 and counts the current unfinished history window. Question history reads the Session log and can be slow, especially in JSON mode. A Task may retain hundreds of Sessions; use `kent task sessions <task>` to choose a Session before listing its Question history.
+
 These commands are one-shot server-side waits. `wait` ignores Questions but reports the next interruption, error, or terminal completion; `watch` reports the next Question, interruption, error, or terminal completion. A reported Question includes a runnable `kent question answer` command.
 
 Use exactly one of `--session` or `--task`. Task short IDs resolve in the current workspace's Project unless `--project` selects another Project. A Task with pending Questions in several Sessions is ambiguous; Kent answers nothing and lists each candidate Session name and ID.

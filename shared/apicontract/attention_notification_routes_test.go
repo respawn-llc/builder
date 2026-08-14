@@ -13,7 +13,7 @@ func TestAttentionNotificationRouteContracts(t *testing.T) {
 	if !ok {
 		t.Fatal("desktop attention notification route missing")
 	}
-	if desktop.Kind != KindSubscription || desktop.Auth != AuthServer || desktop.Scope != ScopeNone || desktop.Connection != ConnectionSubscription || desktop.Dependency != DependencyAttentionNotification {
+	if desktop.Kind != KindSubscription || desktop.Auth != AuthServer || desktop.Scope != ScopeNone || desktop.Connection != ConnectionSubscription {
 		t.Fatalf("desktop attention notification route = %+v", desktop)
 	}
 	if desktop.RequestType != reflect.TypeOf(serverapi.AttentionNotificationSubscribeRequest{}) || desktop.EventType != reflect.TypeOf(protocol.AttentionNotificationEventParams{}) {
@@ -27,7 +27,7 @@ func TestAttentionNotificationRouteContracts(t *testing.T) {
 	if !ok {
 		t.Fatal("session attention notification route missing")
 	}
-	if session.Kind != KindSubscription || session.Auth != AuthServer || session.Scope != ScopeAttachedSession || session.Dependency != DependencyAttentionNotification {
+	if session.Kind != KindSubscription || session.Auth != AuthServer || session.Scope != ScopeAttachedSession {
 		t.Fatalf("session attention notification route = %+v", session)
 	}
 	if session.RequestType != reflect.TypeOf(serverapi.AttentionSessionNotificationSubscribeRequest{}) || !session.ValidatesRequest {

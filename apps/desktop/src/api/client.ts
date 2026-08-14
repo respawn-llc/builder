@@ -28,6 +28,7 @@ import type {
   TaskResumeInput,
   TaskStartInput,
   TaskMutationInput,
+  ProjectTaskGroupCountsInput,
   TaskListInput,
   WorkflowCreateAndLinkInput,
   WorkflowCreateInput,
@@ -79,7 +80,13 @@ import type {
   WorkflowRecord,
   WorkflowValidation,
 } from "./models";
-import type { ProjectLabel, ProjectLabelCatalog, TaskLabelAssignment, TaskListPage } from "./workflowLabels";
+import type {
+  ProjectLabel,
+  ProjectLabelCatalog,
+  ProjectTaskGroupCounts,
+  TaskLabelAssignment,
+  TaskListPage,
+} from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import {
   projectPageSchema,
@@ -469,6 +476,12 @@ export class ApiClient implements ApiService {
 
   async listTasks(input: TaskListInput): Promise<TaskListPage> {
     return workflowLabels.listTasks(this.#transport, input);
+  }
+
+  async getProjectTaskGroupCounts(
+    input: ProjectTaskGroupCountsInput,
+  ): Promise<ProjectTaskGroupCounts> {
+    return workflowLabels.getProjectTaskGroupCounts(this.#transport, input);
   }
 
   async searchTasks(input: TaskSearchInput, signal?: AbortSignal): Promise<TaskSearchResponse> {

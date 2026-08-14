@@ -50,6 +50,7 @@ export {
 } from "./taskLabelCache";
 export { type TaskLabelAssignmentData, type TaskLabelAssignmentFailure } from "./taskLabelAssignmentData";
 export { TaskLabelAssignmentProvider } from "./TaskLabelAssignmentProvider";
+export { TaskLabelAssignmentFeedback } from "./TaskLabelAssignmentFeedback";
 export { useTaskLabelAssignment } from "./taskLabelAssignmentContext";
 export { LabelChooser, type LabelChooserInvocation, type LabelChooserProps } from "./LabelChooser";
 export { createProjectLabelEffects, type ProjectLabelEffects } from "./labelEventEffects";

@@ -3,7 +3,12 @@ import { useEffect, useMemo, useRef } from "react";
 
 import type { OffsetPage, TaskDetail } from "@/api";
 import { errorMessage } from "@/api";
-import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import {
+  invalidateProjectBoardQueries,
+  invalidateProjectTaskSearches,
+  queryKeys,
+  reportNonCancelledError,
+} from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import {
@@ -62,7 +67,11 @@ export function useTaskDetailLiveRefresh(detail: TaskDetail, enabled: boolean) {
     };
     const refreshOrReport = (): void => {
       void refresh().catch((error: unknown) => {
-        void logger.append("warn", "Task detail live refresh failed.", { error: errorMessage(error) });
+        reportNonCancelledError(error, (failure) => {
+          void logger.append("warn", "Task detail live refresh failed.", {
+            error: errorMessage(failure),
+          });
+        });
       });
     };
     const subscription = api.subscribeProject(projectID, {

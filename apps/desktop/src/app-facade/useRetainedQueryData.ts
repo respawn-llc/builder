@@ -9,8 +9,13 @@ export function useRetainedQueryData<TData, TScope>(
   scope: TScope,
   data: TData | undefined,
   scopesEqual: (left: TScope, right: TScope) => boolean,
+  retain = true,
 ): TData | undefined {
   const [retained, setRetained] = useState<RetainedQueryData<TData, TScope> | null>(null);
+  if (!retain) {
+    if (retained !== null) setRetained(null);
+    return undefined;
+  }
   if (data !== undefined && (retained?.data !== data || !scopesEqual(retained.scope, scope))) {
     setRetained({ data, scope });
     return data;

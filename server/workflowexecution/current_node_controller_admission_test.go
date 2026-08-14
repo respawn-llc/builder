@@ -506,6 +506,55 @@ func TestCurrentNodeControllerPassesResumePromptDeliveryToRunner(t *testing.T) {
 	}
 }
 
+func TestCurrentNodeControllerSteersUnclassifiedAutomaticAgentBeforeStartingIt(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(
+		t,
+		"task-automatic-assignment",
+		"node-automatic-agent",
+	)
+	store := &currentNodeControllerStore{}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	runner := &countingCurrentNodeRunner{}
+	steerer := &recordingCurrentNodeAssignmentSteerer{}
+	controller, err := NewCurrentNodeController(
+		store,
+		runner,
+		authority,
+		NewTaskMutationCoordinator(),
+		CurrentNodeControllerConfig{
+			AgentConcurrency:  1,
+			AssignmentSteerer: steerer,
+		},
+	)
+	if err != nil {
+		t.Fatalf("new current node controller: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := controller.Close(); err != nil {
+			t.Errorf("close controller: %v", err)
+		}
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+
+	controller.enqueueAutomaticIntents([]CurrentNodeAutomaticIntent{{
+		CurrentNode: reference,
+		NodeKind:    workflow.NodeKindAgent,
+	}})
+
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		return runner.starts() == 1
+	}, "automatic Agent did not reach runner")
+	if got := steerer.references(); len(got) != 1 || !got[0].Equal(reference) {
+		t.Fatalf("steered assignments = %+v, want %v", got, reference)
+	}
+	if deliveries := runner.promptDeliveries(); len(deliveries) != 1 ||
+		deliveries[0] != workflowruntime.TaskPromptDeliveryResume {
+		t.Fatalf("runner prompt deliveries = %+v, want Resume after assignment publication", deliveries)
+	}
+}
+
 func TestCurrentNodeControllerBoundsExplicitAdmissionSetupWithoutBlockingSiblings(t *testing.T) {
 	const branchCount = explicitAdmissionConcurrency + 2
 	taskID := workflow.TaskID("task-explicit-admission-bound")

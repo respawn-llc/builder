@@ -1739,13 +1739,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{}, err
 	}
 	switch disposition {
-	case workflowexecution.ManualMoveDispositionWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
-				Reason: serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
-			},
-		}, nil
 	case workflowexecution.ManualMoveDispositionLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
@@ -1951,8 +1944,6 @@ func manualMovePreviewBlocker(blocker workflowstore.ManualMoveBlocker) (serverap
 		return serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition, nil
 	case workflowstore.ManualMoveBlockerUnsupportedDestination:
 		return serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination, nil
-	case workflowstore.ManualMoveBlockerWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion, nil
 	case workflowstore.ManualMoveBlockerLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict, nil
 	case workflowstore.ManualMoveBlockerContextSessionUnavailable:
@@ -2234,6 +2225,13 @@ func (s *Service) ListWorkflowTasks(ctx context.Context, req serverapi.WorkflowT
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
 	return s.readModels.TaskList.List(ctx, req)
+}
+
+func (s *Service) GetWorkflowProjectTaskGroupCounts(ctx context.Context, req serverapi.WorkflowProjectTaskGroupCountsRequest) (serverapi.WorkflowProjectTaskGroupCountsResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowProjectTaskGroupCountsResponse{}, err
+	}
+	return s.readModels.TaskList.CountGroups(ctx, req)
 }
 
 func (s *Service) SearchWorkflowTasks(ctx context.Context, req serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error) {

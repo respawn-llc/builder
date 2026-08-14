@@ -21,7 +21,6 @@ const (
 	WorkflowTaskMovePreviewBlockerInvalidWorkflow              WorkflowTaskMovePreviewBlocker = "invalid_workflow"
 	WorkflowTaskMovePreviewBlockerNoSourcePosition             WorkflowTaskMovePreviewBlocker = "no_source_position"
 	WorkflowTaskMovePreviewBlockerUnsupportedDestination       WorkflowTaskMovePreviewBlocker = "unsupported_destination"
-	WorkflowTaskMovePreviewBlockerWaitingQuestion              WorkflowTaskMovePreviewBlocker = "waiting_question"
 	WorkflowTaskMovePreviewBlockerLifecycleConflict            WorkflowTaskMovePreviewBlocker = "lifecycle_conflict"
 	WorkflowTaskMovePreviewBlockerContextSessionUnavailable    WorkflowTaskMovePreviewBlocker = "context_session_unavailable"
 	WorkflowTaskMovePreviewBlockerNoUsableTransition           WorkflowTaskMovePreviewBlocker = "no_usable_transition"
@@ -125,7 +124,6 @@ func (b WorkflowTaskMovePreviewBlocked) Validate() error {
 	case WorkflowTaskMovePreviewBlockerInvalidWorkflow,
 		WorkflowTaskMovePreviewBlockerNoSourcePosition,
 		WorkflowTaskMovePreviewBlockerUnsupportedDestination,
-		WorkflowTaskMovePreviewBlockerWaitingQuestion,
 		WorkflowTaskMovePreviewBlockerLifecycleConflict,
 		WorkflowTaskMovePreviewBlockerContextSessionUnavailable,
 		WorkflowTaskMovePreviewBlockerNoUsableTransition,

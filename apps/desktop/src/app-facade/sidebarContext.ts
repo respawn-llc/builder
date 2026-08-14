@@ -1,4 +1,13 @@
-import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { CreatedTaskSummary, TaskDependencyDirection, TaskStatus } from "@/api";
 import type { ResolvedSidebarWidth, SidebarSizePreference } from "./sidebarSizing";
 
@@ -37,17 +46,29 @@ export type TaskDetailInitialFocus =
   | Readonly<{ kind: "interrupted_current_node" }>
   | Readonly<{ kind: "dependencies" }>;
 
+export type LinkWorkflowCompletion =
+  Readonly<{ kind: "created"; workflowID: string }> | Readonly<{ kind: "linked"; workflowID: string }>;
+
 export type SidebarDestination =
-  | Readonly<{
+  | (Readonly<{
       kind: "newTask";
       mode?: SidebarMode;
-      boardQueryWorkflowID: string | undefined;
       initialSourceWorkspaceID?: string | undefined;
       initialPreparedDependency?: NewTaskPreparedDependency | undefined;
+      onCreated?: ((taskID: string) => void | Promise<void>) | undefined;
       parentReturnDirection?: TaskDependencyDirection | undefined;
       projectID: string;
-      workflowID: string;
-    }>
+    }> &
+      (
+        | Readonly<{
+            boardQueryWorkflowID: string | undefined;
+            workflowID: string;
+          }>
+        | Readonly<{
+            boardQueryWorkflowID: undefined;
+            workflowID?: undefined;
+          }>
+      ))
   | Readonly<{
       kind: "taskDetail";
       mode?: SidebarMode;
@@ -65,6 +86,7 @@ export type SidebarDestination =
       kind: "linkWorkflow";
       mode?: SidebarMode;
       creating?: boolean | undefined;
+      onCompleted: (completion: LinkWorkflowCompletion) => void | Promise<void>;
       projectID: string;
       selectedWorkflowID?: string | undefined;
     }>
@@ -187,10 +209,7 @@ export function useOwnedSidebarRoots(): SidebarRootController {
   return value;
 }
 
-export function useSidebarBackWhen(
-  condition: boolean,
-  navigator: SidebarPageNavigator | undefined,
-): void {
+export function useSidebarBackWhen(condition: boolean, navigator: SidebarPageNavigator | undefined): void {
   useEffect(() => {
     if (condition) navigator?.back();
   }, [condition, navigator]);

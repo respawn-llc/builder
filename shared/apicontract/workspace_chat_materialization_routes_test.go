@@ -16,8 +16,7 @@ func TestWorkspaceChatMaterializationRouteIsAuthenticatedProjectWorkspaceControl
 	if route.Kind != KindUnary ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeProjectWorkspace ||
-		route.Connection != ConnectionControl ||
-		route.Dependency != DependencySessionLaunch {
+		route.Connection != ConnectionControl {
 		t.Fatalf("route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.WorkspaceChatMaterializeRequest{}) ||

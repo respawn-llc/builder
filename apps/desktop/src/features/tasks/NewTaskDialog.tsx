@@ -5,8 +5,13 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { decodeWorkflowTaskDependencyError, errorMessage, isProjectMissingError } from "@/api";
-import type { ApiService, WorkspaceCatalogRow } from "@/api";
+import {
+  decodeWorkflowTaskDependencyError,
+  errorMessage,
+  isProjectMissingError,
+  type ApiService,
+  type WorkspaceCatalogRow,
+} from "@/api";
 import {
   projectWorkspaceQueryOptions,
   queryKeys,
@@ -110,34 +115,27 @@ export type NewTaskRetainedState = Readonly<{
   preparedDependencies: readonly PreparedTaskDependency[];
 }>;
 
-export function decodeNewTaskRetainedState(value: unknown): NewTaskRetainedState | undefined {
-  const parsed = newTaskRetainedStateSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
-}
-
-export function NewTaskForm({
-  boardQueryWorkflowID,
-  className,
-  initialPreparedDependency,
-  initialSourceWorkspaceID,
-  navigator,
-  onPendingChange,
-  parentReturnDirection,
-  projectID,
-  retainedState,
-  workflowID,
-}: Readonly<{
+type NewTaskFormProps = Readonly<{
   boardQueryWorkflowID: string | undefined;
   className?: string | undefined;
   initialPreparedDependency?: NewTaskPreparedDependency | undefined;
   initialSourceWorkspaceID?: string | undefined;
   navigator: SidebarPageNavigator;
+  onCreated?: ((taskID: string) => void | Promise<void>) | undefined;
   onPendingChange?: ((pending: boolean) => void) | undefined;
   parentReturnDirection?: "blocked-by" | "blocks" | undefined;
   projectID: string;
   retainedState?: unknown;
-  workflowID: string;
-}>) {
+  workflowID?: string | undefined;
+}>;
+
+export function decodeNewTaskRetainedState(value: unknown): NewTaskRetainedState | undefined {
+  const parsed = newTaskRetainedStateSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
+
+export function NewTaskForm(props: NewTaskFormProps) {
+  const { projectID } = props;
   const { t } = useTranslation();
   const { push } = useStatusController();
   const reportLabelError = useCallback(
@@ -154,18 +152,7 @@ export function NewTaskForm({
   );
   return (
     <ProjectLabelsProvider onBackgroundError={reportLabelError} projectID={projectID}>
-      <NewTaskFormContent
-        boardQueryWorkflowID={boardQueryWorkflowID}
-        className={className}
-        initialPreparedDependency={initialPreparedDependency}
-        initialSourceWorkspaceID={initialSourceWorkspaceID}
-        navigator={navigator}
-        onPendingChange={onPendingChange}
-        parentReturnDirection={parentReturnDirection}
-        projectID={projectID}
-        retainedState={retainedState}
-        workflowID={workflowID}
-      />
+      <NewTaskFormContent {...props} />
     </ProjectLabelsProvider>
   );
 }
@@ -176,23 +163,13 @@ function NewTaskFormContent({
   initialPreparedDependency,
   initialSourceWorkspaceID,
   navigator,
+  onCreated,
   onPendingChange,
   parentReturnDirection,
   projectID,
   retainedState,
   workflowID,
-}: Readonly<{
-  boardQueryWorkflowID: string | undefined;
-  className?: string | undefined;
-  initialPreparedDependency?: NewTaskPreparedDependency | undefined;
-  initialSourceWorkspaceID?: string | undefined;
-  navigator: SidebarPageNavigator;
-  onPendingChange?: ((pending: boolean) => void) | undefined;
-  parentReturnDirection?: "blocked-by" | "blocks" | undefined;
-  projectID: string;
-  retainedState?: unknown;
-  workflowID: string;
-}>) {
+}: NewTaskFormProps) {
   const { t } = useTranslation();
   const { api, logger } = useAppServices();
   const { dismiss, push } = useStatusController();
@@ -273,7 +250,7 @@ function NewTaskFormContent({
     try {
       const createdTask = await createTask.mutateAsync({
         projectID,
-        workflowID,
+        ...(workflowID === undefined ? {} : { workflowID }),
         title: values.title,
         body: values.body,
         sourceWorkspaceID,
@@ -283,7 +260,7 @@ function NewTaskFormContent({
           newTaskRole: dependency.direction === "blocked-by" ? "blocked" : "blocker",
         })),
       });
-      navigator.back(
+      const navigation = navigator.back(
         parentReturnDirection === undefined
           ? undefined
           : {
@@ -300,6 +277,7 @@ function NewTaskFormContent({
               },
             },
       );
+      if (navigation === "accepted") void onCreated?.(createdTask.id);
     } catch (error) {
       push({
         body: newTaskCreateErrorBody(error, t, logger),
@@ -363,14 +341,17 @@ function NewTaskFormContent({
         }
         navigationDisabled={connection.phase !== "connected"}
         onAdd={(direction) => {
-          navigator.push({
-            boardQueryWorkflowID,
+          const destination = {
             ...(selectedWorkspace === undefined ? {} : { initialSourceWorkspaceID: selectedWorkspace.id }),
-            kind: "newTask",
+            kind: "newTask" as const,
             parentReturnDirection: direction,
             projectID,
-            workflowID,
-          });
+          };
+          navigator.push(
+            workflowID === undefined
+              ? { ...destination, boardQueryWorkflowID: undefined }
+              : { ...destination, boardQueryWorkflowID, workflowID },
+          );
         }}
         onRemove={(direction, item) => {
           setPreparedDependencies((current) => removePreparedTaskDependency(current, direction, item.taskID));

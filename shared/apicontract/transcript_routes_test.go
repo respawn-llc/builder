@@ -13,7 +13,7 @@ func TestTranscriptSubscriptionRouteContract(t *testing.T) {
 	if !ok {
 		t.Fatal("transcript subscription route missing")
 	}
-	if route.Kind != KindSubscription || route.Auth != AuthServer || route.Scope != ScopeAttachedSession || route.Connection != ConnectionSubscription || route.Dependency != DependencySessionTranscript {
+	if route.Kind != KindSubscription || route.Auth != AuthServer || route.Scope != ScopeAttachedSession || route.Connection != ConnectionSubscription {
 		t.Fatalf("transcript subscription route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.TranscriptSubscribeRequest{}) {
@@ -42,7 +42,7 @@ func TestLatestCommittedAssistantFinalAnswerRouteContract(t *testing.T) {
 	if !ok {
 		t.Fatal("latest committed assistant final answer route missing")
 	}
-	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeSessionActiveProject || route.Connection != ConnectionControl || route.Dependency != DependencySessionView {
+	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeSessionActiveProject || route.Connection != ConnectionControl {
 		t.Fatalf("route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}) {

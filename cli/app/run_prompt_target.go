@@ -51,13 +51,6 @@ func startRunPromptClientWithWorkspaceConfig(ctx context.Context, workspaceConfi
 		},
 	})
 	if err != nil {
-		var incompatible *serverattach.IncompatibleServerError
-		if errors.As(err, &incompatible) {
-			if reason := strings.TrimSpace(incompatible.Reason); reason != "" {
-				return nil, nil, fmt.Errorf("%w (%s)", errRunServerIncompatible, reason)
-			}
-			return nil, nil, errRunServerIncompatible
-		}
 		var rootMismatch *serverattach.RootMismatchServerError
 		if errors.As(err, &rootMismatch) {
 			if reason := strings.TrimSpace(rootMismatch.Reason); reason != "" {
@@ -87,9 +80,6 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontra
 	if err := remote.RequireRoot(config.ExplicitPersistenceRootID(cfg)); err != nil {
 		return nil, remote.Close, errRunServerRootMismatch
 	}
-	if !remoteattach.SupportsRuntimeLiveControl(remote.Identity().Capabilities) {
-		return nil, remote.Close, errRunServerIncompatible
-	}
 	if err := ensureRemoteAuthReady(ctx, remote, cfg.Settings, newHeadlessAuthInteractor(), false); err != nil {
 		return nil, remote.Close, err
 	}
@@ -98,10 +88,6 @@ func startRuntimeLiveControlClient(ctx context.Context, opts Options) (apicontra
 
 // errRunRequiresServer is returned when no server is reachable for `kent run`.
 var errRunRequiresServer = errors.New("`kent run` can only be used when a server is already running. Start a server with `kent serve` or install a service with `kent service install` to prevent subagents and scripted runs from exiting abruptly if running concurrently with each other")
-
-// errRunServerIncompatible is returned when a reachable server fails the
-// capability check.
-var errRunServerIncompatible = errors.New("a Kent server is running on the configured endpoint but is not compatible with this client. Restart or upgrade the running server (for example `kent service restart`) instead of starting another, which would conflict on the same address")
 
 // errRunServerRootMismatch is returned when a reachable server on the configured
 // endpoint serves a different persistence root than the one selected. Starting

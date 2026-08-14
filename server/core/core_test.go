@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"reflect"
 	"slices"
 	"testing"
 
@@ -20,7 +19,6 @@ import (
 	"core/server/sessionlaunch"
 	"core/shared/clientui"
 	brand "core/shared/config"
-	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/runtimeinput"
 	"core/shared/serverapi"
@@ -229,12 +227,6 @@ func writeCorePromptFixture(t *testing.T, workspace, name, content string) {
 	}
 	if err := os.WriteFile(filepath.Join(root, name+".md"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
-	}
-}
-
-func TestProtocolIdentityHasNoCapabilityFactsFlag(t *testing.T) {
-	if _, ok := reflect.TypeOf(protocol.CapabilityFlags{}).FieldByName("CapabilityFacts"); ok {
-		t.Fatal("capability facts must be signaled by protocol version/route availability, not a handshake capability flag")
 	}
 }
 

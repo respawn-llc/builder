@@ -882,9 +882,6 @@ func (s *Starter) planCurrentNodeSession(
 		}
 		return launch.ApplyContextPolicy(plan, provider.Capabilities), disposable, nil
 	}
-	if err := validateRetainedWorkflowSessionAgentRole(input, plan, policy); err != nil {
-		return launch.SessionPlan{}, disposable, err
-	}
 	selection, err := currentNodeAgentExecutionSelection(input)
 	if err != nil {
 		return launch.SessionPlan{}, disposable, err
@@ -953,9 +950,8 @@ func (s *Starter) resolveEffectiveProviderCapabilities(
 type currentNodeSessionAssigneePolicy = workflow.AssigneeSessionPolicy
 
 const (
-	currentNodeSessionAssigneeEstablishTarget    = workflow.AssigneeSessionPolicyEstablishTarget
-	currentNodeSessionAssigneeRequireTargetMatch = workflow.AssigneeSessionPolicyRequireTargetMatch
-	currentNodeSessionAssigneePreserve           = workflow.AssigneeSessionPolicyPreserve
+	currentNodeSessionAssigneeEstablishTarget = workflow.AssigneeSessionPolicyEstablishTarget
+	currentNodeSessionAssigneePreserve        = workflow.AssigneeSessionPolicyPreserve
 )
 
 type currentNodeSessionPolicy struct {
@@ -985,51 +981,6 @@ func resolveCurrentNodeSessionPolicy(input workflowstore.CurrentNodeStartContext
 		cloneRetainedSession: input.IsFanoutBranch && !targetOwned && input.ContextMode != workflow.ContextModeNewSession,
 		assignee:             assignee,
 	}, nil
-}
-
-func validateRetainedWorkflowSessionAgentRole(
-	input workflowstore.CurrentNodeStartContext,
-	plan launch.SessionPlan,
-	policy currentNodeSessionPolicy,
-) error {
-	if input.CurrentNode.SessionID == nil ||
-		policy.assignee != currentNodeSessionAssigneeRequireTargetMatch {
-		return nil
-	}
-	selection, err := currentNodeAgentExecutionSelection(input)
-	if err != nil {
-		return err
-	}
-	roleOverride, err := workflowPromptOverrides(selection.Assignee).AgentRoleOverride()
-	if err != nil {
-		return err
-	}
-	var requestedRole *string
-	if roleOverride.Present && !roleOverride.Default {
-		requestedRole = &roleOverride.Role
-	}
-	var retainedRole *string
-	if plan.Continuation != nil {
-		retainedRole = plan.Continuation.AgentRole
-	}
-	if textutil.EqualOptional(retainedRole, requestedRole) {
-		return nil
-	}
-	retainedName := workflow.DefaultAgentRole
-	if retainedRole != nil {
-		retainedName = *retainedRole
-	}
-	requestedName := workflow.DefaultAgentRole
-	if requestedRole != nil {
-		requestedName = *requestedRole
-	}
-	return fmt.Errorf(
-		"%w: session_id=%s current=%q requested=%q",
-		launch.ErrLockedAgentRoleChange,
-		plan.Descriptor.SessionID(),
-		retainedName,
-		requestedName,
-	)
 }
 
 func (s *Starter) currentNodeSessionIntent(

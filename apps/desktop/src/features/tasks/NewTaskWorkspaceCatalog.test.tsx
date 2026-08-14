@@ -661,6 +661,29 @@ describe("New Task Workspace catalog integration", () => {
       expect(state.statusDismiss).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("submits Project-scoped creation without inventing a Workflow selection", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "not_attached" };
+    state.exact.isPending = false;
+    render(<NewTaskForm {...props} boardQueryWorkflowID={undefined} workflowID={undefined} />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "task.name" }), {
+      target: { value: "Project-scoped task" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "task.create" }));
+
+    await vi.waitFor(() => {
+      expect(state.create).toHaveBeenCalledWith({
+        body: "",
+        dependencyIntents: [],
+        labelIDs: [],
+        projectID: "project-1",
+        sourceWorkspaceID: "default",
+        title: "Project-scoped task",
+      });
+    });
+  });
 });
 
 function preparedDependency(direction: TaskDependencyDirection, taskID: string): PreparedTaskDependency {
