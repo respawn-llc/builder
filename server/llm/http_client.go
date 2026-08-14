@@ -1,8 +1,13 @@
 package llm
 
 import (
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
+
+	"core/server/httpcompression"
 )
 
 const (
@@ -11,15 +16,43 @@ const (
 )
 
 var sharedHTTPTransport = newSharedHTTPTransport()
+var sharedCompressedHTTPTransport = httpcompression.Transport(sharedHTTPTransport)
 
 // NewHTTPClient returns an HTTP client that shares a tuned transport across
 // runtimes so local/LAN model backends can reuse warm connections aggressively.
 func NewHTTPClient(timeout time.Duration) *http.Client {
-	client := &http.Client{Transport: sharedHTTPTransport}
+	return newHTTPClient(sharedCompressedHTTPTransport, timeout)
+}
+
+func newHTTPClient(transport http.RoundTripper, timeout time.Duration) *http.Client {
+	client := &http.Client{Transport: transport}
 	if timeout > 0 {
 		client.Timeout = timeout
 	}
 	return client
+}
+
+// NewProviderHTTPClient returns the default model-provider client while
+// keeping loopback model servers on the uncompressed local transport.
+func NewProviderHTTPClient(baseURL string, timeout time.Duration) *http.Client {
+	transport := sharedCompressedHTTPTransport
+	if isLoopbackHTTPURL(baseURL) {
+		transport = sharedHTTPTransport
+	}
+	return newHTTPClient(transport, timeout)
+}
+
+func isLoopbackHTTPURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return false
+	}
+	hostname := strings.TrimSpace(parsed.Hostname())
+	if strings.EqualFold(hostname, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	return ip != nil && ip.IsLoopback()
 }
 
 func newSharedHTTPTransport() *http.Transport {
@@ -28,6 +61,7 @@ func newSharedHTTPTransport() *http.Transport {
 	if ok {
 		transport = base.Clone()
 	}
+	transport.DisableCompression = true
 	transport.ForceAttemptHTTP2 = true
 	if transport.MaxIdleConns < sharedHTTPTransportMaxIdleConns {
 		transport.MaxIdleConns = sharedHTTPTransportMaxIdleConns

@@ -4,8 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"core/server/httpcompression"
 )
 
 var ErrUnsupportedProvider = errors.New("unsupported llm provider")
@@ -37,10 +40,16 @@ type ProviderErrorReducerFactory func(providerID string) ProviderErrorReducer
 
 type ProviderModelMatcher func(model string) bool
 
-type ProviderTransportVariantResolver func(baseURL string, mode OpenAIAuthMode) (string, error)
+type ProviderTransportEndpoint struct {
+	URL      *url.URL
+	Explicit bool
+}
+
+type ProviderTransportVariantResolver func(endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (string, error)
 
 type ProviderVariantContract struct {
 	ProviderID               string
+	RequestCompression       httpcompression.RequestContentCoding
 	Capabilities             ProviderCapabilities
 	RemoteCompactionProtocol remoteCompactionProtocol
 	NewErrorReducer          ProviderErrorReducerFactory
@@ -92,7 +101,8 @@ func providerContracts() []ProviderContract {
 			NewClient: newUnsupportedProviderClientFactory(ProviderAnthropic),
 			ProviderVariants: []ProviderVariantContract{
 				{
-					ProviderID: "anthropic",
+					ProviderID:         "anthropic",
+					RequestCompression: httpcompression.ContentCodingIdentity,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                    "anthropic",
 						SupportsResponsesAPI:          false,
@@ -115,6 +125,7 @@ func providerContracts() []ProviderContract {
 			ProviderVariants: []ProviderVariantContract{
 				{
 					ProviderID:               "openai",
+					RequestCompression:       httpcompression.ContentCodingIdentity,
 					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                    "openai",
@@ -130,7 +141,8 @@ func providerContracts() []ProviderContract {
 					NewErrorReducer: newOpenAICompatibleErrorReducer,
 				},
 				{
-					ProviderID: "openai-compatible",
+					ProviderID:         "openai-compatible",
+					RequestCompression: httpcompression.ContentCodingIdentity,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                    "openai-compatible",
 						SupportsResponsesAPI:          true,
@@ -146,6 +158,7 @@ func providerContracts() []ProviderContract {
 				},
 				{
 					ProviderID:               "chatgpt-codex",
+					RequestCompression:       httpcompression.ContentCodingZstd,
 					RemoteCompactionProtocol: remoteCompactionResponsesTriggerV2,
 					Capabilities: ProviderCapabilities{
 						ProviderID:                    "chatgpt-codex",
@@ -249,11 +262,14 @@ func newOpenAIProviderClient(opts ProviderClientOptions) (Client, error) {
 	if opts.Auth == nil && !allowsAnonymousOpenAIBaseURL(opts.OpenAIBaseURL) {
 		return nil, fmt.Errorf("openai auth provider is required")
 	}
-	transport := newOpenAIHTTPTransport(opts)
+	transport, err := newOpenAIHTTPTransport(opts)
+	if err != nil {
+		return nil, err
+	}
 	return newIdleWatchdogClient(NewOpenAIClient(transport), transport.Client.Timeout), nil
 }
 
-func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
+func newOpenAIHTTPTransport(opts ProviderClientOptions) (*HTTPTransport, error) {
 	transport := NewHTTPTransport(opts.Auth)
 	if opts.Provider != "" {
 		transport.Provider = opts.Provider
@@ -262,9 +278,16 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.Client = opts.HTTPClient
 	}
 	if v := strings.TrimSpace(opts.OpenAIBaseURL); v != "" {
-		normalizedBaseURL := normalizeOpenAIBaseURL(v)
+		parsedBaseURL, err := url.Parse(v)
+		if err != nil {
+			return nil, fmt.Errorf("parse OpenAI base URL: %w", err)
+		}
+		normalizedBaseURL := normalizeOpenAIBaseURL(parsedBaseURL)
 		transport.BaseURL = normalizedBaseURL
-		transport.BaseURLExplicit = !IsOpenAIFirstPartyBaseURL(normalizedBaseURL)
+		transport.BaseURLExplicit = true
+	}
+	if opts.HTTPClient == nil {
+		transport.Client = NewProviderHTTPClient(transport.BaseURL, transport.Client.Timeout)
 	}
 	transport.ModelVerbosity = strings.ToLower(strings.TrimSpace(opts.ModelVerbosity))
 	if opts.ProviderIdentifier != nil {
@@ -278,7 +301,7 @@ func newOpenAIHTTPTransport(opts ProviderClientOptions) *HTTPTransport {
 		transport.ProviderCapabilitiesOverride = &caps
 	}
 	transport.Store = opts.Store
-	return transport
+	return transport, nil
 }
 
 func allowsAnonymousOpenAIBaseURL(baseURL string) bool {

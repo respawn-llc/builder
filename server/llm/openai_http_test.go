@@ -12,7 +12,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -802,20 +801,10 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 		_, _ = w.Write([]byte(`{"id":"resp_anon_1","object":"response","output":[{"type":"message","id":"msg_anon_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hello from anonymous compatible server"}]}],"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18}}`))
 	}))
 	defer server.Close()
-	targetURL, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse server url: %v", err)
-	}
-
 	transport := NewHTTPTransport(nil)
 	transport.BaseURL = "https://example.openrouter.ai/v1"
 	transport.BaseURLExplicit = true
-	transport.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		cloned := req.Clone(req.Context())
-		cloned.URL.Scheme = targetURL.Scheme
-		cloned.URL.Host = targetURL.Host
-		return server.Client().Transport.RoundTrip(cloned)
-	})}
+	transport.Client = newRewritingHTTPClient(t, server)
 
 	providerCaps, err := transport.ProviderCapabilities(context.Background())
 	if err != nil {
@@ -844,12 +833,6 @@ func TestGenerate_ExplicitBaseURLAllowsAnonymousRequests(t *testing.T) {
 	if originator, userAgent, sessionID := capturedHeaders.Get("originator"), capturedHeaders.Get("User-Agent"), capturedHeaders.Get("session-id"); originator != transport.ProviderIdentifier || userAgent != transport.providerUserAgent() || sessionID != "session-1" {
 		t.Fatalf("common identity headers = (%q, %q, %q), want originator, User-Agent, and session-1", originator, userAgent, sessionID)
 	}
-}
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
 }
 
 func TestBuildPayload_UsesTransportStoreSetting(t *testing.T) {
