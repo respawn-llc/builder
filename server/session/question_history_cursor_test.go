@@ -226,6 +226,31 @@ func TestQuestionHistoryCursorLargeIgnoredScalarAllocationIsSizeIndependent(t *t
 	}
 }
 
+func TestEventRecordV2FieldValidationLargePayloadAllocationIsSizeIndependent(t *testing.T) {
+	smallLine := questionHistoryCursorIgnoredRecord(t, 1<<10)
+	largeLine := questionHistoryCursorIgnoredRecord(t, 16<<20)
+	allocated := func(line []byte) uint64 {
+		runtime.GC()
+		var before runtime.MemStats
+		var after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		if err := validateEventRecordV2FieldNames(line); err != nil {
+			t.Fatalf("validate v2 field names: %v", err)
+		}
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+	smallAllocated := allocated(smallLine)
+	largeAllocated := allocated(largeLine)
+	if largeAllocated > smallAllocated+(1<<20) {
+		t.Fatalf(
+			"large v2 field validation allocated %d bytes vs small %d; want size-independent bounded allocation",
+			largeAllocated,
+			smallAllocated,
+		)
+	}
+}
+
 func TestQuestionHistoryCursorSurfacesOversizedLegacyDiscriminatorsWithSizeIndependentAllocation(t *testing.T) {
 	tests := []struct {
 		name  string

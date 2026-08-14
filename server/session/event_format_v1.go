@@ -699,28 +699,26 @@ func validateEventRecordV2(record EventRecord) error {
 	if err != nil {
 		return err
 	}
-	completion, ok := payload.(ToolCompletionRecord)
-	if !ok {
+	switch typed := payload.(type) {
+	case MessageRecord:
+		return validateEventRecordV2MessageToolNames(typed)
+	case ToolCompletionRecord:
+		if err := validateEventRecordV2ToolName(typed.Name); err != nil {
+			return err
+		}
+		isQuestion := typed.Name == askQuestionToolName
+		successfulQuestion := isQuestion && !typed.IsError
+		if err := validateV2QuestionAnswerPlacement(
+			typed.Name,
+			typed.IsError,
+			typed.QuestionAnswer != nil,
+		); err != nil {
+			return err
+		}
+		if successfulQuestion && record.CommittedAtUnixMs() == nil {
+			return errors.New("successful ask_question completion requires a committed timestamp")
+		}
 		return nil
-	}
-	if len(completion.Name) > eventRecordDiscriminatorMaxBytes {
-		return fmt.Errorf(
-			"tool name exceeds %d UTF-8 bytes",
-			eventRecordDiscriminatorMaxBytes,
-		)
-	}
-	isQuestion := completion.Name == askQuestionToolName
-	successfulQuestion := isQuestion && !completion.IsError
-	if err := validateV2QuestionAnswerPlacement(
-		completion.Name,
-		completion.IsError,
-		completion.QuestionAnswer != nil,
-	); err != nil {
-		return err
-	}
-	switch {
-	case successfulQuestion && record.CommittedAtUnixMs() == nil:
-		return errors.New("successful ask_question completion requires a committed timestamp")
 	default:
 		return nil
 	}

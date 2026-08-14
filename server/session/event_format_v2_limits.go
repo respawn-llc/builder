@@ -1,40 +1,52 @@
 package session
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
+
+	"github.com/go-faster/jx"
 )
 
 func validateEventRecordV2FieldNames(line []byte) error {
-	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(line, &envelope); err != nil {
-		return fmt.Errorf("decode event record field names: %w", err)
+	inspectionReader := &eventRecordInspectionReader{
+		reader: bytes.NewReader(line),
 	}
-	for field, value := range envelope {
-		if err := validateEventRecordV2FieldName(field); err != nil {
-			return err
+	decoder := jx.Decode(inspectionReader, int(eventLogScanChunkSize))
+	return inspectEventRecordObject(decoder, inspectionReader, func(
+		decoder *jx.Decoder,
+		field string,
+	) error {
+		if field != "payload" || decoder.Next() != jx.Object {
+			return decoder.Skip()
 		}
-		if field != "payload" {
-			continue
+		if err := inspectEventRecordObject(
+			decoder,
+			inspectionReader,
+			func(decoder *jx.Decoder, _ string) error {
+				return decoder.Skip()
+			},
+		); err != nil {
+			return fmt.Errorf("event payload: %w", err)
 		}
-		var payload map[string]json.RawMessage
-		if err := json.Unmarshal(value, &payload); err != nil {
-			continue
-		}
-		for field := range payload {
-			if err := validateEventRecordV2FieldName(field); err != nil {
-				return fmt.Errorf("event payload: %w", err)
-			}
-		}
+		return nil
+	})
+}
+
+func validateEventRecordV2ToolName(name string) error {
+	if len(name) > eventRecordDiscriminatorMaxBytes {
+		return fmt.Errorf(
+			"tool name exceeds %d UTF-8 bytes",
+			eventRecordDiscriminatorMaxBytes,
+		)
 	}
 	return nil
 }
-func validateEventRecordV2FieldName(field string) error {
-	if len(field) > eventRecordDiscriminatorMaxBytes {
-		return fmt.Errorf(
-			"field name exceeds %d UTF-8 bytes",
-			eventRecordDiscriminatorMaxBytes,
-		)
+
+func validateEventRecordV2MessageToolNames(message MessageRecord) error {
+	for index, call := range message.ToolCalls {
+		if err := validateEventRecordV2ToolName(call.Name); err != nil {
+			return fmt.Errorf("message tool call %d: %w", index, err)
+		}
 	}
 	return nil
 }
