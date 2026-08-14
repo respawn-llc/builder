@@ -51,11 +51,24 @@ type AuthorizedProjectWorkspaceBinding struct {
 	CanonicalRoot string
 }
 
+type AuthorizedSessionAttachment struct {
+	SessionID     runtimeids.SessionID
+	ProjectID     string
+	WorkspaceID   string
+	CanonicalRoot string
+}
+
 type AuthorizedSessionInActiveProject struct {
 	SessionID       runtimeids.SessionID
 	ActiveProjectID string
 	OwningProjectID string
 	ExecutionTarget clientui.SessionExecutionTarget
+}
+
+type RuntimeLiveRequestIdentity struct {
+	SessionID       runtimeids.SessionID
+	ClientRequestID runtimeids.RuntimeClientRequestID
+	CallerSessionID *runtimeids.SessionID
 }
 
 type optionalAuthorizedSessionKind uint8

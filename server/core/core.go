@@ -405,7 +405,19 @@ type configuredCoreOnboardingFinalizeService struct {
 	settingsPath string
 }
 
-func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(context.Context, serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+var _ apicontract.OnboardingFinalizeTrustedService = configuredCoreOnboardingFinalizeService{}
+
+func (s configuredCoreOnboardingFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
+			return s.FinalizeOnboardingValidated(ctx, validated)
+		},
+	)
+}
+
+func (s configuredCoreOnboardingFinalizeService) FinalizeOnboardingValidated(context.Context, apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
 	return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingFinalizeError(serverapi.OnboardingFinalizeConfigAlreadyExists, serverapi.OnboardingConfigAlreadyExistsDetails{SettingsPath: s.settingsPath}, nil)
 }
 

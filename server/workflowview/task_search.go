@@ -10,6 +10,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 	"core/shared/tasksearchtext"
 
@@ -48,10 +49,13 @@ func NewTaskSearch(
 }
 
 func (s *TaskSearch) Search(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.TaskSearchResponse{}, err
-	}
-	return s.ReadSearch(ctx, req)
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error) {
+		return s.SearchValidated(ctx, validated)
+	})
+}
+
+func (s *TaskSearch) SearchValidated(ctx context.Context, validated apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error) {
+	return s.ReadSearch(ctx, validated.Value())
 }
 
 func (s *TaskSearch) ReadSearch(ctx context.Context, req serverapi.TaskSearchRequest) (response serverapi.TaskSearchResponse, err error) {

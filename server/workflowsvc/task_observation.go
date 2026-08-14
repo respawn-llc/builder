@@ -11,15 +11,20 @@ import (
 	"time"
 
 	"core/server/workflow"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
 func (s *Service) ObserveWorkflowTask(ctx context.Context, req serverapi.WorkflowTaskObservationRequest) (serverapi.WorkflowTaskObservationResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskObservationResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskObservationRequest]) (serverapi.WorkflowTaskObservationResponse, error) {
+		return s.ObserveWorkflowTaskValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ObserveWorkflowTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskObservationRequest]) (serverapi.WorkflowTaskObservationResponse, error) {
+	req := validated.Value()
 	sub, err := s.events.subscribe(req.ProjectID, nil)
 	if err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, err
@@ -97,7 +102,7 @@ func (s *Service) observeWorkflowTask(ctx context.Context, req serverapi.Workflo
 		}
 	}
 
-	attention, err := s.readModels.Attention.ListTask(ctx, serverapi.WorkflowTaskAttentionListRequest{TaskID: req.TaskID})
+	attention, err := s.readModels.Attention.ListTaskByID(ctx, req.TaskID)
 	if err != nil {
 		return serverapi.WorkflowTaskObservationResponse{}, false, normalizeTaskObservationError(err)
 	}

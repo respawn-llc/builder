@@ -7,6 +7,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
@@ -42,9 +43,13 @@ func NewActivity(metadataStore *metadata.Store, projector *TaskProjector) (*Acti
 }
 
 func (a *Activity) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskActivityListResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error) {
+		return a.ListValidated(ctx, validated)
+	})
+}
+
+func (a *Activity) ListValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error) {
+	req := validated.Value()
 	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskActivityListResponse{}, err

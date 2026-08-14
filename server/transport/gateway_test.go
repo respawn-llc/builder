@@ -426,6 +426,22 @@ func (c *countingSessionRuntimeClient) ReleaseSessionRuntime(ctx context.Context
 	return c.SessionRuntimeService.ReleaseSessionRuntime(ctx, req)
 }
 
+func (c *countingSessionRuntimeClient) ActivateSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeActivateRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeActivateResponse, error) {
+	return c.ActivateSessionRuntime(ctx, req.Value())
+}
+
+func (c *countingSessionRuntimeClient) ReleaseSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeReleaseRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeReleaseResponse, error) {
+	return c.ReleaseSessionRuntime(ctx, req.Value())
+}
+
 type gatewayRuntimeClientOverride struct {
 	*core.Core
 	runtimeClient apicontract.SessionRuntimeService
@@ -964,6 +980,13 @@ type gatewayAuthStatusService func(context.Context, serverapi.AuthStatusRequest)
 
 func (service gatewayAuthStatusService) GetAuthStatus(ctx context.Context, request serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
 	return service(ctx, request)
+}
+
+func (service gatewayAuthStatusService) GetAuthStatusValidated(
+	ctx context.Context,
+	request apicontract.Validated[serverapi.AuthStatusRequest],
+) (serverapi.AuthStatusResponse, error) {
+	return service(ctx, request.Value())
 }
 
 type gatewayAuthStatusDependencies struct {

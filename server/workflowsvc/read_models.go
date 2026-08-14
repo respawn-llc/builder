@@ -15,16 +15,16 @@ type WorkflowDefinitionReadModel interface {
 }
 
 type WorkflowBoardReadModel interface {
-	Get(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error)
-	ListNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
+	GetValidated(context.Context, apicontract.Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoard, error)
+	ListNodeCardsValidated(context.Context, apicontract.Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error)
 }
 
 type WorkflowTaskListReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
+	ListValidated(context.Context, apicontract.Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error)
 }
 
 type WorkflowTaskSearchReadModel interface {
-	Search(context.Context, serverapi.TaskSearchRequest) (serverapi.TaskSearchResponse, error)
+	SearchValidated(context.Context, apicontract.Validated[serverapi.TaskSearchRequest]) (serverapi.TaskSearchResponse, error)
 }
 
 type WorkflowTaskDetailReadModel interface {
@@ -41,16 +41,17 @@ type WorkflowTaskDependencyReadModel interface {
 }
 
 type WorkflowActivityReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskActivityListResponse, error)
+	ListValidated(context.Context, apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskActivityListResponse, error)
 }
 
 type WorkflowTaskSessionReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error)
+	ListValidated(context.Context, apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error)
 }
 
 type WorkflowAttentionReadModel interface {
-	List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
-	ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error)
+	ListValidated(context.Context, apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error)
+	ListTaskValidated(context.Context, apicontract.Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error)
+	ListTaskByID(context.Context, string) (serverapi.WorkflowTaskAttentionListResponse, error)
 }
 
 type ReadModels struct {

@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -33,9 +34,9 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
-	params, invalid, failed := decodeValidatedParams[serverapi.RunPromptRequest](req)
-	if failed {
-		return sendResponse(ctx, conn, invalid)
+	params, err := decodeParams[serverapi.RunPromptRequest](req.Params)
+	if err != nil {
+		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -58,13 +59,23 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 			}
 		}
 	})
-	runClient, err := g.runPromptClientForState(runCtx, state)
+	resp, err := rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[serverapi.RunPromptRequest]) (serverapi.RunPromptResponse, error) {
+		runClient, ownerErr := g.runPromptClientForState(runCtx, state)
+		if ownerErr != nil {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: ownerErr}
+		}
+		trusted, ok := runClient.(rpccontract.RunPromptTrustedService)
+		if !ok {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: errors.New("Run Prompt trusted service is required")}
+		}
+		response, ownerErr := trusted.RunPromptValidated(runCtx, validated, progress)
+		if ownerErr != nil {
+			return serverapi.RunPromptResponse{}, validatedOwnerError{cause: ownerErr}
+		}
+		return response, nil
+	})
 	if err != nil {
-		return sendResponse(ctx, conn, responseForError(req.ID, err))
-	}
-	resp, err := runClient.RunPrompt(runCtx, params, progress)
-	if err != nil {
-		return sendResponse(ctx, conn, responseForError(req.ID, err))
+		return sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
 	}
 	return sendResponse(ctx, conn, protocol.NewSuccessResponse(req.ID, resp))
 }
@@ -102,19 +113,26 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 }
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
-	if !state.clientCapabilities.TranscriptLiveRunFinished {
-		subscribe = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
-			subscription, err := g.deps.SessionTranscriptClient().SubscribeSessionTranscript(ctx, req)
-			if err != nil {
-				return nil, err
+	trusted, ok := g.deps.SessionTranscriptClient().(rpccontract.SessionTranscriptTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Session Transcript trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.TranscriptSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		func(ctx context.Context, validated rpccontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
+			subscription, err := trusted.SubscribeSessionTranscriptValidated(ctx, validated)
+			if err != nil || state.clientCapabilities.TranscriptLiveRunFinished {
+				return subscription, err
 			}
 			return &legacyTranscriptSubscription{inner: subscription}, nil
-		}
-	}
-	serveGatewaySubscription(g, conn, ctx, state, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
-		return protocol.SessionTranscriptEventParams{Message: message}
-	})
+		},
+		func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
+			return protocol.SessionTranscriptEventParams{Message: message}
+		},
+	)
 }
 
 type legacyTranscriptSubscription struct {
@@ -160,28 +178,36 @@ func (s *legacyTranscriptSubscription) Close() error {
 	return s.inner.Close()
 }
 
-func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](
+func serveGatewaySubscription[Req any, Event any, Wire any, Sub gatewaySubscription[Event]](
 	g *Gateway,
 	conn rpcwire.Conn,
 	ctx context.Context,
 	state *connectionState,
 	route rpccontract.Route,
 	req protocol.Request,
-	subscribe func(context.Context, Req) (Sub, error),
+	authorize func(rpccontract.Validated[Req]) error,
+	subscribe func(context.Context, rpccontract.Validated[Req]) (Sub, error),
 	wire func(Event) Wire,
 ) {
-	params, invalid, failed := decodeValidatedParams[Req](req)
-	if failed {
-		_ = sendResponse(ctx, conn, invalid)
-		return
-	}
-	if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
-		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
-		return
-	}
-	sub, err := subscribe(ctx, params)
+	params, err := decodeParams[Req](req.Params)
 	if err != nil {
-		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
+		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
+		return
+	}
+	sub, err := rpccontract.WithValidated(params, rpccontract.SemanticValidationRequired, func(validated rpccontract.Validated[Req]) (Sub, error) {
+		if err := authorize(validated); err != nil {
+			var zero Sub
+			return zero, validatedOwnerError{cause: err}
+		}
+		subscription, ownerErr := subscribe(ctx, validated)
+		if ownerErr != nil {
+			var zero Sub
+			return zero, validatedOwnerError{cause: ownerErr}
+		}
+		return subscription, nil
+	})
+	if err != nil {
+		_ = sendResponse(ctx, conn, responseForValidationOrOwnerError(req.ID, err))
 		return
 	}
 	defer func() { _ = sub.Close() }()
@@ -207,33 +233,102 @@ func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire
 }
 
 func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.AttentionNotificationClient().SubscribeAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
-		return protocol.AttentionNotificationEventParams{Event: evt}
-	})
+	trusted, ok := g.deps.AttentionNotificationClient().(rpccontract.AttentionNotificationTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Attention Notification trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		trusted.SubscribeAttentionNotificationsValidated,
+		func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+			return protocol.AttentionNotificationEventParams{Event: evt}
+		},
+	)
 }
 
 func (g *Gateway) serveSessionAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.AttentionNotificationClient().SubscribeSessionAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
-		return protocol.AttentionNotificationEventParams{Event: evt}
-	})
+	trusted, ok := g.deps.AttentionNotificationClient().(rpccontract.AttentionNotificationTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Attention Notification trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		trusted.SubscribeSessionAttentionNotificationsValidated,
+		func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+			return protocol.AttentionNotificationEventParams{Event: evt}
+		},
+	)
 }
 
 func (g *Gateway) servePromptFollowUpSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.PromptControlClient().SubscribeFollowUp, func(evt serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
-		return protocol.PromptFollowUpEventParams{Event: protocol.PromptFollowUpEvent{Kind: string(evt.Kind)}}
-	})
+	trusted, ok := g.deps.PromptControlClient().(rpccontract.PromptControlTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Prompt Control trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.PromptFollowUpWatchRequest]) error {
+			_, err := authorizeSessionActiveProject(func(request serverapi.PromptFollowUpWatchRequest) string {
+				return request.SessionID.String()
+			})(ctx, g, state, validated)
+			return err
+		},
+		trusted.SubscribeFollowUpValidated,
+		func(evt serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
+			return protocol.PromptFollowUpEventParams{Event: protocol.PromptFollowUpEvent{Kind: string(evt.Kind)}}
+		},
+	)
 }
 
 func (g *Gateway) serveWorkflowProjectSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorkflowClient().SubscribeWorkflowProject, workflowProjectEventParams)
+	trusted, ok := g.deps.WorkflowClient().(rpccontract.WorkflowSubscriptionTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Workflow trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.WorkflowProjectSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		trusted.SubscribeWorkflowProjectValidated,
+		workflowProjectEventParams,
+	)
 }
 
 func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorkflowClient().SubscribeWorkflow, workflowProjectEventParams)
+	trusted, ok := g.deps.WorkflowClient().(rpccontract.WorkflowSubscriptionTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Workflow trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.WorkflowSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		trusted.SubscribeWorkflowValidated,
+		workflowProjectEventParams,
+	)
 }
 
 func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
+	trusted, ok := g.deps.WorktreeClient().(rpccontract.WorktreeSetupTrustedService)
+	if !ok {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, errors.New("Worktree trusted service is required")))
+		return
+	}
+	serveGatewaySubscription(g, conn, ctx, state, route, req,
+		func(validated rpccontract.Validated[serverapi.WorktreeSetupSubscribeRequest]) error {
+			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+		},
+		trusted.SubscribeWorktreeSetupValidated,
+		worktreeSetupEventParams,
+	)
 }
 
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {

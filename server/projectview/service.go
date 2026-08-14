@@ -70,7 +70,17 @@ func (s *Service) WithWorkflowExecution(taskMutations *workflowexecution.TaskMut
 	return s
 }
 
-func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
+func (s *Service) ListProjects(ctx context.Context, req serverapi.ProjectListRequest) (serverapi.ProjectListResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.NoSemanticValidation, func(validated servicecontract.Validated[serverapi.ProjectListRequest]) (serverapi.ProjectListResponse, error) {
+		return s.ListProjectsValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ListProjectsValidated(ctx context.Context, _ servicecontract.Validated[serverapi.ProjectListRequest]) (serverapi.ProjectListResponse, error) {
+	return s.listProjects(ctx)
+}
+
+func (s *Service) listProjects(ctx context.Context) (serverapi.ProjectListResponse, error) {
 	if s == nil {
 		return serverapi.ProjectListResponse{}, errors.New("project service is required")
 	}
@@ -82,9 +92,13 @@ func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListReque
 }
 
 func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectHomeListResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectHomeListRequest]) (serverapi.ProjectHomeListResponse, error) {
+		return s.ListProjectHomeValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ListProjectHomeValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectHomeListRequest]) (serverapi.ProjectHomeListResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectHomeListResponse{}, errors.New("project service is required")
 	}
@@ -116,13 +130,20 @@ func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHome
 }
 
 func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectResolvePathResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectResolvePathRequest]) (serverapi.ProjectResolvePathResponse, error) {
+		return s.ResolveProjectPathValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ResolveProjectPathValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectResolvePathRequest]) (serverapi.ProjectResolvePathResponse, error) {
+	return s.resolveProjectPath(ctx, validated.Value().Path)
+}
+
+func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverapi.ProjectResolvePathResponse, error) {
 	if s == nil {
 		return serverapi.ProjectResolvePathResponse{}, errors.New("project service is required")
 	}
-	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, req.Path)
+	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, path)
 	if err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
@@ -136,10 +157,14 @@ func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectR
 }
 
 func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectBindingPlanResponse{}, err
-	}
-	resolved, err := s.ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: req.Path})
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectBindingPlanRequest]) (serverapi.ProjectBindingPlanResponse, error) {
+		return s.PlanWorkspaceBindingValidated(ctx, validated)
+	})
+}
+
+func (s *Service) PlanWorkspaceBindingValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectBindingPlanRequest]) (serverapi.ProjectBindingPlanResponse, error) {
+	req := validated.Value()
+	resolved, err := s.resolveProjectPath(ctx, req.Path)
 	if err != nil {
 		if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
 			resp := serverapi.ProjectBindingPlanResponse{
@@ -148,7 +173,7 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 			}
 			switch req.Mode {
 			case serverapi.ProjectBindingPlanModeInteractive:
-				projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+				projects, err := s.listProjects(ctx)
 				if err != nil {
 					return serverapi.ProjectBindingPlanResponse{}, err
 				}
@@ -175,7 +200,7 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 	}
 	switch req.Mode {
 	case serverapi.ProjectBindingPlanModeInteractive:
-		projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+		projects, err := s.listProjects(ctx)
 		if err != nil {
 			return serverapi.ProjectBindingPlanResponse{}, err
 		}
@@ -208,9 +233,13 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 }
 
 func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectCreateResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectCreateRequest]) (serverapi.ProjectCreateResponse, error) {
+		return s.CreateProjectValidated(ctx, validated)
+	})
+}
+
+func (s *Service) CreateProjectValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectCreateRequest]) (serverapi.ProjectCreateResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
 	}
@@ -230,9 +259,13 @@ func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreate
 }
 
 func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectUpdateResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectUpdateRequest]) (serverapi.ProjectUpdateResponse, error) {
+		return s.UpdateProjectValidated(ctx, validated)
+	})
+}
+
+func (s *Service) UpdateProjectValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectUpdateRequest]) (serverapi.ProjectUpdateResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
 	}
@@ -255,9 +288,13 @@ func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdate
 }
 
 func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectEditGetRequest]) (serverapi.ProjectEditGetResponse, error) {
+		return s.GetProjectEditValidated(ctx, validated)
+	})
+}
+
+func (s *Service) GetProjectEditValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectEditGetRequest]) (serverapi.ProjectEditGetResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
 	}
@@ -273,9 +310,13 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 }
 
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectDeleteRequest]) (serverapi.ProjectDeleteResponse, error) {
+		return s.DeleteProjectValidated(ctx, validated)
+	})
+}
+
+func (s *Service) DeleteProjectValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectDeleteRequest]) (serverapi.ProjectDeleteResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
 	}
@@ -497,14 +538,14 @@ func rejectSymlinkComponents(root string, target string) error {
 }
 
 func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (serverapi.ProjectWorkspacePlanSelected, bool, error) {
-	projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+	projects, err := s.listProjects(ctx)
 	if err != nil {
 		return serverapi.ProjectWorkspacePlanSelected{}, false, err
 	}
 	selection := serverapi.ProjectWorkspacePlanSelected{}
 	count := 0
 	for _, project := range projects.Projects {
-		overview, err := s.GetProjectOverview(ctx, serverapi.ProjectGetOverviewRequest{ProjectID: project.ProjectID})
+		overview, err := s.getProjectOverview(ctx, project.ProjectID)
 		if err != nil {
 			return serverapi.ProjectWorkspacePlanSelected{}, false, err
 		}
@@ -527,9 +568,13 @@ func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (serverapi
 }
 
 func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceListResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceListRequest]) (serverapi.ProjectWorkspaceListResponse, error) {
+		return s.ListProjectWorkspacesValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ListProjectWorkspacesValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectWorkspaceListRequest]) (serverapi.ProjectWorkspaceListResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
 	}
@@ -558,13 +603,21 @@ func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.Proje
 }
 
 func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectWorkspaceGetResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceGetRequest]) (serverapi.ProjectWorkspaceGetResponse, error) {
+		return s.GetProjectWorkspaceValidated(ctx, validated)
+	})
+}
+
+func (s *Service) GetProjectWorkspaceValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectWorkspaceGetRequest]) (serverapi.ProjectWorkspaceGetResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
 	}
-	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(
+		ctx,
+		req.ProjectID,
+		req.ProjectWorkspaceSelector,
+	)
 	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
 		return serverapi.ProjectWorkspaceGetResponse{
 			ProjectID: req.ProjectID,
@@ -587,9 +640,13 @@ func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.Project
 }
 
 func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectAttachWorkspaceResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectAttachWorkspaceRequest]) (serverapi.ProjectAttachWorkspaceResponse, error) {
+		return s.AttachWorkspaceToProjectValidated(ctx, validated)
+	})
+}
+
+func (s *Service) AttachWorkspaceToProjectValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectAttachWorkspaceRequest]) (serverapi.ProjectAttachWorkspaceResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
 	}
@@ -612,9 +669,13 @@ func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.Pr
 }
 
 func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectRebindWorkspaceResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectRebindWorkspaceRequest]) (serverapi.ProjectRebindWorkspaceResponse, error) {
+		return s.RebindWorkspaceValidated(ctx, validated)
+	})
+}
+
+func (s *Service) RebindWorkspaceValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectRebindWorkspaceRequest]) (serverapi.ProjectRebindWorkspaceResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
 	}
@@ -636,13 +697,20 @@ func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebi
 }
 
 func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ProjectGetOverviewResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectGetOverviewRequest]) (serverapi.ProjectGetOverviewResponse, error) {
+		return s.GetProjectOverviewValidated(ctx, validated)
+	})
+}
+
+func (s *Service) GetProjectOverviewValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectGetOverviewRequest]) (serverapi.ProjectGetOverviewResponse, error) {
+	return s.getProjectOverview(ctx, validated.Value().ProjectID)
+}
+
+func (s *Service) getProjectOverview(ctx context.Context, projectID string) (serverapi.ProjectGetOverviewResponse, error) {
 	if s == nil {
 		return serverapi.ProjectGetOverviewResponse{}, errors.New("project service is required")
 	}
-	overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectID)
+	overview, err := s.metadata.GetProjectOverview(ctx, projectID)
 	if err != nil {
 		return serverapi.ProjectGetOverviewResponse{}, err
 	}
@@ -650,9 +718,13 @@ func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectG
 }
 
 func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.SessionPageResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error) {
+		return s.ListSessionPageValidated(ctx, validated)
+	})
+}
+
+func (s *Service) ListSessionPageValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error) {
+	req := validated.Value()
 	if s == nil {
 		return serverapi.SessionPageResponse{}, errors.New("project service is required")
 	}
@@ -706,4 +778,12 @@ func projectBindingFromMetadata(binding metadata.Binding) serverapi.ProjectBindi
 	}
 }
 
-var _ servicecontract.ProjectViewService = (*Service)(nil)
+var (
+	_ servicecontract.ProjectViewService                       = (*Service)(nil)
+	_ servicecontract.ProjectListTrustedService                = (*Service)(nil)
+	_ servicecontract.ProjectCatalogMutationTrustedService     = (*Service)(nil)
+	_ servicecontract.ProjectWorkspaceResolutionTrustedService = (*Service)(nil)
+	_ servicecontract.ProjectWorkspaceCatalogTrustedService    = (*Service)(nil)
+	_ servicecontract.ProjectWorkspaceMutationTrustedService   = (*Service)(nil)
+	_ servicecontract.ProjectOverviewTrustedService            = (*Service)(nil)
+)

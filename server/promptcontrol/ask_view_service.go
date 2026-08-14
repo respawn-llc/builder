@@ -3,7 +3,6 @@ package promptcontrol
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -19,16 +18,26 @@ func NewAskViewService(prompts PendingPromptSource) *AskViewService {
 	return &AskViewService{prompts: prompts}
 }
 
-func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, err
-	}
+func (s *AskViewService) ListPendingAsksBySession(ctx context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
+	return servicecontract.WithValidated(
+		req,
+		servicecontract.SemanticValidationRequired,
+		func(validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest]) (serverapi.AskListPendingBySessionResponse, error) {
+			return s.ListPendingAsksBySessionValidated(ctx, validated)
+		},
+	)
+}
+
+func (s *AskViewService) ListPendingAsksBySessionValidated(
+	_ context.Context,
+	validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest],
+) (serverapi.AskListPendingBySessionResponse, error) {
+	return s.listPendingAsksBySession(validated.SessionID(validated.Value().SessionID))
+}
+
+func (s *AskViewService) listPendingAsksBySession(sessionID runtimeids.SessionID) (serverapi.AskListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
-	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
-	if err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask session identity: %w", err)
 	}
 	items := s.prompts.ListPendingPrompts(sessionID.String())
 	asks := make([]clientui.PendingAsk, 0, len(items))
@@ -64,4 +73,7 @@ func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req servera
 	return serverapi.AskListPendingBySessionResponse{Asks: asks}, nil
 }
 
-var _ servicecontract.AskViewService = (*AskViewService)(nil)
+var (
+	_ servicecontract.AskViewService        = (*AskViewService)(nil)
+	_ servicecontract.AskViewTrustedService = (*AskViewService)(nil)
+)

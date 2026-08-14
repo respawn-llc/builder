@@ -567,11 +567,51 @@ func decodeValidatedAndHandle[TReq any, TResp any](
 	req protocol.Request,
 	handler func(apicontract.Validated[TReq]) (TResp, error),
 ) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		func(request TReq) TReq { return request },
+		apicontract.SemanticValidationRequired,
+		handler,
+	)
+}
+
+func decodeNoSemanticValidationAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		func(request TReq) TReq { return request },
+		apicontract.NoSemanticValidation,
+		handler,
+	)
+}
+
+func decodePreparedValidatedAndHandle[TReq any, TResp any](
+	req protocol.Request,
+	prepare func(TReq) TReq,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
+	return decodePreparedValidatedAndHandleWithPolicy(
+		req,
+		prepare,
+		apicontract.SemanticValidationRequired,
+		handler,
+	)
+}
+
+func decodePreparedValidatedAndHandleWithPolicy[TReq any, TResp any](
+	req protocol.Request,
+	prepare func(TReq) TReq,
+	policy apicontract.ValidationPolicy,
+	handler func(apicontract.Validated[TReq]) (TResp, error),
+) protocol.Response {
 	params, err := decodeParams[TReq](req.Params)
 	if err != nil {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
 	}
-	resp, err := apicontract.WithValidated(params, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[TReq]) (TResp, error) {
+	params = prepare(params)
+	resp, err := apicontract.WithValidated(params, policy, func(validated apicontract.Validated[TReq]) (TResp, error) {
 		resp, ownerErr := handler(validated)
 		if ownerErr != nil {
 			return resp, validatedOwnerError{cause: ownerErr}

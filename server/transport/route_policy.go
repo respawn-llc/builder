@@ -130,15 +130,11 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 	case rpccontract.ScopeProjectWorkspaceBinding:
 		return errors.New("Project Workspace binding scope requires typed authorization")
 	case rpccontract.ScopeAttachSession:
-		_, err := e.gateway.resolveSessionAttachment(ctx, state, scopeParams.sessionID)
-		return err
+		return errors.New("Session attachment scope requires typed authorization")
 	case rpccontract.ScopeSessionActiveProject:
-		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
+		return errors.New("Session active-Project scope requires typed authorization")
 	case rpccontract.ScopeSessionActiveProjectIfSet:
-		if strings.TrimSpace(scopeParams.sessionID) == "" {
-			return nil
-		}
-		return e.gateway.requireSessionInActiveProject(ctx, state, scopeParams.sessionID)
+		return errors.New("optional Session active-Project scope requires typed authorization")
 	case rpccontract.ScopeSessionAttachedProject:
 		return errors.New("Session attached-Project scope requires a typed constraint")
 	case rpccontract.ScopeAttachedSession:
@@ -147,9 +143,9 @@ func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connecti
 		}
 		return nil
 	case rpccontract.ScopeGoalSession:
-		return e.gateway.requireGoalSessionAccess(ctx, state, scopeParams.sessionID)
+		return errors.New("Goal Session scope requires its focused authorization path")
 	case rpccontract.ScopeRuntimeLiveSessionOptional:
-		return nil
+		return errors.New("Runtime Live scope requires its focused trusted-owner path")
 	case rpccontract.ScopeProcessActiveProject:
 		return errors.New("Process active-Project scope requires typed authorization")
 	case rpccontract.ScopeProcessListActiveProject:

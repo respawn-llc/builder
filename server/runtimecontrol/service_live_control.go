@@ -14,7 +14,10 @@ import (
 	"core/shared/textutil"
 )
 
-var _ servicecontract.RuntimeLiveControlService = (*Service)(nil)
+var (
+	_ servicecontract.RuntimeLiveControlService        = (*Service)(nil)
+	_ servicecontract.RuntimeLiveControlTrustedService = (*Service)(nil)
+)
 
 func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.SessionID, fn func(context.Context, *runtime.Engine) error) error {
 	if s == nil || s.execution == nil {
@@ -24,19 +27,15 @@ func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.Se
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
-	clientRequestID, err := runtimeids.ParseRuntimeClientRequestID(req.ClientRequestID)
-	if err != nil {
-		return serverapi.RuntimeLiveSteerResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveSteerRequest]) (serverapi.RuntimeLiveSteerResponse, error) {
+		return s.LiveSteerValidated(ctx, validated, runtimeLiveSteerIdentity(validated))
+	})
+}
+
+func (s *Service) LiveSteerValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveSteerRequest], identity servicecontract.RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveSteerResponse, error) {
+	req := validated.Value()
 	memoReq := liveSteerMemoRequest{
-		SessionID:       sessionID,
+		SessionID:       identity.SessionID,
 		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
 		Text:            strings.TrimSpace(req.Text),
 	}
@@ -45,12 +44,9 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
 			queueText := memoReq.Text
 			var agentSteer runtime.AgentSteer
+			var err error
 			if memoReq.CallerSessionID.Present {
-				callerID, parseErr := runtimeids.ParseSessionID(memoReq.CallerSessionID.Value)
-				if parseErr != nil {
-					return parseErr
-				}
-				agentSteer, err = runtime.NewAgentSteer(callerID, memoReq.Text)
+				agentSteer, err = runtime.NewAgentSteer(*identity.CallerSessionID, memoReq.Text)
 				if err != nil {
 					return err
 				}
@@ -60,7 +56,7 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 				if s == nil || s.promptStore == nil {
 					return nil
 				}
-				_, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), clientRequestID.String(), queueText)
+				_, _, err := s.recordPromptHistory(callbackCtx, memoReq.SessionID.String(), identity.ClientRequestID.String(), queueText)
 				if err != nil {
 					return err
 				}
@@ -69,9 +65,9 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 			var item runtime.QueuedUserMessage
 			var accepted bool
 			if memoReq.CallerSessionID.Present {
-				item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, clientRequestID, queueBefore)
+				item, accepted, err = engine.QueueAgentSteerForActiveRun(callbackCtx, agentSteer, identity.ClientRequestID, queueBefore)
 			} else {
-				item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, clientRequestID, queueBefore)
+				item, accepted, err = engine.QueueUserMessageForActiveRun(callbackCtx, queueText, identity.ClientRequestID, queueBefore)
 			}
 			if errors.Is(err, runtime.ErrNoActiveLiveRun) {
 				return serverapi.ErrRuntimeNoActiveRun
@@ -94,14 +90,14 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 }
 
 func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveStopResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeLiveStopResponse{}, err
-	}
-	memoReq := liveStopMemoRequest{SessionID: sessionID}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveStopRequest]) (serverapi.RuntimeLiveStopResponse, error) {
+		return s.LiveStopValidated(ctx, validated, servicecontract.RuntimeLiveRequestIdentity{SessionID: validated.SessionID(req.SessionID)})
+	})
+}
+
+func (s *Service) LiveStopValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RuntimeLiveStopRequest], identity servicecontract.RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveStopResponse, error) {
+	req := validated.Value()
+	memoReq := liveStopMemoRequest{SessionID: identity.SessionID}
 	return s.liveStops.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameLiveStopMemoRequest, func(ctx context.Context) (serverapi.RuntimeLiveStopResponse, error) {
 		resp := serverapi.RuntimeLiveStopResponse{Status: serverapi.RuntimeLiveStopStatusIdle}
 		err := s.withLiveExecutionRuntime(ctx, memoReq.SessionID, func(_ context.Context, engine *runtime.Engine) error {
@@ -139,13 +135,13 @@ func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (
 }
 
 func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveWaitResponse{}, err
-	}
-	sessionID, err := runtimeids.ParseSessionID(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeLiveWaitResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveWaitRequest]) (serverapi.RuntimeLiveWaitResponse, error) {
+		return s.LiveWaitValidated(ctx, validated, servicecontract.RuntimeLiveRequestIdentity{SessionID: validated.SessionID(req.SessionID)})
+	})
+}
+
+func (s *Service) LiveWaitValidated(ctx context.Context, _ servicecontract.Validated[serverapi.RuntimeLiveWaitRequest], identity servicecontract.RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWaitResponse, error) {
+	sessionID := identity.SessionID
 	var resp serverapi.RuntimeLiveWaitResponse
 	waitHandle, sessionName, err := s.captureLiveRun(ctx, sessionID)
 	if err != nil {
@@ -192,13 +188,13 @@ func (s *Service) pendingWatchQuestion(ctx context.Context, sessionID string) (*
 }
 
 func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
-	}
-	id, err := runtimeids.ParseSessionID(req.SessionID)
-	if err != nil {
-		return serverapi.RuntimeLiveWatchResponse{}, err
-	}
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeLiveWatchRequest]) (serverapi.RuntimeLiveWatchResponse, error) {
+		return s.LiveWatchValidated(ctx, validated, servicecontract.RuntimeLiveRequestIdentity{SessionID: validated.SessionID(req.SessionID)})
+	})
+}
+
+func (s *Service) LiveWatchValidated(ctx context.Context, _ servicecontract.Validated[serverapi.RuntimeLiveWatchRequest], identity servicecontract.RuntimeLiveRequestIdentity) (serverapi.RuntimeLiveWatchResponse, error) {
+	id := identity.SessionID
 	if s.attention == nil {
 		return serverapi.RuntimeLiveWatchResponse{}, errors.New("attention notification service is required")
 	}
@@ -298,6 +294,19 @@ func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchR
 		wg.Wait()
 		return serverapi.RuntimeLiveWatchResponse{}, ctx.Err()
 	}
+}
+
+func runtimeLiveSteerIdentity(validated servicecontract.Validated[serverapi.RuntimeLiveSteerRequest]) servicecontract.RuntimeLiveRequestIdentity {
+	req := validated.Value()
+	identity := servicecontract.RuntimeLiveRequestIdentity{
+		SessionID:       validated.SessionID(req.SessionID),
+		ClientRequestID: validated.RuntimeClientRequestID(req.ClientRequestID),
+	}
+	if req.CallerSessionID != nil {
+		callerID := validated.SessionID(*req.CallerSessionID)
+		identity.CallerSessionID = &callerID
+	}
+	return identity
 }
 
 type liveWatchAttentionStreamFailure struct {

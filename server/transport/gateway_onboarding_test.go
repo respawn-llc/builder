@@ -51,6 +51,13 @@ func (s *gatewayOnboardingService) FinalizeOnboarding(ctx context.Context, req s
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: "/tmp/config.toml"}, nil
 }
 
+func (s *gatewayOnboardingService) FinalizeOnboardingValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.OnboardingFinalizeRequest],
+) (serverapi.OnboardingFinalizeResponse, error) {
+	return s.FinalizeOnboarding(ctx, req.Value())
+}
+
 func TestGatewayOnboardingFinalizeErrorContracts(t *testing.T) {
 	blue := serverapi.OnboardingTheme("blue")
 	tests := []struct {

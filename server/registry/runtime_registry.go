@@ -17,6 +17,7 @@ import (
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	shelltool "core/server/tools/shell"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -617,16 +618,19 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 }
 
 func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
+		return r.SubscribeSessionTranscriptValidated(ctx, validated)
+	})
+}
+
+func (r *RuntimeRegistry) SubscribeSessionTranscriptValidated(ctx context.Context, validated apicontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")
-	}
-	if err := req.Validate(); err != nil {
-		return nil, err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	id := strings.TrimSpace(req.SessionID)
+	id := validated.SessionID(validated.Value().SessionID).String()
 	for {
 		authorityEntry, authorityChanged := r.authorityEntryAndChange(id)
 		if authorityEntry != nil {

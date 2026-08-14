@@ -9,6 +9,7 @@ import (
 
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
+	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -39,9 +40,13 @@ func NewTaskList(metadataStore *metadata.Store, definitions *DefinitionProjectio
 }
 
 func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
-		return serverapi.WorkflowTaskListResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error) {
+		return l.ListValidated(ctx, validated)
+	})
+}
+
+func (l *TaskList) ListValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskListRequest]) (serverapi.WorkflowTaskListResponse, error) {
+	req := validated.Value()
 	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err

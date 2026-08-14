@@ -26,30 +26,47 @@ type inProcessRunPromptService struct {
 }
 
 func (s *inProcessRunPromptService) RunPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RunPromptRequest]) (serverapi.RunPromptResponse, error) {
+		return s.RunPromptValidated(ctx, validated, progress)
+	})
+}
+
+func (s *inProcessRunPromptService) RunPromptValidated(ctx context.Context, validated servicecontract.Validated[serverapi.RunPromptRequest], progress serverapi.RunPromptProgressSink) (serverapi.RunPromptResponse, error) {
+	req := prepareRunPromptRequest(validated.Value())
 	overrides, err := req.Overrides.CanonicalKey()
 	if err != nil {
 		return serverapi.RunPromptResponse{}, err
 	}
 	memoReq := runPromptMemoRequest{
 		Intent:          req.Intent,
-		Prompt:          strings.TrimSpace(req.Prompt),
+		Prompt:          req.Prompt,
 		Timeout:         req.Timeout.String(),
 		CallerSessionID: serverapi.CanonicalOptionalString(req.CallerSessionID),
 		Overrides:       overrides,
 	}
-	return s.runs.Do(ctx, strings.TrimSpace(req.ClientRequestID), memoReq, sameRunPromptMemoRequest, func(ctx context.Context) (serverapi.RunPromptResponse, error) {
+	return s.runs.Do(ctx, req.ClientRequestID, memoReq, sameRunPromptMemoRequest, func(ctx context.Context) (serverapi.RunPromptResponse, error) {
 		return s.runPrompt(ctx, req, progress)
 	})
+}
+
+func prepareRunPromptRequest(source serverapi.RunPromptRequest) serverapi.RunPromptRequest {
+	prepared := source
+	prepared.ClientRequestID = strings.TrimSpace(source.ClientRequestID)
+	prepared.Prompt = strings.TrimSpace(source.Prompt)
+	if source.CallerSessionID != nil {
+		callerSessionID := *source.CallerSessionID
+		prepared.CallerSessionID = &callerSessionID
+	}
+	if source.Overrides.AgentRole != nil {
+		agentRole := *source.Overrides.AgentRole
+		prepared.Overrides.AgentRole = &agentRole
+	}
+	return prepared
 }
 
 func (s *inProcessRunPromptService) runPrompt(ctx context.Context, req serverapi.RunPromptRequest, progress serverapi.RunPromptProgressSink) (response serverapi.RunPromptResponse, err error) {
 	if s == nil || s.launcher == nil {
 		return serverapi.RunPromptResponse{}, errors.New("run prompt service is not configured")
-	}
-	req.ClientRequestID = strings.TrimSpace(req.ClientRequestID)
-	req.Prompt = strings.TrimSpace(req.Prompt)
-	if err := req.Validate(); err != nil {
-		return serverapi.RunPromptResponse{}, err
 	}
 
 	runtimeHandle, err := s.launcher.prepareHeadlessPrompt(ctx, req, progress)

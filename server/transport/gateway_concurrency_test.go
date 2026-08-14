@@ -38,6 +38,34 @@ type gatewayConcurrencyWorkflowService struct {
 	resumeWorkflowTask   func(context.Context, serverapi.WorkflowTaskResumeRequest) (serverapi.WorkflowTaskResumeResponse, error)
 }
 
+func (s *gatewayConcurrencyWorkflowService) StartWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskStartRequest],
+) (serverapi.WorkflowTaskStartResponse, error) {
+	return s.StartWorkflowTask(ctx, req.Value())
+}
+
+func (s *gatewayConcurrencyWorkflowService) ResumeWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskResumeRequest],
+) (serverapi.WorkflowTaskResumeResponse, error) {
+	return s.ResumeWorkflowTask(ctx, req.Value())
+}
+
+func (s *gatewayConcurrencyWorkflowService) GetWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
+) (serverapi.WorkflowTaskGetResponse, error) {
+	return s.GetWorkflowTask(ctx, req.Value())
+}
+
+func (s *gatewayConcurrencyWorkflowService) CompleteWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskCompleteRequest],
+) (serverapi.WorkflowTaskCompleteResponse, error) {
+	return s.CompleteWorkflowTask(ctx, req.Value())
+}
+
 func (s *gatewayConcurrencyWorkflowService) StartWorkflowTask(
 	ctx context.Context,
 	req serverapi.WorkflowTaskStartRequest,
@@ -214,6 +242,13 @@ func (s *gatewayCloseWorkflowService) GetWorkflowTask(ctx context.Context, _ ser
 	return serverapi.WorkflowTaskGetResponse{}, ctx.Err()
 }
 
+func (s *gatewayCloseWorkflowService) GetWorkflowTaskValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.WorkflowTaskGetRequest],
+) (serverapi.WorkflowTaskGetResponse, error) {
+	return s.GetWorkflowTask(ctx, req.Value())
+}
+
 type gatewayCloseRuntimeService struct {
 	apicontract.SessionRuntimeService
 	tracker        *gatewayCloseTracker
@@ -243,6 +278,22 @@ func (s *gatewayCloseRuntimeService) ActivateSessionRuntime(ctx context.Context,
 func (s *gatewayCloseRuntimeService) ReleaseSessionRuntime(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	s.releaseStarted <- gatewayCloseRelease{request: req, active: s.tracker.active.Load()}
 	return serverapi.SessionRuntimeReleaseResponse{Released: true}, nil
+}
+
+func (s *gatewayCloseRuntimeService) ActivateSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeActivateRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeActivateResponse, error) {
+	return s.ActivateSessionRuntime(ctx, req.Value())
+}
+
+func (s *gatewayCloseRuntimeService) ReleaseSessionRuntimeValidated(
+	ctx context.Context,
+	req apicontract.Validated[serverapi.SessionRuntimeReleaseRequest],
+	_ apicontract.AuthorizedSessionInActiveProject,
+) (serverapi.SessionRuntimeReleaseResponse, error) {
+	return s.ReleaseSessionRuntime(ctx, req.Value())
 }
 
 type gatewayCloseDependencies struct {

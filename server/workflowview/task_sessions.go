@@ -13,6 +13,7 @@ import (
 	"core/server/runtimeactivity"
 	"core/server/session"
 	"core/server/workflow"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -42,9 +43,13 @@ func NewTaskSessions(metadataStore *metadata.Store, activities ActiveTaskSession
 }
 
 func (s *TaskSessions) List(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.WorkflowTaskSessionListResponse{}, err
-	}
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error) {
+		return s.ListValidated(ctx, validated)
+	})
+}
+
+func (s *TaskSessions) ListValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskOffsetPageRequest]) (serverapi.WorkflowTaskSessionListResponse, error) {
+	req := validated.Value()
 	window, err := serverapi.ResolveWorkflowOffsetWindow(req.Offset, req.Limit)
 	if err != nil {
 		return serverapi.WorkflowTaskSessionListResponse{}, err

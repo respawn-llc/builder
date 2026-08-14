@@ -620,8 +620,20 @@ type startupServerStatusService struct {
 	activeCore func() *core.Core
 }
 
+var _ apicontract.ServerStatusTrustedService = startupServerStatusService{}
+
 func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	resp, err := s.base.GetServerReadiness(ctx, req)
+	return apicontract.WithValidated(
+		req,
+		apicontract.NoSemanticValidation,
+		func(validated apicontract.Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error) {
+			return s.GetServerReadinessValidated(ctx, validated)
+		},
+	)
+}
+
+func (s startupServerStatusService) GetServerReadinessValidated(ctx context.Context, req apicontract.Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error) {
+	resp, err := s.base.(apicontract.ServerStatusTrustedService).GetServerReadinessValidated(ctx, req)
 	if err != nil {
 		return serverapi.ServerReadinessResponse{}, err
 	}
@@ -659,9 +671,16 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 }
 
 func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.UpdateStatusResponse{}, err
-	}
+	return apicontract.WithValidated(
+		req,
+		apicontract.SemanticValidationRequired,
+		func(validated apicontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
+			return s.GetUpdateStatusValidated(ctx, validated)
+		},
+	)
+}
+
+func (s startupServerStatusService) GetUpdateStatusValidated(ctx context.Context, req apicontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
 	if s.readiness != nil {
 		if state := s.readiness.ServerReadinessState(); !state.Ready {
 			reason := serverapi.ServerNotReadyOnboardingRequired
@@ -682,7 +701,7 @@ func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req ser
 	if activeCore == nil {
 		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
-	return activeCore.ServerStatusClient().GetUpdateStatus(ctx, req)
+	return activeCore.ServerStatusClient().(apicontract.ServerStatusTrustedService).GetUpdateStatusValidated(ctx, req)
 }
 
 type startupFinalizeService struct {
@@ -691,11 +710,25 @@ type startupFinalizeService struct {
 	activationContext context.Context
 }
 
+var _ apicontract.OnboardingFinalizeTrustedService = startupFinalizeService{}
+
 func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
 	resp, err := s.service.FinalizeOnboarding(ctx, req)
 	if err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, err
 	}
+	return s.activateResponse(resp)
+}
+
+func (s startupFinalizeService) FinalizeOnboardingValidated(ctx context.Context, req apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
+	resp, err := s.service.(apicontract.OnboardingFinalizeTrustedService).FinalizeOnboardingValidated(ctx, req)
+	if err != nil {
+		return serverapi.OnboardingFinalizeResponse{}, err
+	}
+	return s.activateResponse(resp)
+}
+
+func (s startupFinalizeService) activateResponse(resp serverapi.OnboardingFinalizeResponse) (serverapi.OnboardingFinalizeResponse, error) {
 	if s.activate != nil {
 		activationCtx := s.activationContext
 		if activationCtx == nil {

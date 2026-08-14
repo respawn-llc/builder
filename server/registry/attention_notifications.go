@@ -9,6 +9,7 @@ import (
 
 	"core/server/attentionnotify"
 	askquestion "core/server/tools"
+	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/serverapi"
 )
@@ -24,10 +25,13 @@ func (r *RuntimeRegistry) WithAttentionNotifications(broker *attentionnotify.Bro
 	return r
 }
 
-func (r *RuntimeRegistry) SubscribeAttentionNotifications(_ context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+func (r *RuntimeRegistry) SubscribeAttentionNotifications(ctx context.Context, req serverapi.AttentionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+		return r.SubscribeAttentionNotificationsValidated(ctx, validated)
+	})
+}
+
+func (r *RuntimeRegistry) SubscribeAttentionNotificationsValidated(_ context.Context, _ apicontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
@@ -38,10 +42,14 @@ func (r *RuntimeRegistry) SubscribeAttentionNotifications(_ context.Context, req
 	return newWorkflowAttentionNotificationSubscription(live, r.workflowAttentionSnapshot), nil
 }
 
-func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(_ context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
-	if err := req.Validate(); err != nil {
-		return nil, err
-	}
+func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
+	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+		return r.SubscribeSessionAttentionNotificationsValidated(ctx, validated)
+	})
+}
+
+func (r *RuntimeRegistry) SubscribeSessionAttentionNotificationsValidated(_ context.Context, validated apicontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+	req := validated.Value()
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
