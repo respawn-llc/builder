@@ -207,6 +207,55 @@ func TestPersistedWorkflowAssignmentSnapshotRestoresExactPriorAssignment(t *test
 	}
 }
 
+func TestPersistedWorkflowAssignmentSnapshotRestoresAbsentAssignment(t *testing.T) {
+	store := mustCreateTestSession(t)
+	snapshot, found, err := CapturePersistedWorkflowAssignment(store)
+	if err != nil || !found {
+		t.Fatalf("capture absent workflow assignment = found %v, %v", found, err)
+	}
+	assignment := workflowAssignmentForCommitReceiptTest()
+	steer, err := SteerPersistedWorkflowAssignment(
+		store,
+		assignment,
+		persistedWorkflowAssignmentContextForTest(t),
+	)
+	if err != nil {
+		t.Fatalf("persist workflow assignment: %v", err)
+	}
+	if receipt, waitErr := steer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("workflow assignment receipt = %+v, %v", receipt, waitErr)
+	}
+	restoration, err := SteerPersistedWorkflowAssignmentSnapshot(store, snapshot)
+	if err != nil {
+		t.Fatalf("restore absent workflow assignment: %v", err)
+	}
+	if receipt, waitErr := restoration.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("absent workflow assignment restoration receipt = %+v, %v", receipt, waitErr)
+	}
+	if active := store.Meta().ActiveWorkflowAssignment; active != nil {
+		t.Fatalf("active workflow assignment after absent restoration = %+v, want absent", active)
+	}
+}
+
+func TestWorkflowAssignmentSnapshotRestoresLiveThinkingLevel(t *testing.T) {
+	store := mustCreateTestSession(t)
+	engine := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{
+		Model:         "gpt-5",
+		ThinkingLevel: "high",
+	})
+	snapshot := WorkflowAssignmentSnapshot{}.WithThinkingLevel("low")
+	steer, err := engine.SteerWorkflowAssignmentSnapshot(snapshot)
+	if err != nil {
+		t.Fatalf("restore live workflow assignment snapshot: %v", err)
+	}
+	if receipt, waitErr := steer.Wait(t.Context()); waitErr != nil || !receipt.Committed {
+		t.Fatalf("live workflow assignment restoration receipt = %+v, %v", receipt, waitErr)
+	}
+	if got := engine.ThinkingLevel(); got != "low" {
+		t.Fatalf("live thinking level = %q, want restored value", got)
+	}
+}
+
 func workflowAssignmentForCommitReceiptTest() WorkflowAssignment {
 	reference := workflow.CurrentNodeReference{
 		TaskID: "task-assignment-receipt",

@@ -170,7 +170,7 @@ func messageTypeTranscriptVisibility(messageType *llm.MessageType) transcript.En
 		return transcript.EntryVisibilityDetail
 	case llm.MessageTypeBackgroundNotice:
 		return transcript.EntryVisibilityOngoingCollapsed
-	case llm.MessageTypeWorkflowMode:
+	case llm.MessageTypeWorkflowMode, llm.MessageTypeWorkflowModeExit:
 		return transcript.EntryVisibilityOngoingCollapsed
 	case llm.MessageTypeCompactionSummary,
 		llm.MessageTypeInterruption,
@@ -231,6 +231,8 @@ func compactLabelForMessage(msg llm.Message) string {
 		return "Interactive mode restored"
 	case llm.MessageTypeWorkflowMode:
 		return "Workflow mode instructions"
+	case llm.MessageTypeWorkflowModeExit:
+		return "Workflow mode cleared"
 	case llm.MessageTypeWorktreeMode:
 		return ""
 	case llm.MessageTypeWorktreeModeExit:

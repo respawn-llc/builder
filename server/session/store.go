@@ -329,6 +329,13 @@ func openPersistedSession(
 	if err := normalizeMetaChatSettings(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session Chat settings: %w", err)
 	}
+	if s.meta.ActiveWorkflowAssignment != nil {
+		assignment, err := normalizeMessageRecord(*s.meta.ActiveWorkflowAssignment)
+		if err != nil {
+			return nil, fmt.Errorf("validate active workflow assignment: %w", err)
+		}
+		s.meta.ActiveWorkflowAssignment = &assignment
+	}
 	if err := normalizeMetaWorktreeReminder(&s.meta); err != nil {
 		return nil, fmt.Errorf("validate session worktree context: %w", err)
 	}
@@ -544,6 +551,7 @@ func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
 		ChatSettings:                 cloneChatSettingsOverrides(meta.ChatSettings),
 		PromptCacheLineageGeneration: meta.PromptCacheLineageGeneration,
 		Locked:                       cloneLockedContract(meta.Locked),
+		ActiveWorkflowAssignment:     cloneMessageRecord(meta.ActiveWorkflowAssignment),
 	}
 }
 
@@ -555,6 +563,7 @@ func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapsho
 		s.meta.ChatSettings = cloneChatSettingsOverrides(snapshot.ChatSettings)
 		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
 		s.meta.Locked = cloneLockedContract(snapshot.Locked)
+		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})

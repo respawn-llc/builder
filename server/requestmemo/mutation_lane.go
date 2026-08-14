@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
-
-	"golang.org/x/sync/semaphore"
 )
 
 // MutationLaneRegistry serializes in-process mutations for equal keys.
@@ -17,7 +14,10 @@ type MutationLaneRegistry[K comparable] struct {
 }
 
 type mutationLaneEntry struct {
-	semaphore *semaphore.Weighted
+	mu        sync.Mutex
+	changed   chan struct{}
+	readers   int
+	exclusive bool
 	refs      int
 }
 
@@ -26,7 +26,7 @@ type MutationLaneLease[K comparable] struct {
 	registry *MutationLaneRegistry[K]
 	key      K
 	entry    *mutationLaneEntry
-	weight   int64
+	shared   bool
 	released bool
 }
 
@@ -35,16 +35,16 @@ func NewMutationLaneRegistry[K comparable]() *MutationLaneRegistry[K] {
 }
 
 func (r *MutationLaneRegistry[K]) Acquire(ctx context.Context, key K) (*MutationLaneLease[K], error) {
-	return r.acquire(ctx, key, math.MaxInt64)
+	return r.acquire(ctx, key, false)
 }
 
 // AcquireShared allows operations for the same key to overlap while remaining
 // mutually exclusive with ordinary Acquire callers.
 func (r *MutationLaneRegistry[K]) AcquireShared(ctx context.Context, key K) (*MutationLaneLease[K], error) {
-	return r.acquire(ctx, key, 1)
+	return r.acquire(ctx, key, true)
 }
 
-func (r *MutationLaneRegistry[K]) acquire(ctx context.Context, key K, weight int64) (*MutationLaneLease[K], error) {
+func (r *MutationLaneRegistry[K]) acquire(ctx context.Context, key K, shared bool) (*MutationLaneLease[K], error) {
 	if r == nil {
 		return nil, errors.New("mutation lane registry is required")
 	}
@@ -57,17 +57,17 @@ func (r *MutationLaneRegistry[K]) acquire(ctx context.Context, key K, weight int
 	}
 	entry := r.entries[key]
 	if entry == nil {
-		entry = &mutationLaneEntry{semaphore: semaphore.NewWeighted(math.MaxInt64)}
+		entry = &mutationLaneEntry{changed: make(chan struct{})}
 		r.entries[key] = entry
 	}
 	entry.refs++
 	r.mu.Unlock()
 
-	if err := entry.semaphore.Acquire(ctx, weight); err != nil {
+	if err := entry.acquire(ctx, shared); err != nil {
 		r.releaseReference(key, entry)
 		return nil, err
 	}
-	return &MutationLaneLease[K]{registry: r, key: key, entry: entry, weight: weight}, nil
+	return &MutationLaneLease[K]{registry: r, key: key, entry: entry, shared: shared}, nil
 }
 
 func (l *MutationLaneLease[K]) Release() {
@@ -80,8 +80,48 @@ func (l *MutationLaneLease[K]) Release() {
 		panic(fmt.Sprintf("release mutation lane lease invariant violated: key=%v released twice", l.key))
 	}
 	l.released = true
-	l.entry.semaphore.Release(l.weight)
+	l.entry.release(l.shared)
 	l.registry.releaseReferenceLocked(l.key, l.entry)
+}
+
+func (e *mutationLaneEntry) acquire(ctx context.Context, shared bool) error {
+	for {
+		e.mu.Lock()
+		if (shared && !e.exclusive) || (!shared && !e.exclusive && e.readers == 0) {
+			if shared {
+				e.readers++
+			} else {
+				e.exclusive = true
+			}
+			e.mu.Unlock()
+			return nil
+		}
+		changed := e.changed
+		e.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		}
+	}
+}
+
+func (e *mutationLaneEntry) release(shared bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if shared {
+		if e.readers <= 0 {
+			panic("release shared mutation lane invariant violated")
+		}
+		e.readers--
+	} else {
+		if !e.exclusive {
+			panic("release exclusive mutation lane invariant violated")
+		}
+		e.exclusive = false
+	}
+	close(e.changed)
+	e.changed = make(chan struct{})
 }
 
 func (r *MutationLaneRegistry[K]) releaseReference(key K, entry *mutationLaneEntry) {

@@ -433,6 +433,19 @@ func (s *Starter) captureManualMoveAssignmentSnapshot(
 		snapshot, found, captureErr = runtime.CapturePersistedWorkflowAssignment(store)
 		return captureErr
 	})
+	if err == nil {
+		runtimeErr := s.runtimeAuthority.WithCurrentRuntime(
+			ctx,
+			sessionID,
+			func(_ context.Context, engine *runtime.Engine) error {
+				snapshot = snapshot.WithThinkingLevel(engine.ThinkingLevel())
+				return nil
+			},
+		)
+		if runtimeErr != nil && !errors.Is(runtimeErr, serverapi.ErrRuntimeUnavailable) {
+			err = runtimeErr
+		}
+	}
 	return snapshot, found, err
 }
 

@@ -105,3 +105,36 @@ func TestMutationLaneRegistrySharedAcquisitionAllowsPeersAndBlocksExclusive(t *t
 		t.Fatal("exclusive lease remained blocked after shared leases released")
 	}
 }
+
+func TestMutationLaneRegistrySharedAcquisitionBypassesWaitingExclusiveLease(t *testing.T) {
+	registry := NewMutationLaneRegistry[string]()
+	first, err := registry.AcquireShared(context.Background(), "workflow")
+	if err != nil {
+		t.Fatalf("AcquireShared first: %v", err)
+	}
+	exclusive := make(chan *MutationLaneLease[string], 1)
+	go func() {
+		lease, acquireErr := registry.Acquire(context.Background(), "workflow")
+		if acquireErr == nil {
+			exclusive <- lease
+		}
+	}()
+	select {
+	case lease := <-exclusive:
+		lease.Release()
+		t.Fatal("exclusive lease acquired while a shared lease was held")
+	case <-time.After(20 * time.Millisecond):
+	}
+	peer, err := registry.AcquireShared(context.Background(), "workflow")
+	if err != nil {
+		t.Fatalf("AcquireShared peer behind waiting exclusive lease: %v", err)
+	}
+	peer.Release()
+	first.Release()
+	select {
+	case lease := <-exclusive:
+		lease.Release()
+	case <-time.After(time.Second):
+		t.Fatal("exclusive lease remained blocked after shared leases released")
+	}
+}

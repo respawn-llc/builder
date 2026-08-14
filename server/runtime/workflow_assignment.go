@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -21,7 +22,8 @@ type WorkflowAssignment struct {
 }
 
 type WorkflowAssignmentSnapshot struct {
-	message llm.Message
+	message  *llm.Message
+	thinking *string
 }
 
 // PersistedWorkflowAssignmentContext supplies the runtime-owned context needed
@@ -103,7 +105,12 @@ func (e *Engine) SteerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnap
 	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	return e.steerWorkflowAssignmentMessage(snapshot.message)
+	if snapshot.thinking != nil {
+		if err := e.setThinkingValue(*snapshot.thinking); err != nil {
+			return WorkflowAssignmentSteer{}, err
+		}
+	}
+	return e.steerWorkflowAssignmentMessage(snapshot.restorationMessage())
 }
 
 func (e *Engine) steerWorkflowAssignmentMessage(message llm.Message) (WorkflowAssignmentSteer, error) {
@@ -145,44 +152,29 @@ func CapturePersistedWorkflowAssignment(
 	if store == nil {
 		return WorkflowAssignmentSnapshot{}, false, errors.New("session store is required")
 	}
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		return WorkflowAssignmentSnapshot{}, false, err
-	}
-	var (
-		matched  *session.MessageRecord
-		matchErr error
-	)
-	if _, err := eventLog.ReadNewestSegmentBackward(func(record session.EventRecord) bool {
-		payload, err := record.Payload()
+	meta := store.Meta()
+	snapshot := WorkflowAssignmentSnapshot{}
+	if meta.ActiveWorkflowAssignment != nil {
+		message, err := llmMessageFromSessionRecord(*meta.ActiveWorkflowAssignment)
 		if err != nil {
-			matchErr = err
-			return true
+			return WorkflowAssignmentSnapshot{}, false, err
 		}
-		message, ok := payload.(session.MessageRecord)
-		if !ok || message.MessageType == nil || *message.MessageType != session.MessageTypeWorkflowMode {
-			return false
-		}
-		matched = &message
-		return true
-	}); err != nil {
-		return WorkflowAssignmentSnapshot{}, false, err
+		snapshot.message = &message
 	}
-	if matchErr != nil {
-		return WorkflowAssignmentSnapshot{}, false, matchErr
+	if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
+		thinking := *meta.ChatSettings.Thinking
+		snapshot.thinking = &thinking
 	}
-	if matched == nil {
-		return WorkflowAssignmentSnapshot{}, false, nil
-	}
-	message, err := llmMessageFromSessionRecord(*matched)
-	if err != nil {
-		return WorkflowAssignmentSnapshot{}, false, err
-	}
-	snapshot := WorkflowAssignmentSnapshot{message: message}
 	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
 		return WorkflowAssignmentSnapshot{}, false, err
 	}
 	return snapshot, true, nil
+}
+
+func (s WorkflowAssignmentSnapshot) WithThinkingLevel(level string) WorkflowAssignmentSnapshot {
+	value := level
+	s.thinking = &value
+	return s
 }
 
 func SteerPersistedWorkflowAssignmentSnapshot(
@@ -199,14 +191,28 @@ func SteerPersistedWorkflowAssignmentSnapshot(
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
-	return completePersistedWorkflowAssignment(engine, snapshot.message), nil
+	return completePersistedWorkflowAssignment(engine, snapshot.restorationMessage()), nil
 }
 
 func validateWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnapshot) error {
-	if snapshot.message.MessageType == nil || *snapshot.message.MessageType != llm.MessageTypeWorkflowMode {
+	if snapshot.message != nil &&
+		(snapshot.message.MessageType == nil || *snapshot.message.MessageType != llm.MessageTypeWorkflowMode) {
 		return errors.New("workflow assignment snapshot is required")
 	}
 	return nil
+}
+
+func (s WorkflowAssignmentSnapshot) restorationMessage() llm.Message {
+	if s.message != nil {
+		return *s.message
+	}
+	return llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowModeExit),
+		Content: textutil.Value(
+			"The preceding Workflow assignment was discarded. There is no current executable Workflow Node until a later assignment arrives.",
+		),
+	}
 }
 
 func SteerPersistedWorkflowAssignment(
