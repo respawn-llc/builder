@@ -1,11 +1,8 @@
 import { useTranslation } from "react-i18next";
 
-import {
-  useAppNavigation,
-  useConnectionSnapshot,
-  useOwnedSidebarRoots,
-} from "@/app-facade";
+import { useAppNavigation, useConnectionSnapshot, useOwnedSidebarRoots } from "@/app-facade";
 import { Button, EmptyState } from "@/ui";
+import { completeBoardWorkflowLink } from "./boardWorkflowLinkCompletion";
 
 export function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string }>) {
   const { t } = useTranslation();
@@ -24,14 +21,7 @@ export function BoardNoWorkflowState({ projectID }: Readonly<{ projectID: string
                 kind: "linkWorkflow",
                 mode: "overlay",
                 onCompleted: async (completion) => {
-                  if (completion.kind === "created") {
-                    await navigation.openWorkflowEditor({
-                      projectID,
-                      workflowID: completion.workflowID,
-                    });
-                    return;
-                  }
-                  await navigation.openProject(projectID, completion.workflowID);
+                  await completeBoardWorkflowLink(navigation, projectID, completion);
                 },
                 projectID,
               });

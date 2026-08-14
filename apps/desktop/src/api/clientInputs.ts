@@ -8,7 +8,7 @@ import type {
 } from "./models";
 import type { WorkflowGraphDraft } from "./workflowGraphModels";
 import type { BoardNodeCardsSort, WorkflowTaskListSort } from "./boardNodeCardsSorting";
-import type { TaskLabelFilter } from "./workflowLabels";
+import type { ProjectTaskGroup, TaskLabelFilter } from "./workflowLabels";
 import type { BoardFilter } from "./workflowBoardFilters";
 import type { SetupOperationID } from "./setupOperationID";
 
@@ -40,6 +40,7 @@ export type TaskMutationInput =
 export type TaskListInput = Readonly<{
   projectID: string;
   workflowID?: string | undefined;
+  group?: ProjectTaskGroup | undefined;
   columnKeys?: readonly string[] | undefined;
   statusKinds?: readonly TaskStatusKind[] | undefined;
   attentionKinds?: readonly ("question" | "approval" | "interrupted")[] | undefined;

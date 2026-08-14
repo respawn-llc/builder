@@ -143,6 +143,11 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			}
 			workflowName = *task.WorkflowName
 		}
+		labelIDs := make([]string, len(task.Labels))
+		labelNames := make([]string, len(task.Labels))
+		for index, label := range task.Labels {
+			labelIDs[index], labelNames[index] = label.ID, label.Name
+		}
 		item := taskListItem{
 			ShortID:         task.ShortID,
 			TaskID:          task.TaskID,
@@ -152,12 +157,13 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 			Title:           task.Title,
 			CreatedAtUnixMs: task.CreatedAtUnixMs,
 			UpdatedAtUnixMs: task.UpdatedAtUnixMs,
-			LabelIDs:        normalizedLabelIDs(taskListLabelIDs(task.Labels)),
+			LabelIDs:        labelIDs,
 		}
 		items = append(items, item)
 		rows = append(rows, taskListRenderItem{
 			Item:         item,
 			WorkflowName: workflowName,
+			LabelNames:   labelNames,
 			ShowWorkflow: showWorkflow,
 			ShowColumns:  showColumns,
 		})
@@ -172,12 +178,4 @@ func taskListProjectionFromResponse(resp serverapi.WorkflowTaskListResponse, exp
 		},
 		Rows: rows,
 	}, nil
-}
-
-func taskListLabelIDs(labels []serverapi.WorkflowProjectLabel) []string {
-	ids := make([]string, len(labels))
-	for index, label := range labels {
-		ids[index] = label.ID
-	}
-	return ids
 }

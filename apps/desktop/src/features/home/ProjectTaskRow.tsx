@@ -1,4 +1,4 @@
-import { GitFork } from "lucide-react";
+import { CircleDot, GitFork } from "lucide-react";
 import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import type { useTranslation } from "react-i18next";
 
@@ -8,7 +8,6 @@ import { TaskStatusIcon } from "@/shared/task-status";
 import type { VirtualizedInfiniteListBoundaryState } from "@/ui";
 import type { ProjectTaskGroup } from "./projectTaskListData";
 import { ProjectTaskLabelsCell } from "./ProjectTaskLabelsCell";
-import { ProjectTaskStatusLegend } from "./ProjectTaskStatusLegend";
 
 export const projectTaskColumnCount = 6;
 
@@ -53,6 +52,7 @@ export type ProjectTaskListEntry =
   | Readonly<{
       kind: "task";
       key: string;
+      anchorKey: string;
       groupKey: ProjectTaskGroup;
       ariaLabel: string;
       cells: readonly ProjectTaskGridCell[];
@@ -70,7 +70,7 @@ export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]
       {
         key: "status",
         ariaLabel: t("task.status"),
-        content: <ProjectTaskStatusLegend />,
+        content: <CircleDot aria-hidden="true" size={15} strokeWidth={1.8} />,
         className: "grid place-items-center",
       },
       {
@@ -84,7 +84,9 @@ export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]
       { key: "workflow", content: t("home.prototype.workflowColumn") },
       { key: "labels", content: t("labels.filter") },
     ],
-    className: projectTaskGridClassName("border-b border-[var(--color-outline)] bg-[var(--color-background)]"),
+    className: projectTaskGridClassName(
+      "border-b border-[var(--color-outline)] bg-[var(--color-background)]",
+    ),
   };
 }
 
@@ -110,7 +112,8 @@ export function projectTaskEntry({
   const selected = labelEditorTaskID === task.id || (labelEditorTaskID === null && taskDetailID === task.id);
   return {
     kind: "task",
-    key: task.id,
+    key: `${group}-${task.id}`,
+    anchorKey: task.id,
     groupKey: group,
     ariaLabel: `${task.shortID} ${task.title}`,
     selected,

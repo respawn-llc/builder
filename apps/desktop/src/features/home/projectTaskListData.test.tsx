@@ -14,7 +14,6 @@ import type {
 import { queryKeys } from "@/app-facade";
 import {
   projectTaskGroupPageSize,
-  projectTaskGroupStatusKinds,
   useProjectTaskListData,
   useProjectTaskListEvents,
 } from "./projectTaskListData";
@@ -112,10 +111,7 @@ describe("Project Task-list data ownership", () => {
     await waitFor(() => {
       expect(state.listRequests).toHaveLength(2);
     });
-    expect(state.listRequests.map((request) => request.statusKinds)).toEqual([
-      projectTaskGroupStatusKinds.active,
-      projectTaskGroupStatusKinds.backlog,
-    ]);
+    expect(state.listRequests.map((request) => request.group)).toEqual(["active", "backlog"]);
     await waitFor(() => {
       expect(
         harness.queryClient
@@ -159,7 +155,7 @@ describe("Project Task-list data ownership", () => {
         limit: projectTaskGroupPageSize,
         offset: 0,
         projectID: "project-1",
-        statusKinds: ["waiting_question", "waiting_approval", "interrupted", "running", "queued", "active"],
+        group: "active",
         sort: [{ field: "updated", direction: "desc" }],
       });
     });
@@ -469,20 +465,8 @@ function countsResponse(active: number): ProjectTaskGroupCounts {
 }
 
 function taskGroupForInput(input: TaskListInput): TaskGroup {
-  switch (input.statusKinds?.[0]) {
-    case "backlog":
-      return "backlog";
-    case "done":
-      return "done";
-    case "active":
-    case "waiting_question":
-    case "waiting_approval":
-    case "interrupted":
-    case "running":
-    case "queued":
-    case undefined:
-      return "active";
-  }
+  if (input.group === undefined) throw new Error("Expected a Project Task group.");
+  return input.group;
 }
 
 function pageResponse(group: TaskGroup, offset: number): TaskListPage {

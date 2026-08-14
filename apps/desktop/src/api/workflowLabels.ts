@@ -102,6 +102,8 @@ export type TaskListPage = Readonly<{
   tasks: readonly TaskListItem[];
 }>;
 
+export type ProjectTaskGroup = "active" | "backlog" | "done";
+
 export type ProjectTaskGroupCounts = Readonly<{
   projectID: string;
   counts: Readonly<{

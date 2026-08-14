@@ -7,7 +7,6 @@ import (
 	"io"
 	"strings"
 
-	"core/shared/apicontract"
 	"core/shared/client"
 	"core/shared/config"
 	"core/shared/runtimeids"
@@ -163,7 +162,7 @@ func taskListSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 			WorkflowID:    selectedWorkflowID,
 			WorkflowOwner: taskListExpectedWorkflowFromRequest,
 		}
-		return writeTaskListResponse(context.Background(), stdout, stderr, remote, resp, expectedScope, *jsonOut)
+		return writeTaskListResponse(stdout, stderr, resp, expectedScope, *jsonOut)
 	})
 }
 
@@ -204,7 +203,7 @@ func parseTaskListLabelMatch(raw string, explicit bool, selectorCount int, unlab
 	return mode, nil
 }
 
-func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writer, remote apicontract.WorkflowService, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
+func writeTaskListResponse(stdout io.Writer, stderr io.Writer, resp serverapi.WorkflowTaskListResponse, expectedScope taskListExpectedScope, jsonOut bool) int {
 	projection, err := taskListProjectionFromResponse(resp, expectedScope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -212,28 +211,6 @@ func writeTaskListResponse(ctx context.Context, stdout io.Writer, stderr io.Writ
 	}
 	if jsonOut {
 		return writeCommandJSON(stdout, stderr, projection.Output)
-	}
-	hasLabels := false
-	for _, row := range projection.Rows {
-		if len(row.Item.LabelIDs) > 0 {
-			hasLabels = true
-			break
-		}
-	}
-	if hasLabels {
-		_, snapshot, err := loadWorkflowProjectLabelCatalog(ctx, remote, resp.Scope.ProjectID)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		for index := range projection.Rows {
-			names, err := workflowProjectLabelNames(snapshot, projection.Rows[index].Item.LabelIDs)
-			if err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			projection.Rows[index].LabelNames = names
-		}
 	}
 	for _, row := range projection.Rows {
 		statusText, err := taskStatusText(row.Item.Status)

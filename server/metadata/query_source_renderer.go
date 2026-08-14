@@ -124,26 +124,14 @@ type taskGroupSQLTemplateData struct {
 }
 
 func taskGroupTemplateData() []taskGroupSQLTemplateData {
-	groups := []taskGroupSQLTemplateData{
-		{
-			Name: "active",
-			StatusKinds: []string{
-				string(serverapi.WorkflowTaskStatusKindWaitingQuestion),
-				string(serverapi.WorkflowTaskStatusKindWaitingApproval),
-				string(serverapi.WorkflowTaskStatusKindInterrupted),
-				string(serverapi.WorkflowTaskStatusKindRunning),
-				string(serverapi.WorkflowTaskStatusKindQueued),
-				string(serverapi.WorkflowTaskStatusKindActive),
-			},
-		},
-		{
-			Name:        "backlog",
-			StatusKinds: []string{string(serverapi.WorkflowTaskStatusKindBacklog)},
-		},
-		{
-			Name:        "done",
-			StatusKinds: []string{string(serverapi.WorkflowTaskStatusKindDone)},
-		},
+	definitions := serverapi.WorkflowProjectTaskGroupDefinitions()
+	groups := make([]taskGroupSQLTemplateData, len(definitions))
+	for index, definition := range definitions {
+		statusKinds := make([]string, len(definition.StatusKinds))
+		for statusIndex, status := range definition.StatusKinds {
+			statusKinds[statusIndex] = string(status)
+		}
+		groups[index] = taskGroupSQLTemplateData{Name: string(definition.Group), StatusKinds: statusKinds}
 	}
 	return groups
 }

@@ -220,6 +220,7 @@ export type {
   CanonicalTaskLabelFilter,
   ProjectLabel,
   ProjectLabelCatalog,
+  ProjectTaskGroup,
   ProjectTaskGroupCounts,
   TaskLabelAssignment,
   TaskLabelFilter,

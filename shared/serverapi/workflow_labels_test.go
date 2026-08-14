@@ -210,6 +210,19 @@ func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) 
 	if !hasWorkflowRequestError(request.Validate(), "status_kinds[0]", WorkflowRequestErrorInvalidValue) {
 		t.Fatalf("Validate error = %v, want status kind invalid value", request.Validate())
 	}
+	group := WorkflowProjectTaskGroupActive
+	request = WorkflowTaskListRequest{
+		ProjectID:   &projectID,
+		Group:       &group,
+		LabelFilter: WorkflowTaskLabelFilterNone(),
+	}
+	if err := request.Validate(); err != nil {
+		t.Fatalf("Validate group: %v", err)
+	}
+	request.StatusKinds = []WorkflowTaskStatusKind{WorkflowTaskStatusKindActive}
+	if !hasWorkflowRequestError(request.Validate(), "group", WorkflowRequestErrorInvalidValue) {
+		t.Fatalf("Validate group/status conflict = %v, want invalid group", request.Validate())
+	}
 }
 
 func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {

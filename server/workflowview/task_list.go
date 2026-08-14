@@ -92,10 +92,14 @@ func (l *TaskList) List(ctx context.Context, req serverapi.WorkflowTaskListReque
 	if err != nil {
 		return serverapi.WorkflowTaskListResponse{}, err
 	}
+	statusKinds := req.StatusKinds
+	if req.Group != nil {
+		statusKinds = req.Group.StatusKinds()
+	}
 	page, err := l.queryRows(ctx, workflowTaskListQueryRequest{
 		projectID:          projectID,
 		narrowed:           narrowedQuery,
-		statusKinds:        req.StatusKinds,
+		statusKinds:        statusKinds,
 		attentionKinds:     req.AttentionKinds,
 		labelFilter:        labelFilter,
 		dependencyFilter:   req.DependencyFilter,
