@@ -732,6 +732,12 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		c.releaseReservation(key, start.policy, start.agentCapacityLease)
 		c.finishAdmissionWorker(start)
 	}()
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
 	if start.assignmentWait != nil {
 		decision := classifyCurrentNodeAssignment(
 			c.workerContext,
@@ -742,7 +748,8 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 		key := start.referenceKey()
 		c.mu.Lock()
 		interrupted := c.interrupts.currentNodeFenced(key)
-		if decision.diagnostic != nil {
+		canceled := context.Cause(c.workerContext) != nil
+		if decision.diagnostic != nil && !canceled {
 			c.workerDiagnostics = errors.Join(
 				c.workerDiagnostics,
 				fmt.Errorf(
@@ -758,13 +765,13 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 				c.replaceTransferredUserInterruption(start, decision.diagnostic)
 				return
 			}
-			if context.Cause(c.workerContext) != nil {
+			if canceled {
 				return
 			}
 			c.handleAdmissionFailure(start, false, decision.diagnostic)
 			return
 		}
-		if interrupted || context.Cause(c.workerContext) != nil {
+		if interrupted || canceled {
 			return
 		}
 		start.assignment = decision.assignment
@@ -780,6 +787,14 @@ func (c *CurrentNodeController) runAdmission(start currentNodeQueuedStart) {
 			return
 		}
 		start.holdFor = nil
+	}
+	c.lifecycleBarrier.RLock()
+	defer c.lifecycleBarrier.RUnlock()
+	c.mu.Lock()
+	closed = c.closed || c.closing
+	c.mu.Unlock()
+	if closed {
+		return
 	}
 	if start.policy.countsAgentCapacity() && start.agentCapacityLease == nil {
 		c.mu.Lock()

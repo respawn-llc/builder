@@ -393,7 +393,7 @@ func executionTargetDomainSignoffs() []DomainDeclarationSignoff {
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskObservationResponse", "Validate", "8b21b39e774d48318d319db2c1bde5f04d870b3eea1f986bdee9d645fd8f28bd"),
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskOffsetPageRequest", "Validate", "8c147bcb183cb7e02d24322151f19dfc79eecfbd8e983203c6006f1597b5286c"),
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskResumeRequest", "Validate", "d012774717337596f8861979c08a3f295e9a77c9570feff8a9e09ac4c866a55b"),
-				validatorSignoff("core/shared/serverapi", "WorkflowTaskResumeResponse", "Validate", "c7e06d3c46549b03432c55b3a46a2e01047be1aaddccb6bc850417cddd722e98"),
+				validatorSignoff("core/shared/serverapi", "WorkflowTaskResumeResponse", "Validate", "12b998ce5e47962d89e1c5edbad47bd26744005f69fc29517175e620e9620fe8"),
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskStartRequest", "Validate", "a56dfc3111f5c7d18ab3ce50e4bd3de1ef670e635e49c5a15c5644710015a81f"),
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskStartResponse", "Validate", "a66385a27e8e2c25f88bf27b169bbf018facfafc6101c4eee26d16f544fa59a6"),
 				validatorSignoff("core/shared/serverapi", "WorkflowTaskUpdateRequest", "Validate", "c8aee61dbe71721dba444b57bb1f68012c8db7a0bc643881f4821561ef0c1d1d"),

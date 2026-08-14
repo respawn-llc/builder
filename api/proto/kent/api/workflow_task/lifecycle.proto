@@ -267,6 +267,7 @@ message ResumeSuccess {
     option (buf.validate.oneof).required = true;
     ResumeApplied applied = 1;
     SelectionRequired selection_required = 2;
+    ResumeApplied no_op = 3;
   }
 }
 

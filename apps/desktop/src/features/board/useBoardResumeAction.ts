@@ -19,7 +19,6 @@ export function useBoardResumeAction(controller: TaskInitiatingActionController)
     [controller, pending],
   );
   return {
-    actionsDisabled: controller.running || pending.pendingTaskIDs.size > 0,
     pendingTaskIDs: pending.pendingTaskIDs,
     execute: async (taskID: string) => run(taskID, resumeTaskInitiatingAction(taskID)),
     continueExecution: async (

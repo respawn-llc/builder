@@ -137,9 +137,8 @@ func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
 
 	observationDone := make(chan error, 1)
 	go func() {
-		observationDone <- authority.WithWorkflowTaskExecutionSnapshots(func(map[workflow.TaskID]TaskExecutionSnapshot) error {
-			return nil
-		})
+		_, observationErr := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+		observationDone <- observationErr
 	}()
 	var observationBlocked bool
 	select {
@@ -165,6 +164,154 @@ func TestWithExactExecutionsDoesNotBlockTaskExecutionObservation(t *testing.T) {
 			t.Fatal("workflow task execution observation remained blocked after exact execution release")
 		}
 		t.Fatal("exact execution operation blocked workflow task execution observation")
+	}
+}
+
+func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-read-during-selection")
+	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-read-during-selection"), nil)
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = handle.Stop(context.Background())
+	})
+	initial, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+	if err != nil {
+		t.Fatalf("initial read snapshot: %v", err)
+	}
+	if len(initial[taskID].Executions) != 1 {
+		t.Fatalf("initial Task executions = %+v, want queued execution", initial[taskID].Executions)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
+	selectionDone := make(chan error, 1)
+	go func() {
+		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(WorkflowInterruptSelection) error {
+			close(entered)
+			<-release
+			return errors.New("release lifecycle selection without applying it")
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("lifecycle selection did not acquire live execution ownership")
+	}
+
+	readDone := make(chan error, 1)
+	go func() {
+		snapshot, readErr := authority.CurrentWorkflowTaskExecutionReadSnapshot()
+		if readErr == nil && len(snapshot[taskID].Executions) != 1 {
+			readErr = fmt.Errorf("stale Task executions = %+v, want prior queued snapshot", snapshot[taskID].Executions)
+		}
+		readDone <- readErr
+	}()
+	select {
+	case err := <-readDone:
+		if err != nil {
+			t.Fatalf("read snapshot while lifecycle selection owns live state: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Task execution read snapshot waited for lifecycle selection")
+	}
+
+	releaseSelection()
+	if err := <-selectionDone; err == nil {
+		t.Fatal("lifecycle selection unexpectedly committed")
+	}
+}
+
+func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T) {
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep executable unavailable: %v", err)
+	}
+	authority := NewAuthority(AuthorityOptions{})
+	t.Cleanup(func() {
+		if err := authority.Close(context.Background()); err != nil {
+			t.Errorf("close authority: %v", err)
+		}
+	})
+	taskID := workflow.TaskID("task-manual-move-selection")
+	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-manual-move-selection"), nil)
+	lease, err := authority.NewWorkflowExecutionLease(ref)
+	if err != nil {
+		t.Fatalf("NewWorkflowExecutionLease: %v", err)
+	}
+	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
+		Workflow: &lease,
+		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+	})
+	if err != nil {
+		t.Fatalf("StartScriptExecution: %v", err)
+	}
+	t.Cleanup(func() {
+		lease.Cancel()
+		_ = handle.Stop(context.Background())
+	})
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseSelection := func() { releaseOnce.Do(func() { close(release) }) }
+	defer releaseSelection()
+	selectionDone := make(chan error, 1)
+	go func() {
+		selectionDone <- authority.WithWorkflowManualMoveSelection(taskID, func(WorkflowInterruptSelection) error {
+			close(entered)
+			<-release
+			return errors.New("release lifecycle selection without applying it")
+		})
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("Manual Move selection did not acquire Task execution ownership")
+	}
+
+	otherLeaseDone := make(chan error, 1)
+	go func() {
+		_, leaseErr := authority.NewWorkflowExecutionLease(
+			workflowExecutionRefForTest(t, workflow.TaskID("task-other"), workflow.NodeID("node-other"), nil),
+		)
+		otherLeaseDone <- leaseErr
+	}()
+	select {
+	case err := <-otherLeaseDone:
+		if err != nil {
+			t.Fatalf("unrelated Task lease while Manual Move selected: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Manual Move selection retained Authority-wide ownership")
+	}
+
+	releaseSelection()
+	if err := <-selectionDone; err == nil {
+		t.Fatal("Manual Move selection unexpectedly committed")
 	}
 }
 

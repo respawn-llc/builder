@@ -266,12 +266,12 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 	if s.taskMutations == nil || s.workflowExecution == nil {
 		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
 	}
+	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
 
 	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
-		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
-		if err != nil {
-			return nil, err
-		}
 		for _, taskID := range taskIDs {
 			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
 				return nil, err
@@ -296,6 +296,13 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		if err != nil || len(runtimeBlockers) > 0 {
 			return runtimeBlockers, err
 		}
+		currentTaskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if !metadata.StringSetsEqual(taskIDs, currentTaskIDs) {
+			return nil, workflowstore.ErrProjectDeletePreparationInvalidated
+		}
 		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
 			ProjectID:          projectID,
 			ExpectedSessionIDs: sessionIDs,
@@ -307,10 +314,6 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 			return nil, fmt.Errorf("project %q was deleted, but session artifact cleanup failed: %w", projectID, err)
 		}
 		return nil, nil
-	}
-	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
-	if err != nil {
-		return serverapi.ProjectDeleteResponse{}, err
 	}
 	workflowTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
 	for _, taskID := range taskIDs {

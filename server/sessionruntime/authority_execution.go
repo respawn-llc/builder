@@ -277,6 +277,8 @@ func (e *execution) retire() {
 // Its finalizer can still prove Current Node ownership, but no longer
 // authorizes Interrupt or appears in queued/running read models.
 func (e *execution) beginWorkflowFinalization() {
+	e.exactMu.Lock()
+	defer e.exactMu.Unlock()
 	e.authority.mu.Lock()
 	if e.authority.byScope[e.scope.ID()] != e {
 		e.authority.mu.Unlock()
@@ -536,6 +538,19 @@ func (s *executionPromptStore) hasPendingID(requestID string) bool {
 func (s *executionPromptStore) pendingReferences() ([]PendingPromptReference, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.pendingReferencesLocked()
+}
+
+func (s *executionPromptStore) tryPendingReferences() ([]PendingPromptReference, bool, error) {
+	if !s.mu.TryRLock() {
+		return nil, false, nil
+	}
+	defer s.mu.RUnlock()
+	references, err := s.pendingReferencesLocked()
+	return references, true, err
+}
+
+func (s *executionPromptStore) pendingReferencesLocked() ([]PendingPromptReference, error) {
 	references := make([]PendingPromptReference, 0, len(s.pending))
 	for requestID, entry := range s.pending {
 		if entry == nil {

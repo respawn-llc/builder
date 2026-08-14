@@ -96,7 +96,7 @@ func TestWorkflowTaskLifecycleSchemaHasExactFieldsEnumsAndNestedDomainOutcomes(t
 		fields []string
 	}{
 		"StartSuccess":       {"outcome", []string{"applied", "selection_required", "dependency_confirmation_required"}},
-		"ResumeSuccess":      {"outcome", []string{"applied", "selection_required"}},
+		"ResumeSuccess":      {"outcome", []string{"applied", "selection_required", "no_op"}},
 		"ApproveSuccess":     {"outcome", []string{"applied", "selection_required"}},
 		"MovePreviewSuccess": {"outcome", []string{"no_op", "direct", "transition", "blocked"}},
 		"MoveSuccess":        {"outcome", []string{"no_op", "applied", "selection_required", "dependency_confirmation_required"}},
