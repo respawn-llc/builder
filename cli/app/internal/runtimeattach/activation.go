@@ -52,17 +52,6 @@ func Activate(ctx context.Context, service servicecontract.SessionRuntimeService
 	}, nil
 }
 
-func (a *Activation) Reactivate(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	attachment, err := activate(ctx, a.service, a.request, a.ownerID)
-	if err != nil {
-		return err
-	}
-	a.attachment = attachment
-	return nil
-}
-
 func (a *Activation) Release() error {
 	return a.ReleaseWithClosePolicy(serverapi.SessionRuntimeReleaseClosePolicyCloseIfIdle)
 }

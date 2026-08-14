@@ -9,7 +9,6 @@ import (
 
 	"core/internal/testharness/pty/appfixture"
 	"core/shared/apicontract"
-	"core/shared/config"
 	"core/shared/lifecyclecontract"
 	"core/shared/serverapi"
 )
@@ -148,7 +147,7 @@ func TestRuntimeAttachmentKeepsPromptActivationIndependentFromLifecycleHooks(t *
 		SessionID:                  sessionID,
 		ClientLifecycleCommand:     command,
 		ClientLifecycleOpeningKind: lifecyclecontract.OpeningKindResumed,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("prepareSharedRuntimeWiring: %v", err)
 	}
@@ -158,44 +157,5 @@ func TestRuntimeAttachmentKeepsPromptActivationIndependentFromLifecycleHooks(t *
 	turnHooks, turnOK := wiring.turnQueueHook.(*turnQueueHooks)
 	if !promptOK || !turnOK || turnHooks.notifications != promptHook {
 		t.Fatal("lifecycle hooks changed native prompt-activation ownership")
-	}
-}
-
-func TestRuntimeAttachmentReactivationUsesActivation(t *testing.T) {
-	activateCalls := 0
-	var released serverapi.SessionRuntimeAttachment
-	server := runtimeAttachmentTestServer{
-		runtime: &recordingSessionRuntimeClient{
-			activate: func(_ context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
-				activateCalls++
-				if req.SessionID != "session-recover" || req.ActiveSettings.Model != "gpt-test" {
-					t.Fatalf("unexpected activation request: %+v", req)
-				}
-				return sessionRuntimeActivateResponse(req.SessionID, uint64(activateCalls)), nil
-			},
-			release: func(_ context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
-				released = req.Attachment
-				return serverapi.SessionRuntimeReleaseResponse{}, nil
-			},
-		},
-	}
-	reactivator, lease, err := activateSharedRuntime(context.Background(), server.RuntimeAttachmentClients(), sessionLaunchPlan{
-		SessionID:      "session-recover",
-		ActiveSettings: config.Settings{Model: "gpt-test"},
-	})
-	if err != nil {
-		t.Fatalf("activateSharedRuntime: %v", err)
-	}
-	if err := reactivator.Reactivate(context.Background()); err != nil {
-		t.Fatalf("reactivate: %v", err)
-	}
-	if activateCalls != 2 {
-		t.Fatalf("activate calls = %d, want 2", activateCalls)
-	}
-	if err := lease.Release(); err != nil {
-		t.Fatalf("release: %v", err)
-	}
-	if released.SessionID != "session-recover" || released.Generation != 2 {
-		t.Fatalf("released attachment = %+v, want reactivated generation 2", released)
 	}
 }

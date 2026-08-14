@@ -37,7 +37,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		return nil, errors.New("server is required")
 	}
 	clients := source.RuntimeAttachmentClients()
-	reactivator, lease, err := activateSharedRuntime(ctx, clients, plan)
+	lease, err := activateSharedRuntime(ctx, clients, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -51,7 +51,6 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 		ctx,
 		clients,
 		plan,
-		reactivator,
 	)
 	if err != nil {
 		_ = lease.Release()
@@ -75,7 +74,7 @@ func prepareSharedRuntime(ctx context.Context, source runtimeAttachmentSource, p
 	}, nil
 }
 
-func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeReactivator, *runtimeattach.Activation, error) {
+func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients, plan sessionLaunchPlan) (*runtimeattach.Activation, error) {
 	lease, err := runtimeattach.Activate(ctx, clients.SessionRuntime, runtimeattach.Request{
 		SessionID:                plan.SessionID,
 		ActiveSettings:           plan.ActiveSettings,
@@ -86,18 +85,15 @@ func activateSharedRuntime(ctx context.Context, clients runtimeAttachmentClients
 		Source:                   plan.Source,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	reactivator := newRuntimeReactivator()
-	reactivator.SetReactivateFunc(lease.Reactivate)
-	return reactivator, lease, nil
+	return lease, nil
 }
 
 func prepareSharedRuntimeWiring(
 	ctx context.Context,
 	clients runtimeAttachmentClients,
 	plan sessionLaunchPlan,
-	reactivator *runtimeReactivator,
 ) (*runtimeWiring, func(), error) {
 	runtimeClient := newUIRuntimeClientWithReads(plan.SessionID, clients.SessionViews, clients.RuntimeControls).(*sessionRuntimeClient)
 	terminalFocus := newTerminalFocusState()
@@ -120,9 +116,9 @@ func prepareSharedRuntimeWiring(
 	}
 	var transcriptStream ongoingTranscriptEventStream
 	if lifecycleProxy != nil {
-		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, reactivator.Reactivate, lifecycleProxy.AcceptTranscript)
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, lifecycleProxy.AcceptTranscript)
 	} else {
-		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript, reactivator.Reactivate)
+		transcriptStream = startSessionTranscriptEvents(ctx, plan.SessionID, subscribeTranscript)
 	}
 	transcriptEvents := transcriptStream.Events
 	eventDispatcher := newUIEventDispatcher(transcriptEvents)
