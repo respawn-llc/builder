@@ -72,3 +72,36 @@ func TestMutationLaneRegistryCancelsWaitingLeaseAndRemovesIdleEntry(t *testing.T
 		t.Fatalf("idle entries = %d, want 0", len(registry.entries))
 	}
 }
+
+func TestMutationLaneRegistrySharedAcquisitionAllowsPeersAndBlocksExclusive(t *testing.T) {
+	registry := NewMutationLaneRegistry[string]()
+	first, err := registry.AcquireShared(context.Background(), "workflow")
+	if err != nil {
+		t.Fatalf("AcquireShared first: %v", err)
+	}
+	second, err := registry.AcquireShared(context.Background(), "workflow")
+	if err != nil {
+		t.Fatalf("AcquireShared second: %v", err)
+	}
+	acquired := make(chan *MutationLaneLease[string], 1)
+	go func() {
+		lease, acquireErr := registry.Acquire(context.Background(), "workflow")
+		if acquireErr == nil {
+			acquired <- lease
+		}
+	}()
+	select {
+	case lease := <-acquired:
+		lease.Release()
+		t.Fatal("exclusive lease acquired while shared leases were held")
+	case <-time.After(20 * time.Millisecond):
+	}
+	first.Release()
+	second.Release()
+	select {
+	case lease := <-acquired:
+		lease.Release()
+	case <-time.After(time.Second):
+		t.Fatal("exclusive lease remained blocked after shared leases released")
+	}
+}

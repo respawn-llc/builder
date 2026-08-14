@@ -129,7 +129,7 @@ func (s *Store) RunWorkflowGraphSaveOperation(
 	if s.graphSaves == nil {
 		return WorkflowGraphSaveResult{}, errors.New("workflow graph save lanes are required")
 	}
-	lease, err := s.graphSaves.AcquireExclusive(ctx, workflowID)
+	lease, err := s.graphSaves.Acquire(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}

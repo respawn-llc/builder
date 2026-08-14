@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
+
+	"golang.org/x/sync/semaphore"
 )
 
 // MutationLaneRegistry serializes in-process mutations for equal keys.
@@ -14,8 +17,8 @@ type MutationLaneRegistry[K comparable] struct {
 }
 
 type mutationLaneEntry struct {
-	token chan struct{}
-	refs  int
+	semaphore *semaphore.Weighted
+	refs      int
 }
 
 // MutationLaneLease owns one key's mutation lane until Release is called.
@@ -23,6 +26,7 @@ type MutationLaneLease[K comparable] struct {
 	registry *MutationLaneRegistry[K]
 	key      K
 	entry    *mutationLaneEntry
+	weight   int64
 	released bool
 }
 
@@ -31,6 +35,16 @@ func NewMutationLaneRegistry[K comparable]() *MutationLaneRegistry[K] {
 }
 
 func (r *MutationLaneRegistry[K]) Acquire(ctx context.Context, key K) (*MutationLaneLease[K], error) {
+	return r.acquire(ctx, key, math.MaxInt64)
+}
+
+// AcquireShared allows operations for the same key to overlap while remaining
+// mutually exclusive with ordinary Acquire callers.
+func (r *MutationLaneRegistry[K]) AcquireShared(ctx context.Context, key K) (*MutationLaneLease[K], error) {
+	return r.acquire(ctx, key, 1)
+}
+
+func (r *MutationLaneRegistry[K]) acquire(ctx context.Context, key K, weight int64) (*MutationLaneLease[K], error) {
 	if r == nil {
 		return nil, errors.New("mutation lane registry is required")
 	}
@@ -43,20 +57,17 @@ func (r *MutationLaneRegistry[K]) Acquire(ctx context.Context, key K) (*Mutation
 	}
 	entry := r.entries[key]
 	if entry == nil {
-		entry = &mutationLaneEntry{token: make(chan struct{}, 1)}
-		entry.token <- struct{}{}
+		entry = &mutationLaneEntry{semaphore: semaphore.NewWeighted(math.MaxInt64)}
 		r.entries[key] = entry
 	}
 	entry.refs++
 	r.mu.Unlock()
 
-	select {
-	case <-ctx.Done():
+	if err := entry.semaphore.Acquire(ctx, weight); err != nil {
 		r.releaseReference(key, entry)
-		return nil, ctx.Err()
-	case <-entry.token:
+		return nil, err
 	}
-	return &MutationLaneLease[K]{registry: r, key: key, entry: entry}, nil
+	return &MutationLaneLease[K]{registry: r, key: key, entry: entry, weight: weight}, nil
 }
 
 func (l *MutationLaneLease[K]) Release() {
@@ -69,11 +80,7 @@ func (l *MutationLaneLease[K]) Release() {
 		panic(fmt.Sprintf("release mutation lane lease invariant violated: key=%v released twice", l.key))
 	}
 	l.released = true
-	select {
-	case l.entry.token <- struct{}{}:
-	default:
-		panic(fmt.Sprintf("release mutation lane lease invariant violated: key=%v token already available", l.key))
-	}
+	l.entry.semaphore.Release(l.weight)
 	l.registry.releaseReferenceLocked(l.key, l.entry)
 }
 
