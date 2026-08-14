@@ -56,6 +56,33 @@ func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 	})
 }
 
+func TestFreshHeadlessWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	store := mustCreateTestSession(t)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5", HeadlessMode: true},
+	)
+	assertFreshRequestMatchesCompactionProjection(t, engine, []llm.MessageType{
+		llm.MessageTypeHeadlessMode,
+		llm.MessageTypeSkills,
+		llm.MessageTypeAgentsMD,
+		llm.MessageTypeWorkflowMode,
+		llm.MessageTypeEnvironment,
+	})
+	if !store.Meta().HeadlessActive {
+		t.Fatal("fresh headless Workflow request did not persist Headless mode")
+	}
+}
+
 func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicateContext(t *testing.T) {
 	t.Parallel()
 	observerErr := errors.New("fresh meta-context observer failed")

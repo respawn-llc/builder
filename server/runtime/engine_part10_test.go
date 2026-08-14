@@ -171,7 +171,7 @@ func TestFreshChildSessionReinjectsDeveloperContextEvenWhenParentAlreadyInjected
 	}
 }
 
-func TestInjectsSkillsContextAfterEnvironmentAndPersists(t *testing.T) {
+func TestInjectsSkillsContextBeforeEnvironmentAndPersists(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 

@@ -125,9 +125,6 @@ func TestHandoffReplacementStoresFutureMessageAtomically(t *testing.T) {
 	if pending := reopened.handoffRuntimeState().RequestSnapshot(); pending != nil {
 		t.Fatalf("reopened atomic handoff queued a duplicate request: %+v", pending)
 	}
-	if future := reopened.handoffRuntimeState().FutureMessageSnapshot(); future != "" {
-		t.Fatalf("reopened atomic handoff queued a duplicate future message: %q", future)
-	}
 	if got := countHandoffFutureMessages(reopened.transcriptRuntimeState().SnapshotItems()); got != 1 {
 		t.Fatalf("reopened atomic handoff future-agent items = %d, want 1", got)
 	}
@@ -138,7 +135,6 @@ func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
 	tests := []struct {
 		name             string
 		replacementItems []llm.ResponseItem
-		wantQueuedFuture bool
 		appendTypedEvent bool
 	}{
 		{
@@ -148,14 +144,12 @@ func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
 				MessageType: textutil.Value(llm.MessageTypeCompactionSummary),
 				Content:     textutil.Value("summary"),
 			}}),
-			wantQueuedFuture: true,
 		},
 		{
 			name: "pending followed by typed future message",
 			replacementItems: llm.ItemsFromMessages([]llm.Message{
 				{Role: llm.RoleUser, MessageType: textutil.Value(llm.MessageTypeCompactionSummary), Content: textutil.Value("summary")},
 			}),
-			wantQueuedFuture: false,
 			appendTypedEvent: true,
 		},
 	}
@@ -177,10 +171,7 @@ func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
 				})
 			}
 			restored := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
-			if got := restored.handoffRuntimeState().FutureMessageSnapshot() != ""; got != testCase.wantQueuedFuture {
-				t.Fatalf("queued legacy future message = %t, want %t", got, testCase.wantQueuedFuture)
-			}
-			if !testCase.wantQueuedFuture {
+			if testCase.appendTypedEvent {
 				if got := countHandoffFutureMessages(restored.transcriptRuntimeState().SnapshotItems()); got != 1 {
 					t.Fatalf("reopened typed legacy future messages = %d, want 1", got)
 				}
@@ -201,9 +192,6 @@ func TestLegacyPendingOnlyHandoffRecoveryRemainsStable(t *testing.T) {
 				t.Fatalf("close recovered legacy engine: %v", err)
 			}
 			reopened := mustNewHandoffTestEngine(t, mustOpenTestSession(t, store.Dir()), &fakeClient{}, Config{})
-			if future := reopened.handoffRuntimeState().FutureMessageSnapshot(); future != "" {
-				t.Fatalf("reopened recovered legacy future message remained queued: %q", future)
-			}
 			if got := countHandoffFutureMessages(reopened.transcriptRuntimeState().SnapshotItems()); got != 1 {
 				t.Fatalf("reopened recovered legacy future messages = %d, want 1", got)
 			}
@@ -407,8 +395,8 @@ func TestReopenedSessionAfterTriggerHandoffUsesAtomicFutureMessageReplacement(t 
 	if pending := engine.handoffRuntimeState().RequestSnapshot(); pending != nil {
 		t.Fatalf("atomic handoff retained pending request: %+v", pending)
 	}
-	if future := engine.handoffRuntimeState().FutureMessageSnapshot(); future != "" {
-		t.Fatalf("atomic handoff retained future-message queue: %q", future)
+	if got := countHandoffFutureMessages(engine.transcriptRuntimeState().SnapshotItems()); got != 1 {
+		t.Fatalf("atomic handoff future-agent items = %d, want 1", got)
 	}
 	if got := countHandoffFutureMessageRecords(t, store); got != 0 {
 		t.Fatalf("atomic handoff appended future-message records = %d, want 0", got)

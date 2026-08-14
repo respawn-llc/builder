@@ -1,8 +1,8 @@
 package metadata
 
 import (
+	"encoding/json"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +42,11 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalJSON: %v", err)
 	}
-	if strings.Contains(string(encoded), "prompt_cache_lineage_generation") {
+	var encodedFields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(encoded), &encodedFields); err != nil {
+		t.Fatalf("decode encoded metadata fields: %v", err)
+	}
+	if _, ok := encodedFields["prompt_cache_lineage_generation"]; ok {
 		t.Fatalf("encoded metadata retained obsolete prompt cache lineage generation: %s", encoded)
 	}
 	var legacyDecoded sessionMetadataDocument
@@ -53,7 +57,11 @@ func TestSessionMetadataDocumentRoundTripsWorkflowNeutralFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalJSON legacy metadata: %v", err)
 	}
-	if strings.Contains(string(legacyEncoded), "prompt_cache_lineage_generation") {
+	var legacyEncodedFields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(legacyEncoded), &legacyEncodedFields); err != nil {
+		t.Fatalf("decode rewritten legacy metadata fields: %v", err)
+	}
+	if _, ok := legacyEncodedFields["prompt_cache_lineage_generation"]; ok {
 		t.Fatalf("rewritten metadata retained obsolete prompt cache lineage generation: %s", legacyEncoded)
 	}
 	var decoded sessionMetadataDocument

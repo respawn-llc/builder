@@ -46,7 +46,17 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 		return e.steerMetaContextBuildResult(stepID, metaResult)
 	}
 	if e.workflowPromptActive() {
+		meta := e.store.Meta()
+		headlessChanged := e.cfg.HeadlessMode != meta.HeadlessActive
+		if headlessChanged {
+			if e.cfg.HeadlessMode {
+				options.IncludeHeadless = true
+			} else {
+				options.IncludeHeadlessExit = true
+			}
+		}
 		var committedErr error
+		var headlessPersistErr error
 		applyErr := e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, options, func(resolved metaContextBuildOptions, _ bool) error {
 			receipt, err := steer(resolved)
 			if receipt.Committed {
@@ -60,7 +70,10 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 			e.baseMetaInjected = true
 			return nil
 		})
-		return errors.Join(applyErr, committedErr)
+		if headlessChanged && applyErr == nil {
+			headlessPersistErr = e.store.SetHeadlessActive(e.cfg.HeadlessMode)
+		}
+		return errors.Join(applyErr, committedErr, headlessPersistErr)
 	}
 	meta := e.store.Meta()
 	if e.cfg.HeadlessMode != meta.HeadlessActive {

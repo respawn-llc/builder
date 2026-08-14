@@ -176,7 +176,7 @@ Post-completion compaction of a retained Workflow Session before it becomes dorm
 
 ### Eager Compaction
 
-Automatic post-turn compaction of an eligible non-Workflow Session at 88% of its actual model context window. Eager Compaction runs after any successfully completed non-Workflow agent/model turn with a nonblank final answer and follows the Session's ordinary automatic-compaction setting.
+Automatic post-turn compaction of an eligible non-Workflow Session at 88% of its actual model context window. Eager Compaction runs after a successfully completed user turn, Goal loop step, or background step that produced a nonblank final answer. It follows the Session's ordinary automatic-compaction setting. User shell, compaction, and runtime-maintenance steps are not eligible.
 
 ### Exact Execution Scope
 

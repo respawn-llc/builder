@@ -47,7 +47,7 @@ func GoalAvailabilityFromMeta(meta Meta) (GoalAvailability, error) {
 }
 
 func malformedGoalContract(meta Meta, cause error) error {
-	err := fmt.Errorf("session %q locked contract is malformed: %w", meta.SessionID, cause)
+	err := fmt.Errorf("Session %q locked contract is malformed: %w", meta.SessionID, cause)
 	d := invariant.FailureDiagnostic(invariant.ScopeSessionPersistence, "goal_availability", err)
 	d.Fields[invariant.FieldSessionID] = meta.SessionID
 	d.Fields[invariant.FieldResolverInputs] = "locked_contract"
