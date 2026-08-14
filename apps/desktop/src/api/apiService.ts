@@ -98,7 +98,7 @@ export interface ApiService {
     position: SessionPagePosition,
   ): Promise<SessionCatalogPage>;
   listWorkspaces(projectID: string, pageToken?: string): Promise<WorkspaceList>;
-  getProjectEdit(projectID: string, pageToken?: string): Promise<ProjectEdit>;
+  getProjectEdit(projectID: string): Promise<ProjectEdit>;
   planWorkspace(path: string): Promise<BindingPlan>;
   createProject(displayName: string, projectKey: string, workspaceRoot: string): Promise<ProjectBinding>;
   attachWorkspace(projectID: string, workspaceRoot: string): Promise<ProjectBinding>;

@@ -1717,6 +1717,30 @@ func (q *Queries) GetProjectDisplayName(ctx context.Context, projectID string) (
 	return display_name, err
 }
 
+const getProjectEditMetadata = `-- name: GetProjectEditMetadata :one
+SELECT
+    id,
+    display_name,
+    project_key
+FROM projects
+WHERE id = ?1
+LIMIT 1
+`
+
+type GetProjectEditMetadataRow struct {
+	ID          string
+	DisplayName string
+	ProjectKey  string
+}
+
+func (q *Queries) GetProjectEditMetadata(ctx context.Context, projectID string) (GetProjectEditMetadataRow, error) {
+	row := q.db.QueryRowContext(ctx, getProjectEditMetadata, projectID)
+	var i GetProjectEditMetadataRow
+	err := recordQueryError(ctx, row.Scan(&i.ID, &i.DisplayName, &i.ProjectKey), getProjectEditMetadata, 1)
+
+	return i, err
+}
+
 const getProjectKeyState = `-- name: GetProjectKeyState :one
 SELECT
     p.id,

@@ -94,6 +94,15 @@ SELECT
 FROM projects
 ORDER BY created_at_unix_ms ASC, rowid ASC;
 
+-- name: GetProjectEditMetadata :one
+SELECT
+    id,
+    display_name,
+    project_key
+FROM projects
+WHERE id = sqlc.arg(project_id)
+LIMIT 1;
+
 -- name: GetProjectKeyState :one
 SELECT
     p.id,

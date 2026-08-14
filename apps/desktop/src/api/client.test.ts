@@ -247,7 +247,7 @@ describe("ApiClient", () => {
     });
   });
 
-  it("uses project edit workspace pagination and mutation RPC contracts", async () => {
+  it("uses independent project edit metadata and mutation RPC contracts", async () => {
     const transport = new FakeRpcTransport([
       {
         method: "project.edit.get",
@@ -255,9 +255,6 @@ describe("ApiClient", () => {
           project_id: "project-1",
           project_key: "PROJ",
           display_name: "Project",
-          default_workspace_id: "workspace-1",
-          workspaces: [workspaceResponse],
-          next_page_token: "cursor-2",
         },
       },
       { method: "project.update", result: { project: projectSummaryResponse } },
@@ -273,9 +270,9 @@ describe("ApiClient", () => {
     ]);
     const client = new ApiClient(transport);
 
-    await expect(client.getProjectEdit("project-1", "cursor-1")).resolves.toMatchObject({
+    await expect(client.getProjectEdit("project-1")).resolves.toMatchObject({
       projectID: "project-1",
-      nextPageToken: "cursor-2",
+      projectKey: "PROJ",
     });
     await client.updateProject("project-1", "Renamed");
     await client.updateProject("project-1", "Renamed", "ABC");
@@ -286,7 +283,7 @@ describe("ApiClient", () => {
 
     expect(transport.calls).toContainEqual({
       method: "project.edit.get",
-      params: { project_id: "project-1", page_size: 100, page_token: "cursor-1" },
+      params: { project_id: "project-1" },
     });
     expect(transport.calls).toContainEqual({
       method: "project.update",

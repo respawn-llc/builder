@@ -121,17 +121,12 @@ type ProjectWorkspaceListResponse struct {
 
 type ProjectEditGetRequest struct {
 	ProjectID string `json:"project_id"`
-	PageSize  int    `json:"page_size"`
-	PageToken string `json:"page_token"`
 }
 
 type ProjectEditGetResponse struct {
-	ProjectID          string                    `json:"project_id"`
-	ProjectKey         string                    `json:"project_key"`
-	DisplayName        string                    `json:"display_name"`
-	DefaultWorkspaceID string                    `json:"default_workspace_id"`
-	Workspaces         []ProjectWorkspaceSummary `json:"workspaces"`
-	NextPageToken      string                    `json:"next_page_token"`
+	ProjectID   string `json:"project_id"`
+	ProjectKey  string `json:"project_key"`
+	DisplayName string `json:"display_name"`
 }
 
 type ProjectWorkspaceSummary struct {
@@ -493,7 +488,10 @@ func (r ProjectWorkspaceListRequest) Validate() error {
 }
 
 func (r ProjectEditGetRequest) Validate() error {
-	return validateProjectWorkspacePage(r.ProjectID, r.PageSize, r.PageToken)
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id is required")
+	}
+	return nil
 }
 
 func validateProjectWorkspacePage(projectID string, pageSize int, pageToken string) error {

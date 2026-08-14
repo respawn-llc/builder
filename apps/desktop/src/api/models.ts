@@ -124,9 +124,6 @@ export type ProjectEdit = Readonly<{
   projectID: string;
   projectKey: string;
   displayName: string;
-  defaultWorkspaceID: string;
-  workspaces: readonly WorkspaceSummary[];
-  nextPageToken: string;
 }>;
 
 export type ProjectMutationResponse = Readonly<{

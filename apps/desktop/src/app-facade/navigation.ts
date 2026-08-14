@@ -29,6 +29,7 @@ export type NavigationStackState = Readonly<{
 export function useAppNavigation(): AppNavigation {
   const navigate = useNavigate();
   const router = useRouter();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { logger } = useAppServices();
   const runNavigation = useCallback(
     async (action: () => Promise<void>): Promise<"completed" | "failed"> => {
@@ -65,6 +66,9 @@ export function useAppNavigation(): AppNavigation {
         });
       },
       async openHome() {
+        if (pathname === "/") {
+          return;
+        }
         await runNavigation(async () => {
           await navigate({ to: "/" });
         });
@@ -125,7 +129,7 @@ export function useAppNavigation(): AppNavigation {
         });
       },
     }),
-    [navigate, router.history, runImmediateNavigation, runNavigation],
+    [navigate, pathname, router.history, runImmediateNavigation, runNavigation],
   );
 }
 

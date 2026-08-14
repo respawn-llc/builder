@@ -215,14 +215,12 @@ export class ApiClient implements ApiService {
     return response;
   }
 
-  async getProjectEdit(projectID: string, pageToken = ""): Promise<ProjectEdit> {
+  async getProjectEdit(projectID: string): Promise<ProjectEdit> {
     return parse(
       "project.edit.get",
       projectEditSchema,
       await this.#transport.call("project.edit.get", {
         project_id: projectID,
-        page_size: 100,
-        page_token: pageToken,
       }),
     );
   }

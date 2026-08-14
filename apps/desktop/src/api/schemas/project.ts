@@ -86,20 +86,15 @@ export const workspaceListSchema: z.ZodType<WorkspaceList> = z
 
 export const projectEditSchema: z.ZodType<ProjectEdit> = z
   .object({
-    project_id: z.string(),
+    project_id: canonicalProjectIDSchema,
     project_key: z.string(),
     display_name: z.string(),
-    default_workspace_id: z.string(),
-    workspaces: z.array(workspaceSummarySchema),
-    next_page_token: z.string().optional().default(""),
   })
+  .strict()
   .transform((value) => ({
     projectID: value.project_id,
     projectKey: value.project_key,
     displayName: value.display_name,
-    defaultWorkspaceID: value.default_workspace_id,
-    workspaces: value.workspaces,
-    nextPageToken: value.next_page_token,
   }));
 
 export const projectMutationResponseSchema: z.ZodType<ProjectMutationResponse> = z

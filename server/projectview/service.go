@@ -244,25 +244,14 @@ func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditG
 	if s == nil {
 		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
 	}
-	project, err := s.projectHomeSummary(ctx, req.ProjectID)
-	if err != nil {
-		return serverapi.ProjectEditGetResponse{}, err
-	}
-	workspaces, err := s.ListProjectWorkspaces(ctx, serverapi.ProjectWorkspaceListRequest{
-		ProjectID: req.ProjectID,
-		PageSize:  req.PageSize,
-		PageToken: req.PageToken,
-	})
+	project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectID)
 	if err != nil {
 		return serverapi.ProjectEditGetResponse{}, err
 	}
 	return serverapi.ProjectEditGetResponse{
-		ProjectID:          project.ProjectID,
-		ProjectKey:         project.ProjectKey,
-		DisplayName:        project.DisplayName,
-		DefaultWorkspaceID: workspaces.DefaultWorkspaceID,
-		Workspaces:         workspaces.Workspaces,
-		NextPageToken:      workspaces.NextPageToken,
+		ProjectID:   project.ProjectID,
+		ProjectKey:  project.ProjectKey,
+		DisplayName: project.DisplayName,
 	}, nil
 }
 

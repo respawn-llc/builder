@@ -567,24 +567,14 @@ func TestMetadataServiceUnlinkWorkspaceBlocksActiveRuntimeSession(t *testing.T) 
 
 func TestMetadataServiceGetsProjectEditForGUI(t *testing.T) {
 	store, _, binding := newProjectViewMetadataStore(t)
-	attachProjectViewWorkspace(t, store, binding.ProjectID)
 	svc := newProjectViewMetadataService(t, store)
 
-	edit, err := svc.GetProjectEdit(context.Background(), serverapi.ProjectEditGetRequest{ProjectID: binding.ProjectID, PageSize: 1})
+	edit, err := svc.GetProjectEdit(context.Background(), serverapi.ProjectEditGetRequest{ProjectID: binding.ProjectID})
 	if err != nil {
 		t.Fatalf("GetProjectEdit: %v", err)
 	}
 	if edit.ProjectID != binding.ProjectID || edit.ProjectKey != binding.ProjectKey || edit.DisplayName != binding.ProjectName {
 		t.Fatalf("edit identity = %+v, want %s/%s/%s", edit, binding.ProjectID, binding.ProjectKey, binding.ProjectName)
-	}
-	if edit.DefaultWorkspaceID != binding.WorkspaceID {
-		t.Fatalf("default workspace = %q, want %q", edit.DefaultWorkspaceID, binding.WorkspaceID)
-	}
-	if got := workspaceIDs(edit.Workspaces); len(got) != 1 || got[0] != binding.WorkspaceID {
-		t.Fatalf("edit page1 workspaces = %+v, want default workspace %q", got, binding.WorkspaceID)
-	}
-	if edit.NextPageToken == "" {
-		t.Fatalf("edit next token empty: %+v", edit)
 	}
 }
 
