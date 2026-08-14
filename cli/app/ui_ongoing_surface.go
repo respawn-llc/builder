@@ -74,6 +74,9 @@ func (m *uiModel) handleOngoingSurfaceError(err error) tea.Cmd {
 func (m *uiModel) handleOngoingDeveloperError(err ongoing.DeveloperError) tea.Cmd {
 	if m != nil {
 		m.logf("ongoing.developer_error err=%q", err.Error())
+		if !m.debugMode {
+			return m.handleFatalUIError(fmt.Sprintf("ongoing transcript invariant failed: %v", err), err)
+		}
 	}
 	ongoing.PanicDeveloperError(err)
 	return nil

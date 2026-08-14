@@ -12,6 +12,8 @@ import (
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"core/shared/transcript"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
@@ -65,7 +67,7 @@ func TestStaleContentCompleteHydrationFailsBeforeAnySideEffect(t *testing.T) {
 	}
 }
 
-func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testing.T) {
+func TestStaleHydrationDeveloperErrorIsContainedBeforeSideEffects(t *testing.T) {
 	for _, debugMode := range []bool{false, true} {
 		t.Run(map[bool]string{false: "release", true: "debug"}[debugMode], func(t *testing.T) {
 			runtimeClient := newTestSessionRuntimeClient(
@@ -87,12 +89,31 @@ func TestStaleHydrationDeveloperErrorPanicsInEveryModeBeforeSideEffects(t *testi
 			beforeQueue := append([]queuedInputItem(nil), m.queued...)
 			hydration := runtimeTupleTestRichHydration(10)
 
-			recovered := capturePanic(func() {
-				_ = m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
+			handle := func() tea.Cmd {
+				return m.handleOngoingTranscriptEvent(ongoingTranscriptEvent{
 					Kind:    ongoingTranscriptEventMessage,
 					Message: hydration,
 				})
-			})
+			}
+			if !debugMode {
+				cmd := handle()
+				if cmd == nil {
+					t.Fatal("release containment omitted quit command")
+				}
+				if _, ok := cmd().(tea.QuitMsg); !ok {
+					t.Fatal("release containment did not quit")
+				}
+				if !m.Transition().Exit {
+					t.Fatal("release containment did not request client exit")
+				}
+				assertUnchanged(t, "cached main view", runtimeClient.MainView(), beforeView)
+				assertUnchanged(t, "queued input", m.queued, beforeQueue)
+				if len(surface.calls) != 0 {
+					t.Fatalf("stale hydration reached terminal surface: %+v", surface.calls)
+				}
+				return
+			}
+			recovered := capturePanic(func() { _ = handle() })
 			developerErr, ok := recovered.(ongoing.DeveloperError)
 			if !ok {
 				t.Fatalf("panic = %T, want ongoing.DeveloperError", recovered)

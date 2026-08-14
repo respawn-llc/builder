@@ -171,17 +171,7 @@ func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error
 			return nil, fmt.Errorf("decode params: %w", err)
 		}
 	}
-	params := ptr.Elem().Interface()
-	if validator, ok := params.(interface{ ValidateRPC() error }); ok {
-		if err := validator.ValidateRPC(); err != nil {
-			return nil, err
-		}
-	} else if validator, ok := params.(interface{ Validate() error }); ok {
-		if err := validator.Validate(); err != nil {
-			return nil, err
-		}
-	}
-	return params, nil
+	return ptr.Elem().Interface(), nil
 }
 
 func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connectionState, route rpccontract.Route, params any) error {
