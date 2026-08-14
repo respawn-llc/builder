@@ -5,7 +5,8 @@ import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-import { errorMessage, isProjectMissingError, type ApiService, type WorkspaceCatalogRow } from "@/api";
+import { decodeWorkflowTaskDependencyError, errorMessage, isProjectMissingError } from "@/api";
+import type { ApiService, WorkspaceCatalogRow } from "@/api";
 import {
   projectWorkspaceQueryOptions,
   queryKeys,
@@ -91,6 +92,16 @@ const newTaskRetainedStateSchema = z.object({
   selectedLabelIDs: z.array(z.string().min(1)),
   preparedDependencies: z.array(preparedDependencySchema),
 });
+
+type Translate = ReturnType<typeof useTranslation>["t"];
+type Logger = ReturnType<typeof useAppServices>["logger"];
+
+function newTaskCreateErrorBody(error: unknown, t: Translate, logger: Logger): string {
+  const dependencyError = decodeWorkflowTaskDependencyError(error);
+  if (dependencyError === null) return errorMessage(error);
+  void logger.append("warn", "Task creation dependency validation failed.", { error: errorMessage(error) });
+  return t("task.dependenciesRejected");
+}
 
 export type NewTaskRetainedState = Readonly<{
   formValues: NewTaskFormValues;
@@ -182,7 +193,7 @@ function NewTaskFormContent({
   workflowID: string;
 }>) {
   const { t } = useTranslation();
-  const { api } = useAppServices();
+  const { api, logger } = useAppServices();
   const { push } = useStatusController();
   const connection = useConnectionSnapshot();
   const restored = useMemo(() => decodeNewTaskRetainedState(retainedState), [retainedState]);
@@ -242,11 +253,12 @@ function NewTaskFormContent({
       })),
     [effectiveSelectedLabelIDs, form, navigator, preparedDependencies],
   );
-  const canSubmit =
-    connection.phase === "connected" &&
-    !createTask.isPending &&
-    !labelCreatePending &&
-    selectedWorkspace !== undefined;
+  const canSubmit = [
+    connection.phase === "connected",
+    !createTask.isPending,
+    !labelCreatePending,
+    selectedWorkspace !== undefined,
+  ].every(Boolean);
   async function submit(values: NewTaskFormValues): Promise<void> {
     if (!canSubmit) {
       return;
@@ -288,7 +300,7 @@ function NewTaskFormContent({
       );
     } catch (error) {
       push({
-        body: errorMessage(error),
+        body: newTaskCreateErrorBody(error, t, logger),
         durationMs: Infinity,
         id: "new-task-create-error",
         title: t("task.createFailed"),
@@ -338,6 +350,7 @@ function NewTaskFormContent({
         selectedLabelIDs={effectiveSelectedLabelIDs}
       />
       <DependenciesArea
+        key={form.formState.submitCount}
         dependencies={preparedTaskDependenciesProjection(preparedDependencies)}
         disabled={connection.phase !== "connected"}
         excludedTaskIDs={(direction) =>

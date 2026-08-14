@@ -46,6 +46,7 @@ interface TestState {
   };
   select: TestSelectProps | undefined;
   create: ReturnType<typeof vi.fn>;
+  loggerAppend: ReturnType<typeof vi.fn>;
   resetQueries: ReturnType<typeof vi.fn>;
   searchResults: readonly TaskSearchResult[];
   statusPush: ReturnType<typeof vi.fn>;
@@ -79,6 +80,7 @@ const state = vi.hoisted((): TestState => ({
     title: "Task",
     workflowID: "workflow-1",
   })),
+  loggerAppend: vi.fn(async () => undefined),
   resetQueries: vi.fn(async () => undefined),
   searchResults: [],
   statusPush: vi.fn(),
@@ -98,7 +100,7 @@ vi.mock("@/app-facade", () => ({
   },
   taskSearchDebounceMs: 0,
   useDebouncedText: (value: string) => value,
-  useAppServices: () => ({ api: {} }),
+  useAppServices: () => ({ api: {}, logger: { append: state.loggerAppend } }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
   useStatusController: () => ({ push: state.statusPush }),
   useTaskSearch: () => ({
@@ -228,6 +230,7 @@ describe("New Task Workspace catalog integration", () => {
     state.catalog.refetch.mockClear();
     state.exact.refetch.mockClear();
     state.create.mockClear();
+    state.loggerAppend.mockClear();
     state.resetQueries.mockClear();
     state.searchResults = [];
     state.statusPush.mockClear();
@@ -613,6 +616,50 @@ describe("New Task Workspace catalog integration", () => {
     expect(screen.getByRole("textbox", { name: "task.name" })).toHaveValue("Keep me");
     expect(navigator.back).not.toHaveBeenCalled();
     expect(screen.queryByText("Project no longer exists")).not.toBeInTheDocument();
+  });
+
+  it("presents reciprocal rejection as product copy and resets the open picker", async () => {
+    loadCatalog();
+    state.exact.data = { kind: "attached", workspace: row("source") };
+    state.exact.isPending = false;
+    state.searchResults = [candidate("task-related")];
+    state.create.mockRejectedValueOnce(
+      new RpcError({
+        code: rpcErrorCodes.workflowTaskDependency,
+        message: "workflow task dependency error: reciprocal_dependency",
+        method: "workflow.task.create",
+        data: {
+          type: "workflow_task_dependency_error",
+          reason: "reciprocal_dependency",
+          blocker_task_id: "task-created",
+          blocked_task_id: "task-related",
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <NewTaskForm
+        {...props}
+        retainedState={{
+          formValues: { body: "Keep body", sourceWorkspaceID: "source", title: "Keep title" },
+          preparedDependencies: [preparedDependency("blocks", "task-related")],
+          selectedLabelIDs: [],
+        }}
+      />,
+    );
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    await user.click(screen.getByTestId("dependency-candidate-task-related"));
+    expect(screen.getByText("task.dependenciesNoMatches")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "task.create" }));
+    await vi.waitFor(() => {
+      expect(state.statusPush).toHaveBeenCalledOnce();
+    });
+    expect(state.statusPush.mock.lastCall?.[0]).toMatchObject({
+      body: "task.dependenciesRejected",
+    });
+    expect(JSON.stringify(state.loggerAppend.mock.lastCall?.[2])).toContain("reciprocal_dependency");
+    expect(screen.queryByRole("textbox", { name: "task.dependenciesSearch" })).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("dependency-row-task-related")).toHaveLength(2);
   });
 });
 

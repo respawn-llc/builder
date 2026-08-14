@@ -55,7 +55,7 @@ function preparedDirectionProjection(
     .sort(comparePreparedDependencyRows);
   if (entries.length > taskDependencyMaxPerDirection) {
     throw new Error(
-      `Prepared Task Dependencies ${direction} count exceeds ${taskDependencyMaxPerDirection}.`,
+      `Prepared Task Dependencies ${direction} count exceeds ${String(taskDependencyMaxPerDirection)}.`,
     );
   }
   const items = entries.map((entry): TaskDependencyItem => {
@@ -88,14 +88,8 @@ function preparedDirectionProjection(
 function comparePreparedDependencyRows(left: PreparedTaskDependency, right: PreparedTaskDependency): number {
   const leftDone = left.status.kind === "done";
   const rightDone = right.status.kind === "done";
-  if (leftDone !== rightDone) {
-    return leftDone ? 1 : -1;
-  }
-  if (left.shortID !== right.shortID) {
-    return left.shortID < right.shortID ? -1 : 1;
-  }
-  if (left.taskID === right.taskID) {
-    return 0;
-  }
+  if (leftDone !== rightDone) return leftDone ? 1 : -1;
+  if (left.shortID !== right.shortID) return left.shortID < right.shortID ? -1 : 1;
+  if (left.taskID === right.taskID) return 0;
   return left.taskID < right.taskID ? -1 : 1;
 }
