@@ -953,12 +953,15 @@ type WorkflowTaskResumeRequest struct {
 type WorkflowTaskResumeResponse struct {
 	Outcome           WorkflowExecutionTargetActionOutcome         `json:"outcome,omitempty"`
 	Applied           *WorkflowTaskResumeApplied                   `json:"applied,omitempty"`
+	NoOp              *WorkflowTaskResumeNoOp                      `json:"no_op,omitempty"`
 	SelectionRequired *WorkflowExecutionTargetSelectionRequirement `json:"selection_required,omitempty"`
 }
 
 type WorkflowTaskResumeApplied struct {
 	CurrentNodes []WorkflowTaskCurrentNode `json:"current_nodes"`
 }
+
+type WorkflowTaskResumeNoOp = WorkflowTaskResumeApplied
 
 type WorkflowTaskApproveRequest struct {
 	ApprovalID        string                `json:"approval_id"`

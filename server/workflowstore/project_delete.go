@@ -70,7 +70,7 @@ func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]
 	if err != nil {
 		return nil, rollback(fmt.Errorf("list project sessions for commit: %w", err))
 	}
-	if !metadata.SessionIDSetsEqual(req.ExpectedSessionIDs, commitSessionIDs) {
+	if !metadata.StringSetsEqual(req.ExpectedSessionIDs, commitSessionIDs) {
 		return nil, rollback(ErrProjectDeletePreparationInvalidated)
 	}
 	if _, err := q.DeleteProjectTaskPendingApprovals(ctx, projectID); err != nil {
