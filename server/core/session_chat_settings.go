@@ -13,9 +13,9 @@ import (
 )
 
 type sessionChatSettingsPreparationResolver struct {
-	metadataStore   *metadata.Store
-	authManager     *auth.Manager
-	persistenceRoot string
+	metadataStore  *metadata.Store
+	authManager    *auth.Manager
+	configSnapshot config.App
 }
 
 func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
@@ -34,7 +34,7 @@ func (r sessionChatSettingsPreparationResolver) PrepareSessionChatSettings(
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}
-	cfg, err := config.Load(target.WorkspaceRoot, config.LoadOptions{ConfigRoot: r.persistenceRoot})
+	cfg, err := config.LoadWorkspaceOverlay(r.configSnapshot, target.WorkspaceRoot)
 	if err != nil {
 		return launch.PreparedChatSettings{}, err
 	}
