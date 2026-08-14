@@ -84,12 +84,37 @@ func (m *Manager) Close() error {
 		}
 		entry.mu.Unlock()
 	}
+	type closeTarget struct {
+		entry       *processEntry
+		process     *os.Process
+		descendants []managedProcessIdentity
+		rootExited  bool
+	}
+	targets := make([]closeTarget, 0, len(entries))
+	var cleanupErrors []error
 	for _, entry := range entries {
 		entry.mu.Lock()
 		process := entry.cmd.Process
 		entry.mu.Unlock()
 		if process != nil {
-			_ = killManagedProcess(process)
+			descendants, captureErr := captureManagedDescendants(process)
+			if captureErr != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf("capture descendants for background shell %s: %w", entry.id, captureErr),
+				)
+			}
+			targets = append(targets, closeTarget{
+				entry:       entry,
+				process:     process,
+				descendants: descendants,
+			})
+			if terminateErr := terminateManagedProcess(process, descendants); terminateErr != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf("terminate background shell %s: %w", entry.id, terminateErr),
+				)
+			}
 		}
 	}
 
@@ -98,15 +123,46 @@ func (m *Manager) Close() error {
 		gracePeriod = closeGracePeriod
 	}
 	graceDeadline := time.Now().Add(gracePeriod)
-	for _, entry := range entries {
-		if waitForEntryDone(entry, time.Until(graceDeadline)) {
-			continue
+	for index := range targets {
+		targets[index].rootExited = waitForEntryDone(targets[index].entry, time.Until(graceDeadline))
+	}
+	for time.Now().Before(graceDeadline) {
+		allDescendantsExited := true
+		for _, target := range targets {
+			if !managedDescendantsExited(target.descendants) {
+				allDescendantsExited = false
+				break
+			}
 		}
-		entry.mu.Lock()
-		process := entry.cmd.Process
-		entry.mu.Unlock()
-		if process != nil {
-			_ = forceKillManagedProcess(process)
+		if allDescendantsExited {
+			break
+		}
+		time.Sleep(min(10*time.Millisecond, time.Until(graceDeadline)))
+	}
+	for _, target := range targets {
+		livingDescendants, probeErr := livingManagedDescendantPIDs(target.descendants)
+		if probeErr != nil {
+			cleanupErrors = append(
+				cleanupErrors,
+				fmt.Errorf("probe descendants for background shell %s: %w", target.entry.id, probeErr),
+			)
+		}
+		if len(livingDescendants) > 0 {
+			if forceErr := forceKillManagedDescendants(livingDescendants); forceErr != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf("kill descendants for background shell %s: %w", target.entry.id, forceErr),
+				)
+			}
+		}
+		rootExited := target.rootExited || waitForEntryDone(target.entry, 0)
+		if !rootExited {
+			if forceErr := forceKillManagedRoot(target.process); forceErr != nil {
+				cleanupErrors = append(
+					cleanupErrors,
+					fmt.Errorf("kill background shell %s: %w", target.entry.id, forceErr),
+				)
+			}
 		}
 	}
 
@@ -123,9 +179,12 @@ func (m *Manager) Close() error {
 		pending = append(pending, entry.id)
 	}
 	if len(pending) > 0 {
-		return fmt.Errorf("timed out waiting for background shells to exit: %s", strings.Join(pending, ", "))
+		cleanupErrors = append(
+			cleanupErrors,
+			fmt.Errorf("timed out waiting for background shells to exit: %s", strings.Join(pending, ", ")),
+		)
 	}
-	return nil
+	return errors.Join(cleanupErrors...)
 }
 
 func (m *Manager) entry(id string) (*processEntry, error) {

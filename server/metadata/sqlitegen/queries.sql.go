@@ -2121,7 +2121,7 @@ SELECT
     p.display_name,
     p.project_key,
     COALESCE(w.canonical_root_path, '') AS root_path,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.project_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), p.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id
@@ -5372,7 +5372,7 @@ SELECT
     w.id,
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.workspace_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms,
     w.created_at_unix_ms AS attached_at_unix_ms,
     w.id AS workspace_order_id
@@ -5443,7 +5443,7 @@ SELECT
     w.id,
     w.canonical_root_path AS root_path,
     CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_primary,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.workspace_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), w.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM workspaces w
 JOIN projects p ON p.id = w.project_id
@@ -5519,7 +5519,7 @@ SELECT
     p.display_name,
     p.project_key,
     COALESCE(w.canonical_root_path, '') AS root_path,
-    CAST(COALESCE(COUNT(s.id), 0) AS INTEGER) AS session_count,
+    CAST(COALESCE(COUNT(s.project_id), 0) AS INTEGER) AS session_count,
     COALESCE(MAX(s.updated_at_unix_ms), p.updated_at_unix_ms) AS latest_activity_unix_ms
 FROM projects p
 LEFT JOIN workspaces w ON w.id = p.primary_workspace_id AND w.project_id = p.id

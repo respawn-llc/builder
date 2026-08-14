@@ -13,17 +13,31 @@ func prepareManagedExec(cmd *exec.Cmd) {}
 func deprioritizeManagedProcess(process *os.Process) error { return nil }
 
 func killManagedProcess(process *os.Process) error {
+	return terminateManagedProcess(process, nil)
+}
+
+func terminateManagedProcess(process *os.Process, _ []managedProcessIdentity) error {
 	if process == nil {
 		return nil
 	}
 	return process.Kill()
 }
 
-func forceKillManagedProcess(process *os.Process) error {
+func forceKillManagedDescendants([]managedProcessIdentity) error { return nil }
+
+func forceKillManagedRoot(process *os.Process) error {
 	if process == nil {
 		return nil
 	}
 	return process.Kill()
+}
+
+func captureManagedDescendants(*os.Process) ([]managedProcessIdentity, error) { return nil, nil }
+
+func managedDescendantsExited([]managedProcessIdentity) bool { return true }
+
+func livingManagedDescendantPIDs([]managedProcessIdentity) ([]managedProcessIdentity, error) {
+	return nil, nil
 }
 
 func processExitState(err error) (int, string) {
