@@ -6,7 +6,7 @@ import "context"
 
 type serviceChildContainment struct{}
 
-func prepareServiceChildInvocation(_ string) (serviceChildContainment, error) {
+func prepareServiceChildInvocation(_ context.Context, _ string) (serviceChildContainment, error) {
 	return serviceChildContainment{}, nil
 }
 

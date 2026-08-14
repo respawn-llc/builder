@@ -500,20 +500,30 @@ func (g *Gateway) dispatch(ctx context.Context, state *connectionState, req prot
 	if !ok {
 		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method))
 	}
-	switch req.Method {
-	case protocol.MethodSessionRuntimeActivate, protocol.MethodSessionRuntimeRelease:
-	default:
-		if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
-			return resp
-		}
-	}
 	return handler(g, ctx, state, req)
 }
 
 func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
+	params, invalid, failed := decodeValidatedParams[TReq](req)
+	if failed {
+		return invalid
+	}
+	resp, err := handler(params)
+	if err != nil {
+		return responseForError(req.ID, err)
+	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
+	return protocol.NewSuccessResponse(req.ID, resp)
+}
+
+func decodeValidatedParams[TReq any](req protocol.Request) (TReq, protocol.Response, bool) {
 	params, err := decodeParams[TReq](req.Params)
 	if err != nil {
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()), true
 	}
 	var validationErr error
 	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
@@ -527,20 +537,27 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 			RPCErrorData() json.RawMessage
 		}
 		if errors.As(validationErr, &rpcErr) {
-			return responseForError(req.ID, validationErr)
+			return params, responseForError(req.ID, validationErr), true
 		}
-		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error())
+		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error()), true
 	}
-	resp, err := handler(params)
-	if err != nil {
-		return responseForError(req.ID, err)
-	}
-	if validator, ok := any(resp).(interface{ Validate() error }); ok {
-		if err := validator.Validate(); err != nil {
-			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+	return params, protocol.Response{}, false
+}
+
+func decodeAuthorizeAndHandle[TReq any, TResp any](
+	g *Gateway,
+	ctx context.Context,
+	state *connectionState,
+	req protocol.Request,
+	handler func(TReq) (TResp, error),
+) protocol.Response {
+	return decodeAndHandle(req, func(params TReq) (TResp, error) {
+		var zero TResp
+		if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
+			return zero, err
 		}
-	}
-	return protocol.NewSuccessResponse(req.ID, resp)
+		return handler(params)
+	})
 }
 
 func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, error) {
@@ -578,6 +595,10 @@ func protocolError(err error) (int, string) {
 		return protocol.ErrCodeInternalError, "internal error"
 	}
 	message := strings.TrimSpace(err.Error())
+	var routeErr gatewayRouteError
+	if errors.As(err, &routeErr) {
+		return routeErr.code, routeErr.message
+	}
 	if errors.Is(err, context.Canceled) {
 		if message == "" || message == context.Canceled.Error() {
 			message = canceledByClientMessage

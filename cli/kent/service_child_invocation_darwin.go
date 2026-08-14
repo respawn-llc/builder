@@ -35,7 +35,7 @@ func (c *serviceChildContainment) startLeaseMonitor() {
 	}()
 }
 
-func prepareServiceChildInvocation(persistenceRoot string) (serviceChildContainment, error) {
+func prepareServiceChildInvocation(ctx context.Context, persistenceRoot string) (serviceChildContainment, error) {
 	marker := strings.TrimSpace(os.Getenv(darwinServiceChildMarkerEnv))
 	lockRaw := strings.TrimSpace(os.Getenv(darwinServiceLockFDEnv))
 	leaseRaw := strings.TrimSpace(os.Getenv(darwinServiceLeaseFDEnv))
@@ -80,7 +80,9 @@ func prepareServiceChildInvocation(persistenceRoot string) (serviceChildContainm
 		closeDarwinFiles(lock, lease, gate)
 		return serviceChildContainment{}, err
 	}
-	watchdogAck, gateAck, err := waitForDarwinChildArming(lease, gate)
+	armingCtx, cancel := context.WithTimeout(ctx, darwinServiceHandshakeTimeout)
+	defer cancel()
+	watchdogAck, gateAck, err := waitForDarwinChildArming(armingCtx, lease, gate)
 	_ = gate.Close()
 	if err != nil {
 		closeDarwinFiles(lock, lease)
@@ -99,22 +101,40 @@ func prepareServiceChildInvocation(persistenceRoot string) (serviceChildContainm
 	return containment, nil
 }
 
-func waitForDarwinChildArming(lease, gate *os.File) (darwinServiceMessage, darwinServiceMessage, error) {
+func waitForDarwinChildArming(ctx context.Context, lease, gate *os.File) (darwinServiceMessage, darwinServiceMessage, error) {
 	queue, err := unix.Kqueue()
 	if err != nil {
 		return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("create Darwin child arming queue: %w", err)
 	}
 	defer unix.Close(queue)
+	wake, err := darwinSocketPair()
+	if err != nil {
+		return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("create Darwin child arming cancellation channel: %w", err)
+	}
+	defer func() {
+		_ = unix.Close(wake[0])
+		_ = unix.Close(wake[1])
+	}()
 	changes := []unix.Kevent_t{
 		{Ident: uint64(lease.Fd()), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD | unix.EV_ENABLE},
 		{Ident: uint64(gate.Fd()), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD | unix.EV_ENABLE},
+		{Ident: uint64(wake[0]), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD | unix.EV_ENABLE},
 	}
 	if _, err := unix.Kevent(queue, changes, nil, nil); err != nil {
 		return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("arm Darwin child startup channels: %w", err)
 	}
 	var watchdogAck darwinServiceMessage
 	watchdogReady := false
-	events := make([]unix.Kevent_t, 2)
+	cancelWakeDone := make(chan struct{})
+	defer close(cancelWakeDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_, _ = unix.Write(wake[1], []byte{1})
+		case <-cancelWakeDone:
+		}
+	}()
+	events := make([]unix.Kevent_t, 3)
 	for {
 		count, err := unix.Kevent(queue, nil, events, nil)
 		if err != nil {
@@ -125,8 +145,10 @@ func waitForDarwinChildArming(lease, gate *os.File) (darwinServiceMessage, darwi
 		}
 		for _, event := range events[:count] {
 			switch int(event.Ident) {
+			case wake[0]:
+				return darwinServiceMessage{}, darwinServiceMessage{}, ctx.Err()
 			case int(lease.Fd()):
-				message, err := readDarwinServiceMessage(lease)
+				message, err := readDarwinServiceMessageContext(ctx, lease)
 				if err != nil {
 					if watchdogReady {
 						return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("Darwin watchdog lease failed before host start gate: %w", err)
@@ -139,7 +161,7 @@ func waitForDarwinChildArming(lease, gate *os.File) (darwinServiceMessage, darwi
 				watchdogAck = message
 				watchdogReady = true
 			case int(gate.Fd()):
-				gateAck, err := readDarwinServiceMessage(gate)
+				gateAck, err := readDarwinServiceMessageContext(ctx, gate)
 				if err != nil {
 					return darwinServiceMessage{}, darwinServiceMessage{}, fmt.Errorf("wait for Darwin host start gate: %w", err)
 				}

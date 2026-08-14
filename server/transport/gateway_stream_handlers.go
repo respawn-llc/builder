@@ -33,13 +33,9 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
-	decoded, preflightResp, failed := g.preflightRouteRequest(ctx, state, route, req)
+	params, invalid, failed := decodeValidatedParams[serverapi.RunPromptRequest](req)
 	if failed {
-		return sendResponse(ctx, conn, preflightResp)
-	}
-	params, ok := decoded.(serverapi.RunPromptRequest)
-	if !ok {
-		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInternalError, "run prompt route contract mismatch"))
+		return sendResponse(ctx, conn, invalid)
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -102,10 +98,6 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
-	if _, resp, failed := g.preflightRouteRequest(ctx, state, route, req); failed {
-		_ = sendResponse(ctx, conn, resp)
-		return
-	}
 	handler(g, conn, ctx, state, route, req)
 }
 
@@ -120,7 +112,7 @@ func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx cont
 			return &legacyTranscriptSubscription{inner: subscription}, nil
 		}
 	}
-	serveGatewaySubscription(conn, ctx, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 		return protocol.SessionTranscriptEventParams{Message: message}
 	})
 }
@@ -169,20 +161,22 @@ func (s *legacyTranscriptSubscription) Close() error {
 }
 
 func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](
+	g *Gateway,
 	conn rpcwire.Conn,
 	ctx context.Context,
+	state *connectionState,
 	route rpccontract.Route,
 	req protocol.Request,
 	subscribe func(context.Context, Req) (Sub, error),
 	wire func(Event) Wire,
 ) {
-	params, err := decodeParams[Req](req.Params)
-	if err != nil {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
+	params, invalid, failed := decodeValidatedParams[Req](req)
+	if failed {
+		_ = sendResponse(ctx, conn, invalid)
 		return
 	}
-	if err := params.Validate(); err != nil {
-		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()))
+	if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
 		return
 	}
 	sub, err := subscribe(ctx, params)
@@ -212,34 +206,34 @@ func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire
 	}
 }
 
-func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.AttentionNotificationClient().SubscribeAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.AttentionNotificationClient().SubscribeAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
 		return protocol.AttentionNotificationEventParams{Event: evt}
 	})
 }
 
-func (g *Gateway) serveSessionAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.AttentionNotificationClient().SubscribeSessionAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
+func (g *Gateway) serveSessionAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.AttentionNotificationClient().SubscribeSessionAttentionNotifications, func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
 		return protocol.AttentionNotificationEventParams{Event: evt}
 	})
 }
 
-func (g *Gateway) servePromptFollowUpSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.PromptControlClient().SubscribeFollowUp, func(evt serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
+func (g *Gateway) servePromptFollowUpSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.PromptControlClient().SubscribeFollowUp, func(evt serverapi.PromptFollowUpEvent) protocol.PromptFollowUpEventParams {
 		return protocol.PromptFollowUpEventParams{Event: protocol.PromptFollowUpEvent{Kind: string(evt.Kind)}}
 	})
 }
 
-func (g *Gateway) serveWorkflowProjectSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorkflowClient().SubscribeWorkflowProject, workflowProjectEventParams)
+func (g *Gateway) serveWorkflowProjectSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorkflowClient().SubscribeWorkflowProject, workflowProjectEventParams)
 }
 
-func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorkflowClient().SubscribeWorkflow, workflowProjectEventParams)
+func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorkflowClient().SubscribeWorkflow, workflowProjectEventParams)
 }
 
-func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
+func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
+	serveGatewaySubscription(g, conn, ctx, state, route, req, g.deps.WorktreeClient().SubscribeWorktreeSetup, worktreeSetupEventParams)
 }
 
 func workflowProjectEventParams(evt serverapi.WorkflowProjectEvent) protocol.WorkflowProjectEventParams {

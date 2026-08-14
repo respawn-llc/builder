@@ -55,6 +55,11 @@ run_vet() {
 	go vet ./...
 }
 
+run_metadata_ownership_lint() {
+	echo "==> metadata ownership lint"
+	go run ./tools/metadataownershiplint .
+}
+
 run_build() {
 	echo "==> go build"
 	local version
@@ -87,6 +92,7 @@ all)
 	run_frontend_lint
 	run_format
 	run_vet
+	run_metadata_ownership_lint
 	run_build
 	run_test
 	;;
@@ -105,6 +111,9 @@ rust-policy)
 vet)
 	run_vet
 	;;
+metadata-ownership)
+	run_metadata_ownership_lint
+	;;
 build)
 	run_build
 	;;
@@ -114,7 +123,7 @@ test)
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]]" >&2
+	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|metadata-ownership|build|test [test target/options...]]" >&2
 	exit 1
 	;;
 esac

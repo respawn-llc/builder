@@ -14,7 +14,7 @@ import (
 
 func gatewayClientCall[C any, Req any, Resp any](getClient func(GatewayDependencies) C, call func(C, context.Context, Req) (Resp, error)) gatewayUnaryHandler {
 	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params Req) (Resp, error) {
+		return decodeAuthorizeAndHandle(g, ctx, state, req, func(params Req) (Resp, error) {
 			return call(getClient(g.deps), ctx, params)
 		})
 	}
@@ -22,7 +22,7 @@ func gatewayClientCall[C any, Req any, Resp any](getClient func(GatewayDependenc
 
 func gatewayClientCallNoResponse[C any, Req any](getClient func(GatewayDependencies) C, call func(C, context.Context, Req) error) gatewayUnaryHandler {
 	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params Req) (struct{}, error) {
+		return decodeAuthorizeAndHandle(g, ctx, state, req, func(params Req) (struct{}, error) {
 			return struct{}{}, call(getClient(g.deps), ctx, params)
 		})
 	}
@@ -296,6 +296,9 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if err != nil {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
 		}
+		if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
+			return responseForError(req.ID, err)
+		}
 		response, err := g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
 		if err != nil {
 			return responseForError(req.ID, err)
@@ -384,7 +387,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeGoalComplete:                   gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.CompleteGoal),
 	protocol.MethodRuntimeGoalClear:                      gatewayClientCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, apicontract.RuntimeControlService.ClearGoal),
 	protocol.MethodProcessList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
+		return decodeAuthorizeAndHandle(g, ctx, state, req, func(params serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
 			resp, err := g.deps.ProcessViewClient().ListProcesses(ctx, params)
 			if err != nil {
 				return serverapi.ProcessListResponse{}, err
@@ -400,7 +403,11 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return resp, nil
 		})
 	},
-	protocol.MethodProcessGet:          gatewayClientCall[apicontract.ProcessViewService, serverapi.ProcessGetRequest, serverapi.ProcessGetResponse](GatewayDependencies.ProcessViewClient, apicontract.ProcessViewService.GetProcess),
+	protocol.MethodProcessGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
+		return decodeAndHandle(req, func(params serverapi.ProcessGetRequest) (serverapi.ProcessGetResponse, error) {
+			return g.processInActiveProject(ctx, state, params.ProcessID)
+		})
+	},
 	protocol.MethodProcessKill:         gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessKillRequest, serverapi.ProcessKillResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.KillProcess),
 	protocol.MethodProcessInlineOutput: gatewayClientCall[apicontract.ProcessControlService, serverapi.ProcessInlineOutputRequest, serverapi.ProcessInlineOutputResponse](GatewayDependencies.ProcessControlClient, apicontract.ProcessControlService.GetInlineOutput),
 	protocol.MethodAskListPending:      gatewayClientCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, apicontract.AskViewService.ListPendingAsksBySession),

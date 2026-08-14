@@ -3,12 +3,14 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -23,6 +25,8 @@ const (
 	darwinServiceGateFDEnv      = "KENT_PRIVATE_DARWIN_SERVICE_GATE_FD"
 
 	darwinInheritedFDBase = 3
+
+	darwinServiceHandshakeTimeout = 5 * time.Second
 )
 
 type darwinServiceMessage struct {
@@ -85,6 +89,29 @@ func readDarwinServiceMessage(file *os.File) (darwinServiceMessage, error) {
 		return darwinServiceMessage{}, fmt.Errorf("decode Darwin service control message: %w", err)
 	}
 	return message, nil
+}
+
+func readDarwinServiceMessageContext(ctx context.Context, file *os.File) (darwinServiceMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return darwinServiceMessage{}, err
+	}
+	done := make(chan struct{})
+	interruptDone := make(chan struct{})
+	go func() {
+		defer close(interruptDone)
+		select {
+		case <-ctx.Done():
+			_ = unix.Shutdown(int(file.Fd()), unix.SHUT_RD)
+		case <-done:
+		}
+	}()
+	message, err := readDarwinServiceMessage(file)
+	close(done)
+	<-interruptDone
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return darwinServiceMessage{}, ctxErr
+	}
+	return message, err
 }
 
 var ioEOF = errors.New("Darwin service control channel closed")

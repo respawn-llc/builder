@@ -5,6 +5,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -295,6 +297,72 @@ func TestDarwinServiceChildFailsClosedWhenWatchdogDiesBeforeStartGate(t *testing
 	}
 }
 
+func TestDarwinServiceChildArmingIsCancellable(t *testing.T) {
+	leasePair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatePair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := darwinSocketFile(leasePair[0], "test child lease")
+	watchdogLease := darwinSocketFile(leasePair[1], "test watchdog lease")
+	gate := darwinSocketFile(gatePair[0], "test child gate")
+	hostGate := darwinSocketFile(gatePair[1], "test host gate")
+	defer closeDarwinFiles(lease, watchdogLease, gate, hostGate)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, _, err = waitForDarwinChildArming(ctx, lease, gate)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("child arming error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cancelled child arming took %s", elapsed)
+	}
+}
+
+func TestDarwinServiceFramedReadIsCancellableAfterPartialPayload(t *testing.T) {
+	pair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := darwinSocketFile(pair[0], "test control reader")
+	writer := darwinSocketFile(pair[1], "test control writer")
+	defer closeDarwinFiles(reader, writer)
+
+	header := make([]byte, 4)
+	binary.BigEndian.PutUint32(header, 2)
+	if _, err := writer.Write(append(header, '{')); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := readDarwinServiceMessageContext(ctx, reader); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("partial framed read error = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("cancelled framed read took %s", elapsed)
+	}
+}
+
+func TestDarwinServiceChildArmingStopsOnSignal(t *testing.T) {
+	_, child, childDone, lease, gate := startDarwinTestServiceChild(t)
+	defer closeDarwinFiles(lease, gate)
+	if err := child.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-childDone:
+	case <-time.After(time.Second):
+		_ = child.Process.Kill()
+		t.Fatal("service child did not stop when signaled during arming")
+	}
+}
+
 func TestDarwinWatchdogStopsChildWhenHostExits(t *testing.T) {
 	controlPair, err := darwinSocketPair()
 	if err != nil {
@@ -413,13 +481,15 @@ func TestDarwinServiceHelperProcess(t *testing.T) {
 		}
 		os.Exit(0)
 	case "service-child":
-		containment, err := prepareServiceChildInvocation(os.Getenv("DARWIN_SERVICE_TEST_ROOT"))
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		containment, err := prepareServiceChildInvocation(ctx, os.Getenv("DARWIN_SERVICE_TEST_ROOT"))
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		ctx := containment.Context(context.Background())
-		<-ctx.Done()
+		containedCtx := containment.Context(ctx)
+		<-containedCtx.Done()
 		containment.Close()
 		os.Exit(0)
 	case "child":

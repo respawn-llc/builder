@@ -113,7 +113,9 @@ func runDarwinServiceHost(ctx context.Context, spec serviceSpec) error {
 	if err := writeDarwinServiceMessage(hostLeaseFile, setup); err != nil {
 		return settleDarwinHostFailure(child, watchdog, hostLeaseFile, hostGateFile, fmt.Errorf("configure Darwin watchdog: %w", err))
 	}
-	ack, err := readDarwinServiceMessage(hostLeaseFile)
+	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, darwinServiceHandshakeTimeout)
+	ack, err := readDarwinServiceMessageContext(handshakeCtx, hostLeaseFile)
+	cancelHandshake()
 	if err != nil {
 		return settleDarwinHostFailure(child, watchdog, hostLeaseFile, hostGateFile, fmt.Errorf("arm Darwin watchdog: %w", err))
 	}

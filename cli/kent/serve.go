@@ -43,14 +43,17 @@ func serveSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	installContainment, err := prepareServiceChildInvocation(strings.TrimSpace(*persistenceRoot))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	installContainment, err := prepareServiceChildInvocation(ctx, strings.TrimSpace(*persistenceRoot))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
+		if errors.Is(err, context.Canceled) {
+			return 130
+		}
 		return 1
 	}
 	defer installContainment.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 	ctx = installContainment.Context(ctx)
 	ctx = installServiceShutdownTrigger(ctx)
 	authHandler, onboardingHandler := newServeStartupHandlers()

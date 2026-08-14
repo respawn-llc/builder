@@ -3,10 +3,8 @@ package transport
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"core/server/auth"
@@ -48,49 +46,6 @@ func (e sessionOutsideActiveProjectError) Is(target error) bool {
 
 func newRoutePolicyExecutor(gateway *Gateway) routePolicyExecutor {
 	return routePolicyExecutor{gateway: gateway}
-}
-
-type routePreflightResult struct {
-	params any
-	resp   protocol.Response
-	failed bool
-}
-
-func (e routePolicyExecutor) preflight(ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) routePreflightResult {
-	params, err := e.decodeRouteParams(route, req.Params)
-	if err != nil {
-		var structured protocol.StructuredRPCError
-		if errors.As(err, &structured) {
-			return routePreflightResult{resp: responseForError(req.ID, err), failed: true}
-		}
-		return routePreflightResult{resp: protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()), failed: true}
-	}
-	if err := e.authorizeScope(ctx, state, route, params); err != nil {
-		var routeErr gatewayRouteError
-		if errors.As(err, &routeErr) {
-			return routePreflightResult{resp: protocol.NewErrorResponse(req.ID, routeErr.code, routeErr.message), failed: true}
-		}
-		return routePreflightResult{resp: responseForError(req.ID, err), failed: true}
-	}
-	return routePreflightResult{params: params}
-}
-
-func (e routePolicyExecutor) decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.Method == protocol.MethodOnboardingFinalize && e.gateway != nil {
-		params, err := e.gateway.onboardingFinalizeRequestContract.Decode(raw)
-		if err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return params, nil
-	}
-	if route.Method == protocol.MethodSessionGetExecutionEnvironment && e.gateway != nil {
-		params, err := e.gateway.sessionExecutionRequestContract.Decode(raw)
-		if err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-		return params, nil
-	}
-	return decodeRouteParams(route, raw)
 }
 
 type gatewayRouteError struct {
@@ -159,19 +114,6 @@ func (e routePolicyExecutor) serverAuthReady(ctx context.Context, connection *co
 		return stored.IsNoAuthSelected(), nil
 	}
 	return false, nil
-}
-
-func decodeRouteParams(route rpccontract.Route, raw json.RawMessage) (any, error) {
-	if route.RequestType == nil {
-		return nil, nil
-	}
-	ptr := reflect.New(route.RequestType)
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, ptr.Interface()); err != nil {
-			return nil, fmt.Errorf("decode params: %w", err)
-		}
-	}
-	return ptr.Elem().Interface(), nil
 }
 
 func (e routePolicyExecutor) authorizeScope(ctx context.Context, state *connectionState, route rpccontract.Route, params any) error {
@@ -417,9 +359,12 @@ func routeOwnerSessionID(params any) (string, bool) {
 	}
 }
 
-func (g *Gateway) preflightRouteRequest(ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) (any, protocol.Response, bool) {
-	result := newRoutePolicyExecutor(g).preflight(ctx, state, route, req)
-	return result.params, result.resp, result.failed
+func (g *Gateway) authorizeValidatedRouteRequest(ctx context.Context, state *connectionState, method string, params any) error {
+	route, ok := rpccontract.RouteByMethod(method)
+	if !ok {
+		return fmt.Errorf("route %q is not registered", method)
+	}
+	return newRoutePolicyExecutor(g).authorizeScope(ctx, state, route, params)
 }
 
 func (g *Gateway) activeProjectID(ctx context.Context, state *connectionState) (string, error) {
