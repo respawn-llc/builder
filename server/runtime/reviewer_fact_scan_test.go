@@ -50,7 +50,8 @@ func TestPersistedTranscriptScanReconstructsTypedReviewerFactsInBoundedWindows(t
 	}
 	if page.Entries[0].ReviewerError.ID != reviewerError.ID ||
 		page.Entries[0].ReviewerError.Detail != reviewerError.Detail ||
-		page.Entries[0].StepID != "22222222-2222-4222-8222-222222222222" ||
+		page.Entries[0].StepID == nil ||
+		*page.Entries[0].StepID != "22222222-2222-4222-8222-222222222222" ||
 		page.Entries[0].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("projected Reviewer error = %+v", page.Entries[0])
 	}
@@ -144,7 +145,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 		for _, entry := range page.Snapshot.Entries {
 			if entry.ReviewerFeedback != nil {
 				feedbackEntries++
-				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed ||
+				if entry.StepID == nil || *entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoingCollapsed ||
 					entry.ReviewerFeedback.ID != feedback.ID ||
 					!reflect.DeepEqual(entry.ReviewerFeedback.Suggestions, feedback.Suggestions) {
 					t.Fatalf("paged feedback payload changed: %+v", entry)
@@ -152,7 +153,7 @@ func TestReviewerFactsSurviveNewestAdjacentAndReopenedPages(t *testing.T) {
 			}
 			if entry.ReviewerError != nil {
 				errorEntries++
-				if entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoing ||
+				if entry.StepID == nil || *entry.StepID != stepID || entry.Visibility != transcript.EntryVisibilityOngoing ||
 					entry.ReviewerError.ID != reviewerError.ID ||
 					entry.ReviewerError.Detail != reviewerError.Detail {
 					t.Fatalf("paged Reviewer error payload changed: %+v", entry)
@@ -220,13 +221,13 @@ func assertReviewerRuntimeFacts(
 	}
 	gotFeedback := typedRows[0].ReviewerFeedback
 	gotError := typedRows[1].ReviewerError
-	if gotFeedback.ID != feedback.ID || typedRows[0].StepID != stepID ||
+	if gotFeedback.ID != feedback.ID || typedRows[0].StepID == nil || *typedRows[0].StepID != stepID ||
 		!reflect.DeepEqual(gotFeedback.Suggestions, feedback.Suggestions) ||
 		gotFeedback.SuggestionCount != len(feedback.Suggestions) ||
 		typedRows[0].Visibility != transcript.EntryVisibilityOngoingCollapsed {
 		t.Fatalf("feedback payload changed: %+v", typedRows[0])
 	}
-	if gotError.ID != reviewerError.ID || typedRows[1].StepID != stepID ||
+	if gotError.ID != reviewerError.ID || typedRows[1].StepID == nil || *typedRows[1].StepID != stepID ||
 		gotError.Detail != reviewerError.Detail ||
 		typedRows[1].Visibility != transcript.EntryVisibilityOngoing {
 		t.Fatalf("Reviewer error payload changed: %+v", typedRows[1])

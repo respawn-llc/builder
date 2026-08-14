@@ -196,7 +196,7 @@ func NewRuntimeWiringWithBackground(
 			return
 		}
 		if total == 1 || total%100 == 0 {
-			logger.Logf("runtime.event.drop count=%d kind=%s step_id=%s", total, evt.Kind, evt.StepID)
+			logger.Logf("runtime.event.drop count=%d kind=%s", total, evt.Kind)
 		}
 	})
 	promptReloader := opts.PromptFacingSnapshotReloader

@@ -196,7 +196,7 @@ func (s *defaultExclusiveStepLifecycle) run(
 	if options.EmitRunState {
 		if snapshot := s.Snapshot(); snapshot != nil {
 			mode := runModeFromActiveKind(snapshot.ActiveKind)
-			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: &RunState{
+			_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: exactStepIDPointer(stepID), RunState: &RunState{
 				Lifecycle:  RunningRunLifecycle(mode),
 				RunID:      snapshot.RunID,
 				ActiveKind: snapshot.ActiveKind,
@@ -326,7 +326,7 @@ func (s *defaultExclusiveStepLifecycle) publishTerminalStep(
 		}
 		_ = s.engine.applyExactRuntimeMutation(stepID, &steeringEvent{event: Event{
 			Kind:     EventRunStateChanged,
-			StepID:   stepID,
+			StepID:   exactStepIDPointer(stepID),
 			RunState: state,
 		}})
 	}
@@ -615,7 +615,7 @@ func (s *defaultExclusiveStepLifecycle) publishStepBegan(options exclusiveStepOp
 					state.StartedAt = finished.StartedAt
 					state.FinishedAt = finished.FinishedAt
 				}
-				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: stepID, RunState: state}))
+				_ = s.engine.steer(stepID, steerEventIntent(Event{Kind: EventRunStateChanged, StepID: exactStepIDPointer(stepID), RunState: state}))
 			}
 			if finished != nil {
 				if endErr := s.engine.cfg.StepLifecycle.StepEnded(context.Background(), stepLifecycleSnapshot(s.engine.SessionID(), StepLifecycleTransitionEnded, *finished)); endErr != nil {

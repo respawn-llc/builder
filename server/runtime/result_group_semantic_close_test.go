@@ -57,7 +57,7 @@ func TestSemanticCloseDoesNotRereportCompletedCellAndLeavesNoEmptySlot(t *testin
 		normalized := normalizeToolCallForTranscript(call, engine.transcriptWorkingDir())
 		if err := engine.steer("step", steerEventIntent(Event{
 			Kind:                       EventToolCallStarted,
-			StepID:                     "step",
+			StepID:                     exactStepIDPointer("step"),
 			ToolCall:                   &normalized,
 			CommittedTranscriptChanged: true,
 		})); err != nil {

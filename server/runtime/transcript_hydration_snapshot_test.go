@@ -76,8 +76,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	defer restoreStep()
 	engine.compactionRuntimeState().SetCount(7)
 	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}),
-		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: stepID, Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
+		steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}),
+		steerEventIntent(Event{Kind: EventCompactionStarted, StepID: exactStepIDPointer(stepID), Compaction: &CompactionStatus{Mode: "remote", Count: 8}}),
 	); err != nil {
 		t.Fatalf("steer active owner events: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestTranscriptHydrationSnapshotProjectsAndResetsAllRuntimeOwners(t *testing
 	}
 
 	if err := engine.steer(stepID,
-		steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID}),
-		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: stepID}),
+		steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)}),
+		steerEventIntent(Event{Kind: EventCompactionCompleted, StepID: exactStepIDPointer(stepID)}),
 	); err != nil {
 		t.Fatalf("steer terminal owner events: %v", err)
 	}

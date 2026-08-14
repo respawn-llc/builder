@@ -11,7 +11,7 @@ func reviewerFeedbackChatEntryFromSessionRecord(
 	provenance *TranscriptCommittedRowProvenance,
 ) ChatEntry {
 	return ChatEntry{
-		StepID:              stepID,
+		StepID:              exactStepIDPointer(stepID),
 		Visibility:          runtimeEntryVisibilityFromSession(record.Visibility),
 		CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance),
 		ReviewerFeedback: &ReviewerFeedbackChatEntry{
@@ -27,7 +27,7 @@ func reviewerErrorChatEntryFromSessionRecord(
 	provenance *TranscriptCommittedRowProvenance,
 ) ChatEntry {
 	return ChatEntry{
-		StepID:              stepID,
+		StepID:              exactStepIDPointer(stepID),
 		Visibility:          transcript.EntryVisibilityOngoing,
 		CommittedProvenance: cloneTranscriptCommittedRowProvenance(provenance),
 		ReviewerError: &ReviewerErrorChatEntry{

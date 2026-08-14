@@ -577,10 +577,7 @@ func newRuntimeControlWorkflowTestService(
 	if err := publication.Begin(); err != nil {
 		t.Fatalf("begin Current Node execution publication: %v", err)
 	}
-	binding, err := publication.Commit()
-	if err != nil {
-		t.Fatalf("commit Current Node execution publication: %v", err)
-	}
+	binding := publication.Commit()
 	t.Cleanup(func() {
 		if err := binding.Close(); err != nil && !errors.Is(err, runtime.ErrEngineClosed) {
 			t.Errorf("close Current Node execution binding: %v", err)
@@ -711,8 +708,11 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 			if event.Kind != runtime.EventToolCallStarted || event.ToolCall == nil || event.ToolCall.ID != "ask-cancel" {
 				return
 			}
+			if event.StepID == nil {
+				t.Fatal("tool start event is missing its Step identity")
+			}
 			select {
-			case toolStarted <- event.StepID:
+			case toolStarted <- *event.StepID:
 			default:
 			}
 		},

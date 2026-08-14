@@ -1038,7 +1038,7 @@ func (e *Engine) executeAcceptedToolCallsCoordinated(
 		normalized := normalizeToolCallForTranscript(hosted.Call, e.transcriptWorkingDir())
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:                       EventToolCallStarted,
-			StepID:                     stepID,
+			StepID:                     exactStepIDPointer(stepID),
 			ToolCall:                   &normalized,
 			CommittedTranscriptChanged: true,
 		})); err != nil {

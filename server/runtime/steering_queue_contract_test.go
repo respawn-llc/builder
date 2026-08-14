@@ -106,6 +106,65 @@ func TestSteeringPersistenceRetainsRuntimeAndExactStepPresence(t *testing.T) {
 	}
 }
 
+func TestSteeringProjectionRetainsRuntimeAndExactStepPresence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		stepID     *string
+		wantStepID *string
+	}{
+		{name: "Runtime"},
+		{
+			name:       "exact",
+			stepID:     textutil.OptionalExactString("11111111-1111-4111-8111-111111111111"),
+			wantStepID: textutil.OptionalExactString("11111111-1111-4111-8111-111111111111"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var localEntryEvent *Event
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{
+				Model: "gpt-5",
+				OnEvent: func(event Event) {
+					if event.Kind == EventLocalEntryAdded {
+						copied := event
+						localEntryEvent = &copied
+					}
+				},
+			})
+			intent := steerLocalEntryIntent(storedLocalEntry{
+				Role: "runtime_projection",
+				Text: "provenance",
+			})
+			var err error
+			if test.stepID == nil {
+				err = engine.steerRuntime(intent)
+			} else {
+				restore := setTestActiveStep(engine, *test.stepID)
+				defer restore()
+				err = engine.steer(*test.stepID, intent)
+			}
+			if err != nil {
+				t.Fatalf("project Steering output: %v", err)
+			}
+			if localEntryEvent == nil || !equalOptionalString(localEntryEvent.StepID, test.wantStepID) {
+				t.Fatalf("event Step ID = %v, want %v", localEntryEvent, test.wantStepID)
+			}
+			if localEntryEvent.LocalEntry == nil ||
+				!equalOptionalString(localEntryEvent.LocalEntry.StepID, test.wantStepID) {
+				t.Fatalf("event chat projection = %+v, want Step ID %v", localEntryEvent.LocalEntry, test.wantStepID)
+			}
+			snapshot := engine.ChatSnapshot()
+			if len(snapshot.Entries) != 1 ||
+				!equalOptionalString(snapshot.Entries[0].StepID, test.wantStepID) {
+				t.Fatalf("snapshot = %+v, want Step ID %v", snapshot, test.wantStepID)
+			}
+			facts := TranscriptCommittedRowFactsFromSnapshot(snapshot)
+			if len(facts) != 1 || !equalOptionalString(facts[0].StepID, test.wantStepID) {
+				t.Fatalf("committed facts = %+v, want Step ID %v", facts, test.wantStepID)
+			}
+		})
+	}
+}
+
 func equalOptionalString(left, right *string) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil

@@ -41,6 +41,7 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 		eventsMu                   sync.Mutex
 		assistantEvent             *Event
 		assistantEventCount        int
+		reviewerStartedEvent       *Event
 		reviewerCompletedEvent     *Event
 		snapshotAtReviewerComplete ChatSnapshot
 		reviewerEventOrder         []Event
@@ -49,10 +50,18 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 	eng = mustNewTestEngine(t, store, mainClient, tools.NewRegistry(tools.HandlerRegistration{ID: toolspec.ToolExecCommand, Handler: fakeTool{name: toolspec.ToolExecCommand}}), Config{
 		Model: "gpt-5",
 		OnEvent: func(evt Event) {
-			if evt.Kind == EventLocalEntryAdded || evt.Kind == EventAssistantMessage || evt.Kind == EventReviewerCompleted {
+			if evt.Kind == EventLocalEntryAdded || evt.Kind == EventAssistantMessage ||
+				evt.Kind == EventReviewerStarted || evt.Kind == EventReviewerCompleted {
 				eventsMu.Lock()
 				reviewerEventOrder = append(reviewerEventOrder, evt)
 				eventsMu.Unlock()
+			}
+			if evt.Kind == EventReviewerStarted {
+				eventsMu.Lock()
+				captured := evt
+				reviewerStartedEvent = &captured
+				eventsMu.Unlock()
+				return
 			}
 			if evt.Kind == EventAssistantMessage && messageContent(evt.Message) == "updated final after review" {
 				eventsMu.Lock()
@@ -94,6 +103,7 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 	eventsMu.Lock()
 	assistant := assistantEvent
 	assistantCount := assistantEventCount
+	started := reviewerStartedEvent
 	completed := reviewerCompletedEvent
 	snapshotAtCompletion := snapshotAtReviewerComplete
 	eventOrder := append([]Event(nil), reviewerEventOrder...)
@@ -104,8 +114,15 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 	if assistantCount != 1 {
 		t.Fatalf("follow-up assistant event count = %d, want 1", assistantCount)
 	}
-	if completed == nil {
-		t.Fatal("expected reviewer completed event")
+	if started == nil || completed == nil ||
+		!equalOptionalString(started.StepID, completed.StepID) {
+		t.Fatalf("Reviewer lifecycle events disagree: started=%+v completed=%+v", started, completed)
+	}
+	if assistant.StepID == nil || equalOptionalString(assistant.StepID, completed.StepID) {
+		t.Fatalf("follow-up and Reviewer lifecycle Step identities were not distinct: assistant=%+v completed=%+v", assistant, completed)
+	}
+	if active := eng.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
+		t.Fatalf("Reviewer remained active after successful follow-up: %+v", active)
 	}
 	if len(snapshotAtCompletion.Entries) < 3 {
 		t.Fatalf("expected feedback, follow-up assistant, and reviewer status in completion snapshot, got %+v", snapshotAtCompletion.Entries)
@@ -198,6 +215,51 @@ func TestReviewerSuggestionsPrecedeFollowUpAndCompletionReportsApplication(t *te
 	}
 	if finalSnapshot.Entries[len(finalSnapshot.Entries)-1].Text != "later unrelated note" {
 		t.Fatalf("expected later unrelated note at transcript tail, got %+v", finalSnapshot.Entries[len(finalSnapshot.Entries)-1])
+	}
+}
+
+func TestReviewerFollowUpFailureTerminalizesReviewerLifecycleStep(t *testing.T) {
+	withGenerateRetryDelays(t, nil)
+	followUpErr := errors.New("follow-up provider failed")
+	mainClient := &fakeClient{
+		responses: []llm.Response{{
+			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("original final"), Phase: textutil.Value(llm.MessagePhaseFinal)},
+			Usage:     llm.Usage{WindowTokens: 200000},
+		}},
+		errors: []error{nil, followUpErr},
+	}
+	reviewerClient := &fakeClient{responses: []llm.Response{{
+		Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value(`{"suggestions":["Add verification."]}`)},
+		Usage:     llm.Usage{WindowTokens: 200000},
+	}}}
+	var started, completed *Event
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), mainClient, tools.NewRegistry(), Config{
+		Model: "gpt-5",
+		OnEvent: func(event Event) {
+			switch event.Kind {
+			case EventReviewerStarted:
+				copied := event
+				started = &copied
+			case EventReviewerCompleted:
+				copied := event
+				completed = &copied
+			}
+		},
+		Reviewer: ReviewerConfig{
+			Frequency: "all",
+			Model:     "gpt-5",
+			Client:    reviewerClient,
+		},
+	})
+	if _, err := engine.SubmitUserMessage(context.Background(), "do task"); !errors.Is(err, followUpErr) {
+		t.Fatalf("submit error = %v, want %v", err, followUpErr)
+	}
+	if started == nil || completed == nil ||
+		!equalOptionalString(started.StepID, completed.StepID) {
+		t.Fatalf("Reviewer error terminalization disagrees: started=%+v completed=%+v", started, completed)
+	}
+	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
+		t.Fatalf("Reviewer remained active after follow-up failure: %+v", active)
 	}
 }
 

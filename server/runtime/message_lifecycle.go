@@ -177,7 +177,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 				replacement.CompactionNumber,
 			)
 			for index := range projectedEntries {
-				projectedEntries[index].StepID = stepID
+				projectedEntries[index].StepID = exactStepIDPointer(stepID)
 			}
 			projectedEntries = assignHistoryReplacementEntryProvenance(projectedEntries, &provenance)
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(

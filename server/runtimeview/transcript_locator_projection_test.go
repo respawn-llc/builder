@@ -16,7 +16,7 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 	)
 	provenance := &runtime.TranscriptCommittedRowProvenance{EventSequence: 17}
 	snapshot := runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
-		StepID:              stepID,
+		StepID:              runtimeStepIDPointer(stepID),
 		Visibility:          transcript.EntryVisibilityOngoing,
 		Role:                "user",
 		Text:                "hello",
@@ -37,7 +37,7 @@ func TestCommittedRowLocatorIsStableAcrossPageHydrationAndLiveProjection(t *test
 	})
 	live := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventUserMessageFlushed,
-		StepID:              stepID,
+		StepID:              runtimeStepIDPointer(stepID),
 		UserMessage:         "hello",
 		CommittedProvenance: provenance,
 	})
@@ -66,21 +66,21 @@ func TestCommittedRowLocatorNumbersProjectedRowsAfterFiltering(t *testing.T) {
 	facts := runtime.TranscriptCommittedRowFactsFromSnapshot(runtime.ChatSnapshot{
 		Entries: []runtime.ChatEntry{
 			{
-				StepID:              stepID,
+				StepID:              runtimeStepIDPointer(stepID),
 				Visibility:          transcript.EntryVisibilityHidden,
 				Role:                "assistant",
 				Text:                "internal",
 				CommittedProvenance: provenance,
 			},
 			{
-				StepID:              stepID,
+				StepID:              runtimeStepIDPointer(stepID),
 				Visibility:          transcript.EntryVisibilityOngoing,
 				Role:                "user",
 				Text:                "visible one",
 				CommittedProvenance: provenance,
 			},
 			{
-				StepID:              stepID,
+				StepID:              runtimeStepIDPointer(stepID),
 				Visibility:          transcript.EntryVisibilityDetail,
 				Role:                "assistant",
 				Text:                "visible two",
@@ -111,7 +111,7 @@ func TestCheckedTranscriptProjectionReturnsMalformedLocatorErrors(t *testing.T) 
 	malformed := &runtime.TranscriptCommittedRowProvenance{}
 	snapshot := runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
-			StepID:     stepID,
+			StepID:     runtimeStepIDPointer(stepID),
 			Kind:       runtime.TranscriptCommittedRowFactUser,
 			Locator:    transcript.CommittedRowLocator{},
 			Provenance: malformed,
@@ -127,7 +127,7 @@ func TestCheckedTranscriptProjectionReturnsMalformedLocatorErrors(t *testing.T) 
 		"session",
 		clientui.ConversationFreshness(0),
 		runtime.TranscriptSegmentPage{Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
-			StepID:              stepID,
+			StepID:              runtimeStepIDPointer(stepID),
 			Visibility:          transcript.EntryVisibilityOngoing,
 			Role:                "user",
 			Text:                "malformed",
@@ -140,7 +140,7 @@ func TestCheckedTranscriptProjectionReturnsMalformedLocatorErrors(t *testing.T) 
 
 	_, err = TranscriptMessagesFromRuntimeEventChecked(runtime.Event{
 		Kind:                runtime.EventUserMessageFlushed,
-		StepID:              stepID,
+		StepID:              runtimeStepIDPointer(stepID),
 		UserMessage:         "malformed",
 		CommittedProvenance: malformed,
 	})

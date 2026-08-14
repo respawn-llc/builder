@@ -447,7 +447,7 @@ func TestTranscriptHydrationRetainsAdjacentRowsAroundProviderEmptyAssistant(t *t
 	}
 	for index, stepID := range []string{beforeStepID, afterStepID} {
 		row := hydration.CommittedRows[index]
-		if row.StepID != stepID || row.Kind != TranscriptCommittedRowFactUser || row.User == nil {
+		if row.StepID == nil || *row.StepID != stepID || row.Kind != TranscriptCommittedRowFactUser || row.User == nil {
 			t.Fatalf("hydrated row[%d] = %+v", index, row)
 		}
 	}

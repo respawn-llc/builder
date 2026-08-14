@@ -27,7 +27,7 @@ const (
 )
 
 type TranscriptCommittedRowFact struct {
-	StepID           string
+	StepID           *string
 	Visibility       transcript.EntryVisibility
 	Integrity        transcript.RowIntegrity
 	Kind             TranscriptCommittedRowFactKind
@@ -188,15 +188,15 @@ func TranscriptCommittedRowFactsFromEvent(evt Event) []TranscriptCommittedRowFac
 	return locateTranscriptCommittedRowFacts(facts)
 }
 
-func transcriptCommittedRowFactsForStep(stepID string, facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
-	stepID = strings.TrimSpace(stepID)
+func transcriptCommittedRowFactsForStep(stepID *string, facts []TranscriptCommittedRowFact) []TranscriptCommittedRowFact {
+	stepID = cloneOptionalStepID(stepID)
 	for index := range facts {
-		existing := strings.TrimSpace(facts[index].StepID)
-		if existing != "" && stepID != "" && existing != stepID {
+		existing := cloneOptionalStepID(facts[index].StepID)
+		if existing != nil && stepID != nil && *existing != *stepID {
 			panic("transcript committed row step identity conflicts with its runtime event")
 		}
-		if stepID != "" {
-			facts[index].StepID = stepID
+		if stepID != nil {
+			facts[index].StepID = cloneOptionalStepID(stepID)
 		}
 	}
 	return facts
@@ -256,7 +256,11 @@ func TranscriptToolStartFactsFromEvent(evt Event) []TranscriptLiveToolStart {
 		if evt.ToolCall == nil {
 			return nil
 		}
-		start := transcriptLiveToolStartFromCall(evt.StepID, *evt.ToolCall)
+		stepID, err := requireStepID(evt.StepID, "project live tool start")
+		if err != nil {
+			return nil
+		}
+		start := transcriptLiveToolStartFromCall(stepID, *evt.ToolCall)
 		if strings.TrimSpace(start.ToolCallID) == "" {
 			return nil
 		}
@@ -303,7 +307,7 @@ func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *
 			*msg.MessageType == llm.MessageTypeCompactionSummary {
 			detail, _ := textutil.OptionalExact(msg.Content)
 			return []TranscriptCommittedRowFact{transcriptCompactionNoticeFact(
-				"",
+				nil,
 				messageTypeTranscriptVisibility(msg.MessageType),
 				nil,
 				detail,
@@ -336,7 +340,7 @@ func transcriptCommittedRowFactsFromMessageUnlocated(msg llm.Message, streamID *
 			*msg.MessageType == llm.MessageTypeCompactionSummary {
 			detail, _ := textutil.OptionalExact(msg.Content)
 			return []TranscriptCommittedRowFact{transcriptCompactionNoticeFact(
-				"",
+				nil,
 				messageTypeTranscriptVisibility(msg.MessageType),
 				nil,
 				detail,
@@ -365,6 +369,7 @@ func transcriptCommittedEntryCountFromMessage(msg llm.Message, completions map[s
 func transcriptCommittedRowFactFromChatEntry(entry ChatEntry) (TranscriptCommittedRowFact, bool) {
 	fact, ok := transcriptCommittedRowFactFromChatEntryUnlocated(entry)
 	if ok {
+		fact.StepID = cloneOptionalStepID(fact.StepID)
 		fact.Provenance = cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 	}
 	return fact, ok
@@ -542,7 +547,7 @@ func legacyReviewerNoticeRowFactFromChatEntry(entry ChatEntry) (TranscriptCommit
 }
 
 func transcriptCompactionNoticeFact(
-	stepID string,
+	stepID *string,
 	visibility transcript.EntryVisibility,
 	count *int,
 	detail string,
@@ -552,7 +557,7 @@ func transcriptCompactionNoticeFact(
 		detailPointer = &detail
 	}
 	return TranscriptCommittedRowFact{
-		StepID:     stepID,
+		StepID:     cloneOptionalStepID(stepID),
 		Kind:       TranscriptCommittedRowFactNotice,
 		Visibility: resolveTranscriptVisibility(visibility, transcript.EntryVisibilityOngoing),
 		Integrity:  transcript.RowIntegrityValid,

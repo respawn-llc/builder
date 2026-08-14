@@ -484,7 +484,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				continue
 			}
 			if len(hostedToolExecutions) > 0 {
-				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true}))
+				_ = e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: exactStepIDPointer(stepID), CommittedTranscriptChanged: true}))
 				continue
 			}
 			if execution, active := e.currentNodeExecutionConfig(); active && execution.Controller != nil {
@@ -543,7 +543,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				}
 				stepID = nextStepID
 				reviewerLifecycleStepID = stepID
-				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID}))
+				startErr := e.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)}))
 				if startErr != nil {
 					return stepLoopResult{}, fmt.Errorf("start Reviewer lifecycle: %w", startErr)
 				}
@@ -652,7 +652,7 @@ func (s *defaultStepExecutor) terminalizeReviewerLifecycleAt(stepID string, revi
 	}
 	err := s.engine.steer(stepID, steerEventIntent(Event{
 		Kind:     EventReviewerCompleted,
-		StepID:   reviewerStepID,
+		StepID:   exactStepIDPointer(reviewerStepID),
 		Reviewer: status,
 	}))
 	return err
@@ -752,7 +752,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		assistantMsg.ToolCalls = nil
 		acceptedCalls = acceptedResponseCalls{}
 		phaseTurn.Assistant = assistantMsg
-		if err := e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: stepID, CommittedTranscriptChanged: true})); err != nil {
+		if err := e.steer(stepID, steerEventIntent(Event{Kind: EventConversationUpdated, StepID: exactStepIDPointer(stepID), CommittedTranscriptChanged: true})); err != nil {
 			return preparedCompletedResponse{}, err
 		}
 	}
@@ -765,7 +765,7 @@ func (s *defaultStepExecutor) prepareCompletedResponse(ctx context.Context, step
 		}
 		if err := e.steer(stepID, steerEventIntent(Event{
 			Kind:   EventModelResponse,
-			StepID: stepID,
+			StepID: exactStepIDPointer(stepID),
 			ModelResponse: &ModelResponseTrace{
 				AssistantPhase:   assistantPhase,
 				AssistantChars:   assistantChars,

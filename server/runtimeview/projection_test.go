@@ -309,10 +309,7 @@ func TestMainViewFromWorkflowRuntimeIncludesWorkflowStatus(t *testing.T) {
 	if err := publication.Begin(); err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
-	binding, err := publication.Commit()
-	if err != nil {
-		t.Fatalf("commit Current Node execution publication: %v", err)
-	}
+	binding := publication.Commit()
 	t.Cleanup(func() { _ = binding.Close() })
 	view := mainViewFromRuntimeForTest(t, eng)
 	if view.Status.WorkflowSession == nil {

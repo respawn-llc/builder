@@ -7,6 +7,7 @@ import (
 	"core/server/runtime"
 	"core/server/session"
 	"core/server/tools"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -32,7 +33,7 @@ func TestEventBridgeCoalescesGapSignalsUntilObserved(t *testing.T) {
 	default:
 	}
 
-	bridge.Publish(runtime.Event{Kind: runtime.EventToolCallStarted, StepID: "step-1"})
+	bridge.Publish(runtime.Event{Kind: runtime.EventToolCallStarted, StepID: textutil.Value("step-1")})
 	if got := bridge.Dropped.Load(); got != 3 {
 		t.Fatalf("dropped count after another overflow = %d, want 3", got)
 	}
@@ -105,7 +106,7 @@ func TestEventBridgeDropSignalsGapAndHydrationRestoresAtomicResultGroup(t *testi
 		}
 		bridge.Publish(runtime.Event{
 			Kind:                       runtime.EventToolCallCompleted,
-			StepID:                     stepID,
+			StepID:                     textutil.Value(stepID),
 			ToolResult:                 &result,
 			CommittedTranscriptChanged: true,
 		})

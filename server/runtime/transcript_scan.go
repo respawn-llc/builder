@@ -59,7 +59,7 @@ func newInMemoryTranscriptScan(req inMemoryTranscriptScanRequest, completions ma
 	}
 }
 
-func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID string, owners ...map[string]*TranscriptCommittedRowProvenance) {
+func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID *string, owners ...map[string]*TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
@@ -70,7 +70,7 @@ func (s *inMemoryTranscriptScan) ApplyMessage(msg llm.Message, seq int64, stepID
 			targetID := rollbacktarget.EncodeUserMessageSeq(seq)
 			entry.RollbackTargetID = &targetID
 		}
-		entry.StepID = strings.TrimSpace(stepID)
+		entry.StepID = cloneOptionalStepID(stepID)
 		if seq > 0 {
 			entry.CommittedProvenance = &TranscriptCommittedRowProvenance{EventSequence: seq}
 		}

@@ -57,7 +57,7 @@ func TestTranscriptProjectionOwnsNestedDeletionPresentation(t *testing.T) {
 }
 
 func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) {
-	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
+	notice := transcriptNoticeFromFact(nil, &runtime.TranscriptNoticeRowFact{
 		Reason:   transcript.NoticeReasonCacheWarning,
 		Severity: transcript.NoticeSeverityWarning,
 		CacheWarning: &runtime.TranscriptCacheWarningFact{
@@ -77,7 +77,7 @@ func TestTranscriptCacheWarningProjectionPreservesAbsentTokenLoss(t *testing.T) 
 func TestTranscriptCompactionProjectionCarriesTypedFactsWithoutServerPresentation(t *testing.T) {
 	count := 2
 	detail := "provider summary"
-	notice := transcriptNoticeFromFact("", &runtime.TranscriptNoticeRowFact{
+	notice := transcriptNoticeFromFact(nil, &runtime.TranscriptNoticeRowFact{
 		Reason:      transcript.NoticeReasonCompaction,
 		Severity:    transcript.NoticeSeverityInfo,
 		MessageType: llm.MessageTypeCompactionSummary,
@@ -128,7 +128,7 @@ func TestTranscriptHydrationPreservesDeletionDispositionPresence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 				CommittedRows: []runtime.TranscriptCommittedRowFact{{
-					StepID:     transcriptProjectionStepID,
+					StepID:     runtimeStepIDPointer(transcriptProjectionStepID),
 					Visibility: transcript.EntryVisibilityOngoingCollapsed,
 					Integrity:  transcript.RowIntegrityValid,
 					Kind:       runtime.TranscriptCommittedRowFactTool,
@@ -267,7 +267,7 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 	output := int64(0)
 	live := append(
 		TranscriptMessagesFromRuntimeEvent(runtime.Event{
-			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			Kind: runtime.EventReasoningDelta, StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 			ReasoningDelta: &llm.ReasoningSummaryDelta{
 				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &firstIndex},
 				Text:             "first",
@@ -275,7 +275,7 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 			ReasoningTraceIdentity: &runtime.TranscriptReasoningTraceIdentity{Kent: &firstID},
 		}),
 		TranscriptMessagesFromRuntimeEvent(runtime.Event{
-			Kind: runtime.EventReasoningDelta, StepID: transcriptProjectionStepID,
+			Kind: runtime.EventReasoningDelta, StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 			ReasoningDelta: &llm.ReasoningSummaryDelta{
 				SourceCoordinate: &llm.ReasoningSourceCoordinate{OutputIndex: &output, PartIndex: &secondIndex},
 				Text:             "second",
@@ -301,7 +301,7 @@ func TestTranscriptReasoningHydrationAndLivePreserveOrderedIdentities(t *testing
 func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                runtime.EventLocalEntryAdded,
-		StepID:              transcriptProjectionStepID,
+		StepID:              runtimeStepIDPointer(transcriptProjectionStepID),
 		LocalEntryProjected: true,
 		LocalEntry: &runtime.ChatEntry{
 			Visibility: transcript.EntryVisibilityDetail,
@@ -322,7 +322,7 @@ func TestTranscriptCommittedRowsPreserveRuntimeVisibility(t *testing.T) {
 
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
-			StepID:     transcriptProjectionStepID,
+			StepID:     runtimeStepIDPointer(transcriptProjectionStepID),
 			Visibility: transcript.EntryVisibilityHidden,
 			Kind:       runtime.TranscriptCommittedRowFactUser,
 			Locator:    transcript.CommittedRowLocator{EventSequence: 2, RowOrdinal: 1},
@@ -345,7 +345,7 @@ func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) 
 	durationMs := int64(321)
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:   runtime.EventLocalEntryAdded,
-		StepID: transcriptProjectionStepID,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 		LocalEntry: &runtime.ChatEntry{
 			Visibility: transcript.EntryVisibilityDetail,
 			Role:       string(transcript.EntryRoleReasoning),
@@ -378,7 +378,7 @@ func TestTranscriptCommittedReasoningEventCarriesDedicatedPayload(t *testing.T) 
 func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T) {
 	durationMs := int64(321)
 	fact := runtime.TranscriptCommittedRowFact{
-		StepID:  transcriptProjectionStepID,
+		StepID:  runtimeStepIDPointer(transcriptProjectionStepID),
 		Kind:    runtime.TranscriptCommittedRowFactReasoningTrace,
 		Locator: transcript.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
 		ReasoningTrace: &runtime.TranscriptReasoningTraceRowFact{
@@ -401,7 +401,7 @@ func TestTranscriptReasoningDurationProjectsHydrationAndBoundedPage(t *testing.T
 		"name",
 		clientui.ConversationFreshnessEstablished,
 		runtime.TranscriptSegmentPage{Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
-			StepID:     transcriptProjectionStepID,
+			StepID:     runtimeStepIDPointer(transcriptProjectionStepID),
 			Role:       string(transcript.EntryRoleReasoning),
 			Text:       "Planning\nDetails",
 			DurationMs: &durationMs,
@@ -504,7 +504,7 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 			LatestRollbackCandidate: locator,
 			Snapshot: runtime.ChatSnapshot{Entries: []runtime.ChatEntry{{
 				Role:             "user",
-				StepID:           transcriptProjectionStepID,
+				StepID:           runtimeStepIDPointer(transcriptProjectionStepID),
 				Text:             "persisted user prompt",
 				RollbackTargetID: &targetID,
 				CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
@@ -531,7 +531,7 @@ func TestTranscriptPagePreservesRollbackTargetIdentity(t *testing.T) {
 func TestTranscriptProjectionCanonicalizesBlankPersistedAssistantPhase(t *testing.T) {
 	hydration := mustTranscriptHydration(t, runtime.TranscriptHydrationSnapshot{
 		CommittedRows: []runtime.TranscriptCommittedRowFact{{
-			StepID:  transcriptProjectionStepID,
+			StepID:  runtimeStepIDPointer(transcriptProjectionStepID),
 			Kind:    runtime.TranscriptCommittedRowFactAssistant,
 			Locator: transcript.CommittedRowLocator{EventSequence: 3, RowOrdinal: 1},
 			Assistant: &runtime.TranscriptAssistantRowFact{
@@ -626,7 +626,7 @@ func TestTranscriptMessagesIgnoreFinalizedAssistantReset(t *testing.T) {
 	streamID := uuid.New()
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:                        runtime.EventAssistantDeltaReset,
-		StepID:                      transcriptProjectionStepID,
+		StepID:                      runtimeStepIDPointer(transcriptProjectionStepID),
 		AssistantTranscriptStreamID: &streamID,
 	})
 	if len(messages) != 0 {
@@ -638,7 +638,7 @@ func TestTranscriptBackgroundActivityUsesRuntimeActivityID(t *testing.T) {
 	activityID := uuid.New()
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:   runtime.EventBackgroundUpdated,
-		StepID: transcriptProjectionStepID,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 		Background: &runtime.BackgroundShellEvent{
 			Type:        runtime.BackgroundShellEventBackgrounded,
 			ID:          uuid.NewString(),
@@ -675,7 +675,7 @@ func TestTranscriptBackgroundActivityLifecycleIgnoresPreviewTruncation(t *testin
 		t.Run(tt.name, func(t *testing.T) {
 			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 				Kind:   runtime.EventBackgroundUpdated,
-				StepID: transcriptProjectionStepID,
+				StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 				Background: &runtime.BackgroundShellEvent{
 					Type:           tt.eventType,
 					ID:             uuid.NewString(),
@@ -704,7 +704,7 @@ func TestTranscriptBackgroundNoticeCarriesTypedExitCode(t *testing.T) {
 	activityID := uuid.New()
 	messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:   runtime.EventConversationUpdated,
-		StepID: transcriptProjectionStepID,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 		CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
 			EventSequence: 1,
 		},
@@ -820,7 +820,7 @@ func TestTranscriptBackgroundActivityRejectsMissingRuntimeActivityID(t *testing.
 
 	_ = TranscriptMessagesFromRuntimeEvent(runtime.Event{
 		Kind:   runtime.EventBackgroundUpdated,
-		StepID: transcriptProjectionStepID,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 		Background: &runtime.BackgroundShellEvent{
 			Type:        runtime.BackgroundShellEventBackgrounded,
 			ID:          uuid.NewString(),
@@ -839,7 +839,7 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 		t.Run(string(kind), func(t *testing.T) {
 			messages := TranscriptMessagesFromRuntimeEvent(runtime.Event{
 				Kind:   kind,
-				StepID: transcriptProjectionStepID,
+				StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 				CommittedProvenance: &runtime.TranscriptCommittedRowProvenance{
 					EventSequence: 4,
 				},
@@ -870,7 +870,7 @@ func TestAssistantTranscriptMessagesDoNotReemitLiveToolStarts(t *testing.T) {
 func TestInFlightClearFailureIsOperationalDiagnosticOnly(t *testing.T) {
 	event := runtime.Event{
 		Kind:   runtime.EventInFlightClearFailed,
-		StepID: transcriptProjectionStepID,
+		StepID: runtimeStepIDPointer(transcriptProjectionStepID),
 	}
 	if facts := runtime.TranscriptCommittedRowFactsFromEvent(event); len(facts) != 0 {
 		t.Fatalf("in-flight clear failure committed facts = %+v, want none", facts)

@@ -379,9 +379,7 @@ func normalizeOptionalStoredLocalFact(value *string) *string {
 
 func localEntryChatEntryForStep(entry storedLocalEntry, stepID *string) *ChatEntry {
 	projected := localEntryChatEntry(entry)
-	if stepID != nil {
-		projected.StepID = strings.TrimSpace(*stepID)
-	}
+	projected.StepID = cloneOptionalStepID(stepID)
 	return projected
 }
 
@@ -513,7 +511,7 @@ func (e *Engine) emitLiveToolAbortsRaw(stepID string, reason string) error {
 		call := llm.ToolCall{ID: start.ToolCallID, Name: start.ToolName}
 		if err := e.emitRaw(Event{
 			Kind:            EventToolCallAborted,
-			StepID:          strings.TrimSpace(stepID),
+			StepID:          exactStepIDPointer(stepID),
 			ToolCall:        &call,
 			ToolAbortReason: strings.TrimSpace(reason),
 		}); err != nil {
@@ -701,7 +699,7 @@ func (e *Engine) emitStreamingAssistantTerminalRaw(
 	}
 	return e.emitRaw(Event{
 		Kind:                        EventAssistantDeltaReset,
-		StepID:                      stepID,
+		StepID:                      exactStepIDPointer(stepID),
 		AssistantStreamMetadata:     cloneAssistantStreamMetadata(metadata),
 		AssistantTranscriptStreamID: cloneTranscriptStreamID(&streamID),
 		AssistantStreamAbortReason:  abortReasonValue,
@@ -715,7 +713,7 @@ func (e *Engine) emitStreamingAssistantCleanupEventsRaw(
 	abortReason *AssistantStreamAbortReason,
 ) error {
 	emissionErrors := []error{
-		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
+		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: exactStepIDPointer(stepID)}),
 	}
 	if streamID != nil {
 		emissionErrors = append(emissionErrors, e.emitStreamingAssistantTerminalRaw(stepID, metadata, *streamID, abortReason))
@@ -730,7 +728,7 @@ func (e *Engine) emitCommittedAssistantMessageRaw(stepID string, committed steer
 func (e *Engine) emitCommittedAssistantMessageEventRaw(stepID string, committed steeringCommittedAssistantMessage, streamMetadata *AssistantStreamMetadata, streamID *uuid.UUID) error {
 	event := Event{
 		Kind:                        EventAssistantMessage,
-		StepID:                      stepID,
+		StepID:                      exactStepIDPointer(stepID),
 		Message:                     committed.message,
 		CommittedProvenance:         cloneTranscriptCommittedRowProvenance(committed.provenance),
 		AssistantStreamMetadata:     cloneAssistantStreamMetadata(streamMetadata),

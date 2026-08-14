@@ -99,7 +99,7 @@ func TestReviewerStartPublicationFailureDoesNotEmitCompletionOrLeaveState(t *tes
 	engine.eventLog = session.MaterializedEventLog{}
 
 	err := engine.steer("11111111-1111-4111-8111-111111111111", steerEventIntent(Event{
-		Kind: EventReviewerStarted, StepID: "11111111-1111-4111-8111-111111111111",
+		Kind: EventReviewerStarted, StepID: exactStepIDPointer("11111111-1111-4111-8111-111111111111"),
 	}))
 	if err == nil {
 		t.Fatal("Reviewer start publication unexpectedly succeeded")
@@ -131,10 +131,10 @@ func TestReviewerLifecycleCallbacksObserveMatchingState(t *testing.T) {
 			}
 		}
 	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: stepID})); err != nil {
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerCompleted, StepID: exactStepIDPointer(stepID)})); err != nil {
 		t.Fatalf("publish Reviewer completion: %v", err)
 	}
 }
@@ -144,7 +144,7 @@ func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 	stepID := "11111111-1111-4111-8111-111111111111"
 	restoreStep := setTestActiveStep(engine, stepID)
 	defer restoreStep()
-	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: stepID})); err != nil {
+	if err := engine.steer(stepID, steerEventIntent(Event{Kind: EventReviewerStarted, StepID: exactStepIDPointer(stepID)})); err != nil {
 		t.Fatalf("publish Reviewer start: %v", err)
 	}
 	engine.eventLog = session.MaterializedEventLog{}
@@ -154,6 +154,37 @@ func TestReviewerCompletionPublicationFailureClearsState(t *testing.T) {
 	}
 	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
 		t.Fatalf("completion publication failure left Reviewer active: %+v", active)
+	}
+}
+
+func TestReviewerCompletionFromFollowUpStepTerminalizesReviewerLifecycleStep(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	reviewerStepID := "11111111-1111-4111-8111-111111111111"
+	followUpStepID := "22222222-2222-4222-8222-222222222222"
+	restoreStep := setTestActiveStep(engine, followUpStepID)
+	defer restoreStep()
+	if err := engine.steer(followUpStepID, steerEventIntent(Event{
+		Kind:   EventReviewerStarted,
+		StepID: exactStepIDPointer(reviewerStepID),
+	})); err != nil {
+		t.Fatalf("publish Reviewer start: %v", err)
+	}
+	var completed *Event
+	engine.cfg.OnEvent = func(event Event) {
+		if event.Kind == EventReviewerCompleted {
+			copyEvent := event
+			completed = &copyEvent
+		}
+	}
+	executor := &defaultStepExecutor{engine: engine}
+	if err := executor.terminalizeReviewerLifecycleAt(followUpStepID, reviewerStepID, nil); err != nil {
+		t.Fatalf("terminalize Reviewer lifecycle: %v", err)
+	}
+	if active := engine.reviewerRuntimeState().ActiveStepSnapshot(); active != nil {
+		t.Fatalf("Reviewer remained active after follow-up terminalization: %+v", active)
+	}
+	if completed == nil || completed.StepID == nil || *completed.StepID != reviewerStepID {
+		t.Fatalf("Reviewer completion = %+v, want lifecycle Step %q", completed, reviewerStepID)
 	}
 }
 

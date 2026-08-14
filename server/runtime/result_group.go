@@ -639,7 +639,7 @@ func (e *Engine) applyResultGroupProjection(
 		result := cloneToolResult(projection.unit.completion.completion.Result)
 		if err := e.emitResultGroupProjectionEvent(Event{
 			Kind:                       EventToolCallCompleted,
-			StepID:                     stepID,
+			StepID:                     exactStepIDPointer(stepID),
 			ToolResult:                 &result,
 			CommittedTranscriptChanged: true,
 			CommittedEntryStart:        projection.completionStart,
@@ -653,7 +653,7 @@ func (e *Engine) applyResultGroupProjection(
 			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, textutil.OptionalExactString(stepID))
 			if err := e.emitResultGroupProjectionEvent(Event{
 				Kind:                       EventLocalEntryAdded,
-				StepID:                     stepID,
+				StepID:                     exactStepIDPointer(stepID),
 				LocalEntry:                 entry,
 				CommittedTranscriptChanged: true,
 				CommittedEntryStart:        projection.feedbackStart,

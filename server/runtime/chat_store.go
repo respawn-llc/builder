@@ -19,7 +19,7 @@ import (
 )
 
 type ChatEntry struct {
-	StepID               string
+	StepID               *string
 	Visibility           transcript.EntryVisibility
 	RollbackTargetID     *string
 	Role                 string
@@ -217,7 +217,7 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(
 	projectedStart := len(s.local)
 	if stepID != nil {
 		for index := range projectedEntries {
-			projectedEntries[index].StepID = strings.TrimSpace(*stepID)
+			projectedEntries[index].StepID = cloneOptionalStepID(stepID)
 		}
 	}
 	s.appendProjectedHistoryReplacementEntriesLocked(projectedEntries)
@@ -912,7 +912,7 @@ func newTranscriptDeliveryFactScan(completions map[string]tools.Result, completi
 	return &transcriptDeliveryFactScan{toolCompletions: completions, toolCompletionProvenance: completionProvenance, materializedToolCalls: materializedToolCalls, streamIDsByEntry: streamIDsByEntry, currentEntryIndex: currentEntryIndex}
 }
 
-func (s *transcriptDeliveryFactScan) ApplyMessage(stepID string, msg llm.Message, provenance *TranscriptCommittedRowProvenance) {
+func (s *transcriptDeliveryFactScan) ApplyMessage(stepID *string, msg llm.Message, provenance *TranscriptCommittedRowProvenance) {
 	if s == nil {
 		return
 	}
@@ -1014,8 +1014,7 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 	scan := newTranscriptDeliveryFactScan(s.toolCompletions, s.toolCompletionProvenance, materializedToolResults, streamIDsByEntry, s.activeSegmentEntryStart)
 	s.walkProjectionLocked(
 		func(record chatMessageRecord) {
-			stepID, _ := textutil.OptionalExact(record.StepID)
-			scan.ApplyMessage(stepID, record.Message, record.Provenance)
+			scan.ApplyMessage(record.StepID, record.Message, record.Provenance)
 		},
 		func(local localChatEntry) {
 			entry := local.Entry

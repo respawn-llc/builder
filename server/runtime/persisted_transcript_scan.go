@@ -105,6 +105,7 @@ func clonePersistedChatEntries(entries []ChatEntry) []ChatEntry {
 
 func clonePersistedChatEntry(entry ChatEntry) ChatEntry {
 	copyEntry := entry
+	copyEntry.StepID = cloneOptionalStepID(entry.StepID)
 	copyEntry.RollbackTargetID = textutil.Pointer(entry.RollbackTargetID)
 	copyEntry.DurationMs = textutil.Pointer(entry.DurationMs)
 	copyEntry.CompactionNumber = textutil.Pointer(entry.CompactionNumber)

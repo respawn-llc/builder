@@ -61,7 +61,7 @@ func (t *defaultToolExecutor) ExecuteToolCalls(
 		knownTool := prepared.knownTool
 		executableCall := prepared.call
 		transcriptCall := normalizeToolCallForTranscript(executableCall, e.transcriptWorkingDir())
-		started := Event{Kind: EventToolCallStarted, StepID: stepID, ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
+		started := Event{Kind: EventToolCallStarted, StepID: exactStepIDPointer(stepID), ToolCall: &transcriptCall, CommittedTranscriptChanged: true}
 		if start, ok := e.pendingToolCallStart(call.ID); ok {
 			started.CommittedEntryStart = start
 			started.CommittedEntryStartSet = true

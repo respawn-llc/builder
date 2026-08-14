@@ -41,14 +41,14 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 	case EventCompactionStarted:
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     stepID,
+			StepID:     exactStepIDPointer(stepID),
 			Compaction: status,
 		}))
 
 	case EventCompactionCompleted:
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     stepID,
+			StepID:     exactStepIDPointer(stepID),
 			Compaction: status,
 		}))
 
@@ -60,7 +60,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{Role: "error", Text: message})); err != nil {
 			_ = e.steer(stepID, steerEventIntent(Event{
 				Kind:       kind,
-				StepID:     stepID,
+				StepID:     exactStepIDPointer(stepID),
 				Compaction: status,
 			}))
 
@@ -68,7 +68,7 @@ func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode co
 		}
 		return e.steer(stepID, steerEventIntent(Event{
 			Kind:       kind,
-			StepID:     stepID,
+			StepID:     exactStepIDPointer(stepID),
 			Compaction: status,
 		}))
 

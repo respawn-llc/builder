@@ -302,9 +302,9 @@ func assertDeletionMismatchFallback(t *testing.T, engine *Engine, store *session
 	for _, row := range snapshot.CommittedRows {
 		switch row.Kind {
 		case TranscriptCommittedRowFactTool:
-			toolRow = row.StepID == "step-delete"
+			toolRow = row.StepID != nil && *row.StepID == "step-delete"
 		case TranscriptCommittedRowFactNotice:
-			noticeRow = row.StepID == "step-delete" &&
+			noticeRow = row.StepID != nil && *row.StepID == "step-delete" &&
 				row.Notice != nil &&
 				row.Notice.Reason == transcript.NoticeReasonRuntimeDiagnostic
 		}

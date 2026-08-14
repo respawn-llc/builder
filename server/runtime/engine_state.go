@@ -866,7 +866,11 @@ func (e *Engine) modelRequests() *modelRequestRuntimeState {
 
 func (e *Engine) emitRaw(evt Event) error {
 	if evt.Kind == EventToolCallStarted && e.liveRun != nil {
-		e.liveRun.recordToolStart(evt.StepID)
+		stepID, err := requireStepID(evt.StepID, "record live tool start")
+		if err != nil {
+			return err
+		}
+		e.liveRun.recordToolStart(stepID)
 	}
 	revision, err := e.TranscriptRevision()
 	if err != nil {
@@ -920,7 +924,7 @@ func (e *Engine) publishLiveRunFinished(result LiveRunResult) {
 	copyResult := result
 	e.emitRaw(Event{
 		Kind:          EventLiveRunFinished,
-		StepID:        result.StepID.String(),
+		StepID:        exactStepIDPointer(result.StepID.String()),
 		LiveRunResult: &copyResult,
 	})
 }

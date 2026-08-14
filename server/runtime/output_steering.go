@@ -1652,7 +1652,7 @@ func (e *Engine) applySteeringMutation(
 			}
 			entry := reviewerFeedbackChatEntryFromSessionRecord(record, exactStepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepIDPointer(exactStepID), LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	case *steeringReviewerError:
@@ -1672,7 +1672,7 @@ func (e *Engine) applySteeringMutation(
 			}
 			entry := reviewerErrorChatEntryFromSessionRecord(record, exactStepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepIDPointer(exactStepID), LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	case *steeringHistoryReplacement:
@@ -1706,15 +1706,23 @@ func (e *Engine) applySteeringMutation(
 	case *steeringEvent:
 		evt := mutation.event.withStepID(stepID)
 		if evt.Kind == EventReviewerStarted {
+			eventStepID, err := requireStepID(evt.StepID, "start Reviewer lifecycle")
+			if err != nil {
+				return err
+			}
 			revision, err := e.TranscriptRevision()
 			if err != nil {
 				return err
 			}
-			e.reviewerRuntimeState().SetActiveStep(evt.StepID)
+			e.reviewerRuntimeState().SetActiveStep(eventStepID)
 			return e.emitRawAtRevision(evt, revision)
 		}
 		if evt.Kind == EventReviewerCompleted {
-			e.reviewerRuntimeState().ClearActiveStep(evt.StepID)
+			eventStepID, err := requireStepID(evt.StepID, "complete Reviewer lifecycle")
+			if err != nil {
+				return err
+			}
+			e.reviewerRuntimeState().ClearActiveStep(eventStepID)
 			revision, err := e.TranscriptRevision()
 			if err != nil {
 				return err
@@ -1724,13 +1732,25 @@ func (e *Engine) applySteeringMutation(
 		switch evt.Kind {
 		case EventCompactionStarted:
 			if evt.Compaction != nil {
-				e.compactionRuntimeState().SetActive(evt.StepID, evt.Compaction.Mode, evt.Compaction.Count)
+				eventStepID, err := requireStepID(evt.StepID, "start compaction")
+				if err != nil {
+					return err
+				}
+				e.compactionRuntimeState().SetActive(eventStepID, evt.Compaction.Mode, evt.Compaction.Count)
 			}
 		case EventCompactionCompleted, EventCompactionFailed:
-			e.compactionRuntimeState().ClearActive(evt.StepID)
+			eventStepID, err := requireStepID(evt.StepID, "terminalize compaction")
+			if err != nil {
+				return err
+			}
+			e.compactionRuntimeState().ClearActive(eventStepID)
 		}
 		if evt.Kind == EventToolCallStarted && evt.ToolCall != nil {
-			if err := e.transcriptRuntimeState().RecordLiveToolStart(evt.StepID, *evt.ToolCall); err != nil {
+			eventStepID, err := requireStepID(evt.StepID, "record live tool start")
+			if err != nil {
+				return err
+			}
+			if err := e.transcriptRuntimeState().RecordLiveToolStart(eventStepID, *evt.ToolCall); err != nil {
 				return err
 			}
 		}
@@ -1804,7 +1824,7 @@ func (e *Engine) applySteeringMutation(
 		}
 		if mutation.reasoningReset != nil {
 			e.transcriptRuntimeState().ResetReasoningTraces(exactStepID)
-			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: exactStepID})
+			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: exactStepIDPointer(exactStepID)})
 		}
 		if mutation.clearReasoning {
 			e.transcriptRuntimeState().ClearReasoningState(exactStepID)
@@ -1820,7 +1840,7 @@ func (e *Engine) applySteeringMutation(
 				return err
 			}
 			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(exactStepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: exactStepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
+			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: exactStepIDPointer(exactStepID), AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 		}
 		if mutation.reasoningDelta != nil {
 			delta := *mutation.reasoningDelta
@@ -1830,7 +1850,7 @@ func (e *Engine) applySteeringMutation(
 			}
 			return e.emitRaw(Event{
 				Kind:                   EventReasoningDelta,
-				StepID:                 exactStepID,
+				StepID:                 exactStepIDPointer(exactStepID),
 				ReasoningDelta:         &delta,
 				ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
 			})
@@ -1856,15 +1876,14 @@ func recordSteeringCommitReceipt(destination *session.CommitReceipt, receipt ses
 }
 
 func requireExactSteeringStepID(stepID *string, operation string) (string, error) {
-	if stepID == nil {
-		return "", fmt.Errorf("%s requires exact Step provenance", operation)
-	}
-	return *stepID, nil
+	return requireStepID(stepID, operation+" exact provenance")
 }
 
 func (event Event) withStepID(stepID *string) Event {
-	if stepID != nil {
-		event.StepID = *stepID
+	if event.StepID == nil {
+		event.StepID = cloneOptionalStepID(stepID)
+	} else {
+		event.StepID = cloneOptionalStepID(event.StepID)
 	}
 	return event
 }
@@ -1892,7 +1911,7 @@ func (e *Engine) replaceHistoryRaw(stepID *string, replacement steeringHistoryRe
 	}
 	if stepID != nil {
 		for index := range replacement.projectedEntries {
-			replacement.projectedEntries[index].StepID = strings.TrimSpace(*stepID)
+			replacement.projectedEntries[index].StepID = cloneOptionalStepID(stepID)
 		}
 	}
 	replacement.projectedEntries = assignHistoryReplacementEntryProvenance(
@@ -1959,9 +1978,8 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 		provenance := cloneTranscriptCommittedRowProvenance(entry.CommittedProvenance)
 		if _, projected := transcriptCommittedRowFactFromChatEntry(copyEntry); projected && (provenance == nil || provenance.ProjectedOrdinal == nil) {
 			return fmt.Errorf(
-				"history replacement projected row %d lacks filtered ordinal (step_id=%q role=%q)",
+				"history replacement projected row %d lacks filtered ordinal (role=%q)",
 				idx,
-				copyEntry.StepID,
 				copyEntry.Role,
 			)
 		}

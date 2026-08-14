@@ -5,6 +5,8 @@ import (
 	"core/server/session"
 	"core/server/tools"
 	"core/shared/transcript"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,7 +106,7 @@ type HumanInputInterruptedEvent struct {
 
 type Event struct {
 	Kind                         EventKind
-	StepID                       string
+	StepID                       *string
 	CommittedTranscriptChanged   bool
 	TranscriptRevision           int64
 	CommittedEntryCount          int
@@ -141,6 +143,32 @@ type Event struct {
 	QueuedUserMessageStatus      *QueuedUserMessageStatusEvent
 	HumanInputInterrupted        *HumanInputInterruptedEvent
 	LiveRunResult                *LiveRunResult
+}
+
+func exactStepIDPointer(stepID string) *string {
+	normalized := strings.TrimSpace(stepID)
+	if normalized == "" {
+		panic("Step identity must not be empty")
+	}
+	return &normalized
+}
+
+func cloneOptionalStepID(stepID *string) *string {
+	if stepID == nil {
+		return nil
+	}
+	return exactStepIDPointer(*stepID)
+}
+
+func requireStepID(stepID *string, operation string) (string, error) {
+	if stepID == nil {
+		return "", fmt.Errorf("%s requires Step identity", operation)
+	}
+	normalized := strings.TrimSpace(*stepID)
+	if normalized == "" {
+		return "", fmt.Errorf("%s received an empty Step identity", operation)
+	}
+	return normalized, nil
 }
 
 type GoalStatusUpdate struct {

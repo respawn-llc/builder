@@ -43,14 +43,14 @@ type streamingTranscriptScan struct {
 type turnBuffer struct {
 	assistant              *llm.Message
 	assistantProvenance    *TranscriptCommittedRowProvenance
-	assistantStepID        string
+	assistantStepID        *string
 	callIDs                []string
 	materialized           []llm.Message
 	materializedProvenance []*TranscriptCommittedRowProvenance
-	materializedSteps      []string
+	materializedSteps      []*string
 	localEntries           []storedLocalEntry
 	localEntryProvenance   []*TranscriptCommittedRowProvenance
-	localEntrySteps        []string
+	localEntrySteps        []*string
 }
 
 func newStreamingTranscriptScan(req inMemoryTranscriptScanRequest, cacheWarningMode config.CacheWarningMode) *streamingTranscriptScan {
@@ -69,7 +69,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 	if s == nil {
 		return nil
 	}
-	stepID, _ := textutil.OptionalExact(record.StepID())
+	stepID := record.StepID()
 	payload, err := record.Payload()
 	if err != nil {
 		return err
@@ -132,7 +132,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			}
 			s.turn.localEntries = append(s.turn.localEntries, entry)
 			s.turn.localEntryProvenance = append(s.turn.localEntryProvenance, cloneTranscriptCommittedRowProvenance(&provenance))
-			s.turn.localEntrySteps = append(s.turn.localEntrySteps, stepID)
+			s.turn.localEntrySteps = append(s.turn.localEntrySteps, cloneOptionalStepID(stepID))
 			return nil
 		}
 		s.closeTurn()
@@ -143,18 +143,26 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 		s.appendLocalEntry(entry, stepID, &provenance)
 	case session.ReviewerFeedbackRecord:
 		s.closeTurn()
+		exactStepID, stepErr := requireStepID(stepID, "restore Reviewer feedback")
+		if stepErr != nil {
+			return stepErr
+		}
 		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 		if provenanceErr != nil {
 			return provenanceErr
 		}
-		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, stepID, &provenance))
+		s.scan.appendEntry(reviewerFeedbackChatEntryFromSessionRecord(payload, exactStepID, &provenance))
 	case session.ReviewerErrorRecord:
 		s.closeTurn()
+		exactStepID, stepErr := requireStepID(stepID, "restore Reviewer error")
+		if stepErr != nil {
+			return stepErr
+		}
 		provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 		if provenanceErr != nil {
 			return provenanceErr
 		}
-		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, stepID, &provenance))
+		s.scan.appendEntry(reviewerErrorChatEntryFromSessionRecord(payload, exactStepID, &provenance))
 	case session.CacheWarningRecord:
 		s.closeTurn()
 		warning := cacheWarningFromSessionRecord(payload)
@@ -163,7 +171,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			return provenanceErr
 		}
 		s.scan.appendEntry(ChatEntry{
-			StepID:              stepID,
+			StepID:              cloneOptionalStepID(stepID),
 			Visibility:          cacheWarningEntryVisibility(s.cacheWarningMode),
 			Role:                cacheWarningTranscriptRole,
 			Text:                transcript.CacheWarningText(warning),
@@ -185,7 +193,7 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 			replacement.CompactionNumber,
 		)
 		for index := range entries {
-			entries[index].StepID = stepID
+			entries[index].StepID = cloneOptionalStepID(stepID)
 		}
 		for _, entry := range assignHistoryReplacementEntryProvenance(entries, &provenance) {
 			s.scan.appendEntry(entry)
@@ -195,13 +203,13 @@ func (s *streamingTranscriptScan) ApplyPersistedEvent(record session.EventRecord
 	return nil
 }
 
-func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID string) {
+func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID *string) {
 	if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
 		s.closeTurn()
 		buffered := msg
 		s.turn.assistant = &buffered
 		s.turn.assistantProvenance = cloneTranscriptCommittedRowProvenance(provenance)
-		s.turn.assistantStepID = strings.TrimSpace(stepID)
+		s.turn.assistantStepID = cloneOptionalStepID(stepID)
 		s.turn.callIDs = s.turn.callIDs[:0]
 		for _, call := range msg.ToolCalls {
 			if callID := strings.TrimSpace(call.ID); callID != "" {
@@ -214,7 +222,7 @@ func (s *streamingTranscriptScan) applyReconstructedMessage(msg llm.Message, pro
 	if msg.Role == llm.RoleTool && s.turn.assistant != nil && s.turnOwnsCall(toolCallID) {
 		s.turn.materialized = append(s.turn.materialized, msg)
 		s.turn.materializedProvenance = append(s.turn.materializedProvenance, cloneTranscriptCommittedRowProvenance(provenance))
-		s.turn.materializedSteps = append(s.turn.materializedSteps, strings.TrimSpace(stepID))
+		s.turn.materializedSteps = append(s.turn.materializedSteps, cloneOptionalStepID(stepID))
 		return
 	}
 	s.closeTurn()
@@ -233,7 +241,7 @@ func (s *streamingTranscriptScan) turnOwnsCall(callID string) bool {
 	return false
 }
 
-func (s *streamingTranscriptScan) applyMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID string) {
+func (s *streamingTranscriptScan) applyMessage(msg llm.Message, provenance *TranscriptCommittedRowProvenance, stepID *string) {
 	var seq int64
 	if provenance != nil {
 		seq = provenance.EventSequence
@@ -272,7 +280,7 @@ func (s *streamingTranscriptScan) closeTurn() {
 	orderedMaterialized := make([]struct {
 		message    llm.Message
 		provenance *TranscriptCommittedRowProvenance
-		stepID     string
+		stepID     *string
 	}, len(materialized))
 	for index := range materialized {
 		provenance := materializedProvenance[index]
@@ -284,11 +292,11 @@ func (s *streamingTranscriptScan) closeTurn() {
 		orderedMaterialized[index] = struct {
 			message    llm.Message
 			provenance *TranscriptCommittedRowProvenance
-			stepID     string
+			stepID     *string
 		}{
 			message:    materialized[index],
 			provenance: provenance,
-			stepID:     materializedSteps[index],
+			stepID:     cloneOptionalStepID(materializedSteps[index]),
 		}
 	}
 	sort.SliceStable(orderedMaterialized, func(left, right int) bool {
@@ -337,8 +345,8 @@ func (s *streamingTranscriptScan) closeTurn() {
 	}
 }
 
-func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string, provenance *TranscriptCommittedRowProvenance) {
-	projected := *localEntryChatEntryForStep(entry, textutil.OptionalExactString(stepID))
+func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID *string, provenance *TranscriptCommittedRowProvenance) {
+	projected := *localEntryChatEntryForStep(entry, stepID)
 	projected.CommittedProvenance = cloneTranscriptCommittedRowProvenance(provenance)
 	s.scan.appendEntry(projected)
 }

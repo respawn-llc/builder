@@ -587,12 +587,14 @@ func TestTranscriptHydrationSurvivesCommittedMessageWithoutProviderItems(t *test
 	if len(hydration.CommittedRows) != 2 {
 		t.Fatalf("hydrated rows = %+v, want only messages surrounding provider-empty assistant", hydration.CommittedRows)
 	}
-	if hydration.CommittedRows[0].StepID != beforeStepID ||
+	if hydration.CommittedRows[0].StepID == nil ||
+		*hydration.CommittedRows[0].StepID != beforeStepID ||
 		hydration.CommittedRows[0].User == nil ||
 		hydration.CommittedRows[0].User.Text != "before" {
 		t.Fatalf("hydrated row before provider-empty assistant = %+v", hydration.CommittedRows[0])
 	}
-	if hydration.CommittedRows[1].StepID != afterStepID ||
+	if hydration.CommittedRows[1].StepID == nil ||
+		*hydration.CommittedRows[1].StepID != afterStepID ||
 		hydration.CommittedRows[1].User == nil ||
 		hydration.CommittedRows[1].User.Text != "after" {
 		t.Fatalf("hydrated row after provider-empty assistant = %+v", hydration.CommittedRows[1])
