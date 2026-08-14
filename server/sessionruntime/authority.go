@@ -61,6 +61,7 @@ type Authority struct {
 	promptFeed         ExecutionPromptFeed
 	options            authorityRuntimeOptions
 	invariantPolicy    invariant.Policy
+	workflowTaskReads  atomic.Pointer[workflowTaskExecutionReadSnapshot]
 }
 
 func NewAuthority(options AuthorityOptions) *Authority {

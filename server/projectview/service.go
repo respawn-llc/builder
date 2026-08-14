@@ -327,7 +327,7 @@ func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDelete
 		return nil, nil
 	}
 	var blockers []serverapi.ProjectDeleteBlocker
-	err := s.mutationPermit.Run(ctx, func(ctx context.Context) error {
+	err = s.mutationPermit.Run(ctx, func(ctx context.Context) error {
 		var runErr error
 		blockers, runErr = deleteProject(ctx)
 		return runErr

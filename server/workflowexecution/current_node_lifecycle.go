@@ -247,7 +247,7 @@ func (c *CurrentNodeController) PreflightTaskResume(
 	if c == nil {
 		return TaskResumePreflight{}, errors.New("current node workflow controller is required")
 	}
-	return c.permit.Run(ctx, func(ctx context.Context) error {
+	return RunMutation(ctx, c.permit, func(ctx context.Context) (TaskResumePreflight, error) {
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {
 			return TaskResumePreflight{}, err
@@ -338,7 +338,7 @@ func (c *CurrentNodeController) resumeTask(
 	if preparation != nil && finalizer == nil {
 		return TaskResumeResult{}, errors.New("task resume preparation finalizer is required")
 	}
-	resumed, err := RunMutation(ctx, c.permit, func(ctx context.Context) ([]workflow.CurrentNode, error) {
+	result, err := RunMutation(ctx, c.permit, func(ctx context.Context) (TaskResumeResult, error) {
 		var resolution workflowstore.TaskAttentionResolution
 		classification, err := c.classifyTaskResume(ctx, taskID)
 		if err != nil {

@@ -541,6 +541,7 @@ type currentNodeControllerStore struct {
 	mu                    sync.Mutex
 	started               workflowstore.StartTaskResult
 	interrupted           []workflow.CurrentNode
+	currentNodes          []workflow.CurrentNode
 	pendingApproval       workflow.PendingApproval
 	approvalApplied       workflowstore.PendingApprovalApplyResult
 	manualMoved           workflowstore.ManualMoveResult
@@ -569,6 +570,7 @@ type currentNodeControllerStore struct {
 	interruptRelease      chan struct{}
 	interruptOnce         sync.Once
 	idleResolved          *workflow.CurrentNode
+	idleResolvedSequence  []workflow.CurrentNode
 }
 
 type currentNodeAttentionRecorder struct {

@@ -107,7 +107,7 @@ func TestServiceConcurrentTaskResumeNoOpDoesNotReplacePendingBranch(t *testing.T
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},

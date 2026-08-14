@@ -855,7 +855,7 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},
@@ -890,19 +890,19 @@ func TestServiceWorkflowTaskReadDoesNotWaitForRuntimeLifecycleOwnership(t *testi
 		WorkflowID:  workflowID,
 		CurrentNode: started.Mutation.Created[0].Reference,
 	}
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	handle, err := authority.StartScriptExecution(ctx, sessionruntime.ScriptExecutionRequest{
-		Workflow: &lease,
+	detached, err := authority.PrepareDetachedScriptExecution(ctx, sessionruntime.DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command:  sessionruntime.ScriptCommand{Path: sleepPath, Args: []string{"30"}},
 	})
 	if err != nil {
-		t.Fatalf("StartScriptExecution: %v", err)
+		t.Fatalf("PrepareDetachedScriptExecution: %v", err)
 	}
+	handle, launch, err := detached.Publish(ctx, func() error { return nil }, nil)
+	if err != nil {
+		t.Fatalf("Publish detached Script execution: %v", err)
+	}
+	launch()
 	t.Cleanup(func() {
-		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
 	if _, err := controller.ObserveWorkflowTaskExecutions([]workflow.TaskID{taskID}); err != nil {
@@ -1452,7 +1452,7 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		service.store,
 		initialBranchControllerRunner{},
 		authority,
-		service.taskMutations,
+		service.mutationPermit,
 		workflowexecution.CurrentNodeControllerConfig{
 			AgentConcurrency:  1,
 			AssignmentSteerer: initialBranchControllerSteerer{},

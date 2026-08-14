@@ -181,19 +181,14 @@ func TestWorkflowTaskExecutionReadSnapshotDoesNotWaitForLifecycleSelection(t *te
 	})
 	taskID := workflow.TaskID("task-read-during-selection")
 	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-read-during-selection"), nil)
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
 	})
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
 	t.Cleanup(func() {
-		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
 	initial, err := authority.CurrentWorkflowTaskExecutionReadSnapshot()
@@ -259,19 +254,14 @@ func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T
 	})
 	taskID := workflow.TaskID("task-manual-move-selection")
 	ref := workflowExecutionRefForTest(t, taskID, workflow.NodeID("node-manual-move-selection"), nil)
-	lease, err := authority.NewWorkflowExecutionLease(ref)
-	if err != nil {
-		t.Fatalf("NewWorkflowExecutionLease: %v", err)
-	}
-	handle, err := authority.StartScriptExecution(context.Background(), ScriptExecutionRequest{
-		Workflow: &lease,
+	handle, err := startDetachedScriptExecutionForTest(t, authority, DetachedScriptExecutionRequest{
+		Workflow: ref,
 		Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
 	})
 	if err != nil {
 		t.Fatalf("StartScriptExecution: %v", err)
 	}
 	t.Cleanup(func() {
-		lease.Cancel()
 		_ = handle.Stop(context.Background())
 	})
 
@@ -296,10 +286,14 @@ func TestWorkflowManualMoveSelectionDoesNotRetainAuthorityOwnership(t *testing.T
 
 	otherLeaseDone := make(chan error, 1)
 	go func() {
-		_, leaseErr := authority.NewWorkflowExecutionLease(
-			workflowExecutionRefForTest(t, workflow.TaskID("task-other"), workflow.NodeID("node-other"), nil),
-		)
-		otherLeaseDone <- leaseErr
+		detached, prepareErr := authority.PrepareDetachedScriptExecution(context.Background(), DetachedScriptExecutionRequest{
+			Workflow: workflowExecutionRefForTest(t, workflow.TaskID("task-other"), workflow.NodeID("node-other"), nil),
+			Command:  ScriptCommand{Path: sleepPath, Args: []string{"30"}},
+		})
+		if prepareErr == nil {
+			detached.Cancel()
+		}
+		otherLeaseDone <- prepareErr
 	}()
 	select {
 	case err := <-otherLeaseDone:

@@ -103,6 +103,7 @@ type currentNodePostTurnFinalization struct {
 type CurrentNodeController struct {
 	store interface {
 		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) (session.CommitReceipt, error)
@@ -163,6 +164,7 @@ type CurrentNodeController struct {
 func NewCurrentNodeController(
 	store interface {
 		StartTask(context.Context, workflow.TaskID) (workflowstore.StartTaskResult, error)
+		ListCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		InterruptedExecutableCurrentNodes(context.Context, workflow.TaskID) ([]workflow.CurrentNode, error)
 		PreflightTaskResume(context.Context, workflow.TaskID) ([]workflowstore.CurrentNodeResumeClassification, error)
 		AdmitCurrentNode(context.Context, workflow.CurrentNodeReference) (session.CommitReceipt, error)
@@ -607,9 +609,6 @@ func (c *CurrentNodeController) recordIdleCurrentNodeProtocolViolation(
 		if err != nil {
 			return workflowruntime.ViolationResult{}, err
 		}
-		if source.Reference.TaskID != taskID {
-			return workflowruntime.ViolationResult{}, errors.New("idle current node changed Task during protocol violation handling")
-		}
 		if source.Scheduling == nil {
 			return workflowruntime.ViolationResult{}, errors.New("idle current node scheduling is required")
 		}
@@ -703,9 +702,6 @@ func (c *CurrentNodeController) ResetProtocolViolationBudget(ctx context.Context
 			})
 			if err != nil {
 				return source, err
-			}
-			if source.Reference.TaskID != taskID {
-				return workflow.CurrentNode{}, errors.New("idle current node changed Task during protocol violation reset")
 			}
 			c.clearProtocolViolations(req.ScopeID)
 			return source, nil

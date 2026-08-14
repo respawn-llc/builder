@@ -10,6 +10,7 @@ import (
 
 	"core/server/sessionruntime"
 	"core/server/workflow"
+	"core/shared/runtimeids"
 )
 
 const interruptCleanupTimeout = 300 * time.Second

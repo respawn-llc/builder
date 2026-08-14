@@ -205,7 +205,7 @@ func (a *Authority) WithWorkflowInterruptSelection(
 		default:
 			panic("workflow execution has an invalid interrupt phase")
 		}
-	})
+	}
 	if len(selection.Interruptible) == 0 {
 		if hasQuestion {
 			return ErrWorkflowQuestionPending

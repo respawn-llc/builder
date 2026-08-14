@@ -1429,10 +1429,7 @@ func (s *Service) resumeWorkflowTask(ctx context.Context, req serverapi.Workflow
 	if s.currentNodeExecution == nil {
 		return serverapi.WorkflowTaskResumeResponse{}, errors.New("current node workflow execution is required")
 	}
-	taskID := workflow.TaskID(req.TaskID)
-	return workflowexecution.RunTaskMutation(ctx, s.taskMutations, taskID, func(ctx context.Context) (serverapi.WorkflowTaskResumeResponse, error) {
-		return s.resumeWorkflowTaskAuthorized(ctx, req, taskID)
-	})
+	return s.resumeWorkflowTaskAuthorized(ctx, req, workflow.TaskID(req.TaskID))
 }
 
 func (s *Service) resumeWorkflowTaskAuthorized(
