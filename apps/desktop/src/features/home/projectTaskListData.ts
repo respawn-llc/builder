@@ -5,7 +5,7 @@ import {
   type InfiniteData,
   type UseInfiniteQueryResult,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect } from "react";
 
 import {
   errorMessage,
@@ -117,8 +117,6 @@ function useProjectTaskGroupData(
 ): ProjectTaskGroupData {
   const { api } = useAppServices();
   const queryClient = useQueryClient();
-  const [ownerGeneration, setOwnerGeneration] = useState(enabled ? 1 : 0);
-  const wasEnabled = useRef(enabled);
   const queryKey = queryKeys.projectTaskGroup(projectID, group);
   const query = useInfiniteQuery<
     TaskListPage,
@@ -146,10 +144,6 @@ function useProjectTaskGroupData(
     gcTime: 0,
   });
   useEffect(() => {
-    if (enabled && !wasEnabled.current) {
-      setOwnerGeneration((generation) => generation + 1);
-    }
-    wasEnabled.current = enabled;
     if (enabled) {
       return;
     }
@@ -158,13 +152,12 @@ function useProjectTaskGroupData(
       exact: true,
     });
   }, [enabled, group, projectID, queryClient]);
-  return projectTaskGroupData(query, enabled, ownerGeneration, projectID);
+  return projectTaskGroupData(query, enabled, projectID);
 }
 
 function projectTaskGroupData(
   query: UseInfiniteQueryResult<InfiniteData<TaskListPage, number>>,
   enabled: boolean,
-  ownerGeneration: number,
   projectID: string,
 ): ProjectTaskGroupData {
   if (!enabled) {
@@ -187,9 +180,9 @@ function projectTaskGroupData(
     isFetchingNextPage: query.isFetchingNextPage,
     isFetchingPreviousPage: query.isFetchingPreviousPage,
     isPending: query.isPending,
-    nextRequestGeneration: `${projectID}:${ownerGeneration.toString()}:${nextPageParam?.toString() ?? "end"}`,
+    nextRequestGeneration: `${projectID}:${nextPageParam?.toString() ?? "end"}`,
     pages,
-    previousRequestGeneration: `${projectID}:${ownerGeneration.toString()}:${firstPageParam.toString()}`,
+    previousRequestGeneration: `${projectID}:${firstPageParam.toString()}`,
     refetch: query.refetch,
     tasks: pages.flatMap((page) => page.tasks),
   };

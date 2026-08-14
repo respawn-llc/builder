@@ -21,7 +21,7 @@ export function useVirtualizedItemVisibilityTriggers<TItem>({
   triggers?: readonly VirtualizedItemVisibilityTrigger[] | undefined;
   visibleIndexes: readonly number[];
 }>): void {
-  const handledGenerationsRef = useRef(new Set<string>());
+  const triggerStatesRef = useRef(new Map<string, Readonly<{ generation: string; handled: boolean }>>());
   const visibleItemKeys = useMemo(
     () =>
       new Set(
@@ -33,15 +33,29 @@ export function useVirtualizedItemVisibilityTriggers<TItem>({
     [getItemKey, itemStartIndex, items, visibleIndexes],
   );
   useEffect(() => {
+    const currentItemKeys = new Set(triggers.map((trigger) => trigger.itemKey));
+    for (const itemKey of triggerStatesRef.current.keys()) {
+      if (!currentItemKeys.has(itemKey)) {
+        triggerStatesRef.current.delete(itemKey);
+      }
+    }
     for (const trigger of triggers) {
-      const identity = `${trigger.itemKey}\u0000${trigger.requestGeneration}`;
+      const previousState = triggerStatesRef.current.get(trigger.itemKey);
+      const state =
+        previousState?.generation === trigger.requestGeneration
+          ? previousState
+          : { generation: trigger.requestGeneration, handled: false };
+      triggerStatesRef.current.set(trigger.itemKey, state);
       if (
         trigger.enabled &&
         !trigger.fetching &&
         visibleItemKeys.has(trigger.itemKey) &&
-        !handledGenerationsRef.current.has(identity)
+        !state.handled
       ) {
-        handledGenerationsRef.current.add(identity);
+        triggerStatesRef.current.set(trigger.itemKey, {
+          generation: trigger.requestGeneration,
+          handled: true,
+        });
         trigger.onVisible();
       }
     }

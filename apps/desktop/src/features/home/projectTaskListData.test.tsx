@@ -142,7 +142,7 @@ describe("Project Task-list data ownership", () => {
     ).toHaveLength(2);
   });
 
-  it("starts at zero and advances edge generations while retaining only three pages", async () => {
+  it("starts at zero and exposes the current bounded window edges", async () => {
     const harness = createHarness();
     const { result } = renderHook(
       () =>
@@ -175,7 +175,7 @@ describe("Project Task-list data ownership", () => {
     await waitFor(() => {
       expect(result.current.active.pages).toHaveLength(3);
     });
-    expect(result.current.active.nextRequestGeneration).toBe("project-1:1:75");
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:75");
     await act(async () => {
       await result.current.active.fetchNextPage();
     });
@@ -184,11 +184,20 @@ describe("Project Task-list data ownership", () => {
     });
     expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75]);
     expect(result.current.active.pages).toHaveLength(3);
-    expect(result.current.active.nextRequestGeneration).toBe("project-1:1:100");
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:100");
+
+    await act(async () => {
+      await result.current.active.fetchPreviousPage();
+    });
+    await waitFor(() => {
+      expect(result.current.active.pages).toHaveLength(3);
+    });
+    expect(state.listRequests.map((request) => request.offset)).toEqual([0, 25, 50, 75, 0]);
+    expect(result.current.active.nextRequestGeneration).toBe("project-1:75");
     expect(result.current.backlog.pages).toEqual([]);
   });
 
-  it("resets edge generations when a collapsed group reopens", async () => {
+  it("evicts a collapsed group and restarts its bounded query at zero", async () => {
     const harness = createHarness();
     const { result, rerender } = renderHook(
       ({ expanded }) =>
@@ -203,13 +212,16 @@ describe("Project Task-list data ownership", () => {
       },
     );
     await waitFor(() => {
-      expect(result.current.active.nextRequestGeneration).toBe("project-1:1:25");
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:25");
     });
 
     rerender({ expanded: false });
+    await waitFor(() => {
+      expect(result.current.active.pages).toEqual([]);
+    });
     rerender({ expanded: true });
     await waitFor(() => {
-      expect(result.current.active.nextRequestGeneration).toBe("project-1:2:25");
+      expect(result.current.active.nextRequestGeneration).toBe("project-1:25");
     });
   });
 

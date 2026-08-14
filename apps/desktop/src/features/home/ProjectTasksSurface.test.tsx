@@ -559,9 +559,9 @@ function groupData(tasks: readonly TaskListItem[]) {
     isFetchingNextPage: false,
     isFetchingPreviousPage: false,
     isPending: false,
-    nextRequestGeneration: "project-1:0:end",
+    nextRequestGeneration: "project-1:end",
     pages: [],
-    previousRequestGeneration: "project-1:0:0",
+    previousRequestGeneration: "project-1:0",
     refetch: vi.fn(),
     tasks,
   };

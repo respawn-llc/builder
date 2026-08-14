@@ -333,7 +333,7 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(screen.getByLabelText("task wrapper")).not.toHaveClass("sticky");
   });
 
-  it("loads independent visible items once per request generation", () => {
+  it("loads independent visible items once for their current request generation", () => {
     const loadActive = vi.fn();
     const loadDone = vi.fn();
     const view = render(
@@ -397,6 +397,90 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     );
     expect(loadActive).toHaveBeenCalledTimes(2);
     expect(loadDone).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary", "done-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[
+          {
+            itemKey: "active-boundary",
+            requestGeneration: "active-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadActive,
+          },
+          {
+            itemKey: "done-boundary",
+            requestGeneration: "done-1",
+            enabled: true,
+            fetching: false,
+            onVisible: loadDone,
+          },
+        ]}
+      />,
+    );
+    expect(loadActive).toHaveBeenCalledTimes(3);
+    expect(loadDone).toHaveBeenCalledOnce();
+  });
+
+  it("retires visibility-trigger state after its boundary is removed", () => {
+    const load = vi.fn();
+    const trigger = {
+      itemKey: "active-boundary",
+      requestGeneration: "active-1",
+      enabled: true,
+      fetching: false,
+      onVisible: load,
+    };
+    const view = render(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[trigger]}
+      />,
+    );
+    expect(load).toHaveBeenCalledOnce();
+
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={[]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[]}
+      />,
+    );
+    view.rerender(
+      <VirtualizedInfiniteList
+        estimateSize={testEstimateSize}
+        getItemKey={testGetItemKey}
+        hasNextPage={false}
+        isFetchingNextPage={false}
+        items={["active-boundary"]}
+        loadingLabel="Loading"
+        onLoadMore={() => undefined}
+        renderItem={testRenderItem}
+        visibilityTriggers={[trigger]}
+      />,
+    );
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it.each([
