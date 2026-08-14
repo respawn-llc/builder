@@ -427,7 +427,7 @@ func ensureNoUnmanagedServerConflictForAction(ctx context.Context, backend servi
 	healthStatus, healthPID := probeServiceHealth(ctx, spec)
 	healthRunning := healthStatus == protocol.HealthStatusOK
 	pidProof := status.PID > 0 && healthPID > 0 && status.PID == healthPID
-	commandProof := len(status.Command) > 0 && commandArgsEqual(status.Command, serviceCommand(spec))
+	commandProof := len(status.Command) > 0 && commandArgsEqual(status.Command, serverChildCommand(spec))
 	backendOwnsHealthyServer := healthRunning && status.Running && status.Loaded && (pidProof || commandProof)
 	if healthRunning && !backendOwnsHealthyServer {
 		if action == serviceActionRestart && status.Installed && (!status.Loaded || !status.Running) {
@@ -497,7 +497,7 @@ func readServiceStatus(ctx context.Context, backend serviceBackend, spec service
 	status.Endpoint = spec.Endpoint
 	status.Logs = []string{spec.StdoutLogPath, spec.StderrLogPath}
 	if len(status.Command) == 0 {
-		status.Command = serviceCommand(spec)
+		status.Command = serverChildCommand(spec)
 	}
 	if mismatched {
 

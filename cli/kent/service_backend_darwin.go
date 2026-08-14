@@ -23,7 +23,6 @@ import (
 var (
 	errLaunchdServerNotHealthy       = errors.New("restarted launchd job, but " + brand.Product + " server did not become healthy before timeout")
 	errLaunchdServerProcessNotExited = errors.New("running " + brand.Product + " server process did not exit before service restart")
-	errLaunchdOldServerNotExited     = errors.New("stopped launchd job, but the old " + brand.Product + " server did not exit before restart")
 )
 
 type launchdServiceBackend struct{}
@@ -109,7 +108,9 @@ func writeLaunchdServicePlist(spec serviceSpec, force bool) (string, error) {
 
 func (launchdServiceBackend) Uninstall(ctx context.Context, spec serviceSpec, stop bool) error {
 	if stop {
-		_ = launchdServiceBackend{}.Stop(ctx, spec)
+		if err := (launchdServiceBackend{}).Stop(ctx, spec); err != nil {
+			return err
+		}
 	}
 	path, err := launchdPlistPath()
 	if err != nil {
@@ -133,18 +134,36 @@ func (launchdServiceBackend) Start(ctx context.Context, spec serviceSpec) error 
 		return fmt.Errorf("stat launchd plist: %w", err)
 	}
 	if loaded, _ := launchdLoaded(ctx); !loaded {
-		return bootstrapLaunchdService(ctx, spec, path)
+		if err := bootstrapLaunchdService(ctx, spec, path); err != nil {
+			return err
+		}
+		return waitForLaunchdServiceStartup(ctx, spec)
 	}
-	_, err = runServiceCommand(ctx, "launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel)
-	return err
+	topology, err := resolveDarwinServiceTopology(ctx, spec)
+	if err != nil {
+		return err
+	}
+	if _, err = runServiceCommand(ctx, "launchctl", "kickstart", "-k", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel); err != nil {
+		return err
+	}
+	if err := waitForCapturedDarwinTopologyShutdown(ctx, topology, false); err != nil {
+		return err
+	}
+	return waitForLaunchdServiceStartup(ctx, spec)
 }
 
 func (launchdServiceBackend) Stop(ctx context.Context, spec serviceSpec) error {
-	if loaded, _ := launchdLoaded(ctx); !loaded {
+	topology, err := resolveDarwinServiceTopology(ctx, spec)
+	if err != nil {
+		return err
+	}
+	if !topology.Host.Loaded {
 		return nil
 	}
-	_, err := runServiceCommand(ctx, "launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel)
-	return err
+	if _, err := runServiceCommand(ctx, "launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel); err != nil {
+		return err
+	}
+	return waitForCapturedDarwinTopologyShutdown(ctx, topology, true)
 }
 
 func (launchdServiceBackend) Restart(ctx context.Context, spec serviceSpec) error {
@@ -176,17 +195,21 @@ func (launchdServiceBackend) Status(ctx context.Context, spec serviceSpec) (serv
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return serviceStatus{}, fmt.Errorf("stat launchd plist: %w", err)
 	}
-	loaded, output := launchdLoaded(ctx)
-	pid := launchdPID(output)
-	command := readLaunchdRegisteredCommand(path)
-	if loadedCommand := parseLaunchdPrintProgramArguments(output); len(loadedCommand) > 0 {
-		command = loadedCommand
+	topology, topologyErr := resolveDarwinServiceTopology(ctx, spec)
+	if topologyErr != nil {
+		return serviceStatus{}, topologyErr
+	}
+	command := serverChildCommand(spec)
+	pid := 0
+	if topology.Child != nil {
+		pid = topology.Child.PID
+		command = topology.Child.Command
 	}
 	return serviceStatus{
 		Backend:     "launchd",
 		Installed:   installed,
-		Loaded:      loaded,
-		Running:     pid > 0 || launchdState(output) == "running",
+		Loaded:      topology.Host.Loaded,
+		Running:     topology.Host.PID > 0 || topology.Host.State == "running",
 		PID:         pid,
 		Command:     command,
 		Endpoint:    spec.Endpoint,
@@ -196,22 +219,26 @@ func (launchdServiceBackend) Status(ctx context.Context, spec serviceSpec) (serv
 }
 
 func reloadLaunchdService(ctx context.Context, spec serviceSpec, path string) error {
-	if loaded, _ := launchdLoaded(ctx); loaded {
+	if topology, err := resolveDarwinServiceTopology(ctx, spec); err != nil {
+		return err
+	} else if topology.Host.Loaded {
 		if _, err := runServiceCommand(ctx, "launchctl", "bootout", fmt.Sprintf("gui/%d", os.Getuid())+"/"+serviceLaunchdLabel); err != nil {
 			return err
 		}
-		if err := waitForLaunchdServiceShutdown(ctx, spec); err != nil {
-			stopped, stopErr := stopHealthyServerBeforeLaunchdBootstrap(ctx, spec)
-			if stopErr != nil {
-				return errors.Join(err, stopErr)
-			}
-			if !stopped {
-				return err
-			}
+		if err := waitForCapturedDarwinTopologyShutdown(ctx, topology, true); err != nil {
+			return err
 		}
 	} else {
-		if _, err := stopHealthyServerBeforeLaunchdBootstrap(ctx, spec); err != nil {
+		lockFree, err := darwinServiceLockAvailable(spec)
+		if err != nil {
 			return err
+		}
+		if !lockFree {
+			return errors.New("a prior Darwin service activation still owns the server lock; refusing to bootstrap an overlapping server")
+		}
+		healthStatus, healthPID := probeServiceHealth(ctx, spec)
+		if healthStatus == "ok" {
+			return fmt.Errorf(brand.Product+" server is already running on %s (pid %d), but launchd has no proven host for it", spec.Endpoint, healthPID)
 		}
 	}
 	if err := bootstrapLaunchdService(ctx, spec, path); err != nil {
@@ -220,26 +247,23 @@ func reloadLaunchdService(ctx context.Context, spec serviceSpec, path string) er
 	return waitForLaunchdServiceStartup(ctx, spec)
 }
 
-func stopHealthyServerBeforeLaunchdBootstrap(ctx context.Context, spec serviceSpec) (bool, error) {
-	healthStatus, healthPID := probeServiceHealth(ctx, spec)
-	if healthStatus != "ok" {
+func darwinServiceLockAvailable(spec serviceSpec) (bool, error) {
+	path := darwinServiceLockPath(spec.Config.PersistenceRoot)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("open Darwin service activation lock: %w", err)
+	}
+	defer file.Close()
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	switch {
+	case err == nil:
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		return true, nil
+	case errors.Is(err, syscall.EWOULDBLOCK):
 		return false, nil
+	default:
+		return false, fmt.Errorf("inspect Darwin service activation lock: %w", err)
 	}
-	if healthPID <= 0 {
-		return false, fmt.Errorf(brand.Product+" server is already running on %s, but its process id is unknown. Stop it before restarting the service", spec.Endpoint)
-	}
-	if err := signalLaunchdServiceProcess(healthPID); err != nil {
-		return false, err
-	}
-	if err := waitForLaunchdServiceProcessExit(ctx, healthPID); err != nil {
-		if err := killLaunchdServiceProcess(healthPID); err != nil {
-			return false, err
-		}
-		if err := waitForLaunchdServiceProcessExit(ctx, healthPID); err != nil {
-			return false, err
-		}
-	}
-	return true, waitForLaunchdServiceShutdown(ctx, spec)
 }
 
 func waitForLaunchdServiceProcessExit(ctx context.Context, pid int) error {
@@ -285,29 +309,11 @@ func waitForLaunchdServiceStartup(ctx context.Context, spec serviceSpec) error {
 	deadline := time.Now().Add(timeout)
 	lastDetail := ""
 	for {
-		loaded, output := launchdLoaded(ctx)
-		launchdPID := launchdPID(output)
-		loadedCommand := parseLaunchdPrintProgramArguments(output)
-		healthStatus, healthPID := probeServiceHealth(ctx, spec)
-		healthOwnedByLaunchd := healthStatus == "ok" && launchdPID > 0 && healthPID == launchdPID
-		commandVerified := commandArgsEqual(loadedCommand, serviceCommand(spec))
-		if loaded && launchdPID > 0 && healthOwnedByLaunchd && commandVerified {
+		if err := resolveDarwinServiceReadiness(ctx, spec); err == nil {
 			return nil
+		} else {
+			lastDetail = err.Error()
 		}
-		commandDetail := commandString(loadedCommand)
-		if len(loadedCommand) == 0 {
-			commandDetail = "<missing>"
-		}
-		lastDetail = fmt.Sprintf(
-			"launchd loaded=%t pid=%d state=%s command=%s expected_command=%s health=%s health_pid=%d",
-			loaded,
-			launchdPID,
-			launchdState(output),
-			commandDetail,
-			commandString(serviceCommand(spec)),
-			healthStatus,
-			healthPID,
-		)
 		if time.Now().After(deadline) {
 			return fmt.Errorf("%w: %s", errLaunchdServerNotHealthy, lastDetail)
 		}
@@ -321,34 +327,58 @@ func waitForLaunchdServiceStartup(ctx context.Context, spec serviceSpec) error {
 	}
 }
 
-func waitForLaunchdServiceShutdown(ctx context.Context, spec serviceSpec) error {
+func waitForCapturedDarwinTopologyShutdown(ctx context.Context, topology darwinServiceTopology, requireLaunchdRelease bool) error {
 	timeout := launchdServiceShutdownTimeout
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	interval := launchdServiceShutdownPollInterval
-	if interval <= 0 {
-		interval = 100 * time.Millisecond
-	}
 	deadline := time.Now().Add(timeout)
 	for {
-		healthStatus, healthPID := probeServiceHealth(ctx, spec)
-		loaded, _ := launchdLoaded(ctx)
-		// launchctl bootout is asynchronous: the HTTP listener closes (health
-		// goes down) milliseconds before launchd finishes evicting the job from
-		// the domain. Bootstrapping inside that window fails with the generic
-		// launchctl "Bootstrap error 5: Input/output error". Treat shutdown as
-		// complete only once both the server has stopped responding AND launchd
-		// no longer reports the label loaded, so the follow-up bootstrap can
-		// never race the teardown.
-		if healthStatus != "ok" && !loaded {
+		loaded := false
+		if requireLaunchdRelease {
+			loaded, _ = launchdLoaded(ctx)
+		}
+		hostAlive := false
+		childAlive := false
+		var err error
+		if topology.Host.PID > 0 {
+			hostAlive, err = launchdServiceProcessAlive(topology.Host.PID)
+			if err != nil {
+				return err
+			}
+		}
+		if topology.Child != nil {
+			childAlive, err = launchdServiceProcessAlive(topology.Child.PID)
+			if err != nil {
+				return err
+			}
+		}
+		if !hostAlive && !childAlive && !loaded {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			detail := launchdShutdownBlockDetail(spec, healthStatus, healthPID, loaded)
-			return fmt.Errorf("%w: %s. Not bootstrapping a second server because it would fail with launchctl Bootstrap error 5. Re-running with sudo will not fix this; stop the stale "+brand.Command+" process or wait for it to exit, then run `"+brand.Command+" service restart` again", errLaunchdOldServerNotExited, detail)
+			if childAlive && topology.Child != nil {
+				if err := signalLaunchdServiceProcess(topology.Child.PID); err != nil {
+					return err
+				}
+				if err := waitForLaunchdServiceProcessExit(ctx, topology.Child.PID); err != nil {
+					if err := killLaunchdServiceProcess(topology.Child.PID); err != nil {
+						return err
+					}
+					if err := waitForLaunchdServiceProcessExit(ctx, topology.Child.PID); err != nil {
+						return err
+					}
+				}
+			}
+			if hostAlive {
+				return fmt.Errorf("launchd host process %d did not exit", topology.Host.PID)
+			}
+			if loaded {
+				return errors.New("launchd did not release the stopped service activation")
+			}
+			return nil
 		}
-		timer := time.NewTimer(interval)
+		timer := time.NewTimer(launchdServiceShutdownPollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -358,61 +388,9 @@ func waitForLaunchdServiceShutdown(ctx context.Context, spec serviceSpec) error 
 	}
 }
 
-func launchdShutdownBlockDetail(spec serviceSpec, healthStatus string, healthPID int, loaded bool) string {
-	parts := []string{}
-	if healthStatus == "ok" {
-		detail := brand.Product + " server still responds on " + spec.Endpoint
-		if healthPID > 0 {
-			detail = fmt.Sprintf("%s (pid %d)", detail, healthPID)
-		}
-		parts = append(parts, detail)
-	}
-	if loaded {
-		parts = append(parts, "launchd still reports the service as loaded")
-	}
-	return strings.Join(parts, "; ")
-}
-
 func bootstrapLaunchdService(ctx context.Context, spec serviceSpec, path string) error {
 	if _, err := runServiceCommand(ctx, "launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path); err != nil {
-		if !isTransientLaunchdBootstrapError(err) {
-			return err
-		}
-		return replaceStaleLaunchdService(ctx, spec, path, err)
-	}
-	return nil
-}
-
-func isTransientLaunchdBootstrapError(err error) bool {
-	var commandErr serviceCommandError
-	if !errors.As(err, &commandErr) {
-		return false
-	}
-	return commandErr.Name == "launchctl" && commandErr.Result.Code == 5
-}
-
-// isLaunchdServiceAbsentError reports whether a launchctl command failed because
-// the service is already gone from the domain ("Boot-out failed: 3: No such
-// process"). When the teardown wait already evicted the label, a recovery
-// bootout legitimately returns this and must not abort the bootstrap retry.
-func isLaunchdServiceAbsentError(err error) bool {
-	var commandErr serviceCommandError
-	if !errors.As(err, &commandErr) {
-		return false
-	}
-	return commandErr.Name == "launchctl" && commandErr.Result.Code == 3
-}
-
-func replaceStaleLaunchdService(ctx context.Context, spec serviceSpec, path string, cause error) error {
-	target := fmt.Sprintf("gui/%d", os.Getuid()) + "/" + serviceLaunchdLabel
-	if _, err := runServiceCommand(ctx, "launchctl", "bootout", target); err != nil && !isLaunchdServiceAbsentError(err) {
-		return errors.Join(cause, err)
-	}
-	if err := waitForLaunchdServiceShutdown(ctx, spec); err != nil {
-		return errors.Join(cause, err)
-	}
-	if _, err := runServiceCommand(ctx, "launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), path); err != nil {
-		return errors.Join(cause, err)
+		return err
 	}
 	return nil
 }
@@ -542,14 +520,16 @@ func renderLaunchdPlist(spec serviceSpec) string {
 	builder.WriteString("<plist version=\"1.0\">\n<dict>\n")
 	writeLaunchdString(&builder, "Label", serviceLaunchdLabel)
 	builder.WriteString("\t<key>ProgramArguments</key>\n\t<array>\n")
-	for _, arg := range serviceCommand(spec) {
+	for _, arg := range darwinServiceHostCommand(spec) {
 		builder.WriteString("\t\t<string>")
 		_ = xml.EscapeText(&builder, []byte(arg))
 		builder.WriteString("</string>\n")
 	}
 	builder.WriteString("\t</array>\n")
 	writeLaunchdBool(&builder, "RunAtLoad", true)
-	writeLaunchdBool(&builder, "KeepAlive", true)
+	builder.WriteString("\t<key>KeepAlive</key>\n\t<dict>\n")
+	writeLaunchdBoolIndented(&builder, "SuccessfulExit", false)
+	builder.WriteString("\t</dict>\n")
 	writeLaunchdString(&builder, "StandardOutPath", spec.StdoutLogPath)
 	writeLaunchdString(&builder, "StandardErrorPath", spec.StderrLogPath)
 	builder.WriteString("</dict>\n</plist>\n")
@@ -572,5 +552,16 @@ func writeLaunchdBool(builder *strings.Builder, key string, value bool) {
 		builder.WriteString("\t<true/>\n")
 	} else {
 		builder.WriteString("\t<false/>\n")
+	}
+}
+
+func writeLaunchdBoolIndented(builder *strings.Builder, key string, value bool) {
+	builder.WriteString("\t\t<key>")
+	_ = xml.EscapeText(builder, []byte(key))
+	builder.WriteString("</key>\n")
+	if value {
+		builder.WriteString("\t\t<true/>\n")
+	} else {
+		builder.WriteString("\t\t<false/>\n")
 	}
 }

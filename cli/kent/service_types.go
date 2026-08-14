@@ -188,6 +188,14 @@ func serviceServeArguments(persistenceRoot string) []string {
 	return args
 }
 
+func serviceRunArguments(persistenceRoot string) []string {
+	args := []string{"service", "run"}
+	if trimmed := strings.TrimSpace(persistenceRoot); trimmed != "" {
+		args = append(args, "--persistence-root", trimmed)
+	}
+	return args
+}
+
 func defaultServiceExecutablePath() (string, error) {
 	raw := strings.TrimSpace(os.Args[0])
 	if raw == "" {
@@ -214,11 +222,15 @@ func ensureServiceLogDir(spec serviceSpec) error {
 	return nil
 }
 
-func serviceCommand(spec serviceSpec) []string {
+func serverChildCommand(spec serviceSpec) []string {
 	cmd := make([]string, 0, 1+len(spec.Arguments))
 	cmd = append(cmd, spec.Executable)
 	cmd = append(cmd, spec.Arguments...)
 	return cmd
+}
+
+func darwinServiceHostCommand(spec serviceSpec) []string {
+	return append([]string{spec.Executable}, serviceRunArguments(spec.Config.PersistenceRoot)...)
 }
 
 func commandString(args []string) string {
