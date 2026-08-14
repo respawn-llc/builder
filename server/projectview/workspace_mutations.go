@@ -5,18 +5,13 @@ import (
 	"errors"
 	"strings"
 
-	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
 func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectDefaultWorkspaceSetRequest]) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-		return s.SetDefaultWorkspaceValidated(ctx, validated)
-	})
-}
-
-func (s *Service) SetDefaultWorkspaceValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectDefaultWorkspaceSetRequest]) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
+	}
 	if s == nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, errors.New("project service is required")
 	}
@@ -32,13 +27,9 @@ func (s *Service) SetDefaultWorkspaceValidated(ctx context.Context, validated se
 }
 
 func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceUnlinkRequest]) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-		return s.UnlinkWorkspaceFromProjectValidated(ctx, validated)
-	})
-}
-
-func (s *Service) UnlinkWorkspaceFromProjectValidated(ctx context.Context, validated servicecontract.Validated[serverapi.ProjectWorkspaceUnlinkRequest]) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
+	}
 	if s == nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, errors.New("project service is required")
 	}

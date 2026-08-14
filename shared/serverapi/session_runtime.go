@@ -56,7 +56,7 @@ func (r SessionRuntimeActivateRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return errors.New("client_request_id is required")
 	}
-	if err := validateScopedSessionID(r.SessionID); err != nil {
+	if err := validateRequiredSessionID(r.SessionID); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.OwnerID) == "" {
@@ -97,7 +97,10 @@ func (r SessionRuntimeReleaseRequest) Validate() error {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
 		return errors.New("client_request_id is required")
 	}
-	if err := r.Attachment.Validate(); err != nil {
+	if err := validateRequiredSessionID(r.Attachment.SessionID); err != nil {
+		return err
+	}
+	if err := runtimeids.ResourceGeneration(r.Attachment.Generation).Validate(); err != nil {
 		return err
 	}
 	if strings.TrimSpace(r.OwnerID) == "" {

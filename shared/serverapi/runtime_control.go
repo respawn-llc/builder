@@ -290,20 +290,6 @@ func validateUUIDV4Field(name string, value string) error {
 	return runtimeids.ValidateUUIDv4(value, name)
 }
 
-func validateRuntimeLiveControlRequest(clientRequestID string, sessionID string) error {
-	if _, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID); err != nil {
-		return err
-	}
-	parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-	if err != nil {
-		return err
-	}
-	if !parsed.IsCanonicalUUIDv4() {
-		return errors.New("session_id must be a canonical UUIDv4")
-	}
-	return nil
-}
-
 func validateGoalActor(actor string) error {
 	switch strings.TrimSpace(actor) {
 	case "user", "agent", "system":
@@ -317,15 +303,11 @@ func validateRuntimeControlRequest(clientRequestID string, sessionID string) err
 	if err := validateClientRequestID(clientRequestID); err != nil {
 		return err
 	}
-	return validateScopedSessionID(sessionID)
+	return validateRequiredSessionID(sessionID)
 }
 
 func validateTypedRuntimeControlRequest(clientRequestID string, sessionID string) error {
-	if err := validateRuntimeControlRequest(clientRequestID, sessionID); err != nil {
-		return err
-	}
-	_, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
-	return err
+	return validateRuntimeControlRequest(clientRequestID, sessionID)
 }
 
 func (r RuntimeSetSessionNameRequest) Validate() error {
@@ -382,22 +364,8 @@ func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeLiveSteerRequest) Validate() error {
-	if err := validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
-	}
-	if r.CallerSessionID != nil {
-		callerSessionID, err := runtimeids.ParseSessionID(*r.CallerSessionID)
-		if err != nil {
-			return fmt.Errorf("caller_session_id: %w", err)
-		}
-		if !callerSessionID.IsCanonicalUUIDv4() {
-			return errors.New("caller_session_id: canonical UUIDv4 required")
-		}
-	}
-	if strings.TrimSpace(r.Text) == "" {
-		return errors.New("text is required")
-	}
-	return nil
+	_, _, _, err := PrepareRuntimeLiveSteerRequest(r)
+	return err
 }
 func (r RuntimeLiveSteerResponse) Validate() error {
 	if err := validateUUIDV4Field("client_request_id", r.ClientRequestID); err != nil {
@@ -412,7 +380,8 @@ func (r RuntimeLiveSteerResponse) Validate() error {
 	return nil
 }
 func (r RuntimeLiveStopRequest) Validate() error {
-	return validateRuntimeLiveControlRequest(r.ClientRequestID, r.SessionID)
+	_, _, err := PrepareRuntimeLiveStopRequest(r)
+	return err
 }
 func (r RuntimeLiveStopResponse) Validate() error {
 	switch r.Status {
@@ -423,7 +392,8 @@ func (r RuntimeLiveStopResponse) Validate() error {
 	}
 }
 func (r RuntimeLiveWaitRequest) Validate() error {
-	return validateUUIDV4Field("session_id", r.SessionID)
+	_, err := PrepareRuntimeLiveWaitRequest(r)
+	return err
 }
 func (r RuntimeLiveWaitResponse) Validate() error {
 	if err := validateUUIDV4Field("session_id", r.SessionID); err != nil {
@@ -474,7 +444,57 @@ func (r RuntimeRecordPromptHistoryRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
-	return validateScopedSessionID(r.SessionID)
+	return validateRequiredSessionID(r.SessionID)
+}
+
+func PrepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, *runtimeids.SessionID, error) {
+	sessionID, clientRequestID, err := prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, err
+	}
+	var callerSessionID *runtimeids.SessionID
+	if r.CallerSessionID != nil {
+		caller, err := parseCanonicalRuntimeSessionID(*r.CallerSessionID)
+		if err != nil {
+			return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, fmt.Errorf("caller_session_id: %w", err)
+		}
+		callerSessionID = &caller
+	}
+	if strings.TrimSpace(r.Text) == "" {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, nil, errors.New("text is required")
+	}
+	return sessionID, clientRequestID, callerSessionID, nil
+}
+
+func PrepareRuntimeLiveStopRequest(r RuntimeLiveStopRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
+	return prepareRuntimeLiveIdentity(r.ClientRequestID, r.SessionID)
+}
+
+func PrepareRuntimeLiveWaitRequest(r RuntimeLiveWaitRequest) (runtimeids.SessionID, error) {
+	return parseCanonicalRuntimeSessionID(r.SessionID)
+}
+
+func prepareRuntimeLiveIdentity(clientRequestID string, rawSessionID string) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, error) {
+	clientID, err := runtimeids.ParseRuntimeClientRequestID(clientRequestID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, err
+	}
+	sessionID, err := parseCanonicalRuntimeSessionID(rawSessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, runtimeids.RuntimeClientRequestID{}, err
+	}
+	return sessionID, clientID, nil
+}
+
+func parseCanonicalRuntimeSessionID(raw string) (runtimeids.SessionID, error) {
+	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(raw))
+	if err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	if !sessionID.IsCanonicalUUIDv4() {
+		return runtimeids.SessionID{}, errors.New("session_id must be a canonical UUIDv4")
+	}
+	return sessionID, nil
 }
 func (r RuntimeGoalSetRequest) Validate() error {
 	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {

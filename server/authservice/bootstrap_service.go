@@ -2,7 +2,6 @@ package authservice
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"core/server/auth"
@@ -36,17 +35,7 @@ func NewBootstrapService(manager *auth.Manager, oauthOptions auth.OpenAIOAuthOpt
 	}
 }
 
-func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.NoSemanticValidation,
-		func(validated servicecontract.Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error) {
-			return s.GetAuthBootstrapStatusValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *BootstrapService) GetAuthBootstrapStatusValidated(ctx context.Context, _ servicecontract.Validated[serverapi.AuthGetBootstrapStatusRequest]) (serverapi.AuthGetBootstrapStatusResponse, error) {
+func (s *BootstrapService) GetAuthBootstrapStatus(ctx context.Context, _ serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
 	ready, err := s.authReady(ctx)
 	if err != nil {
 		return serverapi.AuthGetBootstrapStatusResponse{}, err
@@ -69,17 +58,7 @@ func (s *BootstrapService) GetAuthBootstrapStatusValidated(ctx context.Context, 
 	}, nil
 }
 
-func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.NoSemanticValidation,
-		func(validated servicecontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
-			return s.AcknowledgeNoAuthValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *BootstrapService) AcknowledgeNoAuthValidated(ctx context.Context, _ servicecontract.Validated[serverapi.AuthAcknowledgeNoAuthRequest]) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
 	if s == nil || s.manager == nil {
 		return serverapi.AuthAcknowledgeNoAuthResponse{}, serverapi.ErrServerAuthRequired
 	}
@@ -102,17 +81,9 @@ func (s *BootstrapService) AcknowledgeNoAuthValidated(ctx context.Context, _ ser
 }
 
 func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.SemanticValidationRequired,
-		func(validated servicecontract.Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error) {
-			return s.CompleteAuthBootstrapValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *BootstrapService) CompleteAuthBootstrapValidated(ctx context.Context, validated servicecontract.Validated[serverapi.AuthCompleteBootstrapRequest]) (serverapi.AuthCompleteBootstrapResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.AuthCompleteBootstrapResponse{}, err
+	}
 	if s == nil || s.manager == nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, serverapi.ErrServerAuthRequired
 	}
@@ -146,7 +117,7 @@ func (s *BootstrapService) CompleteAuthBootstrapValidated(ctx context.Context, v
 	case serverapi.AuthBootstrapModeDeviceCode:
 		method, completeErr = auth.CompleteOpenAIDeviceAuthorizationGrant(ctx, s.oauthOptions, strings.TrimSpace(req.DeviceAuthorizationCode), strings.TrimSpace(req.DeviceCodeVerifier))
 	default:
-		panic(fmt.Sprintf("validated auth bootstrap mode %q is unsupported", req.Mode))
+		return serverapi.AuthCompleteBootstrapResponse{}, req.Validate()
 	}
 	if completeErr != nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, completeErr
@@ -196,4 +167,3 @@ func (s *BootstrapService) bootstrapResponseFromState(state auth.State) serverap
 }
 
 var _ servicecontract.AuthBootstrapService = (*BootstrapService)(nil)
-var _ servicecontract.AuthBootstrapTrustedService = (*BootstrapService)(nil)

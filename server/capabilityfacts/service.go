@@ -9,7 +9,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/onboardingimports"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -46,20 +45,9 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error) {
-			return s.GetCapabilityFactsValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *Service) GetCapabilityFactsValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.CapabilityFactsRequest],
-) (serverapi.CapabilityFactsResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
 	currentProvider, err := s.currentProviderFacts(ctx)
 	if err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
@@ -414,5 +402,3 @@ func sourceKindPtr(value *onboardingimports.SourceKind) *string {
 func ptr[T any](value T) *T {
 	return &value
 }
-
-var _ apicontract.CapabilityFactsTrustedService = (*Service)(nil)

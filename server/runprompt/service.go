@@ -111,4 +111,7 @@ func sameRunPromptMemoRequest(a runPromptMemoRequest, b runPromptMemoRequest) bo
 		a.Overrides == b.Overrides
 }
 
-var _ servicecontract.RunPromptService = (*inProcessRunPromptService)(nil)
+var (
+	_ servicecontract.RunPromptService        = (*inProcessRunPromptService)(nil)
+	_ servicecontract.RunPromptTrustedService = (*inProcessRunPromptService)(nil)
+)

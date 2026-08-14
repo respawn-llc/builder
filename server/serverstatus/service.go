@@ -6,7 +6,6 @@ import (
 	"core/server/auth"
 	"core/server/authservice"
 	"core/server/workflow"
-	servicecontract "core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
@@ -23,17 +22,7 @@ func NewServerStatusService(authManager *auth.Manager, cfg config.App, updates *
 	return &ServerStatusService{authManager: authManager, endpoint: config.ServerRPCURL(cfg), settings: cfg.Settings, updates: updates}
 }
 
-func (s *ServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.NoSemanticValidation,
-		func(validated servicecontract.Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error) {
-			return s.GetServerReadinessValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *ServerStatusService) GetServerReadinessValidated(ctx context.Context, _ servicecontract.Validated[serverapi.ServerReadinessRequest]) (serverapi.ServerReadinessResponse, error) {
+func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
 	authReady := false
 	settings := config.Settings{}
 	if s != nil {
@@ -74,16 +63,9 @@ func (s *ServerStatusService) GetServerReadinessValidated(ctx context.Context, _
 }
 
 func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.SemanticValidationRequired,
-		func(validated servicecontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
-			return s.GetUpdateStatusValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *ServerStatusService) GetUpdateStatusValidated(ctx context.Context, _ servicecontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
 	if s == nil || s.updates == nil {
 		return serverapi.UpdateStatusResponse{}, ErrUpdateStatusServiceClosed
 	}
@@ -93,9 +75,6 @@ func (s *ServerStatusService) GetUpdateStatusValidated(ctx context.Context, _ se
 	}
 	return serverapi.UpdateStatusResponse{Result: result}, nil
 }
-
-var _ servicecontract.ServerStatusService = (*ServerStatusService)(nil)
-var _ servicecontract.ServerStatusTrustedService = (*ServerStatusService)(nil)
 
 func subagentRoleSummaries(settings config.Settings) []serverapi.SubagentRoleSummary {
 	names := append([]string{workflow.DefaultAgentRole}, config.AvailableSubagentRoleNames(settings, false)...)

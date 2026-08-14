@@ -11,6 +11,7 @@ import (
 	askquestion "core/server/tools"
 	"core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -44,20 +45,24 @@ func (r *RuntimeRegistry) SubscribeAttentionNotificationsValidated(_ context.Con
 
 func (r *RuntimeRegistry) SubscribeSessionAttentionNotifications(ctx context.Context, req serverapi.AttentionSessionNotificationSubscribeRequest) (serverapi.AttentionNotificationSubscription, error) {
 	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
-		return r.SubscribeSessionAttentionNotificationsValidated(ctx, validated)
+		sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return nil, err
+		}
+		return r.SubscribeSessionAttentionNotificationsValidated(ctx, validated, sessionID)
 	})
 }
 
-func (r *RuntimeRegistry) SubscribeSessionAttentionNotificationsValidated(_ context.Context, validated apicontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+func (r *RuntimeRegistry) SubscribeSessionAttentionNotificationsValidated(_ context.Context, validated apicontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest], sessionID runtimeids.SessionID) (serverapi.AttentionNotificationSubscription, error) {
 	req := validated.Value()
 	if r == nil || r.attentionBroker == nil {
 		return nil, fmt.Errorf("attention notification stream is unavailable: %w", serverapi.ErrStreamUnavailable)
 	}
 	if !req.IncludePendingPromptSnapshot {
-		return r.attentionBroker.SubscribeSession(req.SessionID)
+		return r.attentionBroker.SubscribeSession(sessionID.String())
 	}
-	return r.pendingPrompts.WithLockedAttentionSnapshotResult(req.SessionID, func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
-		sub, err := r.attentionBroker.SubscribeSession(req.SessionID)
+	return r.pendingPrompts.WithLockedAttentionSnapshotResult(sessionID.String(), func(items []PendingPromptSnapshot) (serverapi.AttentionNotificationSubscription, error) {
+		sub, err := r.attentionBroker.SubscribeSession(sessionID.String())
 		if err != nil {
 			return nil, err
 		}
@@ -70,13 +75,13 @@ func (r *RuntimeRegistry) SubscribeSessionAttentionNotificationsValidated(_ cont
 					continue
 				}
 				processedTaskSteps[stepID] = struct{}{}
-				if err := r.enqueueTaskQuestionBatchSnapshot(sub, req.SessionID, taskBatches[stepID]); err != nil {
+				if err := r.enqueueTaskQuestionBatchSnapshot(sub, sessionID.String(), taskBatches[stepID]); err != nil {
 					_ = sub.Close()
 					return nil, err
 				}
 				continue
 			}
-			event := attentionPendingEventFromPrompt(req.SessionID, item, clientui.AttentionNotificationSourceSnapshot)
+			event := attentionPendingEventFromPrompt(sessionID.String(), item, clientui.AttentionNotificationSourceSnapshot)
 			if event.Pending == nil {
 				continue
 			}

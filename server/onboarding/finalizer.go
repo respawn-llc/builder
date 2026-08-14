@@ -13,7 +13,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/onboardingimports"
-	"core/shared/apicontract"
 	"core/shared/config"
 	"core/shared/serverapi"
 	"core/shared/theme"
@@ -68,36 +67,6 @@ func (f *Finalizer) FinalizeOnboarding(ctx context.Context, req serverapi.Onboar
 	} else if exists {
 		return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
 	}
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
-			return f.finalizeOnboardingValidated(ctx, validated, true)
-		},
-	)
-}
-
-func (f *Finalizer) FinalizeOnboardingValidated(ctx context.Context, validated apicontract.Validated[serverapi.OnboardingFinalizeRequest]) (serverapi.OnboardingFinalizeResponse, error) {
-	return f.finalizeOnboardingValidated(ctx, validated, false)
-}
-
-func (f *Finalizer) finalizeOnboardingValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.OnboardingFinalizeRequest],
-	initialPathCheckComplete bool,
-) (serverapi.OnboardingFinalizeResponse, error) {
-	req := validated.Value()
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	settingsPath := strings.TrimSpace(f.settingsPath)
-	if !initialPathCheckComplete {
-		if exists, err := pathExists(settingsPath); err != nil {
-			return serverapi.OnboardingFinalizeResponse{}, configWriteFailed(settingsPath, "validate", err)
-		} else if exists {
-			return serverapi.OnboardingFinalizeResponse{}, configAlreadyExists(settingsPath)
-		}
-	}
 	release, err := globalRootLocks.acquire(ctx, f.persistenceRoot)
 	if err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelWaitingForLock)
@@ -110,6 +79,9 @@ func (f *Finalizer) finalizeOnboardingValidated(
 	}
 	if err := ctx.Err(); err != nil {
 		return serverapi.OnboardingFinalizeResponse{}, serverapi.NewOnboardingCanceledError(serverapi.OnboardingCancelValidating)
+	}
+	if err := serverapi.ValidateOnboardingFinalizeRequest(req); err != nil {
+		return serverapi.OnboardingFinalizeResponse{}, err
 	}
 	settings, preserved, err := projectSettings(req)
 	if err != nil {
@@ -140,8 +112,6 @@ func (f *Finalizer) finalizeOnboardingValidated(
 	}
 	return serverapi.OnboardingFinalizeResponse{Completed: true, SettingsPath: path}, nil
 }
-
-var _ apicontract.OnboardingFinalizeTrustedService = (*Finalizer)(nil)
 
 func projectSettings(req serverapi.OnboardingFinalizeRequest) (config.Settings, map[string]bool, error) {
 	settings := config.DefaultOnboardingSettings()

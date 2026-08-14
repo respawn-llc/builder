@@ -619,18 +619,22 @@ func (r *RuntimeRegistry) PublishWorktreeTransitionOutcome(sessionID string, out
 
 func (r *RuntimeRegistry) SubscribeSessionTranscript(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
 	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
-		return r.SubscribeSessionTranscriptValidated(ctx, validated)
+		sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return nil, err
+		}
+		return r.SubscribeSessionTranscriptValidated(ctx, validated, sessionID)
 	})
 }
 
-func (r *RuntimeRegistry) SubscribeSessionTranscriptValidated(ctx context.Context, validated apicontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
+func (r *RuntimeRegistry) SubscribeSessionTranscriptValidated(ctx context.Context, _ apicontract.Validated[serverapi.TranscriptSubscribeRequest], sessionID runtimeids.SessionID) (serverapi.TranscriptSubscription, error) {
 	if r == nil {
 		return nil, fmt.Errorf("runtime registry is required")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	id := validated.SessionID(validated.Value().SessionID).String()
+	id := sessionID.String()
 	for {
 		authorityEntry, authorityChanged := r.authorityEntryAndChange(id)
 		if authorityEntry != nil {

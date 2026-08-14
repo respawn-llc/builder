@@ -70,13 +70,7 @@ func (l *headlessPromptLauncher) prepareHeadlessPrompt(ctx context.Context, req 
 		CallerSessionID: req.CallerSessionID,
 		Overrides:       req.Overrides,
 	}
-	result, err := apicontract.WithValidated(
-		launchReq,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.SessionPlanRequest]) (sessionlaunch.PlanResult, error) {
-			return l.boot.SessionLaunch.PlanLaunchSessionValidated(ctx, validated)
-		},
-	)
+	result, err := l.boot.SessionLaunch.PlanLaunchSession(ctx, launchReq)
 	if err != nil {
 		return nil, err
 	}

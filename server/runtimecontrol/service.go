@@ -398,7 +398,11 @@ func (a *runtimeCommandAttempt) Finish() {
 
 func (s *Service) SetSessionName(ctx context.Context, req serverapi.RuntimeSetSessionNameRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetSessionNameRequest]) (struct{}, error) {
-		return struct{}{}, s.setSessionName(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.setSessionName(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -426,7 +430,11 @@ func (s *Service) setSessionName(ctx context.Context, validated servicecontract.
 
 func (s *Service) SetThinkingLevel(ctx context.Context, req serverapi.RuntimeSetThinkingLevelRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetThinkingLevelRequest]) (struct{}, error) {
-		return struct{}{}, s.setThinkingLevel(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.setThinkingLevel(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -470,7 +478,11 @@ func (s *Service) setThinkingLevel(ctx context.Context, validated servicecontrac
 
 func (s *Service) SetFastModeEnabled(ctx context.Context, req serverapi.RuntimeSetFastModeEnabledRequest) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetFastModeEnabledRequest]) (serverapi.RuntimeSetFastModeEnabledResponse, error) {
-		return s.setFastModeEnabled(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSetFastModeEnabledResponse{}, err
+		}
+		return s.setFastModeEnabled(ctx, validated, sessionID)
 	})
 }
 
@@ -520,7 +532,11 @@ func (s *Service) setFastModeEnabled(ctx context.Context, validated servicecontr
 
 func (s *Service) SetReviewerEnabled(ctx context.Context, req serverapi.RuntimeSetReviewerEnabledRequest) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetReviewerEnabledRequest]) (serverapi.RuntimeSetReviewerEnabledResponse, error) {
-		return s.setReviewerEnabled(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSetReviewerEnabledResponse{}, err
+		}
+		return s.setReviewerEnabled(ctx, validated, sessionID)
 	})
 }
 
@@ -581,7 +597,11 @@ func (s *Service) setReviewerEnabled(ctx context.Context, validated servicecontr
 
 func (s *Service) SetAutoCompactionEnabled(ctx context.Context, req serverapi.RuntimeSetAutoCompactionEnabledRequest) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetAutoCompactionEnabledRequest]) (serverapi.RuntimeSetAutoCompactionEnabledResponse, error) {
-		return s.setAutoCompactionEnabled(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSetAutoCompactionEnabledResponse{}, err
+		}
+		return s.setAutoCompactionEnabled(ctx, validated, sessionID)
 	})
 }
 
@@ -621,7 +641,11 @@ func (s *Service) setAutoCompactionEnabled(ctx context.Context, validated servic
 
 func (s *Service) SetQuestionsEnabled(ctx context.Context, req serverapi.RuntimeSetQuestionsEnabledRequest) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSetQuestionsEnabledRequest]) (serverapi.RuntimeSetQuestionsEnabledResponse, error) {
-		return s.setQuestionsEnabled(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeSetQuestionsEnabledResponse{}, err
+		}
+		return s.setQuestionsEnabled(ctx, validated, sessionID)
 	})
 }
 
@@ -770,7 +794,11 @@ func (s *Service) publishSessionStatus(sessionID string) error {
 
 func (s *Service) AppendCommittedEntry(ctx context.Context, req serverapi.RuntimeAppendCommittedEntryRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeAppendCommittedEntryRequest]) (struct{}, error) {
-		return struct{}{}, s.appendCommittedEntry(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.appendCommittedEntry(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -817,7 +845,11 @@ func (s *Service) AppendSessionEntry(ctx context.Context, sessionID string, role
 
 func (s *Service) ShouldCompactBeforeUserMessage(ctx context.Context, req serverapi.RuntimeShouldCompactBeforeUserMessageRequest) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeShouldCompactBeforeUserMessageRequest]) (serverapi.RuntimeShouldCompactBeforeUserMessageResponse, error) {
-		return s.shouldCompactBeforeUserMessage(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeShouldCompactBeforeUserMessageResponse{}, err
+		}
+		return s.shouldCompactBeforeUserMessage(ctx, validated, sessionID)
 	})
 }
 
@@ -841,7 +873,11 @@ func (s *Service) shouldCompactBeforeUserMessage(ctx context.Context, validated 
 
 func (s *Service) SubmitUserShellCommand(ctx context.Context, req serverapi.RuntimeSubmitUserShellCommandRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeSubmitUserShellCommandRequest]) (struct{}, error) {
-		return struct{}{}, s.submitUserShellCommand(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.submitUserShellCommand(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -867,7 +903,11 @@ func (s *Service) submitUserShellCommand(ctx context.Context, validated servicec
 
 func (s *Service) CompactContext(ctx context.Context, req serverapi.RuntimeCompactContextRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeCompactContextRequest]) (struct{}, error) {
-		return struct{}{}, s.compactContext(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.compactContext(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -893,7 +933,11 @@ func (s *Service) compactContext(ctx context.Context, validated servicecontract.
 
 func (s *Service) Interrupt(ctx context.Context, req serverapi.RuntimeInterruptRequest) (serverapi.RuntimeInterruptResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeInterruptRequest]) (serverapi.RuntimeInterruptResponse, error) {
-		return s.interrupt(ctx, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeInterruptResponse{}, err
+		}
+		return s.interrupt(ctx, sessionID)
 	})
 }
 
@@ -953,7 +997,11 @@ func (s *Service) runtimeInterruptResponse(ctx context.Context, sessionID string
 
 func (s *Service) DiscardQueuedUserMessage(ctx context.Context, req serverapi.RuntimeDiscardQueuedUserMessageRequest) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
 	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeDiscardQueuedUserMessageRequest]) (serverapi.RuntimeDiscardQueuedUserMessageResponse, error) {
-		return s.discardQueuedUserMessage(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, err := parseRuntimeSessionID(req.SessionID)
+		if err != nil {
+			return serverapi.RuntimeDiscardQueuedUserMessageResponse{}, err
+		}
+		return s.discardQueuedUserMessage(ctx, validated, sessionID)
 	})
 }
 
@@ -976,7 +1024,11 @@ func (s *Service) discardQueuedUserMessage(ctx context.Context, validated servic
 
 func (s *Service) RecordPromptHistory(ctx context.Context, req serverapi.RuntimeRecordPromptHistoryRequest) error {
 	_, err := servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.RuntimeRecordPromptHistoryRequest]) (struct{}, error) {
-		return struct{}{}, s.recordPromptHistoryRequest(ctx, validated, validated.SessionID(req.SessionID))
+		sessionID, parseErr := parseRuntimeSessionID(req.SessionID)
+		if parseErr != nil {
+			return struct{}{}, parseErr
+		}
+		return struct{}{}, s.recordPromptHistoryRequest(ctx, validated, sessionID)
 	})
 	return err
 }
@@ -1002,6 +1054,10 @@ func (s *Service) withRuntimeID(ctx context.Context, sessionID runtimeids.Sessio
 		return errors.New("session runtime authority is required")
 	}
 	return s.authority.WithCurrentRuntime(ctx, sessionID, fn)
+}
+
+func parseRuntimeSessionID(raw string) (runtimeids.SessionID, error) {
+	return runtimeids.ParseSessionID(strings.TrimSpace(raw))
 }
 
 func (s *Service) recordPromptHistory(ctx context.Context, sessionID string, sourceID string, text string) (metadata.PromptHistoryRecord, bool, error) {
@@ -1070,5 +1126,4 @@ var (
 	_ servicecontract.RuntimeCompactionTrustedService         = (*Service)(nil)
 	_ servicecontract.RuntimeUserInputTrustedService          = (*Service)(nil)
 	_ servicecontract.RuntimeInterruptTrustedService          = (*Service)(nil)
-	_ servicecontract.RuntimeGoalTrustedService               = (*Service)(nil)
 )

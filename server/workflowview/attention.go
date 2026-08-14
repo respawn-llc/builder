@@ -15,7 +15,6 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/sessionruntime"
 	"core/server/workflow"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -51,13 +50,10 @@ func NewAttention(metadataStore *metadata.Store, definitions *DefinitionProjecti
 }
 
 func (a *Attention) List(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error) {
-		return a.ListValidated(ctx, validated)
-	})
-}
-
-func (a *Attention) ListValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowAttentionListRequest]) (serverapi.WorkflowAttentionListResponse, error) {
-	return a.ReadAttention(ctx, validated.Value())
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowAttentionListResponse{}, err
+	}
+	return a.ReadAttention(ctx, req)
 }
 
 func (a *Attention) ReadAttention(ctx context.Context, req serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error) {
@@ -98,13 +94,10 @@ func (a *Attention) ReadAttention(ctx context.Context, req serverapi.WorkflowAtt
 }
 
 func (a *Attention) ListTask(ctx context.Context, req serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error) {
-		return a.ListTaskValidated(ctx, validated)
-	})
-}
-
-func (a *Attention) ListTaskValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowTaskAttentionListRequest]) (serverapi.WorkflowTaskAttentionListResponse, error) {
-	return a.ListTaskByID(ctx, validated.Value().TaskID)
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	return a.ListTaskByID(ctx, req.TaskID)
 }
 
 func (a *Attention) ListTaskByID(ctx context.Context, taskID string) (serverapi.WorkflowTaskAttentionListResponse, error) {

@@ -519,6 +519,23 @@ func decodeAndHandle[TReq any, TResp any](req protocol.Request, handler func(TRe
 	return protocol.NewSuccessResponse(req.ID, resp)
 }
 
+func decodeOwnerAndHandle[TReq any, TResp any](req protocol.Request, handler func(TReq) (TResp, error)) protocol.Response {
+	params, err := decodeParams[TReq](req.Params)
+	if err != nil {
+		return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
+	}
+	resp, err := handler(params)
+	if err != nil {
+		return responseForError(req.ID, err)
+	}
+	if validator, ok := any(resp).(interface{ Validate() error }); ok {
+		if err := validator.Validate(); err != nil {
+			return responseForError(req.ID, fmt.Errorf("handler returned an invalid response: %w", err))
+		}
+	}
+	return protocol.NewSuccessResponse(req.ID, resp)
+}
+
 func decodeValidatedParams[TReq any](req protocol.Request) (TReq, protocol.Response, bool) {
 	params, err := decodeParams[TReq](req.Params)
 	if err != nil {
@@ -627,22 +644,6 @@ func decodePreparedValidatedAndHandleWithPolicy[TReq any, TResp any](
 		}
 	}
 	return protocol.NewSuccessResponse(req.ID, resp)
-}
-
-func decodeAuthorizeAndHandle[TReq any, TResp any](
-	g *Gateway,
-	ctx context.Context,
-	state *connectionState,
-	req protocol.Request,
-	handler func(TReq) (TResp, error),
-) protocol.Response {
-	return decodeAndHandle(req, func(params TReq) (TResp, error) {
-		var zero TResp
-		if err := g.authorizeValidatedRouteRequest(ctx, state, req.Method, params); err != nil {
-			return zero, err
-		}
-		return handler(params)
-	})
 }
 
 func receiveRequest(ctx context.Context, conn rpcwire.Conn) (protocol.Request, error) {

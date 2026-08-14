@@ -120,10 +120,13 @@ func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx cont
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.TranscriptSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			if state.attachedSession == nil || state.attachedSession.String() != validated.Value().SessionID {
+				return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
+			}
+			return nil
 		},
 		func(ctx context.Context, validated rpccontract.Validated[serverapi.TranscriptSubscribeRequest]) (serverapi.TranscriptSubscription, error) {
-			subscription, err := trusted.SubscribeSessionTranscriptValidated(ctx, validated)
+			subscription, err := trusted.SubscribeSessionTranscriptValidated(ctx, validated, *state.attachedSession)
 			if err != nil || state.clientCapabilities.TranscriptLiveRunFinished {
 				return subscription, err
 			}
@@ -240,7 +243,7 @@ func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx 
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.AttentionNotificationSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			return nil
 		},
 		trusted.SubscribeAttentionNotificationsValidated,
 		func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
@@ -257,9 +260,14 @@ func (g *Gateway) serveSessionAttentionNotificationSubscription(conn rpcwire.Con
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			if state.attachedSession == nil || state.attachedSession.String() != validated.Value().SessionID {
+				return gatewayRouteError{code: protocol.ErrCodeInvalidRequest, message: "session attach is required before subscribing"}
+			}
+			return nil
 		},
-		trusted.SubscribeSessionAttentionNotificationsValidated,
+		func(ctx context.Context, validated rpccontract.Validated[serverapi.AttentionSessionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error) {
+			return trusted.SubscribeSessionAttentionNotificationsValidated(ctx, validated, *state.attachedSession)
+		},
 		func(evt clientui.AttentionNotificationEvent) protocol.AttentionNotificationEventParams {
 			return protocol.AttentionNotificationEventParams{Event: evt}
 		},
@@ -294,7 +302,7 @@ func (g *Gateway) serveWorkflowProjectSubscription(conn rpcwire.Conn, ctx contex
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.WorkflowProjectSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			return nil
 		},
 		trusted.SubscribeWorkflowProjectValidated,
 		workflowProjectEventParams,
@@ -309,7 +317,7 @@ func (g *Gateway) serveWorkflowSubscription(conn rpcwire.Conn, ctx context.Conte
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.WorkflowSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			return nil
 		},
 		trusted.SubscribeWorkflowValidated,
 		workflowProjectEventParams,
@@ -324,7 +332,7 @@ func (g *Gateway) serveWorktreeSetupSubscription(conn rpcwire.Conn, ctx context.
 	}
 	serveGatewaySubscription(g, conn, ctx, state, route, req,
 		func(validated rpccontract.Validated[serverapi.WorktreeSetupSubscribeRequest]) error {
-			return g.authorizeValidatedRouteRequest(ctx, state, req.Method, validated.Value())
+			return nil
 		},
 		trusted.SubscribeWorktreeSetupValidated,
 		worktreeSetupEventParams,

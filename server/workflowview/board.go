@@ -11,7 +11,6 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
-	"core/shared/apicontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
@@ -47,13 +46,10 @@ func NewBoard(metadataStore *metadata.Store, definitions *DefinitionProjection, 
 }
 
 func (b *Board) Get(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoard, error) {
-		return b.GetValidated(ctx, validated)
-	})
-}
-
-func (b *Board) GetValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowBoardRequest]) (serverapi.WorkflowBoard, error) {
-	return b.ReadBoard(ctx, validated.Value())
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowBoard{}, err
+	}
+	return b.ReadBoard(ctx, req)
 }
 
 func (b *Board) ReadBoard(ctx context.Context, req serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error) {
@@ -102,13 +98,10 @@ func (b *Board) ReadBoard(ctx context.Context, req serverapi.WorkflowBoardReques
 }
 
 func (b *Board) ListNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-		return b.ListNodeCardsValidated(ctx, validated)
-	})
-}
-
-func (b *Board) ListNodeCardsValidated(ctx context.Context, validated apicontract.Validated[serverapi.WorkflowBoardNodeCardsListRequest]) (serverapi.WorkflowBoardNodeCardsListResponse, error) {
-	return b.ReadNodeCards(ctx, validated.Value())
+	if err := req.ValidateRPC(); err != nil {
+		return serverapi.WorkflowBoardNodeCardsListResponse{}, err
+	}
+	return b.ReadNodeCards(ctx, req)
 }
 
 func (b *Board) ReadNodeCards(ctx context.Context, req serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error) {

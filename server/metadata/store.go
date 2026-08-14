@@ -2057,18 +2057,21 @@ type ActiveProjectSession struct {
 }
 
 func (s *Store) ResolveActiveProjectSession(ctx context.Context, rawSessionID string) (ActiveProjectSession, error) {
-	sessionID, err := runtimeids.ParseSessionID(rawSessionID)
+	row, err := s.resolveSessionExecutionTargetRow(ctx, rawSessionID)
 	if err != nil {
+		if _, parseErr := runtimeids.ParseSessionID(rawSessionID); parseErr != nil {
+			return ActiveProjectSession{}, parseErr
+		}
 		return ActiveProjectSession{}, err
 	}
-	row, err := s.resolveSessionExecutionTargetRow(ctx, sessionID.String())
+	sessionID, err := runtimeids.ParseSessionID(row.SessionID)
 	if err != nil {
-		return ActiveProjectSession{}, err
+		return ActiveProjectSession{}, fmt.Errorf("decode persisted Session identity: %w", err)
 	}
-	if strings.TrimSpace(row.SessionID) != sessionID.String() {
+	if row.SessionID != rawSessionID {
 		return ActiveProjectSession{}, fmt.Errorf(
 			"resolved session identity mismatch: requested %q, loaded %q",
-			sessionID.String(),
+			rawSessionID,
 			row.SessionID,
 		)
 	}

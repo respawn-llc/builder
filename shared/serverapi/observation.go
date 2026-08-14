@@ -25,7 +25,8 @@ type RuntimeLiveWatchRequest struct {
 }
 
 func (r RuntimeLiveWatchRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	_, err := PrepareRuntimeLiveWaitRequest(RuntimeLiveWaitRequest{SessionID: r.SessionID})
+	return err
 }
 
 type ObservationQuestion struct {

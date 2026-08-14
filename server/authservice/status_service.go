@@ -31,17 +31,9 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 }
 
 func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return servicecontract.WithValidated(
-		req,
-		servicecontract.SemanticValidationRequired,
-		func(validated servicecontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-			return s.GetAuthStatusValidated(ctx, validated)
-		},
-	)
-}
-
-func (s *StatusService) GetAuthStatusValidated(ctx context.Context, validated servicecontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-	req := validated.Value()
+	if err := req.Validate(); err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
 	state := auth.EmptyState()
 	var authStateErr error
 	if s != nil && s.manager != nil {
@@ -330,4 +322,3 @@ func authStatusFailure(err error) serverapi.AuthStatusFailure {
 }
 
 var _ servicecontract.AuthStatusService = (*StatusService)(nil)
-var _ servicecontract.AuthStatusTrustedService = (*StatusService)(nil)

@@ -21,25 +21,13 @@ type promptCommandCatalogService struct {
 	catalog promptcommands.Service
 }
 
-var _ apicontract.PromptCommandCatalogTrustedService = promptCommandCatalogService{}
-
 func (s promptCommandCatalogService) GetPromptCommandCatalog(
 	ctx context.Context,
 	req serverapi.PromptCommandCatalogRequest,
 ) (serverapi.PromptCommandCatalogResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
-			return s.GetPromptCommandCatalogValidated(ctx, validated)
-		},
-	)
-}
-
-func (s promptCommandCatalogService) GetPromptCommandCatalogValidated(
-	_ context.Context,
-	_ apicontract.Validated[serverapi.PromptCommandCatalogRequest],
-) (serverapi.PromptCommandCatalogResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.PromptCommandCatalogResponse{}, err
+	}
 	entries, err := s.catalog.Catalog()
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, publicPromptCommandError(err)
@@ -59,22 +47,10 @@ type promptCommandSessionCatalogService struct {
 	sessionID string
 }
 
-var _ apicontract.PromptCommandCatalogTrustedService = promptCommandSessionCatalogService{}
-
 func (s promptCommandSessionCatalogService) GetPromptCommandCatalog(ctx context.Context, req serverapi.PromptCommandCatalogRequest) (serverapi.PromptCommandCatalogResponse, error) {
-	return apicontract.WithValidated(
-		req,
-		apicontract.SemanticValidationRequired,
-		func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
-			return s.GetPromptCommandCatalogValidated(ctx, validated)
-		},
-	)
-}
-
-func (s promptCommandSessionCatalogService) GetPromptCommandCatalogValidated(
-	ctx context.Context,
-	validated apicontract.Validated[serverapi.PromptCommandCatalogRequest],
-) (serverapi.PromptCommandCatalogResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.PromptCommandCatalogResponse{}, err
+	}
 	if s.core == nil {
 		return serverapi.PromptCommandCatalogResponse{}, errors.New("core is required")
 	}
@@ -86,7 +62,7 @@ func (s promptCommandSessionCatalogService) GetPromptCommandCatalogValidated(
 	if err != nil {
 		return serverapi.PromptCommandCatalogResponse{}, err
 	}
-	return catalog.(apicontract.PromptCommandCatalogTrustedService).GetPromptCommandCatalogValidated(ctx, validated)
+	return catalog.GetPromptCommandCatalog(ctx, req)
 }
 
 type promptCommandEffectiveWorkspaceResolver struct {
