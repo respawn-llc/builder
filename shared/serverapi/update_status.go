@@ -11,8 +11,7 @@ import (
 
 type UpdateStatusRequest struct{}
 
-func (UpdateStatusRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (UpdateStatusRequest) Validate() error {
 	return nil
 }
 

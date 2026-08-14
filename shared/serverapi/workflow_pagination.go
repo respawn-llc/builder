@@ -6,8 +6,7 @@ type WorkflowTaskOffsetPageRequest struct {
 	Limit  *int   `json:"limit,omitempty"`
 }
 
-func (r WorkflowTaskOffsetPageRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskOffsetPageRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}

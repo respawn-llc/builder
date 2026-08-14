@@ -526,9 +526,8 @@ func decodeOwnerAndHandle[TReq any, TResp any](req protocol.Request, handler fun
 	}
 	resp, err := handler(params)
 	if err != nil {
-		var validationErr interface{ RequestValidationCause() error }
-		if errors.As(err, &validationErr) {
-			return responseForValidationError(req.ID, validationErr.RequestValidationCause())
+		if validationErr := semanticValidationError(params); validationErr != nil {
+			return responseForValidationError(req.ID, validationErr)
 		}
 		return responseForError(req.ID, err)
 	}

@@ -1832,13 +1832,11 @@ type WorkflowTaskSessionStarted struct {
 	Name      string `json:"name"`
 }
 
-func (r WorkflowCreateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowCreateRequest) Validate() error {
 	return validateWorkflowName(r.Name, "name")
 }
 
-func (r WorkflowCreateAndLinkProjectRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
 	if err := validateWorkflowName(r.Name, "name"); err != nil {
 		return err
 	}
@@ -1848,16 +1846,14 @@ func (r WorkflowCreateAndLinkProjectRequest) Validate() (resultErr error) {
 	return validateWorkflowProjectLinkDefaultMode(r.DefaultPolicy)
 }
 
-func (r WorkflowUpdateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowUpdateRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
 	return validateWorkflowName(r.Name, "name")
 }
 
-func (r WorkflowListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowListRequest) Validate() error {
 	if _, err := ResolveWorkflowOffsetWindow(r.Offset, r.Limit); err != nil {
 		return err
 	}
@@ -1895,13 +1891,11 @@ func ResolveWorkflowOffsetWindow(offset *int, limit *int) (WorkflowOffsetWindow,
 	)
 }
 
-func (r WorkflowGetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowGetRequest) Validate() error {
 	return validateRequiredWorkflowID(r.WorkflowID)
 }
 
-func (r WorkflowLinkProjectRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowLinkProjectRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
 	}
@@ -1911,31 +1905,26 @@ func (r WorkflowLinkProjectRequest) Validate() (resultErr error) {
 	return validateWorkflowProjectLinkDefaultMode(r.DefaultPolicy)
 }
 
-func (r WorkflowListProjectLinksRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowListProjectLinksRequest) Validate() error {
 	return validateRequired("project_id", r.ProjectID)
 }
 
-func (r WorkflowSetDefaultProjectLinkRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowSetDefaultProjectLinkRequest) Validate() error {
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
 		return err
 	}
 	return validateRequiredWorkflowID(r.WorkflowID)
 }
 
-func (r WorkflowUnlinkProjectRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowUnlinkProjectRequest) Validate() error {
 	return validateRequired("link_id", r.LinkID)
 }
 
-func (r WorkflowDeletePreviewRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowDeletePreviewRequest) Validate() error {
 	return validateRequiredWorkflowID(r.WorkflowID)
 }
 
-func (r WorkflowDeleteRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowDeleteRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -1957,8 +1946,7 @@ func (r WorkflowDeleteRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r WorkflowValidateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowValidateRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -1970,16 +1958,14 @@ func (r WorkflowValidateRequest) Validate() (resultErr error) {
 	}
 }
 
-func (r WorkflowScriptPathValidateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowScriptPathValidateRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
 	return validateRequired("node_id", r.NodeID)
 }
 
-func (r WorkflowGraphValidateDraftRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowGraphValidateDraftRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -1992,8 +1978,7 @@ func (r WorkflowGraphValidateDraftRequest) Validate() (resultErr error) {
 	return validateWorkflowGraphDraftEnvelope(r.Graph)
 }
 
-func (r WorkflowGraphDeriveWiringRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowGraphDeriveWiringRequest) Validate() error {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
 		return err
 	}
@@ -2004,8 +1989,7 @@ func (r WorkflowGraphSavePreviewRequest) Validate() error {
 	return validateWorkflowGraphSavePreviewRequest(r)
 }
 
-func (r WorkflowGraphSavePreviewRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowGraphSavePreviewRequest) ValidateRPC() error {
 	return validateWorkflowGraphSavePreviewRequest(r)
 }
 
@@ -2033,8 +2017,7 @@ func (r WorkflowGraphSaveRequest) Validate() error {
 	return validateWorkflowGraphSaveRequest(r)
 }
 
-func (r WorkflowGraphSaveRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowGraphSaveRequest) ValidateRPC() error {
 	return validateWorkflowGraphSaveRequest(r)
 }
 
@@ -2345,8 +2328,7 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	return nil
 }
 
-func (r WorkflowTaskUpdateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskUpdateRequest) Validate() error {
 	if err := validateTaskID("task_id", r.TaskID); err != nil {
 		return err
 	}
@@ -2437,8 +2419,7 @@ func (r WorkflowTaskListItem) Validate() error {
 	return validateLabelIDs("label_ids", r.LabelIDs)
 }
 
-func (r WorkflowTaskCreateRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskCreateRequest) ValidateRPC() error {
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
 		return workflowLabelRPCValidationError(err, r.ProjectID, "", false)
 	}
@@ -2816,8 +2797,7 @@ func prefixWorkflowProjectionValidationField(field string, index int, err error)
 	)
 }
 
-func (r WorkflowTaskStartRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskStartRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
@@ -2836,8 +2816,7 @@ func (r WorkflowTaskStartRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r WorkflowTaskResumeRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskResumeRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
@@ -2856,16 +2835,14 @@ func (r WorkflowTaskResumeRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r WorkflowTaskApproveRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskApproveRequest) Validate() error {
 	if err := validateRequired("approval_id", r.ApprovalID); err != nil {
 		return err
 	}
 	return validateWorkflowTaskInvokingSession(r.InvokingSessionID)
 }
 
-func (r WorkflowTaskMoveRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskMoveRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("target_node_id", r.TargetNodeID)); err != nil {
 		return err
 	}
@@ -2917,8 +2894,7 @@ func validateWorkflowTaskInvokingSession(sessionID *runtimeids.SessionID) error 
 	return nil
 }
 
-func (r WorkflowTaskCompleteRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskCompleteRequest) Validate() error {
 	if err := validateWorkflowTaskCompleteActor(r); err != nil {
 		return err
 	}
@@ -2951,13 +2927,11 @@ func (r WorkflowTaskCompleteRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r WorkflowTaskDeleteRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskDeleteRequest) Validate() error {
 	return validateRequired("task_id", r.TaskID)
 }
 
-func (r WorkflowTaskInterruptRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskInterruptRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}
@@ -2992,8 +2966,7 @@ func workflowTaskCompleteSelectorCount(r WorkflowTaskCompleteRequest) int {
 	return count
 }
 
-func (r WorkflowAttentionListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowAttentionListRequest) Validate() error {
 	if r.PageSize < 0 {
 		return WorkflowRequestValidationError{Code: WorkflowRequestErrorInvalidMode, Field: "page_size", Message: "page_size must be non-negative"}
 	}
@@ -3003,8 +2976,7 @@ func (r WorkflowAttentionListRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r WorkflowTaskAttentionListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskAttentionListRequest) Validate() error {
 	return validateRequired("task_id", r.TaskID)
 }
 
@@ -3017,8 +2989,7 @@ func validateWorkflowApprovalDecision(decision clientui.ApprovalDecision) error 
 	}
 }
 
-func (r WorkflowTaskCommentAddRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskCommentAddRequest) Validate() error {
 	if err := validateRequiredFields(requiredField("task_id", r.TaskID), requiredField("body", r.Body), requiredField("author", r.Author)); err != nil {
 		return err
 	}
@@ -3034,13 +3005,11 @@ func validateWorkflowTaskCommentAuthorKind(author string) error {
 	}
 }
 
-func (r WorkflowTaskCommentReplaceRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskCommentReplaceRequest) Validate() error {
 	return validateRequiredFields(requiredField("comment_id", r.CommentID), requiredField("body", r.Body))
 }
 
-func (r WorkflowTaskCommentDeleteRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskCommentDeleteRequest) Validate() error {
 	return validateRequired("comment_id", r.CommentID)
 }
 
@@ -3051,8 +3020,7 @@ func (r WorkflowBoardRequest) Validate() error {
 	return r.LabelFilter.Validate()
 }
 
-func (r WorkflowBoardRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowBoardRequest) ValidateRPC() error {
 	if err := r.validateScope(); err != nil {
 		return err
 	}
@@ -3079,8 +3047,7 @@ func (r WorkflowTaskListRequest) Validate() error {
 	return r.validateAfterLabelFilter()
 }
 
-func (r WorkflowTaskListRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskListRequest) ValidateRPC() error {
 	if err := r.validateBeforeLabelFilter(); err != nil {
 		return err
 	}
@@ -3161,8 +3128,7 @@ func (r WorkflowBoardNodeCardsListRequest) Validate() error {
 	return r.LabelFilter.Validate()
 }
 
-func (r WorkflowBoardNodeCardsListRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowBoardNodeCardsListRequest) ValidateRPC() error {
 	if err := r.validateScopeAndPage(); err != nil {
 		return err
 	}
@@ -3217,8 +3183,7 @@ func (r WorkflowSubscribeRequest) Validate() error {
 	return validateRequiredWorkflowID(r.WorkflowID)
 }
 
-func (r WorkflowTaskGetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskGetRequest) Validate() error {
 	taskID := strings.TrimSpace(r.TaskID)
 	projectID := strings.TrimSpace(r.ProjectID)
 	shortID := strings.TrimSpace(r.ShortID)

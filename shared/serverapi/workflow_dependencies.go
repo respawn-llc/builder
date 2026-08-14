@@ -177,18 +177,15 @@ func (i WorkflowTaskDependencyCreateIntent) Validate() error {
 	}
 }
 
-func (r WorkflowTaskDependencyAddRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskDependencyAddRequest) Validate() error {
 	return validateWorkflowTaskDependencyPair(r.BlockerTaskID, r.BlockedTaskID)
 }
 
-func (r WorkflowTaskDependencyRemoveRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskDependencyRemoveRequest) Validate() error {
 	return validateWorkflowTaskDependencyPair(r.BlockerTaskID, r.BlockedTaskID)
 }
 
-func (r WorkflowTaskDependencyListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskDependencyListRequest) Validate() error {
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}

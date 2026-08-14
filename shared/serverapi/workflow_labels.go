@@ -276,8 +276,7 @@ func validWorkflowLabelErrorString(value *string) bool {
 	return value != nil && strings.TrimSpace(*value) != "" && strings.TrimSpace(*value) == *value
 }
 
-func (r WorkflowProjectLabelCatalogRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowProjectLabelCatalogRequest) Validate() error {
 	return validateRequired("project_id", r.ProjectID)
 }
 
@@ -306,8 +305,7 @@ func (r WorkflowProjectLabelCreateRequest) Validate() error {
 	return validateLabelName(r.Name)
 }
 
-func (r WorkflowProjectLabelCreateRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowProjectLabelCreateRequest) ValidateRPC() error {
 	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
 }
 
@@ -323,8 +321,7 @@ func (r WorkflowProjectLabelRenameRequest) Validate() error {
 	return validateLabelID("label_id", r.LabelID)
 }
 
-func (r WorkflowProjectLabelRenameRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowProjectLabelRenameRequest) ValidateRPC() error {
 	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
 }
 
@@ -335,8 +332,7 @@ func (r WorkflowProjectLabelDeleteRequest) Validate() error {
 	return validateLabelID("label_id", r.LabelID)
 }
 
-func (r WorkflowProjectLabelDeleteRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowProjectLabelDeleteRequest) ValidateRPC() error {
 	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", false)
 }
 
@@ -360,8 +356,7 @@ func (r WorkflowProjectLabelReorderRequest) Validate() error {
 	return err
 }
 
-func (r WorkflowProjectLabelReorderRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowProjectLabelReorderRequest) ValidateRPC() error {
 	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
 }
 
@@ -369,8 +364,7 @@ func (r WorkflowProjectLabelReorderResponse) Validate() error {
 	return r.Catalog.Validate()
 }
 
-func (r WorkflowTaskLabelsGetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskLabelsGetRequest) Validate() error {
 	return validateTaskID("task_id", r.TaskID)
 }
 
@@ -408,8 +402,7 @@ func (r WorkflowTaskLabelsUpdateRequest) Validate() error {
 	return nil
 }
 
-func (r WorkflowTaskLabelsUpdateRequest) ValidateRPC() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r WorkflowTaskLabelsUpdateRequest) ValidateRPC() error {
 	return workflowLabelRPCValidationError(r.Validate(), "", r.TaskID, false)
 }
 

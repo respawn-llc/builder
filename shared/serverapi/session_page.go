@@ -34,8 +34,7 @@ func (r SessionPageRequest) ResolveWindow() (OffsetWindow, error) {
 	return ResolveOffsetWindow(r.Offset, r.Limit)
 }
 
-func (r SessionPageRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r SessionPageRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}

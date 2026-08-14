@@ -51,8 +51,7 @@ type TaskSearchRequest struct {
 	Offset          *int                     `json:"offset,omitempty"`
 }
 
-func (r TaskSearchRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r TaskSearchRequest) Validate() error {
 	if r.Mode != TaskSearchModeLiteral && r.Mode != TaskSearchModeFTS5 {
 		return taskSearchFieldError("mode", "mode is invalid")
 	}

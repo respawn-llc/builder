@@ -511,24 +511,21 @@ type ProjectGetOverviewResponse struct {
 	Overview clientui.ProjectOverview
 }
 
-func (r ProjectGetOverviewRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectGetOverviewRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project id is required")
 	}
 	return nil
 }
 
-func (r ProjectResolvePathRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectResolvePathRequest) Validate() error {
 	if strings.TrimSpace(r.Path) == "" {
 		return errors.New("path is required")
 	}
 	return nil
 }
 
-func (r ProjectBindingPlanRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectBindingPlanRequest) Validate() error {
 	if strings.TrimSpace(r.Path) == "" {
 		return errors.New("path is required")
 	}
@@ -540,8 +537,7 @@ func (r ProjectBindingPlanRequest) Validate() (resultErr error) {
 	}
 }
 
-func (r ProjectCreateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectCreateRequest) Validate() error {
 	if err := validateProjectDisplayName(r.DisplayName); err != nil {
 		return err
 	}
@@ -556,8 +552,7 @@ func (r ProjectCreateRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r ProjectUpdateRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectUpdateRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -569,32 +564,28 @@ func (r ProjectUpdateRequest) Validate() (resultErr error) {
 	return validateProjectDisplayName(r.DisplayName)
 }
 
-func (r ProjectDefaultWorkspaceSetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectDefaultWorkspaceSetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
 	return r.ProjectWorkspaceSelector.Validate()
 }
 
-func (r ProjectWorkspaceUnlinkRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectWorkspaceUnlinkRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
 	return r.ProjectWorkspaceSelector.Validate()
 }
 
-func (r ProjectDeleteRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectDeleteRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
 	return nil
 }
 
-func (r ProjectHomeListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectHomeListRequest) Validate() error {
 	if r.PageSize < 0 {
 		return errors.New("page_size must be non-negative")
 	}
@@ -604,8 +595,7 @@ func (r ProjectHomeListRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r ProjectAttachWorkspaceRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectAttachWorkspaceRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -615,8 +605,7 @@ func (r ProjectAttachWorkspaceRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r ProjectWorkspaceListRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectWorkspaceListRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -632,8 +621,7 @@ func (r ProjectWorkspaceListRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r ProjectWorkspaceGetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectWorkspaceGetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -643,8 +631,7 @@ func (r ProjectWorkspaceGetRequest) Validate() (resultErr error) {
 	return r.ProjectWorkspaceSelector.Validate()
 }
 
-func (r ProjectEditGetRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectEditGetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
@@ -654,8 +641,7 @@ func (r ProjectEditGetRequest) Validate() (resultErr error) {
 	return nil
 }
 
-func (r ProjectRebindWorkspaceRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r ProjectRebindWorkspaceRequest) Validate() error {
 	if strings.TrimSpace(r.OldWorkspaceRoot) == "" {
 		return errors.New("old_workspace_root is required")
 	}

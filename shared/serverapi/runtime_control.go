@@ -369,8 +369,7 @@ func (r RuntimeCompactContextRequest) Validate() error {
 func (r RuntimeInterruptRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
-func (r RuntimeLiveSteerRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r RuntimeLiveSteerRequest) Validate() error {
 	_, _, _, err := prepareRuntimeLiveSteerRequest(r)
 	return err
 }
@@ -386,8 +385,7 @@ func (r RuntimeLiveSteerResponse) Validate() error {
 	}
 	return nil
 }
-func (r RuntimeLiveStopRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r RuntimeLiveStopRequest) Validate() error {
 	_, _, err := prepareRuntimeLiveStopRequest(r)
 	return err
 }
@@ -399,8 +397,7 @@ func (r RuntimeLiveStopResponse) Validate() error {
 		return errors.New("status must be stopped or idle")
 	}
 }
-func (r RuntimeLiveWaitRequest) Validate() (resultErr error) {
-	defer func() { resultErr = classifyRequestValidation(resultErr) }()
+func (r RuntimeLiveWaitRequest) Validate() error {
 	_, err := prepareRuntimeLiveWaitRequest(r)
 	return err
 }
