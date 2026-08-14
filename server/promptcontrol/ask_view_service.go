@@ -19,17 +19,21 @@ func NewAskViewService(prompts PendingPromptSource) *AskViewService {
 	return &AskViewService{prompts: prompts}
 }
 
-func (s *AskViewService) ListPendingAsksBySession(_ context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, err
-	}
+func (s *AskViewService) ListPendingAsksBySession(ctx context.Context, req serverapi.AskListPendingBySessionRequest) (serverapi.AskListPendingBySessionResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.AskListPendingBySessionRequest]) (serverapi.AskListPendingBySessionResponse, error) {
+		sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask session identity: %w", err)
+		}
+		return s.ListPendingAsksBySessionValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{SessionID: sessionID})
+	})
+}
+
+func (s *AskViewService) ListPendingAsksBySessionValidated(_ context.Context, _ servicecontract.Validated[serverapi.AskListPendingBySessionRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.AskListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
-	if err != nil {
-		return serverapi.AskListPendingBySessionResponse{}, fmt.Errorf("pending ask session identity: %w", err)
-	}
+	sessionID := authorization.SessionID
 	items := s.prompts.ListPendingPrompts(sessionID.String())
 	asks := make([]clientui.PendingAsk, 0, len(items))
 	for _, item := range items {

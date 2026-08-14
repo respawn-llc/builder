@@ -75,3 +75,62 @@ func TestGatewayRejectsInvalidRunPromptBeforeProjectAuthorization(t *testing.T) 
 		t.Fatalf("error code = %d, want InvalidParams; response=%+v", response.Code, response)
 	}
 }
+
+func TestGatewayMapsRawOwnerValidationToInvalidParams(t *testing.T) {
+	_, server := newGatewayTestServer(t)
+	conn := dialGateway(t, server)
+	defer conn.Close()
+	handshakeGateway(t, conn)
+
+	response := callGatewayExpectError(t, conn, "invalid-workflow-create", protocol.MethodWorkflowCreate, serverapi.WorkflowCreateRequest{})
+	if response.Code != protocol.ErrCodeInvalidParams {
+		t.Fatalf("error code = %d, want InvalidParams; response=%+v", response.Code, response)
+	}
+}
+
+func TestGatewayPreservesStructuredWorkflowFilterValidation(t *testing.T) {
+	_, server := newGatewayTestServer(t)
+	conn := dialGateway(t, server)
+	defer conn.Close()
+	handshakeGateway(t, conn)
+
+	projectID := "project-1"
+	response := callGatewayExpectError(t, conn, "invalid-workflow-filter", protocol.MethodWorkflowTaskList, serverapi.WorkflowTaskListRequest{
+		ProjectID: &projectID,
+		LabelFilter: serverapi.WorkflowTaskLabelFilter{
+			Kind: "invalid",
+		},
+	})
+	if response.Code != protocol.ErrCodeWorkflowLabel {
+		t.Fatalf("error code = %d, want WorkflowLabel; response=%+v", response.Code, response)
+	}
+}
+
+func TestGatewayValidatesBeforeProjectAndSessionResolution(t *testing.T) {
+	_, server := newUnboundGatewayTestServer(t)
+	conn := dialGateway(t, server)
+	defer conn.Close()
+	handshakeGateway(t, conn)
+
+	for _, testCase := range []struct {
+		name   string
+		method string
+		params any
+	}{
+		{
+			name:   "session plan",
+			method: protocol.MethodSessionPlan,
+			params: serverapi.SessionPlanRequest{
+				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+			},
+		},
+		{name: "Goal show", method: protocol.MethodRuntimeGoalShow, params: serverapi.RuntimeGoalShowRequest{SessionID: "../session"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := callGatewayExpectError(t, conn, "invalid-"+testCase.name, testCase.method, testCase.params)
+			if response.Code != protocol.ErrCodeInvalidParams {
+				t.Fatalf("error code = %d, want InvalidParams; response=%+v", response.Code, response)
+			}
+		})
+	}
+}

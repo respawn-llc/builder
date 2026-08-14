@@ -22,12 +22,18 @@ func validateRequiredSessionID(sessionID string) error {
 }
 
 func validateScopedSessionID(sessionID string) error {
+	_, err := parseScopedSessionID(sessionID)
+	return err
+}
+
+func parseScopedSessionID(sessionID string) (runtimeids.SessionID, error) {
 	trimmed := strings.TrimSpace(sessionID)
 	if err := validateRequiredSessionID(trimmed); err != nil {
-		return err
+		return runtimeids.SessionID{}, err
 	}
-	if _, err := runtimeids.ParseSessionID(trimmed); err != nil {
-		return ErrSessionIDNotSingle
+	parsed, err := runtimeids.ParseSessionID(trimmed)
+	if err != nil {
+		return runtimeids.SessionID{}, ErrSessionIDNotSingle
 	}
-	return nil
+	return parsed, nil
 }

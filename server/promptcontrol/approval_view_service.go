@@ -25,17 +25,21 @@ func NewApprovalViewService(prompts PendingPromptSource) *ApprovalViewService {
 	return &ApprovalViewService{prompts: prompts}
 }
 
-func (s *ApprovalViewService) ListPendingApprovalsBySession(_ context.Context, req serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
-	if err := req.Validate(); err != nil {
-		return serverapi.ApprovalListPendingBySessionResponse{}, err
-	}
+func (s *ApprovalViewService) ListPendingApprovalsBySession(ctx context.Context, req serverapi.ApprovalListPendingBySessionRequest) (serverapi.ApprovalListPendingBySessionResponse, error) {
+	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ApprovalListPendingBySessionRequest]) (serverapi.ApprovalListPendingBySessionResponse, error) {
+		sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
+		if err != nil {
+			return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval session identity: %w", err)
+		}
+		return s.ListPendingApprovalsBySessionValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{SessionID: sessionID})
+	})
+}
+
+func (s *ApprovalViewService) ListPendingApprovalsBySessionValidated(_ context.Context, _ servicecontract.Validated[serverapi.ApprovalListPendingBySessionRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.ApprovalListPendingBySessionResponse, error) {
 	if s == nil || s.prompts == nil {
 		return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending prompt source is required")
 	}
-	sessionID, err := runtimeids.ParseSessionID(strings.TrimSpace(req.SessionID))
-	if err != nil {
-		return serverapi.ApprovalListPendingBySessionResponse{}, fmt.Errorf("pending approval session identity: %w", err)
-	}
+	sessionID := authorization.SessionID
 	items := s.prompts.ListPendingPrompts(sessionID.String())
 	approvals := make([]clientui.PendingApproval, 0, len(items))
 	for _, item := range items {

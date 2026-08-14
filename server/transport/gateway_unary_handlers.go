@@ -62,34 +62,22 @@ func gatewaySessionTrustedCallNoResponse[Raw any, Trusted any, Req any](
 	)
 }
 
-func gatewaySessionOwnerCall[C any, Req any, Resp any](
-	getClient func(GatewayDependencies) C,
+func gatewayGoalTrustedCall[Req any, Resp any](
 	sessionID func(Req) string,
-	call func(C, context.Context, Req) (Resp, error),
+	call func(apicontract.RuntimeGoalTrustedService, context.Context, apicontract.Validated[Req], apicontract.AuthorizedSessionInActiveProject) (Resp, error),
 ) gatewayUnaryHandler {
 	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeOwnerAndHandle(req, func(params Req) (Resp, error) {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[Req]) (Resp, error) {
 			var zero Resp
-			if err := g.requireSessionInActiveProject(ctx, state, sessionID(params)); err != nil {
+			authorization, err := authorizeGoalSession(sessionID)(ctx, g, state, validated)
+			if err != nil {
 				return zero, err
 			}
-			return call(getClient(g.deps), ctx, params)
-		})
-	}
-}
-
-func gatewayGoalOwnerCall[C any, Req any, Resp any](
-	getClient func(GatewayDependencies) C,
-	sessionID func(Req) string,
-	call func(C, context.Context, Req) (Resp, error),
-) gatewayUnaryHandler {
-	return func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeOwnerAndHandle(req, func(params Req) (Resp, error) {
-			var zero Resp
-			if err := g.requireGoalSessionAccess(ctx, state, sessionID(params)); err != nil {
-				return zero, err
+			trusted, ok := g.deps.RuntimeControlClient().(apicontract.RuntimeGoalTrustedService)
+			if !ok {
+				return zero, errors.New("Runtime Goal trusted service is required")
 			}
-			return call(getClient(g.deps), ctx, params)
+			return call(trusted, ctx, validated, authorization)
 		})
 	}
 }
@@ -182,27 +170,25 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodCapabilityFactsGet: gatewayClientCall[apicontract.CapabilityFactsService, serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](GatewayDependencies.CapabilityFactsClient, apicontract.CapabilityFactsService.GetCapabilityFacts),
 	protocol.MethodPromptCommandCatalogGet: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		params, err := decodeParams[serverapi.PromptCommandCatalogRequest](req.Params)
-		if err != nil {
-			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error())
-		}
-		projectID, err := g.activeProjectID(ctx, state)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, params.SessionID)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		resp, err := catalog.GetPromptCommandCatalog(ctx, params)
-		if err != nil {
-			return responseForError(req.ID, err)
-		}
-		return protocol.NewSuccessResponse(req.ID, resp)
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error) {
+			projectID, err := g.activeProjectID(ctx, state)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			workspaceRoot, err := g.promptCommandWorkspaceRootForCatalog(ctx, state, validated.Value().SessionID)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			catalog, err := g.deps.PromptCommandCatalogClientForProjectWorkspace(ctx, projectID, workspaceRoot)
+			if err != nil {
+				return serverapi.PromptCommandCatalogResponse{}, err
+			}
+			trusted, ok := catalog.(apicontract.PromptCommandCatalogTrustedService)
+			if !ok {
+				return serverapi.PromptCommandCatalogResponse{}, errors.New("Prompt Command Catalog trusted service is required")
+			}
+			return trusted.GetPromptCommandCatalogValidated(ctx, validated)
+		})
 	},
 	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		params, err := g.onboardingFinalizeRequestContract.Decode(req.Params)
@@ -321,30 +307,42 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskGet:               gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskGetRequest, serverapi.WorkflowTaskGetResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowTask),
 	protocol.MethodWorkflowTaskObserve:           gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskObservationRequest, serverapi.WorkflowTaskObservationResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ObserveWorkflowTask),
 	protocol.MethodSessionPlan: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeOwnerAndHandle(req, func(params serverapi.SessionPlanRequest) (serverapi.SessionPlanResponse, error) {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error) {
 			launchClient, err := g.sessionLaunchClientForState(ctx, state)
 			if err != nil {
 				return serverapi.SessionPlanResponse{}, err
 			}
-			return launchClient.PlanSession(ctx, params)
+			trusted, ok := launchClient.(apicontract.SessionLaunchTrustedService)
+			if !ok {
+				return serverapi.SessionPlanResponse{}, errors.New("Session Launch trusted service is required")
+			}
+			return trusted.PlanSessionValidated(ctx, validated)
 		})
 	},
 	protocol.MethodSessionWorkspaceChatDraft: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeOwnerAndHandle(req, func(params serverapi.WorkspaceChatDraftRequest) (serverapi.WorkspaceChatDraftResponse, error) {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error) {
 			launchClient, err := g.sessionLaunchClientForState(ctx, state)
 			if err != nil {
 				return serverapi.WorkspaceChatDraftResponse{}, err
 			}
-			return launchClient.WorkspaceChatDraft(ctx, params)
+			trusted, ok := launchClient.(apicontract.SessionLaunchTrustedService)
+			if !ok {
+				return serverapi.WorkspaceChatDraftResponse{}, errors.New("Session Launch trusted service is required")
+			}
+			return trusted.WorkspaceChatDraftValidated(ctx, validated)
 		})
 	},
 	protocol.MethodSessionWorkspaceChatMaterialize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeOwnerAndHandle(req, func(params serverapi.WorkspaceChatMaterializeRequest) (serverapi.WorkspaceChatMaterializeResponse, error) {
+		return decodeValidatedAndHandle(req, func(validated apicontract.Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error) {
 			launchClient, err := g.sessionLaunchClientForState(ctx, state)
 			if err != nil {
 				return serverapi.WorkspaceChatMaterializeResponse{}, err
 			}
-			return launchClient.MaterializeWorkspaceChat(ctx, params)
+			trusted, ok := launchClient.(apicontract.SessionLaunchTrustedService)
+			if !ok {
+				return serverapi.WorkspaceChatMaterializeResponse{}, errors.New("Session Launch trusted service is required")
+			}
+			return trusted.MaterializeWorkspaceChatValidated(ctx, validated)
 		})
 	},
 	protocol.MethodSessionGetMainView: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
@@ -593,22 +591,24 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodRuntimeLiveWatch:                      gatewayClientCall[apicontract.RuntimeLiveControlService, serverapi.RuntimeLiveWatchRequest, serverapi.RuntimeLiveWatchResponse](GatewayDependencies.RuntimeLiveControlClient, apicontract.RuntimeLiveControlService.LiveWatch),
 	protocol.MethodRuntimeDiscardQueuedUserMessage:       gatewaySessionTrustedCall[apicontract.RuntimeControlService, apicontract.RuntimeUserInputTrustedService, serverapi.RuntimeDiscardQueuedUserMessageRequest, serverapi.RuntimeDiscardQueuedUserMessageResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeDiscardQueuedUserMessageRequest) string { return r.SessionID }, apicontract.RuntimeUserInputTrustedService.DiscardQueuedUserMessageValidated),
 	protocol.MethodRuntimeRecordPromptHistory:            gatewaySessionTrustedCallNoResponse[apicontract.RuntimeControlService, apicontract.RuntimeTranscriptMutationTrustedService, serverapi.RuntimeRecordPromptHistoryRequest](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeRecordPromptHistoryRequest) string { return r.SessionID }, apicontract.RuntimeTranscriptMutationTrustedService.RecordPromptHistoryValidated),
-	protocol.MethodRuntimeGoalShow:                       gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalShowRequest) string { return r.SessionID }, apicontract.RuntimeControlService.ShowGoal),
-	protocol.MethodRuntimeGoalSet:                        gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalSetRequest) string { return r.SessionID }, apicontract.RuntimeControlService.SetGoal),
-	protocol.MethodRuntimeGoalPause:                      gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeControlService.PauseGoal),
-	protocol.MethodRuntimeGoalResume:                     gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeControlService.ResumeGoal),
-	protocol.MethodRuntimeGoalComplete:                   gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeControlService.CompleteGoal),
-	protocol.MethodRuntimeGoalClear:                      gatewayGoalOwnerCall[apicontract.RuntimeControlService, serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](GatewayDependencies.RuntimeControlClient, func(r serverapi.RuntimeGoalClearRequest) string { return r.SessionID }, apicontract.RuntimeControlService.ClearGoal),
+	protocol.MethodRuntimeGoalShow:                       gatewayGoalTrustedCall[serverapi.RuntimeGoalShowRequest, serverapi.RuntimeGoalShowResponse](func(r serverapi.RuntimeGoalShowRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.ShowGoalValidated),
+	protocol.MethodRuntimeGoalSet:                        gatewayGoalTrustedCall[serverapi.RuntimeGoalSetRequest, serverapi.RuntimeGoalMutationResponse](func(r serverapi.RuntimeGoalSetRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.SetGoalValidated),
+	protocol.MethodRuntimeGoalPause:                      gatewayGoalTrustedCall[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.PauseGoalValidated),
+	protocol.MethodRuntimeGoalResume:                     gatewayGoalTrustedCall[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.ResumeGoalValidated),
+	protocol.MethodRuntimeGoalComplete:                   gatewayGoalTrustedCall[serverapi.RuntimeGoalStatusRequest, serverapi.RuntimeGoalMutationResponse](func(r serverapi.RuntimeGoalStatusRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.CompleteGoalValidated),
+	protocol.MethodRuntimeGoalClear:                      gatewayGoalTrustedCall[serverapi.RuntimeGoalClearRequest, serverapi.RuntimeGoalMutationResponse](func(r serverapi.RuntimeGoalClearRequest) string { return r.SessionID }, apicontract.RuntimeGoalTrustedService.ClearGoalValidated),
 	protocol.MethodProcessList: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeOwnerAndHandle(req, func(params serverapi.ProcessListRequest) (serverapi.ProcessListResponse, error) {
+			if strings.TrimSpace(params.OwnerSessionID) != "" {
+				if err := g.requireSessionInActiveProject(ctx, state, params.OwnerSessionID); err != nil {
+					return serverapi.ProcessListResponse{}, err
+				}
+			}
 			resp, err := g.deps.ProcessViewClient().ListProcesses(ctx, params)
 			if err != nil {
 				return serverapi.ProcessListResponse{}, err
 			}
 			if strings.TrimSpace(params.OwnerSessionID) != "" {
-				if err := g.requireSessionInActiveProject(ctx, state, params.OwnerSessionID); err != nil {
-					return serverapi.ProcessListResponse{}, err
-				}
 				return resp, nil
 			}
 			filtered, err := g.filterProcessesForActiveProject(ctx, state, resp.Processes)
@@ -658,7 +658,19 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 			return trusted.GetInlineOutputValidated(ctx, validated, authorization)
 		})
 	},
-	protocol.MethodAskListPending:      gatewaySessionOwnerCall[apicontract.AskViewService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](GatewayDependencies.AskViewClient, func(r serverapi.AskListPendingBySessionRequest) string { return r.SessionID }, apicontract.AskViewService.ListPendingAsksBySession),
-	protocol.MethodPromptAnswerBatch:   gatewaySessionOwnerCall[apicontract.PromptControlService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](GatewayDependencies.PromptControlClient, func(r serverapi.PromptAnswerBatchRequest) string { return r.SessionID.String() }, apicontract.PromptControlService.AnswerPromptBatch),
-	protocol.MethodApprovalListPending: gatewaySessionOwnerCall[apicontract.ApprovalViewService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](GatewayDependencies.ApprovalViewClient, func(r serverapi.ApprovalListPendingBySessionRequest) string { return r.SessionID }, apicontract.ApprovalViewService.ListPendingApprovalsBySession),
+	protocol.MethodAskListPending: gatewaySessionTrustedCall[apicontract.AskViewService, apicontract.AskViewTrustedService, serverapi.AskListPendingBySessionRequest, serverapi.AskListPendingBySessionResponse](
+		GatewayDependencies.AskViewClient,
+		func(r serverapi.AskListPendingBySessionRequest) string { return r.SessionID },
+		apicontract.AskViewTrustedService.ListPendingAsksBySessionValidated,
+	),
+	protocol.MethodPromptAnswerBatch: gatewaySessionTrustedCall[apicontract.PromptControlService, apicontract.PromptAnswerBatchTrustedService, serverapi.PromptAnswerBatchRequest, serverapi.PromptAnswerBatchResponse](
+		GatewayDependencies.PromptControlClient,
+		func(r serverapi.PromptAnswerBatchRequest) string { return r.SessionID.String() },
+		apicontract.PromptAnswerBatchTrustedService.AnswerPromptBatchValidated,
+	),
+	protocol.MethodApprovalListPending: gatewaySessionTrustedCall[apicontract.ApprovalViewService, apicontract.ApprovalViewTrustedService, serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](
+		GatewayDependencies.ApprovalViewClient,
+		func(r serverapi.ApprovalListPendingBySessionRequest) string { return r.SessionID },
+		apicontract.ApprovalViewTrustedService.ListPendingApprovalsBySessionValidated,
+	),
 }

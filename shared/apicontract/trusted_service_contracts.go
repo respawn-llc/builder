@@ -15,6 +15,28 @@ type PromptControlTrustedService interface {
 	SubscribeFollowUpValidated(ctx context.Context, req Validated[serverapi.PromptFollowUpWatchRequest]) (serverapi.PromptFollowUpSubscription, error)
 }
 
+type PromptAnswerBatchTrustedService interface {
+	AnswerPromptBatchValidated(ctx context.Context, req Validated[serverapi.PromptAnswerBatchRequest], authorization AuthorizedSessionInActiveProject) (serverapi.PromptAnswerBatchResponse, error)
+}
+
+type AskViewTrustedService interface {
+	ListPendingAsksBySessionValidated(ctx context.Context, req Validated[serverapi.AskListPendingBySessionRequest], authorization AuthorizedSessionInActiveProject) (serverapi.AskListPendingBySessionResponse, error)
+}
+
+type ApprovalViewTrustedService interface {
+	ListPendingApprovalsBySessionValidated(ctx context.Context, req Validated[serverapi.ApprovalListPendingBySessionRequest], authorization AuthorizedSessionInActiveProject) (serverapi.ApprovalListPendingBySessionResponse, error)
+}
+
+type PromptCommandCatalogTrustedService interface {
+	GetPromptCommandCatalogValidated(ctx context.Context, req Validated[serverapi.PromptCommandCatalogRequest]) (serverapi.PromptCommandCatalogResponse, error)
+}
+
+type SessionLaunchTrustedService interface {
+	PlanSessionValidated(ctx context.Context, req Validated[serverapi.SessionPlanRequest]) (serverapi.SessionPlanResponse, error)
+	WorkspaceChatDraftValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatDraftRequest]) (serverapi.WorkspaceChatDraftResponse, error)
+	MaterializeWorkspaceChatValidated(ctx context.Context, req Validated[serverapi.WorkspaceChatMaterializeRequest]) (serverapi.WorkspaceChatMaterializeResponse, error)
+}
+
 type AttentionNotificationTrustedService interface {
 	SubscribeAttentionNotificationsValidated(ctx context.Context, req Validated[serverapi.AttentionNotificationSubscribeRequest]) (serverapi.AttentionNotificationSubscription, error)
 	SubscribeSessionAttentionNotificationsValidated(ctx context.Context, req Validated[serverapi.AttentionSessionNotificationSubscribeRequest], sessionID runtimeids.SessionID) (serverapi.AttentionNotificationSubscription, error)
@@ -116,6 +138,15 @@ type RuntimeUserInputTrustedService interface {
 
 type RuntimeInterruptTrustedService interface {
 	InterruptValidated(ctx context.Context, req Validated[serverapi.RuntimeInterruptRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeInterruptResponse, error)
+}
+
+type RuntimeGoalTrustedService interface {
+	ShowGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalShowRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalShowResponse, error)
+	SetGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalSetRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
+	PauseGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
+	ResumeGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
+	CompleteGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalStatusRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
+	ClearGoalValidated(ctx context.Context, req Validated[serverapi.RuntimeGoalClearRequest], authorization AuthorizedSessionInActiveProject) (serverapi.RuntimeGoalMutationResponse, error)
 }
 
 type WorktreeQueryTrustedService interface {

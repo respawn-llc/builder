@@ -119,10 +119,14 @@ func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectR
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
+	return s.resolveProjectPath(ctx, req.Path)
+}
+
+func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverapi.ProjectResolvePathResponse, error) {
 	if s == nil {
 		return serverapi.ProjectResolvePathResponse{}, errors.New("project service is required")
 	}
-	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, req.Path)
+	canonicalRoot, binding, err := s.metadata.ResolveWorkspacePath(ctx, path)
 	if err != nil {
 		return serverapi.ProjectResolvePathResponse{}, err
 	}
@@ -139,7 +143,7 @@ func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.Projec
 	if err := req.Validate(); err != nil {
 		return serverapi.ProjectBindingPlanResponse{}, err
 	}
-	resolved, err := s.ResolveProjectPath(ctx, serverapi.ProjectResolvePathRequest{Path: req.Path})
+	resolved, err := s.resolveProjectPath(ctx, req.Path)
 	if err != nil {
 		if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
 			resp := serverapi.ProjectBindingPlanResponse{

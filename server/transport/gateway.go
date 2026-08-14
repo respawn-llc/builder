@@ -526,6 +526,9 @@ func decodeOwnerAndHandle[TReq any, TResp any](req protocol.Request, handler fun
 	}
 	resp, err := handler(params)
 	if err != nil {
+		if validationErr := semanticValidationError(params); validationErr != nil {
+			return responseForValidationError(req.ID, validationErr)
+		}
 		return responseForError(req.ID, err)
 	}
 	if validator, ok := any(resp).(interface{ Validate() error }); ok {
@@ -541,23 +544,32 @@ func decodeValidatedParams[TReq any](req protocol.Request) (TReq, protocol.Respo
 	if err != nil {
 		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, err.Error()), true
 	}
-	var validationErr error
-	if validator, ok := any(params).(interface{ ValidateRPC() error }); ok {
-		validationErr = validator.ValidateRPC()
-	} else if validator, ok := any(params).(interface{ Validate() error }); ok {
-		validationErr = validator.Validate()
-	}
+	validationErr := semanticValidationError(params)
 	if validationErr != nil {
-		var rpcErr interface {
-			RPCErrorCode() int
-			RPCErrorData() json.RawMessage
-		}
-		if errors.As(validationErr, &rpcErr) {
-			return params, responseForError(req.ID, validationErr), true
-		}
-		return params, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, validationErr.Error()), true
+		return params, responseForValidationError(req.ID, validationErr), true
 	}
 	return params, protocol.Response{}, false
+}
+
+func semanticValidationError[T any](request T) error {
+	if validator, ok := any(request).(interface{ ValidateRPC() error }); ok {
+		return validator.ValidateRPC()
+	}
+	if validator, ok := any(request).(interface{ Validate() error }); ok {
+		return validator.Validate()
+	}
+	return nil
+}
+
+func responseForValidationError(id string, err error) protocol.Response {
+	var rpcErr interface {
+		RPCErrorCode() int
+		RPCErrorData() json.RawMessage
+	}
+	if errors.As(err, &rpcErr) {
+		return responseForError(id, err)
+	}
+	return protocol.NewErrorResponse(id, protocol.ErrCodeInvalidParams, err.Error())
 }
 
 type validatedOwnerError struct{ cause error }

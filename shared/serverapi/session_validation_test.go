@@ -29,3 +29,15 @@ func TestValidateScopedSessionID(t *testing.T) {
 		}
 	}
 }
+
+func TestRuntimeGoalShowRejectsPathLikeSessionID(t *testing.T) {
+	if err := (RuntimeGoalShowRequest{SessionID: "../session"}).Validate(); !errors.Is(err, ErrSessionIDNotSingle) {
+		t.Fatalf("Validate error = %v, want ErrSessionIDNotSingle", err)
+	}
+}
+
+func TestRuntimeControlRequestsRejectPathLikeSessionID(t *testing.T) {
+	if err := validateRuntimeControlRequest("request-1", "../session"); !errors.Is(err, ErrSessionIDNotSingle) {
+		t.Fatalf("validation error = %v, want ErrSessionIDNotSingle", err)
+	}
+}

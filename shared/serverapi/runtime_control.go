@@ -300,10 +300,15 @@ func validateGoalActor(actor string) error {
 }
 
 func validateRuntimeControlRequest(clientRequestID string, sessionID string) error {
+	_, err := prepareRuntimeControlIdentity(clientRequestID, sessionID)
+	return err
+}
+
+func prepareRuntimeControlIdentity(clientRequestID string, sessionID string) (runtimeids.SessionID, error) {
 	if err := validateClientRequestID(clientRequestID); err != nil {
-		return err
+		return runtimeids.SessionID{}, err
 	}
-	return validateRequiredSessionID(sessionID)
+	return parseScopedSessionID(sessionID)
 }
 
 func validateTypedRuntimeControlRequest(clientRequestID string, sessionID string) error {
@@ -444,7 +449,12 @@ func (r RuntimeRecordPromptHistoryRequest) Validate() error {
 	return validateRuntimeControlRequest(r.ClientRequestID, r.SessionID)
 }
 func (r RuntimeGoalShowRequest) Validate() error {
-	return validateRequiredSessionID(r.SessionID)
+	_, err := PrepareRuntimeGoalShowRequest(r)
+	return err
+}
+
+func PrepareRuntimeGoalShowRequest(r RuntimeGoalShowRequest) (runtimeids.SessionID, error) {
+	return parseScopedSessionID(r.SessionID)
 }
 
 func PrepareRuntimeLiveSteerRequest(r RuntimeLiveSteerRequest) (runtimeids.SessionID, runtimeids.RuntimeClientRequestID, *runtimeids.SessionID, error) {
@@ -497,23 +507,50 @@ func parseCanonicalRuntimeSessionID(raw string) (runtimeids.SessionID, error) {
 	return sessionID, nil
 }
 func (r RuntimeGoalSetRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
+	_, err := PrepareRuntimeGoalSetRequest(r)
+	return err
+}
+
+func PrepareRuntimeGoalSetRequest(r RuntimeGoalSetRequest) (runtimeids.SessionID, error) {
+	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, err
 	}
 	if strings.TrimSpace(r.Objective) == "" {
-		return errors.New("objective is required")
+		return runtimeids.SessionID{}, errors.New("objective is required")
 	}
-	return validateGoalActor(r.Actor)
+	if err := validateGoalActor(r.Actor); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	return sessionID, nil
 }
 func (r RuntimeGoalStatusRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
+	_, err := PrepareRuntimeGoalStatusRequest(r)
+	return err
+}
+
+func PrepareRuntimeGoalStatusRequest(r RuntimeGoalStatusRequest) (runtimeids.SessionID, error) {
+	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, err
 	}
-	return validateGoalActor(r.Actor)
+	if err := validateGoalActor(r.Actor); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	return sessionID, nil
 }
 func (r RuntimeGoalClearRequest) Validate() error {
-	if err := validateRuntimeControlRequest(r.ClientRequestID, r.SessionID); err != nil {
-		return err
+	_, err := PrepareRuntimeGoalClearRequest(r)
+	return err
+}
+
+func PrepareRuntimeGoalClearRequest(r RuntimeGoalClearRequest) (runtimeids.SessionID, error) {
+	sessionID, err := prepareRuntimeControlIdentity(r.ClientRequestID, r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, err
 	}
-	return validateGoalActor(r.Actor)
+	if err := validateGoalActor(r.Actor); err != nil {
+		return runtimeids.SessionID{}, err
+	}
+	return sessionID, nil
 }

@@ -11,6 +11,7 @@ import (
 	"core/server/session"
 	rpccontract "core/shared/apicontract"
 	"core/shared/clientui"
+	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
 
@@ -148,13 +149,6 @@ func (g *Gateway) requireSessionInActiveProject(ctx context.Context, state *conn
 	return nil
 }
 
-func (g *Gateway) requireGoalSessionAccess(ctx context.Context, state *connectionState, sessionID string) error {
-	if strings.TrimSpace(state.attachedProject) == "" && strings.TrimSpace(g.deps.ProjectID()) == "" {
-		return nil
-	}
-	return g.requireSessionInActiveProject(ctx, state, sessionID)
-}
-
 func authorizeSessionActiveProject[Req any](
 	sessionID func(Req) string,
 ) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
@@ -198,6 +192,22 @@ func authorizeOptionalSessionActiveProject[Req any](
 			return rpccontract.OptionalAuthorizedSessionInActiveProject{}, err
 		}
 		return rpccontract.PresentAuthorizedSessionInActiveProject(authorization), nil
+	}
+}
+
+func authorizeGoalSession[Req any](
+	sessionID func(Req) string,
+) func(context.Context, *Gateway, *connectionState, rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
+	required := authorizeSessionActiveProject(sessionID)
+	return func(ctx context.Context, g *Gateway, state *connectionState, validated rpccontract.Validated[Req]) (rpccontract.AuthorizedSessionInActiveProject, error) {
+		if strings.TrimSpace(state.attachedProject) != "" || strings.TrimSpace(g.deps.ProjectID()) != "" {
+			return required(ctx, g, state, validated)
+		}
+		parsed, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID(validated.Value())))
+		if err != nil {
+			return rpccontract.AuthorizedSessionInActiveProject{}, err
+		}
+		return rpccontract.AuthorizedSessionInActiveProject{SessionID: parsed}, nil
 	}
 }
 

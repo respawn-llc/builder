@@ -15,12 +15,12 @@ type WorkflowDefinitionReadModel interface {
 }
 
 type WorkflowBoardReadModel interface {
-	Get(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error)
-	ListNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
+	ReadBoard(context.Context, serverapi.WorkflowBoardRequest) (serverapi.WorkflowBoard, error)
+	ReadNodeCards(context.Context, serverapi.WorkflowBoardNodeCardsListRequest) (serverapi.WorkflowBoardNodeCardsListResponse, error)
 }
 
 type WorkflowTaskListReadModel interface {
-	List(context.Context, serverapi.WorkflowTaskListRequest) (serverapi.WorkflowTaskListResponse, error)
+	ReadTasks(context.Context, serverapi.WorkflowTaskListRequest, serverapi.WorkflowOffsetWindow) (serverapi.WorkflowTaskListResponse, error)
 }
 
 type WorkflowTaskSearchReadModel interface {
@@ -49,8 +49,8 @@ type WorkflowTaskSessionReadModel interface {
 }
 
 type WorkflowAttentionReadModel interface {
-	List(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
-	ListTask(context.Context, serverapi.WorkflowTaskAttentionListRequest) (serverapi.WorkflowTaskAttentionListResponse, error)
+	ReadAttention(context.Context, serverapi.WorkflowAttentionListRequest) (serverapi.WorkflowAttentionListResponse, error)
+	ListTaskByID(context.Context, string) (serverapi.WorkflowTaskAttentionListResponse, error)
 }
 
 type ReadModels struct {

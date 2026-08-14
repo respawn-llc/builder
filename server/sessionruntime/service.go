@@ -72,29 +72,30 @@ func appendRecoveredWarning(store *session.Store, provider func() (string, bool,
 func (s *API) ActivateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest) (serverapi.SessionRuntimeActivateResponse, error) {
 	prepared := req
 	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	return servicecontract.WithValidated(prepared, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionRuntimeActivateRequest]) (serverapi.SessionRuntimeActivateResponse, error) {
-		sessionID, err := runtimeids.ParseSessionID(validated.Value().SessionID)
-		if err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		if s == nil || s.metadataStore == nil {
-			return serverapi.SessionRuntimeActivateResponse{}, errors.New("metadata store is required")
-		}
-		resolved, err := s.metadataStore.ResolveActiveProjectSession(ctx, sessionID.String())
-		if err != nil {
-			return serverapi.SessionRuntimeActivateResponse{}, err
-		}
-		return s.ActivateSessionRuntimeValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{
-			SessionID:       resolved.SessionID,
-			ActiveProjectID: resolved.OwningProjectID,
-			OwningProjectID: resolved.OwningProjectID,
-			ExecutionTarget: resolved.ExecutionTarget,
-		})
+	sessionID, err := serverapi.PrepareSessionRuntimeActivateRequest(prepared)
+	if err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	if s == nil || s.metadataStore == nil {
+		return serverapi.SessionRuntimeActivateResponse{}, errors.New("metadata store is required")
+	}
+	resolved, err := s.metadataStore.ResolveActiveProjectSession(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.SessionRuntimeActivateResponse{}, err
+	}
+	return s.activateSessionRuntime(ctx, prepared, servicecontract.AuthorizedSessionInActiveProject{
+		SessionID:       resolved.SessionID,
+		ActiveProjectID: resolved.OwningProjectID,
+		OwningProjectID: resolved.OwningProjectID,
+		ExecutionTarget: resolved.ExecutionTarget,
 	})
 }
 
 func (s *API) ActivateSessionRuntimeValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionRuntimeActivateRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
-	req := validated.Value()
+	return s.activateSessionRuntime(ctx, validated.Value(), authorization)
+}
+
+func (s *API) activateSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeActivateRequest, authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeActivateResponse, error) {
 	if s == nil || s.authority == nil {
 		return serverapi.SessionRuntimeActivateResponse{}, errors.New("session runtime authority is required")
 	}
@@ -227,19 +228,18 @@ func (s *API) interactiveRuntimePlan(ctx context.Context, req serverapi.SessionR
 func (s *API) ReleaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest) (serverapi.SessionRuntimeReleaseResponse, error) {
 	prepared := req
 	prepared.OwnerID = strings.TrimSpace(req.OwnerID)
-	return servicecontract.WithValidated(prepared, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionRuntimeReleaseRequest]) (serverapi.SessionRuntimeReleaseResponse, error) {
-		sessionID, err := runtimeids.ParseSessionID(validated.Value().Attachment.SessionID)
-		if err != nil {
-			return serverapi.SessionRuntimeReleaseResponse{}, err
-		}
-		return s.ReleaseSessionRuntimeValidated(ctx, validated, servicecontract.AuthorizedSessionInActiveProject{
-			SessionID: sessionID,
-		})
-	})
+	sessionID, err := serverapi.PrepareSessionRuntimeReleaseRequest(prepared)
+	if err != nil {
+		return serverapi.SessionRuntimeReleaseResponse{}, err
+	}
+	return s.releaseSessionRuntime(ctx, prepared, servicecontract.AuthorizedSessionInActiveProject{SessionID: sessionID})
 }
 
 func (s *API) ReleaseSessionRuntimeValidated(ctx context.Context, validated servicecontract.Validated[serverapi.SessionRuntimeReleaseRequest], authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
-	req := validated.Value()
+	return s.releaseSessionRuntime(ctx, validated.Value(), authorization)
+}
+
+func (s *API) releaseSessionRuntime(ctx context.Context, req serverapi.SessionRuntimeReleaseRequest, authorization servicecontract.AuthorizedSessionInActiveProject) (serverapi.SessionRuntimeReleaseResponse, error) {
 	if s == nil || s.authority == nil {
 		return serverapi.SessionRuntimeReleaseResponse{}, errors.New("session runtime authority is required")
 	}

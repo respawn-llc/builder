@@ -53,22 +53,28 @@ const (
 )
 
 func (r SessionRuntimeActivateRequest) Validate() error {
+	_, err := PrepareSessionRuntimeActivateRequest(r)
+	return err
+}
+
+func PrepareSessionRuntimeActivateRequest(r SessionRuntimeActivateRequest) (runtimeids.SessionID, error) {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
+		return runtimeids.SessionID{}, errors.New("client_request_id is required")
 	}
-	if err := validateRequiredSessionID(r.SessionID); err != nil {
-		return err
+	sessionID, err := parseScopedSessionID(r.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, err
 	}
 	if strings.TrimSpace(r.OwnerID) == "" {
-		return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
+		return runtimeids.SessionID{}, errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 	}
 	if r.QuestionsEnabled == nil {
-		return errors.New("questions_enabled is required")
+		return runtimeids.SessionID{}, errors.New("questions_enabled is required")
 	}
 	if r.AutoCompactionEnabled == nil {
-		return errors.New("auto_compaction_enabled is required")
+		return runtimeids.SessionID{}, errors.New("auto_compaction_enabled is required")
 	}
-	return nil
+	return sessionID, nil
 }
 
 func (a SessionRuntimeAttachment) Validate() error {
@@ -94,28 +100,34 @@ func (r SessionRuntimeActivateResponse) ValidateForSession(sessionID string) err
 }
 
 func (r SessionRuntimeReleaseRequest) Validate() error {
+	_, err := PrepareSessionRuntimeReleaseRequest(r)
+	return err
+}
+
+func PrepareSessionRuntimeReleaseRequest(r SessionRuntimeReleaseRequest) (runtimeids.SessionID, error) {
 	if strings.TrimSpace(r.ClientRequestID) == "" {
-		return errors.New("client_request_id is required")
+		return runtimeids.SessionID{}, errors.New("client_request_id is required")
 	}
-	if err := validateRequiredSessionID(r.Attachment.SessionID); err != nil {
-		return err
+	sessionID, err := parseScopedSessionID(r.Attachment.SessionID)
+	if err != nil {
+		return runtimeids.SessionID{}, err
 	}
 	if err := runtimeids.ResourceGeneration(r.Attachment.Generation).Validate(); err != nil {
-		return err
+		return runtimeids.SessionID{}, err
 	}
 	if strings.TrimSpace(r.OwnerID) == "" {
-		return errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
+		return runtimeids.SessionID{}, errors.Join(ErrRuntimeOwnerIDRequired, errors.New("runtime owner_id is required; upgrade the client or connect through the current Kent gateway"))
 	}
 	switch r.ClosePolicy {
 	case "", SessionRuntimeReleaseClosePolicyCloseIfIdle:
 	case SessionRuntimeReleaseClosePolicyDetachOnly:
 		if !r.DropOwner {
-			return errors.New("detach_only release requires drop_owner")
+			return runtimeids.SessionID{}, errors.New("detach_only release requires drop_owner")
 		}
 	default:
-		return errors.New("invalid session runtime release close_policy")
+		return runtimeids.SessionID{}, errors.New("invalid session runtime release close_policy")
 	}
-	return nil
+	return sessionID, nil
 }
 
 func (r SessionRuntimeReleaseRequest) EffectiveClosePolicy() SessionRuntimeReleaseClosePolicy {
