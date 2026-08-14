@@ -559,7 +559,39 @@ func (c *CurrentNodeController) ApplyManualMove(
 			return workflowstore.ManualMoveResult{}, err
 		}
 		c.mu.Unlock()
-		moved, err := c.store.ApplyManualMove(ctx, prepared, candidate)
+		var (
+			preparedAssignments  map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer
+			assignmentDiagnostic error
+		)
+		moved, err := c.store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			prepared,
+			candidate,
+			func(
+				ctx context.Context,
+				contexts []workflowstore.CurrentNodeStartContext,
+			) (workflowstore.ManualMoveTargetAssignmentPreparation, error) {
+				preparation, steers, err := c.steerer.PrepareManualMoveAssignments(ctx, contexts)
+				if err != nil {
+					return preparation, err
+				}
+				for _, input := range contexts {
+					if input.CurrentNode.AgentExecutionSelection == nil {
+						continue
+					}
+					key, keyErr := input.CurrentNode.Reference.Key()
+					if keyErr != nil {
+						return preparation, keyErr
+					}
+					if steers[key] == nil {
+						return preparation, fmt.Errorf("manual move target %v has no prepared assignment steer", input.CurrentNode.Reference)
+					}
+				}
+				preparedAssignments = steers
+				assignmentDiagnostic = preparation.Diagnostic
+				return preparation, nil
+			},
+		)
 		if err != nil {
 			return workflowstore.ManualMoveResult{}, err
 		}
@@ -570,8 +602,22 @@ func (c *CurrentNodeController) ApplyManualMove(
 		if err != nil {
 			return moved, err
 		}
-		_, assignmentErr := c.classifyAutomaticStarts(ctx, starts, nil)
-		return moved, assignmentErr
+		for index := range starts {
+			if !starts[index].requiresAssignment {
+				continue
+			}
+			key, err := starts[index].reference.Key()
+			if err != nil {
+				return moved, err
+			}
+			steer := preparedAssignments[key]
+			if steer == nil {
+				return moved, fmt.Errorf("Manual Move target %v has no prepared assignment", starts[index].reference)
+			}
+			starts[index].assignment = newCurrentNodeClassifiedAssignment(starts[index].reference, steer)
+		}
+		c.deliverClassifiedStarts(starts, nil)
+		return moved, assignmentDiagnostic
 	})
 }
 

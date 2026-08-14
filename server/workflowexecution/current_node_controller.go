@@ -38,10 +38,23 @@ type CurrentNodeRunner interface {
 
 type CurrentNodeAssignmentSteerer interface {
 	SteerCurrentNodeAssignment(context.Context, workflow.CurrentNodeReference) (CurrentNodeAssignmentSteer, error)
+	PrepareManualMoveAssignments(
+		context.Context,
+		[]workflowstore.CurrentNodeStartContext,
+	) (
+		workflowstore.ManualMoveTargetAssignmentPreparation,
+		map[workflow.CurrentNodeReferenceKey]CurrentNodeAssignmentSteer,
+		error,
+	)
 }
 
 type CurrentNodeAssignmentSteer interface {
 	Wait(context.Context) (session.CommitReceipt, error)
+}
+
+type CurrentNodeSessionAssignmentSteer interface {
+	CurrentNodeAssignmentSteer
+	SessionID() runtimeids.SessionID
 }
 
 // CurrentNodeClassifiedAssignment is the immutable durable assignment proof
@@ -109,7 +122,12 @@ type currentNodeStore interface {
 	ResumeCurrentNode(context.Context, workflow.CurrentNodeReference) (workflowstore.InterruptedCurrentNodeAttentionProjection, bool, error)
 	PendingApproval(context.Context, workflow.ApprovalID) (workflow.PendingApproval, error)
 	ApplyPendingApproval(context.Context, workflow.ApprovalID) (workflowstore.PendingApprovalApplyResult, error)
-	ApplyManualMove(context.Context, workflowstore.ManualMovePreparation, *workflowstore.ExecutionTargetCandidate) (workflowstore.ManualMoveResult, error)
+	ApplyManualMoveWithTargetAssignments(
+		context.Context,
+		workflowstore.ManualMovePreparation,
+		*workflowstore.ExecutionTargetCandidate,
+		workflowstore.ManualMoveTargetAssignmentPreparer,
+	) (workflowstore.ManualMoveResult, error)
 	InterruptAdmittedCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 	InterruptCurrentNode(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionReason, workflow.CurrentNodeInterruptionDetail) error
 	ReplaceUserInterruptionWithAssignmentFailure(context.Context, workflow.CurrentNodeReference, workflow.CurrentNodeInterruptionDetail) error

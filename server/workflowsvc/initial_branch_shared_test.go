@@ -9,6 +9,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowexecution"
 	"core/server/workflowruntime"
+	"core/server/workflowstore"
 )
 
 type initialBranchControllerRunner struct{}
@@ -31,6 +32,17 @@ func (initialBranchControllerSteerer) SteerCurrentNodeAssignment(
 	workflow.CurrentNodeReference,
 ) (workflowexecution.CurrentNodeAssignmentSteer, error) {
 	return initialBranchControllerSteer{}, nil
+}
+
+func (initialBranchControllerSteerer) PrepareManualMoveAssignments(
+	context.Context,
+	[]workflowstore.CurrentNodeStartContext,
+) (
+	workflowstore.ManualMoveTargetAssignmentPreparation,
+	map[workflow.CurrentNodeReferenceKey]workflowexecution.CurrentNodeAssignmentSteer,
+	error,
+) {
+	return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, errors.New("Manual Move assignment preparation must not run")
 }
 
 type initialBranchControllerSteer struct{}

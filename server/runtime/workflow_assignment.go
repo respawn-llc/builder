@@ -11,6 +11,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/shared/config"
+	"core/shared/textutil"
 	"core/shared/toolspec"
 )
 
@@ -18,6 +19,11 @@ type WorkflowAssignment struct {
 	ContextMode    workflow.ContextMode
 	CompletionMode workflowruntime.CompletionMode
 	Prompt         workflowruntime.PromptContract
+}
+
+type WorkflowAssignmentSnapshot struct {
+	message  *llm.Message
+	thinking *string
 }
 
 // PersistedWorkflowAssignmentContext supplies the runtime-owned context needed
@@ -92,6 +98,22 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 	if err != nil {
 		return WorkflowAssignmentSteer{}, err
 	}
+	return e.steerWorkflowAssignmentMessage(message)
+}
+
+func (e *Engine) SteerWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnapshot) (WorkflowAssignmentSteer, error) {
+	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	if snapshot.thinking != nil {
+		if err := e.setThinkingValue(*snapshot.thinking); err != nil {
+			return WorkflowAssignmentSteer{}, err
+		}
+	}
+	return e.steerWorkflowAssignmentMessage(snapshot.restorationMessage())
+}
+
+func (e *Engine) steerWorkflowAssignmentMessage(message llm.Message) (WorkflowAssignmentSteer, error) {
 	steer := newWorkflowAssignmentSteer()
 	intent := steerMessagesWithPersistenceIntent(
 		steeringPriorityRuntimeContext,
@@ -122,6 +144,75 @@ func (e *Engine) SteerWorkflowAssignment(assignment WorkflowAssignment) (Workflo
 	receipt, err := e.steerWithCommitReceipt("", intent)
 	steer.complete(receipt, err)
 	return steer, nil
+}
+
+func CapturePersistedWorkflowAssignment(
+	store *session.Store,
+) (WorkflowAssignmentSnapshot, bool, error) {
+	if store == nil {
+		return WorkflowAssignmentSnapshot{}, false, errors.New("session store is required")
+	}
+	meta := store.Meta()
+	snapshot := WorkflowAssignmentSnapshot{}
+	if meta.ActiveWorkflowAssignment != nil {
+		message, err := llmMessageFromSessionRecord(*meta.ActiveWorkflowAssignment)
+		if err != nil {
+			return WorkflowAssignmentSnapshot{}, false, err
+		}
+		snapshot.message = &message
+	}
+	if meta.ChatSettings != nil && meta.ChatSettings.Thinking != nil {
+		thinking := *meta.ChatSettings.Thinking
+		snapshot.thinking = &thinking
+	}
+	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
+		return WorkflowAssignmentSnapshot{}, false, err
+	}
+	return snapshot, true, nil
+}
+
+func (s WorkflowAssignmentSnapshot) WithThinkingLevel(level string) WorkflowAssignmentSnapshot {
+	value := level
+	s.thinking = &value
+	return s
+}
+
+func SteerPersistedWorkflowAssignmentSnapshot(
+	store *session.Store,
+	snapshot WorkflowAssignmentSnapshot,
+) (WorkflowAssignmentSteer, error) {
+	if store == nil {
+		return WorkflowAssignmentSteer{}, errors.New("session store is required")
+	}
+	if err := validateWorkflowAssignmentSnapshot(snapshot); err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	engine, err := newPersistedSteeringEngine(store)
+	if err != nil {
+		return WorkflowAssignmentSteer{}, err
+	}
+	return completePersistedWorkflowAssignment(engine, snapshot.restorationMessage()), nil
+}
+
+func validateWorkflowAssignmentSnapshot(snapshot WorkflowAssignmentSnapshot) error {
+	if snapshot.message != nil &&
+		(snapshot.message.MessageType == nil || *snapshot.message.MessageType != llm.MessageTypeWorkflowMode) {
+		return errors.New("workflow assignment snapshot is required")
+	}
+	return nil
+}
+
+func (s WorkflowAssignmentSnapshot) restorationMessage() llm.Message {
+	if s.message != nil {
+		return *s.message
+	}
+	return llm.Message{
+		Role:        llm.RoleDeveloper,
+		MessageType: textutil.Value(llm.MessageTypeWorkflowModeExit),
+		Content: textutil.Value(
+			"The preceding Workflow assignment was discarded. There is no current executable Workflow Node until a later assignment arrives.",
+		),
+	}
 }
 
 func SteerPersistedWorkflowAssignment(
