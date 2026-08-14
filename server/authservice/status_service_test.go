@@ -114,7 +114,7 @@ func TestStatusServicePublishesUnavailableWhenInitialLoadFails(t *testing.T) {
 	}
 }
 
-func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
+func TestStatusServiceDoesNotRefreshOAuthCredentials(t *testing.T) {
 	now := time.Date(2026, time.August, 9, 3, 0, 0, 0, time.UTC)
 	store := auth.NewMemoryStore(auth.State{
 		Scope: auth.ScopeGlobal,
@@ -128,24 +128,24 @@ func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
 		}},
 		EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
 	})
-	refreshErr := errors.New("refresh failed")
+	refreshCalls := 0
 	refresher := auth.NewOAuthRefresher(
 		func() time.Time { return now },
 		30*time.Second,
 		func(context.Context, auth.Method) (auth.Method, error) {
-			return auth.Method{}, refreshErr
+			refreshCalls++
+			return auth.Method{}, errors.New("refresh must not run")
 		},
 	)
 	service := NewStatusService(auth.NewManager(store, refresher, func() time.Time { return now }), config.Settings{})
 
-	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{})
+	response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
 	if err != nil {
 		t.Fatalf("GetAuthStatus: %v", err)
 	}
 	facts := response.Resolution.Facts
 	if response.Resolution.Kind != serverapi.AuthStatusResolutionKnown ||
-		response.Resolution.Failure == nil ||
-		response.Resolution.Failure.Cause != refreshErr.Error() ||
+		response.Resolution.Failure != nil ||
 		facts == nil ||
 		facts.Method != serverapi.AuthStatusMethodOAuth ||
 		facts.OAuth == nil ||
@@ -153,10 +153,73 @@ func TestStatusServiceRetainsOAuthFactsWhenRefreshFails(t *testing.T) {
 		*facts.OAuth.Email != "user@example.com" {
 		t.Fatalf("resolution = %+v", response.Resolution)
 	}
-	if !response.Subscription.Applicable ||
-		response.Subscription.Failure == nil ||
-		response.Subscription.Failure.Cause != refreshErr.Error() {
-		t.Fatalf("subscription = %+v", response.Subscription)
+	if refreshCalls != 0 {
+		t.Fatalf("OAuth refresh calls = %d, want 0", refreshCalls)
+	}
+	persisted, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load persisted OAuth state: %v", err)
+	}
+	if persisted.Method.OAuth == nil || persisted.Method.OAuth.AccessToken != "stale" {
+		t.Fatalf("status read persisted refreshed OAuth state: %+v", persisted)
+	}
+}
+
+func TestStatusServiceResolvesEnvironmentAndSavedAPIKeyPreferences(t *testing.T) {
+	tests := []struct {
+		name       string
+		persisted  auth.State
+		envKey     string
+		wantSuffix string
+		wantPref   serverapi.AuthStatusEnvPreference
+	}{
+		{
+			name:       "environment only",
+			persisted:  auth.EmptyState(),
+			envKey:     "env-secret-1111",
+			wantSuffix: "1111",
+			wantPref:   serverapi.AuthStatusEnvPreferenceUnspecified,
+		},
+		{
+			name: "prefer saved",
+			persisted: auth.State{
+				Scope:               auth.ScopeGlobal,
+				Method:              auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "saved-secret-2222"}},
+				EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferSaved,
+			},
+			envKey:     "env-secret-1111",
+			wantSuffix: "2222",
+			wantPref:   serverapi.AuthStatusEnvPreferencePreferSaved,
+		},
+		{
+			name: "prefer environment",
+			persisted: auth.State{
+				Scope:               auth.ScopeGlobal,
+				Method:              auth.Method{Type: auth.MethodAPIKey, APIKey: &auth.APIKeyMethod{Key: "saved-secret-2222"}},
+				EnvAPIKeyPreference: auth.EnvAPIKeyPreferencePreferEnv,
+			},
+			envKey:     "env-secret-1111",
+			wantSuffix: "1111",
+			wantPref:   serverapi.AuthStatusEnvPreferencePreferEnv,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := auth.NewEnvAPIKeyOverrideStore(auth.NewMemoryStore(test.persisted), func(key string) (string, bool) {
+				return test.envKey, key == "OPENAI_API_KEY"
+			})
+			service := NewStatusService(auth.NewManager(store, nil, time.Now), config.Settings{Model: "gpt-5"})
+			response, err := service.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+			if err != nil {
+				t.Fatalf("GetAuthStatus: %v", err)
+			}
+			facts := response.Resolution.Facts
+			if facts == nil || facts.APIKey == nil || facts.APIKey.Suffix == nil ||
+				*facts.APIKey.Suffix != test.wantSuffix ||
+				facts.EnvPreference != test.wantPref {
+				t.Fatalf("auth status facts = %+v", facts)
+			}
+		})
 	}
 }
 

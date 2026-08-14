@@ -8,13 +8,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"core/internal/testharness/testsetup"
 	"core/server/auth"
 	"core/server/authservice"
+	serverbootstrap "core/server/bootstrap"
 	corepkg "core/server/core"
 	"core/server/metadata"
 	"core/server/workflow"
@@ -25,6 +28,7 @@ import (
 	"core/shared/protocol"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/toolspec"
 )
 
 type envAuthHandler struct {
@@ -508,6 +512,178 @@ func TestMissingConfigServeStartsBootstrapSurfaceBeforeAuthReady(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(home, config.ConfigDirName, "config.toml")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("settings file should remain absent before finalize, stat err=%v", statErr)
+	}
+}
+
+func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+	skillDir := filepath.Join(home, ".claude", "skills", "helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("create import skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: helper\n---\n"), 0o644); err != nil {
+		t.Fatalf("write import skill: %v", err)
+	}
+
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, envAuthHandler{}, nil)
+	originalBuilder := server.deps.buildCore
+	buildStarted := make(chan config.App, 1)
+	releaseBuild := make(chan struct{})
+	var releaseBuildOnce sync.Once
+	releaseCoreBuild := func() { releaseBuildOnce.Do(func() { close(releaseBuild) }) }
+	t.Cleanup(releaseCoreBuild)
+	server.deps.buildCore = func(
+		ctx context.Context,
+		cfg config.App,
+		authSupport serverbootstrap.AuthSupport,
+		runtimeSupport serverbootstrap.RuntimeSupport,
+		options corepkg.Options,
+	) (*corepkg.Core, error) {
+		buildStarted <- cloneStartupConfig(cfg)
+		<-releaseBuild
+		return originalBuilder(ctx, cfg, authSupport, runtimeSupport, options)
+	}
+	startServingTestServer(t, server)
+
+	activator, err := client.DialConfiguredRemote(context.Background(), server.Config())
+	if err != nil {
+		t.Fatalf("dial activation remote: %v", err)
+	}
+	defer func() { _ = activator.Close() }()
+	reader, err := client.DialConfiguredRemote(context.Background(), server.Config())
+	if err != nil {
+		t.Fatalf("dial read remote: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	initialReadiness, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("initial readiness: %v", err)
+	}
+	initialBootstrap, err := reader.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("initial auth bootstrap: %v", err)
+	}
+	initialAuth, err := reader.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	if err != nil {
+		t.Fatalf("initial auth status: %v", err)
+	}
+	initialFacts, err := reader.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("initial capability facts: %v", err)
+	}
+
+	provider := "anthropic"
+	finalizeDone := make(chan error, 1)
+	go func() {
+		_, finalizeErr := activator.FinalizeOnboarding(context.Background(), serverapi.OnboardingFinalizeRequest{
+			MainProvider: &serverapi.OnboardingProviderChoice{ProviderOverride: &provider},
+			Model: &serverapi.OnboardingModelChoice{
+				Kind:  serverapi.OnboardingModelCustom,
+				Alias: "pending-model",
+			},
+			DisabledSkillNames: []string{"helper"},
+		})
+		finalizeDone <- finalizeErr
+	}()
+	pendingConfig := <-buildStarted
+	if pendingConfig.Settings.Model != "pending-model" || pendingConfig.Settings.ProviderOverride != provider || pendingConfig.Settings.SkillToggles["helper"] {
+		t.Fatalf("pending activation config = %+v", pendingConfig.Settings)
+	}
+
+	readCtx, cancelReads := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReads()
+	duringReadiness, err := reader.GetServerReadiness(readCtx, serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("readiness during activation: %v", err)
+	}
+	duringBootstrap, err := reader.GetAuthBootstrapStatus(readCtx, serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("auth bootstrap during activation: %v", err)
+	}
+	duringAuth, err := reader.GetAuthStatus(readCtx, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	if err != nil {
+		t.Fatalf("auth status during activation: %v", err)
+	}
+	duringFacts, err := reader.GetCapabilityFacts(readCtx, serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("capability facts during activation: %v", err)
+	}
+	if _, err := reader.GetUpdateStatus(readCtx, serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("update status during activation = %v, want onboarding required", err)
+	}
+	if !reflect.DeepEqual(duringReadiness, initialReadiness) ||
+		!reflect.DeepEqual(duringBootstrap, initialBootstrap) ||
+		!reflect.DeepEqual(duringAuth, initialAuth) ||
+		!reflect.DeepEqual(duringFacts, initialFacts) {
+		t.Fatalf("activation reads crossed published tuples")
+	}
+
+	releaseCoreBuild()
+	if err := <-finalizeDone; err != nil {
+		t.Fatalf("finalize onboarding: %v", err)
+	}
+	ready, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil || !ready.Ready {
+		t.Fatalf("readiness after activation = %+v, %v", ready, err)
+	}
+	facts, err := reader.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("capability facts after activation: %v", err)
+	}
+	if facts.Defaults.PrimaryModelID != "pending-model" ||
+		facts.Providers.CurrentEffective == nil ||
+		facts.Providers.CurrentEffective.LLMProviderID != provider {
+		t.Fatalf("capability facts after activation = %+v", facts)
+	}
+	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancelUpdate()
+	if _, err := reader.GetUpdateStatus(updateCtx, serverapi.UpdateStatusRequest{}); errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("update status did not reach published Core: %v", err)
+	}
+}
+
+func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
+	hook := "/tmp/hook"
+	preCompaction := 123
+	cfg := config.App{
+		Settings: config.Settings{
+			Model:             "initial-model",
+			SystemPromptFiles: []config.SystemPromptFile{{Path: "/tmp/prompt"}},
+			EnabledTools:      map[toolspec.ID]bool{toolspec.ToolPatch: true},
+			SkillToggles:      map[string]bool{"helper": true},
+			Shell:             config.ShellSettings{PostprocessHook: &hook},
+			Workflow:          config.WorkflowSettings{PreCompactionTokens: &preCompaction},
+			Subagents: map[string]config.SubagentRole{
+				"worker": {Sources: map[string]string{"model": "file"}, Settings: config.Settings{SkillToggles: map[string]bool{"nested": true}}},
+			},
+		},
+		Source: config.SourceReport{Sources: map[string]string{"model": "default"}},
+	}
+	deps := newStartupGatewayDependencies(context.Background(), cfg, serverbootstrap.Request{}, serverbootstrap.AuthSupport{}, nil, nil)
+	cfg.Settings.EnabledTools[toolspec.ToolPatch] = false
+	cfg.Settings.SkillToggles["helper"] = false
+	*cfg.Settings.Shell.PostprocessHook = "mutated"
+	cfg.Source.Sources["model"] = "mutated"
+
+	first := cloneStartupConfig(deps.loadSnapshot().cfg)
+	first.Settings.SystemPromptFiles[0].Path = "mutated"
+	role := first.Settings.Subagents["worker"]
+	role.Sources["model"] = "mutated"
+	role.Settings.SkillToggles["nested"] = false
+	first.Settings.Subagents["worker"] = role
+	second := deps.loadSnapshot().cfg
+	if !second.Settings.EnabledTools[toolspec.ToolPatch] ||
+		!second.Settings.SkillToggles["helper"] ||
+		*second.Settings.Shell.PostprocessHook != "/tmp/hook" ||
+		second.Source.Sources["model"] != "default" ||
+		second.Settings.SystemPromptFiles[0].Path != "/tmp/prompt" ||
+		second.Settings.Subagents["worker"].Sources["model"] != "file" ||
+		!second.Settings.Subagents["worker"].Settings.SkillToggles["nested"] {
+		t.Fatalf("published startup config was aliased: %+v", second)
 	}
 }
 

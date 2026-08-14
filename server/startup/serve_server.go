@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/auth"
@@ -26,6 +28,7 @@ import (
 	"core/shared/config"
 	"core/shared/protocol"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 )
 
 type ServeServer struct {
@@ -42,7 +45,7 @@ func (s *ServeServer) Config() config.App {
 		return s.Core.Config()
 	}
 	if s.deps != nil {
-		return s.deps.snapshotConfig()
+		return cloneStartupConfig(s.deps.loadSnapshot().cfg)
 	}
 	return s.cfg
 }
@@ -395,28 +398,46 @@ type startupGatewayDependencies struct {
 	finalizer   apicontract.OnboardingFinalizeService
 	core        *core.Core
 	activation  error
+	buildCore   startupCoreBuilder
+	snapshot    atomic.Pointer[startupDependencySnapshot]
+}
+
+type startupCoreBuilder func(context.Context, config.App, serverbootstrap.AuthSupport, serverbootstrap.RuntimeSupport, core.Options) (*core.Core, error)
+
+type startupDependencySnapshot struct {
+	cfg       config.App
+	readiness startupReadinessState
+	core      *core.Core
 }
 
 func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstrapReq serverbootstrap.Request, authSupport serverbootstrap.AuthSupport, rootLease *core.RootLockLease, finalizer *onboarding.Finalizer) *startupGatewayDependencies {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
+	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease, buildCore: core.NewWithContextOptions}
+	reason := serverapi.ServerNotReadyOnboardingRequired
+	deps.publishSnapshotLocked(startupReadinessState{Reason: &reason}, nil)
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
 
 func (d *startupGatewayDependencies) Close() error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.core != nil {
-		return d.core.Close()
+		appCore := d.core
+		d.core = nil
+		reason := serverapi.ServerNotReadyOnboardingRequired
+		d.publishSnapshotLocked(startupReadinessState{Reason: &reason}, nil)
+		d.mu.Unlock()
+		return appCore.Close()
 	}
 	if d.rootLease != nil {
 		err := d.rootLease.Close()
 		d.rootLease = nil
+		d.mu.Unlock()
 		return err
 	}
+	d.mu.Unlock()
 	return nil
 }
 
@@ -434,7 +455,11 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	if err != nil {
 		return d.activationError(resp, err)
 	}
-	appCore, err := core.NewWithContextOptions(
+	buildCore := d.buildCore
+	if buildCore == nil {
+		buildCore = core.NewWithContextOptions
+	}
+	appCore, err := buildCore(
 		ctx,
 		refreshed.Config,
 		d.authSupport,
@@ -449,13 +474,16 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	d.rootLease = nil
 	d.cfg = refreshed.Config
 	d.activation = nil
+	d.publishSnapshotLocked(startupReadinessState{Ready: true}, appCore)
 	return nil
 }
 
 func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
 	d.activation = err
-	settingsPath := resp.SettingsPath
+	reason := serverapi.ServerNotReadyActivationFailed
 	diagnostic := err.Error()
+	d.publishSnapshotLocked(startupReadinessState{Reason: &reason, Diagnostic: &diagnostic}, nil)
+	settingsPath := resp.SettingsPath
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: true,
 		SettingsPath:        &settingsPath,
@@ -464,9 +492,7 @@ func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFi
 }
 
 func (d *startupGatewayDependencies) activeCore() *core.Core {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.core
+	return d.loadSnapshot().core
 }
 
 func (d *startupGatewayDependencies) RequireCoreActive() error {
@@ -489,36 +515,28 @@ type startupReadinessState struct {
 }
 
 func (d *startupGatewayDependencies) ServerReadinessState() startupReadinessState {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if d.core != nil {
-		return startupReadinessState{Ready: true}
-	}
-	if d.activation != nil {
-		reason := serverapi.ServerNotReadyActivationFailed
-		diagnostic := d.activation.Error()
-		return startupReadinessState{Reason: &reason, Diagnostic: &diagnostic}
-	}
-	reason := serverapi.ServerNotReadyOnboardingRequired
-	return startupReadinessState{Reason: &reason}
+	return cloneStartupReadiness(d.loadSnapshot().readiness)
 }
 
-func (d *startupGatewayDependencies) snapshotConfig() config.App {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.cfg
+func (d *startupGatewayDependencies) loadSnapshot() startupDependencySnapshot {
+	if d == nil {
+		return startupDependencySnapshot{}
+	}
+	snapshot := d.snapshot.Load()
+	if snapshot == nil {
+		return startupDependencySnapshot{}
+	}
+	return *snapshot
 }
 
 func (d *startupGatewayDependencies) DebugEnabled() bool {
-	return d.snapshotConfig().Settings.Debug
+	return d.loadSnapshot().cfg.Settings.Debug
 }
 
 type startupServerStatusService struct {
-	base      apicontract.ServerStatusService
-	readiness interface {
-		ServerReadinessState() startupReadinessState
-	}
-	activeCore func() *core.Core
+	base       apicontract.ServerStatusService
+	readiness  startupReadinessState
+	activeCore *core.Core
 }
 
 func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
@@ -526,10 +544,7 @@ func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req 
 	if err != nil {
 		return serverapi.ServerReadinessResponse{}, err
 	}
-	if s.readiness == nil {
-		return resp, nil
-	}
-	if state := s.readiness.ServerReadinessState(); !state.Ready {
+	if state := s.readiness; !state.Ready {
 		resp.Ready = false
 		diagnosticID := ""
 		if state.Reason != nil {
@@ -563,33 +578,93 @@ func (s startupServerStatusService) GetUpdateStatus(ctx context.Context, req ser
 	if err := req.Validate(); err != nil {
 		return serverapi.UpdateStatusResponse{}, err
 	}
-	if s.readiness != nil {
-		if state := s.readiness.ServerReadinessState(); !state.Ready {
-			reason := serverapi.ServerNotReadyOnboardingRequired
-			if state.Reason != nil {
-				reason = *state.Reason
-			}
-			var details any
-			if state.Diagnostic != nil {
-				details = serverapi.ServerNotReadyDetails{Diagnostic: state.Diagnostic}
-			}
-			return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(reason, details, nil)
+	if state := s.readiness; !state.Ready {
+		reason := serverapi.ServerNotReadyOnboardingRequired
+		if state.Reason != nil {
+			reason = *state.Reason
 		}
+		var details any
+		if state.Diagnostic != nil {
+			details = serverapi.ServerNotReadyDetails{Diagnostic: state.Diagnostic}
+		}
+		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(reason, details, nil)
 	}
 	if s.activeCore == nil {
 		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
 	}
-	activeCore := s.activeCore()
-	if activeCore == nil {
-		return serverapi.UpdateStatusResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-	}
-	return activeCore.ServerStatusClient().GetUpdateStatus(ctx, req)
+	return s.activeCore.ServerStatusClient().GetUpdateStatus(ctx, req)
 }
 
 type startupFinalizeService struct {
 	service           apicontract.OnboardingFinalizeService
 	activate          func(context.Context, serverapi.OnboardingFinalizeResponse) error
 	activationContext context.Context
+}
+
+type startupAuthBootstrapService struct {
+	status *authservice.BootstrapService
+	deps   *startupGatewayDependencies
+}
+
+func (s startupAuthBootstrapService) GetAuthBootstrapStatus(ctx context.Context, req serverapi.AuthGetBootstrapStatusRequest) (serverapi.AuthGetBootstrapStatusResponse, error) {
+	return s.status.GetAuthBootstrapStatus(ctx, req)
+}
+
+func (s startupAuthBootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
+	s.deps.mu.Lock()
+	defer s.deps.mu.Unlock()
+	return s.deps.authBootstrapMutationService().CompleteAuthBootstrap(ctx, req)
+}
+
+func (s startupAuthBootstrapService) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
+	s.deps.mu.Lock()
+	defer s.deps.mu.Unlock()
+	return s.deps.authBootstrapMutationService().AcknowledgeNoAuth(ctx, req)
+}
+
+func (d *startupGatewayDependencies) authBootstrapMutationService() *authservice.BootstrapService {
+	settings := d.loadSnapshot().cfg.Settings
+	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, settings, apicontract.AllowedPreAuthMethods())
+}
+
+func (d *startupGatewayDependencies) publishSnapshotLocked(readiness startupReadinessState, appCore *core.Core) {
+	snapshot := &startupDependencySnapshot{
+		cfg:       cloneStartupConfig(d.cfg),
+		readiness: cloneStartupReadiness(readiness),
+		core:      appCore,
+	}
+	d.snapshot.Store(snapshot)
+}
+
+func cloneStartupReadiness(readiness startupReadinessState) startupReadinessState {
+	readiness.Reason = textutil.Pointer(readiness.Reason)
+	readiness.Diagnostic = textutil.Pointer(readiness.Diagnostic)
+	return readiness
+}
+
+func cloneStartupConfig(cfg config.App) config.App {
+	cfg.Settings = cloneStartupSettings(cfg.Settings)
+	cfg.Source.Sources = maps.Clone(cfg.Source.Sources)
+	return cfg
+}
+
+func cloneStartupSettings(settings config.Settings) config.Settings {
+	cloned := settings
+	cloned.SystemPromptFiles = append([]config.SystemPromptFile(nil), settings.SystemPromptFiles...)
+	cloned.EnabledTools = maps.Clone(settings.EnabledTools)
+	cloned.SkillToggles = maps.Clone(settings.SkillToggles)
+	cloned.Shell.PostprocessHook = textutil.Pointer(settings.Shell.PostprocessHook)
+	cloned.Workflow.PreCompactionTokens = textutil.Pointer(settings.Workflow.PreCompactionTokens)
+	if settings.Subagents != nil {
+		cloned.Subagents = make(map[string]config.SubagentRole, len(settings.Subagents))
+		for name, role := range settings.Subagents {
+			copied := role
+			copied.Settings = cloneStartupSettings(role.Settings)
+			copied.Sources = maps.Clone(role.Sources)
+			cloned.Subagents[name] = copied
+		}
+	}
+	return cloned
 }
 
 func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
@@ -611,24 +686,28 @@ func (s startupFinalizeService) FinalizeOnboarding(ctx context.Context, req serv
 
 func (d *startupGatewayDependencies) AuthManager() *auth.Manager { return d.authSupport.AuthManager }
 func (d *startupGatewayDependencies) AuthBootstrapClient() apicontract.AuthBootstrapService {
-	return authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, d.snapshotConfig().Settings, apicontract.AllowedPreAuthMethods())
+	snapshot := d.loadSnapshot()
+	return startupAuthBootstrapService{
+		status: authservice.NewBootstrapService(d.authSupport.AuthManager, d.authSupport.OAuthOptions, snapshot.cfg.Settings, apicontract.AllowedPreAuthMethods()),
+		deps:   d,
+	}
 }
 func (d *startupGatewayDependencies) AuthStatusClient() apicontract.AuthStatusService {
-	return authservice.NewStatusService(d.authSupport.AuthManager, d.snapshotConfig().Settings)
+	return authservice.NewStatusService(d.authSupport.AuthManager, d.loadSnapshot().cfg.Settings)
 }
 func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.CapabilityFactsService {
-	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.snapshotConfig(), AuthManager: d.authSupport.AuthManager})
+	return capabilityfacts.NewService(capabilityfacts.Options{Config: d.loadSnapshot().cfg, AuthManager: d.authSupport.AuthManager})
 }
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
-	cfg := d.snapshotConfig()
+	snapshot := d.loadSnapshot()
 	return startupServerStatusService{
-		base:       serverstatus.NewServerStatusService(d.authSupport.AuthManager, cfg, nil),
-		readiness:  d,
-		activeCore: d.activeCore,
+		base:       serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil),
+		readiness:  snapshot.readiness,
+		activeCore: snapshot.core,
 	}
 }
 func (d *startupGatewayDependencies) ServerAuthRequired() bool {
-	return authservice.StartupAuthRequired(d.snapshotConfig().Settings)
+	return authservice.StartupAuthRequired(d.loadSnapshot().cfg.Settings)
 }
 func (d *startupGatewayDependencies) OnboardingFinalizeClient() apicontract.OnboardingFinalizeService {
 	return d.finalizer
