@@ -24,7 +24,7 @@ export function TaskLabelAssignmentFeedback({
         />
       )}
       {assignment.failures.length === 0 ? null : (
-        <div className="grid gap-[var(--space-1)]" role="alert">
+        <div className="grid gap-[var(--space-1)]">
           {assignment.failures.map((failure) => (
             <FailureRow
               error={failure.error}
@@ -44,7 +44,7 @@ export function TaskLabelAssignmentFeedback({
 function FailureRow({ error, onRetry, title }: Readonly<{ error: unknown; onRetry(): void; title: string }>) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[var(--color-error)]">
+    <div className="flex min-w-0 flex-wrap items-center gap-[var(--space-1)] text-[var(--color-error)]" role="alert">
       <span>{title}</span>
       <span className="min-w-0">{errorMessage(error)}</span>
       <Button onClick={onRetry} variant="primary">

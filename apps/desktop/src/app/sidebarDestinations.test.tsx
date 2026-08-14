@@ -10,6 +10,7 @@ const fixture = vi.hoisted(() => ({
   openWindow: vi.fn(async () => undefined),
   openProject: vi.fn(async () => undefined),
   openWorkflowEditor: vi.fn(async () => undefined),
+  push: vi.fn(),
   workflowEditorProps: vi.fn<(props: unknown) => void>(),
   newTaskFormProps: vi.fn<(props: unknown) => void>(),
 }));
@@ -27,7 +28,7 @@ vi.mock("@/app-facade", () => ({
     },
   }),
   usePublishSidebarHeaderAction: headerAction,
-  useStatusController: () => ({ push: vi.fn() }),
+  useStatusController: () => ({ push: fixture.push }),
 }));
 vi.mock("@/features/task-detail", () => ({
   TaskDetailSurface: () => <div />,
@@ -268,8 +269,9 @@ describe("Sidebar destination completion ownership", () => {
     expect(follow()).toHaveBeenCalledOnce();
   });
 
-  it("runs caller-owned Link Workflow completion without global navigation", () => {
-    const onCompleted = vi.fn();
+  it("runs caller-owned Link Workflow completion without global navigation and reports failure", async () => {
+    const failure = new Error("follow-up failed");
+    const onCompleted = vi.fn(async () => Promise.reject(failure));
     const navigator = mountDestination({
       kind: "linkWorkflow",
       onCompleted,
@@ -279,11 +281,11 @@ describe("Sidebar destination completion ownership", () => {
     fireEvent.click(screen.getByTestId("workflow-linked"));
 
     expect(navigator.close).toHaveBeenCalledOnce();
-    expect(onCompleted).toHaveBeenCalledWith({
-      kind: "linked",
-      workflowID: "workflow-linked",
-    });
+    expect(onCompleted).toHaveBeenCalledWith({ kind: "linked", workflowID: "workflow-linked" });
     expect(fixture.openProject).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(fixture.push).toHaveBeenCalledWith(expect.objectContaining({ body: failure.message }));
+    });
   });
 
   it("closes Workflow Inspector through its scoped navigator when the selected node is missing", () => {

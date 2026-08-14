@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { useCallback } from "react";
 
-import { initializeI18n } from "@/i18n";
+import { appI18n, initializeI18n } from "@/i18n";
 import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
 
@@ -37,7 +37,7 @@ vi.mock("./ProjectTasksSurface", () => ({
     );
     return (
       <div
-        aria-label="Project tasks"
+        aria-label={appI18n.t("home.prototype.projectTasksGrid")}
         onScroll={(event) => {
           viewMemory.setScrollOffsets(event.currentTarget.scrollTop, event.currentTarget.scrollLeft);
         }}
@@ -52,16 +52,16 @@ beforeAll(async () => initializeI18n());
 
 it("restores Task-grid pixels after visiting another Project tab", () => {
   render(<ProjectPrototypeDetail projectID="project-1" sidebarMode="shift" />);
-  const grid = screen.getByRole("grid", { name: "Project tasks" });
+  const grid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   grid.scrollTop = 500;
   grid.scrollLeft = 120;
   fireEvent.scroll(grid);
 
-  fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
-  expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.sessions") }));
+  expect(screen.queryByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") })).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
-  const restoredGrid = screen.getByRole("grid", { name: "Project tasks" });
+  fireEvent.click(screen.getByRole("tab", { name: appI18n.t("home.prototype.tasks") }));
+  const restoredGrid = screen.getByRole("grid", { name: appI18n.t("home.prototype.projectTasksGrid") });
   expect(restoredGrid.scrollTop).toBe(500);
   expect(restoredGrid.scrollLeft).toBe(120);
 });

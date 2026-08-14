@@ -208,13 +208,18 @@ function LinkWorkflowDestinationView({
   destination: Extract<SidebarDestination, { kind: "linkWorkflow" }>;
   navigator: SidebarPageNavigator;
 }>): ReactElement {
+  const { t } = useTranslation();
+  const { push } = useStatusController();
   usePublishSidebarHeaderAction(
     destination.creating === true ? null : (
       <LinkWorkflowCreateHeaderButton destination={destination} navigator={navigator} />
     ),
   );
   const complete = (completion: Parameters<typeof destination.onCompleted>[0]) => {
-    if (navigator.close() === "accepted") void destination.onCompleted(completion);
+    if (navigator.close() !== "accepted") return;
+    void (async () => destination.onCompleted(completion))().catch((error: unknown) => {
+      push({ body: errorMessage(error), durationMs: Infinity, id: "workflow-link-completion-error", title: t("states.error"), tone: "danger" });
+    });
   };
   return (
     <LinkWorkflowSidebar

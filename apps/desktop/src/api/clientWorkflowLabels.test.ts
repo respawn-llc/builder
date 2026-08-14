@@ -6,36 +6,26 @@ import { taskLabelFilterPayload } from "./clientWorkflowLabels";
 const priorityID = "f74ce532-9e6e-4cf6-b3c1-d67d5a3eedcf";
 const urgentID = "942495c2-5958-4959-8445-94046ad74fbd";
 const smallID = "11111111-1111-4111-8111-111111111111";
-
 describe("ApiClient workflow labels", () => {
-  it("loads server-owned Project Task-group definitions with exact counts", async () => {
-    const transport = new FakeRpcTransport([
-      {
-        method: "workflow.task.groupCounts",
-        result: {
-          project_id: "project-1",
-          definitions: [
-            { group: "active", status_kinds: ["running", "active"] },
-            { group: "backlog", status_kinds: ["backlog"] },
-            { group: "done", status_kinds: ["done"] },
-          ],
-          counts: { active: 3, backlog: 2, done: 1 },
-          generated_at_unix_ms: 7,
-        },
-      },
-    ]);
-    const client = new ApiClient(transport);
-
-    await expect(client.getProjectTaskGroupCounts({ projectID: "project-1" })).resolves.toEqual({
-      projectID: "project-1",
-      definitions: [
-        { group: "active", statusKinds: ["running", "active"] },
-        { group: "backlog", statusKinds: ["backlog"] },
-        { group: "done", statusKinds: ["done"] },
-      ],
+  it("loads each Project Task-group definition exactly once", async () => {
+    const definitions = [{ group: "active", status_kinds: ["running", "active"] }, { group: "backlog", status_kinds: ["backlog"] }, { group: "done", status_kinds: ["done"] }] as const;
+    const result = {
+      project_id: "project-1",
+      definitions,
       counts: { active: 3, backlog: 2, done: 1 },
-      generatedAt: 7,
+      generated_at_unix_ms: 7,
+    };
+    const getCounts = async (response: unknown) =>
+      new ApiClient(new FakeRpcTransport([{ method: "workflow.task.groupCounts", result: response }]))
+        .getProjectTaskGroupCounts({ projectID: "project-1" });
+
+    await expect(getCounts(result)).resolves.toMatchObject({
+      definitions: definitions.map(({ group, status_kinds }) => ({ group, statusKinds: status_kinds })),
+      counts: result.counts,
     });
+    await expect(
+      getCounts({ ...result, definitions: [definitions[0], definitions[0], definitions[2]] }),
+    ).rejects.toBeInstanceOf(ContractError);
   });
 
   it("reorders a Project label catalog and preserves the authoritative response order", async () => {
