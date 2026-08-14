@@ -1070,7 +1070,7 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 		}
 		return blockers, nil
 	}
-	if !SessionIDSetsEqual(preparedSessionIDs, commitSessionIDs) {
+	if !StringSetsEqual(preparedSessionIDs, commitSessionIDs) {
 		return nil, &serverapi.WorkspaceDetachConflictError{
 			ProjectID:   trimmedProjectID,
 			WorkspaceID: trimmedWorkspaceID,

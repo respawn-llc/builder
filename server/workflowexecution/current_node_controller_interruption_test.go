@@ -14,6 +14,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowruntime"
 	"core/server/workflowstore"
+	"core/shared/runtimeids"
 )
 
 func TestCurrentNodeControllerInterruptPersistsAfterCallerDeadline(t *testing.T) {
@@ -868,6 +869,95 @@ func TestCurrentNodeControllerReservationDoesNotAuthorizeTaskInterrupt(t *testin
 	}
 	if err := controller.EnsureTaskQuiescent(reference.TaskID); !errors.Is(err, ErrTaskExecutionNotQuiescent) {
 		t.Fatalf("reservation-only task quiescence = %v, want %v", err, ErrTaskExecutionNotQuiescent)
+	}
+}
+
+func TestCurrentNodeControllerInterruptNoOpsWhenTaskIsAlreadyInterrupted(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-already-interrupted", "node-agent")
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{
+			Reference: reference,
+			Scheduling: &workflow.CurrentNodeScheduling{
+				State: workflow.CurrentNodeSchedulingInterrupted,
+			},
+		}},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := controller.Interrupt(context.Background(), InterruptSelector{TaskID: reference.TaskID}); err != nil {
+		t.Fatalf("Interrupt already-interrupted Task: %v", err)
+	}
+}
+
+func TestCurrentNodeControllerInterruptNoOpsOnlyForMatchingInterruptedSession(t *testing.T) {
+	reference := currentNodeReferenceForControllerTest(t, "task-already-interrupted-session", "node-agent")
+	interruptedSessionID := runtimeids.NewSessionID()
+	otherSessionID := runtimeids.NewSessionID()
+	store := &currentNodeControllerStore{
+		interrupted: []workflow.CurrentNode{{
+			Reference: reference,
+			SessionID: &interruptedSessionID,
+			Scheduling: &workflow.CurrentNodeScheduling{
+				State: workflow.CurrentNodeSchedulingInterrupted,
+			},
+		}},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := controller.Interrupt(context.Background(), InterruptSelector{
+		TaskID:    reference.TaskID,
+		SessionID: &interruptedSessionID,
+	}); err != nil {
+		t.Fatalf("Interrupt already-interrupted Session: %v", err)
+	}
+	if err := controller.Interrupt(context.Background(), InterruptSelector{
+		TaskID:    reference.TaskID,
+		SessionID: &otherSessionID,
+	}); !errors.Is(err, ErrNoInterruptibleExecution) {
+		t.Fatalf("Interrupt another Session error = %v, want %v", err, ErrNoInterruptibleExecution)
+	}
+}
+
+func TestCurrentNodeControllerTaskInterruptRejectsPartiallyInterruptedTask(t *testing.T) {
+	interrupted := currentNodeReferenceForControllerTest(t, "task-partially-interrupted", "node-interrupted")
+	waiting := currentNodeReferenceForControllerTest(t, string(interrupted.TaskID), "node-waiting")
+	store := &currentNodeControllerStore{
+		currentNodes: []workflow.CurrentNode{
+			{
+				Reference: interrupted,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingInterrupted,
+				},
+			},
+			{
+				Reference: waiting,
+				Scheduling: &workflow.CurrentNodeScheduling{
+					State: workflow.CurrentNodeSchedulingAdmitted,
+				},
+			},
+		},
+	}
+	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
+	controller := newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
+	t.Cleanup(func() {
+		_ = controller.Close()
+		_ = authority.Close(context.Background())
+	})
+
+	if err := controller.Interrupt(context.Background(), InterruptSelector{
+		TaskID: interrupted.TaskID,
+	}); !errors.Is(err, ErrNoInterruptibleExecution) {
+		t.Fatalf("Interrupt partially interrupted Task error = %v, want %v", err, ErrNoInterruptibleExecution)
 	}
 }
 
