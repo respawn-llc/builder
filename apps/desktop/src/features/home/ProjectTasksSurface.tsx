@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Plus } from "lucide-react";
-import { useCallback, useLayoutEffect, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
+import { useCallback, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { WorkflowPickerItem } from "@/api";
@@ -55,22 +55,6 @@ export function ProjectTasksSurface({
   const { activeDestination } = useSidebarShell();
   const [disclosure, setDisclosure] = useState(viewMemory.read().disclosure);
   const [labelEditorTaskID, setLabelEditorTaskID] = useState<string | null>(null);
-  const verticalScrollRestorationReadyRef = useRef(false);
-  const onScrollElementChange = useCallback(
-    (element: HTMLDivElement | null) => {
-      if (element === null) return;
-      const memory = viewMemory.read();
-      element.scrollLeft = memory.horizontalOffsetPx;
-      element.onscroll = () => {
-        const current = viewMemory.read();
-        viewMemory.setScrollOffsets(
-          verticalScrollRestorationReadyRef.current ? element.scrollTop : current.verticalOffsetPx,
-          element.scrollLeft,
-        );
-      };
-    },
-    [viewMemory],
-  );
   const query = useQuery({
     queryKey: queryKeys.board(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
     queryFn: async () => api.getBoard(projectID, undefined, canonicalBoardFilter({ kind: "none" })),
@@ -161,9 +145,21 @@ export function ProjectTasksSurface({
     t,
   });
   const scrollRestorationReady = projectTaskScrollRestorationReady(data, disclosure);
-  useLayoutEffect(() => {
-    verticalScrollRestorationReadyRef.current = scrollRestorationReady;
-  }, [scrollRestorationReady]);
+  const onScrollElementChange = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (element === null) return;
+      const memory = viewMemory.read();
+      element.scrollLeft = memory.horizontalOffsetPx;
+      element.onscroll = () => {
+        const current = viewMemory.read();
+        viewMemory.setScrollOffsets(
+          scrollRestorationReady ? element.scrollTop : current.verticalOffsetPx,
+          element.scrollLeft,
+        );
+      };
+    },
+    [scrollRestorationReady, viewMemory],
+  );
   return (
     <ProjectTasksContent
       boardBoundary={boardBoundary}
