@@ -403,6 +403,11 @@ describe("ProjectTasksSurface", () => {
       const loadingGrid = screen.getByRole("grid", { name: "Project tasks" });
       expect(loadingGrid.scrollTop).toBe(0);
       expect(loadingGrid.scrollLeft).toBe(120);
+      fireEvent.scroll(loadingGrid);
+      expect(memory.read()).toMatchObject({
+        horizontalOffsetPx: 120,
+        verticalOffsetPx: 200,
+      });
 
       fixture.initialGroupPagesError = true;
       view.rerender(withQueryClient(surface(memory)));
@@ -416,6 +421,11 @@ describe("ProjectTasksSurface", () => {
       const restoredGrid = screen.getByRole("grid", { name: "Project tasks" });
       expect(restoredGrid.scrollTop).toBe(200);
       expect(restoredGrid.scrollLeft).toBe(120);
+      fireEvent.scroll(restoredGrid);
+      expect(memory.read()).toMatchObject({
+        horizontalOffsetPx: 120,
+        verticalOffsetPx: 200,
+      });
     } finally {
       if (originalScrollTop === undefined) {
         Reflect.deleteProperty(HTMLElement.prototype, "scrollTop");
