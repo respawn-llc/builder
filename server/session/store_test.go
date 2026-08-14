@@ -607,7 +607,7 @@ func TestConversationFreshnessAdvancesOnlyForVisibleUserMessages(t *testing.T) {
 	}
 }
 
-func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T) {
+func TestMaterializeEventLogUsesPersistedConversationFreshness(t *testing.T) {
 	store := newSessionTestStore(t)
 	appendSessionTestRecord(t, store, "s1", sessionTestMessage(MessageRoleUser, "established session"))
 
@@ -626,11 +626,11 @@ func TestMaterializeEventLogBackfillsConversationFreshnessFromTail(t *testing.T)
 		t.Fatalf("open store: %v", err)
 	}
 	log := mustMaterializeSessionTestEventLog(t, opened)
-	if got := mustConversationFreshness(log); got != ConversationFreshnessEstablished {
-		t.Fatalf("backfilled freshness = %v, want established", got)
+	if got := mustConversationFreshness(log); got != ConversationFreshnessFresh {
+		t.Fatalf("persisted freshness = %v, want fresh", got)
 	}
-	if mustConversationFreshness(log) != ConversationFreshnessEstablished {
-		t.Fatalf("expected backfill to persist conversation_established flag")
+	if opened.Meta().ConversationEstablished {
+		t.Fatal("materialization rewrote the persisted conversation freshness projection")
 	}
 }
 

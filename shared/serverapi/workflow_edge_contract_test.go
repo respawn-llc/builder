@@ -56,8 +56,11 @@ func TestWorkflowEdgeContractRoundTripsSelectionModesAndParameterPurposes(t *tes
 
 func TestWorkflowGraphRequestsRejectInvalidEdgeUnionValues(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
+	edgeID := runtimeids.NewGraphEntityID()
+	transitionGroupID := runtimeids.NewGraphEntityID()
+	targetNodeID := runtimeids.NewGraphEntityID()
 	valid := WorkflowGraphDraft{Edges: []WorkflowGraphDraftEdge{{
-		ID: "edge", TransitionGroupID: "group", Key: "edge", TargetNodeID: "target",
+		ID: edgeID, TransitionGroupID: transitionGroupID, Key: "edge", TargetNodeID: targetNodeID,
 		AssigneeSelection: "configured", ThinkingSelection: "configured",
 		ContextMode: "new_session",
 		Parameters:  []WorkflowParameter{{Key: "summary", Description: "Summary.", Purpose: "ordinary"}},
@@ -110,10 +113,10 @@ func TestWorkflowGraphRequestsRejectInvalidEdgeUnionValues(t *testing.T) {
 func TestWorkflowGraphRequestEnvelopeDefersSemanticShapeToWorkflowValidation(t *testing.T) {
 	workflowID := runtimeids.NewWorkflowID()
 	graph := WorkflowGraphDraft{Edges: []WorkflowGraphDraftEdge{{
-		ID:                "not-a-canonical-id",
-		TransitionGroupID: "missing-group",
+		ID:                runtimeids.NewGraphEntityID(),
+		TransitionGroupID: runtimeids.NewGraphEntityID(),
 		Key:               "duplicate",
-		TargetNodeID:      "missing-target",
+		TargetNodeID:      runtimeids.NewGraphEntityID(),
 		AssigneeSelection: "previous_node",
 		ThinkingSelection: "configured",
 		ContextMode:       "new_session",
@@ -144,6 +147,83 @@ func TestWorkflowGraphRequestEnvelopeDefersSemanticShapeToWorkflowValidation(t *
 		t.Run(name, func(t *testing.T) {
 			if err := validate(); err != nil {
 				t.Fatalf("envelope validation rejected semantic graph shape: %v", err)
+			}
+		})
+	}
+}
+
+func TestWorkflowGraphRequestsRejectNonCanonicalEntityAndReferenceIDs(t *testing.T) {
+	workflowID := runtimeids.NewWorkflowID()
+	newGraph := func() WorkflowGraphDraft {
+		groupID := runtimeids.NewGraphEntityID()
+		nodeID := runtimeids.NewGraphEntityID()
+		transitionGroupID := runtimeids.NewGraphEntityID()
+		edgeID := runtimeids.NewGraphEntityID()
+		return WorkflowGraphDraft{
+			NodeGroups: []WorkflowGraphDraftNodeGroup{{ID: groupID}},
+			Nodes: []WorkflowGraphDraftNode{{
+				ID: nodeID, Kind: string(WorkflowNodeKindJoin), GroupID: &groupID,
+				JoinInputProviders: []WorkflowJoinInputProvider{{ProviderEdgeID: edgeID}},
+			}},
+			TransitionGroups: []WorkflowGraphDraftTransitionGroup{{
+				ID: transitionGroupID, SourceNodeID: nodeID,
+			}},
+			Edges: []WorkflowGraphDraftEdge{{
+				ID: edgeID, TransitionGroupID: transitionGroupID, TargetNodeID: nodeID,
+				AssigneeSelection: "configured", ThinkingSelection: "configured", ContextMode: "new_session",
+			}},
+		}
+	}
+	validators := map[string]func(WorkflowGraphDraft) error{
+		"validate draft": func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphValidateDraftRequest{
+				WorkflowID: workflowID, Graph: graph,
+				Modes: []WorkflowValidationMode{WorkflowValidationModeDraft},
+			}).Validate()
+		},
+		"derive wiring": func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphDeriveWiringRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+		"preview save": func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphSavePreviewRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+		"save": func(graph WorkflowGraphDraft) error {
+			return (WorkflowGraphSaveRequest{WorkflowID: workflowID, Graph: graph}).Validate()
+		},
+	}
+	invalid := map[string]func(*WorkflowGraphDraft){
+		"node group id": func(graph *WorkflowGraphDraft) { graph.NodeGroups[0].ID = "invalid" },
+		"node id":       func(graph *WorkflowGraphDraft) { graph.Nodes[0].ID = "invalid" },
+		"node group reference": func(graph *WorkflowGraphDraft) {
+			*graph.Nodes[0].GroupID = "invalid"
+		},
+		"join provider edge reference": func(graph *WorkflowGraphDraft) {
+			graph.Nodes[0].JoinInputProviders[0].ProviderEdgeID = "invalid"
+		},
+		"transition group id": func(graph *WorkflowGraphDraft) {
+			graph.TransitionGroups[0].ID = "invalid"
+		},
+		"transition source reference": func(graph *WorkflowGraphDraft) {
+			graph.TransitionGroups[0].SourceNodeID = "invalid"
+		},
+		"edge id": func(graph *WorkflowGraphDraft) { graph.Edges[0].ID = "invalid" },
+		"edge transition group reference": func(graph *WorkflowGraphDraft) {
+			graph.Edges[0].TransitionGroupID = "invalid"
+		},
+		"edge target reference": func(graph *WorkflowGraphDraft) {
+			graph.Edges[0].TargetNodeID = "invalid"
+		},
+	}
+	for requestName, validate := range validators {
+		t.Run(requestName, func(t *testing.T) {
+			for fieldName, mutate := range invalid {
+				t.Run(fieldName, func(t *testing.T) {
+					graph := newGraph()
+					mutate(&graph)
+					if err := validate(graph); err == nil {
+						t.Fatalf("%s accepted non-canonical %s", requestName, fieldName)
+					}
+				})
 			}
 		})
 	}

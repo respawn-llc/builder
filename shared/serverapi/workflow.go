@@ -2310,18 +2310,56 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 	if err := validateWorkflowGraphDraftCollectionBounds(graph); err != nil {
 		return err
 	}
-	for _, node := range graph.Nodes {
+	for index, group := range graph.NodeGroups {
+		if err := validateGraphEntityID(fmt.Sprintf("graph.node_groups[%d].id", index), group.ID); err != nil {
+			return err
+		}
+	}
+	for index, node := range graph.Nodes {
+		if err := validateGraphEntityID(fmt.Sprintf("graph.nodes[%d].id", index), node.ID); err != nil {
+			return err
+		}
 		if kind := WorkflowNodeKind(strings.TrimSpace(node.Kind)); !slices.Contains([]WorkflowNodeKind{WorkflowNodeKindStart, WorkflowNodeKindAgent, WorkflowNodeKindScript, WorkflowNodeKindJoin, WorkflowNodeKindTerminal}, kind) {
 			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.kind", "node kind is invalid")
 		}
-		if node.GroupID != nil && strings.TrimSpace(*node.GroupID) == "" {
-			return workflowRequestError(WorkflowRequestErrorInvalidValue, "graph.nodes.group_id", "group_id must be non-blank when present")
+		if node.GroupID != nil {
+			if err := validateGraphEntityID(fmt.Sprintf("graph.nodes[%d].group_id", index), *node.GroupID); err != nil {
+				return err
+			}
 		}
 		if len(node.JoinInputProviders) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.nodes.join_input_providers", fmt.Sprintf("join_input_providers must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
 		}
+		for providerIndex, provider := range node.JoinInputProviders {
+			if err := validateGraphEntityID(
+				fmt.Sprintf("graph.nodes[%d].join_input_providers[%d].provider_edge_id", index, providerIndex),
+				provider.ProviderEdgeID,
+			); err != nil {
+				return err
+			}
+		}
 	}
-	for _, edge := range graph.Edges {
+	for index, group := range graph.TransitionGroups {
+		if err := validateGraphEntityID(fmt.Sprintf("graph.transition_groups[%d].id", index), group.ID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID(fmt.Sprintf("graph.transition_groups[%d].source_node_id", index), group.SourceNodeID); err != nil {
+			return err
+		}
+		if len([]rune(group.Description)) > 1000 {
+			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
+		}
+	}
+	for index, edge := range graph.Edges {
+		if err := validateGraphEntityID(fmt.Sprintf("graph.edges[%d].id", index), edge.ID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID(fmt.Sprintf("graph.edges[%d].transition_group_id", index), edge.TransitionGroupID); err != nil {
+			return err
+		}
+		if err := validateGraphEntityID(fmt.Sprintf("graph.edges[%d].target_node_id", index), edge.TargetNodeID); err != nil {
+			return err
+		}
 		switch strings.TrimSpace(edge.AssigneeSelection) {
 		case "configured", "previous_node":
 		default:
@@ -2351,11 +2389,6 @@ func validateWorkflowGraphDraftEnvelope(graph WorkflowGraphDraft) error {
 		}
 		if len(edge.Parameters) > WorkflowGraphDraftMaxFieldsPerEntity {
 			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.edges.parameters", fmt.Sprintf("parameters must be <= %d", WorkflowGraphDraftMaxFieldsPerEntity))
-		}
-	}
-	for _, group := range graph.TransitionGroups {
-		if len([]rune(group.Description)) > 1000 {
-			return workflowRequestError(WorkflowRequestErrorTooLong, "graph.transition_groups.description", "description must be <= 1000 characters")
 		}
 	}
 	return nil

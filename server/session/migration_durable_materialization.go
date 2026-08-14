@@ -81,29 +81,8 @@ func (s *Store) issueCurrentEventLogCapabilityWithMutationHeld() (
 		)
 	}
 	log.durabilityObserver = s.options.durabilityObserver
-	window, err := log.readActiveSegment()
-	if err != nil {
-		return MaterializedEventLog{}, wrapEventLogMaterializationError(
-			EventLogMaterializationStageReconciliation, true, false, err)
-	}
-	freshness := ConversationFreshnessFresh
-	for _, record := range window.Records {
-		kind, kindErr := record.Kind()
-		if kindErr != nil {
-			return MaterializedEventLog{}, kindErr
-		}
-		visible, visibleErr := hasVisibleUserMessageRecord(record)
-		if visibleErr != nil {
-			return MaterializedEventLog{}, visibleErr
-		}
-		if kind == EventKindHistoryReplace || visible {
-			freshness = ConversationFreshnessEstablished
-			break
-		}
-	}
 	s.mu.Lock()
 	s.materializedEventLog = log
-	s.conversationFreshness = freshness
 	s.mu.Unlock()
 	return MaterializedEventLog{store: s, log: log}, nil
 }
