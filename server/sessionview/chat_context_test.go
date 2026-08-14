@@ -181,6 +181,36 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	}
 }
 
+func TestReadDormantSessionChatContextSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
+	settings := config.DefaultOnboardingSettings()
+	settings.CompactionMode = config.CompactionModeNative
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               "custom",
+		SupportsResponsesCompact: true,
+	}
+	authReader := &sessionChatContextAuthReader{err: errors.New("auth must not be loaded")}
+	service := NewService(
+		newTestSessionResolver(store),
+		nil,
+		nil,
+		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
+	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
+		app: config.App{Settings: settings},
+	}).WithChatContextAuthReader(authReader)
+
+	got, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
+	if err != nil {
+		t.Fatalf("ReadSessionChatContext: %v", err)
+	}
+	if got.CompactionMode != serverapi.ChatContextCompactionModeProviderNative {
+		t.Fatalf("CompactionMode = %q, want explicit provider-native mode", got.CompactionMode)
+	}
+	if authReader.calls != 0 {
+		t.Fatalf("effective auth Load calls = %d, want 0", authReader.calls)
+	}
+}
+
 func TestReadDormantSessionChatContextProjectsAbsentAndNormalizesFacts(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
 	settings := config.DefaultOnboardingSettings()

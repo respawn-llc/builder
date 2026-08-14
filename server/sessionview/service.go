@@ -162,8 +162,11 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 	if err != nil {
 		return serverapi.ChatContext{}, err
 	}
-	capabilities, locked := llm.ProviderCapabilitiesFromLocked(snapshot.Meta.Locked)
-	if !locked {
+	capabilities, configured := llm.ProviderCapabilitiesFromLockedOrOverride(
+		snapshot.Meta.Locked,
+		current.Settings.ProviderCapabilities,
+	)
+	if !configured {
 		if s.contextAuth == nil {
 			return serverapi.ChatContext{}, errors.New("effective auth reader is required")
 		}

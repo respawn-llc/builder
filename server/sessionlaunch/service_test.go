@@ -158,6 +158,38 @@ func TestPlanLaunchSessionLoadsEffectiveAuthWhenLockedProviderContractIsAbsent(t
 	}
 }
 
+func TestPlanLaunchSessionSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
+	workspace := t.TempDir()
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	cfg.Settings.CompactionMode = config.CompactionModeNative
+	cfg.Settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               "custom",
+		SupportsResponsesCompact: false,
+	}
+	reader := &nonRefreshingAuthStateReader{
+		loaded: auth.State{Method: auth.Method{Type: auth.MethodOAuth}},
+	}
+	service := newSessionLaunchTestService(cfg, t.TempDir()).WithAuthStateReader(reader)
+
+	result, err := service.PlanLaunchSession(t.Context(), serverapi.SessionPlanRequest{
+		ClientRequestID: "explicit-provider-capabilities",
+		Mode:            serverapi.SessionLaunchModeInteractive,
+		Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+	})
+	if err != nil {
+		t.Fatalf("PlanLaunchSession: %v", err)
+	}
+	if result.Plan.ActiveSettings.CompactionMode != config.CompactionModeLocal {
+		t.Fatalf("CompactionMode = %q, want explicit-capability local fallback", result.Plan.ActiveSettings.CompactionMode)
+	}
+	if reader.loadCalls != 0 {
+		t.Fatalf("effective auth Load calls = %d, want 0", reader.loadCalls)
+	}
+}
+
 func sessionLaunchStringPtr(value string) *string {
 	return &value
 }

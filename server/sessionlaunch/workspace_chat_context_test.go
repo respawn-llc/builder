@@ -253,6 +253,30 @@ func TestReadWorkspaceChatContextPropagatesEffectiveAuthFailure(t *testing.T) {
 	}
 }
 
+func TestReadWorkspaceChatContextSkipsEffectiveAuthForExplicitProviderCapabilities(t *testing.T) {
+	settings := draftSettings("custom-model", "medium")
+	settings.CompactionMode = config.CompactionModeNative
+	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
+		ProviderID:               "custom",
+		SupportsResponsesCompact: true,
+	}
+	authReader := &workspaceChatContextAuthReader{loadErr: errors.New("auth must not be loaded")}
+	service := NewService(launchPlannerForWorkspaceChatContext(settings)).
+		WithWorkspaceChatDraft(NewWorkspaceChatDraftOwner(&draftPersistence{}), "workspace-1").
+		WithAuthStateReader(authReader)
+
+	got, err := service.ReadWorkspaceChatContext(t.Context())
+	if err != nil {
+		t.Fatalf("ReadWorkspaceChatContext: %v", err)
+	}
+	if got.CompactionMode != serverapi.ChatContextCompactionModeProviderNative {
+		t.Fatalf("CompactionMode = %q, want explicit provider-native mode", got.CompactionMode)
+	}
+	if authReader.loadCalls != 0 {
+		t.Fatalf("effective auth Load calls = %d, want 0", authReader.loadCalls)
+	}
+}
+
 func launchPlannerForWorkspaceChatContext(settings config.Settings) launch.Planner {
 	return launch.Planner{Config: config.App{Settings: settings}}
 }

@@ -107,8 +107,11 @@ type SessionPlan struct {
 // ApplyContextPolicy resolves Context policy only after the plan's final Agent
 // role, settings overrides, and persisted Session continuity are known.
 func ApplyContextPolicy(plan SessionPlan, authState auth.State) (SessionPlan, error) {
-	capabilities, locked := llm.ProviderCapabilitiesFromLocked(plan.Locked)
-	if !locked {
+	capabilities, configured := llm.ProviderCapabilitiesFromLockedOrOverride(
+		plan.Locked,
+		plan.ActiveSettings.ProviderCapabilities,
+	)
+	if !configured {
 		var err error
 		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, plan.ActiveSettings)
 		if err != nil {

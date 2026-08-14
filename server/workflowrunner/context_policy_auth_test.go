@@ -6,6 +6,7 @@ import (
 
 	"core/server/auth"
 	"core/server/session"
+	"core/shared/config"
 )
 
 func TestStarterLoadsEffectiveAuthUntilProviderContractIsEstablished(t *testing.T) {
@@ -17,7 +18,7 @@ func TestStarterLoadsEffectiveAuthUntilProviderContractIsEstablished(t *testing.
 	}), nil, time.Now)
 	starter := &Starter{authManager: manager}
 
-	state, err := starter.loadEffectiveAuthState(t.Context(), &session.LockedContract{})
+	state, err := starter.loadEffectiveAuthState(t.Context(), &session.LockedContract{}, config.Settings{})
 	if err != nil {
 		t.Fatalf("loadEffectiveAuthState without provider contract: %v", err)
 	}
@@ -27,11 +28,21 @@ func TestStarterLoadsEffectiveAuthUntilProviderContractIsEstablished(t *testing.
 
 	state, err = starter.loadEffectiveAuthState(t.Context(), &session.LockedContract{
 		ProviderContract: session.LockedProviderCapabilities{ProviderID: "chatgpt-codex"},
-	})
+	}, config.Settings{})
 	if err != nil {
 		t.Fatalf("loadEffectiveAuthState with provider contract: %v", err)
 	}
 	if state.Method.Type != auth.MethodNone {
 		t.Fatalf("established provider contract auth method = %q, want no auth read", state.Method.Type)
+	}
+
+	state, err = starter.loadEffectiveAuthState(t.Context(), nil, config.Settings{
+		ProviderCapabilities: config.ProviderCapabilitiesOverride{ProviderID: "custom"},
+	})
+	if err != nil {
+		t.Fatalf("loadEffectiveAuthState with explicit provider capabilities: %v", err)
+	}
+	if state.Method.Type != auth.MethodNone {
+		t.Fatalf("explicit provider capabilities auth method = %q, want no auth read", state.Method.Type)
 	}
 }

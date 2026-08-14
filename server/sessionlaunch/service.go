@@ -72,16 +72,19 @@ func (s *Service) ReadWorkspaceChatContext(ctx context.Context) (serverapi.ChatC
 	if !ok {
 		return serverapi.ChatContext{}, fmt.Errorf("workspace Chat draft Agent %q has no resolved settings", resolution.Draft.Agent)
 	}
-	authState := auth.EmptyState()
-	if s.authStates != nil {
-		authState, err = s.authStates.Load(ctx)
+	capabilities, configured := llm.ProviderCapabilitiesFromOverride(selected.settings.ProviderCapabilities)
+	if !configured {
+		authState := auth.EmptyState()
+		if s.authStates != nil {
+			authState, err = s.authStates.Load(ctx)
+			if err != nil {
+				return serverapi.ChatContext{}, err
+			}
+		}
+		capabilities, err = llm.ProviderCapabilitiesForSettings(authState, selected.settings)
 		if err != nil {
 			return serverapi.ChatContext{}, err
 		}
-	}
-	capabilities, err := llm.ProviderCapabilitiesForSettings(authState, selected.settings)
-	if err != nil {
-		return serverapi.ChatContext{}, err
 	}
 	policy := chatcontext.ResolvePolicy(selected.settings, capabilities, nil)
 	return chatcontext.Project(chatcontext.ProjectionInput{
@@ -706,8 +709,11 @@ func (s *Service) finalizeLaunchPlan(
 		return PlanResult{}, err
 	}
 	authState := auth.EmptyState()
-	_, hasProviderContract := llm.ProviderCapabilitiesFromLocked(plan.Locked)
-	if !hasProviderContract && s.authStates != nil {
+	_, capabilitiesConfigured := llm.ProviderCapabilitiesFromLockedOrOverride(
+		plan.Locked,
+		plan.ActiveSettings.ProviderCapabilities,
+	)
+	if !capabilitiesConfigured && s.authStates != nil {
 		authState, err = s.authStates.Load(ctx)
 		if err != nil {
 			return PlanResult{}, err
