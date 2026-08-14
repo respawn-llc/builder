@@ -65,6 +65,22 @@ type recordingWorkflowCompletionDiagnosticSink struct {
 	diagnostics []workflowruntime.WorkflowCompletionDiagnostic
 }
 
+type blockingWorkflowCompletionDiagnosticSink struct {
+	recordingWorkflowCompletionDiagnosticSink
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingWorkflowCompletionDiagnosticSink) PublishWorkflowCompletionDiagnostic(
+	ctx context.Context,
+	diagnostic workflowruntime.WorkflowCompletionDiagnostic,
+) error {
+	s.once.Do(func() { close(s.entered) })
+	<-s.release
+	return s.recordingWorkflowCompletionDiagnosticSink.PublishWorkflowCompletionDiagnostic(ctx, diagnostic)
+}
+
 type failingCompletionEventPublisher struct {
 	err error
 }
@@ -778,7 +794,7 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	)
 	f := newCurrentNodeRunnerFixtureWithClient(t, client)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
-	threshold := 1
+	threshold := 100_000
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
@@ -1563,6 +1579,78 @@ func TestWorkflowRunnerCompletedAgentRejectsStopDuringPostTurnFinalization(t *te
 	}
 	if !replacementCommitted {
 		t.Fatal("cancellation lost the committed Workflow Post-Compaction replacement")
+	}
+}
+
+func TestControllerCloseWaitsForRunnerOwnedCompletionDiagnostic(t *testing.T) {
+	f := newCurrentNodeRunnerFixture(
+		t,
+		ScriptedFinalAnswer(`{"transition":"next","commentary":"source done"}`),
+	)
+	diagnosticSink := &blockingWorkflowCompletionDiagnosticSink{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	t.Cleanup(func() {
+		select {
+		case <-diagnosticSink.release:
+		default:
+			close(diagnosticSink.release)
+		}
+	})
+	f.starter.completionDiagnostics = diagnosticSink
+	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNone
+	publicationErr := errors.New("completion event publication failed")
+	f.store.SetWorkflowEventPublisher(failingCompletionEventPublisher{err: publicationErr})
+	workflowID := createCurrentNodeTwoStepWorkflow(
+		t,
+		f.store,
+		"Close completion diagnostic ownership",
+		workflow.ContextModeCompactAndContinueSession,
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "coder", prompt: "Complete source."},
+		currentNodeWorkflowStep{kind: workflow.NodeKindAgent, role: "reviewer", prompt: "Review successor."},
+	)
+	task := f.createTask(t, workflowID)
+	f.startTask(t, task)
+	select {
+	case <-diagnosticSink.entered:
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("runner-owned completion diagnostic publication did not start")
+	}
+	quiescence, err := f.controller.CurrentTaskQuiescence([]workflow.TaskID{task.ID})
+	if err != nil {
+		t.Fatalf("inspect pre-Close Task quiescence: %v", err)
+	}
+	if quiescence[task.ID] {
+		t.Fatal("post-turn compaction gate has no controller operation")
+	}
+
+	closed := make(chan error, 1)
+	go func() {
+		closed <- f.controller.Close()
+	}()
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before the exact runner could publish its diagnostic: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if diagnostics := diagnosticSink.snapshot(); len(diagnostics) != 0 {
+		t.Fatalf("completion diagnostic published before finalizer shutdown settlement: %+v", diagnostics)
+	}
+	close(diagnosticSink.release)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(currentNodeRunnerWait):
+		t.Fatal("Close did not wait for the exact runner")
+	}
+	diagnostics := diagnosticSink.snapshot()
+	if len(diagnostics) != 1 ||
+		diagnostics[0].Kind != workflowruntime.WorkflowCompletionDiagnosticCommittedCompletion ||
+		!errors.Is(diagnostics[0].Diagnostic, publicationErr) {
+		t.Fatalf("Close-race diagnostics = %+v, want one runner-owned completion diagnostic", diagnostics)
 	}
 }
 
