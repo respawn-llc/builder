@@ -26,6 +26,10 @@ func (p compactionPersistence) replaceHistory(stepID, engine string, mode compac
 	return e.steerWithCommitReceipt(stepID, steerHistoryReplacementIntent(engine, mode, e.compactionRuntimeState().Count()+1, pendingHandoffFutureMessage, e.LastCommittedAssistantFinalAnswer(), items))
 }
 
+func (p compactionPersistence) setActivity(stepID string, mode compactionMode, count int, active bool) error {
+	return p.engine.steer(stepID, steerCompactionActivityIntent(active, string(mode), count))
+}
+
 func (p compactionPersistence) emitStatus(stepID string, kind EventKind, mode compactionMode, engine, provider string, trimmed *int, count int, errText string) error {
 	e := p.engine
 	status := &CompactionStatus{

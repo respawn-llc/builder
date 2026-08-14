@@ -2,7 +2,13 @@ package metadata
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
+
+	"core/server/session"
+
+	"github.com/google/uuid"
 )
 
 func TestResolveOptionalSessionExecutionTargetAllowsUnlinkedSession(t *testing.T) {
@@ -20,5 +26,16 @@ func TestResolveOptionalSessionExecutionTargetAllowsUnlinkedSession(t *testing.T
 	}
 	if target != nil {
 		t.Fatalf("unlinked session target = %+v, want nil", target)
+	}
+}
+
+func TestResolveSessionExecutionTargetMapsMissingSession(t *testing.T) {
+	store, _, _ := newMetadataTestStore(t)
+	_, err := store.ResolveSessionExecutionTarget(context.Background(), uuid.NewString())
+	if !errors.Is(err, session.ErrSessionNotFound) {
+		t.Fatalf("resolve missing Session error = %v, want ErrSessionNotFound", err)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("resolve missing Session leaked sql.ErrNoRows: %v", err)
 	}
 }

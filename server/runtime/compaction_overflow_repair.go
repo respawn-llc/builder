@@ -106,7 +106,7 @@ func compactionOverflowRepairTargetTokens(contextWindowTokens int, repairAttempt
 		return 0
 	}
 	if contextWindowTokens <= 0 {
-		contextWindowTokens = defaultContextWindowTokens
+		return 0
 	}
 	return (contextWindowTokens * compactionOverflowRepairTargetPercents[repairAttempt-1]) / 100
 }

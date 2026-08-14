@@ -1,9 +1,13 @@
 Usage of kent question:
+  kent questions list [--session <id>] [--max-handoffs <count>] [--json]
   kent question (--session <id>|--task <task>) [--project <project>]
   kent question answer (--session <id>|--task <task>) [--project <project>] [--option <number>] [--commentary <text>]
 
 Show or answer another session's first pending question. Task short IDs use the
 project selected by --project, which defaults to the current workspace's project.
 
-Aliases:
-  kent questions
+List answered Questions from one Session with `kent questions list`. An explicit
+--session takes precedence over the invoking agent's Session. --max-handoffs
+defaults to 25 and includes the current unfinished history window. Tasks can
+have hundreds of sessions; use `kent task sessions` to find the one you need,
+then use --session. JSON Question-history output can be slow.

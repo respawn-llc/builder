@@ -110,16 +110,7 @@ func (m *uiModel) startLatestDesiredQuestionProjection() tea.Cmd {
 	}
 	m.ask.inFlightProjection = &request
 	projector := m.questionProjector
-	return func() (message tea.Msg) {
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				message = questionRenderResultMsg{
-					request: request,
-					err:     fmt.Errorf("ask question Markdown projector panicked: %v", recovered),
-					stack:   debug.Stack(),
-				}
-			}
-		}()
+	return func() tea.Msg {
 		if projector == nil {
 			return questionRenderResultMsg{
 				request: request,

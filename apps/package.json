@@ -6,18 +6,19 @@
     "node": ">=22"
   },
   "scripts": {
+    "contract:generate": "go run github.com/go-task/task/v3/cmd/task@v3.52.0 --dir .. --temp-dir .generated/protobuf/task protobuf:ts",
     "deps:policy": "node ./scripts/check-dependency-policy.mjs",
     "desktop:dev": "pnpm --filter @app/desktop tauri:dev",
     "desktop:dev:browser": "pnpm --filter @app/desktop dev:browser",
     "desktop:build": "pnpm --filter @app/desktop tauri:build",
     "desktop:install": "pnpm --filter @app/desktop tauri:install",
     "architecture:policy": "node --test ./scripts/check-eslint-architecture.test.mjs",
-    "lint": "pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present lint",
+    "lint": "pnpm contract:generate && pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present lint",
     "ts:policy": "node ./scripts/check-typescript-policy.mjs",
-    "typecheck": "pnpm --recursive --if-present typecheck",
+    "typecheck": "pnpm contract:generate && pnpm --recursive --if-present typecheck",
     "test": "pnpm deps:policy && pnpm ts:policy && pnpm architecture:policy && pnpm --recursive --if-present test",
     "format": "pnpm --recursive --if-present format",
-    "build": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
+    "build": "pnpm contract:generate && pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
   },
   "devDependencies": {
     "postcss": "8.5.25",

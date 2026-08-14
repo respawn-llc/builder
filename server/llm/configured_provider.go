@@ -1,12 +1,60 @@
 package llm
 
 import (
+	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"core/server/auth"
+	"core/server/session"
 	"core/shared/config"
 )
+
+type EffectiveAuthStateReader interface {
+	Load(context.Context) (auth.State, error)
+}
+
+type EffectiveProviderResolution struct {
+	AuthState    auth.State
+	Capabilities ProviderCapabilities
+}
+
+// ResolveEffectiveProviderCapabilities is the sole authority for choosing
+// locked, explicitly configured, or effective-auth-derived provider
+// capabilities. A missing reader represents an effective no-auth state.
+func ResolveEffectiveProviderCapabilities(
+	ctx context.Context,
+	locked *session.LockedContract,
+	settings config.Settings,
+	authStates EffectiveAuthStateReader,
+) (EffectiveProviderResolution, error) {
+	if capabilities, configured := ProviderCapabilitiesFromLockedOrOverride(
+		locked,
+		settings.ProviderCapabilities,
+	); configured {
+		return EffectiveProviderResolution{
+			AuthState:    auth.EmptyState(),
+			Capabilities: capabilities,
+		}, nil
+	}
+	authState := auth.EmptyState()
+	if authStates != nil {
+		var err error
+		authState, err = authStates.Load(ctx)
+		if err != nil {
+			return EffectiveProviderResolution{}, err
+		}
+	}
+	capabilities, err := ProviderCapabilitiesForSettings(authState, settings)
+	if err != nil {
+		return EffectiveProviderResolution{}, err
+	}
+	return EffectiveProviderResolution{
+		AuthState:    authState,
+		Capabilities: capabilities,
+	}, nil
+}
 
 func ProviderCapabilitiesForSettings(authState auth.State, settings config.Settings) (ProviderCapabilities, error) {
 	return ResolveRuntimeProviderCapabilities(authState, settings)
@@ -30,11 +78,30 @@ func ResolveRuntimeProviderCapabilities(authState auth.State, settings config.Se
 		}
 	}
 	mode := OpenAIAuthModeForAuthState(authState)
-	variant, err := resolveRuntimeTransportVariant(provider, settings.OpenAIBaseURL, mode)
+	endpoint, err := newProviderTransportEndpoint(settings.OpenAIBaseURL, strings.TrimSpace(settings.OpenAIBaseURL) != "")
+	if err != nil {
+		return ProviderCapabilities{}, err
+	}
+	variant, err := resolveRuntimeTransportVariant(provider, endpoint, mode)
 	if err != nil {
 		return ProviderCapabilities{}, err
 	}
 	return variant.Capabilities, nil
+}
+
+func newProviderTransportEndpoint(rawURL string, explicit bool) (ProviderTransportEndpoint, error) {
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		if explicit {
+			return ProviderTransportEndpoint{}, fmt.Errorf("explicit provider endpoint URL is empty")
+		}
+		return ProviderTransportEndpoint{Explicit: false}, nil
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return ProviderTransportEndpoint{}, fmt.Errorf("parse provider endpoint URL: %w", err)
+	}
+	return ProviderTransportEndpoint{URL: parsed, Explicit: explicit}, nil
 }
 
 func OpenAIAuthModeForAuthState(authState auth.State) OpenAIAuthMode {
@@ -48,8 +115,8 @@ func OpenAIAuthModeForAuthState(authState auth.State) OpenAIAuthMode {
 	return OpenAIAuthMode{IsOAuth: true, AccountID: accountID}
 }
 
-func resolveRuntimeTransportVariant(provider Provider, baseURL string, mode OpenAIAuthMode) (ProviderVariantContract, error) {
-	if variant, err := resolveProviderTransportVariant(provider, baseURL, mode); err == nil {
+func resolveRuntimeTransportVariant(provider Provider, endpoint ProviderTransportEndpoint, mode OpenAIAuthMode) (ProviderVariantContract, error) {
+	if variant, err := resolveProviderTransportVariant(provider, endpoint, mode); err == nil {
 		return variant, nil
 	} else if provider == ProviderOpenAI {
 		return ProviderVariantContract{}, err

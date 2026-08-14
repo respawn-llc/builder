@@ -244,8 +244,18 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 	for index, input := range inputs {
 		sequence++
 		committedAtUnixMs := input.committedAtUnixMs
+		payload, err := projectEventPayloadForVersion(log.version, input.Payload)
+		if err != nil {
+			s.mu.Unlock()
+			return recordAppendOutcome{}, fmt.Errorf(
+				"project event record %d for event-log v%d: %w",
+				index,
+				log.version,
+				err,
+			)
+		}
 		if !input.preserveCommittedAt {
-			eligible, err := eventPayloadEligibleForCommittedTime(input.Payload)
+			eligible, err := eventPayloadEligibleForCommittedTime(payload)
 			if err != nil {
 				s.mu.Unlock()
 				return recordAppendOutcome{}, fmt.Errorf(
@@ -261,7 +271,7 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		record, err := newEventRecord(
 			sequence,
 			input.StepID,
-			input.Payload,
+			payload,
 			committedAtUnixMs,
 		)
 		if err != nil {
@@ -343,6 +353,22 @@ func (c MaterializedEventLog) appendRecordInputsAtomic(
 		endByteCursor: endByteCursor,
 	}
 	return outcome, s.observePersistenceAndClearAppendRecovery(observation)
+}
+
+func projectEventPayloadForVersion(version int, payload EventRecordPayload) (EventRecordPayload, error) {
+	switch version {
+	case EventLogVersionV2:
+		return payload, nil
+	case EventLogVersionV1:
+		completion, ok := payload.(ToolCompletionRecord)
+		if !ok || completion.QuestionAnswer == nil {
+			return payload, nil
+		}
+		completion.QuestionAnswer = nil
+		return completion, nil
+	default:
+		return nil, fmt.Errorf("unsupported event log version %d", version)
+	}
 }
 
 func advanceActiveWorkflowAssignmentFromRecords(meta *Meta, records []EventRecord) error {

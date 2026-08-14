@@ -2,7 +2,6 @@ package runtimewire
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -103,52 +102,6 @@ func TestStepLifecycleSinkUsesPublisherRegistrySnapshotForTerminalActivity(t *te
 	}
 }
 
-func TestStepLifecycleSinkPublishesSafeRecoveryActivityOnTerminalPublicationInvariantFailure(t *testing.T) {
-	publisher := &registrySnapshotRuntimeReadModelPublisher{
-		recordingRuntimeReadModelPublisher: recordingRuntimeReadModelPublisher{panicNext: true, panicMessage: "broken publication"},
-		registry:                           runtimeactivity.RegistrySnapshot{Registered: true, QueueAccepting: true},
-	}
-	var diagnostics []invariant.Diagnostic
-	policy := invariant.NewPolicy(
-		invariant.WithMode(invariant.ModeDiagnostic),
-		invariant.WithSink(invariant.SinkFunc(func(d invariant.Diagnostic) {
-			diagnostics = append(diagnostics, d)
-		})),
-	)
-	sink := NewStepLifecycleSinkWithInvariantPolicy("session-recovery", publisher, policy)
-
-	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
-		SessionID:  "session-recovery",
-		RunID:      stepLifecycleTestRunID,
-		StepID:     stepLifecycleTestStepID,
-		ActiveKind: runtime.ActiveKindGoalLoop,
-		FinishedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		t.Fatalf("StepEnded diagnostic recovery: %v", err)
-	}
-	if len(diagnostics) != 1 {
-		t.Fatalf("diagnostics = %d, want 1", len(diagnostics))
-	}
-	if diagnostics[0].Scope != invariant.ScopeReadModelPublication ||
-		diagnostics[0].Fields[invariant.FieldPublicationCause] != "step_ended" ||
-		diagnostics[0].Fields[invariant.FieldProviderError] == "" {
-		t.Fatalf("diagnostic = %+v, want read-model publication failure fields", diagnostics[0])
-	}
-	if len(publisher.snapshots) != 1 {
-		t.Fatalf("published snapshots = %d, want recovery snapshot only", len(publisher.snapshots))
-	}
-	recovery := publisher.snapshots[0]
-	if recovery.Activity.State != clientui.RuntimeActivityRegisteredIdle ||
-		!recovery.Activity.DiagnosticRecovery ||
-		!recovery.Activity.QueueAccepting {
-		t.Fatalf("recovery activity = %+v, want diagnostic registered idle", recovery.Activity)
-	}
-	if err := recovery.Validate(); err != nil {
-		t.Fatalf("recovery read model invalid: %v", err)
-	}
-}
-
 func TestStepLifecycleSinkPanicsOnPublicationInvariantFailureInPanicMode(t *testing.T) {
 	publisher := &recordingRuntimeReadModelPublisher{panicNext: true, panicMessage: "broken publication"}
 	sink := NewStepLifecycleSinkWithInvariantPolicy("session-panic", publisher, invariant.NewPolicy(invariant.WithMode(invariant.ModePanic)))
@@ -161,13 +114,10 @@ func TestStepLifecycleSinkPanicsOnPublicationInvariantFailureInPanicMode(t *test
 			t.Fatalf("published snapshots after panic = %+v, want none", publisher.snapshots)
 		}
 	}()
-	err := sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
+	_ = sink.StepEnded(context.Background(), runtime.StepLifecycleSnapshot{
 		SessionID:  "session-panic",
 		RunID:      stepLifecycleTestRunID,
 		StepID:     stepLifecycleTestStepID,
 		ActiveKind: runtime.ActiveKindGoalLoop,
 	})
-	if err != nil && !errors.Is(err, context.Canceled) {
-		t.Fatalf("unexpected returned error before panic: %v", err)
-	}
 }

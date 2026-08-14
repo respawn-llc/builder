@@ -66,10 +66,12 @@ const (
 	DependencyAuthBootstrap         Dependency = "auth_bootstrap"
 	DependencyAuthStatus            Dependency = "auth_status"
 	DependencyCapabilityFacts       Dependency = "capability_facts"
+	DependencyChatContext           Dependency = "chat_context"
 	DependencyPromptCommandCatalog  Dependency = "prompt_command_catalog"
 	DependencyOnboardingFinalize    Dependency = "onboarding_finalize"
 	DependencyProjectView           Dependency = "project_view"
 	DependencySessionLaunch         Dependency = "session_launch"
+	DependencyChatSettings          Dependency = "chat_settings"
 	DependencySessionView           Dependency = "session_view"
 	DependencySessionLifecycle      Dependency = "session_lifecycle"
 	DependencySessionRuntime        Dependency = "session_runtime"
@@ -192,6 +194,7 @@ var routeContracts = []Route{
 	unary[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](protocol.MethodAuthAcknowledgeNoAuth, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),
 	unary[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](protocol.MethodAuthGetStatus, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthStatus),
 	unary[serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](protocol.MethodCapabilityFactsGet, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyCapabilityFacts),
+	unary[serverapi.ChatContextRequest, serverapi.ChatContextResponse](protocol.MethodChatContextGet, AuthPreServerAuth, ScopeSessionActiveProjectIfSet, ConnectionControl, DependencyChatContext),
 	unary[serverapi.PromptCommandCatalogRequest, serverapi.PromptCommandCatalogResponse](protocol.MethodPromptCommandCatalogGet, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencyPromptCommandCatalog),
 	unary[serverapi.OnboardingFinalizeRequest, serverapi.OnboardingFinalizeResponse](protocol.MethodOnboardingFinalize, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyOnboardingFinalize),
 	unary[protocol.AttachProjectRequest, protocol.AttachResponse](protocol.MethodAttachProject, AuthPreServerAuth, ScopeAttachProject, ConnectionUnscoped, DependencyProtocolAttach),
@@ -212,6 +215,7 @@ var routeContracts = []Route{
 	unary[serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](protocol.MethodProjectRebindWorkspace, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](protocol.MethodProjectGetOverview, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.SessionPageRequest, serverapi.SessionPageResponse](protocol.MethodSessionPage, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
+	unary[serverapi.ChatSettingsReadRequest, serverapi.ChatSettingsReadResponse](protocol.MethodChatSettingsRead, AuthServer, ScopeNone, ConnectionControl, DependencyChatSettings),
 	unary[serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](protocol.MethodWorkflowCreate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](protocol.MethodWorkflowCreateAndLinkProject, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](protocol.MethodWorkflowUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
@@ -322,6 +326,7 @@ var routeContracts = []Route{
 	unary[serverapi.ApprovalListPendingBySessionRequest, serverapi.ApprovalListPendingBySessionResponse](protocol.MethodApprovalListPending, AuthPreServerAuth, ScopeSessionActiveProject, ConnectionControl, DependencyApprovalView),
 	progress[serverapi.RunPromptRequest, serverapi.RunPromptResponse, serverapi.RunPromptProgress](protocol.MethodRunPrompt, ScopeProjectWorkspace, DependencyRunPrompt, protocol.MethodRunPromptProgress),
 	subscription[serverapi.TranscriptSubscribeRequest, protocol.SessionTranscriptEventParams](protocol.MethodSessionSubscribeTranscript, AuthServer, ScopeAttachedSession, DependencySessionTranscript, protocol.MethodSessionTranscriptEvent, protocol.MethodSessionTranscriptComplete),
+	subscription[serverapi.QuestionHistorySubscribeRequest, protocol.SessionQuestionHistoryEventParams](protocol.MethodSessionQuestionHistorySubscribe, AuthServer, ScopeAttachedSession, DependencySessionView, protocol.MethodSessionQuestionHistoryEvent, protocol.MethodSessionQuestionHistoryComplete),
 	subscription[serverapi.AttentionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationSubscribe, AuthServer, ScopeNone, DependencyAttentionNotification, protocol.MethodAttentionNotificationEvent, protocol.MethodAttentionNotificationComplete),
 	subscription[serverapi.AttentionSessionNotificationSubscribeRequest, protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationSubscribe, AuthServer, ScopeAttachedSession, DependencyAttentionNotification, protocol.MethodAttentionSessionNotificationEvent, protocol.MethodAttentionSessionNotificationComplete),
 	subscription[serverapi.WorkflowSubscribeRequest, protocol.WorkflowProjectEventParams](protocol.MethodWorkflowSubscribe, AuthServer, ScopeNone, DependencyWorkflow, protocol.MethodWorkflowEvent, protocol.MethodWorkflowComplete),
@@ -329,6 +334,8 @@ var routeContracts = []Route{
 	notification[serverapi.RunPromptProgress](protocol.MethodRunPromptProgress),
 	notification[protocol.SessionTranscriptEventParams](protocol.MethodSessionTranscriptEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodSessionTranscriptComplete),
+	notification[protocol.SessionQuestionHistoryEventParams](protocol.MethodSessionQuestionHistoryEvent),
+	notification[protocol.StreamCompleteParams](protocol.MethodSessionQuestionHistoryComplete),
 	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionNotificationEvent),
 	notification[protocol.StreamCompleteParams](protocol.MethodAttentionNotificationComplete),
 	notification[protocol.AttentionNotificationEventParams](protocol.MethodAttentionSessionNotificationEvent),

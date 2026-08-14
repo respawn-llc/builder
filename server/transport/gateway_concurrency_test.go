@@ -355,55 +355,7 @@ func TestGatewayConcurrentUnaryResponsesAreCorrelated(t *testing.T) {
 	}
 }
 
-func TestGatewayOrdinaryHandlerPanicClosesOnlyItsConnection(t *testing.T) {
-	appCore, _ := newGatewayTestCore(t, true, true)
-	defer func() { _ = appCore.Close() }()
-
-	panicEntered := make(chan struct{})
-	workflow := &gatewayConcurrencyWorkflowService{
-		WorkflowService: appCore.WorkflowClient(),
-		getWorkflowTask: func(_ context.Context, req serverapi.WorkflowTaskGetRequest) (serverapi.WorkflowTaskGetResponse, error) {
-			if req.TaskID == "panic" {
-				close(panicEntered)
-				panic("gateway test panic")
-			}
-			return serverapi.WorkflowTaskGetResponse{}, errors.New("unexpected workflow task lookup")
-		},
-	}
-	deps := &gatewayConcurrencyDependencies{
-		GatewayDependencies: appCore,
-		workflow:            workflow,
-	}
-	gateway, err := NewGateway(deps, protocol.ServerIdentity{ProtocolVersion: protocol.Version, ServerID: "server-1"})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-	server := httptest.NewServer(gateway.Handler())
-	defer server.Close()
-
-	conn := dialGateway(t, server)
-	handshakeGateway(t, conn)
-	defer func() { _ = conn.Close() }()
-	sendGatewayRequest(t, conn, "panic", protocol.MethodWorkflowTaskGet, serverapi.WorkflowTaskGetRequest{TaskID: "panic"})
-	select {
-	case <-panicEntered:
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for panic route")
-	}
-	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatalf("SetReadDeadline: %v", err)
-	}
-	var response protocol.Response
-	if err := websocket.JSON.Receive(conn, &response); err == nil {
-		t.Fatal("panic request unexpectedly returned a response")
-	}
-
-	next := dialGateway(t, server)
-	defer func() { _ = next.Close() }()
-	handshakeGateway(t, next)
-}
-
-func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
+func TestGatewayOrdinaryHandlerPanicPropagates(t *testing.T) {
 	appCore, _ := newGatewayTestCore(t, true, true)
 	defer func() { _ = appCore.Close() }()
 
@@ -433,28 +385,12 @@ func TestGatewayOrdinaryHandlerPanicFailsFastInDebug(t *testing.T) {
 	stopped := false
 	defer func() {
 		recovered := recover()
-		diagnostic, ok := recovered.(gatewayRequestPanicDiagnostic)
-		if !ok {
-			t.Fatalf("recovered panic = %#v, want gatewayRequestPanicDiagnostic", recovered)
-		}
-		if diagnostic.Operation != gatewayOrdinaryRequestOperation {
-			t.Fatalf("diagnostic operation = %q, want %q", diagnostic.Operation, gatewayOrdinaryRequestOperation)
-		}
-		if diagnostic.Method != protocol.MethodWorkflowTaskGet {
-			t.Fatalf("diagnostic method = %q, want %q", diagnostic.Method, protocol.MethodWorkflowTaskGet)
-		}
-		if diagnostic.RequestID != "panic" {
-			t.Fatalf("diagnostic request id = %q, want panic", diagnostic.RequestID)
-		}
-		cause, ok := diagnostic.Cause.(error)
+		cause, ok := recovered.(error)
 		if !ok || !errors.Is(cause, panicCause) {
-			t.Fatalf("diagnostic cause = %#v, want original panic cause", diagnostic.Cause)
+			t.Fatalf("recovered panic = %#v, want original panic cause", recovered)
 		}
-		if diagnostic.Stack == "" {
-			t.Fatal("diagnostic stack is empty")
-		}
-		if !stopped {
-			t.Fatal("debug panic did not close the connection")
+		if stopped {
+			t.Fatal("ordinary request stop callback ran after panic")
 		}
 	}()
 	gateway.serveOrdinaryGatewayRequest(nil, context.Background(), state, req, gatewayRequestSchedule{

@@ -7,12 +7,17 @@ import (
 	"strconv"
 	"strings"
 
+	"core/server/httpcompression"
 	"core/shared/llmerrors"
 	"core/shared/textutil"
 
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
+
+func requestCompressionOption(variant ProviderVariantContract) option.RequestOption {
+	return option.WithMiddleware(httpcompression.Middleware(variant.RequestCompression))
+}
 
 func (t *HTTPTransport) serviceBaseURL(mode OpenAIAuthMode) string {
 	if mode.IsOAuth && !t.BaseURLExplicit {
@@ -39,11 +44,11 @@ func (t *HTTPTransport) buildRequestOptions(authHeader string, mode OpenAIAuthMo
 	if mode.IsOAuth && mode.AccountID != "" {
 		opts = append(opts, option.WithHeader("ChatGPT-Account-Id", mode.AccountID))
 	}
-	if mode.IsOAuth && projection != nil {
+	if projection != nil {
 		opts = append(opts, option.WithHeader("x-codex-routing-hint", projection.RoutingHint))
-	}
-	if turnState, present := dispatch.turnStateForRetry(); mode.IsOAuth && present {
-		opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
+		if turnState, present := dispatch.turnStateForRetry(); present {
+			opts = append(opts, option.WithHeader(codexTurnStateHeader, turnState))
+		}
 	}
 	return opts
 }
@@ -98,7 +103,11 @@ func (t *HTTPTransport) providerVariantForMode(mode OpenAIAuthMode) (ProviderVar
 	if provider == "" {
 		provider = ProviderOpenAI
 	}
-	variant, err := resolveProviderTransportVariant(provider, t.BaseURL, mode)
+	endpoint, err := newProviderTransportEndpoint(t.BaseURL, t.BaseURLExplicit)
+	if err != nil {
+		return ProviderVariantContract{}, err
+	}
+	variant, err := resolveProviderTransportVariant(provider, endpoint, mode)
 	if err != nil {
 		providerID := strings.TrimSpace(string(provider))
 		if providerID == "" {
@@ -118,6 +127,13 @@ func (t *HTTPTransport) providerCapabilitiesForMode(mode OpenAIAuthMode) (Provid
 		return ProviderCapabilities{}, err
 	}
 	return variant.Capabilities, nil
+}
+
+func (t *HTTPTransport) providerCapabilitiesForVariant(variant ProviderVariantContract) ProviderCapabilities {
+	if t.ProviderCapabilitiesOverride != nil {
+		return *t.ProviderCapabilitiesOverride
+	}
+	return variant.Capabilities
 }
 
 func (t *HTTPTransport) cacheModelContextWindow(model string, tokens int) {

@@ -12,6 +12,7 @@
     "@app/desktop": {
       "dependencies": [
         "@app/native-bridge",
+        "@app/server-api-contract",
         "@app/ui-kit",
         "@fontsource-variable/montserrat",
         "@hookform/resolvers",
@@ -86,6 +87,10 @@
         "zod"
       ],
       "devDependencies": ["typescript", "typescript7", "vitest"]
+    },
+    "@app/server-api-contract": {
+      "dependencies": ["@bufbuild/protobuf", "@bufbuild/protovalidate"],
+      "devDependencies": ["typescript", "typescript7"]
     },
     "@app/ui-kit": {
       "dependencies": ["@dnd-kit/core", "@dnd-kit/sortable", "react"],

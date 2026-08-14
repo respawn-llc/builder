@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"core/server/chatcontext"
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/sessionruntime"
@@ -170,8 +171,15 @@ func TestServiceCompactContextDuringAgentStepRunsBeforeNextStep(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for compaction at the Agent Step boundary")
 	}
+	activeContext := chatcontext.Project(engine.LiveChatContextSnapshot())
+	if !activeContext.CompactionRunning || activeContext.ManualCompactAvailable {
+		t.Fatalf("Context during accepted manual compaction = %+v, want running and manual Compact unavailable", activeContext)
+	}
 	if err := <-compactDone; err != nil {
 		t.Fatalf("CompactContext: %v", err)
+	}
+	if completedContext := chatcontext.Project(engine.LiveChatContextSnapshot()); completedContext.CompactionRunning {
+		t.Fatalf("Context after accepted manual compaction = %+v, want compaction not running", completedContext)
 	}
 	select {
 	case <-client.nextStepStarted:

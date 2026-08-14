@@ -1,0 +1,526 @@
+syntax = "proto3";
+
+package kent.api.session_launch;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/empty.proto";
+import "kent/api/project/project.proto";
+import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
+import "kent/api/session_launch/validation.proto";
+import "kent/api/session_launch/session_launch.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/session_launch;sessionlaunchpb";
+
+message SessionInitialInputRequest {
+  optional string session_id = 1 [
+    (buf.validate.field).string.(scoped_session_id) = true
+  ];
+  string transition_input = 2;
+  bool override_stored_draft = 3;
+}
+
+message SessionInitialInputSuccess {
+  string input = 1;
+}
+
+message SessionInitialInputError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionInitialInputResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionInitialInputSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionInitialInputError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SessionPersistInputDraftRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.(scoped_session_id) = true
+  ];
+  string input = 2;
+}
+
+message SessionPersistInputDraftError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionPersistInputDraftResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionPersistInputDraftError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SessionRetargetWorkspaceRequest {
+  string session_id = 1 [
+    (buf.validate.field).string.(scoped_session_id) = true
+  ];
+  string workspace_root = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.retarget_workspace_root_nonblank"
+      message: "workspace_root must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  optional string project_id = 3 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.retarget_project_id_nonblank"
+      message: "project_id must not be blank when provided"
+      expression: "this.trim() != ''"
+    }
+  ];
+}
+
+message SessionRetargetWorkspaceSuccess {
+  kent.api.project.ProjectBinding binding = 1 [(buf.validate.field).required = true];
+  bool workspace_binding_created = 2;
+}
+
+message ProjectReference {
+  string id = 1 [(buf.validate.field).string.min_len = 1];
+  string name = 2 [(buf.validate.field).string.min_len = 1];
+}
+
+message SessionRetargetFacts {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  ProjectReference source_project = 2 [(buf.validate.field).required = true];
+  string target_root = 3 [(buf.validate.field).string.min_len = 1];
+  repeated ProjectReference candidate_projects = 4;
+  repeated string workflow_task_ids = 5 [(buf.validate.field).repeated.items.string.min_len = 1];
+}
+
+message SessionRetargetTargetProjectRequiredDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.retarget_project_required_candidates"
+    message: "candidate_projects must not be empty"
+    expression: "size(this.facts.candidate_projects) > 0"
+  };
+}
+
+message SessionRetargetTargetProjectConflictDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.retarget_project_conflict_candidates"
+    message: "candidate_projects must not be empty"
+    expression: "size(this.facts.candidate_projects) > 0"
+  };
+}
+
+message SessionRetargetWorkflowOwnedDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+}
+
+message SessionRetargetBackgroundProcessActiveDetails {
+  SessionRetargetFacts facts = 1 [(buf.validate.field).required = true];
+}
+
+message SessionRetargetWorkspaceError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    SessionRetargetTargetProjectRequiredDetails target_project_required = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "target_project_required"
+      }
+    ];
+    SessionRetargetTargetProjectConflictDetails target_project_conflict = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "target_project_conflict"
+      }
+    ];
+    SessionRetargetWorkflowOwnedDetails workflow_owned = 4 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "workflow_owned"
+      }
+    ];
+    SessionRetargetBackgroundProcessActiveDetails background_process_active = 5 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "background_process_active"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 6 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionRetargetWorkspaceResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionRetargetWorkspaceSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionRetargetWorkspaceError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+enum SessionTransitionAction {
+  SESSION_TRANSITION_ACTION_UNSPECIFIED = 0;
+  SESSION_TRANSITION_ACTION_NONE = 1;
+  SESSION_TRANSITION_ACTION_NEW_SESSION = 2;
+  SESSION_TRANSITION_ACTION_RESUME = 3;
+  SESSION_TRANSITION_ACTION_LOGOUT = 4;
+  SESSION_TRANSITION_ACTION_FORK_ROLLBACK = 5;
+  SESSION_TRANSITION_ACTION_OPEN_SESSION = 6;
+}
+
+message SessionTransition {
+  SessionTransitionAction action = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  string initial_prompt = 2;
+  bool initial_prompt_history_recorded = 3;
+  optional string initial_input = 4;
+  string target_session_id = 5;
+  string fork_rollback_target_id = 6;
+  optional string previous_session_id = 7 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.transition_targets"
+    message: "open-session and rollback-fork transitions require their target IDs"
+    expression:
+      "(this.action != 6 || this.target_session_id.trim() != '') && "
+      "(this.action != 5 || this.fork_rollback_target_id.trim() != '')"
+  };
+}
+
+message SessionResolveTransitionRequest {
+  optional string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  SessionTransition transition = 2 [(buf.validate.field).required = true];
+}
+
+enum SessionAuthPreparation {
+  SESSION_AUTH_PREPARATION_UNSPECIFIED = 0;
+  SESSION_AUTH_PREPARATION_KEEP_CURRENT_AUTH = 1;
+  SESSION_AUTH_PREPARATION_REAUTHENTICATE = 2;
+}
+
+message SessionNavigationBinding {
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.navigation_project_id"
+      message: "project ID must be non-blank and trimmed"
+      expression: "this.trim() != '' && this == this.trim()"
+    }
+  ];
+  string workspace_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session_launch.navigation_workspace_id"
+      message: "workspace ID must be non-blank and trimmed"
+      expression: "this.trim() != '' && this == this.trim()"
+    }
+  ];
+}
+
+message SessionInitialPromptMetadata {
+  string text = 1 [(buf.validate.field).string.min_len = 1];
+  bool history_recorded = 2;
+}
+
+message SessionDraftDisposition {
+  oneof disposition {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty restore_stored_draft = 1;
+    string override_stored_draft = 2;
+  }
+}
+
+message SessionLaunchPreparation {
+  optional SessionInitialPromptMetadata initial_prompt = 1;
+  SessionDraftDisposition input_policy = 2 [(buf.validate.field).required = true];
+  SessionAuthPreparation auth = 3 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+  optional SessionNavigationBinding navigation_binding = 4;
+}
+
+message SessionSelectDirective {
+  SessionAuthPreparation auth = 1 [
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+}
+
+message SessionLaunchDirective {
+  SessionLaunchIntent intent = 1 [(buf.validate.field).required = true];
+  SessionLaunchPreparation preparation = 2 [(buf.validate.field).required = true];
+}
+
+message SessionDirective {
+  oneof directive {
+    option (buf.validate.oneof).required = true;
+
+    google.protobuf.Empty stop = 1;
+    SessionSelectDirective select_session = 2;
+    SessionLaunchDirective launch = 3;
+  }
+}
+
+message SessionResolveTransitionError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    kent.api.shared.InternalFailureDetails internal_failure = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionResolveTransitionResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionDirective success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionResolveTransitionError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+message SessionRuntimeActivateRequest {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string owner_id = 2 [(buf.validate.field).string.min_len = 1];
+  Settings active_settings = 3 [(buf.validate.field).required = true];
+  repeated ToolID enabled_tool_ids = 4 [(buf.validate.field).repeated.items.enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  optional bool questions_enabled = 5 [(buf.validate.field).required = true];
+  optional bool auto_compaction_enabled = 6 [(buf.validate.field).required = true];
+  bool thinking_override_explicit = 7;
+  SourceReport source = 8 [(buf.validate.field).required = true];
+}
+
+message SessionRuntimeAttachment {
+  string session_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  uint64 generation = 2 [
+    (buf.validate.field).uint64 = {
+      gte: 1
+      lte: 9007199254740991
+    }
+  ];
+}
+
+message SessionRuntimeActivateSuccess {
+  SessionRuntimeAttachment attachment = 1 [(buf.validate.field).required = true];
+}
+
+message SessionRuntimeActivateError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    SessionRuntimeUnavailableDetails runtime_unavailable = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "runtime_unavailable"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionRuntimeUnavailableDetails {
+  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message SessionRuntimeActivateResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionRuntimeActivateSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionRuntimeActivateError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+enum SessionRuntimeReleaseClosePolicy {
+  SESSION_RUNTIME_RELEASE_CLOSE_POLICY_UNSPECIFIED = 0;
+  SESSION_RUNTIME_RELEASE_CLOSE_POLICY_CLOSE_IF_IDLE = 1;
+  SESSION_RUNTIME_RELEASE_CLOSE_POLICY_DETACH_ONLY = 2;
+}
+
+message SessionRuntimeReleaseRequest {
+  SessionRuntimeAttachment attachment = 1 [(buf.validate.field).required = true];
+  bool drop_owner = 2;
+  optional SessionRuntimeReleaseClosePolicy close_policy = 3 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [0]
+  }];
+  string owner_id = 4 [(buf.validate.field).string.min_len = 1];
+
+  option (buf.validate.message).cel = {
+    id: "kent.session_launch.detach_only_drops_owner"
+    message: "detach_only release requires drop_owner"
+    expression:
+      "!has(this.close_policy) || this.close_policy != 2 || this.drop_owner"
+  };
+}
+
+message SessionRuntimeReleaseSuccess {
+  bool released = 1;
+  bool active = 2;
+}
+
+message SessionRuntimeReleaseError {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR_CODE
+  ];
+  oneof detail {
+    SessionRuntimeUnavailableDetails runtime_unavailable = 2 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "runtime_unavailable"
+      }
+    ];
+    kent.api.shared.InternalFailureDetails internal_failure = 3 [
+      (kent.api.shared.kent_result_field) = {
+        role: RESULT_FIELD_ROLE_ERROR_DETAIL
+        error_code: "internal_failure"
+      }
+    ];
+  }
+}
+
+message SessionRuntimeReleaseResult {
+  oneof outcome {
+    option (buf.validate.oneof).required = true;
+
+    SessionRuntimeReleaseSuccess success = 1 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_SUCCESS];
+    SessionRuntimeReleaseError error = 2 [(kent.api.shared.kent_result_field).role = RESULT_FIELD_ROLE_ERROR];
+  }
+}
+
+service SessionLifecycleService {
+  rpc GetInitialInput(SessionInitialInputRequest) returns (SessionInitialInputResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_PRE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.getInitialInput"
+    };
+  }
+
+  rpc PersistInputDraft(SessionPersistInputDraftRequest) returns (SessionPersistInputDraftResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.persistInputDraft"
+    };
+  }
+
+  rpc RetargetWorkspace(SessionRetargetWorkspaceRequest) returns (SessionRetargetWorkspaceResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ATTACHED_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.retargetWorkspace"
+    };
+  }
+
+  rpc ResolveTransition(SessionResolveTransitionRequest) returns (SessionResolveTransitionResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT_IF_SET
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.resolveTransition"
+    };
+  }
+}
+
+service SessionRuntimeService {
+  rpc Activate(SessionRuntimeActivateRequest) returns (SessionRuntimeActivateResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.runtime.activate"
+    };
+  }
+
+  rpc Release(SessionRuntimeReleaseRequest) returns (SessionRuntimeReleaseResult) {
+    option (kent.api.shared.kent_method) = {
+      kind: OPERATION_KIND_UNARY
+      authentication_stage: AUTHENTICATION_STAGE_SERVER
+      scope_policy: SCOPE_POLICY_SESSION_ACTIVE_PROJECT
+      direction: DIRECTION_CLIENT_TO_SERVER
+      unary_connection: UNARY_CONNECTION_MULTIPLEXED
+      legacy_wire_name: "session.runtime.release"
+    };
+  }
+}

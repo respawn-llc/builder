@@ -6,19 +6,26 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import testingLibrary from "eslint-plugin-testing-library";
 import tseslint from "typescript-eslint";
 
-import { createArchitecturePolicy } from "./eslint-architecture.config.js";
+import {
+  createArchitecturePolicy,
+  generatedServerApiContractFiles,
+} from "./eslint-architecture.config.js";
 import { appArchitecture } from "./eslint-app-plugin.js";
 
 const parserProjects = [
   "./tsconfig.app.json",
   "./tsconfig.node.json",
   "./packages/native-bridge/tsconfig.json",
+  "./packages/server-api-contract/tsconfig.json",
   "./packages/ui-kit/tsconfig.json",
 ];
 
 export default tseslint.config(
   {
     ignores: ["**/dist", "eslint-fixtures/architecture", "src-tauri/target", "node_modules"],
+  },
+  {
+    ignores: [generatedServerApiContractFiles],
   },
   {
     linterOptions: {

@@ -886,3 +886,26 @@ func TestInFlightClearFailureIsOperationalDiagnosticOnly(t *testing.T) {
 		t.Fatalf("diagnostic code = %q, want %q", diagnostic.Code, clientui.OperationalDiagnosticInFlightClearFailed)
 	}
 }
+
+func TestContextFactPersistenceFailureIsOperationalDiagnosticOnly(t *testing.T) {
+	stepID := mustTranscriptStepID(transcriptProjectionStepID, "test Context-fact diagnostic")
+	event := runtime.Event{
+		Kind:   runtime.EventContextFactsPersistFailed,
+		StepID: stepID.String(),
+		Error:  "persist Session Context manual Compact eligibility: disk full",
+	}
+	if facts := runtime.TranscriptCommittedRowFactsFromEvent(event); len(facts) != 0 {
+		t.Fatalf("Context-fact persistence failure committed facts = %+v, want none", facts)
+	}
+	messages := TranscriptMessagesFromRuntimeEvent(event)
+	if len(messages) != 1 || messages[0].Kind() != clientui.TranscriptMessageOperationalDiagnostic {
+		t.Fatalf("Context-fact persistence failure messages = %+v, want one operational diagnostic", messages)
+	}
+	diagnostic := transcriptPayload[clientui.TranscriptOperationalDiagnostic](t, messages[0])
+	if diagnostic.Code != clientui.OperationalDiagnosticContextFactsPersistFailed ||
+		diagnostic.Detail == "" ||
+		diagnostic.StepID == nil ||
+		*diagnostic.StepID != stepID {
+		t.Fatalf("Context-fact persistence diagnostic = %+v", diagnostic)
+	}
+}

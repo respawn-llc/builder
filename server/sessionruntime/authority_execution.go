@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
-	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -15,28 +13,6 @@ import (
 	"core/server/tools"
 	"core/shared/runtimeids"
 )
-
-func (a *Authority) runExecutionCallback(operation string, scope ExecutionScope, callback func() error) (err error) {
-	defer func() {
-		recovered := recover()
-		if recovered == nil {
-			return
-		}
-		if a.options.debug {
-			panic(recovered)
-		}
-		stack := string(debug.Stack())
-		slog.Error(
-			"exact execution callback panicked",
-			"operation", operation,
-			"scope_id", scope.ID(),
-			"panic", recovered,
-			"stack", stack,
-		)
-		err = fmt.Errorf("%s panicked for exact execution scope %s: %v", operation, scope.ID(), recovered)
-	}()
-	return callback()
-}
 
 type ExecutionHandle interface {
 	Scope() ExecutionScope

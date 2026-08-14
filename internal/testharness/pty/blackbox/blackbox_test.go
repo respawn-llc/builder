@@ -3,8 +3,10 @@ package blackbox_test
 import (
 	"bytes"
 	"context"
+	"core/internal/testharness/httpclient"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -732,9 +734,9 @@ func TestResponsesStubServesCompactAndModelMetadataTransportRoutes(t *testing.T)
 	}
 	t.Cleanup(compact.Close)
 	compactTransport := llm.NewHTTPTransport(oauthStaticTransportAuth{})
-	compactTransport.BaseURL = compact.URL()
+	compactTransport.BaseURL = "https://chatgpt.com/backend-api/codex"
 	compactTransport.BaseURLExplicit = true
-	compactTransport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
+	compactTransport.Client = newCanonicalOAuthStubClient(t, compact)
 	if _, err := compactTransport.Compact(context.Background(), llm.OpenAICompactionRequest{
 		Model:         "gpt-5",
 		SessionID:     textutil.Value("session-1"),
@@ -786,6 +788,19 @@ func newStubTransport(stub *blackbox.ResponsesStub) *llm.HTTPTransport {
 	transport.BaseURL = stub.URL()
 	transport.Client = &http.Client{Transport: &http.Transport{Proxy: nil}}
 	return transport
+}
+
+func newCanonicalOAuthStubClient(t *testing.T, stub *blackbox.ResponsesStub) *http.Client {
+	t.Helper()
+	target, err := url.Parse(stub.URL())
+	if err != nil {
+		t.Fatalf("parse Responses stub URL: %v", err)
+	}
+	roundTripper := &http.Transport{Proxy: nil}
+	t.Cleanup(roundTripper.CloseIdleConnections)
+	return &http.Client{
+		Transport: httpclient.NewURLRewriteTransport(target, roundTripper, "/backend-api/codex"),
+	}
 }
 
 type unknownLengthReader struct {
