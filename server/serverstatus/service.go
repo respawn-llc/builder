@@ -64,17 +64,17 @@ func (s *ServerStatusService) GetServerReadiness(ctx context.Context, _ serverap
 }
 
 func (s *ServerStatusService) GetUpdateStatus(ctx context.Context, req serverapi.UpdateStatusRequest) (serverapi.UpdateStatusResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.UpdateStatusRequest]) (serverapi.UpdateStatusResponse, error) {
-		_ = validated.Value()
-		if s == nil || s.updates == nil {
-			return serverapi.UpdateStatusResponse{}, ErrUpdateStatusServiceClosed
-		}
-		result, err := s.updates.Status(ctx)
-		if err != nil {
-			return serverapi.UpdateStatusResponse{}, err
-		}
-		return serverapi.UpdateStatusResponse{Result: result}, nil
-	})
+	if err := apicontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	if s == nil || s.updates == nil {
+		return serverapi.UpdateStatusResponse{}, ErrUpdateStatusServiceClosed
+	}
+	result, err := s.updates.Status(ctx)
+	if err != nil {
+		return serverapi.UpdateStatusResponse{}, err
+	}
+	return serverapi.UpdateStatusResponse{Result: result}, nil
 }
 
 func subagentRoleSummaries(settings config.Settings) []serverapi.SubagentRoleSummary {

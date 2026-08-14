@@ -36,6 +36,14 @@ func (v Validated[T]) Value() T {
 	return v.value
 }
 
+// ClassifyRequestValidation marks a concrete request validator failure for RPC mapping.
+func ClassifyRequestValidation(cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return requestValidationError{cause: cause}
+}
+
 func WithValidated[T any, R any](
 	value T,
 	policy ValidationPolicy,

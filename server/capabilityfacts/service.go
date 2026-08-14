@@ -46,43 +46,43 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	return apicontract.WithValidated(req, apicontract.SemanticValidationRequired, func(validated apicontract.Validated[serverapi.CapabilityFactsRequest]) (serverapi.CapabilityFactsResponse, error) {
-		req := validated.Value()
-		currentProvider, err := s.currentProviderFacts(ctx)
-		if err != nil {
-			return serverapi.CapabilityFactsResponse{}, err
-		}
-		explicitProviders, err := explicitProviderFacts(req.NormalizedExplicitLLMProviderIDs())
-		if err != nil {
-			return serverapi.CapabilityFactsResponse{}, err
-		}
-		defaults, err := defaultFacts(s.cfg.Settings)
-		if err != nil {
-			return serverapi.CapabilityFactsResponse{}, err
-		}
-		imports, err := onboardingimports.Discover(onboardingimports.Options{
-			ConfigRoot:    s.cfg.PersistenceRoot,
-			WorkspaceRoot: req.WorkspaceRoot,
-			HomeDir:       s.homeDir,
-			SkillPolicy:   config.ResolveSkillPolicy(s.cfg.Settings),
-		})
-		if err != nil {
-			return serverapi.CapabilityFactsResponse{}, err
-		}
-		models, err := modelFacts(currentProvider)
-		if err != nil {
-			return serverapi.CapabilityFactsResponse{}, err
-		}
-		return serverapi.CapabilityFactsResponse{
-			Models: models,
-			Providers: serverapi.ProviderCapabilityFacts{
-				CurrentEffective: ptr(providerFact(currentProvider, providerRoleCurrentEffective)),
-				Explicit:         explicitProviders,
-			},
-			Imports:  importFacts(imports),
-			Defaults: defaults,
-		}, nil
+	if err := apicontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	currentProvider, err := s.currentProviderFacts(ctx)
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	explicitProviders, err := explicitProviderFacts(req.NormalizedExplicitLLMProviderIDs())
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	defaults, err := defaultFacts(s.cfg.Settings)
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	imports, err := onboardingimports.Discover(onboardingimports.Options{
+		ConfigRoot:    s.cfg.PersistenceRoot,
+		WorkspaceRoot: req.WorkspaceRoot,
+		HomeDir:       s.homeDir,
+		SkillPolicy:   config.ResolveSkillPolicy(s.cfg.Settings),
 	})
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	models, err := modelFacts(currentProvider)
+	if err != nil {
+		return serverapi.CapabilityFactsResponse{}, err
+	}
+	return serverapi.CapabilityFactsResponse{
+		Models: models,
+		Providers: serverapi.ProviderCapabilityFacts{
+			CurrentEffective: ptr(providerFact(currentProvider, providerRoleCurrentEffective)),
+			Explicit:         explicitProviders,
+		},
+		Imports:  importFacts(imports),
+		Defaults: defaults,
+	}, nil
 }
 
 func (s *Service) currentProviderFacts(ctx context.Context) (llm.ProviderCapabilities, error) {

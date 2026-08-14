@@ -786,6 +786,54 @@ func TestGatewayRemoteTaskSearchRoundsTripIndexedResponse(t *testing.T) {
 	}
 }
 
+func TestGatewayRemoteWorkflowProjectSubscriptionOpensAndReceivesEvents(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+
+	remote, err := remoteclient.DialRemoteURLForProject(
+		context.Background(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	subscription, err := remote.SubscribeWorkflowProject(context.Background(), serverapi.WorkflowProjectSubscribeRequest{
+		ProjectID: appCore.ProjectID(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+
+	created, err := appCore.WorkflowClient().CreateAndLinkWorkflowToProject(t.Context(), serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Subscription workflow",
+		ProjectID:     appCore.ProjectID(),
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultIfProjectHasNone,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	event, err := subscription.Next(ctx)
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if event.ProjectID == nil ||
+		*event.ProjectID != appCore.ProjectID() ||
+		event.WorkflowID == nil ||
+		*event.WorkflowID != created.Workflow.ID ||
+		event.Resource != serverapi.WorkflowProjectEventResourceWorkflowLink ||
+		event.Action != serverapi.WorkflowProjectEventActionLinked {
+		t.Fatalf("event = %+v, want linked Workflow event", event)
+	}
+}
+
 func TestGatewayRemoteWorkflowTaskSessionsRoundsTripPage(t *testing.T) {
 	appCore, server := newGatewayTestServer(t)
 	defer func() { _ = appCore.Close() }()

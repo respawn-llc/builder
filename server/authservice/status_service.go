@@ -31,42 +31,42 @@ func NewStatusService(manager *auth.Manager, settings config.Settings) *StatusSe
 }
 
 func (s *StatusService) GetAuthStatus(ctx context.Context, req serverapi.AuthStatusRequest) (serverapi.AuthStatusResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.AuthStatusRequest]) (serverapi.AuthStatusResponse, error) {
-		req := validated.Value()
-		state := auth.EmptyState()
-		var authStateErr error
-		if s != nil && s.manager != nil {
-			resolution, err := s.manager.ResolveCurrentState(ctx)
-			if resolution.Loaded != nil {
-				state = *resolution.Loaded
-			}
-			if err != nil {
-				if resolution.Loaded == nil {
-					return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-						Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
-					})
-				}
-				authStateErr = err
-			} else {
-				state = *resolution.Current
-			}
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
+	state := auth.EmptyState()
+	var authStateErr error
+	if s != nil && s.manager != nil {
+		resolution, err := s.manager.ResolveCurrentState(ctx)
+		if resolution.Loaded != nil {
+			state = *resolution.Loaded
 		}
-		provider, subscriptionUsageSupported, err := s.resolveProvider(state, req.Provider)
 		if err != nil {
-			return serverapi.AuthStatusResponse{}, err
+			if resolution.Loaded == nil {
+				return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
+					Resolution: serverapi.UnavailableAuthStatusResolution(authStatusFailure(err)),
+				})
+			}
+			authStateErr = err
+		} else {
+			state = *resolution.Current
 		}
-		subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
-		if authStateErr != nil {
-			failure := authStatusFailure(authStateErr)
-			return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-				Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
-				Subscription: subscriptionStatus(ctx, state, authStateErr, subscriptionUsageSupported),
-			})
-		}
+	}
+	provider, subscriptionUsageSupported, err := s.resolveProvider(state, req.Provider)
+	if err != nil {
+		return serverapi.AuthStatusResponse{}, err
+	}
+	subscriptionUsageSupported = subscriptionUsageSupported && !req.SkipSubscriptionUsage
+	if authStateErr != nil {
+		failure := authStatusFailure(authStateErr)
 		return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
-			Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
-			Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
+			Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), &failure),
+			Subscription: subscriptionStatus(ctx, state, authStateErr, subscriptionUsageSupported),
 		})
+	}
+	return validatedAuthStatusResponse(serverapi.AuthStatusResponse{
+		Resolution:   serverapi.KnownAuthStatusResolution(authFacts(state, provider), nil),
+		Subscription: subscriptionStatus(ctx, state, nil, subscriptionUsageSupported),
 	})
 }
 

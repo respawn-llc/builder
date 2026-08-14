@@ -82,44 +82,44 @@ func (s *Service) ListProjects(ctx context.Context, _ serverapi.ProjectListReque
 }
 
 func (s *Service) ListProjectHome(ctx context.Context, req serverapi.ProjectHomeListRequest) (serverapi.ProjectHomeListResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectHomeListRequest]) (serverapi.ProjectHomeListResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectHomeListResponse{}, errors.New("project service is required")
-		}
-		pageSize := req.PageSize
-		if pageSize == 0 {
-			pageSize = defaultProjectHomePageSize
-		}
-		if pageSize > maxProjectHomePageSize {
-			pageSize = maxProjectHomePageSize
-		}
-		offset, err := parseProjectHomePageToken(req.PageToken)
-		if err != nil {
-			return serverapi.ProjectHomeListResponse{}, err
-		}
-		summaries, err := s.metadata.ListProjectHomeSummaries(ctx, pageSize+1, offset)
-		if err != nil {
-			return serverapi.ProjectHomeListResponse{}, err
-		}
-		nextPageToken := ""
-		if len(summaries) > pageSize {
-			summaries = summaries[:pageSize]
-			nextPageToken = strconv.Itoa(offset + pageSize)
-		}
-		return serverapi.ProjectHomeListResponse{
-			Projects:          summaries,
-			NextPageToken:     nextPageToken,
-			GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
-		}, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectHomeListResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectHomeListResponse{}, errors.New("project service is required")
+	}
+	pageSize := req.PageSize
+	if pageSize == 0 {
+		pageSize = defaultProjectHomePageSize
+	}
+	if pageSize > maxProjectHomePageSize {
+		pageSize = maxProjectHomePageSize
+	}
+	offset, err := parseProjectHomePageToken(req.PageToken)
+	if err != nil {
+		return serverapi.ProjectHomeListResponse{}, err
+	}
+	summaries, err := s.metadata.ListProjectHomeSummaries(ctx, pageSize+1, offset)
+	if err != nil {
+		return serverapi.ProjectHomeListResponse{}, err
+	}
+	nextPageToken := ""
+	if len(summaries) > pageSize {
+		summaries = summaries[:pageSize]
+		nextPageToken = strconv.Itoa(offset + pageSize)
+	}
+	return serverapi.ProjectHomeListResponse{
+		Projects:          summaries,
+		NextPageToken:     nextPageToken,
+		GeneratedAtUnixMs: time.Now().UTC().UnixMilli(),
+	}, nil
 }
 
 func (s *Service) ResolveProjectPath(ctx context.Context, req serverapi.ProjectResolvePathRequest) (serverapi.ProjectResolvePathResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectResolvePathRequest]) (serverapi.ProjectResolvePathResponse, error) {
-		req := validated.Value()
-		return s.resolveProjectPath(ctx, req.Path)
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectResolvePathResponse{}, err
+	}
+	return s.resolveProjectPath(ctx, req.Path)
 }
 
 func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverapi.ProjectResolvePathResponse, error) {
@@ -140,216 +140,216 @@ func (s *Service) resolveProjectPath(ctx context.Context, path string) (serverap
 }
 
 func (s *Service) PlanWorkspaceBinding(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectBindingPlanRequest]) (serverapi.ProjectBindingPlanResponse, error) {
-		req := validated.Value()
-		resolved, err := s.resolveProjectPath(ctx, req.Path)
-		if err != nil {
-			if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
-				resp := serverapi.ProjectBindingPlanResponse{
-					CanonicalRoot:    ambiguous.CanonicalRoot,
-					PathAvailability: clientui.ProjectAvailability(availabilityForProjectPath(ambiguous.CanonicalRoot)),
-				}
-				switch req.Mode {
-				case serverapi.ProjectBindingPlanModeInteractive:
-					projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
-					if err != nil {
-						return serverapi.ProjectBindingPlanResponse{}, err
-					}
-					resp.Kind = serverapi.ProjectBindingPlanKindServerWorkspaceSelection
-					resp.Projects = projects.Projects
-					return resp, nil
-				case serverapi.ProjectBindingPlanModeHeadless:
-					resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
-					return resp, nil
-				default:
-					return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
-				}
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectBindingPlanResponse{}, err
+	}
+	resolved, err := s.resolveProjectPath(ctx, req.Path)
+	if err != nil {
+		if ambiguous, ok := serverapi.AsWorkspaceBindingAmbiguous(err); ok {
+			resp := serverapi.ProjectBindingPlanResponse{
+				CanonicalRoot:    ambiguous.CanonicalRoot,
+				PathAvailability: clientui.ProjectAvailability(availabilityForProjectPath(ambiguous.CanonicalRoot)),
 			}
-			return serverapi.ProjectBindingPlanResponse{}, err
-		}
-		resp := serverapi.ProjectBindingPlanResponse{
-			CanonicalRoot:    resolved.CanonicalRoot,
-			PathAvailability: resolved.PathAvailability,
-			Binding:          resolved.Binding,
-		}
-		if resolved.Binding != nil {
-			resp.Kind = serverapi.ProjectBindingPlanKindBound
-			return resp, nil
-		}
-		switch req.Mode {
-		case serverapi.ProjectBindingPlanModeInteractive:
-			projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
-			if err != nil {
-				return serverapi.ProjectBindingPlanResponse{}, err
-			}
-			resp.Projects = projects.Projects
-			if resolved.PathAvailability == clientui.ProjectAvailabilityMissing || resolved.PathAvailability == clientui.ProjectAvailabilityInaccessible {
+			switch req.Mode {
+			case serverapi.ProjectBindingPlanModeInteractive:
+				projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+				if err != nil {
+					return serverapi.ProjectBindingPlanResponse{}, err
+				}
 				resp.Kind = serverapi.ProjectBindingPlanKindServerWorkspaceSelection
+				resp.Projects = projects.Projects
 				return resp, nil
-			}
-			resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
-			return resp, nil
-		case serverapi.ProjectBindingPlanModeHeadless:
-			if resolved.PathAvailability == clientui.ProjectAvailabilityAvailable {
-				resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
-				return resp, nil
-			}
-			workspace, found, err := s.selectSingleAvailableWorkspace(ctx)
-			if err != nil {
-				return serverapi.ProjectBindingPlanResponse{}, err
-			}
-			if !found {
+			case serverapi.ProjectBindingPlanModeHeadless:
 				resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
 				return resp, nil
+			default:
+				return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
 			}
-			resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteSelected
-			resp.Workspace = &workspace
-			return resp, nil
-		default:
-			return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
 		}
-	})
+		return serverapi.ProjectBindingPlanResponse{}, err
+	}
+	resp := serverapi.ProjectBindingPlanResponse{
+		CanonicalRoot:    resolved.CanonicalRoot,
+		PathAvailability: resolved.PathAvailability,
+		Binding:          resolved.Binding,
+	}
+	if resolved.Binding != nil {
+		resp.Kind = serverapi.ProjectBindingPlanKindBound
+		return resp, nil
+	}
+	switch req.Mode {
+	case serverapi.ProjectBindingPlanModeInteractive:
+		projects, err := s.ListProjects(ctx, serverapi.ProjectListRequest{})
+		if err != nil {
+			return serverapi.ProjectBindingPlanResponse{}, err
+		}
+		resp.Projects = projects.Projects
+		if resolved.PathAvailability == clientui.ProjectAvailabilityMissing || resolved.PathAvailability == clientui.ProjectAvailabilityInaccessible {
+			resp.Kind = serverapi.ProjectBindingPlanKindServerWorkspaceSelection
+			return resp, nil
+		}
+		resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
+		return resp, nil
+	case serverapi.ProjectBindingPlanModeHeadless:
+		if resolved.PathAvailability == clientui.ProjectAvailabilityAvailable {
+			resp.Kind = serverapi.ProjectBindingPlanKindLocalUnbound
+			return resp, nil
+		}
+		workspace, found, err := s.selectSingleAvailableWorkspace(ctx)
+		if err != nil {
+			return serverapi.ProjectBindingPlanResponse{}, err
+		}
+		if !found {
+			resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteAmbiguous
+			return resp, nil
+		}
+		resp.Kind = serverapi.ProjectBindingPlanKindHeadlessRemoteSelected
+		resp.Workspace = &workspace
+		return resp, nil
+	default:
+		return serverapi.ProjectBindingPlanResponse{}, errors.New("mode must be interactive or headless")
+	}
 }
 
 func (s *Service) CreateProject(ctx context.Context, req serverapi.ProjectCreateRequest) (serverapi.ProjectCreateResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectCreateRequest]) (serverapi.ProjectCreateResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
-		}
-		var projectKey *runtimeids.ProjectKey
-		if strings.TrimSpace(req.ProjectKey) != "" {
-			parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
-			if err != nil {
-				return serverapi.ProjectCreateResponse{}, err
-			}
-			projectKey = &parsed
-		}
-		binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, projectKey)
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectCreateResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectCreateResponse{}, errors.New("project service is required")
+	}
+	var projectKey *runtimeids.ProjectKey
+	if strings.TrimSpace(req.ProjectKey) != "" {
+		parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
 		if err != nil {
 			return serverapi.ProjectCreateResponse{}, err
 		}
-		return serverapi.ProjectCreateResponse{Binding: projectBindingFromMetadata(binding)}, nil
-	})
+		projectKey = &parsed
+	}
+	binding, err := s.metadata.CreateProjectForWorkspaceWithKey(ctx, req.WorkspaceRoot, req.DisplayName, projectKey)
+	if err != nil {
+		return serverapi.ProjectCreateResponse{}, err
+	}
+	return serverapi.ProjectCreateResponse{Binding: projectBindingFromMetadata(binding)}, nil
 }
 
 func (s *Service) UpdateProject(ctx context.Context, req serverapi.ProjectUpdateRequest) (serverapi.ProjectUpdateResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectUpdateRequest]) (serverapi.ProjectUpdateResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
-		}
-		var projectKey *runtimeids.ProjectKey
-		if strings.TrimSpace(req.ProjectKey) != "" {
-			parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
-			if err != nil {
-				return serverapi.ProjectUpdateResponse{}, err
-			}
-			projectKey = &parsed
-		}
-		if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, projectKey); err != nil {
-			return serverapi.ProjectUpdateResponse{}, err
-		}
-		project, err := s.projectHomeSummary(ctx, req.ProjectID)
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectUpdateResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectUpdateResponse{}, errors.New("project service is required")
+	}
+	var projectKey *runtimeids.ProjectKey
+	if strings.TrimSpace(req.ProjectKey) != "" {
+		parsed, err := runtimeids.ParseProjectKey(req.ProjectKey)
 		if err != nil {
 			return serverapi.ProjectUpdateResponse{}, err
 		}
-		return serverapi.ProjectUpdateResponse{Project: project}, nil
-	})
+		projectKey = &parsed
+	}
+	if err := s.metadata.UpdateProjectMetadata(ctx, req.ProjectID, req.DisplayName, projectKey); err != nil {
+		return serverapi.ProjectUpdateResponse{}, err
+	}
+	project, err := s.projectHomeSummary(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectUpdateResponse{}, err
+	}
+	return serverapi.ProjectUpdateResponse{Project: project}, nil
 }
 
 func (s *Service) GetProjectEdit(ctx context.Context, req serverapi.ProjectEditGetRequest) (serverapi.ProjectEditGetResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectEditGetRequest]) (serverapi.ProjectEditGetResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
-		}
-		project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectID)
-		if err != nil {
-			return serverapi.ProjectEditGetResponse{}, err
-		}
-		return serverapi.ProjectEditGetResponse{
-			ProjectID:   project.ProjectID,
-			ProjectKey:  project.ProjectKey,
-			DisplayName: project.DisplayName,
-		}, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectEditGetResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectEditGetResponse{}, errors.New("project service is required")
+	}
+	project, err := s.metadata.GetProjectEditMetadata(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectEditGetResponse{}, err
+	}
+	return serverapi.ProjectEditGetResponse{
+		ProjectID:   project.ProjectID,
+		ProjectKey:  project.ProjectKey,
+		DisplayName: project.DisplayName,
+	}, nil
 }
 
 func (s *Service) DeleteProject(ctx context.Context, req serverapi.ProjectDeleteRequest) (serverapi.ProjectDeleteResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectDeleteRequest]) (serverapi.ProjectDeleteResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
-		}
-		projectID := strings.TrimSpace(req.ProjectID)
-		if s.taskMutations == nil || s.workflowExecution == nil {
-			return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
-		}
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectDeleteResponse{}, errors.New("project service is required")
+	}
+	projectID := strings.TrimSpace(req.ProjectID)
+	if s.taskMutations == nil || s.workflowExecution == nil {
+		return serverapi.ProjectDeleteResponse{}, errors.New("workflow execution is required for project deletion")
+	}
 
-		deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
-			taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
-			if err != nil {
-				return nil, err
-			}
-			for _, taskID := range taskIDs {
-				if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
-					return nil, err
-				}
-			}
-			if s.workflowStore == nil {
-				return nil, errors.New("workflow store is required for project deletion")
-			}
-			sessionIDs, err := s.metadata.ListProjectSessionIDs(ctx, projectID)
-			if err != nil {
-				return nil, err
-			}
-			runtimeBlockers, release, err := withRuntimeBlockers(
-				ctx,
-				sessionIDs,
-				s.projectActiveSessionBlockers,
-				s.blockSessionStarts,
-			)
-			if release != nil {
-				defer release()
-			}
-			if err != nil || len(runtimeBlockers) > 0 {
-				return runtimeBlockers, err
-			}
-			blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
-				ProjectID:          projectID,
-				ExpectedSessionIDs: sessionIDs,
-			})
-			if err != nil || len(blockers) > 0 {
-				return blockers, err
-			}
-			if err := deleteProjectSessionArtifacts(s.metadata.PersistenceRoot(), projectID); err != nil {
-				return nil, fmt.Errorf("project %q was deleted, but session artifact cleanup failed: %w", projectID, err)
-			}
-			return nil, nil
-		}
+	deleteProject := func(ctx context.Context) ([]serverapi.ProjectDeleteBlocker, error) {
 		taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
 		if err != nil {
-			return serverapi.ProjectDeleteResponse{}, err
+			return nil, err
 		}
-		workflowTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
 		for _, taskID := range taskIDs {
-			workflowTaskIDs = append(workflowTaskIDs, workflow.TaskID(taskID))
+			if err := s.workflowExecution.EnsureTaskQuiescent(workflow.TaskID(taskID)); err != nil {
+				return nil, err
+			}
 		}
-		var blockers []serverapi.ProjectDeleteBlocker
-		err = s.taskMutations.RunMany(ctx, workflowTaskIDs, func(ctx context.Context) error {
-			var runErr error
-			blockers, runErr = deleteProject(ctx)
-			return runErr
-		})
+		if s.workflowStore == nil {
+			return nil, errors.New("workflow store is required for project deletion")
+		}
+		sessionIDs, err := s.metadata.ListProjectSessionIDs(ctx, projectID)
 		if err != nil {
-			return serverapi.ProjectDeleteResponse{}, err
+			return nil, err
 		}
-		if len(blockers) > 0 {
-			return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: false, Blockers: blockers}, nil
+		runtimeBlockers, release, err := withRuntimeBlockers(
+			ctx,
+			sessionIDs,
+			s.projectActiveSessionBlockers,
+			s.blockSessionStarts,
+		)
+		if release != nil {
+			defer release()
 		}
-		return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
+		if err != nil || len(runtimeBlockers) > 0 {
+			return runtimeBlockers, err
+		}
+		blockers, err := s.workflowStore.DeleteProject(ctx, workflowstore.ProjectDeleteRequest{
+			ProjectID:          projectID,
+			ExpectedSessionIDs: sessionIDs,
+		})
+		if err != nil || len(blockers) > 0 {
+			return blockers, err
+		}
+		if err := deleteProjectSessionArtifacts(s.metadata.PersistenceRoot(), projectID); err != nil {
+			return nil, fmt.Errorf("project %q was deleted, but session artifact cleanup failed: %w", projectID, err)
+		}
+		return nil, nil
+	}
+	taskIDs, err := s.metadata.ListProjectTaskIDs(ctx, projectID)
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	workflowTaskIDs := make([]workflow.TaskID, 0, len(taskIDs))
+	for _, taskID := range taskIDs {
+		workflowTaskIDs = append(workflowTaskIDs, workflow.TaskID(taskID))
+	}
+	var blockers []serverapi.ProjectDeleteBlocker
+	err = s.taskMutations.RunMany(ctx, workflowTaskIDs, func(ctx context.Context) error {
+		var runErr error
+		blockers, runErr = deleteProject(ctx)
+		return runErr
 	})
+	if err != nil {
+		return serverapi.ProjectDeleteResponse{}, err
+	}
+	if len(blockers) > 0 {
+		return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: false, Blockers: blockers}, nil
+	}
+	return serverapi.ProjectDeleteResponse{ProjectID: projectID, Deleted: true}, nil
 }
 
 func (s *Service) blockSessionStarts(ctx context.Context, sessionIDs []string) (func(), error) {
@@ -531,136 +531,136 @@ func (s *Service) selectSingleAvailableWorkspace(ctx context.Context) (serverapi
 }
 
 func (s *Service) ListProjectWorkspaces(ctx context.Context, req serverapi.ProjectWorkspaceListRequest) (serverapi.ProjectWorkspaceListResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceListRequest]) (serverapi.ProjectWorkspaceListResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
-		}
-		page, err := s.metadata.ListProjectWorkspaceCatalogPage(ctx, req.ProjectID, req.Offset, req.Limit)
-		if err != nil {
-			return serverapi.ProjectWorkspaceListResponse{}, err
-		}
-		response := serverapi.ProjectWorkspaceListResponse{
-			ProjectID:  req.ProjectID,
-			Offset:     req.Offset,
-			Workspaces: make([]serverapi.ProjectWorkspaceCatalogRow, 0, len(page.Workspaces)),
-			NextOffset: page.NextOffset,
-		}
-		for _, workspace := range page.Workspaces {
-			response.Workspaces = append(response.Workspaces, serverapi.ProjectWorkspaceCatalogRow{
-				WorkspaceID: workspace.WorkspaceID,
-				DisplayName: workspace.DisplayName,
-				RootPath:    workspace.CanonicalRoot,
-				IsDefault:   workspace.IsDefault,
-			})
-		}
-		if err := response.Validate(); err != nil {
-			return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response: %w", err)
-		}
-		return response, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectWorkspaceListResponse{}, errors.New("project service is required")
+	}
+	page, err := s.metadata.ListProjectWorkspaceCatalogPage(ctx, req.ProjectID, req.Offset, req.Limit)
+	if err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, err
+	}
+	response := serverapi.ProjectWorkspaceListResponse{
+		ProjectID:  req.ProjectID,
+		Offset:     req.Offset,
+		Workspaces: make([]serverapi.ProjectWorkspaceCatalogRow, 0, len(page.Workspaces)),
+		NextOffset: page.NextOffset,
+	}
+	for _, workspace := range page.Workspaces {
+		response.Workspaces = append(response.Workspaces, serverapi.ProjectWorkspaceCatalogRow{
+			WorkspaceID: workspace.WorkspaceID,
+			DisplayName: workspace.DisplayName,
+			RootPath:    workspace.CanonicalRoot,
+			IsDefault:   workspace.IsDefault,
+		})
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceListResponse{}, fmt.Errorf("project workspace catalog response: %w", err)
+	}
+	return response, nil
 }
 
 func (s *Service) GetProjectWorkspace(ctx context.Context, req serverapi.ProjectWorkspaceGetRequest) (serverapi.ProjectWorkspaceGetResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectWorkspaceGetRequest]) (serverapi.ProjectWorkspaceGetResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
-		}
-		workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
-		if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
-			return serverapi.ProjectWorkspaceGetResponse{
-				ProjectID: req.ProjectID,
-				Result:    serverapi.ProjectWorkspaceGetResultNotAttached,
-			}, nil
-		}
-		if err != nil {
-			return serverapi.ProjectWorkspaceGetResponse{}, err
-		}
-		projected := projectWorkspaceCatalogRowFromMetadata(workspace)
-		response := serverapi.ProjectWorkspaceGetResponse{
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, errors.New("project service is required")
+	}
+	workspace, err := s.metadata.GetProjectWorkspaceCatalogRow(ctx, req.ProjectID, req.ProjectWorkspaceSelector)
+	if errors.Is(err, serverapi.ErrWorkspaceNotRegistered) {
+		return serverapi.ProjectWorkspaceGetResponse{
 			ProjectID: req.ProjectID,
-			Result:    serverapi.ProjectWorkspaceGetResultAttached,
-			Workspace: &projected,
-		}
-		if err := response.Validate(); err != nil {
-			return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response: %w", err)
-		}
-		return response, nil
-	})
+			Result:    serverapi.ProjectWorkspaceGetResultNotAttached,
+		}, nil
+	}
+	if err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, err
+	}
+	projected := projectWorkspaceCatalogRowFromMetadata(workspace)
+	response := serverapi.ProjectWorkspaceGetResponse{
+		ProjectID: req.ProjectID,
+		Result:    serverapi.ProjectWorkspaceGetResultAttached,
+		Workspace: &projected,
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectWorkspaceGetResponse{}, fmt.Errorf("exact Project Workspace response: %w", err)
+	}
+	return response, nil
 }
 
 func (s *Service) AttachWorkspaceToProject(ctx context.Context, req serverapi.ProjectAttachWorkspaceRequest) (serverapi.ProjectAttachWorkspaceResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectAttachWorkspaceRequest]) (serverapi.ProjectAttachWorkspaceResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
-		}
-		result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectID, req.WorkspaceRoot)
-		if err != nil {
-			return serverapi.ProjectAttachWorkspaceResponse{}, err
-		}
-		outcome := serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached
-		if result.Attached {
-			outcome = serverapi.ProjectWorkspaceAttachOutcomeAttached
-		}
-		response := serverapi.ProjectAttachWorkspaceResponse{
-			Binding: projectBindingFromMetadata(result.Binding),
-			Outcome: outcome,
-		}
-		if err := response.Validate(); err != nil {
-			return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response: %w", err)
-		}
-		return response, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, errors.New("project service is required")
+	}
+	result, err := s.metadata.AttachWorkspaceToProjectWithResult(ctx, req.ProjectID, req.WorkspaceRoot)
+	if err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, err
+	}
+	outcome := serverapi.ProjectWorkspaceAttachOutcomeAlreadyAttached
+	if result.Attached {
+		outcome = serverapi.ProjectWorkspaceAttachOutcomeAttached
+	}
+	response := serverapi.ProjectAttachWorkspaceResponse{
+		Binding: projectBindingFromMetadata(result.Binding),
+		Outcome: outcome,
+	}
+	if err := response.Validate(); err != nil {
+		return serverapi.ProjectAttachWorkspaceResponse{}, fmt.Errorf("Project Workspace attach response: %w", err)
+	}
+	return response, nil
 }
 
 func (s *Service) RebindWorkspace(ctx context.Context, req serverapi.ProjectRebindWorkspaceRequest) (serverapi.ProjectRebindWorkspaceResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectRebindWorkspaceRequest]) (serverapi.ProjectRebindWorkspaceResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
-		}
-		prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
-		if err != nil {
-			return serverapi.ProjectRebindWorkspaceResponse{}, err
-		}
-		binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
-			ctx,
-			req.OldWorkspaceRoot,
-			req.NewWorkspaceRoot,
-			prepared.ProjectID,
-			prepared.WorkspaceID,
-		)
-		if err != nil {
-			return serverapi.ProjectRebindWorkspaceResponse{}, err
-		}
-		return serverapi.ProjectRebindWorkspaceResponse{Binding: projectBindingFromMetadata(binding)}, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, errors.New("project service is required")
+	}
+	prepared, err := s.metadata.PrepareWorkspaceRebind(ctx, req.OldWorkspaceRoot)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	binding, err := s.metadata.RebindWorkspaceWithExpectedBinding(
+		ctx,
+		req.OldWorkspaceRoot,
+		req.NewWorkspaceRoot,
+		prepared.ProjectID,
+		prepared.WorkspaceID,
+	)
+	if err != nil {
+		return serverapi.ProjectRebindWorkspaceResponse{}, err
+	}
+	return serverapi.ProjectRebindWorkspaceResponse{Binding: projectBindingFromMetadata(binding)}, nil
 }
 
 func (s *Service) GetProjectOverview(ctx context.Context, req serverapi.ProjectGetOverviewRequest) (serverapi.ProjectGetOverviewResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.ProjectGetOverviewRequest]) (serverapi.ProjectGetOverviewResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.ProjectGetOverviewResponse{}, errors.New("project service is required")
-		}
-		overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectID)
-		if err != nil {
-			return serverapi.ProjectGetOverviewResponse{}, err
-		}
-		return serverapi.ProjectGetOverviewResponse{Overview: overview}, nil
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.ProjectGetOverviewResponse{}, err
+	}
+	if s == nil {
+		return serverapi.ProjectGetOverviewResponse{}, errors.New("project service is required")
+	}
+	overview, err := s.metadata.GetProjectOverview(ctx, req.ProjectID)
+	if err != nil {
+		return serverapi.ProjectGetOverviewResponse{}, err
+	}
+	return serverapi.ProjectGetOverviewResponse{Overview: overview}, nil
 }
 
 func (s *Service) ListSessionPage(ctx context.Context, req serverapi.SessionPageRequest) (serverapi.SessionPageResponse, error) {
-	return servicecontract.WithValidated(req, servicecontract.SemanticValidationRequired, func(validated servicecontract.Validated[serverapi.SessionPageRequest]) (serverapi.SessionPageResponse, error) {
-		req := validated.Value()
-		if s == nil {
-			return serverapi.SessionPageResponse{}, errors.New("project service is required")
-		}
-		return s.metadata.ListSessionPage(ctx, req)
-	})
+	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+		return serverapi.SessionPageResponse{}, err
+	}
+	if s == nil {
+		return serverapi.SessionPageResponse{}, errors.New("project service is required")
+	}
+	return s.metadata.ListSessionPage(ctx, req)
 }
 
 func (s *Service) projectHomeSummary(ctx context.Context, projectID string) (serverapi.ProjectHomeSummary, error) {
