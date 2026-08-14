@@ -794,7 +794,7 @@ func TestApprovalTransitionSteersPreviousTargetSessionExactlyOnceAfterSourceReti
 	)
 	f := newCurrentNodeRunnerFixtureWithClient(t, client)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNative
-	threshold := 100_000
+	threshold := 1
 	f.starter.cfg.Settings.Workflow.PreCompactionTokens = &threshold
 	workflowID := createCurrentNodeApprovalLoopWorkflow(t, f.store)
 	task := f.createTask(t, workflowID)
