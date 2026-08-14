@@ -1,5 +1,5 @@
 import { type ReactNode, useMemo } from "react";
-import { Check, Folder, Plus, Workflow } from "lucide-react";
+import { Check, Folder, Inbox, Plus, Workflow } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import type { ProjectSummary } from "@/api";
@@ -18,6 +18,7 @@ export function HomeSidebar({
   onCategorySelect,
   onChooseWorkspace,
   onCreateWorkflow,
+  onInboxSelect,
   onProjectSelect,
   projectItems,
   projectsQuery,
@@ -29,6 +30,7 @@ export function HomeSidebar({
   onCategorySelect: (category: HomeSidebarCategory) => void;
   onChooseWorkspace: () => void;
   onCreateWorkflow: () => void;
+  onInboxSelect: () => void;
   onProjectSelect: (projectID: string) => void;
   projectItems: readonly ProjectSummary[];
   projectsQuery: ReturnType<typeof useProjectPages>;
@@ -63,22 +65,36 @@ export function HomeSidebar({
     <div className="flex h-full min-h-0 select-none flex-col px-[calc(var(--space-3)/2)]">
       <div className="relative z-20 grid shrink-0 gap-[var(--space-2)] pt-[var(--space-3)]">
         <CategoryRow
-          actionLabel={t("home.newProject")}
-          disabled={disabled}
+          action={null}
+          current={selectedProjectID === null}
+          icon={<Inbox size={18} strokeWidth={1.5} />}
+          label={t("home.attentionPane")}
+          onSelect={onInboxSelect}
+          selected={selectedProjectID === null}
+        />
+        <CategoryRow
+          action={{
+            disabled,
+            label: t("home.newProject"),
+            onSelect: onChooseWorkspace,
+          }}
+          current={false}
           icon={<Folder size={18} strokeWidth={1.5} />}
           label={t("home.projectsPane")}
-          onAction={onChooseWorkspace}
           onSelect={() => {
             onCategorySelect("projects");
           }}
           selected={selectedCategory === "projects"}
         />
         <CategoryRow
-          actionLabel={t("workflowLibrary.createWorkflow")}
-          disabled={disabled}
+          action={{
+            disabled,
+            label: t("workflowLibrary.createWorkflow"),
+            onSelect: onCreateWorkflow,
+          }}
+          current={false}
           icon={<Workflow size={18} strokeWidth={1.5} />}
           label={t("workflowLibrary.homeIslandTitle")}
-          onAction={onCreateWorkflow}
           onSelect={() => {
             onCategorySelect("workflows");
           }}
@@ -152,32 +168,32 @@ export function HomeSidebar({
 }
 
 function CategoryRow({
-  actionLabel,
-  disabled,
+  action,
+  current,
   icon,
   label,
-  onAction,
   onSelect,
   selected,
 }: Readonly<{
-  actionLabel: string;
-  disabled: boolean;
+  action: Readonly<{ disabled: boolean; label: string; onSelect: () => void }> | null;
+  current: boolean;
   icon: ReactNode;
   label: string;
-  onAction: () => void;
   onSelect: () => void;
   selected: boolean;
 }>) {
   return (
     <div
       className={cx(
-        "relative flex min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] pr-[calc(40px+var(--space-3)/2)] transition-colors",
+        "relative flex min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-m)] px-[calc(var(--space-3)/2)] py-[var(--space-1)] transition-colors",
+        action !== null && "pr-[calc(40px+var(--space-3)/2)]",
         selected
           ? "bg-[color-mix(in_srgb,var(--color-on-island)_12%,transparent)]"
           : "hover:bg-[color-mix(in_srgb,var(--color-on-island)_4%,transparent)]",
       )}
     >
       <button
+        aria-current={current ? "page" : undefined}
         className="flex min-w-0 flex-1 items-center gap-[var(--space-2)] text-left"
         onClick={onSelect}
         type="button"
@@ -185,15 +201,17 @@ function CategoryRow({
         <CategoryIcon icon={icon} selected={selected} />
         <strong className="min-w-0 truncate">{label}</strong>
       </button>
-      <button
-        aria-label={actionLabel}
-        className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
-        disabled={disabled}
-        onClick={onAction}
-        type="button"
-      >
-        <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
-      </button>
+      {action === null ? null : (
+        <button
+          aria-label={action.label}
+          className="absolute right-[calc(var(--space-3)/2)] top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center justify-items-end rounded-full text-[var(--color-on-island)] disabled:opacity-55"
+          disabled={action.disabled}
+          onClick={action.onSelect}
+          type="button"
+        >
+          <Plus aria-hidden="true" size={14} strokeWidth={1.5} />
+        </button>
+      )}
     </div>
   );
 }

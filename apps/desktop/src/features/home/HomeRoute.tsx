@@ -190,6 +190,12 @@ function HomeRouteContent({ selectedProjectID }: Readonly<{ selectedProjectID: s
           onCreateWorkflow={() => {
             open({ kind: "workflowCreate", mode: sidebarMode });
           }}
+          onInboxSelect={() => {
+            setCategory("projects");
+            if (selectedProjectID !== null) {
+              void navigation.selectHomeProject(null);
+            }
+          }}
           onProjectSelect={(projectID) => {
             if (selectedProjectID === projectID) {
               void navigation.selectHomeProject(null);
