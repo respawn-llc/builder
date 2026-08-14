@@ -504,21 +504,13 @@ func (p processorProxy) ID() string {
 	return p.inner.ID()
 }
 
-func (p processorProxy) Process(ctx context.Context, envelope Envelope) (decision Decision, err error) {
+func (p processorProxy) Process(ctx context.Context, envelope Envelope) (Decision, error) {
 	if p.inner == nil {
 		return Skip(envelope), nil
 	}
 	if scoped, ok := p.inner.(ScopedProcessor); ok && !scoped.Scope().Matches(envelope.Request) {
 		return Skip(envelope), nil
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = ProcessorError{
-				Severity: FailureCritical,
-				Message:  fmt.Sprintf("postprocess processor %s panicked: %v", p.ID(), recovered),
-			}
-		}
-	}()
 	return p.inner.Process(ctx, envelope)
 }
 

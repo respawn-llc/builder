@@ -48,12 +48,15 @@ func TestAskProjectionUpdateIgnoresLateOrMismatchedCompletion(t *testing.T) {
 		}
 		model, command := updateQuestionProjection(model, askEventMsg{event: testQuestionAskEvent("ask-1", "Question?")})
 		model, _ = updateQuestionProjection(model, askEventMsg{event: askEvent{resolvedPromptID: "ask-1"}})
-		result := requireQuestionRenderResult(t, command)
-		model, quit := updateQuestionProjection(model, result)
-		if result.err == nil || len(result.stack) == 0 ||
-			quit != nil || model.forcedLocalExit || ringer.total() != 0 {
-			t.Fatal("late projector panic affected the resolved prompt")
-		}
+		defer func() {
+			if recovered := recover(); recovered != "stale renderer panic" {
+				t.Fatalf("recovered panic = %#v, want stale renderer panic", recovered)
+			}
+			if model.forcedLocalExit || ringer.total() != 0 {
+				t.Fatal("late projector panic mutated the resolved prompt")
+			}
+		}()
+		_ = command()
 	})
 }
 

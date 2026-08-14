@@ -57,6 +57,11 @@ run_vet() {
 	go vet ./...
 }
 
+run_architecture() {
+	echo "==> architecture guard"
+	go run ./cmd/architectureguard .
+}
+
 run_build() {
 	echo "==> go build"
 	local version
@@ -95,6 +100,7 @@ all)
 	run_frontend_deps_policy
 	run_frontend_lint
 	run_format
+	run_architecture
 	run_vet
 	run_build
 	run_test
@@ -107,6 +113,9 @@ frontend-lint)
 	;;
 format)
 	run_format
+	;;
+architecture)
+	run_architecture
 	;;
 rust-policy)
 	run_rust_policy
@@ -123,7 +132,7 @@ test)
 	;;
 *)
 	echo "Unknown mode: $mode" >&2
-	echo "Usage: $0 [all|deps|frontend-lint|format|rust-policy|vet|build|test [test target/options...]]" >&2
+	echo "Usage: $0 [all|deps|frontend-lint|format|architecture|rust-policy|vet|build|test [test target/options...]]" >&2
 	exit 1
 	;;
 esac

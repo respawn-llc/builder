@@ -263,7 +263,9 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 	e := s.engine
 	executedToolCall := false
 	patchEditsApplied, mismatchWarningCommitted := false, false
+	stepNo := 0
 	for {
+		stepNo++
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
 		}
@@ -280,6 +282,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if err := s.prepareModelTurn(ctx, stepID); err != nil {
 			return stepLoopResult{}, err
 		}
+		e.assertWorkflowInstructionsPresent(stepNo)
 
 		var reasoningSteerErr error
 		candidate, err := e.generateWithMissingToolOutputRepair(
@@ -390,7 +393,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			if err != nil {
 				return stepLoopResult{}, err
 			}
-			if err := s.completeAgentStepBoundary(ctx); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			patchEditsApplied = patchEditsApplied || applied
@@ -405,7 +408,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		}
 
 		if assistantMsg.Content == nil && responseContainsProgress(resp) {
-			if err := s.completeAgentStepBoundary(ctx); err != nil {
+			if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 				return stepLoopResult{}, err
 			}
 			continue
@@ -841,15 +844,18 @@ func (s *defaultStepExecutor) materializeFinalAnswerToolCalls(ctx context.Contex
 		return false, false, err
 	}
 	if calls.hasCalls() {
-		if err := s.completeAgentStepBoundary(ctx); err != nil {
+		if err := s.completeAgentStepBoundary(ctx, stepID); err != nil {
 			return false, false, err
 		}
 	}
 	return patchEditsApplied, terminal, nil
 }
 
-func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context) error {
+func (s *defaultStepExecutor) completeAgentStepBoundary(ctx context.Context, stepID string) error {
 	s.engine.compactionRuntimeState().SetManualCompactionEligible(true)
+	if err := s.engine.flushPendingWorkflowAssignments(stepID); err != nil {
+		return err
+	}
 	return s.engine.stepLifecycle.DrainAgentStepBoundary(ctx)
 }
 

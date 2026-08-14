@@ -911,11 +911,9 @@ func (a *Authority) StartAgentExecution(ctx context.Context, request AgentExecut
 			}
 			a.beginWorkflowExecution(execution)
 		}
-		runErr := a.runExecutionCallback("agent_runner", execution.scope, func() error {
-			return request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
-				authority: a,
-				resource:  resource.ref,
-			})
+		runErr := request.Runner(execution.ctx, execution.scope, AgentRuntimeBridge{
+			authority: a,
+			resource:  resource.ref,
 		})
 		execution.finish(ExecutionResult{}, runErr, nil)
 	}()

@@ -21,6 +21,7 @@ type asyncLogWriter struct {
 	done    chan struct{}
 	onFlush func()
 
+	sendMu sync.RWMutex
 	mu     sync.Mutex
 	err    error
 	closed bool
@@ -38,7 +39,7 @@ func newAsyncLogWriter(file *os.File, onFlush func()) *asyncLogWriter {
 	return w
 }
 
-func (w *asyncLogWriter) Write(p []byte) (err error) {
+func (w *asyncLogWriter) Write(p []byte) error {
 	if w == nil || len(p) == 0 {
 		return nil
 	}
@@ -46,11 +47,11 @@ func (w *asyncLogWriter) Write(p []byte) (err error) {
 		return err
 	}
 	chunk := append([]byte(nil), p...)
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = errors.New("shell log writer is closed")
-		}
-	}()
+	w.sendMu.RLock()
+	defer w.sendMu.RUnlock()
+	if w.closed {
+		return errors.New("shell log writer is closed")
+	}
 	w.ch <- chunk
 	return w.error()
 }
@@ -60,10 +61,10 @@ func (w *asyncLogWriter) Close() error {
 		return nil
 	}
 	w.once.Do(func() {
-		w.mu.Lock()
+		w.sendMu.Lock()
 		w.closed = true
-		w.mu.Unlock()
 		close(w.ch)
+		w.sendMu.Unlock()
 		<-w.done
 	})
 	return w.storedError()
@@ -142,9 +143,6 @@ func (w *asyncLogWriter) error() error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.closed {
-		return errors.New("shell log writer is closed")
-	}
 	return w.err
 }
 
