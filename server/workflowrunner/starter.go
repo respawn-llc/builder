@@ -269,11 +269,14 @@ func (s *Starter) PrepareManualMoveAssignments(
 		return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, err
 	}
 	for _, input := range inputs {
-		if input.Node.Kind == workflow.NodeKindScript {
+		requiresAssignment := input.CurrentNode.AgentExecutionSelection != nil
+		if !requiresAssignment && input.Node.Kind == workflow.NodeKindScript {
 			continue
 		}
-		if input.Node.Kind != workflow.NodeKindAgent {
-			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(fmt.Errorf("current node %v is not executable", input.CurrentNode.Reference))
+		if !requiresAssignment || input.Node.Kind != workflow.NodeKindAgent {
+			return workflowstore.ManualMoveTargetAssignmentPreparation{}, nil, cleanupPrepared(
+				fmt.Errorf("current node %v execution shape is inconsistent", input.CurrentNode.Reference),
+			)
 		}
 		key, err := input.CurrentNode.Reference.Key()
 		if err != nil {

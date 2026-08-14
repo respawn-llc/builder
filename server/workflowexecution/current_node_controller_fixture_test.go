@@ -562,11 +562,28 @@ func (s *currentNodeControllerStore) ApplyManualMove(context.Context, workflowst
 }
 
 func (s *currentNodeControllerStore) ApplyManualMoveWithTargetAssignments(
-	context.Context,
-	workflowstore.ManualMovePreparation,
-	*workflowstore.ExecutionTargetCandidate,
-	workflowstore.ManualMoveTargetAssignmentPreparer,
+	ctx context.Context,
+	_ workflowstore.ManualMovePreparation,
+	_ *workflowstore.ExecutionTargetCandidate,
+	prepareAssignments workflowstore.ManualMoveTargetAssignmentPreparer,
 ) (workflowstore.ManualMoveResult, error) {
+	if prepareAssignments == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("Manual Move assignment preparer is required")
+	}
+	contexts := make([]workflowstore.CurrentNodeStartContext, 0, len(s.manualMoved.Mutation.Created))
+	for _, currentNode := range s.manualMoved.Mutation.Created {
+		kind := workflow.NodeKindScript
+		if currentNode.AgentExecutionSelection != nil {
+			kind = workflow.NodeKindAgent
+		}
+		contexts = append(contexts, workflowstore.CurrentNodeStartContext{
+			Node:        workflowstore.NodeRecord{Kind: kind},
+			CurrentNode: currentNode,
+		})
+	}
+	if _, err := prepareAssignments(ctx, contexts); err != nil {
+		return workflowstore.ManualMoveResult{}, err
+	}
 	return s.manualMoved, nil
 }
 

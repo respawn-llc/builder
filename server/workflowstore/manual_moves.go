@@ -309,6 +309,12 @@ func (s *Store) applyManualMoveWithinWorkflowLane(
 		if err != nil {
 			return ManualMoveResult{}, err
 		}
+		for _, detail := range invariants {
+			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, detail)
+		}
+		for _, detail := range legacyFallbacks {
+			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, detail)
+		}
 		applyManualMoveCommentary(targets, prepared.request.Commentary)
 		if prepareAssignments != nil {
 			if !sameManualMoveTargets(targets, preparedAssignments.targets) {
@@ -638,11 +644,9 @@ func (s *Store) materializeManualMoveTargets(
 			return nil, nil, nil, err
 		}
 		if materializedTarget.Invariant != nil {
-			checkRetainedTargetInvariantBeforeMutation(s.invariantPolicy, *materializedTarget.Invariant)
 			invariants = append(invariants, *materializedTarget.Invariant)
 		}
 		if materializedTarget.LegacyFallback != nil {
-			checkLegacyContinuationSourceBeforeMutation(s.invariantPolicy, *materializedTarget.LegacyFallback)
 			legacyFallbacks = append(legacyFallbacks, *materializedTarget.LegacyFallback)
 		}
 		targets = append(targets, materializedTarget.CurrentNode)
@@ -659,9 +663,6 @@ func applyManualMoveTargetAssignments(
 	targets []workflow.CurrentNode,
 	assignments []ManualMoveTargetAssignment,
 ) ([]workflow.CurrentNode, error) {
-	if len(assignments) == 0 {
-		return targets, nil
-	}
 	byReference := make(map[workflow.CurrentNodeReferenceKey]runtimeids.SessionID, len(assignments))
 	for index, assignment := range assignments {
 		if assignment.SessionID.IsZero() {

@@ -692,20 +692,34 @@ func (f *currentNodeRunnerFixture) workflowAssignmentRecordCount(
 	if err != nil {
 		t.Fatalf("materialize event log for Session %s: %v", sessionID, err)
 	}
-	window, err := eventLog.ReadRecentRecords(32)
+	const recordsPerWindow = 128
+	window, err := eventLog.ReadRecentRecords(recordsPerWindow)
 	if err != nil {
 		t.Fatalf("read workflow assignment records for Session %s: %v", sessionID, err)
 	}
-	for _, event := range window.Records {
-		payload, err := event.Payload()
-		if err != nil {
-			t.Fatalf("read workflow assignment event for Session %s: %v", sessionID, err)
+	for {
+		for _, event := range window.Records {
+			payload, payloadErr := event.Payload()
+			if payloadErr != nil {
+				t.Fatalf("read workflow assignment event for Session %s: %v", sessionID, payloadErr)
+			}
+			message, ok := payload.(session.MessageRecord)
+			if ok &&
+				message.MessageType != nil &&
+				*message.MessageType == session.MessageTypeWorkflowMode {
+				count++
+			}
 		}
-		message, ok := payload.(session.MessageRecord)
-		if ok &&
-			message.MessageType != nil &&
-			*message.MessageType == session.MessageTypeWorkflowMode {
-			count++
+		if window.ReachedStart {
+			break
+		}
+		seen := 0
+		window, err = eventLog.ReadSegmentBackward(window.StartOffset, func(session.EventRecord) bool {
+			seen++
+			return seen == recordsPerWindow
+		})
+		if err != nil {
+			t.Fatalf("read older workflow assignment records for Session %s: %v", sessionID, err)
 		}
 	}
 	return count
@@ -1273,6 +1287,9 @@ func TestManualMoveAssignmentPreparationFailureLeavesOriginCurrent(t *testing.T)
 			target = workflow.NodeIDOf(node)
 			break
 		}
+	}
+	if target == "" {
+		t.Fatal("workflow has no Agent target")
 	}
 	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID:       task.ID,

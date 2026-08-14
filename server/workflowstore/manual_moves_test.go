@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
@@ -118,12 +121,13 @@ func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *tes
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
+	assignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
 	aborted := false
 	_, err = store.ApplyManualMoveWithTargetAssignments(
 		ctx,
 		prepared,
 		noneManualMoveExecutionTargetCandidate(binding),
-		func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+		func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
 			version, versionErr := store.incrementWorkflowVersion(ctx, store.queries, workflowID)
 			if versionErr != nil {
 				return ManualMoveTargetAssignmentPreparation{}, versionErr
@@ -131,12 +135,15 @@ func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *tes
 			if version != record.Version+1 {
 				return ManualMoveTargetAssignmentPreparation{}, errors.New("workflow version did not advance")
 			}
-			return ManualMoveTargetAssignmentPreparation{
-				Abort: func(err error) error {
-					aborted = true
-					return err
-				},
-			}, nil
+			preparation, assignmentErr := manualMoveTargetAssignmentsForSession(inputs, assignmentSessionID)
+			if assignmentErr != nil {
+				return ManualMoveTargetAssignmentPreparation{}, assignmentErr
+			}
+			preparation.Abort = func(err error) error {
+				aborted = true
+				return err
+			}
+			return preparation, nil
 		},
 	)
 	if err == nil {
@@ -173,6 +180,7 @@ func TestManualMoveRetainedAssignmentBlocksWorkflowSaveUntilMoveCommits(t *testi
 	if err != nil {
 		t.Fatalf("PrepareManualMove: %v", err)
 	}
+	assignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
 	assignmentPrepared := make(chan struct{})
 	releaseAssignment := make(chan struct{})
 	var releaseOnce sync.Once
@@ -185,10 +193,10 @@ func TestManualMoveRetainedAssignmentBlocksWorkflowSaveUntilMoveCommits(t *testi
 			ctx,
 			prepared,
 			noneManualMoveExecutionTargetCandidate(binding),
-			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
 				close(assignmentPrepared)
 				<-releaseAssignment
-				return ManualMoveTargetAssignmentPreparation{}, nil
+				return manualMoveTargetAssignmentsForSession(inputs, assignmentSessionID)
 			},
 		)
 		moveDone <- moveErr
@@ -265,6 +273,8 @@ func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testin
 	}
 	firstPrepared := prepare(firstTask.ID)
 	secondPrepared := prepare(secondTask.ID)
+	firstAssignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
+	secondAssignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
 	firstWaiting := make(chan struct{})
 	releaseFirst := make(chan struct{})
 	var releaseOnce sync.Once
@@ -277,10 +287,10 @@ func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testin
 			ctx,
 			firstPrepared,
 			noneManualMoveExecutionTargetCandidate(binding),
-			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
 				close(firstWaiting)
 				<-releaseFirst
-				return ManualMoveTargetAssignmentPreparation{}, nil
+				return manualMoveTargetAssignmentsForSession(inputs, firstAssignmentSessionID)
 			},
 		)
 		firstDone <- moveErr
@@ -296,8 +306,8 @@ func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testin
 			ctx,
 			secondPrepared,
 			noneManualMoveExecutionTargetCandidate(binding),
-			func(context.Context, []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
-				return ManualMoveTargetAssignmentPreparation{}, nil
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				return manualMoveTargetAssignmentsForSession(inputs, secondAssignmentSessionID)
 			},
 		)
 		secondDone <- moveErr
@@ -314,6 +324,23 @@ func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testin
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first Manual Move: %v", err)
 	}
+}
+
+func createManualMoveAssignmentSession(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	binding metadata.Binding,
+) runtimeids.SessionID {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, config.App{
+		PersistenceRoot: store.metadata.PersistenceRoot(),
+		WorkspaceRoot:   binding.CanonicalRoot,
+	}))
+	if err != nil {
+		t.Fatalf("parse test Session ID: %v", err)
+	}
+	return sessionID
 }
 
 func TestApplyManualMoveRejectsScriptDestinationWithAgentFanoutWithoutAssignmentPreparation(t *testing.T) {

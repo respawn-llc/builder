@@ -639,10 +639,10 @@ func (s *currentNodeCompletionExecutionStub) ApplyManualMove(
 	if s.store == nil {
 		return workflowstore.ManualMoveResult{}, errors.New("workflow store is required")
 	}
-	if s.manualMoveAssignments != nil {
-		return s.store.ApplyManualMoveWithTargetAssignments(ctx, prepared, candidate, s.manualMoveAssignments)
+	if s.manualMoveAssignments == nil {
+		return workflowstore.ManualMoveResult{}, errors.New("Manual Move assignment preparer is required")
 	}
-	return s.store.ApplyManualMove(ctx, prepared, candidate)
+	return s.store.ApplyManualMoveWithTargetAssignments(ctx, prepared, candidate, s.manualMoveAssignments)
 }
 
 func workflowServiceTestManualMoveAssignments(

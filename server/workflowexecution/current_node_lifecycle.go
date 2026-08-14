@@ -575,6 +575,18 @@ func (c *CurrentNodeController) ApplyManualMove(
 				if err != nil {
 					return preparation, err
 				}
+				for _, input := range contexts {
+					if input.CurrentNode.AgentExecutionSelection == nil {
+						continue
+					}
+					key, keyErr := input.CurrentNode.Reference.Key()
+					if keyErr != nil {
+						return preparation, keyErr
+					}
+					if steers[key] == nil {
+						return preparation, fmt.Errorf("Manual Move target %v has no prepared assignment steer", input.CurrentNode.Reference)
+					}
+				}
 				preparedAssignments = steers
 				assignmentDiagnostic = preparation.Diagnostic
 				return preparation, nil

@@ -232,21 +232,10 @@ func applyManualMoveForStoreTestWithPreparation(
 			if observe != nil {
 				observe(inputs)
 			}
-			assignments := make([]ManualMoveTargetAssignment, 0, len(inputs))
-			for _, input := range inputs {
-				if input.Node.Kind == workflow.NodeKindScript {
-					continue
-				}
-				if input.Node.Kind != workflow.NodeKindAgent {
-					return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target is not executable")
-				}
+			return prepareManualMoveTargetAssignments(inputs, func(input CurrentNodeStartContext) (runtimeids.SessionID, error) {
 				sessionID := input.CurrentNode.SessionID
 				if sessionID != nil {
-					assignments = append(assignments, ManualMoveTargetAssignment{
-						CurrentNode: input.CurrentNode.Reference,
-						SessionID:   *sessionID,
-					})
-					continue
+					return *sessionID, nil
 				}
 				cfg := config.App{
 					PersistenceRoot: store.metadata.PersistenceRoot(),
@@ -264,16 +253,48 @@ func applyManualMoveForStoreTestWithPreparation(
 					cfg,
 				))
 				if err != nil {
-					return ManualMoveTargetAssignmentPreparation{}, err
+					return runtimeids.SessionID{}, err
 				}
-				assignments = append(assignments, ManualMoveTargetAssignment{
-					CurrentNode: input.CurrentNode.Reference,
-					SessionID:   freshSessionID,
-				})
-			}
-			return ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+				return freshSessionID, nil
+			})
 		},
 	)
+}
+
+func prepareManualMoveTargetAssignments(
+	inputs []CurrentNodeStartContext,
+	sessionFor func(CurrentNodeStartContext) (runtimeids.SessionID, error),
+) (ManualMoveTargetAssignmentPreparation, error) {
+	assignments := make([]ManualMoveTargetAssignment, 0, len(inputs))
+	for _, input := range inputs {
+		if input.CurrentNode.AgentExecutionSelection == nil {
+			if input.Node.Kind != workflow.NodeKindScript {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+			}
+			continue
+		}
+		if input.Node.Kind != workflow.NodeKindAgent {
+			return ManualMoveTargetAssignmentPreparation{}, errors.New("test Manual Move target execution shape is inconsistent")
+		}
+		sessionID, err := sessionFor(input)
+		if err != nil {
+			return ManualMoveTargetAssignmentPreparation{}, err
+		}
+		assignments = append(assignments, ManualMoveTargetAssignment{
+			CurrentNode: input.CurrentNode.Reference,
+			SessionID:   sessionID,
+		})
+	}
+	return ManualMoveTargetAssignmentPreparation{Assignments: assignments}, nil
+}
+
+func manualMoveTargetAssignmentsForSession(
+	inputs []CurrentNodeStartContext,
+	sessionID runtimeids.SessionID,
+) (ManualMoveTargetAssignmentPreparation, error) {
+	return prepareManualMoveTargetAssignments(inputs, func(CurrentNodeStartContext) (runtimeids.SessionID, error) {
+		return sessionID, nil
+	})
 }
 
 func linkWorkflow(t *testing.T, ctx context.Context, store *Store, projectID string, workflowID runtimeids.WorkflowID, isDefault bool) ProjectWorkflowLinkRecord {
