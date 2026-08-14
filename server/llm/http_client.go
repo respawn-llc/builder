@@ -21,7 +21,11 @@ var sharedCompressedHTTPTransport = httpcompression.Transport(sharedHTTPTranspor
 // NewHTTPClient returns an HTTP client that shares a tuned transport across
 // runtimes so local/LAN model backends can reuse warm connections aggressively.
 func NewHTTPClient(timeout time.Duration) *http.Client {
-	client := &http.Client{Transport: sharedCompressedHTTPTransport}
+	return newHTTPClient(sharedCompressedHTTPTransport, timeout)
+}
+
+func newHTTPClient(transport http.RoundTripper, timeout time.Duration) *http.Client {
+	client := &http.Client{Transport: transport}
 	if timeout > 0 {
 		client.Timeout = timeout
 	}
@@ -31,14 +35,11 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 // NewProviderHTTPClient returns the default model-provider client while
 // keeping loopback model servers on the uncompressed local transport.
 func NewProviderHTTPClient(baseURL string, timeout time.Duration) *http.Client {
+	transport := sharedCompressedHTTPTransport
 	if isLoopbackHTTPURL(baseURL) {
-		client := &http.Client{Transport: sharedHTTPTransport}
-		if timeout > 0 {
-			client.Timeout = timeout
-		}
-		return client
+		transport = sharedHTTPTransport
 	}
-	return NewHTTPClient(timeout)
+	return newHTTPClient(transport, timeout)
 }
 
 func isLoopbackHTTPURL(rawURL string) bool {
