@@ -20,7 +20,7 @@
     "build": "pnpm deps:policy && pnpm ts:policy && pnpm --recursive --if-present build"
   },
   "devDependencies": {
-    "postcss": "8.5.25",
+    "postcss": "8.5.26",
     "prettier": "^3.9.6"
   }
 }
