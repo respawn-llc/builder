@@ -355,6 +355,22 @@ func TestWorkflowTaskLifecycleGeneratedValidationPreservesMutationPredicates(t *
 	assertDynamicValid(t, branch)
 }
 
+func TestWorkflowTaskLifecycleGeneratedValidationRequiresWorkflowUUIDV4(t *testing.T) {
+	files, err := protodesc.NewFiles(buildWorkflowTaskLifecycleDescriptorSet(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := dynamicMessage(t, files, "kent.api.workflow_task.CreateRequest")
+	setStringField(t, request, "project_id", "project-1")
+	setStringField(t, request, "workflow_id", "123e4567-e89b-42d3-a456-426614174000")
+	setStringField(t, request, "title", "Task")
+	assertDynamicValid(t, request)
+
+	setStringField(t, request, "workflow_id", "123e4567-e89b-12d3-a456-426614174000")
+	assertDynamicInvalid(t, request)
+}
+
 func TestWorkflowTaskLifecycleGeneratedValidationRejectsBlankTaskIdentifiers(t *testing.T) {
 	files, err := protodesc.NewFiles(buildWorkflowTaskLifecycleDescriptorSet(t))
 	if err != nil {

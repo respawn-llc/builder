@@ -150,7 +150,10 @@ message CreateRequest {
       expression: "this.trim() != ''"
     }
   ];
-  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string title = 3 [
     (buf.validate.field).string.min_len = 1,
     (buf.validate.field).cel = {
@@ -684,7 +687,10 @@ message CreateSelectionDetails {
     not_in: [0]
   }];
   string project_id = 2 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 
   option (buf.validate.message).cel = {
     id: "kent.workflow_task.create_selection"

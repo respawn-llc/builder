@@ -174,8 +174,13 @@ message ListRequest {
       expression: "this == this.trim()"
     }
   ];
-  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
-  repeated string column_keys = 3 [(buf.validate.field).repeated.items.string.min_len = 1];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  repeated string column_keys = 3 [
+    (buf.validate.field).repeated.items.string.(kent.api.shared.workflow_key) = true
+  ];
   repeated TaskStatusKind status_kinds = 4 [(buf.validate.field).repeated.items.enum = {
     defined_only: true
     not_in: [0]
@@ -204,13 +209,19 @@ message ListRequest {
 
 message ListScope {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 }
 
 message ListItem {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
   string short_id = 2 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   optional string workflow_name = 4 [(buf.validate.field).string.min_len = 1];
   string title = 5 [(buf.validate.field).string.min_len = 1];
   google.protobuf.Timestamp created_at = 6 [(buf.validate.field).required = true];
@@ -379,6 +390,7 @@ message SearchGroup {
   ];
   string workflow_id = 5 [
     (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true,
     (buf.validate.field).cel = {
       id: "kent.workflow_task.search_group_workflow_id_trimmed"
       message: "workflow_id must be trimmed"
@@ -431,14 +443,20 @@ message SearchSuccess {
 
 message BoardGetRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   LabelFilter label_filter = 3 [(buf.validate.field).required = true];
   optional bool dependency_filter = 4;
 }
 
 message BoardNodeCardsListRequest {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string node_id = 3 [(buf.validate.field).string.min_len = 1];
   LabelFilter label_filter = 4 [(buf.validate.field).required = true];
   optional bool dependency_filter = 5;
@@ -465,7 +483,10 @@ message BoardProject {
 }
 
 message WorkflowPickerItem {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string display_name = 2 [(buf.validate.field).string.min_len = 1];
   string description = 3;
   int64 version = 4 [(buf.validate.field).int64 = {
@@ -564,7 +585,10 @@ message BoardTaskCard {
   string short_id = 2 [(buf.validate.field).string.min_len = 1];
   string title = 3 [(buf.validate.field).string.min_len = 1];
   MarkdownPreview preview = 4 [(buf.validate.field).required = true];
-  string workflow_id = 5 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 5 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   repeated string active_node_ids = 6 [(buf.validate.field).repeated.items.string.min_len = 1];
   TaskSourceWorkspace source_workspace = 7 [(buf.validate.field).required = true];
   TaskStatus status = 8 [(buf.validate.field).required = true];
@@ -597,7 +621,10 @@ message BoardGetSuccess {
 
 message BoardNodeCardsListSuccess {
   string project_id = 1 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 2 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string node_id = 3 [(buf.validate.field).string.min_len = 1];
   repeated BoardTaskCard cards = 4;
   optional int32 next_offset = 5 [(buf.validate.field).int32.gt = 0];
@@ -641,7 +668,10 @@ message GetRequest {
 message TaskSummary {
   string id = 1 [(buf.validate.field).string.min_len = 1];
   string project_id = 2 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string short_id = 4 [(buf.validate.field).string.min_len = 1];
   string title = 5 [(buf.validate.field).string.min_len = 1];
   optional string body_preview = 6;
@@ -653,7 +683,10 @@ message TaskSummary {
 }
 
 message TaskWorkflowSummary {
-  string workflow_id = 1 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   string display_name = 2 [(buf.validate.field).string.min_len = 1];
   int64 version = 3 [(buf.validate.field).int64 = {
     gte: 0
@@ -696,9 +729,9 @@ message ExecutionTarget {
 }
 
 message LiveSession {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
-  optional string session_name = 2 [(buf.validate.field).string.min_len = 1];
-  string node_display_name = 3 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  optional string session_name = 2 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
+  string node_display_name = 3 [(buf.validate.field).string.(kent.api.shared.nonblank) = true];
 }
 
 message CurrentScript {
@@ -723,7 +756,10 @@ message DependencyItem {
   string task_id = 1 [(buf.validate.field).string.min_len = 1];
   string short_id = 2 [(buf.validate.field).string.min_len = 1];
   string title = 3 [(buf.validate.field).string.min_len = 1];
-  string workflow_id = 4 [(buf.validate.field).string.uuid = true];
+  string workflow_id = 4 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   TaskStatus status = 5 [(buf.validate.field).required = true];
   optional DependencySatisfaction satisfaction = 6 [(buf.validate.field).enum = {
     defined_only: true
@@ -781,7 +817,9 @@ message TaskDetail {
   optional ExecutionTarget execution_target = 7;
   optional string worktree_path = 8 [(buf.validate.field).string.min_len = 1];
   repeated AttentionCurrentNode current_nodes = 9;
-  repeated LiveSession live_sessions = 10;
+  // Kent permits at most 100 concurrent agent runs. The matching bound lets
+  // portable Protovalidate CEL enumerate every adjacent pair without custom list extensions.
+  repeated LiveSession live_sessions = 10 [(buf.validate.field).repeated.max_items = 100];
   repeated CurrentScript current_scripts = 11;
   int32 retained_session_count = 12 [(buf.validate.field).int32.gte = 0];
   TaskStatus status = 13 [(buf.validate.field).required = true];
@@ -796,6 +834,20 @@ message TaskDetail {
   ];
   int32 attention_count = 16 [(buf.validate.field).int32.gte = 0];
   TaskDependencies dependencies = 17 [(buf.validate.field).required = true];
+
+  option (buf.validate.message).cel = {
+    id: "kent.workflow_task.live_sessions_sorted_unique"
+    message: "live_sessions must contain sorted unique session IDs"
+    expression:
+      "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, "
+      "17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, "
+      "33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, "
+      "49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, "
+      "65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, "
+      "81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, "
+      "97, 98, 99].all(index, index >= size(this.live_sessions) || "
+      "this.live_sessions[index - 1].session_id < this.live_sessions[index].session_id)"
+  };
 }
 
 message GetSuccess {
@@ -828,7 +880,10 @@ message ListScopeErrorDetails {
     not_in: [0]
   }];
   string project_id = 2 [(buf.validate.field).string.min_len = 1];
-  optional string workflow_id = 3 [(buf.validate.field).string.uuid = true];
+  optional string workflow_id = 3 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
 
   option (buf.validate.message).cel = {
     id: "kent.workflow_task.list_scope_error"

@@ -1,6 +1,7 @@
 package migrationcheck
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -288,6 +289,9 @@ func TestWorkflowTaskReadGeneratedValidationPreservesReadPredicates(t *testing.T
 	appendEnumField(t, list, "attention_kinds", 1)
 	appendEnumField(t, list, "attention_kinds", 1)
 	assertDynamicValid(t, list)
+	appendStringField(t, list, "column_keys", "Bad Key")
+	assertDynamicInvalid(t, list)
+	list.Mutable(fds(t, list, "column_keys")).List().Truncate(0)
 	sort := dynamicMessage(t, files, "kent.api.workflow_task.ListSort")
 	setEnumField(t, sort, "field", 1)
 	setEnumField(t, sort, "direction", 1)
@@ -349,6 +353,62 @@ func TestWorkflowTaskReadGeneratedValidationPreservesReadPredicates(t *testing.T
 	assertDynamicValid(t, dependencies)
 	setInt32Field(t, dependencies, "blocker_count", 1)
 	assertDynamicInvalid(t, dependencies)
+}
+
+func TestWorkflowTaskReadGeneratedValidationRequiresWorkflowUUIDV4(t *testing.T) {
+	set := buildWorkflowTaskReadDescriptorSet(t)
+	files, err := protodesc.NewFiles(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	noneFilter := dynamicMessage(t, files, "kent.api.workflow_task.LabelFilter")
+	setMessageField(t, noneFilter, "none", dynamicMessage(t, files, "google.protobuf.Empty"))
+	request := dynamicMessage(t, files, "kent.api.workflow_task.ListRequest")
+	setStringField(t, request, "project_id", "project-1")
+	setStringField(t, request, "workflow_id", validWorkflowTaskReadUUID)
+	setMessageField(t, request, "label_filter", noneFilter)
+	assertDynamicValid(t, request)
+
+	setStringField(t, request, "workflow_id", "123e4567-e89b-12d3-a456-426614174000")
+	assertDynamicInvalid(t, request)
+}
+
+func TestWorkflowTaskReadGeneratedValidationRequiresSortedUniqueLiveSessions(t *testing.T) {
+	set := buildWorkflowTaskReadDescriptorSet(t)
+	files, err := protodesc.NewFiles(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail := validTaskDetail(t, files)
+	first := validLiveSession(t, files, "session-a")
+	second := validLiveSession(t, files, "session-b")
+	appendMessageField(t, detail, "live_sessions", first)
+	appendMessageField(t, detail, "live_sessions", second)
+	assertDynamicValid(t, detail)
+
+	setStringField(t, second, "session_id", "session-a")
+	assertDynamicInvalid(t, detail)
+
+	setStringField(t, second, "session_id", "session-0")
+	assertDynamicInvalid(t, detail)
+
+	assertDynamicInvalid(t, validLiveSession(t, files, " "))
+
+	blankName := validLiveSession(t, files, "session-c")
+	setStringField(t, blankName, "session_name", " ")
+	assertDynamicInvalid(t, blankName)
+
+	blankNodeName := validLiveSession(t, files, "session-c")
+	setStringField(t, blankNodeName, "node_display_name", " ")
+	assertDynamicInvalid(t, blankNodeName)
+
+	tooMany := validTaskDetail(t, files)
+	for index := 0; index <= 100; index++ {
+		appendMessageField(t, tooMany, "live_sessions", validLiveSession(t, files, fmt.Sprintf("session-%03d", index)))
+	}
+	assertDynamicInvalid(t, tooMany)
 }
 
 func TestWorkflowTaskReadGeneratedValidationRequiresLabelUUIDV4(t *testing.T) {
@@ -448,6 +508,11 @@ func appendEnumField(t *testing.T, message protoreflect.Message, name protorefle
 	message.Mutable(fds(t, message, name)).List().Append(protoreflect.ValueOfEnum(value))
 }
 
+func appendStringField(t *testing.T, message protoreflect.Message, name protoreflect.Name, value string) {
+	t.Helper()
+	message.Mutable(fds(t, message, name)).List().Append(protoreflect.ValueOfString(value))
+}
+
 func appendMessageField(t *testing.T, message protoreflect.Message, name protoreflect.Name, value protoreflect.ProtoMessage) {
 	t.Helper()
 	message.Mutable(fds(t, message, name)).List().Append(protoreflect.ValueOfMessage(value.ProtoReflect()))
@@ -541,6 +606,51 @@ func validTaskDependencies(t *testing.T, files *protoregistry.Files) *dynamicpb.
 	appendMessageField(t, dependencies, "directions", direction(1, true))
 	appendMessageField(t, dependencies, "directions", direction(2, false))
 	return dependencies
+}
+
+func validTaskDetail(t *testing.T, files *protoregistry.Files) *dynamicpb.Message {
+	t.Helper()
+	summary := dynamicMessage(t, files, "kent.api.workflow_task.TaskSummary")
+	setStringField(t, summary, "id", "task-1")
+	setStringField(t, summary, "project_id", "project-1")
+	setStringField(t, summary, "workflow_id", validWorkflowTaskReadUUID)
+	setStringField(t, summary, "short_id", "KENT-1")
+	setStringField(t, summary, "title", "Task")
+	setMessageField(t, summary, "created_at", validTimestamp(t, files))
+	setMessageField(t, summary, "updated_at", validTimestamp(t, files))
+
+	project := dynamicMessage(t, files, "kent.api.workflow_task.BoardProject")
+	setStringField(t, project, "project_key", "KENT")
+	setStringField(t, project, "display_name", "Kent")
+	setStringField(t, project, "default_workspace_id", "workspace-1")
+
+	workflow := dynamicMessage(t, files, "kent.api.workflow_task.TaskWorkflowSummary")
+	setStringField(t, workflow, "workflow_id", validWorkflowTaskReadUUID)
+	setStringField(t, workflow, "display_name", "Workflow")
+
+	sourceWorkspace := dynamicMessage(t, files, "kent.api.workflow_task.TaskSourceWorkspace")
+	setStringField(t, sourceWorkspace, "workspace_id", "workspace-1")
+	setStringField(t, sourceWorkspace, "display_name", "Workspace")
+	setStringField(t, sourceWorkspace, "root_path", "/workspace")
+	setEnumField(t, sourceWorkspace, "availability", 1)
+
+	detail := dynamicMessage(t, files, "kent.api.workflow_task.TaskDetail")
+	setMessageField(t, detail, "summary", summary)
+	setMessageField(t, detail, "project", project)
+	setMessageField(t, detail, "workflow", workflow)
+	setMessageField(t, detail, "source_workspace", sourceWorkspace)
+	setMessageField(t, detail, "status", validTaskStatus(t, files))
+	setMessageField(t, detail, "actions", dynamicMessage(t, files, "kent.api.workflow_task.TaskActions"))
+	setMessageField(t, detail, "dependencies", validTaskDependencies(t, files))
+	return detail
+}
+
+func validLiveSession(t *testing.T, files *protoregistry.Files, sessionID string) *dynamicpb.Message {
+	t.Helper()
+	session := dynamicMessage(t, files, "kent.api.workflow_task.LiveSession")
+	setStringField(t, session, "session_id", sessionID)
+	setStringField(t, session, "node_display_name", "Node")
+	return session
 }
 
 func assertSearchHitOrdinalsStrictlyAscending(t *testing.T, success protoreflect.Message) {

@@ -42,6 +42,7 @@ import {
   schema_kent_api_shared_validation as sharedValidation,
   schema_kent_api_server_server as server,
   schema_kent_api_transcript_transcript as transcript,
+  schema_kent_api_workflow_task_read as workflowTaskRead,
 } from "../dist/index.js";
 import {
   schema_fixture_method_policy_fixture as methodPolicyFixture,
@@ -115,6 +116,8 @@ const validator = createValidator({
     promptCommandValidation.canonical_name,
     sessionLaunchValidation.scoped_session_id,
     sharedValidation.canonical_uuid_v4,
+    sharedValidation.nonblank,
+    sharedValidation.workflow_key,
   ),
 });
 const javaScriptSafeIntegerMaximum = 9007199254740991n;
@@ -210,6 +213,83 @@ test("new schema slice executes generated validation in TypeScript", () => {
     },
   }));
 });
+
+test("workflow task generated validation matches key, identity, and live-session invariants", () => {
+  const noneFilter = create(workflowTaskRead.LabelFilterSchema, {
+    filter: { case: "none", value: create(EmptySchema) },
+  });
+  const request = create(workflowTaskRead.ListRequestSchema, {
+    projectId: "project-1",
+    workflowId: "123e4567-e89b-42d3-a456-426614174000",
+    columnKeys: ["current_node"],
+    labelFilter: noneFilter,
+  });
+  validateGeneratedMessage(workflowTaskRead.ListRequestSchema, request);
+
+  request.columnKeys = ["Bad Key"];
+  assert.throws(() => validateGeneratedMessage(workflowTaskRead.ListRequestSchema, request));
+  request.columnKeys = [];
+  request.workflowId = "123e4567-e89b-12d3-a456-426614174000";
+  assert.throws(() => validateGeneratedMessage(workflowTaskRead.ListRequestSchema, request));
+
+  const detail = validWorkflowTaskDetail();
+  validateGeneratedMessage(workflowTaskRead.TaskDetailSchema, detail);
+  detail.liveSessions[1].sessionId = "session-a";
+  assert.throws(() => validateGeneratedMessage(workflowTaskRead.TaskDetailSchema, detail));
+});
+
+function validWorkflowTaskDetail() {
+  const timestamp = create(TimestampSchema, { seconds: 1n });
+  const availability = create(workflowTaskRead.DependencyAddAvailabilitySchema, {
+    availability: {
+      case: "available",
+      value: create(workflowTaskRead.DependencyAvailableSchema, { remainingCapacity: 1 }),
+    },
+  });
+  const direction = (kind, blockedBy) => create(workflowTaskRead.DependencyDirectionProjectionSchema, {
+    direction: kind,
+    totalCount: 0,
+    unsatisfiedCount: blockedBy ? 0 : undefined,
+    items: [],
+    addAvailability: availability,
+  });
+
+  return create(workflowTaskRead.TaskDetailSchema, {
+    summary: create(workflowTaskRead.TaskSummarySchema, {
+      id: "task-1",
+      projectId: "project-1",
+      workflowId: "123e4567-e89b-42d3-a456-426614174000",
+      shortId: "KENT-1",
+      title: "Task",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }),
+    project: create(workflowTaskRead.BoardProjectSchema, {
+      projectKey: "KENT",
+      displayName: "Kent",
+      defaultWorkspaceId: "workspace-1",
+    }),
+    workflow: create(workflowTaskRead.TaskWorkflowSummarySchema, {
+      workflowId: "123e4567-e89b-42d3-a456-426614174000",
+      displayName: "Workflow",
+    }),
+    sourceWorkspace: create(workflowTaskRead.TaskSourceWorkspaceSchema, {
+      workspaceId: "workspace-1",
+      displayName: "Workspace",
+      rootPath: "/workspace",
+      availability: 1,
+    }),
+    liveSessions: [
+      create(workflowTaskRead.LiveSessionSchema, { sessionId: "session-a", nodeDisplayName: "Node" }),
+      create(workflowTaskRead.LiveSessionSchema, { sessionId: "session-b", nodeDisplayName: "Node" }),
+    ],
+    status: create(workflowTaskRead.TaskStatusSchema, { kind: 1, nativeState: 1 }),
+    actions: create(workflowTaskRead.TaskActionsSchema),
+    dependencies: create(workflowTaskRead.TaskDependenciesSchema, {
+      directions: [direction(1, true), direction(2, false)],
+    }),
+  });
+}
 
 function validSchemaConventionsFixture() {
   return create(SchemaConventionsFixtureSchema, {

@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "f4b02c1c6ec143d78ca7f627216e0ebf5b5ac3229afe682ac2b706b0f23b3e12"
+const reviewedExceptionalWireFingerprint = "f34437353384b6bdcda38e28fb06617b97d99b30cb45a309196456b0f8b79a98"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
@@ -68,14 +68,14 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[serverapi.WorkflowAttentionListResponse]("kent.api.workflow_task.AttentionListSuccess", WireExceptionFieldReshape, "0bdafdde8a2a6a798774ca203ce80eb19f7c55513e2cca29c1315426c182f390", "24ddfb6a62549d889fe9c6c04b0e90d576aa32bcd021efc9b6e4fef6bb04e217"),
 		wireExceptionSignoff[serverapi.WorkflowTaskLabelFilter]("kent.api.workflow_task.LabelFilter", WireExceptionOneofReshape, "6f48e45f62a5064d5229d75e6a452ea08f121792bcdb0230236cc736ffc60c8d", "6ce362cebcf0f863d488ac27ffa9f64cb50b54072866dba11457be6a54241728"),
 		wireExceptionSignoff[serverapi.WorkflowBoard]("kent.api.workflow_task.Board", WireExceptionFieldReshape, "414d41793329da8392bb4274f1fe3722670333e0e8cd7954c21767b25542e550", "15a94c5e7cf5ae0151a0f860e0e30844bc924e3e97c6e1cfb48fcfed69eee98c"),
-		wireExceptionSignoff[serverapi.WorkflowBoardNodeCardsListResponse]("kent.api.workflow_task.BoardNodeCardsListSuccess", WireExceptionFieldReshape, "35db67e7109a016dcc682ec69e13c22f6c11ab92adb21a761585b65293057be2", "7a67d6af4a16d2176dd599525b746371b7928137e6beec4097c7975d4a7fecb4"),
+		wireExceptionSignoff[serverapi.WorkflowBoardNodeCardsListResponse]("kent.api.workflow_task.BoardNodeCardsListSuccess", WireExceptionFieldReshape, "35db67e7109a016dcc682ec69e13c22f6c11ab92adb21a761585b65293057be2", "f9a6edd3384f5cf7652a62f60f1750837138c5cd03b5255e62a6956cca1b477e"),
 		wireExceptionSignoff[protocol.WorkflowProjectEventParams]("kent.api.workflow_definition.ProjectEvent", WireExceptionFieldReshape, "0da93c2e200cf283e9cd2a2064ea0eb303cbaf35077dacd0aa1d1a25045b99e8", "12c3137315e1bb9ee8a182ca2e71394d2be10d15c499b1eca4aa967d7b5031c0"),
 		wireExceptionSignoff[serverapi.WorkflowTaskActivityListResponse]("kent.api.workflow_task.ActivityListSuccess", WireExceptionFieldReshape, "b7b2b2b485f5a9b082a32f397eacdfd06052de22dcae1bb3a9e08062e00b54f6", "9c641379249644575c482c0d91609683a346c86f445ebf7941c2c7689b1b7d9b"),
 		wireExceptionSignoff[serverapi.WorkflowTaskApproveResponse]("kent.api.workflow_task.ApproveSuccess", WireExceptionFieldReshape, "b9be459f0f0427762b5037b53b9089f4c9af13f86330a802e8ffc843c4623cb3", "4578f980aaa50bb8a2bddbebb0d499bd647df6722cec47a1514e0568094c0f2a"),
 		wireExceptionSignoff[serverapi.WorkflowTaskAttentionListResponse]("kent.api.workflow_task.TaskAttentionListSuccess", WireExceptionFieldReshape, "f31e3567162b0e0ba2c5367757905b9ba142f997ea3b4808f480b0e8887b0d85", "dbe961424af57427037c83a92e1fff3192ec4c620d49ad127f39804f1df55397"),
 		wireExceptionSignoff[serverapi.WorkflowTaskComment]("kent.api.workflow_task.Comment", WireExceptionFieldReshape, "db17323a91312bc73b28d3374c5b646fb4e00ee2996df5a55b65cc2a8df6e233", "9220a5eb228803ac761a780fff614ef709f7e0a1b362c5e4104aa8e082d35e0f"),
 		wireExceptionSignoff[serverapi.WorkflowTaskCommentListResponse]("kent.api.workflow_task.CommentListSuccess", WireExceptionFieldReshape, "da959845a61c581a3a05b5ce3ecdbdcf0f0f827942135647397cd40513c28b4e", "0b20e2a1259e4084011dd6e430fd4ccea27308ae66e6003c4cab0b16c3f93bee"),
-		wireExceptionSignoff[serverapi.WorkflowTaskSummary]("kent.api.workflow_task.TaskSummary", WireExceptionFieldReshape, "6fd3342a1b7a3df8be7196a76241828b2916ba8952b66541288bcfa0ab5cd44a", "338dd295bf256eb91c6636c6c94902f65546ecf39a38d3b8e0fbca0dfb751d9b"),
+		wireExceptionSignoff[serverapi.WorkflowTaskSummary]("kent.api.workflow_task.TaskSummary", WireExceptionFieldReshape, "6fd3342a1b7a3df8be7196a76241828b2916ba8952b66541288bcfa0ab5cd44a", "de15ea0f23a2f4b84c098023a8d6024ab4545195ac2e2c4e690e151c3574b870"),
 		wireExceptionSignoff[serverapi.WorkflowTaskListResponse]("kent.api.workflow_task.ListSuccess", WireExceptionFieldReshape, "2443c53e5331c85831c069d7e2826def12f0cc16794387088493185d14160ea5", "73b29c6c6f089a46134de2da7ca43e6feb7cd1deb21c24e08c5ba2bfd2e82901"),
 		wireExceptionSignoff[serverapi.WorkflowTaskMovePreviewResponse]("kent.api.workflow_task.MovePreviewSuccess", WireExceptionFieldReshape, "cf0872e7613e2b3cefca7b828f2bb6c92428deaa46cd30f50df03e0f3ab563a2", "4530b08f055552d295b9e02e16063b4e5e8e446d1f908a4e0580c1917f251d1d"),
 		wireExceptionSignoff[serverapi.WorkflowTaskMoveResponse]("kent.api.workflow_task.MoveSuccess", WireExceptionOneofReshape, "c1ccf0a0b5b7cd47f1d877fb33f8c8014a7ce159040e4d0adf3b7d5615e8b989", "18b6605421151ac40daeab8bf2d6ad762f26c1880bdde3aaf4d2a845d2e67202"),
