@@ -38,21 +38,29 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 	builder := e.activeMetaContextBuilder(e.cfg.Model, e.cfg.SkillPolicy)
 	options := baseMetaContextBuildOptions(true)
 	options.WorktreeReminder = session.CloneWorktreeReminderState(e.store.Meta().WorktreeReminder)
-	steer := func(options metaContextBuildOptions) error {
+	steer := func(options metaContextBuildOptions) (session.CommitReceipt, error) {
 		metaResult, err := builder.Build(options)
 		if err != nil {
-			return err
+			return session.CommitReceipt{}, err
 		}
-		if err := e.steerMetaContextBuildResult(stepID, metaResult); err != nil {
-			return err
-		}
-		e.baseMetaInjected = true
-		return nil
+		return e.steerMetaContextBuildResult(stepID, metaResult)
 	}
 	if e.workflowPromptActive() {
-		return e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, options, func(resolved metaContextBuildOptions, _ bool) error {
-			return steer(resolved)
+		var committedErr error
+		applyErr := e.withResolvedWorkflowMetaContext(ctx, workflowTaskPromptTriggerTaskDelivery, workflowMetaContextDeliveryConsume, options, func(resolved metaContextBuildOptions, _ bool) error {
+			receipt, err := steer(resolved)
+			if receipt.Committed {
+				e.baseMetaInjected = true
+				committedErr = err
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			e.baseMetaInjected = true
+			return nil
 		})
+		return errors.Join(applyErr, committedErr)
 	}
 	meta := e.store.Meta()
 	if e.cfg.HeadlessMode != meta.HeadlessActive {
@@ -65,9 +73,14 @@ func (e *Engine) steerFreshMetaContext(ctx context.Context, stepID string) error
 	if goal, ok := e.goalContinuation().activeGoal(); ok {
 		options.ActiveGoal = &goal
 	}
-	if err := steer(options); err != nil {
+	receipt, err := steer(options)
+	if receipt.Committed {
+		e.baseMetaInjected = true
+	}
+	if err != nil {
 		return err
 	}
+	e.baseMetaInjected = true
 	if e.cfg.HeadlessMode != meta.HeadlessActive {
 		return e.store.SetHeadlessActive(e.cfg.HeadlessMode)
 	}
@@ -108,8 +121,13 @@ func (e *Engine) activeMetaContextBuilder(model string, skillPolicy config.Skill
 }
 
 func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPriority, messages []llm.Message) error {
+	_, err := e.steerMetaContextIfChangedWithReceipt(stepID, priority, messages)
+	return err
+}
+
+func (e *Engine) steerMetaContextIfChangedWithReceipt(stepID string, priority steeringPriority, messages []llm.Message) (session.CommitReceipt, error) {
 	if len(messages) == 0 {
-		return nil
+		return session.CommitReceipt{}, nil
 	}
 	activeItems := e.transcriptRuntimeState().SnapshotItems()
 	pending := make([]llm.Message, 0, len(messages))
@@ -120,9 +138,12 @@ func (e *Engine) steerMetaContextIfChanged(stepID string, priority steeringPrior
 		pending = append(pending, message)
 	}
 	if len(pending) == 0 {
-		return nil
+		return session.CommitReceipt{}, nil
 	}
-	return e.steer(stepID, steerMessagesWithPersistenceIntent(priority, steeringMessageEventDefault, true, pending))
+	intent := steerMessagesWithPersistenceIntent(priority, steeringMessageEventDefault, true, pending)
+	receipt := session.CommitReceipt{}
+	intent.items[len(intent.items)-1].commitReceipt = &receipt
+	return receipt, e.steer(stepID, intent)
 }
 
 func latestActiveMetaContextMatches(items []llm.ResponseItem, desired llm.Message) bool {
@@ -368,24 +389,24 @@ func (e *Engine) steerBaseMetaContext(
 	if err != nil {
 		return err
 	}
-	return e.steerMetaContextBuildResult(stepID, metaResult)
+	_, err = e.steerMetaContextBuildResult(stepID, metaResult)
+	return err
 }
-func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaContextBuildResult) error {
-	intents := make([]steeringIntent, 0, 2)
+func (e *Engine) steerMetaContextBuildResult(stepID string, metaResult metaContextBuildResult) (session.CommitReceipt, error) {
 	if warning := strings.TrimSpace(strings.Join(metaResult.SkillWarnings, "\n")); warning != "" {
-		intents = append(intents, steerLocalEntryIntent(storedLocalEntry{
+		if err := e.steer(stepID, steerLocalEntryIntent(storedLocalEntry{
 			Visibility: transcript.EntryVisibilityOngoing,
 			Role:       string(transcript.EntryRoleWarning),
 			Text:       warning,
-		}))
+		})); err != nil {
+			return session.CommitReceipt{}, err
+		}
 	}
-	intents = append(intents, steerMessagesWithPersistenceIntent(
+	return e.steerMetaContextIfChangedWithReceipt(
+		stepID,
 		steeringPriorityRuntimeContext,
-		steeringMessageEventDefault,
-		true,
 		metaResult.Projection().Messages(),
-	))
-	return e.steer(stepID, intents...)
+	)
 }
 
 // steerHeadlessModeTransitionIfNeeded reconciles the launch mode with the

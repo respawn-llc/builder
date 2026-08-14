@@ -2,10 +2,13 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"core/prompts"
 	"core/server/llm"
+	"core/server/session"
+	"core/server/session/sessiontest"
 	"core/server/workflowruntime"
 	"core/shared/runtimeids"
 )
@@ -51,6 +54,54 @@ func TestFreshWorkflowRequestMatchesPostCompactionMetaOrder(t *testing.T) {
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeEnvironment,
 	})
+}
+
+func TestFreshWorkflowMetaContextRetriesCommittedObserverFailureWithoutDuplicateContext(t *testing.T) {
+	t.Parallel()
+	observerErr := errors.New("fresh meta-context observer failed")
+	gate := sessiontest.NewPersistenceGate(runtimeTestSessionPersistence)
+	store := mustCreateTestSessionAt(t, t.TempDir(), session.WithPersistenceObserver(gate))
+	currentNode := mustTestCurrentNodeReference(t, "task", "node", nil)
+	engine := mustNewWorkflowTestEngine(
+		t,
+		store,
+		&fakeClient{},
+		&workflowruntime.CurrentNodeExecutionConfig{
+			ScopeID:        runtimeids.NewExecutionScopeID(),
+			CompletionMode: workflowruntime.CompletionModeTool,
+			Controller:     &externallyCompletedWorkflowController{},
+			Instructions:   workflowruntime.TaskInstructions{CurrentNode: currentNode},
+		},
+		Config{Model: "gpt-5"},
+	)
+	gate.FailNext(observerErr)
+
+	if err := engine.ensureMetaContextForRequest(context.Background(), "fresh"); !errors.Is(err, observerErr) {
+		t.Fatalf("first fresh meta-context error = %v, want %v", err, observerErr)
+	}
+	if engine.baseMetaInjected {
+		t.Fatal("fresh meta-context marked injected before the complete projection committed")
+	}
+
+	if err := engine.ensureMetaContextForRequest(context.Background(), "retry"); err != nil {
+		t.Fatalf("retry fresh meta-context: %v", err)
+	}
+	if !engine.baseMetaInjected {
+		t.Fatal("fresh meta-context remained uninjected after committed retry")
+	}
+	if trigger := engine.currentNodeExecutionSnapshot().delivery.trigger(workflowTaskPromptTriggerTaskDelivery); trigger != workflowTaskPromptTriggerTaskDelivery {
+		t.Fatalf("workflow delivery trigger after retry = %v, want ordinary task delivery", trigger)
+	}
+
+	counts := make(map[llm.MessageType]int)
+	for _, message := range engine.transcriptRuntimeState().SnapshotMessages() {
+		if message.MessageType != nil {
+			counts[*message.MessageType]++
+		}
+	}
+	if counts[llm.MessageTypeWorkflowMode] != 1 || counts[llm.MessageTypeEnvironment] != 1 {
+		t.Fatalf("fresh workflow meta-context counts = %+v, want one Workflow and one Environment", counts)
+	}
 }
 
 func assertFreshRequestMatchesCompactionProjection(t *testing.T, engine *Engine, want []llm.MessageType) {
