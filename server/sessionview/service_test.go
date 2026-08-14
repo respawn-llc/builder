@@ -87,7 +87,7 @@ func (r failingSessionStoreResolver) ResolveSessionStore(context.Context, string
 }
 
 type missingRuntimeMainViewSnapshotProvider struct {
-	runtimeReadModelSnapshotProvider
+	runtimeMainViewSnapshotProvider
 }
 
 func (missingRuntimeMainViewSnapshotProvider) RuntimeMainViewSnapshot(string) (clientui.RuntimeMainView, bool) {
@@ -113,14 +113,14 @@ func (*serviceBlockingLLM) ProviderCapabilities(context.Context) (llm.ProviderCa
 	return llm.ProviderCapabilities{ProviderID: "openai", SupportsResponsesAPI: true, IsOpenAIFirstParty: true}, nil
 }
 
-func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
+func TestServiceGetSessionMainViewUsesPublishedRuntimeProjectionWhenAttached(t *testing.T) {
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	client := &serviceBlockingLLM{started: started, release: release}
 	fixture := newSessionViewRuntimeFixture(t, store, client)
-	svc := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
+	svc := NewService(newTestSessionResolver(store), fixture.activity, nil)
 	handle := fixture.startUserTurn(t, "run tools")
 	select {
 	case <-started:
@@ -141,10 +141,10 @@ func TestServiceGetSessionMainViewUsesLiveRuntimeWhenAttached(t *testing.T) {
 	}
 }
 
-func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t *testing.T) {
+func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForPublishedRuntime(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, fixture.activity, fixture.authority, nil).
+	response, err := NewService(failingSessionStoreResolver{err: errors.New("store unavailable")}, fixture.activity, nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get live main view: %v", err)
@@ -157,7 +157,7 @@ func TestServiceGetSessionMainViewDoesNotRequireStoreResolutionForLiveRuntime(t 
 func TestServiceGetSessionMainViewReturnsPublishedProjectionWhileRuntimeMutationIsAdmitted(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	service := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil)
+	service := NewService(newTestSessionResolver(store), fixture.activity, nil)
 	before, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{
 		SessionID: store.Meta().SessionID,
 	})
@@ -229,7 +229,7 @@ func TestServiceGetSessionMainViewReturnsPublishedProjectionWhileRuntimeMutation
 func TestServiceGetSessionMainViewFallsBackToPersistedViewWhenLiveProjectionIsMissing(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
 	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
-	live, err := NewService(newTestSessionResolver(store), fixture.activity, fixture.authority, nil).
+	live, err := NewService(newTestSessionResolver(store), fixture.activity, nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get completed live Main View: %v", err)
@@ -237,8 +237,8 @@ func TestServiceGetSessionMainViewFallsBackToPersistedViewWhenLiveProjectionIsMi
 	if !live.MainView.Status.AutoCompactionEnabled {
 		t.Fatalf("live Main View did not establish distinct Runtime status: %+v", live.MainView.Status)
 	}
-	activity := missingRuntimeMainViewSnapshotProvider{runtimeReadModelSnapshotProvider: fixture.activity}
-	response, err := NewService(newTestSessionResolver(store), activity, fixture.authority, nil).
+	activity := missingRuntimeMainViewSnapshotProvider{runtimeMainViewSnapshotProvider: fixture.activity}
+	response, err := NewService(newTestSessionResolver(store), activity, nil).
 		GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get persisted Main View fallback: %v", err)
@@ -252,6 +252,34 @@ func TestServiceGetSessionMainViewFallsBackToPersistedViewWhenLiveProjectionIsMi
 	}
 	if err := response.MainView.Version.Validate(); err != nil {
 		t.Fatalf("persisted Main View version = %+v, want retained client revision", response.MainView.Version)
+	}
+}
+
+func TestServiceGetSessionMainViewFallsBackToPersistedViewAfterRuntimeRetires(t *testing.T) {
+	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
+	fixture := newSessionViewRuntimeFixture(t, store, &serviceFakeLLM{})
+	service := NewService(newTestSessionResolver(store), fixture.activity, nil)
+
+	live, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("get live Main View: %v", err)
+	}
+	if live.MainView.Activity.State != clientui.RuntimeActivityRegisteredIdle {
+		t.Fatalf("live Main View activity = %+v, want registered idle", live.MainView.Activity)
+	}
+	if err := fixture.authority.Close(t.Context()); err != nil {
+		t.Fatalf("retire Runtime: %v", err)
+	}
+
+	retired, err := service.GetSessionMainView(t.Context(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
+	if err != nil {
+		t.Fatalf("get retired Main View fallback: %v", err)
+	}
+	if retired.MainView.Activity.State != clientui.RuntimeActivityUnavailable {
+		t.Fatalf("retired Main View activity = %+v, want unavailable persisted fallback", retired.MainView.Activity)
+	}
+	if retired.MainView.Session.SessionID != store.Meta().SessionID {
+		t.Fatalf("retired Main View Session = %+v, want persisted Session", retired.MainView.Session)
 	}
 }
 
@@ -270,7 +298,7 @@ func TestServiceGetSessionMainViewFallsBackToDurableSessionState(t *testing.T) {
 	}
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleUser, "hello", nil, nil)
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleAssistant, "final answer", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)
@@ -304,7 +332,7 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 		CwdRelpath:       ".",
 		EffectiveWorkdir: dir,
 	}
-	svc := NewService(newTestSessionResolver(store), nil, nil, staticExecutionTargetResolver{target: target})
+	svc := NewService(newTestSessionResolver(store), nil, staticExecutionTargetResolver{target: target})
 
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
@@ -319,7 +347,7 @@ func TestServiceGetSessionMainViewIncludesExecutionTarget(t *testing.T) {
 }
 
 func TestServiceRequiresSessionStoreResolverForDormantReads(t *testing.T) {
-	svc := NewService(nil, nil, nil, nil)
+	svc := NewService(nil, nil, nil)
 
 	if _, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: "session-1"}); err == nil || !errors.Is(err, errSessionStoreResolverRequired) {
 		t.Fatalf("expected explicit session store resolver error for main view, got %v", err)
@@ -336,7 +364,7 @@ func TestServiceWithCacheWarningModeChangesSubsequentDormantReads(t *testing.T) 
 		Scope:  session.CacheScopeConversation,
 		Reason: session.CacheWarningReasonNonPostfix,
 	})
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -360,7 +388,7 @@ func TestServiceSessionTranscriptTailEntriesObservesRevisionAdvance(t *testing.T
 	dir := t.TempDir()
 	store := newSessionViewStore(t, dir, "ws", dir)
 	appendSessionViewMessage(t, store, "11111111-1111-4111-8111-111111111111", session.MessageRoleAssistant, "line 0", sessionViewMessagePhasePointer(session.MessagePhaseFinal), nil)
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	first, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -391,7 +419,7 @@ func TestServiceDormantHistoryReplacementStartsNewTranscriptSegment(t *testing.T
 		Mode:   session.CompactionModeAuto,
 	})
 
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -424,7 +452,7 @@ func TestServiceSessionTranscriptTailEntriesKeepsDormantPersistedCompactionSumma
 		Text:       sessionViewStringPointer("condensed summary"),
 	})
 	appendSessionViewMessage(t, store, "step-1", session.MessageRoleDeveloper, "Last user message before handoff\n\ncarry this forward", nil, sessionViewMessageTypePointer(session.MessageTypeCompactionPreservedUserMessage))
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 
 	entries, err := svc.SessionTranscriptTailEntries(context.Background(), store.Meta().SessionID)
 	if err != nil {
@@ -464,7 +492,7 @@ func TestServiceDormantReadsDoNotMutatePersistedEvents(t *testing.T) {
 		t.Fatalf("read events file before: %v", err)
 	}
 
-	svc := NewService(newTestSessionResolver(store), nil, nil, nil)
+	svc := NewService(newTestSessionResolver(store), nil, nil)
 	resp, err := svc.GetSessionMainView(context.Background(), serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID})
 	if err != nil {
 		t.Fatalf("get session main view: %v", err)

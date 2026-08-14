@@ -14,7 +14,6 @@ import (
 	"core/server/llm"
 	"core/server/runtime"
 	"core/server/session"
-	"core/server/sessionruntime"
 	"core/server/worktree"
 	servicecontract "core/shared/apicontract"
 	"core/shared/clientui"
@@ -78,8 +77,7 @@ func (s *Service) WithExecutionEnvironmentGit(inspector *worktree.GitInspector) 
 
 func NewService(
 	sessions SessionStoreResolver,
-	activity runtimeReadModelSnapshotProvider,
-	authority *sessionruntime.Authority,
+	mainViews runtimeMainViewSnapshotProvider,
 	targets ExecutionTargetResolver,
 ) *Service {
 	svc := &Service{
@@ -89,7 +87,7 @@ func NewService(
 	if persisted, ok := sessions.(PersistedSessionResolver); ok {
 		svc.persisted = persisted
 	}
-	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
+	svc.snapshots = newResolvedSessionSnapshotSource(sessions, mainViews, svc.cacheWarningModeValue)
 	return svc
 }
 

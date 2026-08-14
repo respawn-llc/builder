@@ -71,7 +71,7 @@ func TestReadDormantSessionChatContextUsesExactExecutionRootAndBoundedFacts(t *t
 	resolver := &sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}
 	authReader := &sessionChatContextAuthReader{}
 	target := availableSessionExecutionTarget(executionRoot)
-	service := NewService(newTestSessionResolver(store), nil, nil, staticExecutionTargetResolver{target: target}).
+	service := NewService(newTestSessionResolver(store), nil, staticExecutionTargetResolver{target: target}).
 		WithChatContextWorkspaceResolver(resolver).
 		WithChatContextAuthReader(authReader)
 
@@ -146,7 +146,6 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	service := NewService(
 		newTestSessionResolver(store),
 		nil,
-		nil,
 		staticExecutionTargetResolver{target: availableSessionExecutionTarget(executionRoot)},
 	).WithChatContextWorkspaceResolver(resolver).WithChatContextAuthReader(authReader)
 
@@ -206,7 +205,6 @@ func TestReadDormantSessionChatContextRejectsMalformedEventLogWithoutMaterializa
 			metadataStore.AuthoritativeSessionStoreOptions()...,
 		),
 		nil,
-		nil,
 		metadataStore,
 	).WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
 		app: config.App{Settings: settings},
@@ -236,7 +234,7 @@ func TestReadDormantSessionChatContextPropagatesLoadAndAuthFailures(t *testing.T
 	targets := staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())}
 
 	loadErr := errors.New("config unavailable")
-	service := NewService(newTestSessionResolver(store), nil, nil, targets).
+	service := NewService(newTestSessionResolver(store), nil, targets).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{err: loadErr})
 	if _, err := service.ReadSessionChatContext(t.Context(), sessionID); !errors.Is(err, loadErr) {
 		t.Fatalf("load error = %v, want %v", err, loadErr)
@@ -244,7 +242,7 @@ func TestReadDormantSessionChatContextPropagatesLoadAndAuthFailures(t *testing.T
 
 	authErr := errors.New("auth unavailable")
 	settings := config.DefaultOnboardingSettings()
-	service = NewService(newTestSessionResolver(store), nil, nil, targets).
+	service = NewService(newTestSessionResolver(store), nil, targets).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}).
 		WithChatContextAuthReader(&sessionChatContextAuthReader{err: authErr})
 	if _, err := service.ReadSessionChatContext(t.Context(), sessionID); !errors.Is(err, authErr) {
@@ -276,7 +274,6 @@ func TestReadSessionChatContextUsesPersistedFactsWhenRuntimeIsAttached(t *testin
 	service := NewService(
 		newTestSessionResolver(store),
 		nil,
-		fixture.authority,
 		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
 	).WithChatContextWorkspaceResolver(resolver).WithChatContextAuthReader(authReader)
 
@@ -311,7 +308,6 @@ func TestReadSessionChatContextReResolvesPersistedConfigWhileRuntimeIsAttached(t
 	service := NewService(
 		newTestSessionResolver(store),
 		nil,
-		fixture.authority,
 		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
 	).WithChatContextWorkspaceResolver(resolver).WithChatContextAuthReader(authReader)
 
@@ -386,7 +382,7 @@ func TestReadSessionChatContextRuntimeAttachmentDoesNotChangeNamedAgentPolicy(t 
 		},
 	}
 	targets := staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())}
-	dormantService := NewService(newTestSessionResolver(store), nil, nil, targets).
+	dormantService := NewService(newTestSessionResolver(store), nil, targets).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}).
 		WithChatContextAuthReader(&sessionChatContextAuthReader{})
 	dormant, err := dormantService.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
@@ -399,7 +395,7 @@ func TestReadSessionChatContextRuntimeAttachmentDoesNotChangeNamedAgentPolicy(t 
 		t.Fatalf("ResolveReadOnlySessionContextSettings: %v", err)
 	}
 	fixture := newSessionChatContextRuntimeFixture(t, store, current.Settings, capabilities)
-	liveService := NewService(newTestSessionResolver(store), nil, fixture.authority, targets).
+	liveService := NewService(newTestSessionResolver(store), nil, targets).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}).
 		WithChatContextAuthReader(&sessionChatContextAuthReader{})
 	live, err := liveService.ReadSessionChatContext(t.Context(), fixture.sessionID)

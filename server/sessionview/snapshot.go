@@ -3,17 +3,13 @@ package sessionview
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/runtimeview"
 	"core/server/session"
-	"core/server/sessionruntime"
 	"core/shared/clientui"
 	"core/shared/config"
-	"core/shared/runtimeids"
-	"core/shared/serverapi"
 	"core/shared/textutil"
 )
 
@@ -21,21 +17,8 @@ type sessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
 }
 
-type runtimeReadModelSnapshotProvider interface {
-	RuntimeReadModelSnapshot(ctx context.Context, sessionID string) (runtimeactivity.ResponseSnapshot, error)
-}
-
-func resolveRuntimeActivitySnapshot(
-	ctx context.Context,
-	activity runtimeReadModelSnapshotProvider,
-	sessionID string,
-) (runtimeactivity.ResponseSnapshot, error) {
-	if activity != nil {
-		return activity.RuntimeReadModelSnapshot(ctx, sessionID)
-	}
-	return runtimeactivity.BuildSnapshot(sessionID, func() (runtimeactivity.ResolverSnapshot, error) {
-		return runtimeactivity.ResolverSnapshot{}, nil
-	})
+type runtimeMainViewSnapshotProvider interface {
+	RuntimeMainViewSnapshot(sessionID string) (clientui.RuntimeMainView, bool)
 }
 
 func readWithContext[T any](ctx context.Context, read func() (T, error)) (T, error) {
@@ -63,8 +46,7 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 
 type resolvedSessionSnapshotSource struct {
 	sessions         PersistedSessionResolver
-	activity         runtimeReadModelSnapshotProvider
-	authority        *sessionruntime.Authority
+	mainViews        runtimeMainViewSnapshotProvider
 	cacheWarningMode func() config.CacheWarningMode
 }
 
@@ -85,15 +67,13 @@ func resolvePersistedSessionView(
 
 func newResolvedSessionSnapshotSource(
 	sessions SessionStoreResolver,
-	activity runtimeReadModelSnapshotProvider,
-	authority *sessionruntime.Authority,
+	mainViews runtimeMainViewSnapshotProvider,
 	cacheWarningMode func() config.CacheWarningMode,
 ) *resolvedSessionSnapshotSource {
 	persisted, _ := sessions.(PersistedSessionResolver)
 	return &resolvedSessionSnapshotSource{
 		sessions:         persisted,
-		activity:         activity,
-		authority:        authority,
+		mainViews:        mainViews,
 		cacheWarningMode: cacheWarningMode,
 	}
 }
@@ -102,27 +82,12 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 	if s == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	readModelSnapshot, err := resolveRuntimeActivitySnapshot(ctx, s.activity, sessionID)
-	if err != nil {
+	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	if s.authority != nil {
-		id, err := runtimeids.ParseSessionID(strings.TrimSpace(sessionID))
-		if err != nil {
-			return nil, err
-		}
-		err = s.authority.WithCurrentRuntime(ctx, id, func(context.Context, *runtime.Engine) error {
-			return nil
-		})
-		if err == nil {
-			return liveRuntimeSessionSnapshot{
-				authority: s.authority,
-				sessionID: id,
-				snapshot:  readModelSnapshot,
-			}, nil
-		}
-		if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			return nil, err
+	if s.mainViews != nil {
+		if view, ok := s.mainViews.RuntimeMainViewSnapshot(sessionID); ok {
+			return publishedRuntimeSessionSnapshot{view: view}, nil
 		}
 	}
 	if s.sessions == nil {
@@ -134,47 +99,20 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 	}
 	return dormantSessionSnapshot{
 		view:             view,
-		activity:         readModelSnapshot,
 		cacheWarningMode: s.cacheWarningMode,
 	}, nil
 }
 
-type liveRuntimeSessionSnapshot struct {
-	authority *sessionruntime.Authority
-	sessionID runtimeids.SessionID
-	snapshot  runtimeactivity.ResponseSnapshot
+type publishedRuntimeSessionSnapshot struct {
+	view clientui.RuntimeMainView
 }
 
-func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) (clientui.RuntimeMainView, error) {
-		view, err := runtimeview.MainViewFromRuntimeActivity(engine, s.snapshot.Version, s.snapshot.Activity)
-		if err != nil {
-			return clientui.RuntimeMainView{}, err
-		}
-		return view, nil
-	})
-}
-
-func withLiveRuntime[T any](
-	ctx context.Context,
-	authority *sessionruntime.Authority,
-	sessionID runtimeids.SessionID,
-	read func(*runtime.Engine) (T, error),
-) (T, error) {
-	var value T
-	err := authority.WithCurrentRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-		var err error
-		value, err = readWithContext(callbackCtx, func() (T, error) {
-			return read(engine)
-		})
-		return err
-	})
-	return value, err
+func (s publishedRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
+	return resultWithContext(ctx, s.view)
 }
 
 type dormantSessionSnapshot struct {
 	view             *session.PersistedSessionView
-	activity         runtimeactivity.ResponseSnapshot
 	cacheWarningMode func() config.CacheWarningMode
 }
 
@@ -191,6 +129,14 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
+	revision, err := s.view.Revision()
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
+	version, err := persistedRuntimeMainViewVersion(meta.SessionID, revision)
+	if err != nil {
+		return clientui.RuntimeMainView{}, err
+	}
 	freshness := runtimeview.ConversationFreshnessFromSession(sessionFreshness)
 	goalAvailability, err := session.GoalAvailabilityFromMeta(meta)
 	if err != nil {
@@ -204,18 +150,29 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 		LastCommittedAssistantFinalAnswer: segment.LastCommittedAssistantFinalAnswer,
 		Goal:                              runtimeview.GoalFromSessionState(meta.Goal, goalAvailability, false),
 	}
-	view := runtimeview.RuntimeMainViewFromActivity(
-		s.activity.Activity,
-		status,
-		clientui.RuntimeSessionView{
+	view := clientui.RuntimeMainView{
+		Version: version,
+		Status:  status,
+		Session: clientui.RuntimeSessionView{
 			SessionID:             meta.SessionID,
 			SessionName:           meta.Name,
 			AgentRole:             session.ContinuationAgentRole(meta),
 			ConversationFreshness: freshness,
 		},
-	)
-	view.Version = s.activity.Version
+		Activity: clientui.RuntimeActivity{State: clientui.RuntimeActivityUnavailable},
+	}
 	return resultWithContext(ctx, view)
+}
+
+func persistedRuntimeMainViewVersion(sessionID string, revision int64) (clientui.ReadModelVersion, error) {
+	if revision < 0 {
+		return clientui.ReadModelVersion{}, fmt.Errorf("persisted Session revision must not be negative")
+	}
+	return clientui.NewReadModelVersion(
+		"persisted-session-"+sessionID,
+		1,
+		uint64(revision)+1,
+	)
 }
 
 func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {

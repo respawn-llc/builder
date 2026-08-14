@@ -100,6 +100,7 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 		PersistenceRoot:   t.TempDir(),
 		StoreOptions:      sessionViewTestPersistence.Options(),
 		ResourceLifecycle: activity,
+		StepLifecycle:     sessionViewStepLifecycle{activity: activity},
 		EventFeed: func(resource runtimeids.SessionResourceRef, event runtime.Event) {
 			activity.PublishAuthorityRuntimeEvent(resource, event)
 		},
@@ -121,6 +122,26 @@ func newSessionViewRuntimeFixture(t *testing.T, store *session.Store, client llm
 		activity:  activity,
 		sessionID: sessionID,
 	}
+}
+
+type sessionViewStepLifecycle struct {
+	activity *registry.RuntimeRegistry
+}
+
+func (s sessionViewStepLifecycle) StepBegan(
+	ctx context.Context,
+	resource sessionruntime.AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.activity).StepBegan(ctx, snapshot)
+}
+
+func (s sessionViewStepLifecycle) StepEnded(
+	ctx context.Context,
+	resource sessionruntime.AgentResourceDescriptor,
+	snapshot runtime.StepLifecycleSnapshot,
+) error {
+	return runtimewire.NewStepLifecycleSink(resource.Ref.SessionID().String(), s.activity).StepEnded(ctx, snapshot)
 }
 
 func (f sessionViewRuntimeFixture) startUserTurn(t *testing.T, prompt string) sessionruntime.ExecutionHandle {

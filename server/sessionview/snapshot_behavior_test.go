@@ -39,7 +39,7 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 			LatestRollbackCandidate: &locator,
 		})
 	}
-	dormant := NewService(newTestSessionResolver(store), nil, nil, nil)
+	dormant := NewService(newTestSessionResolver(store), nil, nil)
 
 	dormantNewest := mustTranscriptPage(t, dormant, store.Meta().SessionID, nil, nil)
 	if dormantNewest.LatestRollbackCandidate == nil || *dormantNewest.LatestRollbackCandidate != locator {
@@ -71,7 +71,7 @@ func TestServiceDormantTranscriptPagesPreserveRollbackLocatorAcrossCandidateFree
 
 func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "ws", t.TempDir())
-	service := NewService(newTestSessionResolver(store), nil, nil, nil)
+	service := NewService(newTestSessionResolver(store), nil, nil)
 	cursor := int64(1)
 	requests := map[string]serverapi.SessionTranscriptPageRequest{
 		"newest page": {SessionID: store.Meta().SessionID},
@@ -94,9 +94,9 @@ func TestServiceTranscriptReadsHonorCanceledContext(t *testing.T) {
 	}
 }
 
-func TestLiveRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
+func TestPublishedRuntimeSnapshotReturnsActiveRunWithoutSessionStore(t *testing.T) {
 	store, fixture, release, handle := startBlockingRuntimeRun(t)
-	live := NewService(nil, fixture.activity, fixture.authority, nil)
+	live := NewService(nil, fixture.activity, nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if _, err := live.GetSessionMainView(ctx, serverapi.SessionMainViewRequest{SessionID: store.Meta().SessionID}); !errors.Is(err, context.Canceled) {

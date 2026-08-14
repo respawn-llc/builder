@@ -73,7 +73,7 @@ func TestPersistedSessionReadsDoNotWaitForCommittedAppendOwner(t *testing.T) {
 	settings.ProviderOverride = "openai"
 	target := availableSessionExecutionTarget(workspaceRoot)
 	resolver := blockedCommittedSessionResolver{store: store, persistence: persistence}
-	service := NewService(resolver, nil, nil, staticExecutionTargetResolver{target: target}).
+	service := NewService(resolver, nil, staticExecutionTargetResolver{target: target}).
 		WithExecutionEnvironmentConfig(config.App{Settings: settings}).
 		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{
 			app: config.App{Settings: settings},

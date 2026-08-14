@@ -11,7 +11,6 @@ import (
 	"core/server/registry"
 	"core/server/runtime"
 	"core/server/runtimecontrol"
-	"core/server/runtimeview"
 	"core/server/runtimewire"
 	"core/server/session"
 	"core/server/session/sessiontest"
@@ -234,28 +233,14 @@ func newProjectedAuthorityRuntime(
 			t.Errorf("close projected runtime: %v", err)
 		}
 	})
-	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, authority, nil)
+	reads := sessionview.NewService(testSessionViewSessionResolver{store: store}, activity, nil)
 	controls := runtimecontrol.NewService(authority).WithRuntimeActivityResolver(activity)
 	runtimeClient := newUIRuntimeClientWithReads(sessionID.String(), reads, controls).(*sessionRuntimeClient)
-	snapshot, err := activity.RuntimeReadModelSnapshot(context.Background(), sessionID.String())
-	if err != nil {
-		t.Fatalf("projected runtime snapshot: %v", err)
+	view, ok := activity.RuntimeMainViewSnapshot(sessionID.String())
+	if !ok {
+		t.Fatal("projected Runtime Main View snapshot is missing")
 	}
-	err = authority.WithCurrentRuntime(t.Context(), sessionID, func(_ context.Context, engine *runtime.Engine) error {
-		view, err := runtimeview.MainViewFromRuntimeActivity(
-			engine,
-			snapshot.Version,
-			snapshot.Activity,
-		)
-		if err != nil {
-			return err
-		}
-		runtimeClient.storeMainView(view)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("read projected runtime: %v", err)
-	}
+	runtimeClient.storeMainView(view)
 	return projectedAuthorityRuntime{
 		client:    runtimeClient,
 		reads:     reads,
