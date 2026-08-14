@@ -549,13 +549,12 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			writeWorkflowExecutionTargetSelectionRequired(stderr, resp.SelectionRequired)
 			return 1
 		}
-		resumed, err := projectWorkflowTaskResume(resp)
+		applied, err := requireAppliedExecutionTargetAction(resp.Outcome, resp.Applied)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if resumed.requiresSetupCompletion &&
-			!finishObservedTaskSetup(taskSetupObservedActionResume, stderr, positionals[0], recoveryProject, terminal) {
+		if !finishObservedTaskSetup(taskSetupObservedActionResume, stderr, positionals[0], recoveryProject, terminal) {
 			return 1
 		}
 		detail, err := getWorkflowTaskByID(context.Background(), remote, taskID)
@@ -563,33 +562,9 @@ func taskResumeSubcommand(args []string, stdout io.Writer, stderr io.Writer) int
 			fmt.Fprintf(stderr, "resumed task %s but failed to load task detail for output: %v\n", taskID, err)
 			return 1
 		}
-		writeTaskResumeResult(stdout, detail, resumed.applied)
+		writeTaskResumeResult(stdout, detail, *applied)
 		return 0
 	})
-}
-
-type workflowTaskResumeProjection struct {
-	applied                 serverapi.WorkflowTaskResumeApplied
-	requiresSetupCompletion bool
-}
-
-func projectWorkflowTaskResume(
-	response serverapi.WorkflowTaskResumeResponse,
-) (workflowTaskResumeProjection, error) {
-	switch response.Outcome {
-	case serverapi.WorkflowExecutionTargetActionOutcomeApplied:
-		if response.Applied != nil {
-			return workflowTaskResumeProjection{
-				applied:                 *response.Applied,
-				requiresSetupCompletion: true,
-			}, nil
-		}
-	case serverapi.WorkflowExecutionTargetActionOutcomeNoOp:
-		if response.NoOp != nil {
-			return workflowTaskResumeProjection{applied: *response.NoOp}, nil
-		}
-	}
-	return workflowTaskResumeProjection{}, errors.New("workflow action requires execution target selection")
 }
 
 func taskInterruptSubcommand(args []string, stdout io.Writer, stderr io.Writer) int {
