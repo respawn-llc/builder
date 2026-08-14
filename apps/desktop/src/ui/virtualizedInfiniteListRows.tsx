@@ -10,13 +10,11 @@ export type VirtualizedRowLayout = Readonly<{
   verticalBehavior: "sticky" | "virtualized";
 }>;
 
-export function resolveVirtualizedRowLayout(sticky: boolean): VirtualizedRowLayout {
-  return {
-    horizontalCoordinateSpace: "scroll-content",
-    horizontalPlacement: sticky ? "flow" : "content-start",
-    verticalBehavior: sticky ? "sticky" : "virtualized",
-  };
-}
+export const resolveVirtualizedRowLayout = (sticky: boolean): VirtualizedRowLayout => ({
+  horizontalCoordinateSpace: "scroll-content",
+  horizontalPlacement: sticky ? "flow" : "content-start",
+  verticalBehavior: sticky ? "sticky" : "virtualized",
+});
 
 export function virtualizedRowLayoutClassName(layout: VirtualizedRowLayout): string {
   return cx(

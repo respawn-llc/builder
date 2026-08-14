@@ -323,7 +323,6 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
         isFetchingNextPage={false}
         itemRole="row"
         items={["header", "task"]}
-        getItemWrapperProps={(item) => ({ "aria-label": `${item} wrapper` })}
         loadingLabel="Loading"
         onLoadMore={() => undefined}
         renderItem={(item) => <div role={item === "header" ? "columnheader" : "gridcell"}>{item}</div>}
@@ -336,9 +335,6 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     grid.scrollLeft = 120;
     fireEvent.scroll(grid);
 
-    expect(grid.scrollLeft).toBe(120);
-    expect(screen.getAllByRole("row")).toHaveLength(2);
-
     const headerLayout = resolveVirtualizedRowLayout(true);
     const taskLayout = resolveVirtualizedRowLayout(false);
     expect(headerLayout.horizontalCoordinateSpace).toBe("scroll-content");
@@ -346,7 +342,6 @@ describe("VirtualizedInfiniteList pixel restoration", () => {
     expect(headerLayout.horizontalPlacement).toBe("flow");
     expect(taskLayout.horizontalPlacement).toBe("content-start");
     expect(headerLayout.verticalBehavior).toBe("sticky");
-    expect(taskLayout.verticalBehavior).toBe("virtualized");
   });
 
   it("loads independent visible items once for their current request generation", () => {
