@@ -410,6 +410,7 @@ func TestPlanLaunchSessionUsesResolvedCallerWorkflowOrigin(t *testing.T) {
 		StoreOptions:             meta.AuthoritativeSessionStoreOptions(),
 		PersistedSessions:        meta,
 		ProjectWorkspaceBoundary: meta,
+		SessionCallers:           meta,
 	})
 	worker := "worker"
 	workflowCallerID := workflowCaller.Meta().SessionID

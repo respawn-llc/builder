@@ -724,10 +724,12 @@ func (s *Service) releaseProvisionalTaskWorktree(
 }
 
 func (s *Service) unbindTaskManagedWorktree(ctx context.Context, task sqlitegen.TaskRecord) error {
-	updated, err := s.metadata.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
-		ID:                task.ID,
-		ManagedWorktreeID: sql.NullString{},
-		UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+	updated, err := metadata.RunOperation(ctx, s.metadata, "Unbind task managed worktree", func(q *sqlitegen.Queries) (int64, error) {
+		return q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+			ID:                task.ID,
+			ManagedWorktreeID: sql.NullString{},
+			UpdatedAtUnixMs:   time.Now().UTC().UnixMilli(),
+		})
 	})
 	if err != nil {
 		return err
@@ -1192,20 +1194,20 @@ func (s *Service) createAndBindManagedTaskWorktree(ctx context.Context, req mana
 		return boundManagedTaskWorktree{}, err
 	}
 	cleanup.worktreeID = created.record.ID
-	var updated int64
-	if req.FreshBinding {
-		updated, err = s.metadata.Queries().BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
-			ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
-			UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
-			TaskID:            req.Task.ID,
-		})
-	} else {
-		updated, err = s.metadata.Queries().UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
+	updated, err := metadata.RunOperation(ctx, s.metadata, "Bind task managed worktree", func(q *sqlitegen.Queries) (int64, error) {
+		if req.FreshBinding {
+			return q.BindInitialTaskManagedWorktree(ctx, sqlitegen.BindInitialTaskManagedWorktreeParams{
+				ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
+				UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
+				TaskID:            req.Task.ID,
+			})
+		}
+		return q.UpdateTaskManagedWorktree(ctx, sqlitegen.UpdateTaskManagedWorktreeParams{
 			ID:                req.Task.ID,
 			ManagedWorktreeID: sql.NullString{String: created.record.ID, Valid: true},
 			UpdatedAtUnixMs:   created.record.UpdatedAt.UnixMilli(),
 		})
-	}
+	})
 	if err != nil {
 		return boundManagedTaskWorktree{}, fmt.Errorf(
 			"bind managed worktree %q (workspace %q) to task %q (source workspace %q): %w",

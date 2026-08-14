@@ -54,6 +54,11 @@ type MetadataExecutionTargetStore interface {
 	Close() error
 }
 
+type SessionCallerStore interface {
+	AuthoritativeSessionStoreOptions() []session.StoreOption
+	SessionHasWorkflowTask(context.Context, string) (bool, error)
+}
+
 type Planner struct {
 	Config                   config.App
 	GlobalConfig             config.App
@@ -63,6 +68,7 @@ type Planner struct {
 	ExecutionTargets         SessionExecutionTargetResolver
 	ProjectWorkspaceBoundary SessionProjectWorkspaceBoundaryResolver
 	MetadataStore            MetadataExecutionTargetStore
+	SessionCallers           SessionCallerStore
 }
 
 type SessionRequest struct {

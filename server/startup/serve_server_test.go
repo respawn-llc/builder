@@ -29,13 +29,6 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-type testSQLiteCodeError struct {
-	code int
-}
-
-func (e testSQLiteCodeError) Error() string { return "structured SQLite failure" }
-func (e testSQLiteCodeError) Code() int     { return e.code }
-
 type envAuthHandler struct {
 	lookupEnv func(string) string
 }
@@ -261,7 +254,13 @@ func TestServeReturnsTypedTerminationForMetadataFatal(t *testing.T) {
 		context.Background(),
 		"Session append projection",
 		filepath.Join(server.Config().PersistenceRoot, "db", "main.sqlite3"),
-		&testSQLiteCodeError{code: sqlite3.SQLITE_FULL},
+		&metadata.SQLiteCause{
+			ResultCode: metadata.SQLiteResultCode{
+				Primary:  sqlite3.SQLITE_FULL,
+				Extended: sqlite3.SQLITE_FULL,
+			},
+			Cause: errors.New("database full"),
+		},
 	)
 	if !server.MetadataFatalAuthority().ReportMetadataFatal(failure) {
 		t.Fatal("metadata fatal was not accepted")
@@ -277,6 +276,31 @@ func TestServeReturnsTypedTerminationForMetadataFatal(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not terminate after metadata fatal")
+	}
+}
+
+func TestServePrefersRetainedMetadataFatalOverCanceledContext(t *testing.T) {
+	workspace := newServeWorkspace(t)
+	server := startServeTestServer(
+		t,
+		Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true},
+		envAuthHandler{},
+		noopOnboarding,
+	)
+	failure := &metadata.ClassifiedFailure{
+		Class:     metadata.FailureCritical,
+		Operation: "metadata read",
+		Cause:     context.Canceled,
+	}
+	if !server.MetadataFatalAuthority().ReportMetadataFatal(failure) {
+		t.Fatal("metadata fatal was not accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := server.Serve(ctx)
+	var termination *CriticalInfrastructureTermination
+	if !errors.As(err, &termination) || termination.Cause != failure {
+		t.Fatalf("Serve error = %#v, want retained CriticalInfrastructureTermination", err)
 	}
 }
 

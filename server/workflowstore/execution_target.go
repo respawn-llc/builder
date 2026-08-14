@@ -64,7 +64,7 @@ func (s *Store) ReplacePendingInitialManagedBranchName(ctx context.Context, task
 	return nil
 }
 
-func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) error {
+func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate) (metadataOperationErr error) {
 	task, err := s.queries.GetTask(ctx, string(taskID))
 	if err != nil {
 		return err
@@ -73,12 +73,12 @@ func (s *Store) LockTaskExecutionTarget(ctx context.Context, taskID workflow.Tas
 	if err != nil {
 		return err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "LockTaskExecutionTarget", nil)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if err := applyPreparedExecutionTargetMutation(ctx, s.queries.WithTx(tx), task, prepared, s.now().UnixMilli()); err != nil {
+	defer tx.Settle(ctx, &metadataOperationErr)
+	if err := applyPreparedExecutionTargetMutation(ctx, tx.Queries(), task, prepared, s.now().UnixMilli()); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 
+	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
@@ -22,6 +23,27 @@ type SQLiteResultCode struct {
 	Extended int
 }
 
+// SQLiteCause carries a structured result code when a lower database boundary
+// cannot retain the concrete driver error directly.
+type SQLiteCause struct {
+	ResultCode SQLiteResultCode
+	Cause      error
+}
+
+func (e *SQLiteCause) Error() string {
+	if e == nil || e.Cause == nil {
+		return "SQLite operation failed"
+	}
+	return e.Cause.Error()
+}
+
+func (e *SQLiteCause) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 type ClassifiedFailure struct {
 	Class         FailureClass
 	Operation     string
@@ -33,6 +55,14 @@ type ClassifiedFailure struct {
 
 func (f *ClassifiedFailure) Error() string {
 	if f.Cause == nil {
+		if f.RollbackCause != nil {
+			return fmt.Sprintf(
+				"metadata operation %q on database %q failed during rollback: %v",
+				f.Operation,
+				f.DatabasePath,
+				f.RollbackCause,
+			)
+		}
 		return fmt.Sprintf(
 			"metadata operation %q on database %q completed without a failure cause",
 			f.Operation,
@@ -74,10 +104,21 @@ func ClassifyOperationFailure(
 	primary error,
 	rollback error,
 ) *ClassifiedFailure {
-	classified := ClassifyFailure(ctx, operation, databasePath, primary)
-	classified.RollbackCause = rollback
-	if rollback != nil &&
-		ClassifyFailure(ctx, operation, databasePath, rollback).Class == FailureCritical {
+	classified := &ClassifiedFailure{
+		Class:         FailureNoncritical,
+		Operation:     operation,
+		DatabasePath:  databasePath,
+		Cause:         primary,
+		RollbackCause: rollback,
+	}
+	primaryClass, primaryCode := classifyCause(ctx, primary)
+	rollbackClass, rollbackCode := classifyCause(ctx, rollback)
+	classified.Class = primaryClass
+	classified.SQLite = primaryCode
+	if primary == nil {
+		classified.Class = rollbackClass
+		classified.SQLite = rollbackCode
+	} else if rollbackClass == FailureCritical {
 		classified.Class = FailureCritical
 	}
 	return classified
@@ -90,37 +131,39 @@ func ClassifyFailure(
 	databasePath string,
 	cause error,
 ) *ClassifiedFailure {
-	result := &ClassifiedFailure{
-		Class:        FailureNoncritical,
+	class, code := classifyCause(ctx, cause)
+	return &ClassifiedFailure{
+		Class:        class,
 		Operation:    operation,
 		DatabasePath: databasePath,
+		SQLite:       code,
 		Cause:        cause,
 	}
+}
+
+func classifyCause(ctx context.Context, cause error) (FailureClass, *SQLiteResultCode) {
 	if cause == nil {
-		return result
+		return FailureNoncritical, nil
 	}
 
 	if code, ok := sqliteResultCode(cause); ok {
-		result.SQLite = &code
-		result.Class = classifySQLiteFailure(ctx, cause, code.Primary)
-		return result
+		return classifySQLiteFailure(ctx, cause, code.Primary), &code
 	}
 	if isCallerContextFailure(ctx, cause) ||
 		errors.Is(cause, sql.ErrNoRows) {
-		return result
+		return FailureNoncritical, nil
 	}
 	if errors.Is(cause, sql.ErrConnDone) {
-		result.Class = FailureCritical
-		return result
+		return FailureCritical, nil
 	}
 
 	var pathError *fs.PathError
 	if errors.As(cause, &pathError) &&
 		(errors.Is(pathError.Err, fs.ErrNotExist) ||
 			errors.Is(pathError.Err, fs.ErrPermission)) {
-		result.Class = FailureCritical
+		return FailureCritical, nil
 	}
-	return result
+	return FailureNoncritical, nil
 }
 
 func classifySQLiteFailure(
@@ -151,17 +194,19 @@ func classifySQLiteFailure(
 }
 
 func sqliteResultCode(cause error) (SQLiteResultCode, bool) {
-	var sqliteError interface {
-		Code() int
+	var sqliteError *sqlitedriver.Error
+	if errors.As(cause, &sqliteError) {
+		extended := sqliteError.Code()
+		return SQLiteResultCode{
+			Primary:  extended & 0xff,
+			Extended: extended,
+		}, true
 	}
-	if !errors.As(cause, &sqliteError) {
-		return SQLiteResultCode{}, false
+	var structured *SQLiteCause
+	if errors.As(cause, &structured) {
+		return structured.ResultCode, true
 	}
-	extended := sqliteError.Code()
-	return SQLiteResultCode{
-		Primary:  extended & 0xff,
-		Extended: extended,
-	}, true
+	return SQLiteResultCode{}, false
 }
 
 func isCallerContextFailure(ctx context.Context, cause error) bool {

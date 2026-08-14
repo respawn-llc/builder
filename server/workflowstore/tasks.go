@@ -160,7 +160,7 @@ func (r ManualMoveResult) Validate() error {
 	return nil
 }
 
-func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskRecord, error) {
+func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (_ TaskRecord, metadataOperationErr error) {
 	projectID := strings.TrimSpace(req.ProjectID)
 	var workflowID *runtimeids.WorkflowID
 	if req.WorkflowID != nil {
@@ -177,12 +177,12 @@ func (s *Store) CreateTask(ctx context.Context, req CreateTaskRequest) (TaskReco
 		sourceWorkspaceID: strings.TrimSpace(req.SourceWorkspaceID), taskID: prefixedID("task"),
 		labelIDs: req.LabelIDs, dependencyIntent: req.DependencyIntent, nowUnixMs: s.now().UnixMilli(),
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "CreateTask", nil)
 	if err != nil {
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	task, err := createTaskWithQueries(ctx, s.queries.WithTx(tx), prepared)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	task, err := createTaskWithQueries(ctx, tx.Queries(), prepared)
 	if err != nil {
 		return TaskRecord{}, taskCreateStoreError(err)
 	}
@@ -275,13 +275,13 @@ func createTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, prepared p
 	}, nil
 }
 
-func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskRecord, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (_ TaskRecord, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "UpdateTask", nil)
 	if err != nil {
 		return TaskRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	task, err := q.GetTask(ctx, string(req.TaskID))
 	if err != nil {
 		return TaskRecord{}, err
@@ -342,13 +342,13 @@ func (s *Store) UpdateTask(ctx context.Context, req UpdateTaskRequest) (TaskReco
 	return taskRecordFromTask(row)
 }
 
-func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (DeleteTaskResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) DeleteTask(ctx context.Context, taskID workflow.TaskID) (_ DeleteTaskResult, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "DeleteTask", nil)
 	if err != nil {
 		return DeleteTaskResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	task, err := q.GetTask(ctx, string(taskID))
 	if err != nil {
 		return DeleteTaskResult{}, err
@@ -419,7 +419,7 @@ func (s *Store) StartTaskWithExecutionTarget(ctx context.Context, taskID workflo
 	return s.startTask(ctx, taskID, candidate, true)
 }
 
-func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (StartTaskResult, error) {
+func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate *ExecutionTargetCandidate, requireTarget bool) (_ StartTaskResult, metadataOperationErr error) {
 	prepared, err := s.prepareTaskStart(ctx, taskID)
 	if err != nil {
 		return StartTaskResult{}, err
@@ -467,12 +467,12 @@ func (s *Store) startTask(ctx context.Context, taskID workflow.TaskID, candidate
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "startTask", nil)
 	if err != nil {
 		return StartTaskResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	nowTime := s.now().UTC()
 	now := nowTime.UnixMilli()
 	if requireTarget {

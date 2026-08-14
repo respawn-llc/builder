@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/server/workflowscript"
 	"core/shared/runtimeids"
@@ -151,13 +150,13 @@ func (s *Store) previewWorkflowGraphSave(ctx context.Context, req WorkflowGraphS
 	return plan.workflowGraphSaveResult(false), nil
 }
 
-func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSavePlan, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+func (s *Store) prepareWorkflowGraphSave(ctx context.Context, req WorkflowGraphSaveRequest) (_ WorkflowGraphSavePlan, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "prepareWorkflowGraphSave", &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return WorkflowGraphSavePlan{}, fmt.Errorf("begin workflow graph save preparation: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	plan, err := s.planWorkflowGraphSave(ctx, s.queries.WithTx(tx), req)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	plan, err := s.planWorkflowGraphSave(ctx, tx.Queries(), req)
 	if err != nil {
 		return WorkflowGraphSavePlan{}, err
 	}
@@ -267,7 +266,7 @@ func (s *Store) SaveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 	})
 }
 
-func (s *Store) saveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (WorkflowGraphSaveResult, error) {
+func (s *Store) saveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequest) (_ WorkflowGraphSaveResult, metadataOperationErr error) {
 	workflowID := req.WorkflowID
 	plan, err := s.prepareWorkflowGraphSave(ctx, req)
 	if err != nil {
@@ -280,15 +279,15 @@ func (s *Store) saveWorkflowGraph(ctx context.Context, req WorkflowGraphSaveRequ
 		return plan.workflowGraphSaveResult(true), nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "saveWorkflowGraph", nil)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	if err := sqlitelifecyclegen.New(tx).DeferForeignKeys(ctx); err != nil {
+	defer tx.Settle(ctx, &metadataOperationErr)
+	if err := tx.DeferForeignKeys(ctx); err != nil {
 		return WorkflowGraphSaveResult{}, err
 	}
-	q := s.queries.WithTx(tx)
+	q := tx.Queries()
 	locked, err := q.AcquireWorkflowGraphSaveWriteLock(ctx, workflowID)
 	if err != nil {
 		return WorkflowGraphSaveResult{}, err

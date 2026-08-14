@@ -153,7 +153,7 @@ func resolveImmediateSourceTransitionContext(
 		if err != nil {
 			return transitionContextResolution{}, err
 		}
-		association, err := currentTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, sourceReference)
+		association, err := currentTaskSessionForNode(ctx, q, sourceReference)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) &&
 				source != nil &&
@@ -219,7 +219,7 @@ func resolveRetainedTargetTransitionContext(
 	targetState := workflow.UnavailableRetainedTarget()
 	targetHasProvenance := false
 	var selected *TaskSessionAssociation
-	association, err := currentTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, targetReference)
+	association, err := currentTaskSessionForNode(ctx, q, targetReference)
 	switch {
 	case err == nil:
 		targetHasProvenance = true
@@ -252,7 +252,7 @@ func resolveRetainedTargetTransitionContext(
 				return transitionContextResolution{}, err
 			}
 			sourceAssociation, associationErr := currentTaskSessionForNode(
-				sqlitegen.WithExpectedNoRows(ctx),
+				ctx,
 				q,
 				sourceReference,
 			)

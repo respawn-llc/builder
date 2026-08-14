@@ -488,16 +488,16 @@ func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.Current
 // ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
 // immediately follows it with AdmitCurrentNode under the same Task mutation owner;
 // it is deliberately not an automatic recovery path.
-func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
+func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (_ InterruptedCurrentNodeAttentionProjection, _ bool, metadataOperationErr error) {
 	if err := reference.Validate(); err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "ResumeCurrentNode", nil)
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	branchKey, branchScoped := reference.TransitionBranchKey()
 	var branchValue any
 	if branchScoped {

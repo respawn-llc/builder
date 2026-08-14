@@ -47,7 +47,13 @@ type ListTaskSearchPageDescriptorsRow struct {
 	RawSnippet         interface{}
 }
 
-func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTaskSearchPageDescriptorsParams) ([]ListTaskSearchPageDescriptorsRow, error) {
+func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTaskSearchPageDescriptorsParams) (metadataOperationResult0 []ListTaskSearchPageDescriptorsRow, metadataOperationErr error) {
+	if metadataOperationErr = q.beforeOperation(); metadataOperationErr != nil {
+		return nil, metadataOperationErr
+	}
+	defer func() {
+		metadataOperationErr = q.completeOperation(ctx, "ListTaskSearchPageDescriptors", metadataOperationErr)
+	}()
 	rows, err := q.db.QueryContext(ctx, listTaskSearchPageDescriptors,
 		arg.Mode,
 		arg.CandidateExpression,
@@ -62,7 +68,6 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 		arg.LiveTaskStatesJson,
 		arg.ShortIDCaseMode,
 	)
-	err = recordQueryError(ctx, err, listTaskSearchPageDescriptors, 12)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +75,7 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 	var items []ListTaskSearchPageDescriptorsRow
 	for rows.Next() {
 		var item ListTaskSearchPageDescriptorsRow
-		if err := recordQueryError(ctx, rows.Scan(
+		if err := rows.Scan(
 			&item.TaskID,
 			&item.ProjectID,
 			&item.ProjectKey,
@@ -89,15 +94,15 @@ func (q *Queries) ListTaskSearchPageDescriptors(ctx context.Context, arg ListTas
 			&item.SourceOrdinal,
 			&item.TaskWeightedRank,
 			&item.RawSnippet,
-		), listTaskSearchPageDescriptors, 12); err != nil {
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
 	}
-	if err := recordQueryError(ctx, rows.Close(), listTaskSearchPageDescriptors, 12); err != nil {
+	if err := rows.Close(); err != nil {
 		return nil, err
 	}
-	if err := recordQueryError(ctx, rows.Err(), listTaskSearchPageDescriptors, 12); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return items, nil

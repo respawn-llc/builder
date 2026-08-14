@@ -331,7 +331,11 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 		var caller *subagentpolicy.Caller
 		if req.Mode == serverapi.SessionLaunchModeHeadless {
 			if req.CallerSessionID != nil {
-				resolved, callerErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, *req.CallerSessionID)
+				resolved, callerErr := launch.ResolveSessionCallerWithStore(
+					planner.Config.PersistenceRoot,
+					*req.CallerSessionID,
+					planner.SessionCallers,
+				)
 				if callerErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialCallerMissing}
 				}
@@ -344,7 +348,11 @@ func (s *Service) PlanLaunchSession(ctx context.Context, req serverapi.SessionPl
 				}
 			}
 			if parentAgentSessionID != nil && req.CallerSessionID == nil {
-				if _, parentErr := launch.ResolveSessionCaller(planner.Config.PersistenceRoot, parentAgentSessionID.String()); parentErr != nil {
+				if _, parentErr := launch.ResolveSessionCallerWithStore(
+					planner.Config.PersistenceRoot,
+					parentAgentSessionID.String(),
+					planner.SessionCallers,
+				); parentErr != nil {
 					return PlanResult{}, &serverapi.SubagentLaunchDeniedError{Kind: serverapi.SubagentLaunchDenialParentMissing}
 				}
 			}

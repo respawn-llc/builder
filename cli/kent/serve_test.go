@@ -51,6 +51,17 @@ func TestServeSubcommandMapsOnlyCriticalInfrastructureTerminationToStatusTwo(t *
 			wantStatus: 2,
 		},
 		{
+			name: "critical metadata termination wrapping cancellation",
+			serveErr: &serverstartup.CriticalInfrastructureTermination{
+				Cause: &metadata.ClassifiedFailure{
+					Class:     metadata.FailureCritical,
+					Operation: "metadata read",
+					Cause:     context.Canceled,
+				},
+			},
+			wantStatus: 2,
+		},
+		{
 			name:       "ordinary serving failure",
 			serveErr:   errors.New("listener failed"),
 			wantStatus: 1,

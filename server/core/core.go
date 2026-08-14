@@ -286,6 +286,7 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 		ExecutionTargets:         s.safeBundles().Persistence.metadataStore,
 		ProjectWorkspaceBoundary: s.safeBundles().Persistence.metadataStore,
 		MetadataStore:            s.safeBundles().Persistence.metadataStore,
+		SessionCallers:           s.safeBundles().Persistence.metadataStore,
 	}).
 		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
 		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).

@@ -56,7 +56,7 @@ func (s *Store) projectSessionAppend(ctx context.Context, projection session.App
 	if projection.FirstPromptPreview != nil {
 		preview = sql.NullString{String: *projection.FirstPromptPreview, Valid: true}
 	}
-	affected, err := sqlitegen.New(connection).ProjectSessionAppend(ctx, sqlitegen.ProjectSessionAppendParams{
+	affected, err := sqlitegen.NewRaw(connection).ProjectSessionAppend(ctx, sqlitegen.ProjectSessionAppendParams{
 		FirstPromptPreview:              preview,
 		UpdatedAtUnixMs:                 projection.AppendedAt.UTC().UnixMilli(),
 		ConversationEstablished:         boolToInt64(projection.ConversationEstablished),

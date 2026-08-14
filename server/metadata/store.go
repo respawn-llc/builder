@@ -66,6 +66,40 @@ type Store struct {
 	fatalReporter   FatalReporter
 }
 
+type monitoredDBTX struct {
+	sqlitegen.DBTX
+	monitor sqlitegen.OperationMonitor
+}
+
+func (db monitoredDBTX) BeforeOperation() error {
+	return db.monitor.BeforeOperation()
+}
+
+func (db monitoredDBTX) CompleteOperation(ctx context.Context, operation string, cause error) error {
+	return db.monitor.CompleteOperation(ctx, operation, cause)
+}
+
+func (s *Store) BeforeOperation() error {
+	if s == nil || s.fatalReporter == nil {
+		return nil
+	}
+	if fatal := s.fatalReporter.MetadataFatal(); fatal != nil {
+		return fatal
+	}
+	return nil
+}
+
+func (s *Store) CompleteOperation(ctx context.Context, operation string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	failure := ClassifyFailure(ctx, operation, s.databasePath, cause)
+	if failure.Class == FailureCritical && s.fatalReporter != nil {
+		s.fatalReporter.ReportMetadataFatal(failure)
+	}
+	return failure
+}
+
 type sessionMetadataDocument struct {
 	WorkspaceRoot                   string                         `json:"workspace_root"`
 	WorkspaceContainer              string                         `json:"workspace_container"`
@@ -224,9 +258,9 @@ func OpenAtPathWithFatalReporter(
 		persistenceRoot: trimmedRoot,
 		databasePath:    trimmedDatabasePath,
 		db:              db,
-		queries:         sqlitegen.New(db),
 		fatalReporter:   fatalReporter,
 	}
+	store.queries = sqlitegen.New(monitoredDBTX{DBTX: db, monitor: store})
 	if err := store.BackfillProjectKeys(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -814,7 +848,7 @@ func (s *Store) AttachWorkspaceToProject(ctx context.Context, projectID string, 
 	return result.Binding, err
 }
 
-func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectID string, workspaceRoot string) (ProjectWorkspaceAttachResult, error) {
+func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectID string, workspaceRoot string) (_ ProjectWorkspaceAttachResult, metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return ProjectWorkspaceAttachResult{}, errors.New("metadata store is required")
 	}
@@ -826,12 +860,12 @@ func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectI
 	if err != nil {
 		return ProjectWorkspaceAttachResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "AttachWorkspaceToProjectWithResult", nil)
 	if err != nil {
 		return ProjectWorkspaceAttachResult{}, fmt.Errorf("begin workspace attach tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
 		return ProjectWorkspaceAttachResult{}, fmt.Errorf("lock workspace attach: %w", err)
 	}
@@ -849,7 +883,7 @@ func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectI
 // present, its project key in a single transaction. An absent projectKey leaves
 // the existing key unchanged. Existing task short IDs are frozen at creation, so
 // changing the key only affects the prefix applied to future tasks.
-func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, displayName string, projectKey *runtimeids.ProjectKey) error {
+func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, displayName string, projectKey *runtimeids.ProjectKey) (metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
@@ -862,12 +896,12 @@ func (s *Store) UpdateProjectMetadata(ctx context.Context, projectID string, dis
 		normalizedKey = projectKey.String()
 	}
 	now := time.Now().UTC().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "UpdateProjectMetadata", nil)
 	if err != nil {
 		return fmt.Errorf("begin project metadata tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	updated, err := q.SetProjectDisplayName(ctx, sqlitegen.SetProjectDisplayNameParams{
 		ProjectID:       trimmedProjectID,
 		DisplayName:     displayName,
@@ -908,7 +942,7 @@ func (s *Store) SetProjectDefaultWorkspace(ctx context.Context, projectID string
 	return err
 }
 
-func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, projectID string, workspaceID string) (serverapi.ProjectHomeSummary, error) {
+func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, projectID string, workspaceID string) (_ serverapi.ProjectHomeSummary, metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return serverapi.ProjectHomeSummary{}, errors.New("metadata store is required")
 	}
@@ -920,12 +954,12 @@ func (s *Store) SetProjectDefaultWorkspaceAndGetSummary(ctx context.Context, pro
 	if trimmedWorkspaceID == "" {
 		return serverapi.ProjectHomeSummary{}, errors.New("workspace id is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "SetProjectDefaultWorkspaceAndGetSummary", nil)
 	if err != nil {
 		return serverapi.ProjectHomeSummary{}, fmt.Errorf("begin default workspace tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	currentWorkspaceID, err := q.GetProjectPrimaryWorkspaceID(ctx, trimmedProjectID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -975,7 +1009,7 @@ func (s *Store) UnlinkProjectWorkspaceWithPreflightBlockers(ctx context.Context,
 	return s.UnlinkProjectWorkspaceWithRuntimeBlockers(ctx, projectID, workspaceID, preflightBlockers, nil)
 }
 
-func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker, runtimeBlocker WorkspaceUnlinkRuntimeBlocker) ([]serverapi.ProjectWorkspaceUnlinkBlocker, error) {
+func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, projectID string, workspaceID string, preflightBlockers []serverapi.ProjectWorkspaceUnlinkBlocker, runtimeBlocker WorkspaceUnlinkRuntimeBlocker) (_ []serverapi.ProjectWorkspaceUnlinkBlocker, metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return nil, errors.New("metadata store is required")
 	}
@@ -1033,12 +1067,12 @@ func (s *Store) UnlinkProjectWorkspaceWithRuntimeBlockers(ctx context.Context, p
 	if len(blockers) > 0 {
 		return blockers, nil
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "UnlinkProjectWorkspaceWithRuntimeBlockers", nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin workspace unlink tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	locked, err := q.AcquireWorkspaceUnlinkWriteLock(ctx, sqlitegen.AcquireWorkspaceUnlinkWriteLockParams{
 		ProjectID:   trimmedProjectID,
 		WorkspaceID: trimmedWorkspaceID,
@@ -1200,7 +1234,7 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 	newWorkspaceRoot string,
 	expectedProjectID string,
 	expectedWorkspaceID string,
-) (Binding, error) {
+) (_ Binding, metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return Binding{}, errors.New("metadata store is required")
 	}
@@ -1224,12 +1258,12 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 		return Binding{}, err
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "RebindWorkspaceWithExpectedBinding", nil)
 	if err != nil {
 		return Binding{}, fmt.Errorf("begin workspace rebind tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 
 	oldWorkspace, err := singleWorkspaceByCanonicalRoot(ctx, q, oldCanonicalRoot)
 	if err != nil {
@@ -1267,16 +1301,11 @@ func (s *Store) RebindWorkspaceWithExpectedBinding(
 		UpdatedAtUnixMs:   now,
 	})
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			return Binding{}, fmt.Errorf("rollback workspace rebind tx: %w", rollbackErr)
-		}
-		if binding, lookupErr := s.lookupProjectWorkspaceBinding(ctx, oldWorkspace.ProjectID, newCanonicalRoot); lookupErr == nil && binding.WorkspaceID != oldWorkspace.ID {
+		settledErr := tx.Complete(ctx, fmt.Errorf("update workspace binding canonical root: %w", err))
+		if IsSQLiteUniqueConstraint(settledErr) {
 			return Binding{}, fmt.Errorf("workspace %q: %w", newCanonicalRoot, ErrWorkspaceAlreadyBound)
 		}
-		if IsSQLiteUniqueConstraint(err) {
-			return Binding{}, fmt.Errorf("workspace %q: %w", newCanonicalRoot, ErrWorkspaceAlreadyBound)
-		}
-		return Binding{}, fmt.Errorf("update workspace binding canonical root: %w", err)
+		return Binding{}, settledErr
 	}
 	if rows == 0 {
 		return Binding{}, fmt.Errorf("update workspace binding canonical root: workspace %q was not updated", oldCanonicalRoot)
@@ -1352,13 +1381,13 @@ func (s *Store) RegisterWorkspaceBinding(ctx context.Context, workspaceRoot stri
 	return s.registerWorkspaceBindingConverged(ctx, canonicalRoot)
 }
 
-func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonicalRoot string) (Binding, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) registerWorkspaceBindingConverged(ctx context.Context, canonicalRoot string) (_ Binding, metadataOperationErr error) {
+	tx, err := s.BeginTransaction(ctx, "registerWorkspaceBindingConverged", nil)
 	if err != nil {
 		return Binding{}, fmt.Errorf("begin workspace registration tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
 		return Binding{}, fmt.Errorf("acquire workspace registration lock: %w", err)
 	}
@@ -1492,16 +1521,16 @@ func isSQLiteConstraint(err error, code int) bool {
 	return sqliteErr.Code() == code
 }
 
-func (s *Store) BackfillProjectKeys(ctx context.Context) error {
+func (s *Store) BackfillProjectKeys(ctx context.Context) (metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "BackfillProjectKeys", nil)
 	if err != nil {
 		return fmt.Errorf("begin project key backfill tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	rows, err := q.ListProjectKeyRows(ctx)
 	if err != nil {
 		return fmt.Errorf("list project keys: %w", err)
@@ -1596,7 +1625,7 @@ func setInitialProjectKey(ctx context.Context, q *sqlitegen.Queries, projectID s
 	return normalizedKey, nil
 }
 
-func (s *Store) SetProjectKey(ctx context.Context, projectID string, rawProjectKey string) error {
+func (s *Store) SetProjectKey(ctx context.Context, projectID string, rawProjectKey string) (metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
@@ -1609,12 +1638,12 @@ func (s *Store) SetProjectKey(ctx context.Context, projectID string, rawProjectK
 		return err
 	}
 	key := projectKey.String()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "SetProjectKey", nil)
 	if err != nil {
 		return fmt.Errorf("begin set project key tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	state, err := q.GetProjectKeyState(ctx, trimmedProjectID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1785,13 +1814,13 @@ func insertWorkspaceBindingWithQueries(ctx context.Context, q *sqlitegen.Queries
 	return true, nil
 }
 
-func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string, projectDisplayName string, projectKey *runtimeids.ProjectKey, workspaceDisplayName string, projectID string, workspaceID string, now time.Time, isPrimary bool) (Binding, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string, projectDisplayName string, projectKey *runtimeids.ProjectKey, workspaceDisplayName string, projectID string, workspaceID string, now time.Time, isPrimary bool) (_ Binding, metadataOperationErr error) {
+	tx, err := s.BeginTransaction(ctx, "insertWorkspaceBinding", nil)
 	if err != nil {
 		return Binding{}, fmt.Errorf("begin workspace binding tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if err := q.UpsertProject(ctx, sqlitegen.UpsertProjectParams{
 		ID:              projectID,
 		DisplayName:     projectDisplayName,
@@ -1816,14 +1845,11 @@ func (s *Store) insertWorkspaceBinding(ctx context.Context, canonicalRoot string
 		Primary:       isPrimary,
 	})
 	if err != nil {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return Binding{}, fmt.Errorf("rollback workspace binding tx: %w", rollbackErr)
-		}
-		return Binding{}, fmt.Errorf("insert workspace binding: %w", err)
+		return Binding{}, tx.Complete(ctx, fmt.Errorf("insert workspace binding: %w", err))
 	}
 	if !inserted {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return Binding{}, fmt.Errorf("rollback workspace binding tx: %w", rollbackErr)
+		if settleErr := tx.Complete(ctx, nil); settleErr != nil {
+			return Binding{}, settleErr
 		}
 		if binding, recovered := s.recoverWorkspaceBindingAfterCanonicalRootConflict(ctx, canonicalRoot, workspaceID); recovered {
 			return binding, nil
@@ -2237,18 +2263,18 @@ func (s *Store) ImportSessionSnapshot(ctx context.Context, snapshot session.Pers
 	return s.upsertSessionSnapshot(ctx, snapshot)
 }
 
-func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
+func (s *Store) upsertSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) (metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "upsertSessionSnapshot", nil)
 	if err != nil {
 		return fmt.Errorf("begin session snapshot import tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer tx.Settle(ctx, &metadataOperationErr)
 	if err := s.upsertSessionSnapshotWithQueries(
 		ctx,
-		s.queries.WithTx(tx),
+		tx.Queries(),
 		snapshot,
 		sessionSnapshotUpsertOptions{},
 	); err != nil {
@@ -2269,7 +2295,7 @@ func (s *Store) upsertWorkspaceChatMaterializationSnapshot(
 	ctx context.Context,
 	workspaceID string,
 	snapshot session.PersistedStoreSnapshot,
-) error {
+) (metadataOperationErr error) {
 	if s == nil || s.queries == nil {
 		return errors.New("metadata store is required")
 	}
@@ -2277,12 +2303,12 @@ func (s *Store) upsertWorkspaceChatMaterializationSnapshot(
 	if trimmedWorkspaceID == "" {
 		return errors.New("workspace id is required")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "upsertWorkspaceChatMaterializationSnapshot", nil)
 	if err != nil {
 		return fmt.Errorf("begin workspace Chat materialization tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if err := s.upsertSessionSnapshotWithQueries(
 		ctx,
 		q,

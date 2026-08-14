@@ -481,14 +481,14 @@ func withProjectLabelTransaction[T any](
 	ctx context.Context,
 	s *Store,
 	operation func(*sqlitegen.Queries) (T, error),
-) (T, error) {
+) (_ T, metadataOperationErr error) {
 	var zero T
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "withProjectLabelTransaction", nil)
 	if err != nil {
 		return zero, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	result, err := operation(s.queries.WithTx(tx))
+	defer tx.Settle(ctx, &metadataOperationErr)
+	result, err := operation(tx.Queries())
 	if err != nil {
 		return zero, err
 	}

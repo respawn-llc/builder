@@ -90,7 +90,7 @@ func openEmptyMetadataTestDatabase(t testing.TB) *sql.DB {
 func TestAllMetadataMigrationsMatchLatestInMemorySchema(t *testing.T) {
 	migrated := openEmptyMetadataTestDatabase(t)
 	t.Cleanup(func() { _ = migrated.Close() })
-	if err := runMigrations(migrated); err != nil {
+	if err := runMigrations(migrated, "in-memory metadata test database"); err != nil {
 		t.Fatalf("run full metadata migration chain in memory: %v", err)
 	}
 

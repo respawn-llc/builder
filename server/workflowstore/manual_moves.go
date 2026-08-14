@@ -125,12 +125,12 @@ func (s *Store) ApplyManualMove(ctx context.Context, prepared ManualMovePreparat
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "ApplyManualMove", nil)
 	if err != nil {
 		return ManualMoveResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &resultErr)
+	q := tx.Queries()
 	nowTime := s.now().UTC()
 	locked, err := q.AcquireManualMoveTaskWriteLock(ctx, string(prepared.request.TaskID))
 	if err != nil {

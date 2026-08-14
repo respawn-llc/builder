@@ -24,14 +24,14 @@ func (s *Store) LinkWorkflow(ctx context.Context, projectID string, workflowID r
 	return s.LinkWorkflowWithDefaultPolicy(ctx, projectID, workflowID, policy)
 }
 
-func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, policy WorkflowLinkDefaultPolicy) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) LinkWorkflowWithDefaultPolicy(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID, policy WorkflowLinkDefaultPolicy) (_ ProjectWorkflowLinkRecord, metadataOperationErr error) {
 	now := s.now().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "LinkWorkflowWithDefaultPolicy", nil)
 	if err != nil {
 		return ProjectWorkflowLinkRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	link, err := s.linkWorkflowInTx(ctx, q, now, projectID, workflowID, policy)
 	if err != nil {
 		return ProjectWorkflowLinkRecord{}, err
@@ -97,7 +97,7 @@ func (s *Store) shouldSetWorkflowLinkDefault(ctx context.Context, q *sqlitegen.Q
 			return true, nil
 		}
 		_, err = q.GetDefaultProjectWorkflowLink(ctx, projectID)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return true, nil
 		}
 		if err != nil {
@@ -158,14 +158,14 @@ func (s *Store) GetProjectWorkflowLink(ctx context.Context, linkID string) (Proj
 	return linkRecordFromRow(row), nil
 }
 
-func (s *Store) SetDefaultProjectWorkflowLink(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID) (ProjectWorkflowLinkRecord, error) {
+func (s *Store) SetDefaultProjectWorkflowLink(ctx context.Context, projectID string, workflowID runtimeids.WorkflowID) (_ ProjectWorkflowLinkRecord, metadataOperationErr error) {
 	now := s.now().UnixMilli()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "SetDefaultProjectWorkflowLink", nil)
 	if err != nil {
 		return ProjectWorkflowLinkRecord{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	updated, err := q.SetProjectDefaultWorkflowLinkByWorkflow(ctx, sqlitegen.SetProjectDefaultWorkflowLinkByWorkflowParams{
 		UpdatedAtUnixMs: now,
 		ProjectID:       projectID,
@@ -192,16 +192,16 @@ func (s *Store) SetDefaultProjectWorkflowLink(ctx context.Context, projectID str
 	return s.GetProjectWorkflowLink(ctx, link.ID)
 }
 
-func (s *Store) UnlinkProjectWorkflow(ctx context.Context, linkID string, replacementDefaultLinkID string) (ProjectWorkflowUnlinkResult, error) {
+func (s *Store) UnlinkProjectWorkflow(ctx context.Context, linkID string, replacementDefaultLinkID string) (_ ProjectWorkflowUnlinkResult, metadataOperationErr error) {
 	now := s.now().UnixMilli()
 	linkID = strings.TrimSpace(linkID)
 	replacementDefaultLinkID = strings.TrimSpace(replacementDefaultLinkID)
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "UnlinkProjectWorkflow", nil)
 	if err != nil {
 		return ProjectWorkflowUnlinkResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	link, err := q.GetProjectWorkflowLink(ctx, linkID)
 	if err != nil {
 		return ProjectWorkflowUnlinkResult{}, err
@@ -275,7 +275,7 @@ func resolveTaskWorkflowLinkWithQueries(ctx context.Context, q *sqlitegen.Querie
 		if err == nil {
 			return link, nil
 		}
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			return sqlitegen.ProjectWorkflowLinkRecord{}, err
 		}
 		links, err := q.ListProjectWorkflowLinksForTaskSelection(ctx, projectID)
@@ -297,7 +297,7 @@ func resolveTaskWorkflowLinkWithQueries(ctx context.Context, q *sqlitegen.Querie
 		}
 	}
 	link, err := q.GetActiveProjectWorkflowLinkByWorkflow(ctx, sqlitegen.GetActiveProjectWorkflowLinkByWorkflowParams{ProjectID: projectID, WorkflowID: *workflowID})
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return sqlitegen.ProjectWorkflowLinkRecord{}, TaskWorkflowSelectionError{
 			Reason:     TaskWorkflowSelectionWorkflowNotLinked,
 			ProjectID:  projectID,

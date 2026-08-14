@@ -50,13 +50,13 @@ type TaskDependencyRemoveResult struct {
 	WorkflowID     runtimeids.WorkflowID
 }
 
-func (s *Store) AddTaskDependency(ctx context.Context, req TaskDependencyAddRequest) (TaskDependencyAddResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) AddTaskDependency(ctx context.Context, req TaskDependencyAddRequest) (_ TaskDependencyAddResult, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "AddTaskDependency", nil)
 	if err != nil {
 		return TaskDependencyAddResult{}, fmt.Errorf("begin task dependency transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 
 	if _, err := q.AcquireTaskDependencyWriteLock(ctx, string(req.BlockerTaskID)); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -133,13 +133,13 @@ func attachTaskDependencyWithQueries(
 	return facts, nil
 }
 
-func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemoveRequest) (TaskDependencyRemoveResult, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+func (s *Store) RemoveTaskDependency(ctx context.Context, req TaskDependencyRemoveRequest) (_ TaskDependencyRemoveResult, metadataOperationErr error) {
+	tx, err := s.metadata.BeginTransaction(ctx, "RemoveTaskDependency", nil)
 	if err != nil {
 		return TaskDependencyRemoveResult{}, fmt.Errorf("begin task dependency removal transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	if _, err := q.AcquireTaskDependencyWriteLock(ctx, string(req.BlockerTaskID)); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return TaskDependencyRemoveResult{}, fmt.Errorf("lock task dependency project: %w", err)

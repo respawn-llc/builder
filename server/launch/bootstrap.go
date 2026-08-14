@@ -26,14 +26,32 @@ type BootstrapPlan struct {
 }
 
 func ResolveSessionCaller(persistenceRoot string, sessionID string) (subagentpolicy.Caller, error) {
-	if _, err := openSessionByID(persistenceRoot, sessionID); err != nil {
-		return subagentpolicy.Caller{}, err
-	}
 	metadataStore, err := metadata.Open(persistenceRoot)
 	if err != nil {
 		return subagentpolicy.Caller{}, err
 	}
 	defer func() { _ = metadataStore.Close() }()
+	return ResolveSessionCallerWithStore(persistenceRoot, sessionID, metadataStore)
+}
+
+func ResolveSessionCallerWithStore(
+	persistenceRoot string,
+	sessionID string,
+	metadataStore interface {
+		AuthoritativeSessionStoreOptions() []session.StoreOption
+		SessionHasWorkflowTask(context.Context, string) (bool, error)
+	},
+) (subagentpolicy.Caller, error) {
+	if metadataStore == nil {
+		return subagentpolicy.Caller{}, errors.New("metadata store is required")
+	}
+	if _, err := session.OpenByID(
+		persistenceRoot,
+		sessionID,
+		metadataStore.AuthoritativeSessionStoreOptions()...,
+	); err != nil {
+		return subagentpolicy.Caller{}, err
+	}
 	workflow, err := metadataStore.SessionHasWorkflowTask(context.Background(), sessionID)
 	if err != nil {
 		return subagentpolicy.Caller{}, err

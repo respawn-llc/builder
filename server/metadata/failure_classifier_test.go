@@ -14,17 +14,20 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-type sqliteCodeError struct {
-	code int
+func sqliteCause(code int) error {
+	return &metadata.SQLiteCause{
+		ResultCode: metadata.SQLiteResultCode{
+			Primary:  code & 0xff,
+			Extended: code,
+		},
+		Cause: errors.New("structured SQLite failure"),
+	}
 }
 
-func (e sqliteCodeError) Error() string {
-	return "structured SQLite failure"
-}
+type unrelatedCodeError struct{}
 
-func (e sqliteCodeError) Code() int {
-	return e.code
-}
+func (unrelatedCodeError) Error() string { return "unrelated coded domain error" }
+func (unrelatedCodeError) Code() int     { return sqlite3.SQLITE_FULL }
 
 func TestClassifyFailureByStructuredCause(t *testing.T) {
 	t.Parallel()
@@ -53,7 +56,7 @@ func TestClassifyFailureByStructuredCause(t *testing.T) {
 		{
 			name:      "declared constraint",
 			ctx:       context.Background(),
-			cause:     fmt.Errorf("insert: %w", sqliteCodeError{code: sqlite3.SQLITE_CONSTRAINT_UNIQUE}),
+			cause:     fmt.Errorf("insert: %w", sqliteCause(sqlite3.SQLITE_CONSTRAINT_UNIQUE)),
 			wantClass: metadata.FailureNoncritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_CONSTRAINT_UNIQUE),
 		},
@@ -72,56 +75,56 @@ func TestClassifyFailureByStructuredCause(t *testing.T) {
 		{
 			name:      "SQLite interrupt caused by caller cancellation",
 			ctx:       canceledContext,
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_INTERRUPT},
+			cause:     sqliteCause(sqlite3.SQLITE_INTERRUPT),
 			wantClass: metadata.FailureNoncritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_INTERRUPT),
 		},
 		{
 			name:      "busy extended variant",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_BUSY_TIMEOUT},
+			cause:     sqliteCause(sqlite3.SQLITE_BUSY_TIMEOUT),
 			wantClass: metadata.FailureNoncritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_BUSY_TIMEOUT),
 		},
 		{
 			name:      "locked extended variant",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_LOCKED_SHAREDCACHE},
+			cause:     sqliteCause(sqlite3.SQLITE_LOCKED_SHAREDCACHE),
 			wantClass: metadata.FailureNoncritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_LOCKED_SHAREDCACHE),
 		},
 		{
 			name:      "database full",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_FULL},
+			cause:     sqliteCause(sqlite3.SQLITE_FULL),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_FULL),
 		},
 		{
 			name:      "corrupt extended variant",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_CORRUPT_INDEX},
+			cause:     sqliteCause(sqlite3.SQLITE_CORRUPT_INDEX),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_CORRUPT_INDEX),
 		},
 		{
 			name:      "not a database",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_NOTADB},
+			cause:     sqliteCause(sqlite3.SQLITE_NOTADB),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_NOTADB),
 		},
 		{
 			name:      "cannot open extended variant",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_CANTOPEN_ISDIR},
+			cause:     sqliteCause(sqlite3.SQLITE_CANTOPEN_ISDIR),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_CANTOPEN_ISDIR),
 		},
 		{
 			name:      "unexpected readonly extended variant",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_READONLY_DBMOVED},
+			cause:     sqliteCause(sqlite3.SQLITE_READONLY_DBMOVED),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_READONLY_DBMOVED),
 		},
@@ -158,14 +161,14 @@ func TestClassifyFailureByStructuredCause(t *testing.T) {
 		{
 			name:      "unknown SQLite primary code",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: 31},
+			cause:     sqliteCause(31),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(31),
 		},
 		{
 			name:      "SQLite interrupt without caller cancellation",
 			ctx:       context.Background(),
-			cause:     sqliteCodeError{code: sqlite3.SQLITE_INTERRUPT},
+			cause:     sqliteCause(sqlite3.SQLITE_INTERRUPT),
 			wantClass: metadata.FailureCritical,
 			wantCode:  sqliteResultCode(sqlite3.SQLITE_INTERRUPT),
 		},
@@ -173,6 +176,12 @@ func TestClassifyFailureByStructuredCause(t *testing.T) {
 			name:      "ordinary non-SQLite operation failure",
 			ctx:       context.Background(),
 			cause:     errors.New("validation failed"),
+			wantClass: metadata.FailureNoncritical,
+		},
+		{
+			name:      "unrelated coded domain failure",
+			ctx:       context.Background(),
+			cause:     unrelatedCodeError{},
 			wantClass: metadata.FailureNoncritical,
 		},
 	}
@@ -252,7 +261,7 @@ func TestClassifyFailureTreatsEverySQLiteIOERRExtendedVariantAsCritical(t *testi
 
 	for _, tt := range ioErrorCodes {
 		t.Run(tt.name, func(t *testing.T) {
-			cause := sqliteCodeError{code: tt.code}
+			cause := sqliteCause(tt.code)
 			classified := metadata.ClassifyFailure(
 				context.Background(),
 				"read metadata",

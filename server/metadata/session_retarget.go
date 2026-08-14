@@ -158,7 +158,7 @@ func (s *Store) PlanSessionWorkspaceRetarget(ctx context.Context, req SessionWor
 	}, nil
 }
 
-func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan SessionWorkspaceRetargetPlan, updatedAt time.Time) (SessionWorkspaceRetargetResult, error) {
+func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan SessionWorkspaceRetargetPlan, updatedAt time.Time) (result SessionWorkspaceRetargetResult, resultErr error) {
 	if s == nil || s.queries == nil {
 		return SessionWorkspaceRetargetResult{}, errors.New("metadata store is required")
 	}
@@ -166,14 +166,15 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		return SessionWorkspaceRetargetResult{}, errors.New("session retarget updated time is required")
 	}
 	updatedAt = updatedAt.UTC()
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.BeginTransaction(ctx, "Commit Session workspace retarget", nil)
 	if err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("begin session retarget tx: %w", err)
+		return SessionWorkspaceRetargetResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &resultErr)
+	q := tx.Queries()
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("lock session retarget: %w", err)
+		resultErr = fmt.Errorf("lock session retarget: %w", err)
+		return SessionWorkspaceRetargetResult{}, resultErr
 	}
 	state, err := q.GetSessionWorkspaceRetargetStateByID(ctx, plan.SessionID)
 	if err != nil {
@@ -228,7 +229,8 @@ func (s *Store) CommitSessionWorkspaceRetarget(ctx context.Context, plan Session
 		return SessionWorkspaceRetargetResult{}, errors.New("session project or artifact changed while rebinding")
 	}
 	if err := tx.Commit(); err != nil {
-		return SessionWorkspaceRetargetResult{}, fmt.Errorf("commit session retarget tx: %w", err)
+		resultErr = err
+		return SessionWorkspaceRetargetResult{}, resultErr
 	}
 	return SessionWorkspaceRetargetResult{Binding: binding, WorkspaceBindingCreated: created, UpdatedAt: updatedAt}, nil
 }

@@ -182,6 +182,10 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	if ctx == nil {
 		return errContextRequired
 	}
+	if fatal := s.metadataFatalTermination(); fatal != nil {
+		_ = s.Close()
+		return fatal
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -190,6 +194,10 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	}
 	rpc, err := s.startRPC()
 	if err != nil {
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			_ = s.Close()
+			return fatal
+		}
 		return err
 	}
 	defer s.close()
@@ -201,19 +209,34 @@ func (s *ServeServer) Serve(ctx context.Context) error {
 	case <-ctx.Done():
 		rpc.shutdown()
 		rpc.wait()
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		return ctx.Err()
 	case serveErr := <-rpc.errCh:
 		rpc.shutdown()
 		rpc.waitRemaining()
+		if fatal := s.metadataFatalTermination(); fatal != nil {
+			return fatal
+		}
 		return serveErr
 	case <-metadataFatal:
 		rpc.shutdown()
 		rpc.wait()
 		_ = s.Close()
-		return &CriticalInfrastructureTermination{
-			Cause: s.Core.MetadataFatalAuthority().MetadataFatal(),
-		}
+		return s.metadataFatalTermination()
 	}
+}
+
+func (s *ServeServer) metadataFatalTermination() *CriticalInfrastructureTermination {
+	if s == nil || s.Core == nil || s.Core.MetadataFatalAuthority() == nil {
+		return nil
+	}
+	fatal := s.Core.MetadataFatalAuthority().MetadataFatal()
+	if fatal == nil {
+		return nil
+	}
+	return &CriticalInfrastructureTermination{Cause: fatal}
 }
 
 func (s *ServeServer) startRPC() (*runningRPC, error) {

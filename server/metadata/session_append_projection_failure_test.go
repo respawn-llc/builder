@@ -14,6 +14,7 @@ import (
 
 	"core/server/session"
 	"core/shared/runtimeids"
+	sqlitedriver "modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
@@ -60,13 +61,6 @@ func (r *projectionLogRecords) snapshot() []map[string]any {
 	return append([]map[string]any(nil), r.records...)
 }
 
-type projectionSQLiteCodeError struct {
-	code int
-}
-
-func (e projectionSQLiteCodeError) Error() string { return "structured SQLite failure" }
-func (e projectionSQLiteCodeError) Code() int     { return e.code }
-
 func (r *recordingFatalReporter) ReportMetadataFatal(failure *ClassifiedFailure) bool {
 	if len(r.failures) != 0 {
 		return false
@@ -76,8 +70,17 @@ func (r *recordingFatalReporter) ReportMetadataFatal(failure *ClassifiedFailure)
 }
 
 func TestSessionAppendProjectionOperationClassificationAggregatesRollbackOnce(t *testing.T) {
-	primary := projectionSQLiteCodeError{code: sqlite3.SQLITE_BUSY}
-	rollback := projectionSQLiteCodeError{code: sqlite3.SQLITE_IOERR_ROLLBACK_ATOMIC}
+	primary := &SQLiteCause{
+		ResultCode: SQLiteResultCode{Primary: sqlite3.SQLITE_BUSY, Extended: sqlite3.SQLITE_BUSY},
+		Cause:      errors.New("database busy"),
+	}
+	rollback := &SQLiteCause{
+		ResultCode: SQLiteResultCode{
+			Primary:  sqlite3.SQLITE_IOERR,
+			Extended: sqlite3.SQLITE_IOERR_ROLLBACK_ATOMIC,
+		},
+		Cause: errors.New("rollback I/O failure"),
+	}
 	failure := ClassifyOperationFailure(
 		context.Background(),
 		"Session append projection",
@@ -98,6 +101,29 @@ func TestSessionAppendProjectionOperationClassificationAggregatesRollbackOnce(t 
 		failure.SQLite.Primary != sqlite3.SQLITE_BUSY ||
 		failure.SQLite.Extended != sqlite3.SQLITE_BUSY {
 		t.Fatalf("primary SQLite classification = %#v, want BUSY", failure.SQLite)
+	}
+}
+
+func TestSessionAppendProjectionOperationClassificationSupportsRollbackOnlyFailure(t *testing.T) {
+	rollback := &SQLiteCause{
+		ResultCode: SQLiteResultCode{
+			Primary:  sqlite3.SQLITE_IOERR,
+			Extended: sqlite3.SQLITE_IOERR_ROLLBACK_ATOMIC,
+		},
+		Cause: errors.New("rollback I/O failure"),
+	}
+	failure := ClassifyOperationFailure(
+		context.Background(),
+		"Session append projection",
+		"/metadata/main.sqlite3",
+		nil,
+		rollback,
+	)
+	if failure.Class != FailureCritical || !errors.Is(failure, rollback) {
+		t.Fatalf("rollback-only aggregate = %#v, want retained critical rollback", failure)
+	}
+	if got := failure.Error(); !strings.Contains(got, rollback.Error()) {
+		t.Fatalf("rollback-only diagnostic %q omits rollback cause", got)
 	}
 }
 
@@ -124,10 +150,11 @@ func TestSessionAppendProjectionSignalsCriticalFailureOnceAndReturnsNil(t *testi
 	if err != nil {
 		t.Fatalf("metadataSQLiteReadOnlyDSN: %v", err)
 	}
-	store.db, err = sql.Open("sqlite", dsn)
+	connector, err := sqlitedriver.NewConnector(dsn)
 	if err != nil {
-		t.Fatalf("open read-only metadata database: %v", err)
+		t.Fatalf("create read-only metadata connector: %v", err)
 	}
+	store.db = sql.OpenDB(connector)
 	projection := session.AppendProjection{
 		SessionID:     runtimeids.NewSessionID(),
 		FirstSequence: 4,

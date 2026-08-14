@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	sqlitedriver "modernc.org/sqlite"
 )
 
 func TestLatestMetadataFixtureConfiguresEightConnectionSQLitePool(t *testing.T) {
@@ -88,10 +90,11 @@ func TestActivatedMetadataSQLiteDSNRequiresExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("metadataSQLiteDSN: %v", err)
 	}
-	db, err := sql.Open("sqlite", dsn)
+	connector, err := sqlitedriver.NewConnector(dsn)
 	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
+		t.Fatalf("create SQLite connector: %v", err)
 	}
+	db := sql.OpenDB(connector)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Ping(); err == nil {
 		t.Fatal("activated metadata connection unexpectedly created a missing database")

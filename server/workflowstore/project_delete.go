@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -21,8 +20,8 @@ type ProjectDeleteRequest struct {
 	ExpectedSessionIDs []string
 }
 
-func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]serverapi.ProjectDeleteBlocker, error) {
-	if s == nil || s.db == nil || s.queries == nil {
+func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) (_ []serverapi.ProjectDeleteBlocker, metadataOperationErr error) {
+	if s == nil || s.metadata == nil || s.queries == nil {
 		return nil, errors.New("workflow store is required")
 	}
 	projectID := strings.TrimSpace(req.ProjectID)
@@ -35,59 +34,50 @@ func (s *Store) DeleteProject(ctx context.Context, req ProjectDeleteRequest) ([]
 		return blockers, nil
 	}
 
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "DeleteProject", nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin project delete tx: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
-	rollback := func(operation error) error {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			return errors.Join(operation, fmt.Errorf("rollback project delete tx: %w", rollbackErr))
-		}
-		return operation
-	}
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	locked, err := q.AcquireProjectDeleteWriteLock(ctx, projectID)
 	if err != nil {
-		return nil, rollback(fmt.Errorf("lock project delete: %w", err))
+		return nil, fmt.Errorf("lock project delete: %w", err)
 	}
 	if locked == 0 {
-		return nil, rollback(fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID))
+		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
 	}
 
 	counts, err = q.GetProjectDeleteBlockerCounts(ctx, projectID)
 	if err != nil {
-		return nil, rollback(fmt.Errorf("count project delete blockers: %w", err))
+		return nil, fmt.Errorf("count project delete blockers: %w", err)
 	}
 	blockers := projectDeleteBlockersFromCounts(counts)
 	if len(blockers) > 0 {
-		if err := rollback(nil); err != nil {
-			return nil, err
-		}
 		return blockers, nil
 	}
 	commitSessionIDs, err := q.ListProjectSessionIDs(ctx, projectID)
 	if err != nil {
-		return nil, rollback(fmt.Errorf("list project sessions for commit: %w", err))
+		return nil, fmt.Errorf("list project sessions for commit: %w", err)
 	}
 	if !metadata.SessionIDSetsEqual(req.ExpectedSessionIDs, commitSessionIDs) {
-		return nil, rollback(ErrProjectDeletePreparationInvalidated)
+		return nil, ErrProjectDeletePreparationInvalidated
 	}
 	if _, err := q.DeleteProjectTaskPendingApprovals(ctx, projectID); err != nil {
-		return nil, rollback(fmt.Errorf("delete project task pending approvals: %w", err))
+		return nil, fmt.Errorf("delete project task pending approvals: %w", err)
 	}
 	if err := q.DeleteProjectTasks(ctx, projectID); err != nil {
-		return nil, rollback(fmt.Errorf("delete project tasks: %w", err))
+		return nil, fmt.Errorf("delete project tasks: %w", err)
 	}
 	rows, err := q.DeleteProject(ctx, projectID)
 	if err != nil {
-		return nil, rollback(fmt.Errorf("delete project: %w", err))
+		return nil, fmt.Errorf("delete project: %w", err)
 	}
 	if rows == 0 {
-		return nil, rollback(fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID))
+		return nil, fmt.Errorf("%w: %q", serverapi.ErrProjectNotFound, projectID)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, rollback(fmt.Errorf("commit project delete tx: %w", err))
+		return nil, fmt.Errorf("commit project delete tx: %w", err)
 	}
 	return nil, nil
 }

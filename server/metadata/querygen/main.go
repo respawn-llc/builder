@@ -89,6 +89,9 @@ func generateMetadataQueriesCommand(args []string) (err error) {
 	if err := annotateFile(filepath.Join(generatedDir, generatedQueriesFilename)); err != nil {
 		return err
 	}
+	if err := generateQueriesDB(filepath.Join(generatedDir, "db.go")); err != nil {
+		return err
+	}
 	pageQuery, err := renderer.RenderTaskSearchPageDescriptors()
 	if err != nil {
 		return err

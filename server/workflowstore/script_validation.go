@@ -3,6 +3,7 @@ package workflowstore
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"core/server/metadata/sqlitegen"
@@ -41,7 +42,7 @@ func (s *Store) scriptNodeInterruption(ctx context.Context, q *sqlitegen.Queries
 func (s *Store) scriptNodeDiagnostics(ctx context.Context, q *sqlitegen.Queries, nodeID workflow.NodeID, executionRoot *ExecutionRoot) ([]workflowscript.Diagnostic, error) {
 	node, err := q.GetWorkflowNode(ctx, string(nodeID))
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("script node %q missing from workflow graph", nodeID)
 		}
 		return nil, err

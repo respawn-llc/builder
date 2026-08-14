@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"core/server/metadata/sqlitegen"
-	"core/server/metadata/sqlitelifecyclegen"
 	"core/server/workflow"
 	"core/shared/runtimeids"
 )
@@ -64,7 +63,7 @@ func (a CurrentNodeSessionBindingAuthority) CurrentAssociation() (TaskSessionAss
 
 // BindSessionToCurrentNode atomically establishes the live Agent Session
 // binding and the exact current retained-Session tuple for one Current Node.
-func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSessionBindingRequest) (CurrentNodeSessionBindingAuthority, error) {
+func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSessionBindingRequest) (_ CurrentNodeSessionBindingAuthority, metadataOperationErr error) {
 	normalized, err := normalizeTaskSessionAssociationRequest(req.Association)
 	if err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
@@ -72,33 +71,15 @@ func (s *Store) BindSessionToCurrentNode(ctx context.Context, req CurrentNodeSes
 	if req.ExpectedCurrentSessionID != nil && req.ExpectedCurrentSessionID.IsZero() {
 		return CurrentNodeSessionBindingAuthority{}, errors.New("expected current Session id is invalid")
 	}
-	connection, err := s.db.Conn(ctx)
+	transaction, err := s.metadata.BeginImmediateTransaction(ctx, "Bind Session to Current Node")
 	if err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
 	}
-	defer func() { _ = connection.Close() }()
-	lifecycle := sqlitelifecyclegen.New(connection)
-	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
-		return CurrentNodeSessionBindingAuthority{}, err
-	}
-	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
-	if err := lifecycle.BeginImmediate(ctx); err != nil {
-		return CurrentNodeSessionBindingAuthority{}, err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = lifecycle.Rollback(context.Background())
-		}
-	}()
+	defer transaction.Settle(ctx, &metadataOperationErr)
 	commit := func() error {
-		if err := lifecycle.Commit(ctx); err != nil {
-			return err
-		}
-		committed = true
-		return nil
+		return transaction.Commit(ctx)
 	}
-	q := sqlitegen.New(connection)
+	q := transaction.Queries()
 	currentNode, err := s.currentNodeForReference(ctx, q, normalized.CurrentNode)
 	if err != nil {
 		return CurrentNodeSessionBindingAuthority{}, err
@@ -295,7 +276,7 @@ func currentTaskSessionAssociationBeforeBinding(
 	q *sqlitegen.Queries,
 	currentNode workflow.CurrentNodeReference,
 ) (TaskSessionAssociation, bool, error) {
-	association, err := currentTaskSessionForNode(sqlitegen.WithExpectedNoRows(ctx), q, currentNode)
+	association, err := currentTaskSessionForNode(ctx, q, currentNode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TaskSessionAssociation{}, false, nil
 	}
@@ -529,7 +510,7 @@ func (s *Store) LoadSessionReuseAssociations(
 ) ([]workflow.SessionReuseAssociation, error) {
 	associations := make([]workflow.SessionReuseAssociation, 0, len(references))
 	seen := make(map[workflow.CurrentNodeReferenceKey]struct{}, len(references))
-	lookupCtx := sqlitegen.WithExpectedNoRows(ctx)
+	lookupCtx := ctx
 	for _, reference := range references {
 		key, err := reference.Key()
 		if err != nil {
@@ -680,7 +661,7 @@ func (s *Store) ValidateCurrentNodeSessionBinding(
 func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 	ctx context.Context,
 	currentNode workflow.CurrentNode,
-) error {
+) (metadataOperationErr error) {
 	if currentNode.SessionID == nil {
 		return nil
 	}
@@ -691,26 +672,12 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		currentNode.Scheduling.State != workflow.CurrentNodeSchedulingInterrupted {
 		return errors.New("retained Resume Current Node must be interrupted")
 	}
-	connection, err := s.db.Conn(ctx)
+	transaction, err := s.metadata.BeginImmediateTransaction(ctx, "Repair Current Node Session provenance")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = connection.Close() }()
-	lifecycle := sqlitelifecyclegen.New(connection)
-	if err := lifecycle.SetBusyTimeout15Seconds(ctx); err != nil {
-		return err
-	}
-	defer func() { _ = lifecycle.SetBusyTimeout5Seconds(context.Background()) }()
-	if err := lifecycle.BeginImmediate(ctx); err != nil {
-		return err
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = lifecycle.Rollback(context.Background())
-		}
-	}()
-	q := sqlitegen.New(connection)
+	defer transaction.Settle(ctx, &metadataOperationErr)
+	q := transaction.Queries()
 	persisted, err := s.currentNodeForReference(ctx, q, currentNode.Reference)
 	if err != nil {
 		return err
@@ -723,10 +690,9 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		return ErrSessionNotCurrentWorkflowNode
 	}
 	if persisted.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
-		if err := lifecycle.Commit(ctx); err != nil {
+		if err := transaction.Commit(ctx); err != nil {
 			return err
 		}
-		committed = true
 		return nil
 	}
 	currentNodes, err := s.listTaskCurrentNodes(ctx, q, currentNode.Reference.TaskID)
@@ -755,7 +721,7 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 		return ErrSessionNotCurrentWorkflowNode
 	}
 	association, err := currentTaskSessionForNode(
-		sqlitegen.WithExpectedNoRows(ctx),
+		ctx,
 		q,
 		currentNode.Reference,
 	)
@@ -786,10 +752,9 @@ func (s *Store) RepairCurrentNodeSessionProvenanceForResume(
 	if err := designateCurrentTaskSessionAssociation(ctx, q, normalized, sourceSessionID); err != nil {
 		return err
 	}
-	if err := lifecycle.Commit(ctx); err != nil {
+	if err := transaction.Commit(ctx); err != nil {
 		return err
 	}
-	committed = true
 	return nil
 }
 

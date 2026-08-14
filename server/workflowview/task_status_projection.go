@@ -2,7 +2,6 @@ package workflowview
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,7 +52,7 @@ func NewTaskStatusProjection(
 	projector *TaskProjector,
 	liveObservation TaskStatusLiveObservationSource,
 ) (*TaskStatusProjection, error) {
-	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
+	if metadataStore == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
 	if workflowStore == nil {
@@ -304,7 +303,7 @@ type TaskStatusDurableSnapshot struct {
 func (p *TaskStatusProjection) WithDurableSnapshot(
 	ctx context.Context,
 	operation func(*TaskStatusDurableSnapshot) error,
-) (err error) {
+) error {
 	if p == nil {
 		return errors.New("task status projection is required")
 	}
@@ -314,24 +313,19 @@ func (p *TaskStatusProjection) WithDurableSnapshot(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := p.metadata.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return fmt.Errorf("begin task status durable snapshot: %w", err)
-	}
-	snapshot := &TaskStatusDurableSnapshot{
-		queries:       p.metadata.Queries().WithTx(tx),
-		workflowStore: p.workflowStore,
-		projector:     p.projector,
-	}
-	defer func() {
-		rollbackErr := tx.Rollback()
-		snapshot.closed = true
-		snapshot.queries = nil
-		if err == nil && rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = fmt.Errorf("close task status durable snapshot: %w", rollbackErr)
+	_, err := metadata.RunReadTransaction(ctx, p.metadata, "Task status durable snapshot", func(queries *sqlitegen.Queries) (struct{}, error) {
+		snapshot := &TaskStatusDurableSnapshot{
+			queries:       queries,
+			workflowStore: p.workflowStore,
+			projector:     p.projector,
 		}
-	}()
-	return operation(snapshot)
+		defer func() {
+			snapshot.closed = true
+			snapshot.queries = nil
+		}()
+		return struct{}{}, operation(snapshot)
+	})
+	return err
 }
 
 func (s *TaskStatusDurableSnapshot) validate() error {

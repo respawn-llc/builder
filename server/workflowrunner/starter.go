@@ -409,11 +409,11 @@ func (s *Starter) startCurrentNodeAgent(
 			var turnEngine *runtime.Engine
 			turnErr := bridge.WithEngine(runCtx, func(engineCtx context.Context, engine *runtime.Engine) error {
 				if input.ContextMode == workflow.ContextModeCompactAndContinueSession {
-					_, err := engine.SubmitWorkflowContinuationTurn(metadata.WithQueryFailureDiagnostics(engineCtx))
+					_, err := engine.SubmitWorkflowContinuationTurn(engineCtx)
 					if err != nil {
 						return err
 					}
-				} else if _, err := engine.SubmitWorkflowTurn(metadata.WithQueryFailureDiagnostics(engineCtx)); err != nil {
+				} else if _, err := engine.SubmitWorkflowTurn(engineCtx); err != nil {
 					return err
 				}
 				turnEngine = engine

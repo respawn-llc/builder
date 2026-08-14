@@ -174,7 +174,7 @@ func (s *Store) IsCurrentNodeExecutionEligible(ctx context.Context, reference wo
 	return !pending, nil
 }
 
-func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (PendingApprovalApplyResult, error) {
+func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.ApprovalID) (_ PendingApprovalApplyResult, metadataOperationErr error) {
 	normalizedID, err := normalizeApprovalID(approvalID)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
@@ -185,12 +185,12 @@ func (s *Store) ApplyPendingApproval(ctx context.Context, approvalID workflow.Ap
 	case <-ctx.Done():
 		return PendingApprovalApplyResult{}, ctx.Err()
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	tx, err := s.metadata.BeginTransaction(ctx, "ApplyPendingApproval", nil)
 	if err != nil {
 		return PendingApprovalApplyResult{}, err
 	}
-	defer func() { _ = tx.Rollback() }()
-	q := s.queries.WithTx(tx)
+	defer tx.Settle(ctx, &metadataOperationErr)
+	q := tx.Queries()
 	nowTime := s.now().UTC()
 	approval, err := pendingApprovalByID(ctx, q, normalizedID)
 	if err != nil {
