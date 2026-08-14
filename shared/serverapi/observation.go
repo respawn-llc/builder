@@ -102,17 +102,15 @@ func validateObservationApproval(approval clientui.PendingApproval) error {
 	if len(approval.Options) == 0 {
 		return errors.New("observation approval options are required")
 	}
-	seen := make(map[clientui.ApprovalDecision]struct{}, len(approval.Options))
 	for _, option := range approval.Options {
+		if strings.TrimSpace(option.Label) == "" {
+			return errors.New("observation approval option label is required")
+		}
 		switch option.Decision {
 		case clientui.ApprovalDecisionAllowOnce, clientui.ApprovalDecisionAllowSession, clientui.ApprovalDecisionDeny:
 		default:
 			return errors.New("observation approval option decision is invalid")
 		}
-		if _, exists := seen[option.Decision]; exists {
-			return errors.New("observation approval option decision is duplicated")
-		}
-		seen[option.Decision] = struct{}{}
 	}
 	return nil
 }

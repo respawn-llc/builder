@@ -5,7 +5,6 @@ import (
 	"io"
 	"strings"
 
-	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
 )
@@ -27,7 +26,7 @@ func writeObservedQuestion(w io.Writer, question serverapi.ObservationQuestion, 
 		fmt.Fprintln(w, question.Approval.Question)
 		fmt.Fprintln(w, questionSuggestionsHeading)
 		for i, option := range question.Approval.Options {
-			fmt.Fprintf(w, "%d. %s\n", i+1, clientui.ApprovalDecisionLabel(option.Decision))
+			fmt.Fprintf(w, "%d. %s\n", i+1, option.Label)
 		}
 	}
 	if strings.TrimSpace(hint) != "" {
