@@ -887,7 +887,7 @@ func (s *defaultStepExecutor) beginNextAgentStep(ctx context.Context) (string, e
 	if err := s.completeAgentStepBoundary(ctx); err != nil {
 		return "", err
 	}
-	if err := s.engine.drainSteeringAtBoundary(ctx, ""); err != nil {
+	if err := s.engine.drainSteeringAtRuntimeBoundary(ctx); err != nil {
 		return "", err
 	}
 	lifecycle, ok := s.engine.stepLifecycle.(*defaultExclusiveStepLifecycle)

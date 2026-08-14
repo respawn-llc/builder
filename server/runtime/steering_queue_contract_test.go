@@ -7,10 +7,50 @@ import (
 	"testing"
 	"time"
 
+	"core/server/llm"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"
+	"core/shared/textutil"
 )
+
+func TestSteeringOutputProvenanceIsTypedAndExactIDsAreValidated(t *testing.T) {
+	intent := steerEventIntent(Event{Kind: EventStreamingErrorUpdated})
+
+	runtimeEntry := newRuntimeOutputSteeringQueueEntry(false, intent)
+	if err := runtimeEntry.validate(); err != nil {
+		t.Fatalf("validate Runtime output: %v", err)
+	}
+	if _, ok := runtimeEntry.output.provenance.(runtimeOutputProvenance); !ok {
+		t.Fatalf("Runtime output provenance = %+v", runtimeEntry.output.provenance)
+	}
+
+	for _, stepID := range []string{"", "   "} {
+		entry := newExactOutputSteeringQueueEntry(stepID, false, intent)
+		if err := entry.validate(); err == nil {
+			t.Fatalf("exact output with Step ID %q validated", stepID)
+		}
+	}
+
+	human := newHumanSteeringQueueEntry(QueuedUserMessage{
+		ID: "queue-item",
+		Message: llm.Message{
+			Role:    llm.RoleUser,
+			Content: textutil.Value("hello"),
+		},
+	}, true)
+	queue := newSteeringQueue()
+	if _, err := queue.appendHuman(human, nil, false); err != nil {
+		t.Fatalf("append deferred human output: %v", err)
+	}
+	if err := queue.bindDeferredHumanProvenance(exactSteeringOutputProvenance("step")); err != nil {
+		t.Fatalf("bind deferred human output: %v", err)
+	}
+	exact, ok := human.output.provenance.(exactOutputProvenance)
+	if !ok || exact.stepID != "step" {
+		t.Fatalf("bound human output provenance = %+v", human.output.provenance)
+	}
+}
 
 func TestSteeringQueueFIFOAndDrainingHeadContract(t *testing.T) {
 	queue := newSteeringQueue()

@@ -78,8 +78,8 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 				}
 				time.Sleep(time.Millisecond)
 			}
-			if !engine.backgroundFlow.HasPendingNotices() {
-				t.Fatal("terminal background continuation was lost at the Step lifecycle edge")
+			if engine.backgroundFlow.HasPendingNotices() {
+				t.Fatal("terminal background continuation queued before its live update was applied")
 			}
 
 			lifecycle.end()
@@ -89,7 +89,35 @@ func TestTerminalBackgroundUpdateQueuesAcrossClosingOrInterruptedStep(t *testing
 			case <-time.After(runtimeTestSynchronizationTimeout):
 				t.Fatal("queued background update did not complete after Runtime drain")
 			}
+			if engine.backgroundFlow.HasPendingNotices() {
+				t.Fatal("applied terminal background continuation remained pending")
+			}
+			foundNotice := false
+			for _, entry := range engine.ChatSnapshot().Entries {
+				if entry.MessageType == llm.MessageTypeBackgroundNotice {
+					foundNotice = true
+					break
+				}
+			}
+			if !foundNotice {
+				t.Fatal("applied terminal background continuation was not persisted")
+			}
 		})
+	}
+}
+
+func TestTerminalBackgroundUpdateDoesNotQueueWhenRuntimeIsClosed(t *testing.T) {
+	engine := mustNewTestEngine(t, mustCreateTestSession(t), &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+	engine.closed.Store(true)
+
+	engine.HandleBackgroundShellUpdate(BackgroundShellEvent{
+		Type:  BackgroundShellEventCompleted,
+		ID:    "shell",
+		State: "completed",
+	}, true)
+
+	if engine.backgroundFlow.HasPendingNotices() {
+		t.Fatal("closed Runtime retained a notice for an unrecorded background completion")
 	}
 }
 

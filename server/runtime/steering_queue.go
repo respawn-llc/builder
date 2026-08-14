@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"core/server/session"
@@ -31,8 +32,50 @@ type steeringOutputReply struct {
 	err     error
 }
 
+type steeringOutputProvenance interface {
+	steeringOutputProvenance()
+}
+
+type runtimeOutputProvenance struct{}
+
+type exactOutputProvenance struct {
+	stepID string
+}
+
+type deferredHumanOutputProvenance struct{}
+
+func (runtimeOutputProvenance) steeringOutputProvenance()       {}
+func (exactOutputProvenance) steeringOutputProvenance()         {}
+func (deferredHumanOutputProvenance) steeringOutputProvenance() {}
+
+func runtimeSteeringOutputProvenance() steeringOutputProvenance {
+	return runtimeOutputProvenance{}
+}
+
+func exactSteeringOutputProvenance(stepID string) steeringOutputProvenance {
+	return exactOutputProvenance{stepID: stepID}
+}
+
+func deferredHumanSteeringOutputProvenance() steeringOutputProvenance {
+	return deferredHumanOutputProvenance{}
+}
+
+func validateSteeringOutputProvenance(provenance steeringOutputProvenance) error {
+	switch provenance := provenance.(type) {
+	case runtimeOutputProvenance, deferredHumanOutputProvenance:
+		return nil
+	case exactOutputProvenance:
+		if strings.TrimSpace(provenance.stepID) == "" {
+			return errors.New("exact Runtime output requires a Step ID")
+		}
+		return nil
+	default:
+		return errors.New("Runtime output provenance is required")
+	}
+}
+
 type steeringOutputOperation struct {
-	stepID        string
+	provenance    steeringOutputProvenance
 	intents       []steeringIntent
 	commitReceipt bool
 	humanItem     *QueuedUserMessage
@@ -90,7 +133,7 @@ type steeringQueueEntry struct {
 func newExactOutputSteeringQueueEntry(stepID string, commitReceipt bool, intents ...steeringIntent) *steeringQueueEntry {
 	return &steeringQueueEntry{
 		output: &steeringOutputOperation{
-			stepID:        stepID,
+			provenance:    exactSteeringOutputProvenance(stepID),
 			intents:       append([]steeringIntent(nil), intents...),
 			commitReceipt: commitReceipt,
 		},
@@ -101,6 +144,7 @@ func newExactOutputSteeringQueueEntry(stepID string, commitReceipt bool, intents
 func newRuntimeOutputSteeringQueueEntry(commitReceipt bool, intents ...steeringIntent) *steeringQueueEntry {
 	return &steeringQueueEntry{
 		output: &steeringOutputOperation{
+			provenance:    runtimeSteeringOutputProvenance(),
 			intents:       append([]steeringIntent(nil), intents...),
 			commitReceipt: commitReceipt,
 		},
@@ -108,11 +152,16 @@ func newRuntimeOutputSteeringQueueEntry(commitReceipt bool, intents ...steeringI
 	}
 }
 
-func newHumanSteeringQueueEntry(item QueuedUserMessage) *steeringQueueEntry {
+func newHumanSteeringQueueEntry(item QueuedUserMessage, deferUntilStepBoundary bool) *steeringQueueEntry {
+	provenance := runtimeSteeringOutputProvenance()
+	if deferUntilStepBoundary {
+		provenance = deferredHumanSteeringOutputProvenance()
+	}
 	return &steeringQueueEntry{
 		output: &steeringOutputOperation{
-			intents:   []steeringIntent{steerUserMessageWithFlushIntent(item.Message)},
-			humanItem: &item,
+			provenance: provenance,
+			intents:    []steeringIntent{steerUserMessageWithFlushIntent(item.Message)},
+			humanItem:  &item,
 		},
 		outputReply: make(chan steeringOutputReply, 1),
 	}
@@ -168,6 +217,9 @@ func (e *steeringQueueEntry) validate() error {
 		}
 		if len(e.output.intents) == 0 {
 			return errors.New("output Steering operation requires at least one intent")
+		}
+		if err := validateSteeringOutputProvenance(e.output.provenance); err != nil {
+			return err
 		}
 		for _, intent := range e.output.intents {
 			if len(intent.items) == 0 {
@@ -562,18 +614,30 @@ func (q *steeringQueue) pendingHumanForFailure(current *steeringQueueEntry) []in
 	return items
 }
 
-func (q *steeringQueue) bindDeferredHumanStep(stepID string) {
+func (q *steeringQueue) bindDeferredHumanProvenance(
+	provenance steeringOutputProvenance,
+) error {
 	if q == nil {
-		return
+		return nil
+	}
+	if err := validateSteeringOutputProvenance(provenance); err != nil {
+		return err
+	}
+	if _, deferred := provenance.(deferredHumanOutputProvenance); deferred {
+		return errors.New("deferred human output cannot bind to deferred provenance")
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, entry := range q.pending {
-		if entry.human == nil || entry.output == nil || entry.output.stepID != "" {
+		if entry.human == nil || entry.output == nil {
 			continue
 		}
-		entry.output.stepID = stepID
+		if _, deferred := entry.output.provenance.(deferredHumanOutputProvenance); !deferred {
+			continue
+		}
+		entry.output.provenance = provenance
 	}
+	return nil
 }
 
 func (q *steeringQueue) finishCurrent(entry *steeringQueueEntry) error {

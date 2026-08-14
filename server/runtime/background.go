@@ -52,15 +52,18 @@ func (e *Engine) SteerBackgroundContinuationFailure(err error) error {
 }
 
 func (b *defaultBackgroundNoticeScheduler) HandleBackgroundShellUpdate(evt BackgroundShellEvent, queueNotice bool) {
-	if queueNotice {
+	err := b.RecordBackgroundShellUpdate(evt)
+	if queueNotice && err == nil {
 		b.QueueBackgroundShellContinuation(evt)
 	}
-	if err := b.RecordBackgroundShellUpdate(evt); err != nil {
+	if err != nil {
 		b.engine.surfaceRunError(err)
 	}
 }
 
-func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(evt BackgroundShellEvent) error {
+func (b *defaultBackgroundNoticeScheduler) RecordBackgroundShellUpdate(
+	evt BackgroundShellEvent,
+) error {
 	return b.engine.steerCurrentStepOrRuntime(
 		steerEventIntent(Event{Kind: EventBackgroundUpdated, Background: &evt}),
 	)

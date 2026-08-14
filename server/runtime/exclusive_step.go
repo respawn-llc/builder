@@ -450,7 +450,7 @@ func (s *defaultExclusiveStepLifecycle) persistInterruption(stepID string) error
 			Content:     textutil.Value(interruptMessage),
 		}},
 	)
-	return s.engine.applyExactRuntimeMutation("", intent.items[0])
+	return s.engine.applyExactRuntimeMutation(stepID, intent.items[0])
 }
 
 func (s *defaultExclusiveStepLifecycle) runCurrentLocked(run *exclusiveRunState) bool {
