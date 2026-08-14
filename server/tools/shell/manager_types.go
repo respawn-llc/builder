@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/tools/shell/postprocess"
@@ -80,7 +81,7 @@ type terminalCompletionCache struct {
 }
 
 func newBackgroundedEvent(snapshot Snapshot) Event {
-	return Event{Type: EventBackgrounded, Snapshot: snapshotWithExecutionCorrelationCopy(snapshot)}
+	return Event{Type: EventBackgrounded, Snapshot: cloneSnapshot(snapshot)}
 }
 
 func newFinalizedBackgroundEvent(eventType EventType, snapshot Snapshot, output string, warning postprocess.Warning, noticeSuppressed bool) Event {
@@ -114,7 +115,7 @@ func newTerminalBackgroundEvent(eventType EventType, snapshot Snapshot, output c
 	}
 	return Event{
 		Type:             eventType,
-		Snapshot:         snapshotWithExecutionCorrelationCopy(snapshot),
+		Snapshot:         cloneSnapshot(snapshot),
 		NoticeSuppressed: noticeSuppressed,
 		completion:       &output,
 	}
@@ -274,6 +275,11 @@ type processEntry struct {
 	terminalDelivered    bool
 	mu                   sync.Mutex
 	interactMu           sync.Mutex
+	publishedSnapshot    atomic.Pointer[Snapshot]
+}
+
+type processCatalogSnapshot struct {
+	entries map[string]*processEntry
 }
 
 func (p *processEntry) signal() {
@@ -324,8 +330,15 @@ func cloneExecutionCorrelation(correlation *runtimeids.ExecutionCorrelation) *ru
 	return &copy
 }
 
-func snapshotWithExecutionCorrelationCopy(snapshot Snapshot) Snapshot {
+func cloneSnapshot(snapshot Snapshot) Snapshot {
 	snapshot.ExecutionCorrelation = cloneExecutionCorrelation(snapshot.ExecutionCorrelation)
+	snapshot.ExitCode = textutil.Pointer(snapshot.ExitCode)
+	return snapshot
+}
+
+func (p *processEntry) publishSnapshotLocked() Snapshot {
+	snapshot := p.snapshotLocked()
+	p.publishedSnapshot.Store(&snapshot)
 	return snapshot
 }
 
@@ -374,6 +387,7 @@ func (p *processEntry) writeOutput(chunk []byte) error {
 	p.lastUpdatedAt = time.Now().UTC()
 	if p.lastSignaledAt.IsZero() || p.lastUpdatedAt.Sub(p.lastSignaledAt) >= shellOutputNotifyInterval {
 		p.lastSignaledAt = p.lastUpdatedAt
+		p.publishSnapshotLocked()
 		p.signal()
 	}
 	return nil
@@ -387,6 +401,7 @@ func (p *processEntry) setExited(exitCode int, state string) {
 	p.exitCode = &exitCode
 	p.state = state
 	stdin, log := p.detachResourcesLocked()
+	p.publishSnapshotLocked()
 	p.mu.Unlock()
 	closeDetachedResources(stdin, log)
 	p.finalizeOutput()
@@ -410,15 +425,21 @@ func (p *processEntry) closeOnExit(exitCode int, state string) Snapshot {
 	closeDetachedResources(stdin, log)
 	p.finalizeOutput()
 	p.mu.Lock()
-	snapshot := p.snapshotLocked()
+	p.running = false
+	snapshot := p.publishSnapshotLocked()
 	p.mu.Unlock()
 	return snapshot
 }
 
 func (p *processEntry) snapshot() Snapshot {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.snapshotLocked()
+	if p == nil {
+		return Snapshot{}
+	}
+	snapshot := p.publishedSnapshot.Load()
+	if snapshot == nil {
+		panic("background shell process has no published snapshot")
+	}
+	return cloneSnapshot(*snapshot)
 }
 
 func (p *processEntry) drainPending() []byte {
@@ -446,7 +467,7 @@ func (p *processEntry) transitionToBackground() (Snapshot, bool) {
 	}
 	p.backgrounded = true
 	p.state = "running"
-	return p.snapshotLocked(), true
+	return p.publishSnapshotLocked(), true
 }
 
 type outputWriter struct {

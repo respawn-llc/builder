@@ -16,14 +16,12 @@ import (
 )
 
 func (m *Manager) List() []Snapshot {
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
+	catalog := m.catalog.Load()
+	if catalog == nil {
+		return nil
 	}
-	m.mu.Unlock()
-	out := make([]Snapshot, 0, len(entries))
-	for _, entry := range entries {
+	out := make([]Snapshot, 0, len(catalog.entries))
+	for _, entry := range catalog.entries {
 		out = append(out, entry.snapshot())
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -39,15 +37,9 @@ func (m *Manager) List() []Snapshot {
 }
 
 func (m *Manager) Count() int {
-	m.mu.Lock()
-	entries := make([]*processEntry, 0, len(m.entries))
-	for _, entry := range m.entries {
-		entries = append(entries, entry)
-	}
-	m.mu.Unlock()
 	count := 0
-	for _, entry := range entries {
-		if entry.isRunning() {
+	for _, snapshot := range m.List() {
+		if snapshot.Running {
 			count++
 		}
 	}
@@ -55,7 +47,7 @@ func (m *Manager) Count() int {
 }
 
 func (m *Manager) Snapshot(id string) (Snapshot, error) {
-	entry, err := m.entry(strings.TrimSpace(id))
+	entry, err := m.publishedEntry(strings.TrimSpace(id))
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -81,6 +73,7 @@ func (m *Manager) Close() error {
 			_ = entry.stdin.Close()
 			entry.stdin = nil
 			entry.stdinOpen = false
+			entry.publishSnapshotLocked()
 		}
 		entry.mu.Unlock()
 	}
@@ -239,6 +232,21 @@ func (m *Manager) entry(id string) (*processEntry, error) {
 	return entry, nil
 }
 
+func (m *Manager) publishedEntry(id string) (*processEntry, error) {
+	if m == nil {
+		return nil, ErrResultUnavailable
+	}
+	catalog := m.catalog.Load()
+	if catalog == nil {
+		return nil, ErrResultUnavailable
+	}
+	entry, ok := catalog.entries[id]
+	if !ok {
+		return nil, ErrResultUnavailable
+	}
+	return entry, nil
+}
+
 func (m *Manager) emitEvent(evt Event) bool {
 	m.mu.Lock()
 	handler := m.onEvent
@@ -389,7 +397,7 @@ func (m *Manager) retryTerminalEvent(entry *processEntry, ownerSessionID string)
 func cacheTerminalEvent(entry *processEntry, event Event) *terminalEventCache {
 	cached := &terminalEventCache{
 		eventType:        event.Type,
-		snapshot:         snapshotWithExecutionCorrelationCopy(event.Snapshot),
+		snapshot:         cloneSnapshot(event.Snapshot),
 		noticeSuppressed: event.NoticeSuppressed,
 	}
 	if event.completion == nil {
@@ -427,7 +435,7 @@ func (c *terminalEventCache) event() Event {
 	}
 	event := Event{
 		Type:             c.eventType,
-		Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+		Snapshot:         cloneSnapshot(c.snapshot),
 		NoticeSuppressed: c.noticeSuppressed,
 	}
 	if c.completion == nil {
@@ -454,7 +462,7 @@ func (c *terminalEventCache) fallbackEvent(cause error) Event {
 	if err != nil {
 		return Event{
 			Type:             c.eventType,
-			Snapshot:         snapshotWithExecutionCorrelationCopy(c.snapshot),
+			Snapshot:         cloneSnapshot(c.snapshot),
 			NoticeSuppressed: c.noticeSuppressed,
 		}
 	}
@@ -516,6 +524,7 @@ func (m *Manager) releaseEntry(id string) {
 	defer m.mu.Unlock()
 	delete(m.entries, id)
 	m.removeCompletedLocked(id)
+	m.publishCatalogLocked()
 }
 
 func (m *Manager) retainCompletedEntry(id string) {
@@ -536,6 +545,18 @@ func (m *Manager) retainCompletedEntry(id string) {
 			delete(m.entries, evictedID)
 		}
 	}
+	m.publishCatalogLocked()
+}
+
+func (m *Manager) publishCatalogLocked() {
+	entries := make(map[string]*processEntry, len(m.entries))
+	for id, entry := range m.entries {
+		if entry == nil || entry.publishedSnapshot.Load() == nil {
+			panic(fmt.Sprintf("background shell process %s has no published snapshot", id))
+		}
+		entries[id] = entry
+	}
+	m.catalog.Store(&processCatalogSnapshot{entries: entries})
 }
 
 func (m *Manager) touchCompletedLocked(id string) {

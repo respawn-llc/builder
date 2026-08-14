@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"core/server/tools"
@@ -31,6 +32,7 @@ type Manager struct {
 	closeWaitTimeout     time.Duration
 	defaultPostprocessor *postprocess.Runner
 	closed               bool
+	catalog              atomic.Pointer[processCatalogSnapshot]
 }
 
 type ManagerOption func(*Manager)
@@ -90,6 +92,7 @@ func NewManager(opts ...ManagerOption) (*Manager, error) {
 		_ = os.RemoveAll(tempDir)
 		return nil, errors.New("shell postprocessor is required")
 	}
+	mgr.publishCatalogLocked()
 	return mgr, nil
 }
 
@@ -225,9 +228,14 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 			m.releaseEntry(id)
 			return ExecResult{}, fmt.Errorf("close stdin: %w", err)
 		}
+	}
+	entry.mu.Lock()
+	if !req.KeepStdinOpen {
 		entry.stdin = nil
 	}
 	entry.state = "running"
+	entry.publishSnapshotLocked()
+	entry.mu.Unlock()
 
 	m.mu.Lock()
 	if m.closed {
@@ -245,6 +253,7 @@ func (m *Manager) Start(ctx context.Context, req ExecRequest) (ExecResult, error
 		return ExecResult{}, errors.New("background shell manager is closed")
 	}
 	m.entries[id] = entry
+	m.publishCatalogLocked()
 	m.mu.Unlock()
 
 	go m.waitForExit(entry)
@@ -435,12 +444,13 @@ func (m *Manager) Kill(id string) error {
 		return fmt.Errorf("unknown session_id %s", id)
 	}
 	entry.killRequested = true
+	entry.publishSnapshotLocked()
 	entry.mu.Unlock()
 	return killManagedProcess(process)
 }
 
 func (m *Manager) InlineOutput(id string, maxChars int) (string, string, error) {
-	entry, err := m.entry(id)
+	entry, err := m.publishedEntry(strings.TrimSpace(id))
 	if err != nil {
 		return "", "", err
 	}
