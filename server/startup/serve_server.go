@@ -412,7 +412,10 @@ func newStartupGatewayDependencies(ctx context.Context, cfg config.App, bootstra
 	}
 	deps := &startupGatewayDependencies{cfg: cfg, bootstrap: bootstrapReq, authSupport: authSupport, rootLease: rootLease}
 	reason := serverapi.ServerNotReadyOnboardingRequired
-	deps.publishSnapshotLocked(startupReadinessState{Reason: &reason}, nil)
+	deps.publishSnapshotLocked(startupReadinessState{
+		AuthReady: startupAuthReady(ctx, authSupport.AuthManager),
+		Reason:    &reason,
+	}, nil)
 	deps.finalizer = startupFinalizeService{service: finalizer, activate: deps.activate, activationContext: ctx}
 	return deps
 }
@@ -423,7 +426,10 @@ func (d *startupGatewayDependencies) Close() error {
 		appCore := d.core
 		d.core = nil
 		reason := serverapi.ServerNotReadyOnboardingRequired
-		d.publishSnapshotLocked(startupReadinessState{Reason: &reason}, nil)
+		d.publishSnapshotLocked(startupReadinessState{
+			AuthReady: d.loadSnapshot().readiness.AuthReady,
+			Reason:    &reason,
+		}, nil)
 		d.mu.Unlock()
 		return appCore.Close()
 	}
@@ -465,14 +471,21 @@ func (d *startupGatewayDependencies) activate(ctx context.Context, resp serverap
 	d.core = appCore
 	d.rootLease = nil
 	d.cfg = refreshed.Config
-	d.publishSnapshotLocked(startupReadinessState{Ready: true}, appCore)
+	d.publishSnapshotLocked(startupReadinessState{
+		Ready:     true,
+		AuthReady: d.loadSnapshot().readiness.AuthReady,
+	}, appCore)
 	return nil
 }
 
 func (d *startupGatewayDependencies) activationError(resp serverapi.OnboardingFinalizeResponse, err error) error {
 	reason := serverapi.ServerNotReadyActivationFailed
 	diagnostic := err.Error()
-	d.publishSnapshotLocked(startupReadinessState{Reason: &reason, Diagnostic: &diagnostic}, nil)
+	d.publishSnapshotLocked(startupReadinessState{
+		AuthReady:  d.loadSnapshot().readiness.AuthReady,
+		Reason:     &reason,
+		Diagnostic: &diagnostic,
+	}, nil)
 	settingsPath := resp.SettingsPath
 	return serverapi.NewServerNotReadyError(serverapi.ServerNotReadyActivationFailed, serverapi.ServerNotReadyDetails{
 		OnboardingCompleted: true,
@@ -503,6 +516,7 @@ func (d *startupGatewayDependencies) RequireCoreActive() error {
 
 type startupReadinessState struct {
 	Ready      bool
+	AuthReady  bool
 	Reason     *serverapi.ServerNotReadyReason
 	Diagnostic *string
 }
@@ -527,21 +541,13 @@ func (d *startupGatewayDependencies) DebugEnabled() bool {
 }
 
 type startupServerStatusService struct {
-	base       apicontract.ServerStatusService
 	cfg        config.App
 	readiness  startupReadinessState
 	activeCore *core.Core
 }
 
-func (s startupServerStatusService) GetServerReadiness(ctx context.Context, req serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
-	if !s.readiness.Ready {
-		resp := serverstatus.ReadinessResponse(config.ServerRPCURL(s.cfg), s.cfg.Settings, false)
-		return applyStartupReadiness(resp, s.readiness), nil
-	}
-	resp, err := s.base.GetServerReadiness(ctx, req)
-	if err != nil {
-		return serverapi.ServerReadinessResponse{}, err
-	}
+func (s startupServerStatusService) GetServerReadiness(context.Context, serverapi.ServerReadinessRequest) (serverapi.ServerReadinessResponse, error) {
+	resp := serverstatus.ReadinessResponse(config.ServerRPCURL(s.cfg), s.cfg.Settings, s.readiness.AuthReady)
 	return applyStartupReadiness(resp, s.readiness), nil
 }
 
@@ -618,7 +624,14 @@ func (s startupAuthBootstrapService) GetAuthBootstrapStatus(ctx context.Context,
 func (s startupAuthBootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
 	s.deps.mu.Lock()
 	defer s.deps.mu.Unlock()
-	return s.deps.authBootstrapMutationService().CompleteAuthBootstrap(ctx, req)
+	resp, err := s.deps.authBootstrapMutationService().CompleteAuthBootstrap(ctx, req)
+	if err != nil {
+		return serverapi.AuthCompleteBootstrapResponse{}, err
+	}
+	snapshot := s.deps.loadSnapshot()
+	snapshot.readiness.AuthReady = req.Mode != serverapi.AuthBootstrapModeNone
+	s.deps.publishSnapshotLocked(snapshot.readiness, snapshot.core)
+	return resp, nil
 }
 
 func (s startupAuthBootstrapService) AcknowledgeNoAuth(ctx context.Context, req serverapi.AuthAcknowledgeNoAuthRequest) (serverapi.AuthAcknowledgeNoAuthResponse, error) {
@@ -645,6 +658,17 @@ func cloneStartupReadiness(readiness startupReadinessState) startupReadinessStat
 	readiness.Reason = textutil.Pointer(readiness.Reason)
 	readiness.Diagnostic = textutil.Pointer(readiness.Diagnostic)
 	return readiness
+}
+
+func startupAuthReady(ctx context.Context, manager *auth.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	state, err := manager.Load(ctx)
+	if err != nil {
+		return false
+	}
+	return auth.EvaluateStartupGate(state).Ready
 }
 
 func cloneStartupConfig(cfg config.App) config.App {
@@ -706,7 +730,6 @@ func (d *startupGatewayDependencies) CapabilityFactsClient() apicontract.Capabil
 func (d *startupGatewayDependencies) ServerStatusClient() apicontract.ServerStatusService {
 	snapshot := d.loadSnapshot()
 	return startupServerStatusService{
-		base:       serverstatus.NewServerStatusService(d.authSupport.AuthManager, snapshot.cfg, nil),
 		cfg:        snapshot.cfg,
 		readiness:  snapshot.readiness,
 		activeCore: snapshot.core,

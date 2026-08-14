@@ -14,7 +14,6 @@ import (
 	"core/server/attentionnotify"
 	"core/server/llm"
 	"core/server/runtime"
-	"core/server/runtimeactivity"
 	"core/server/sessionruntime"
 	askquestion "core/server/tools"
 	"core/shared/clientui"
@@ -426,9 +425,37 @@ func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
 	}
 	newer := current
 	newer.Version.Sequence += 2
+	runID, err := runtimeids.ParseRunID(registryTestRunID)
+	if err != nil {
+		t.Fatalf("parse Run ID: %v", err)
+	}
+	stepID, err := runtimeids.ParseStepID(registryTestStepID)
+	if err != nil {
+		t.Fatalf("parse Step ID: %v", err)
+	}
+	newer.Activity = clientui.RuntimeActivity{
+		State: clientui.RuntimeActivityRunning,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			RunID:      runID,
+			StepID:     stepID,
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+		},
+		QueueAccepting: true,
+	}
 	older := current
 	older.Version.Sequence++
 
+	subscription, err := registry.SubscribeSessionTranscript(t.Context(), serverapi.TranscriptSubscribeRequest{SessionID: engine.SessionID()})
+	if err != nil {
+		t.Fatalf("subscribe Runtime transcript: %v", err)
+	}
+	if _, err := subscription.Next(t.Context()); err != nil {
+		t.Fatalf("read Runtime transcript hydration: %v", err)
+	}
+	activityChanges := make(chan bool, 2)
+	registry.SetSleepObserver(func(active bool) {
+		activityChanges <- active
+	})
 	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), newer)
 	registry.PublishRuntimeReadModelUpdate(engine.SessionID(), older)
 
@@ -438,6 +465,32 @@ func TestRuntimeMainViewPublicationRejectsOlderReadModelUpdate(t *testing.T) {
 	}
 	if view.Version != newer.Version {
 		t.Fatalf("Runtime Main View version = %+v, want newer %+v", view.Version, newer.Version)
+	}
+	message, err := subscription.Next(t.Context())
+	if err != nil {
+		t.Fatalf("read Runtime Read Model publication: %v", err)
+	}
+	feed := transcriptPayload[clientui.RuntimeReadModelUpdate](t, message)
+	if feed.Version != newer.Version {
+		t.Fatalf("Runtime Read Model publication version = %+v, want newer %+v", feed.Version, newer.Version)
+	}
+	readCtx, cancelRead := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelRead()
+	if stale, err := subscription.Next(readCtx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stale Runtime Read Model publication = %+v, error %v", stale, err)
+	}
+	select {
+	case active := <-activityChanges:
+		if !active {
+			t.Fatal("newer active Runtime publication reported aggregate idle")
+		}
+	default:
+		t.Fatal("newer active Runtime publication did not update aggregate activity")
+	}
+	select {
+	case active := <-activityChanges:
+		t.Fatalf("older Runtime publication changed aggregate activity to %t", active)
+	default:
 	}
 }
 
@@ -1059,10 +1112,12 @@ func publishRunState(registry *RuntimeRegistry, sessionID string, running bool) 
 			QueueAccepting: true,
 		}
 	}
-	registry.PublishRuntimeReadModelUpdate(sessionID, clientui.RuntimeReadModelUpdate{
-		Version:  runtimeactivity.NextReadModelVersion(sessionID),
-		Activity: activity,
-	})
+	update, err := registry.RuntimeReadModelFeedSnapshot(context.Background(), sessionID)
+	if err != nil {
+		panic(fmt.Sprintf("build Runtime Read Model test update for Session %q: %v", sessionID, err))
+	}
+	update.Activity = activity
+	registry.PublishRuntimeReadModelUpdate(sessionID, update)
 }
 
 func TestActiveRuntimeActivitySnapshotsExcludeRegisteredIdlePopulation(t *testing.T) {

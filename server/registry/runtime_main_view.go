@@ -41,31 +41,13 @@ func (r *RuntimeRegistry) republishRuntimeMainView(entry *authorityRuntimeEntry)
 	if r == nil || entry == nil {
 		return nil
 	}
-	r.mainViewPublicationMu.Lock()
-	defer r.mainViewPublicationMu.Unlock()
+	entry.publicationMu.Lock()
+	defer entry.publicationMu.Unlock()
 	readModel := entry.readModel.Load()
 	if readModel == nil {
 		return nil
 	}
 	return r.publishRuntimeMainViewLocked(entry, readModel.Version, readModel.Activity)
-}
-
-func (r *RuntimeRegistry) publishRuntimeMainViewUpdate(
-	entry *authorityRuntimeEntry,
-	update clientui.RuntimeReadModelUpdate,
-) error {
-	if r == nil || entry == nil {
-		return nil
-	}
-	r.mainViewPublicationMu.Lock()
-	defer r.mainViewPublicationMu.Unlock()
-	current := entry.readModel.Load()
-	if current != nil && !update.Version.NewerThan(current.Version) {
-		return nil
-	}
-	completed := cloneRuntimeReadModelUpdate(update)
-	entry.readModel.Store(&completed)
-	return r.publishRuntimeMainViewLocked(entry, completed.Version, completed.Activity)
 }
 
 func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
@@ -104,6 +86,8 @@ func (r *RuntimeRegistry) publishRuntimeMainViewLocked(
 	if current != entry {
 		return nil
 	}
+	r.mainViewCatalogMu.Lock()
+	defer r.mainViewCatalogMu.Unlock()
 	currentCatalog := r.mainViews.Load()
 	if currentCatalog == nil {
 		currentCatalog = &runtimeMainViewCatalog{bySession: make(map[string]runtimeMainViewPublication)}
@@ -122,8 +106,10 @@ func (r *RuntimeRegistry) removeRuntimeMainView(entry *authorityRuntimeEntry) {
 		return
 	}
 	sessionID := entry.ref.SessionID().String()
-	r.mainViewPublicationMu.Lock()
-	defer r.mainViewPublicationMu.Unlock()
+	entry.publicationMu.Lock()
+	defer entry.publicationMu.Unlock()
+	r.mainViewCatalogMu.Lock()
+	defer r.mainViewCatalogMu.Unlock()
 	current := r.mainViews.Load()
 	if current == nil {
 		return

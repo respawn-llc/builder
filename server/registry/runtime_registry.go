@@ -28,7 +28,7 @@ type RuntimeRegistry struct {
 	authorityMu                sync.RWMutex
 	authorityBySession         map[string]*authorityRuntimeEntry
 	authorityChanged           chan struct{}
-	mainViewPublicationMu      sync.Mutex
+	mainViewCatalogMu          sync.Mutex
 	mainViews                  atomic.Pointer[runtimeMainViewCatalog]
 	sleepObserverMu            sync.Mutex
 	sleepObserver              func(active bool)
@@ -51,6 +51,7 @@ type authorityRuntimeEntry struct {
 	retain      func() (io.Closer, error)
 	readModel   atomic.Pointer[clientui.RuntimeReadModelUpdate]
 
+	publicationMu  sync.Mutex
 	mu             sync.Mutex
 	lifecycle      authorityRuntimeEntryLifecycle
 	feedReady      bool
@@ -607,10 +608,21 @@ func (r *RuntimeRegistry) publishRuntimeReadModelUpdate(sessionID string, update
 		return nil
 	}
 	if authorityEntry := r.authorityEntryBySession(sessionID); authorityEntry != nil {
-		authorityEntry.sessionFeed.PublishRuntimeReadModel(update)
-		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, update.Activity.ActiveForControl())
 		completed := cloneRuntimeReadModelUpdate(update)
-		return r.publishRuntimeMainViewUpdate(authorityEntry, completed)
+		if err := completed.Validate(); err != nil {
+			panic(fmt.Sprintf("publish invalid canonical runtime read-model update: %+v: %v", completed, err))
+		}
+		authorityEntry.publicationMu.Lock()
+		defer authorityEntry.publicationMu.Unlock()
+		current := authorityEntry.readModel.Load()
+		if current != nil && !completed.Version.NewerThan(current.Version) {
+			return nil
+		}
+		authorityEntry.readModel.Store(&completed)
+		publicationErr := r.publishRuntimeMainViewLocked(authorityEntry, completed.Version, completed.Activity)
+		authorityEntry.sessionFeed.PublishRuntimeReadModel(completed)
+		r.updateAggregateRuntimeActivityForAuthority(sessionID, authorityEntry, completed.Activity.ActiveForControl())
+		return publicationErr
 	}
 	return nil
 }

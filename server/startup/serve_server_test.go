@@ -41,6 +41,30 @@ type blockingAuthStore struct {
 	releaseSave <-chan struct{}
 }
 
+type blockingAuthLoadStore struct {
+	base        auth.Store
+	block       bool
+	loadStarted chan struct{}
+	release     <-chan struct{}
+	startOnce   sync.Once
+}
+
+func (s *blockingAuthLoadStore) Load(ctx context.Context) (auth.State, error) {
+	if s.block {
+		s.startOnce.Do(func() { close(s.loadStarted) })
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return auth.State{}, ctx.Err()
+		}
+	}
+	return s.base.Load(ctx)
+}
+
+func (s *blockingAuthLoadStore) Save(ctx context.Context, state auth.State) error {
+	return s.base.Save(ctx, state)
+}
+
 func (s *blockingAuthStore) Load(ctx context.Context) (auth.State, error) {
 	return s.base.Load(ctx)
 }
@@ -70,27 +94,6 @@ type blockingAuthHandler struct {
 	envAuthHandler
 	saveStarted chan auth.State
 	releaseSave <-chan struct{}
-}
-
-type blockingStartupReadinessService struct {
-	called  chan struct{}
-	release <-chan struct{}
-}
-
-func (s blockingStartupReadinessService) GetServerReadiness(
-	context.Context,
-	serverapi.ServerReadinessRequest,
-) (serverapi.ServerReadinessResponse, error) {
-	close(s.called)
-	<-s.release
-	return serverapi.ServerReadinessResponse{}, nil
-}
-
-func (blockingStartupReadinessService) GetUpdateStatus(
-	context.Context,
-	serverapi.UpdateStatusRequest,
-) (serverapi.UpdateStatusResponse, error) {
-	return serverapi.UpdateStatusResponse{}, nil
 }
 
 func (h blockingAuthHandler) WrapStore(base auth.Store) auth.Store {
@@ -914,6 +917,13 @@ func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.
 	if err := <-ackDone; err != nil {
 		t.Fatalf("auth acknowledgement: %v", err)
 	}
+	publishedReadiness, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("readiness after auth mutation: %v", err)
+	}
+	if !publishedReadiness.AuthReady {
+		t.Fatalf("readiness after auth mutation = %+v, want published auth ready", publishedReadiness)
+	}
 }
 
 func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
@@ -957,49 +967,86 @@ func TestStartupDependencySnapshotDeepCopiesConfig(t *testing.T) {
 	}
 }
 
-func TestStartupReadinessDoesNotConsultCoreStatusBeforeCorePublication(t *testing.T) {
-	called := make(chan struct{})
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	releaseBase := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(releaseBase)
+func TestStartupReadinessReturnsPublishedNotReadyTuple(t *testing.T) {
 	reason := serverapi.ServerNotReadyOnboardingRequired
 	service := startupServerStatusService{
-		base: blockingStartupReadinessService{
-			called:  called,
-			release: release,
-		},
 		cfg: config.App{Settings: config.Settings{
 			Model: "gpt-5",
 		}},
 		readiness: startupReadinessState{Reason: &reason},
 	}
 
+	response, err := service.GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("GetServerReadiness: %v", err)
+	}
+	if response.Ready || len(response.Causes) != 1 ||
+		response.Causes[0].Code != string(serverapi.ServerNotReadyOnboardingRequired) {
+		t.Fatalf("startup readiness = %+v, want onboarding-required snapshot", response)
+	}
+}
+
+func TestStartupReadinessUsesPublishedAuthAfterCorePublication(t *testing.T) {
+	loadStarted := make(chan struct{})
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLoad := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseLoad)
+	store := &blockingAuthLoadStore{
+		base: auth.NewMemoryStore(auth.State{
+			Scope: auth.ScopeGlobal,
+			Method: auth.Method{
+				Type:   auth.MethodAPIKey,
+				APIKey: &auth.APIKeyMethod{Key: "published-key"},
+			},
+		}),
+		loadStarted: loadStarted,
+		release:     release,
+	}
+	deps := newStartupGatewayDependencies(
+		t.Context(),
+		config.App{Settings: config.Settings{
+			ProviderOverride: "openai",
+		}},
+		serverbootstrap.Request{},
+		serverbootstrap.AuthSupport{AuthManager: auth.NewManager(store, nil, nil)},
+		nil,
+		nil,
+	)
+	snapshot := deps.loadSnapshot()
+	deps.mu.Lock()
+	deps.publishSnapshotLocked(startupReadinessState{
+		Ready:     true,
+		AuthReady: snapshot.readiness.AuthReady,
+	}, nil)
+	deps.mu.Unlock()
+	store.block = true
+
 	result := make(chan struct {
 		response serverapi.ServerReadinessResponse
 		err      error
 	}, 1)
 	go func() {
-		response, err := service.GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
+		response, err := deps.ServerStatusClient().GetServerReadiness(t.Context(), serverapi.ServerReadinessRequest{})
 		result <- struct {
 			response serverapi.ServerReadinessResponse
 			err      error
 		}{response: response, err: err}
 	}()
 	select {
-	case <-called:
-		releaseBase()
-		t.Fatal("pre-Core readiness consulted the Core status service")
+	case <-loadStarted:
+		releaseLoad()
+		t.Fatal("ready startup snapshot consulted the live auth store")
 	case got := <-result:
 		if got.err != nil {
 			t.Fatalf("GetServerReadiness: %v", got.err)
 		}
-		if got.response.Ready || len(got.response.Causes) != 1 ||
-			got.response.Causes[0].Code != string(serverapi.ServerNotReadyOnboardingRequired) {
-			t.Fatalf("startup readiness = %+v, want onboarding-required snapshot", got.response)
+		if !got.response.Ready || !got.response.AuthReady || !got.response.AuthRequired {
+			t.Fatalf("startup readiness = %+v, want published ready tuple", got.response)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("pre-Core readiness did not complete")
+		releaseLoad()
+		t.Fatal("ready startup snapshot did not complete")
 	}
 }
 
