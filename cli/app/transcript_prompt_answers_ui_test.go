@@ -255,6 +255,69 @@ func TestAskRepeatedEnterWhileDeliveryActiveDoesNotSubmitAgain(t *testing.T) {
 	}
 }
 
+func TestAskCtrlCFinishesPromptCancellationBeforeRuntimeInterrupt(t *testing.T) {
+	disableTransientStatusClearForTest(t)
+	control := newRecordingPromptControl()
+	runtimeClient := &runtimeControlFakeClient{}
+	model := newProjectedTestUIModel(runtimeClient)
+	model.promptAnswers = newTranscriptPromptAnswerer(context.Background(), control)
+	model.setRuntimeActivityBusyForTest(true)
+	model = updateUIModel(t, model, askEventMsg{event: model.transcriptPromptEvent(
+		testQuestionPrompt("ask-interrupt-order", "Proceed?", "Yes", "No"),
+	)})
+
+	next, cancellationCommand := model.askController().handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(*uiModel)
+	activeCancellation := model.ask.activeDelivery
+	if cancellationCommand == nil || activeCancellation == nil {
+		t.Fatal("Ctrl+C did not start prompt cancellation delivery")
+	}
+	if runtimeClient.interruptCalls != 0 {
+		t.Fatal("Ctrl+C interrupted runtime before prompt cancellation completed")
+	}
+
+	next, repeatedCommand := model.askController().handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	model = next.(*uiModel)
+	if repeatedCommand != nil {
+		t.Fatal("repeated Ctrl+C started another cancellation sequence")
+	}
+	if model.ask.activeDelivery != activeCancellation {
+		t.Fatal("repeated Ctrl+C replaced the in-flight prompt cancellation")
+	}
+
+	rawResult := cancellationCommand()
+	result, ok := rawResult.(promptAnswerDeliveryResultMsg)
+	if !ok {
+		t.Fatalf("prompt cancellation result = %T, want promptAnswerDeliveryResultMsg", rawResult)
+	}
+	if result.err != nil {
+		t.Fatalf("prompt cancellation failed: %v", result.err)
+	}
+	if runtimeClient.interruptCalls != 0 {
+		t.Fatal("runtime interrupted concurrently with prompt cancellation")
+	}
+
+	continuation := model.askController().applyDeliveryResult(result)
+	if continuation == nil || testActiveAsk(model) != nil {
+		t.Fatal("successful prompt cancellation did not finish the prompt and schedule global Ctrl+C")
+	}
+	next, interruptCommand := model.Update(continuation())
+	model = next.(*uiModel)
+	if interruptCommand == nil || runtimeClient.interruptCalls != 0 {
+		t.Fatal("global Ctrl+C did not defer runtime interruption to its command")
+	}
+	model = updateUIModel(t, model, interruptCommand())
+	if runtimeClient.interruptCalls != 1 {
+		t.Fatalf("runtime interrupt calls = %d, want one after prompt cancellation", runtimeClient.interruptCalls)
+	}
+
+	request := requirePromptAnswerBatchRequest(t, control)
+	entry := request.Entries[0]
+	if entry.Declined == nil {
+		t.Fatalf("prompt cancellation entry = %+v, want declined", entry)
+	}
+}
+
 func TestAskDeliverySetupFailureKeepsQuestionActivity(t *testing.T) {
 	disableTransientStatusClearForTest(t)
 	model, control := newProjectedPromptTestUIModel(t)

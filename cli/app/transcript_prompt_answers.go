@@ -31,10 +31,18 @@ type transcriptPromptKey struct {
 	promptID  clientui.PromptID
 }
 
+type promptAnswerDeliveryContinuation uint8
+
+const (
+	promptAnswerDeliveryContinuationNone promptAnswerDeliveryContinuation = iota
+	promptAnswerDeliveryContinuationRuntimeCtrlC
+)
+
 type activePromptAnswerDelivery struct {
-	key        transcriptPromptKey
-	generation uint64
-	cancel     context.CancelFunc
+	key          transcriptPromptKey
+	generation   uint64
+	cancel       context.CancelFunc
+	continuation promptAnswerDeliveryContinuation
 }
 
 type promptAnswerDeliveryResultMsg struct {
@@ -42,6 +50,8 @@ type promptAnswerDeliveryResultMsg struct {
 	generation uint64
 	err        error
 }
+
+type promptCtrlCContinuationMsg struct{}
 
 func newTranscriptPromptAnswerer(ctx context.Context, control promptBatchAnswerer) *transcriptPromptAnswerer {
 	if ctx == nil || control == nil {

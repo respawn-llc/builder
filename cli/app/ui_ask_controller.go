@@ -140,18 +140,25 @@ func (c uiAskController) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
+		if m.ask.activeDelivery != nil &&
+			m.ask.activeDelivery.continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
+			return m, nil
+		}
 		c.cancelActiveDelivery()
-		_, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
-		interruptCmd := tea.Cmd(nil)
-		if m.blocksRuntimeInput() {
-			_, interruptCmd = m.inputController().handleRuntimeCtrlC(nil)
+		currentToken := m.ask.currentToken
+		accepted, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("interrupted"))
+		runtimeCtrlCCmd := tea.Cmd(nil)
+		if m.ask.activeDelivery != nil {
+			m.ask.activeDelivery.continuation = promptAnswerDeliveryContinuationRuntimeCtrlC
+		} else if accepted && (m.ask.currentToken != currentToken || !m.ask.hasCurrent()) && m.blocksRuntimeInput() {
+			_, runtimeCtrlCCmd = m.inputController().handleRuntimeCtrlC(nil)
 		}
 		if hasNext {
 			m.activity = uiActivityQuestion
 		} else {
 			m.activity = uiActivityInterrupted
 		}
-		return m, tea.Batch(answerCmd, interruptCmd, m.interruptedStatusNoticeCmd())
+		return m, tea.Batch(answerCmd, runtimeCtrlCCmd, m.interruptedStatusNoticeCmd())
 	case tea.KeyEsc:
 		c.cancelActiveDelivery()
 		_, hasNext, answerCmd := c.answer(clientui.PromptAnswer{}, errors.New("question canceled"))
@@ -482,6 +489,7 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 	if m == nil || !m.ask.activeDelivery.matches(result.key, result.generation) {
 		return nil
 	}
+	continuation := m.ask.activeDelivery.continuation
 	if result.err == nil {
 		c.cancelActiveDelivery()
 		hasNext := c.finishDeliveredPrompt()
@@ -491,6 +499,9 @@ func (c uiAskController) applyDeliveryResult(result promptAnswerDeliveryResultMs
 			m.activity = uiActivityRunning
 		} else {
 			m.activity = uiActivityIdle
+		}
+		if continuation == promptAnswerDeliveryContinuationRuntimeCtrlC {
+			return func() tea.Msg { return promptCtrlCContinuationMsg{} }
 		}
 		return nil
 	}
