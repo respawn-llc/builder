@@ -52,6 +52,8 @@ run_frontend_lint() {
 
 run_vet() {
 	echo "==> go vet"
+	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
+		--temp-dir .generated/protobuf/task protobuf:go
 	go vet ./...
 }
 
@@ -79,10 +81,17 @@ run_rust_policy() {
 	cargo run --manifest-path tui-rs/Cargo.toml --locked -p manifest-check -- check --repo-root "$repo_root"
 }
 
+run_protobuf() {
+	echo "==> Protobuf lint"
+	go run github.com/go-task/task/v3/cmd/task@v3.52.0 \
+		--temp-dir .generated/protobuf/task protobuf:lint protobuf
+}
+
 mode="${1:-all}"
 
 case "$mode" in
 all)
+	run_protobuf
 	run_frontend_deps_policy
 	run_frontend_lint
 	run_format

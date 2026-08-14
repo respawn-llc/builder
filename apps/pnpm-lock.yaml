@@ -20,6 +20,9 @@ importers:
       '@app/native-bridge':
         specifier: workspace:*
         version: link:packages/native-bridge
+      '@app/server-api-contract':
+        specifier: workspace:*
+        version: link:packages/server-api-contract
       '@app/ui-kit':
         specifier: workspace:*
         version: link:packages/ui-kit
@@ -233,6 +236,22 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@26.1.2)(jsdom@30.0.1(@noble/hashes@1.8.0))(msw@2.14.6(@types/node@26.1.2)(typescript@6.0.3))(vite@8.2.0(@types/node@26.1.2)(jiti@2.7.0)(yaml@2.9.0))
 
+  desktop/packages/server-api-contract:
+    dependencies:
+      '@bufbuild/protobuf':
+        specifier: 2.13.0
+        version: 2.13.0
+      '@bufbuild/protovalidate':
+        specifier: 1.2.0
+        version: 1.2.0(@bufbuild/protobuf@2.13.0)
+    devDependencies:
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      typescript7:
+        specifier: npm:typescript@7.0.2
+        version: typescript@7.0.2
+
   desktop/packages/ui-kit:
     dependencies:
       '@dnd-kit/core':
@@ -426,6 +445,24 @@ packages:
   '@bramus/specificity@2.4.2':
     resolution: {integrity: sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw==}
     hasBin: true
+
+  '@bufbuild/cel-spec@0.4.0':
+    resolution: {integrity: sha512-dUS6f2fNt6KEumsYGE7YFxERZE5ZuyME1hQmGjtO8tkZhR6ow6/ne3v4Gik9cfdb9lSLK3AJ+vDxCdGWmDbWvA==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.6.2
+
+  '@bufbuild/cel@0.4.0':
+    resolution: {integrity: sha512-CdW/JgiTJCYXqnwuaJRo7NcoYhR37AaF58MMiog0/t8nudn86ZyLXYaA1f2yGhm2U17h8pKGZNksTHVSTcpmAw==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.6.2
+
+  '@bufbuild/protobuf@2.13.0':
+    resolution: {integrity: sha512-acq7c49vxfm1ggJ95P70TX7ABDM0vxr1SYD3BB0o0jnBLB4OAqeHyKuN+cD3w80gXEDQ2zxHpR6CUeA+O/aU9g==}
+
+  '@bufbuild/protovalidate@1.2.0':
+    resolution: {integrity: sha512-tD08DwGrHIV88khLz1Kdz9DYUwEo1TsoepaIg7/B/zd//AymaTx67kvCS1jlkcG/+vgQaSOl6f0HCE3sL8vI7w==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.8.0
 
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
@@ -5440,6 +5477,22 @@ snapshots:
   '@bramus/specificity@2.4.2':
     dependencies:
       css-tree: 3.2.1
+
+  '@bufbuild/cel-spec@0.4.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/protobuf': 2.13.0
+
+  '@bufbuild/cel@0.4.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/cel-spec': 0.4.0(@bufbuild/protobuf@2.13.0)
+      '@bufbuild/protobuf': 2.13.0
+
+  '@bufbuild/protobuf@2.13.0': {}
+
+  '@bufbuild/protovalidate@1.2.0(@bufbuild/protobuf@2.13.0)':
+    dependencies:
+      '@bufbuild/cel': 0.4.0(@bufbuild/protobuf@2.13.0)
+      '@bufbuild/protobuf': 2.13.0
 
   '@chevrotain/types@11.1.2': {}
 

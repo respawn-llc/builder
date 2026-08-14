@@ -1,0 +1,24 @@
+syntax = "proto2";
+
+package kent.api.prompt_command;
+
+import "buf/validate/validate.proto";
+
+option go_package = "core/shared/protoapi/gen/kent/api/prompt_command;promptcommandpb";
+
+extend buf.validate.StringRules {
+  optional bool canonical_name = 50000 [(buf.validate.predefined).cel = {
+    id: "kent.prompt_command.name.canonical"
+    message: "must be canonical prompt command text"
+    expression:
+      "!rule || ("
+      "this == this.trim() && this == this.lowerAscii() && "
+      "size(this) > 7 && this.startsWith('prompt:') && "
+      "this.substring(7).split('').all(character, "
+      "(character >= 'a' && character <= 'z') || "
+      "(character >= '0' && character <= '9') || character == '_') && "
+      "!this.substring(7).startsWith('_') && "
+      "!this.endsWith('_') && "
+      "!this.contains('__'))"
+  }];
+}
