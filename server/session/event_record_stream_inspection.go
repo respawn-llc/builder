@@ -153,6 +153,9 @@ func inspectHistoryReplacementRecordStream(reader io.Reader) error {
 		if field != "payload" {
 			return decoder.Skip()
 		}
+		if payloadPresent {
+			return errors.New("history replacement payload must not be repeated")
+		}
 		payloadPresent = true
 		if decoder.Next() != jx.Object {
 			if err := decoder.Skip(); err != nil {

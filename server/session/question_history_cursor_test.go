@@ -150,6 +150,10 @@ func TestQuestionHistoryCursorRejectsCorruptReplacementAtBoundary(t *testing.T) 
 			name: "invalid mode",
 			line: []byte(`{"seq":2,"kind":"history_replaced","payload":{"engine":"local","mode":"future","items":[]}}`),
 		},
+		{
+			name: "duplicate payload",
+			line: []byte(`{"seq":2,"kind":"history_replaced","payload":{"engine":"local"},"payload":{"mode":"handoff","items":[]}}`),
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
