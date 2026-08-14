@@ -26,28 +26,28 @@ const validator = createValidator({
   ),
 });
 
-export function decodeGeneratedMessage<Descriptor extends DescMessage>(
+export function decode<Descriptor extends DescMessage>(
   descriptor: Descriptor,
   bytes: Uint8Array,
 ): MessageShape<Descriptor> {
   const message = fromBinary(descriptor, bytes, {
     readUnknownFields: true,
   });
-  validateGeneratedMessage(descriptor, message);
+  validate(descriptor, message);
   return message;
 }
 
-export function encodeGeneratedMessage<Descriptor extends DescMessage>(
+export function encode<Descriptor extends DescMessage>(
   descriptor: Descriptor,
   message: MessageShape<Descriptor>,
 ): Uint8Array {
-  validateGeneratedMessage(descriptor, message);
+  validate(descriptor, message);
   return toBinary(descriptor, message, {
     writeUnknownFields: true,
   });
 }
 
-export function validateGeneratedMessage<Descriptor extends DescMessage>(
+function validate<Descriptor extends DescMessage>(
   descriptor: Descriptor,
   message: MessageShape<Descriptor>,
 ): void {
