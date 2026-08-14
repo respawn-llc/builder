@@ -51,7 +51,8 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 	}
 	generationsByStep := make(map[string][]*restoredToolGeneration)
 	for _, record := range activeWindow.Records {
-		stepID, _ := textutil.OptionalExact(record.StepID())
+		stepIDPointer := record.StepID()
+		stepID, _ := textutil.OptionalExact(stepIDPointer)
 		payload, err := record.Payload()
 		if err != nil {
 			return err
@@ -69,7 +70,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if provenanceErr != nil {
 				return fmt.Errorf("restore session message provenance: %w", provenanceErr)
 			}
-			if err := e.transcriptRuntimeState().AppendMessage(stepID, msg, &provenance); err != nil {
+			if err := e.transcriptRuntimeState().AppendMessage(stepIDPointer, msg, &provenance); err != nil {
 				return fmt.Errorf("restore session message projection: %w", err)
 			}
 			if msg.Role == llm.RoleAssistant && len(msg.ToolCalls) > 0 {
@@ -125,7 +126,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			if entry.DiagnosticKey != nil {
 				e.diagnosticDedupeStore().RestoreLocal(*entry.DiagnosticKey)
 			}
-			restored := *localEntryChatEntryForStep(entry, stepID)
+			restored := *localEntryChatEntryForStep(entry, stepIDPointer)
 			provenance, provenanceErr := transcriptProvenanceFromRecord(record)
 			if provenanceErr != nil {
 				return fmt.Errorf("restore session local entry provenance: %w", provenanceErr)
@@ -180,7 +181,7 @@ func (m *defaultMessageLifecycle) RestoreMessages() error {
 			}
 			projectedEntries = assignHistoryReplacementEntryProvenance(projectedEntries, &provenance)
 			e.transcriptRuntimeState().ReplaceHistoryAtCommittedEntryStart(
-				stepID,
+				record.StepID(),
 				replacement.Items,
 				replacement.CommittedEntryStart,
 				projectedEntries,

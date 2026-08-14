@@ -6,6 +6,7 @@ import (
 	"core/server/llm"
 	"core/server/tools"
 	"core/shared/runtimeids"
+	"core/shared/textutil"
 )
 
 func TestAgentSteerLiveEventsProjectTheCommittedMessage(t *testing.T) {
@@ -41,7 +42,7 @@ func TestAgentSteerLiveEventsProjectTheCommittedMessage(t *testing.T) {
 		}
 		message := steer.Message()
 		item := QueuedUserMessage{ID: runtimeids.NewQueueItemID().String(), Message: message}
-		if _, err := eng.appendQueuedUserMessageFlush("018fdd67-89ab-4cde-8123-456789abc001", message, nil, []QueuedUserMessage{item}); err != nil {
+		if _, err := eng.appendQueuedUserMessageFlush(textutil.OptionalExactString("018fdd67-89ab-4cde-8123-456789abc001"), message, nil, []QueuedUserMessage{item}); err != nil {
 			t.Fatalf("appendQueuedUserMessageFlush: %v", err)
 		}
 		assertAgentSteerConversationEvent(t, events)

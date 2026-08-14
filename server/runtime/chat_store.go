@@ -112,7 +112,7 @@ type chatStore struct {
 }
 
 type chatMessageRecord struct {
-	StepID        string
+	StepID        *string
 	Message       llm.Message
 	ProviderItems []llm.ResponseItem
 	Provenance    *TranscriptCommittedRowProvenance
@@ -157,14 +157,14 @@ func newChatStoreWithCWD(cwd string) *chatStore {
 	}
 }
 
-func (s *chatStore) validateMessage(stepID string, msg llm.Message) error {
+func (s *chatStore) validateMessage(stepID *string, msg llm.Message) error {
 	msg = normalizeMessageForTranscript(msg, s.cwd)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.validateMessageLocked(stepID, msg)
 }
 
-func (s *chatStore) appendMessage(stepID string, msg llm.Message, provenances ...*TranscriptCommittedRowProvenance) error {
+func (s *chatStore) appendMessage(stepID *string, msg llm.Message, provenances ...*TranscriptCommittedRowProvenance) error {
 	var provenance *TranscriptCommittedRowProvenance
 	if len(provenances) > 0 {
 		provenance = provenances[0]
@@ -176,7 +176,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message, provenances ..
 		return err
 	}
 	s.messageRecords = append(s.messageRecords, chatMessageRecord{
-		StepID:        strings.TrimSpace(stepID),
+		StepID:        textutil.Pointer(stepID),
 		Message:       cloneChatStoreMessage(msg),
 		ProviderItems: llm.ItemsFromMessages([]llm.Message{msg}),
 		Provenance:    cloneTranscriptCommittedRowProvenance(provenance),
@@ -188,7 +188,7 @@ func (s *chatStore) appendMessage(stepID string, msg llm.Message, provenances ..
 }
 func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
 	s.replaceHistoryAtCommittedEntryStart(
-		stepID,
+		textutil.OptionalExactString(stepID),
 		items,
 		nil,
 		transcriptEntriesFromHistoryReplacement(items, nil),
@@ -196,7 +196,7 @@ func (s *chatStore) replaceHistory(stepID string, items []llm.ResponseItem) {
 }
 
 func (s *chatStore) replaceHistoryAtCommittedEntryStart(
-	stepID string,
+	stepID *string,
 	items []llm.ResponseItem,
 	committedEntryStart *int,
 	projectedEntries []ChatEntry,
@@ -215,8 +215,10 @@ func (s *chatStore) replaceHistoryAtCommittedEntryStart(
 	// Provider/model history switches to the compacted checkpoint while the
 	// transcript receives its typed projection at the same committed boundary.
 	projectedStart := len(s.local)
-	for index := range projectedEntries {
-		projectedEntries[index].StepID = strings.TrimSpace(stepID)
+	if stepID != nil {
+		for index := range projectedEntries {
+			projectedEntries[index].StepID = strings.TrimSpace(*stepID)
+		}
 	}
 	s.appendProjectedHistoryReplacementEntriesLocked(projectedEntries)
 	s.local = append([]localChatEntry(nil), s.local[projectedStart:]...)
@@ -786,44 +788,40 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func (s *chatStore) validateMessageLocked(stepID string, msg llm.Message) error {
-	if msg.Role != llm.RoleAssistant {
+func (s *chatStore) validateMessageLocked(stepID *string, msg llm.Message) error {
+	if msg.Role != llm.RoleAssistant || stepID == nil {
 		return nil
 	}
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
-		return nil
-	}
+	exactStepID := strings.TrimSpace(*stepID)
 	for _, call := range msg.ToolCalls {
 		callID := strings.TrimSpace(call.ID)
 		if callID == "" {
 			continue
 		}
-		if existing, present := s.assistantToolCallStepIDs[callID]; present && existing != stepID {
+		if existing, present := s.assistantToolCallStepIDs[callID]; present && existing != exactStepID {
 			return fmt.Errorf(
 				"assistant tool call %q changed step identity from %q to %q",
 				callID,
 				existing,
-				stepID,
+				exactStepID,
 			)
 		}
 	}
 	return nil
 }
 
-func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
+func (s *chatStore) applyMessageStatsLocked(stepID *string, msg llm.Message) {
 	s.applyLastCommittedAssistantFinalAnswerLocked(msg)
 	delta := len(VisibleChatEntriesFromMessage(msg))
 	switch msg.Role {
 	case llm.RoleAssistant:
-		stepID = strings.TrimSpace(stepID)
 		for _, call := range msg.ToolCalls {
 			callID := strings.TrimSpace(call.ID)
 			if callID == "" {
 				continue
 			}
-			if stepID != "" {
-				s.assistantToolCallStepIDs[callID] = stepID
+			if stepID != nil {
+				s.assistantToolCallStepIDs[callID] = strings.TrimSpace(*stepID)
 			}
 			s.assistantToolCalls[callID] = struct{}{}
 			if _, materialized := s.materializedToolResults[callID]; materialized {
@@ -852,11 +850,11 @@ func (s *chatStore) applyMessageStatsLocked(stepID string, msg llm.Message) {
 	}
 }
 
-func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID string, items []llm.ResponseItem) {
-	stepID = strings.TrimSpace(stepID)
-	if stepID == "" {
+func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID *string, items []llm.ResponseItem) {
+	if stepID == nil {
 		return
 	}
+	exactStepID := strings.TrimSpace(*stepID)
 	for _, item := range items {
 		if !isToolCallItem(item.Type) {
 			continue
@@ -868,7 +866,7 @@ func (s *chatStore) recordReplacementToolCallStepIDsLocked(stepID string, items 
 		// Replacement items are born at the compaction boundary, which is also
 		// the only ownership fact available when the active segment is restored.
 		// Rebase live ownership to the same Step so restart cannot change it.
-		s.assistantToolCallStepIDs[callID] = stepID
+		s.assistantToolCallStepIDs[callID] = exactStepID
 	}
 }
 
@@ -1016,7 +1014,8 @@ func (s *chatStore) deliverySnapshot() transcriptDeliverySnapshot {
 	scan := newTranscriptDeliveryFactScan(s.toolCompletions, s.toolCompletionProvenance, materializedToolResults, streamIDsByEntry, s.activeSegmentEntryStart)
 	s.walkProjectionLocked(
 		func(record chatMessageRecord) {
-			scan.ApplyMessage(record.StepID, record.Message, record.Provenance)
+			stepID, _ := textutil.OptionalExact(record.StepID)
+			scan.ApplyMessage(stepID, record.Message, record.Provenance)
 		},
 		func(local localChatEntry) {
 			entry := local.Entry

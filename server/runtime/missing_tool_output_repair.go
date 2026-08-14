@@ -212,7 +212,7 @@ func (e *Engine) repairMissingToolOutputsByAppendingRaw(
 		projectionErr = errors.Join(
 			projectionErr,
 			e.publishCommittedFinalizedToolCompletion(
-				*dangling[index].stepID,
+				dangling[index].stepID,
 				feedbackStepID,
 				completion.completion,
 				&applied.completionProvenance,

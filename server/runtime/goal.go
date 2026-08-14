@@ -317,24 +317,22 @@ func (e *Engine) validateGoalMutationForAdmission(mutation GoalMutation) error {
 }
 
 func (e *Engine) applyGoalMutation(
-	stepID string,
 	mutation GoalMutation,
 	applyNotice func(*steeringGoalNoticeAndStatus, *session.CommitReceipt) error,
 ) (GoalCommandResult, error) {
 	switch mutation.Kind {
 	case GoalMutationSet:
-		return e.applyGoalSet(stepID, mutation, applyNotice)
+		return e.applyGoalSet(mutation, applyNotice)
 	case GoalMutationStatus:
-		return e.applyGoalStatus(stepID, mutation, applyNotice)
+		return e.applyGoalStatus(mutation, applyNotice)
 	case GoalMutationClear:
-		return e.applyGoalClear(stepID, mutation.Actor, applyNotice)
+		return e.applyGoalClear(mutation.Actor, applyNotice)
 	default:
 		return GoalCommandResult{}, fmt.Errorf("unsupported Goal mutation kind %d", mutation.Kind)
 	}
 }
 
 func (e *Engine) applyGoalSet(
-	stepID string,
 	mutation GoalMutation,
 	applyNotice func(*steeringGoalNoticeAndStatus, *session.CommitReceipt) error,
 ) (GoalCommandResult, error) {
@@ -359,7 +357,6 @@ func (e *Engine) applyGoalSet(
 }
 
 func (e *Engine) applyGoalStatus(
-	stepID string,
 	mutation GoalMutation,
 	applyNotice func(*steeringGoalNoticeAndStatus, *session.CommitReceipt) error,
 ) (GoalCommandResult, error) {
@@ -396,7 +393,6 @@ func (e *Engine) applyGoalStatus(
 }
 
 func (e *Engine) applyGoalClear(
-	stepID string,
 	actor session.GoalActor,
 	applyNotice func(*steeringGoalNoticeAndStatus, *session.CommitReceipt) error,
 ) (GoalCommandResult, error) {

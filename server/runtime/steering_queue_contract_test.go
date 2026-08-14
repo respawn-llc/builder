@@ -9,6 +9,7 @@ import (
 
 	"core/server/llm"
 	"core/server/session"
+	"core/server/tools"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/textutil"
@@ -50,6 +51,66 @@ func TestSteeringOutputProvenanceIsTypedAndExactIDsAreValidated(t *testing.T) {
 	if !ok || exact.stepID != "step" {
 		t.Fatalf("bound human output provenance = %+v", human.output.provenance)
 	}
+}
+
+func TestSteeringPersistenceRetainsRuntimeAndExactStepPresence(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		stepID     *string
+		wantStepID *string
+	}{
+		{name: "Runtime"},
+		{
+			name:       "exact",
+			stepID:     textutil.OptionalExactString("11111111-1111-4111-8111-111111111111"),
+			wantStepID: textutil.OptionalExactString("11111111-1111-4111-8111-111111111111"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := mustCreateTestSession(t)
+			engine := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{Model: "gpt-5"})
+			intent := steerMessagesWithPersistenceIntent(
+				steeringMessageEventNone,
+				true,
+				[]llm.Message{{
+					Role:    llm.RoleDeveloper,
+					Content: textutil.Value("provenance"),
+				}},
+			)
+			var (
+				receipt session.CommitReceipt
+				err     error
+			)
+			if test.stepID == nil {
+				receipt, err = engine.steerRuntimeWithCommitReceipt(intent)
+			} else {
+				restore := setTestActiveStep(engine, *test.stepID)
+				defer restore()
+				receipt, err = engine.steerWithCommitReceipt(*test.stepID, intent)
+			}
+			if err != nil || !receipt.Committed {
+				t.Fatalf("persist Steering output = %+v, %v", receipt, err)
+			}
+			window, err := mustMaterializeTestEventLog(t, store).ReadRecentRecords(1)
+			if err != nil {
+				t.Fatalf("read persisted Steering output: %v", err)
+			}
+			if len(window.Records) != 1 {
+				t.Fatalf("persisted Steering records = %d, want 1", len(window.Records))
+			}
+			gotStepID := window.Records[0].StepID()
+			if !equalOptionalString(gotStepID, test.wantStepID) {
+				t.Fatalf("persisted Step ID = %v, want %v", gotStepID, test.wantStepID)
+			}
+		})
+	}
+}
+
+func equalOptionalString(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func TestSteeringQueueFIFOAndDrainingHeadContract(t *testing.T) {

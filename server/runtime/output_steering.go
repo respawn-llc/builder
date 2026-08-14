@@ -1324,14 +1324,12 @@ func (e *Engine) applyRuntimeMutations(
 	items []steeringMutation,
 	commitReceipt *session.CommitReceipt,
 ) error {
-	if err := validateSteeringOutputProvenance(provenance); err != nil {
+	stepID, err := steeringOutputStepID(provenance)
+	if err != nil {
 		return err
 	}
-	if _, deferred := provenance.(deferredHumanOutputProvenance); deferred {
-		return errors.New("deferred human Runtime output requires Step binding")
-	}
 	for _, item := range items {
-		if err := e.applySteeringMutation(provenance, item, commitReceipt); err != nil {
+		if err := e.applySteeringMutation(stepID, item, commitReceipt); err != nil {
 			return err
 		}
 		if _, replacesHistory := item.(*steeringHistoryReplacement); !replacesHistory {
@@ -1344,11 +1342,11 @@ func (e *Engine) applyRuntimeMutations(
 }
 
 func (e *Engine) applyNestedRuntimeMutation(
-	provenance steeringOutputProvenance,
+	stepID *string,
 	mutation steeringMutation,
 	commitReceipt *session.CommitReceipt,
 ) error {
-	return e.applySteeringMutation(provenance, mutation, commitReceipt)
+	return e.applySteeringMutation(stepID, mutation, commitReceipt)
 }
 
 func (e *Engine) applyExactRuntimeMutation(stepID string, mutation steeringMutation) error {
@@ -1406,14 +1404,10 @@ func (e *Engine) resolveCompletedResponseStream(stepID string, instruction compl
 }
 
 func (e *Engine) applySteeringMutation(
-	provenance steeringOutputProvenance,
+	stepID *string,
 	mutation steeringMutation,
 	commitReceipt *session.CommitReceipt,
 ) error {
-	stepID := ""
-	if exact, ok := provenance.(exactOutputProvenance); ok {
-		stepID = exact.stepID
-	}
 	switch mutation := mutation.(type) {
 	case *steeringMissingToolOutputRepair:
 		repair := mutation
@@ -1424,7 +1418,7 @@ func (e *Engine) applySteeringMutation(
 		return e.applyThinkingLevel(mutation.level)
 	case *steeringFastMode:
 		changed, receipt, err := e.applyFastModeWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
-			return e.applyNestedRuntimeMutation(provenance, feedback, receipt)
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
 		})
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if mutation.changed != nil {
@@ -1433,7 +1427,7 @@ func (e *Engine) applySteeringMutation(
 		return err
 	case *steeringReviewerMode:
 		changed, mode, receipt, err := e.applyReviewerWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
-			return e.applyNestedRuntimeMutation(provenance, feedback, receipt)
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
 		})
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if mutation.changed != nil {
@@ -1454,7 +1448,7 @@ func (e *Engine) applySteeringMutation(
 		return nil
 	case *steeringQuestions:
 		changed, enabled, receipt, err := e.applyQuestionsWithCommittedFeedback(mutation.enabled, mutation.feedback, func(feedback steeringMutation, receipt *session.CommitReceipt) error {
-			return e.applyNestedRuntimeMutation(provenance, feedback, receipt)
+			return e.applyNestedRuntimeMutation(stepID, feedback, receipt)
 		})
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if mutation.changed != nil {
@@ -1508,17 +1502,29 @@ func (e *Engine) applySteeringMutation(
 		*report.outcome = outcome
 		return nil
 	case *steeringResultGroupFlush:
+		exactStepID, err := requireExactSteeringStepID(stepID, "result group flush")
+		if err != nil {
+			return err
+		}
 		flush := mutation
 		if flush.collector == nil {
-			return e.flushResultGroup(stepID, nil, flush.reason)
+			return e.flushResultGroup(exactStepID, nil, flush.reason)
 		}
 		cursor := flush.collector.cursor
-		err := e.flushResultGroup(stepID, flush.collector, flush.reason)
+		err = e.flushResultGroup(exactStepID, flush.collector, flush.reason)
 		flush.committed = err == nil && flush.collector.cursor > cursor
 		return err
 	case *steeringResultGroupClose:
-		return e.closeResultGroup(stepID, mutation.collector)
+		exactStepID, err := requireExactSteeringStepID(stepID, "result group close")
+		if err != nil {
+			return err
+		}
+		return e.closeResultGroup(exactStepID, mutation.collector)
 	case *steeringAssistantCommit:
+		exactStepID, err := requireExactSteeringStepID(stepID, "assistant commit")
+		if err != nil {
+			return err
+		}
 		commit := mutation
 		if commit.result == nil {
 			return errors.New("assistant commit steering item requires a result destination")
@@ -1529,7 +1535,7 @@ func (e *Engine) applySteeringMutation(
 			return err
 		}
 		if len(VisibleChatEntriesFromMessage(commit.message)) == 0 {
-			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
+			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(exactStepID, completedResponseAbortInstruction())
 			commit.result.resolution = outcome
 			return resolveErr
 		}
@@ -1541,21 +1547,21 @@ func (e *Engine) applySteeringMutation(
 				return errors.New("persisted assistant text row has no committed transcript coordinate")
 			}
 			instruction := completedResponseFinalizeInstruction(commit.message, coordinate, commit.result.provenance)
-			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, instruction)
+			outcome, resolveErr := e.resolveCompletedResponseStreamRaw(exactStepID, instruction)
 			commit.result.resolution = outcome
 			return resolveErr
 		}
 		commit.result.resolution = completedResponseResolutionOutcome{
 			kind: completedResponseResolutionAbsent,
 		}
-		if err := e.emitCommittedAssistantMessageEventRaw(stepID, steeringCommittedAssistantMessage{
+		if err := e.emitCommittedAssistantMessageEventRaw(exactStepID, steeringCommittedAssistantMessage{
 			message:    commit.message,
 			coordinate: cloneCommittedAssistantCoordinate(coordinate),
 			provenance: cloneTranscriptCommittedRowProvenance(commit.result.provenance),
 		}, nil, nil); err != nil {
 			return err
 		}
-		outcome, resolveErr := e.resolveCompletedResponseStreamRaw(stepID, completedResponseAbortInstruction())
+		outcome, resolveErr := e.resolveCompletedResponseStreamRaw(exactStepID, completedResponseAbortInstruction())
 		commit.result.resolution = outcome
 		return resolveErr
 	case *steeringMessage:
@@ -1586,13 +1592,12 @@ func (e *Engine) applySteeringMutation(
 		}
 		statusErr := e.emitRaw(Event{
 			Kind:       EventGoalStatusUpdated,
-			StepID:     stepID,
 			GoalStatus: &notice.update,
-		})
+		}.withStepID(stepID))
 		return errors.Join(noticeErr, statusErr)
 	case *steeringGoalMutation:
-		result, err := e.applyGoalMutation(stepID, mutation.mutation, func(notice *steeringGoalNoticeAndStatus, receipt *session.CommitReceipt) error {
-			return e.applyNestedRuntimeMutation(provenance, notice, receipt)
+		result, err := e.applyGoalMutation(mutation.mutation, func(notice *steeringGoalNoticeAndStatus, receipt *session.CommitReceipt) error {
+			return e.applyNestedRuntimeMutation(stepID, notice, receipt)
 		})
 		if mutation.result != nil {
 			*mutation.result = result
@@ -1600,13 +1605,21 @@ func (e *Engine) applySteeringMutation(
 		recordSteeringCommitReceipt(commitReceipt, result.MetadataReceipt)
 		return err
 	case *steeringCommittedAssistantMessage:
-		return e.emitCommittedAssistantMessageRaw(stepID, *mutation)
+		exactStepID, err := requireExactSteeringStepID(stepID, "committed assistant event")
+		if err != nil {
+			return err
+		}
+		return e.emitCommittedAssistantMessageRaw(exactStepID, *mutation)
 	case *steeringCompletedResponseResolution:
+		exactStepID, err := requireExactSteeringStepID(stepID, "completed response resolution")
+		if err != nil {
+			return err
+		}
 		resolution := mutation
 		if resolution.outcome == nil {
 			return errors.New("completed response stream resolution requires an outcome destination")
 		}
-		outcome, err := e.resolveCompletedResponseStreamRaw(stepID, resolution.instruction)
+		outcome, err := e.resolveCompletedResponseStreamRaw(exactStepID, resolution.instruction)
 		if err != nil {
 			return err
 		}
@@ -1619,13 +1632,17 @@ func (e *Engine) applySteeringMutation(
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		return err
 	case *steeringReviewerFeedback:
+		exactStepID, exactErr := requireExactSteeringStepID(stepID, "reviewer feedback")
+		if exactErr != nil {
+			return exactErr
+		}
 		id := runtimeids.NewReviewerFeedbackID()
 		visibility, visibilityErr := sessionEntryVisibilityFromRuntime(mutation.visibility)
 		if visibilityErr != nil {
 			return visibilityErr
 		}
 		record := session.ReviewerFeedbackRecord{ID: id, Suggestions: append([]string(nil), mutation.suggestions...), Visibility: visibility}
-		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		appended, receipt, err := e.eventLog.AppendRecord(stepID, record)
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if receipt.Committed {
 			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
@@ -1633,15 +1650,19 @@ func (e *Engine) applySteeringMutation(
 			if provenanceErr != nil {
 				return err
 			}
-			entry := reviewerFeedbackChatEntryFromSessionRecord(record, stepID, &provenance)
+			entry := reviewerFeedbackChatEntryFromSessionRecord(record, exactStepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	case *steeringReviewerError:
+		exactStepID, exactErr := requireExactSteeringStepID(stepID, "reviewer error")
+		if exactErr != nil {
+			return exactErr
+		}
 		id := runtimeids.NewReviewerErrorID()
 		record := session.ReviewerErrorRecord{ID: id, Detail: mutation.detail}
-		appended, receipt, err := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		appended, receipt, err := e.eventLog.AppendRecord(stepID, record)
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if receipt.Committed {
 			provenance, provenanceErr := transcriptProvenanceFromRecord(appended)
@@ -1649,9 +1670,9 @@ func (e *Engine) applySteeringMutation(
 			if provenanceErr != nil {
 				return err
 			}
-			entry := reviewerErrorChatEntryFromSessionRecord(record, stepID, &provenance)
+			entry := reviewerErrorChatEntryFromSessionRecord(record, exactStepID, &provenance)
 			e.transcriptRuntimeState().chatProjection().appendLocalEntryRecord(entry, nil)
-			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: stepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+			err = errors.Join(err, e.emitRaw(Event{Kind: EventLocalEntryAdded, StepID: exactStepID, LocalEntry: &entry, LocalEntryProjected: true, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
 		}
 		return err
 	case *steeringHistoryReplacement:
@@ -1665,7 +1686,7 @@ func (e *Engine) applySteeringMutation(
 		if receipt.Committed {
 			err = errors.Join(err, e.publishCommittedFinalizedToolCompletion(
 				stepID,
-				textutil.OptionalExactString(stepID),
+				stepID,
 				completion,
 				provenance,
 				feedbackProvenance,
@@ -1683,10 +1704,7 @@ func (e *Engine) applySteeringMutation(
 		}
 		return nil
 	case *steeringEvent:
-		evt := mutation.event
-		if evt.StepID == "" {
-			evt.StepID = stepID
-		}
+		evt := mutation.event.withStepID(stepID)
 		if evt.Kind == EventReviewerStarted {
 			revision, err := e.TranscriptRevision()
 			if err != nil {
@@ -1724,7 +1742,7 @@ func (e *Engine) applySteeringMutation(
 		if adaptErr != nil {
 			return fmt.Errorf("adapt cache warning record: %w", adaptErr)
 		}
-		appended, receipt, appendErr := e.eventLog.AppendRecord(textutil.OptionalExactString(stepID), record)
+		appended, receipt, appendErr := e.eventLog.AppendRecord(stepID, record)
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if appendErr != nil && !receipt.Committed {
 			return appendErr
@@ -1735,12 +1753,12 @@ func (e *Engine) applySteeringMutation(
 		}
 		e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility, &provenance)
 		if mutation.emit {
-			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}))
+			appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: &provenance}.withStepID(stepID)))
 		}
 		return appendErr
 	case *steeringCacheObservation:
 		observation := mutation
-		records, receipt, appendErr := e.eventLog.AppendRecordsAtomic(textutil.OptionalExactString(stepID), observation.records)
+		records, receipt, appendErr := e.eventLog.AppendRecordsAtomic(stepID, observation.records)
 		recordSteeringCommitReceipt(commitReceipt, receipt)
 		if !receipt.Committed {
 			return appendErr
@@ -1769,19 +1787,27 @@ func (e *Engine) applySteeringMutation(
 			}
 			e.transcriptRuntimeState().AppendCommittedEntryWithVisibility(cacheWarningTranscriptRole, transcript.CacheWarningText(warning), visibility, warningProvenance)
 			if observation.emit {
-				appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, StepID: stepID, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: warningProvenance}))
+				appendErr = errors.Join(appendErr, e.emitRaw(Event{Kind: EventCacheWarning, CacheWarning: copyCacheWarning(&warning), CacheWarningVisibility: visibility, CommittedTranscriptChanged: true, CommittedProvenance: warningProvenance}.withStepID(stepID)))
 			}
 		}
 		return appendErr
 	case *steeringLiveToolAbort:
-		return e.emitLiveToolAbortsRaw(stepID, mutation.reason)
+		exactStepID, err := requireExactSteeringStepID(stepID, "live tool abort")
+		if err != nil {
+			return err
+		}
+		return e.emitLiveToolAbortsRaw(exactStepID, mutation.reason)
 	case *steeringStreamingOutput:
+		exactStepID, err := requireExactSteeringStepID(stepID, "streaming output")
+		if err != nil {
+			return err
+		}
 		if mutation.reasoningReset != nil {
-			e.transcriptRuntimeState().ResetReasoningTraces(stepID)
-			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: stepID})
+			e.transcriptRuntimeState().ResetReasoningTraces(exactStepID)
+			return e.emitRaw(Event{Kind: EventReasoningDeltaReset, StepID: exactStepID})
 		}
 		if mutation.clearReasoning {
-			e.transcriptRuntimeState().ClearReasoningState(stepID)
+			e.transcriptRuntimeState().ClearReasoningState(exactStepID)
 			return nil
 		}
 		if mutation.assistantDelta != nil {
@@ -1793,18 +1819,18 @@ func (e *Engine) applySteeringMutation(
 			if err != nil {
 				return err
 			}
-			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(stepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
-			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: stepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
+			metadata, streamID := e.transcriptRuntimeState().AppendStreamingDelta(exactStepID, revision, e.CommittedTranscriptEntryCount(), delta.Text, delta.Phase)
+			return e.emitRaw(Event{Kind: EventAssistantDelta, StepID: exactStepID, AssistantDelta: delta.Text, AssistantDeltaPhase: delta.Phase, AssistantStreamMetadata: metadata, AssistantTranscriptStreamID: streamID})
 		}
 		if mutation.reasoningDelta != nil {
 			delta := *mutation.reasoningDelta
-			identity, err := e.transcriptRuntimeState().SetReasoningState(stepID, delta)
+			identity, err := e.transcriptRuntimeState().SetReasoningState(exactStepID, delta)
 			if err != nil {
 				return err
 			}
 			return e.emitRaw(Event{
 				Kind:                   EventReasoningDelta,
-				StepID:                 stepID,
+				StepID:                 exactStepID,
 				ReasoningDelta:         &delta,
 				ReasoningTraceIdentity: cloneTranscriptReasoningTraceIdentity(identity),
 			})
@@ -1815,7 +1841,7 @@ func (e *Engine) applySteeringMutation(
 			clearedMetadata, clearedStreamID = e.clearStreamingAssistantStateRaw()
 		}
 		if mutation.resetEvents {
-			return e.emitStreamingAssistantCleanupEventsRaw(stepID, clearedMetadata, clearedStreamID, mutation.abortReason)
+			return e.emitStreamingAssistantCleanupEventsRaw(exactStepID, clearedMetadata, clearedStreamID, mutation.abortReason)
 		}
 		return nil
 	}
@@ -1829,7 +1855,21 @@ func recordSteeringCommitReceipt(destination *session.CommitReceipt, receipt ses
 	}
 }
 
-func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryReplacement) (session.CommitReceipt, error) {
+func requireExactSteeringStepID(stepID *string, operation string) (string, error) {
+	if stepID == nil {
+		return "", fmt.Errorf("%s requires exact Step provenance", operation)
+	}
+	return *stepID, nil
+}
+
+func (event Event) withStepID(stepID *string) Event {
+	if stepID != nil {
+		event.StepID = *stepID
+	}
+	return event
+}
+
+func (e *Engine) replaceHistoryRaw(stepID *string, replacement steeringHistoryReplacement) (session.CommitReceipt, error) {
 	reminderIssued := false
 	projectedStart := e.CommittedTranscriptEntryCount()
 	replacement.payload.CommittedEntryStart = &projectedStart
@@ -1840,7 +1880,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 		return session.CommitReceipt{}, fmt.Errorf("adapt history replacement record: %w", adaptErr)
 	}
 	appended, receipt, appendErr := e.eventLog.AppendCompactionHistoryReplacement(
-		textutil.OptionalExactString(stepID),
+		stepID,
 		record,
 	)
 	if appendErr != nil && !receipt.Committed {
@@ -1850,8 +1890,10 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	if provenanceErr != nil {
 		return receipt, errors.Join(appendErr, provenanceErr)
 	}
-	for index := range replacement.projectedEntries {
-		replacement.projectedEntries[index].StepID = strings.TrimSpace(stepID)
+	if stepID != nil {
+		for index := range replacement.projectedEntries {
+			replacement.projectedEntries[index].StepID = strings.TrimSpace(*stepID)
+		}
 	}
 	replacement.projectedEntries = assignHistoryReplacementEntryProvenance(
 		replacement.projectedEntries,
@@ -1884,7 +1926,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 	emitErr = errors.Join(
 		modeErr,
 		emitErr,
-		e.emitRaw(Event{Kind: EventConversationUpdated, StepID: stepID}),
+		e.emitRaw(Event{Kind: EventConversationUpdated}.withStepID(stepID)),
 	)
 	// The durable history replacement is the compaction boundary. Apply that
 	// committed replacement in memory before resetting workflow-adjacent state,
@@ -1899,7 +1941,7 @@ func (e *Engine) replaceHistoryRaw(stepID string, replacement steeringHistoryRep
 }
 
 func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
-	stepID string,
+	stepID *string,
 	start int,
 	entries []ChatEntry,
 ) error {
@@ -1925,7 +1967,6 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 		}
 		if err := e.emitRaw(Event{
 			Kind:                       EventLocalEntryAdded,
-			StepID:                     stepID,
 			LocalEntry:                 &copyEntry,
 			LocalEntryProjected:        true,
 			CommittedTranscriptChanged: true,
@@ -1933,7 +1974,7 @@ func (e *Engine) emitProjectedHistoryReplacementEntriesRaw(
 			CommittedEntryStartSet:     true,
 			CommittedEntryCount:        start + idx + 1,
 			CommittedProvenance:        provenance,
-		}); err != nil {
+		}.withStepID(stepID)); err != nil {
 			return err
 		}
 	}

@@ -338,7 +338,7 @@ func (s *streamingTranscriptScan) closeTurn() {
 }
 
 func (s *streamingTranscriptScan) appendLocalEntry(entry storedLocalEntry, stepID string, provenance *TranscriptCommittedRowProvenance) {
-	projected := *localEntryChatEntryForStep(entry, stepID)
+	projected := *localEntryChatEntryForStep(entry, textutil.OptionalExactString(stepID))
 	projected.CommittedProvenance = cloneTranscriptCommittedRowProvenance(provenance)
 	s.scan.appendEntry(projected)
 }

@@ -74,6 +74,23 @@ func validateSteeringOutputProvenance(provenance steeringOutputProvenance) error
 	}
 }
 
+func steeringOutputStepID(provenance steeringOutputProvenance) (*string, error) {
+	switch provenance := provenance.(type) {
+	case runtimeOutputProvenance:
+		return nil, nil
+	case exactOutputProvenance:
+		if strings.TrimSpace(provenance.stepID) == "" {
+			return nil, errors.New("exact Runtime output requires a Step ID")
+		}
+		stepID := provenance.stepID
+		return &stepID, nil
+	case deferredHumanOutputProvenance:
+		return nil, errors.New("deferred human Runtime output requires Step binding")
+	default:
+		return nil, errors.New("Runtime output provenance is required")
+	}
+}
+
 type steeringOutputOperation struct {
 	provenance    steeringOutputProvenance
 	intents       []steeringIntent

@@ -562,7 +562,7 @@ func (e *Engine) prepareResultGroupProjection(
 			Name:        textutil.Value(string(completion.completion.Result.Name)),
 			MessageType: llm.ToolOutputMessageType(slot.call.OutputKind == session.ToolOutputKindCustom),
 		}
-		preparedOutput, err := e.prepareMessageProjection(stepID, output)
+		preparedOutput, err := e.prepareMessageProjection(textutil.OptionalExactString(stepID), output)
 		if err != nil {
 			return resultGroupProjectionPlan{}, fmt.Errorf("prepare result group output %q: %w", slot.call.CallID, err)
 		}
@@ -615,7 +615,7 @@ func (e *Engine) applyResultGroupProjection(
 		}
 		e.transcriptRuntimeState().CompleteLiveTool(unit.completion.completion.Result.CallID)
 		if err := e.applyPreparedMessageProjection(
-			stepID,
+			textutil.OptionalExactString(stepID),
 			unit.output,
 			&outputProvenance,
 		); err != nil {
@@ -650,7 +650,7 @@ func (e *Engine) applyResultGroupProjection(
 			return err
 		}
 		if projection.unit.completion.feedback != nil {
-			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, stepID)
+			entry := localEntryChatEntryForStep(*projection.unit.completion.feedback, textutil.OptionalExactString(stepID))
 			if err := e.emitResultGroupProjectionEvent(Event{
 				Kind:                       EventLocalEntryAdded,
 				StepID:                     stepID,

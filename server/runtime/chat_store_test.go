@@ -98,7 +98,7 @@ func TestHistoryReplacementRebasesDanglingToolCallStepOwnership(t *testing.T) {
 	items := llm.ItemsFromMessages([]llm.Message{message})
 
 	live := newChatStoreWithCWD(t.TempDir())
-	if err := live.appendMessage(chatStoreTestStepID, message); err != nil {
+	if err := live.appendMessage(textutil.OptionalExactString(chatStoreTestStepID), message); err != nil {
 		t.Fatalf("append live message: %v", err)
 	}
 	live.replaceHistory(replacementStepID, items)
