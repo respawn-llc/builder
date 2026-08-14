@@ -955,17 +955,57 @@ func TestCurrentNodeControllerProtocolViolationCapStopsAndInterruptsLiveScope(t 
 	result, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
 		ScopeID:  scopeID,
 		Kind:     workflowruntime.ViolationKindInvalidCompletion,
-		MaxCount: 1,
+		MaxCount: 2,
 		Detail:   "invalid completion",
 	})
 	if err != nil {
 		t.Fatalf("record protocol violation: %v", err)
 	}
-	if !result.Interrupted || result.Count != 1 {
-		t.Fatalf("violation result = %+v, want count 1 and interrupted", result)
+	if result.Interrupted || result.Count != 1 {
+		t.Fatalf("first violation result = %+v, want count 1 without interruption", result)
+	}
+	if err := controller.ResetProtocolViolationBudget(context.Background(), workflowruntime.ViolationResetRequest{
+		ScopeID: scopeID,
+	}); err != nil {
+		t.Fatalf("reset protocol violation budget: %v", err)
+	}
+	result, err = controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
+		ScopeID:  scopeID,
+		Kind:     workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount: 2,
+		Detail:   "invalid completion",
+	})
+	if err != nil {
+		t.Fatalf("record violation after reset: %v", err)
+	}
+	if result.Interrupted || result.Count != 1 {
+		t.Fatalf("post-reset violation result = %+v, want count 1 without interruption", result)
+	}
+	result, err = controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
+		ScopeID:  scopeID,
+		Kind:     workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount: 2,
+		Detail:   "invalid completion",
+	})
+	if err != nil {
+		t.Fatalf("record cap violation: %v", err)
+	}
+	if !result.Interrupted || result.Count != 2 {
+		t.Fatalf("cap violation result = %+v, want count 2 and interrupted", result)
 	}
 	interruption, ok := store.interruption(reference)
 	if !ok || interruption.reason != reasonProtocolViolationCap {
 		t.Fatalf("protocol interruption = %+v, want reason %q", interruption, reasonProtocolViolationCap)
+	}
+	testsetup.RequireUntil(t, time.Now().Add(3*time.Second), 10*time.Millisecond, func() bool {
+		_, live := authority.ExecutionByScope(scopeID)
+		return !live
+	}, "protocol-capped execution did not retire")
+	if _, err := controller.RecordProtocolViolation(context.Background(), workflowruntime.ViolationRequest{
+		ScopeID:  scopeID,
+		Kind:     workflowruntime.ViolationKindInvalidCompletion,
+		MaxCount: 2,
+	}); !errors.Is(err, sessionruntime.ErrExecutionNoLongerLive) {
+		t.Fatalf("retired protocol budget error = %v, want %v", err, sessionruntime.ErrExecutionNoLongerLive)
 	}
 }
