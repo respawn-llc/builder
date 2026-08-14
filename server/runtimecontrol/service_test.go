@@ -465,7 +465,7 @@ func runtimeControlExactExecution(t *testing.T) *workflowruntime.CurrentNodeExec
 }
 
 func newRuntimeControlTestService(t *testing.T, client llm.Client, registry *tools.Registry, cfg runtime.Config, opts ...session.StoreOption) (*session.Store, *runtime.Engine, *Service) {
-	return newRuntimeControlTestServiceWithEventFeed(t, client, registry, cfg, nil, opts...)
+	return newRuntimeControlTestServiceWithFeeds(t, client, registry, cfg, nil, nil, opts...)
 }
 
 func newRuntimeControlTestServiceWithEventFeed(
@@ -474,6 +474,18 @@ func newRuntimeControlTestServiceWithEventFeed(
 	registry *tools.Registry,
 	cfg runtime.Config,
 	eventFeed sessionruntime.AgentResourceEventFeed,
+	opts ...session.StoreOption,
+) (*session.Store, *runtime.Engine, *Service) {
+	return newRuntimeControlTestServiceWithFeeds(t, client, registry, cfg, eventFeed, nil, opts...)
+}
+
+func newRuntimeControlTestServiceWithFeeds(
+	t *testing.T,
+	client llm.Client,
+	registry *tools.Registry,
+	cfg runtime.Config,
+	eventFeed sessionruntime.AgentResourceEventFeed,
+	promptFeed sessionruntime.ExecutionPromptFeed,
 	opts ...session.StoreOption,
 ) (*session.Store, *runtime.Engine, *Service) {
 	t.Helper()
@@ -531,6 +543,7 @@ func newRuntimeControlTestServiceWithEventFeed(
 		PersistenceRoot: t.TempDir(),
 		StoreOptions:    append(runtimeControlTestSessionPersistence.Options(), opts...),
 		EventFeed:       eventFeed,
+		PromptFeed:      promptFeed,
 	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
 	if err != nil {
@@ -672,8 +685,27 @@ func TestServiceSubmitUserTurnStillCancelsOnExplicitInterrupt(t *testing.T) {
 	}
 }
 
-func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *testing.T) {
+type runtimeControlPendingPromptFeed struct {
+	pending chan struct{}
+	once    sync.Once
+}
+
+func (f *runtimeControlPendingPromptFeed) PromptPendingScope(
+	sessionruntime.ExecutionScope,
+	tools.AskQuestionRequest,
+	time.Time,
+) error {
+	f.once.Do(func() { close(f.pending) })
+	return nil
+}
+
+func (*runtimeControlPendingPromptFeed) PromptResolvedScope(sessionruntime.ExecutionScope, string) error {
+	return nil
+}
+
+func TestServiceInterruptCancelsPendingQuestionAndAllowsNextTurn(t *testing.T) {
 	toolStarted := make(chan string, 1)
+	promptFeed := &runtimeControlPendingPromptFeed{pending: make(chan struct{})}
 	client := &runtimeControlFakeClient{responses: []llm.Response{
 		{
 			Assistant: llm.Message{Role: llm.RoleAssistant},
@@ -702,7 +734,7 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 			Usage: llm.Usage{WindowTokens: 200000},
 		},
 	}}
-	store, engine, service := newRuntimeControlTestService(t, client, nil, runtime.Config{
+	store, engine, service := newRuntimeControlTestServiceWithFeeds(t, client, nil, runtime.Config{
 		EnabledTools: []toolspec.ID{toolspec.ToolAskQuestion},
 		OnEvent: func(event runtime.Event) {
 			if event.Kind != runtime.EventToolCallStarted || event.ToolCall == nil || event.ToolCall.ID != "ask-cancel" {
@@ -713,7 +745,7 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 			default:
 			}
 		},
-	})
+	}, nil, promptFeed)
 
 	firstRequest := runtimeControlUserTurnRequest(store, "ask-cancel", "ask then cancel")
 	firstDone := make(chan error, 1)
@@ -721,12 +753,9 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 		_, err := service.SubmitUserTurn(context.Background(), firstRequest)
 		firstDone <- err
 	}()
-	var promptStepID runtimeids.StepID
 	select {
 	case rawStepID := <-toolStarted:
-		var err error
-		promptStepID, err = runtimeids.ParseStepID(rawStepID)
-		if err != nil {
+		if _, err := runtimeids.ParseStepID(rawStepID); err != nil {
 			t.Fatalf("parse prompt step id: %v", err)
 		}
 	case err := <-firstDone:
@@ -734,74 +763,42 @@ func TestServicePendingQuestionRejectsInterruptAndReleasesAfterResolution(t *tes
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for ask_question to start")
 	}
-	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	promptNotPending := errors.New("prompt not pending")
-	for deadline := time.Now().Add(3 * time.Second); ; {
-		err = service.authority.WithInterruptibleAgentTurn(context.Background(), sessionID, nil, func(context.Context, *runtime.Engine) error {
-			return promptNotPending
-		})
-		if errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
-			break
-		}
-		if !errors.Is(err, promptNotPending) {
-			t.Fatalf("wait for pending question: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for pending question")
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-promptFeed.pending:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for pending Question publication")
 	}
 	if _, err := service.Interrupt(context.Background(), serverapi.RuntimeInterruptRequest{
 		ClientRequestID: "interrupt-ask-cancel",
 		SessionID:       store.Meta().SessionID,
-	}); !errors.Is(err, serverapi.ErrRuntimeCommandNotAccepted) || !errors.Is(err, sessionruntime.ErrExecutionPromptPending) {
-		t.Fatalf("pending-question Interrupt error = %v, want typed pending-prompt rejection", err)
-	}
-	results, err := service.authority.ResolvePromptBatch(
-		context.Background(),
-		sessionID,
-		promptStepID,
-		[]sessionruntime.PromptAnswerCommand{{
-			PromptID: "ask-cancel",
-			Payload: sessionruntime.PromptQuestionAnswerCommand{
-				Answer: tools.AskQuestionAnswer{Freeform: textutil.Value("continue")},
-			},
-		}},
-	)
-	if err != nil {
-		t.Fatalf("resolve pending question: %v", err)
-	}
-	if len(results) != 1 || results[0].Outcome != sessionruntime.PromptAnswerOutcomeResolved {
-		t.Fatalf("prompt answer results = %+v, want resolved", results)
+	}); err != nil {
+		t.Fatalf("Interrupt pending Question: %v", err)
 	}
 	select {
 	case err := <-firstDone:
-		if err != nil {
-			t.Fatalf("resolved ask_question turn: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("interrupted ask_question turn error = %v, want context canceled", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("resolved ask_question turn retained its execution")
+		t.Fatal("interrupted ask_question turn retained its execution")
 	}
 	if _, err := service.LiveSteer(context.Background(), serverapi.RuntimeLiveSteerRequest{
 		ClientRequestID: "b8349273-19d6-4a4b-94fb-895b48103d02",
 		SessionID:       store.Meta().SessionID,
 		Text:            "must not join the canceled execution",
 	}); !errors.Is(err, serverapi.ErrRuntimeNoActiveRun) {
-		t.Fatalf("live steer after resolved ask_question error = %v, want no active run", err)
+		t.Fatalf("live steer after interrupted ask_question error = %v, want no active run", err)
 	}
 
 	next, err := service.SubmitUserTurn(context.Background(), runtimeControlUserTurnRequest(store, "after-ask-cancel", "next user message"))
 	if err != nil {
-		t.Fatalf("submit next user turn after resolved ask_question: %v", err)
+		t.Fatalf("submit next user turn after interrupted ask_question: %v", err)
 	}
-	if next.Message == nil || *next.Message != "next turn completed" {
+	if next.Message == nil || *next.Message != "question turn completed" {
 		t.Fatalf("next user turn response = %+v, want completed response", next)
 	}
 	if engine.HasActiveLiveRunGroup() {
-		t.Fatal("resolved ask_question turn retained live-run ownership after next user turn")
+		t.Fatal("interrupted ask_question turn retained live-run ownership after next user turn")
 	}
 	nextUserMessageCommitted := false
 	if err := engine.WithTranscriptHydrationSnapshot(func(snapshot runtime.TranscriptHydrationSnapshot) error {

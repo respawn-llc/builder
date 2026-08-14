@@ -63,6 +63,39 @@ func TestRuntimeCtrlCInterruptsRestartedAgentLoopInsteadOfQuitting(t *testing.T)
 	}
 }
 
+func TestRuntimeCtrlCInterruptsAwaitingQuestionInsteadOfQuitting(t *testing.T) {
+	client := &runtimeControlFakeClient{}
+	model := newProjectedClosedUIModel(client)
+	runID, err := runtimeids.ParseRunID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("parse Run id: %v", err)
+	}
+	stepID, err := runtimeids.ParseStepID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+	if err != nil {
+		t.Fatalf("parse Step id: %v", err)
+	}
+	if err := model.applyRuntimeActivityProjection(clientui.RuntimeActivity{
+		State: clientui.RuntimeActivityAwaitingPrompt,
+		ActiveStep: &clientui.RuntimeActiveStep{
+			ActiveKind: clientui.RuntimeActivityActiveKindUserTurn,
+			RunID:      runID,
+			StepID:     stepID,
+		},
+	}); err != nil {
+		t.Fatalf("apply awaiting-Question activity: %v", err)
+	}
+
+	_, command := model.inputController().handleRuntimeCtrlC(nil)
+	for _, message := range collectCmdMessages(t, command) {
+		if _, quits := message.(tea.QuitMsg); quits {
+			t.Fatal("Ctrl+C exited the TUI while an Agent Turn awaited a Question")
+		}
+	}
+	if client.interruptCalls != 1 {
+		t.Fatalf("interrupt calls = %d, want 1", client.interruptCalls)
+	}
+}
+
 func TestRuntimeCtrlCExitsWhenNoAgentLoopIsRunning(t *testing.T) {
 	model := newProjectedClosedUIModel(&runtimeControlFakeClient{})
 
