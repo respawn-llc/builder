@@ -88,6 +88,5 @@ func (source goSourceFile) locationViolation(node ast.Node) string {
 }
 
 func (source goSourceFile) detailedViolation(node ast.Node, detail string) string {
-	position := source.fileSet.Position(node.Pos())
-	return fmt.Sprintf("%s:%d: %s", source.relativePath, position.Line, detail)
+	return source.locationViolation(node) + ": " + detail
 }
