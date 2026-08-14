@@ -51,9 +51,10 @@ func TestPersistedSessionReadsDoNotWaitForCommittedAppendOwner(t *testing.T) {
 	blocked, release := gate.BlockNextAfter()
 	appendDone := make(chan error, 1)
 	go func() {
+		stepID := "11111111-1111-4111-8111-111111111111"
 		phase := session.MessagePhaseFinal
 		content := "committed final answer"
-		_, _, appendErr := eventLog.AppendRecord(nil, session.MessageRecord{
+		_, _, appendErr := eventLog.AppendRecord(&stepID, session.MessageRecord{
 			Role:    session.MessageRoleAssistant,
 			Content: &content,
 			Phase:   &phase,

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"core/server/llm"
+	"core/server/runtime"
 	"core/server/session"
 	"core/shared/clientui"
 	"core/shared/config"

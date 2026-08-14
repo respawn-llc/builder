@@ -47,12 +47,14 @@ func TestMaterializedChatSettingsDoesNotWaitForSessionMetadataMutation(t *testin
 	go func() { mutationDone <- store.SetName("committed name") }()
 	<-blocked
 
-	settings := config.DefaultOnboardingSettings()
-	settings.Model = "gpt-5"
-	settings.ProviderOverride = "openai"
+	cfg, err := config.Load(workspace, config.LoadOptions{ConfigRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Settings.ProviderCapabilities.ProviderID = "anthropic"
 	reader := chatSettingsPersistedReader{Persistence: persistence}
 	service := NewService(launch.Planner{
-		Config:            config.App{WorkspaceRoot: workspace, Settings: settings},
+		Config:            cfg,
 		PersistedSessions: reader,
 	})
 	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)

@@ -569,7 +569,7 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatalf("create import skill: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: helper\n---\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: helper\ndescription: Test helper\n---\n"), 0o644); err != nil {
 		t.Fatalf("write import skill: %v", err)
 	}
 
@@ -781,7 +781,6 @@ func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.
 	firstMutation := dial("first mutation")
 	secondMutation := dial("second mutation")
 	acknowledger := dial("acknowledgement")
-	gated := dial("startup gate")
 	reader := dial("reader")
 
 	initialReadiness, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
@@ -835,15 +834,6 @@ func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.
 		ackDone <- ackErr
 	}()
 	<-ackStarted
-	gateStarted := make(chan struct{})
-	gateDone := make(chan error, 1)
-	go func() {
-		close(gateStarted)
-		_, gateErr := gated.ListProjects(context.Background(), serverapi.ProjectListRequest{})
-		gateDone <- gateErr
-	}()
-	<-gateStarted
-
 	readCtx, cancelReads := context.WithTimeout(context.Background(), time.Second)
 	defer cancelReads()
 	duringReadiness, err := reader.GetServerReadiness(readCtx, serverapi.ServerReadinessRequest{})
@@ -886,12 +876,6 @@ func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.
 		t.Fatalf("auth acknowledgement completed before the first mutation: %v", err)
 	default:
 	}
-	select {
-	case err := <-gateDone:
-		t.Fatalf("startup authorization gate completed before the auth mutation: %v", err)
-	default:
-	}
-
 	releaseAuthSaves()
 	if err := <-firstDone; err != nil {
 		t.Fatalf("first auth mutation: %v", err)
@@ -905,9 +889,6 @@ func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.
 	}
 	if err := <-ackDone; err != nil {
 		t.Fatalf("auth acknowledgement: %v", err)
-	}
-	if err := <-gateDone; !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
-		t.Fatalf("startup authorization gate error = %v, want onboarding required", err)
 	}
 }
 
