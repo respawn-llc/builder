@@ -11,6 +11,7 @@ import { scoped_session_id } from "./gen/kent/api/session_launch/validation_pb.j
 import {
   canonical_uuid_v4,
   nonblank,
+  trimmed,
   workflow_key,
 } from "./gen/kent/api/shared/validation_pb.js";
 
@@ -20,6 +21,7 @@ const validator = createValidator({
     scoped_session_id,
     canonical_uuid_v4,
     nonblank,
+    trimmed,
     workflow_key,
   ),
 });

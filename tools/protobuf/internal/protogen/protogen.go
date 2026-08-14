@@ -265,7 +265,9 @@ func (m *Manager) ensureTypeScriptGenerator() error {
 	executable := filepath.Join(m.typeScriptGeneratorBinDir(), "protoc-gen-es")
 	installedFingerprint, readErr := os.ReadFile(metadataPath)
 	if readErr == nil && strings.TrimSpace(string(installedFingerprint)) == inputFingerprint {
-		return ensureExecutable(executable)
+		if err := ensureExecutable(executable); err == nil {
+			return nil
+		}
 	}
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return readErr

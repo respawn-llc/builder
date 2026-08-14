@@ -64,6 +64,27 @@ func TestProtobufEnsureInvalidatesOnlyAffectedTarget(t *testing.T) {
 	}
 }
 
+func TestProtobufGenerationReinstallsMissingTypeScriptGenerator(t *testing.T) {
+	fixture := newProtobufGenerationFixture(t)
+	if output, err := fixture.run("ensure", "ts"); err != nil {
+		t.Fatalf("initial ensure: %v\n%s", err, output)
+	}
+	if err := os.RemoveAll(filepath.Join(
+		fixture.repositoryRoot,
+		"tools",
+		"protobuf",
+		"node_modules",
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := fixture.run("generate", "ts"); err != nil {
+		t.Fatalf("generate after dependency cleanup: %v\n%s", err, output)
+	}
+	if got := fixture.generationCount(t, "ts"); got != 2 {
+		t.Fatalf("TypeScript generation count = %d, want 2", got)
+	}
+}
+
 func TestProtobufEnsureSerializesConcurrentCalls(t *testing.T) {
 	fixture := newProtobufGenerationFixture(t)
 	var waitGroup sync.WaitGroup

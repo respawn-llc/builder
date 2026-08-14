@@ -34,6 +34,7 @@ import {
   schema_kent_api_attention_attention as attention,
   schema_kent_api_prompt_prompt as prompt,
   schema_kent_api_prompt_command_validation as promptCommandValidation,
+  schema_kent_api_project_project as project,
   schema_kent_api_run_prompt_run_prompt as runPrompt,
   schema_kent_api_runtime_runtime as runtime,
   schema_kent_api_session_launch_session_lifecycle as sessionLifecycle,
@@ -176,6 +177,31 @@ test("new schema slice executes generated validation in TypeScript", () => {
     prompt.ListPendingRequestSchema,
     create(prompt.ListPendingRequestSchema, { sessionId: " " }),
   ));
+  validateGeneratedMessage(
+    project.ProjectHomeListRequestSchema,
+    create(project.ProjectHomeListRequestSchema),
+  );
+  assert.throws(() => validateGeneratedMessage(
+    project.ProjectHomeListRequestSchema,
+    create(project.ProjectHomeListRequestSchema, { pageSize: 0 }),
+  ));
+  for (const [schema, projectId, extra] of [
+    [project.ProjectWorkspaceListRequestSchema, " ", { limit: 1 }],
+    [project.ProjectWorkspaceListRequestSchema, " project ", { limit: 1 }],
+    [project.ProjectEditGetRequestSchema, " ", {}],
+    [project.ProjectEditGetRequestSchema, " project ", {}],
+    [project.GetProjectWorkspaceRequestSchema, " ", {
+      selector: { case: "workspaceId", value: "workspace" },
+    }],
+    [project.GetProjectWorkspaceRequestSchema, " project ", {
+      selector: { case: "workspaceId", value: "workspace" },
+    }],
+  ]) {
+    assert.throws(() => validateGeneratedMessage(
+      schema,
+      create(schema, { projectId, ...extra }),
+    ));
+  }
   assert.throws(() => validateGeneratedMessage(
     runtime.PromptCommandInputSchema,
     create(runtime.PromptCommandInputSchema, { name: "bogus" }),

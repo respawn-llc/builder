@@ -6,6 +6,7 @@ import "buf/validate/validate.proto";
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 import "kent/api/shared/foundation.proto";
+import "kent/api/shared/validation.proto";
 
 option go_package = "core/shared/protoapi/gen/kent/api/project;projectpb";
 
@@ -403,7 +404,7 @@ message ProjectListResult {
 
 message ProjectHomeListRequest {
   optional int32 page_size = 1 [(buf.validate.field).int32 = {
-    gte: 0
+    gt: 0
   }];
   optional string page_token = 2 [
     (buf.validate.field).string.min_len = 1,
@@ -620,13 +621,21 @@ message CreateProjectResult {
 }
 
 message ProjectWorkspaceListRequest {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
   int32 offset = 2 [(buf.validate.field).int32.gte = 0];
   int32 limit = 3 [(buf.validate.field).int32 = {gte: 1 lte: 100}];
 }
 
 message ProjectEditGetRequest {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
 }
 
 message GetProjectEditSuccess {
@@ -868,7 +877,11 @@ enum ProjectWorkspaceGetResult {
 }
 
 message GetProjectWorkspaceRequest {
-  string project_id = 1 [(buf.validate.field).string.min_len = 1];
+  string project_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true,
+    (buf.validate.field).string.(kent.api.shared.trimmed) = true
+  ];
   oneof selector {
     option (buf.validate.oneof).required = true;
     string workspace_id = 2 [

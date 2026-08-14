@@ -46,6 +46,31 @@ func TestCapabilityDefaultsRejectUnknownCompactionMode(t *testing.T) {
 
 func TestProjectWorkspaceContractsRejectBlankAndNoncanonicalValues(t *testing.T) {
 	for name, message := range map[string]proto.Message{
+		"present zero project page size": &projectpb.ProjectHomeListRequest{
+			PageSize: int32Pointer(0),
+		},
+		"blank workspace-list project ID": &projectpb.ProjectWorkspaceListRequest{
+			ProjectId: " ",
+			Limit:     1,
+		},
+		"spaced workspace-list project ID": &projectpb.ProjectWorkspaceListRequest{
+			ProjectId: " project ",
+			Limit:     1,
+		},
+		"blank edit project ID": &projectpb.ProjectEditGetRequest{
+			ProjectId: " ",
+		},
+		"spaced edit project ID": &projectpb.ProjectEditGetRequest{
+			ProjectId: " project ",
+		},
+		"blank get project ID": &projectpb.GetProjectWorkspaceRequest{
+			ProjectId: " ",
+			Selector:  &projectpb.GetProjectWorkspaceRequest_WorkspaceId{WorkspaceId: "workspace"},
+		},
+		"spaced get project ID": &projectpb.GetProjectWorkspaceRequest{
+			ProjectId: " project ",
+			Selector:  &projectpb.GetProjectWorkspaceRequest_WorkspaceId{WorkspaceId: "workspace"},
+		},
 		"selector ID": &projectpb.ProjectWorkspaceSelector{
 			Selector: &projectpb.ProjectWorkspaceSelector_WorkspaceId{WorkspaceId: " "},
 		},

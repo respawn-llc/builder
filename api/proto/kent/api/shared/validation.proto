@@ -35,4 +35,9 @@ extend buf.validate.StringRules {
       "(this.charAt(index) >= '0' && this.charAt(index) <= '9') || "
       "this.charAt(index) == '_'))"
   }];
+  optional bool trimmed = 50005 [(buf.validate.predefined).cel = {
+    id: "kent.shared.trimmed"
+    message: "must not have surrounding whitespace"
+    expression: "!rule || this == this.trim()"
+  }];
 }
