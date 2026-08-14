@@ -20,10 +20,43 @@ type testSessionMetadata struct {
 var sessionTestPersistence = &testSessionMetadata{records: map[string]PersistedSessionRecord{}}
 
 func (p *testSessionMetadata) ObservePersistedStore(_ context.Context, snapshot PersistedStoreSnapshot) error {
+	contextFacts := snapshot.ContextFacts.Clone()
+	if existing, ok := p.sharedStore().Get(snapshot.Meta.SessionID); ok {
+		contextFacts = existing.ContextFacts.Clone()
+	}
 	p.sharedStore().Put(snapshot.Meta.SessionID, PersistedSessionRecord{
-		SessionDir: snapshot.SessionDir,
-		Meta:       cloneTestMeta(&snapshot.Meta),
+		SessionDir:   snapshot.SessionDir,
+		Meta:         cloneTestMeta(&snapshot.Meta),
+		ContextFacts: contextFacts,
 	})
+	return nil
+}
+
+func (p *testSessionMetadata) WriteSessionContextFacts(
+	_ context.Context,
+	sessionID string,
+	facts SessionContextFacts,
+) error {
+	record, ok := p.sharedStore().Get(sessionID)
+	if !ok {
+		return ErrSessionNotFound
+	}
+	record.ContextFacts = facts.Clone()
+	p.sharedStore().Put(sessionID, record)
+	return nil
+}
+
+func (p *testSessionMetadata) WriteManualCompactEligibility(
+	_ context.Context,
+	sessionID string,
+	eligible bool,
+) error {
+	record, ok := p.sharedStore().Get(sessionID)
+	if !ok {
+		return ErrSessionNotFound
+	}
+	record.ContextFacts.ManualCompactEligible = &eligible
+	p.sharedStore().Put(sessionID, record)
 	return nil
 }
 
@@ -72,6 +105,7 @@ func (p *testSessionMetadata) sharedStore() *recordstore.Store[PersistedSessionR
 
 func cloneTestPersistedSessionRecord(record PersistedSessionRecord) PersistedSessionRecord {
 	record.Meta = cloneTestMeta(record.Meta)
+	record.ContextFacts = record.ContextFacts.Clone()
 	return record
 }
 
@@ -91,6 +125,7 @@ func (p *testSessionMetadata) options() []StoreOption {
 	return []StoreOption{
 		WithPersistenceObserver(p),
 		WithPersistedSessionResolver(p),
+		WithSessionContextFactWriter(p),
 	}
 }
 

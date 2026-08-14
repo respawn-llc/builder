@@ -66,10 +66,12 @@ const (
 	DependencyAuthBootstrap         Dependency = "auth_bootstrap"
 	DependencyAuthStatus            Dependency = "auth_status"
 	DependencyCapabilityFacts       Dependency = "capability_facts"
+	DependencyChatContext           Dependency = "chat_context"
 	DependencyPromptCommandCatalog  Dependency = "prompt_command_catalog"
 	DependencyOnboardingFinalize    Dependency = "onboarding_finalize"
 	DependencyProjectView           Dependency = "project_view"
 	DependencySessionLaunch         Dependency = "session_launch"
+	DependencyChatSettings          Dependency = "chat_settings"
 	DependencySessionView           Dependency = "session_view"
 	DependencySessionLifecycle      Dependency = "session_lifecycle"
 	DependencySessionRuntime        Dependency = "session_runtime"
@@ -192,6 +194,7 @@ var routeContracts = []Route{
 	unary[serverapi.AuthAcknowledgeNoAuthRequest, serverapi.AuthAcknowledgeNoAuthResponse](protocol.MethodAuthAcknowledgeNoAuth, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthBootstrap),
 	unary[serverapi.AuthStatusRequest, serverapi.AuthStatusResponse](protocol.MethodAuthGetStatus, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyAuthStatus),
 	unary[serverapi.CapabilityFactsRequest, serverapi.CapabilityFactsResponse](protocol.MethodCapabilityFactsGet, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyCapabilityFacts),
+	unary[serverapi.ChatContextRequest, serverapi.ChatContextResponse](protocol.MethodChatContextGet, AuthPreServerAuth, ScopeSessionActiveProjectIfSet, ConnectionControl, DependencyChatContext),
 	unary[serverapi.PromptCommandCatalogRequest, serverapi.PromptCommandCatalogResponse](protocol.MethodPromptCommandCatalogGet, AuthServer, ScopeProjectWorkspace, ConnectionControl, DependencyPromptCommandCatalog),
 	unary[serverapi.OnboardingFinalizeRequest, serverapi.OnboardingFinalizeResponse](protocol.MethodOnboardingFinalize, AuthPreServerAuth, ScopeNone, ConnectionUnscoped, DependencyOnboardingFinalize),
 	unary[protocol.AttachProjectRequest, protocol.AttachResponse](protocol.MethodAttachProject, AuthPreServerAuth, ScopeAttachProject, ConnectionUnscoped, DependencyProtocolAttach),
@@ -212,6 +215,7 @@ var routeContracts = []Route{
 	unary[serverapi.ProjectRebindWorkspaceRequest, serverapi.ProjectRebindWorkspaceResponse](protocol.MethodProjectRebindWorkspace, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.ProjectGetOverviewRequest, serverapi.ProjectGetOverviewResponse](protocol.MethodProjectGetOverview, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
 	unary[serverapi.SessionPageRequest, serverapi.SessionPageResponse](protocol.MethodSessionPage, AuthPreServerAuth, ScopeProjectView, ConnectionUnscoped, DependencyProjectView),
+	unary[serverapi.ChatSettingsReadRequest, serverapi.ChatSettingsReadResponse](protocol.MethodChatSettingsRead, AuthServer, ScopeNone, ConnectionControl, DependencyChatSettings),
 	unary[serverapi.WorkflowCreateRequest, serverapi.WorkflowCreateResponse](protocol.MethodWorkflowCreate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowCreateAndLinkProjectRequest, serverapi.WorkflowCreateAndLinkProjectResponse](protocol.MethodWorkflowCreateAndLinkProject, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),
 	unary[serverapi.WorkflowUpdateRequest, serverapi.WorkflowGetResponse](protocol.MethodWorkflowUpdate, AuthServer, ScopeProjectView, ConnectionUnscoped, DependencyWorkflow),

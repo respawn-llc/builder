@@ -2204,6 +2204,8 @@ SELECT
     s.locked_json,
     s.usage_state_json,
     s.metadata_json,
+    s.completed_compaction_count,
+    s.manual_compact_eligible,
     COALESCE(w.canonical_root_path, json_extract(s.metadata_json, '$.workspace_root'), '') AS workspace_root
 FROM sessions s
 LEFT JOIN workspaces w ON w.id = s.workspace_id
@@ -2212,23 +2214,25 @@ LIMIT 1
 `
 
 type GetSessionRecordByIDRow struct {
-	ID                   string
-	ArtifactRelpath      string
-	Name                 string
-	FirstPromptPreview   string
-	InputDraft           string
-	PreviousSessionID    sql.NullString
-	ParentAgentSessionID sql.NullString
-	Category             sql.NullString
-	CreatedAtUnixMs      int64
-	UpdatedAtUnixMs      int64
-	LastSequence         int64
-	ModelRequestCount    int64
-	ContinuationJson     string
-	LockedJson           string
-	UsageStateJson       string
-	MetadataJson         string
-	WorkspaceRoot        string
+	ID                       string
+	ArtifactRelpath          string
+	Name                     string
+	FirstPromptPreview       string
+	InputDraft               string
+	PreviousSessionID        sql.NullString
+	ParentAgentSessionID     sql.NullString
+	Category                 sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	LastSequence             int64
+	ModelRequestCount        int64
+	ContinuationJson         string
+	LockedJson               string
+	UsageStateJson           string
+	MetadataJson             string
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
+	WorkspaceRoot            string
 }
 
 func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (GetSessionRecordByIDRow, error) {
@@ -2251,6 +2255,8 @@ func (q *Queries) GetSessionRecordByID(ctx context.Context, sessionID string) (G
 		&i.LockedJson,
 		&i.UsageStateJson,
 		&i.MetadataJson,
+		&i.CompletedCompactionCount,
+		&i.ManualCompactEligible,
 		&i.WorkspaceRoot,
 	), getSessionRecordByID, 1)
 
@@ -9282,6 +9288,29 @@ func (q *Queries) TouchWorkflowDependencySurvivors(ctx context.Context, arg Touc
 	return result.RowsAffected()
 }
 
+const updateSessionContextFacts = `-- name: UpdateSessionContextFacts :execrows
+UPDATE sessions
+SET
+    completed_compaction_count = ?1,
+    manual_compact_eligible = ?2
+WHERE id = ?3
+`
+
+type UpdateSessionContextFactsParams struct {
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
+	SessionID                string
+}
+
+func (q *Queries) UpdateSessionContextFacts(ctx context.Context, arg UpdateSessionContextFactsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionContextFacts, arg.CompletedCompactionCount, arg.ManualCompactEligible, arg.SessionID)
+	err = recordQueryError(ctx, err, updateSessionContextFacts, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateSessionExecutionTargetByID = `-- name: UpdateSessionExecutionTargetByID :execrows
 UPDATE sessions
 SET
@@ -9307,6 +9336,26 @@ func (q *Queries) UpdateSessionExecutionTargetByID(ctx context.Context, arg Upda
 	)
 	err = recordQueryError(ctx, err, updateSessionExecutionTargetByID, 4)
 
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateSessionManualCompactEligibility = `-- name: UpdateSessionManualCompactEligibility :execrows
+UPDATE sessions
+SET manual_compact_eligible = ?1
+WHERE id = ?2
+`
+
+type UpdateSessionManualCompactEligibilityParams struct {
+	ManualCompactEligible sql.NullInt64
+	SessionID             string
+}
+
+func (q *Queries) UpdateSessionManualCompactEligibility(ctx context.Context, arg UpdateSessionManualCompactEligibilityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSessionManualCompactEligibility, arg.ManualCompactEligible, arg.SessionID)
+	err = recordQueryError(ctx, err, updateSessionManualCompactEligibility, 2)
 	if err != nil {
 		return 0, err
 	}
@@ -9703,7 +9752,9 @@ INSERT INTO sessions (
     continuation_json,
     locked_json,
     usage_state_json,
-    metadata_json
+    metadata_json,
+    completed_compaction_count,
+    manual_compact_eligible
 ) VALUES (
     ?1,
     ?2,
@@ -9725,7 +9776,9 @@ INSERT INTO sessions (
     ?18,
     ?19,
     ?20,
-    ?21
+    ?21,
+    ?22,
+    ?23
 )
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
@@ -9748,27 +9801,29 @@ ON CONFLICT(id) DO UPDATE SET
 `
 
 type UpsertSessionParams struct {
-	ID                   string
-	ProjectID            string
-	WorkspaceID          sql.NullString
-	WorktreeID           sql.NullString
-	ArtifactRelpath      string
-	Name                 string
-	FirstPromptPreview   string
-	InputDraft           string
-	PreviousSessionID    sql.NullString
-	ParentAgentSessionID sql.NullString
-	Category             sql.NullString
-	CreatedAtUnixMs      int64
-	UpdatedAtUnixMs      int64
-	LastSequence         int64
-	ModelRequestCount    int64
-	LaunchVisible        int64
-	CwdRelpath           string
-	ContinuationJson     string
-	LockedJson           string
-	UsageStateJson       string
-	MetadataJson         string
+	ID                       string
+	ProjectID                string
+	WorkspaceID              sql.NullString
+	WorktreeID               sql.NullString
+	ArtifactRelpath          string
+	Name                     string
+	FirstPromptPreview       string
+	InputDraft               string
+	PreviousSessionID        sql.NullString
+	ParentAgentSessionID     sql.NullString
+	Category                 sql.NullString
+	CreatedAtUnixMs          int64
+	UpdatedAtUnixMs          int64
+	LastSequence             int64
+	ModelRequestCount        int64
+	LaunchVisible            int64
+	CwdRelpath               string
+	ContinuationJson         string
+	LockedJson               string
+	UsageStateJson           string
+	MetadataJson             string
+	CompletedCompactionCount sql.NullInt64
+	ManualCompactEligible    sql.NullInt64
 }
 
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) error {
@@ -9794,8 +9849,10 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) er
 		arg.LockedJson,
 		arg.UsageStateJson,
 		arg.MetadataJson,
+		arg.CompletedCompactionCount,
+		arg.ManualCompactEligible,
 	)
-	err = recordQueryError(ctx, err, upsertSession, 21)
+	err = recordQueryError(ctx, err, upsertSession, 23)
 
 	return err
 }

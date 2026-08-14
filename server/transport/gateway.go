@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"core/server/auth"
+	"core/server/chatcontext"
 	"core/server/metadata"
 	"core/shared/apicontract"
 	"core/shared/invariant"
@@ -90,12 +91,16 @@ type GatewayProjectDependencies interface {
 
 type GatewaySessionDependencies interface {
 	SessionBelongsToProject(context.Context, string, string) error
+	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService
 	SessionTranscriptClient() apicontract.SessionTranscriptService
 	SessionLaunchClientForProjectWorkspace(context.Context, string, string) (apicontract.SessionLaunchService, error)
 	SessionLaunchClientForProjectWorkspaceID(context.Context, string, string) (apicontract.SessionLaunchService, error)
+	WorkspaceChatContextOwnerForProjectWorkspace(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	WorkspaceChatContextOwnerForProjectWorkspaceID(context.Context, string, string) (chatcontext.WorkspaceOwner, error)
+	SessionChatContextOwner() chatcontext.SessionOwner
 	RunPromptClientForProjectWorkspace(context.Context, string, string) (apicontract.RunPromptService, error)
 	RunPromptClientForProjectWorkspaceID(context.Context, string, string) (apicontract.RunPromptService, error)
 }

@@ -13,6 +13,7 @@ import (
 	"core/server/authservice"
 	serverbootstrap "core/server/bootstrap"
 	"core/server/capabilityfacts"
+	"core/server/chatcontext"
 	"core/server/metadata"
 
 	"core/server/processview"
@@ -52,14 +53,20 @@ func NewWithContext(ctx context.Context, cfg config.App, authSupport serverboots
 }
 
 type Options struct {
-	RuntimeClientFactory runtimewire.RuntimeClientFactory
-	RootLease            *RootLockLease
+	RuntimeClientFactory       runtimewire.RuntimeClientFactory
+	RootLease                  *RootLockLease
+	WorkspaceConfigLoadOptions config.LoadOptions
 }
 
 func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serverbootstrap.AuthSupport, runtimeSupport serverbootstrap.RuntimeSupport, opts Options) (*Core, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	workspaceConfigResolver := chatcontext.NewFixedRootWorkspaceResolver(
+		cfg.PersistenceRoot,
+		cfg.WorkspaceRoot,
+		opts.WorkspaceConfigLoadOptions,
+	)
 	rootLease := opts.RootLease
 	ownsIncomingRootLease := rootLease != nil
 	if rootLease == nil {
@@ -207,6 +214,8 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithExecutionEnvironmentConfig(cfg).
 		WithExecutionEnvironmentAuth(authStatusService).
 		WithExecutionEnvironmentGit(gitInspector).
+		WithChatContextWorkspaceResolver(workspaceConfigResolver).
+		WithChatContextAuthReader(authSupport.AuthManager).
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
@@ -359,6 +368,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 	}
 	core := &Core{bundles: composeBundles(bundleCompositionInput{
 		cfg:                     cfg,
+		workspaceConfigResolver: workspaceConfigResolver,
 		authSupport:             authSupport,
 		capabilityFactsService:  capabilityFactsService,
 		runtimeSupport:          runtimeSupport,
