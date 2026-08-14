@@ -369,13 +369,27 @@ message SessionIdentity {
 }
 
 message SessionStatus {
-  string reviewer_frequency = 1 [(buf.validate.field).string.min_len = 1];
+  string reviewer_frequency = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.session_reviewer_frequency_nonblank"
+      message: "reviewer_frequency must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   bool reviewer_enabled = 2;
   bool auto_compaction_enabled = 3;
   bool questions_enabled = 4;
   bool fast_mode_available = 5;
   bool fast_mode_enabled = 6;
-  string thinking_level = 7 [(buf.validate.field).string.min_len = 1];
+  string thinking_level = 7 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.session_thinking_level_nonblank"
+      message: "thinking_level must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   string compaction_mode = 8 [
     (buf.validate.field).string = {in: ["native", "local", "none"]}
   ];
@@ -392,20 +406,38 @@ message SessionStatus {
 }
 
 message AssistantStream {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string stream_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
 }
 
 message AssistantDelta {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string stream_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   AssistantPhase phase = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
 }
 
 message AssistantStreamAbort {
-  string step_id = 1 [(buf.validate.field).string.uuid = true];
-  string stream_id = 2 [(buf.validate.field).string.uuid = true];
+  string step_id = 1 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
+  string stream_id = 2 [
+    (buf.validate.field).string.uuid = true,
+    (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
+  ];
   AssistantAbortReason reason = 3 [(buf.validate.field).enum = {defined_only: true not_in: [0]}];
   optional Diagnostic diagnostic = 4;
   option (buf.validate.message).cel = {
@@ -559,6 +591,14 @@ message BackgroundActivity {
   bool user_requested_kill = 11;
   bool notice_suppressed = 12;
   optional Diagnostic diagnostic = 13;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.background_text_nonblank"
+    message: "background activity text fields must be non-blank"
+    expression:
+      "this.process_id.trim() != '' && this.command.trim() != '' && this.workdir.trim() != '' && "
+      "(!has(this.log_path) || this.log_path.trim() != '') && "
+      "(!has(this.preview) || this.preview.trim() != '')"
+  };
   option (buf.validate.message).cel = {
     id: "kent.transcript.background_lifecycle"
     message: "background activity terminal facts must match lifecycle"
