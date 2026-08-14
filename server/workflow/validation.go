@@ -730,16 +730,8 @@ func (s *validationState) validateRuntimeSupport() {
 		if sourceExists {
 			sourceKind = source.Kind()
 		}
-		contextSource, contextSourceValid := s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
+		contextSource, _ := s.validateContextSource(edge, source, sourceExists, target, targetExists, ref)
 		s.validateSelectorApplicability(edge, source, sourceExists, target, targetExists, contextSource, ref)
-		if edge.ContextMode == ContextModeContinueSession && contextSourceValid {
-			selectedSource, selectedSourceExists := s.contextSourceNode(contextSource, source, sourceExists, target, targetExists)
-			if selectedSourceExists && targetExists &&
-				selectedSource.Kind() == NodeKindAgent && target.Kind() == NodeKindAgent &&
-				!sameAgentRoleIdentity(NodeSubagentRole(selectedSource), NodeSubagentRole(target)) {
-				s.addSemantic(CodeInvalidContinueSessionRole, "continue_session requires source and target agent nodes to use the same normalized subagent role", ref)
-			}
-		}
 		for _, issue := range UnsupportedRuntimeFeatures(RuntimeSupportEdge{SourceKind: sourceKind, ContextMode: edge.ContextMode, RequiresApproval: edge.RequiresApproval, TargetKind: targetKind, InputBindings: edge.InputBindings}) {
 			s.addSemantic(issue.Code, issue.Message, ref)
 		}
@@ -803,12 +795,6 @@ func (s *validationState) validateSelectorApplicability(edge Edge, source Node, 
 
 type agentRoleIdentity struct {
 	value string
-}
-
-func sameAgentRoleIdentity(left, right string) bool {
-	leftIdentity, leftValid := canonicalAgentRoleIdentity(left)
-	rightIdentity, rightValid := canonicalAgentRoleIdentity(right)
-	return leftValid && rightValid && leftIdentity == rightIdentity
 }
 
 func canonicalAgentRoleIdentity(raw string) (agentRoleIdentity, bool) {

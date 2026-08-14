@@ -177,7 +177,7 @@ func TestManualMoveExecutableRejectsBranchKindDriftAfterTargetValidation(t *test
 	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
 }
 
-func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *testing.T) {
+func TestManualMoveExecutableRejectsConcurrentScriptPathDriftWithoutMutation(t *testing.T) {
 	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	const validatedScriptPath = "scripts/validated"
 	absoluteScriptPath := filepath.Join(binding.CanonicalRoot, validatedScriptPath)
@@ -237,7 +237,7 @@ func TestManualMoveExecutableRejectsScriptPathDriftAfterTargetValidation(t *test
 	if err := writer.Commit(); err != nil {
 		t.Fatalf("commit competing workflow change: %v", err)
 	}
-	assertManualMoveTargetShapeDriftRejected(t, ctx, moveStore, task.ID, source.Reference, <-moved)
+	assertManualMoveRejectedWithoutMutation(t, ctx, moveStore, task.ID, source.Reference, <-moved)
 }
 
 func assertManualMoveTargetShapeDriftRejected(
@@ -251,6 +251,21 @@ func assertManualMoveTargetShapeDriftRejected(
 	t.Helper()
 	if !errors.Is(applied.err, errManualMoveTargetShapeChanged) {
 		t.Fatalf("ApplyManualMove error = %T %v, want target-shape drift", applied.err, applied.err)
+	}
+	assertManualMoveRejectedWithoutMutation(t, ctx, store, taskID, source, applied)
+}
+
+func assertManualMoveRejectedWithoutMutation(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	taskID workflow.TaskID,
+	source workflow.CurrentNodeReference,
+	applied manualMoveApplyResult,
+) {
+	t.Helper()
+	if applied.err == nil {
+		t.Fatal("ApplyManualMove accepted concurrent target drift")
 	}
 	currentNodes, err := store.ListCurrentNodes(ctx, taskID)
 	if err != nil {

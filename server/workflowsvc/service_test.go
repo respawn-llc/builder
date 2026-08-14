@@ -456,20 +456,19 @@ func TestServicePreviewManualMoveMapsOutcomesAndLiveBlockers(t *testing.T) {
 		t.Fatalf("transition preview = %+v", transition)
 	}
 
-	execution.disposition = workflowexecution.ManualMoveDispositionWaitingQuestion
-	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
+	execution.disposition = workflowexecution.ManualMoveDispositionAutoInterruptible
+	interruptible, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
 		TaskID: task.Task.ID, TargetNodeID: terminalID,
 	})
 	if err != nil {
-		t.Fatalf("PreviewWorkflowTaskMove waiting question: %v", err)
+		t.Fatalf("PreviewWorkflowTaskMove auto-interruptible: %v", err)
 	}
-	if blocked.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeBlocked ||
-		blocked.Blocked == nil ||
-		blocked.Blocked.Reason != serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion {
-		t.Fatalf("waiting-question preview = %+v", blocked)
+	if interruptible.Outcome != serverapi.WorkflowTaskMovePreviewOutcomeDirect ||
+		interruptible.Direct == nil {
+		t.Fatalf("auto-interruptible preview = %+v, want direct move", interruptible)
 	}
 	execution.disposition = workflowexecution.ManualMoveDispositionLifecycleConflict
-	blocked, err = service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
+	blocked, err := service.PreviewWorkflowTaskMove(ctx, serverapi.WorkflowTaskMovePreviewRequest{
 		TaskID: task.Task.ID, TargetNodeID: terminalID,
 	})
 	if err != nil {

@@ -468,6 +468,133 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 }
 
+func TestManualMoveRepairsCurrentNodeWhoseEnteringEdgeWasRetargetedToRequestedTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	gateNodeID := testNodeID("node-manual-move-repair-gate-" + workflowID.String())
+	gateGroupID := testTransitionGroupID("group-manual-move-repair-gate-" + workflowID.String())
+	continueGroupID := testTransitionGroupID("group-manual-move-repair-continue-" + workflowID.String())
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(definition workflow.Definition, request *WorkflowGraphSaveRequest) {
+		plan := nodeByKey(t, definition, "plan")
+		implementation := nodeByKey(t, definition, "implement")
+		request.Nodes = append(request.Nodes, NodeRecord{
+			ID:           gateNodeID,
+			WorkflowID:   workflowID,
+			Key:          "repair_gate",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Repair Gate",
+			SubagentRole: "coder",
+		})
+		request.TransitionGroups = append(request.TransitionGroups,
+			TransitionGroupRecord{
+				ID:           gateGroupID,
+				WorkflowID:   workflowID,
+				SourceNodeID: workflow.NodeIDOf(plan),
+				TransitionID: "gate",
+				DisplayName:  "Gate",
+			},
+			TransitionGroupRecord{
+				ID:           continueGroupID,
+				WorkflowID:   workflowID,
+				SourceNodeID: gateNodeID,
+				TransitionID: "continue",
+				DisplayName:  "Continue",
+			},
+		)
+		request.Edges = append(request.Edges,
+			EdgeRecord{
+				ID:                testEdgeID("edge-manual-move-repair-gate-" + workflowID.String()),
+				WorkflowID:        workflowID,
+				TransitionGroupID: gateGroupID,
+				Key:               "gate",
+				TargetNodeID:      gateNodeID,
+				ContextMode:       workflow.ContextModeNewSession,
+				PromptTemplate:    "Check the plan.",
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+			},
+			EdgeRecord{
+				ID:                testEdgeID("edge-manual-move-repair-continue-" + workflowID.String()),
+				WorkflowID:        workflowID,
+				TransitionGroupID: continueGroupID,
+				Key:               "continue",
+				TargetNodeID:      workflow.NodeIDOf(implementation),
+				ContextMode:       workflow.ContextModeNewSession,
+				PromptTemplate:    "Implement the checked plan.",
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+			},
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	implementationResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	implementation := implementationResult.Mutation.Created[0]
+	if implementation.EnteredByEdgeID == nil {
+		t.Fatal("implementation Current Node has no entering Edge")
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	gate := nodeByKey(t, definition, "repair_gate")
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE workflow_edges
+SET target_node_id = ?
+WHERE id = ?`,
+		testGraphEntityBlob(t, string(workflow.NodeIDOf(gate))),
+		testGraphEntityBlob(t, string(*implementation.EnteredByEdgeID)),
+	); err != nil {
+		t.Fatalf("retarget entering Edge: %v", err)
+	}
+
+	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: plan.Reference.NodeID,
+	}); err == nil {
+		t.Fatal("manual move to unrelated target accepted retargeted entering Edge")
+	}
+
+	transition := workflow.TransitionID("next")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(gate),
+		TransitionKey: &transition,
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "approved plan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove to retargeted entering Edge target: %v", err)
+	}
+	moved, err := applyManualMoveForStoreTest(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+	)
+	if err != nil {
+		t.Fatalf("ApplyManualMove to retargeted entering Edge target: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(gate) ||
+		moved.Mutation.Created[0].EnteredByEdgeID == nil ||
+		*moved.Mutation.Created[0].EnteredByEdgeID != *implementation.EnteredByEdgeID {
+		t.Fatalf("manual move repair = %+v, want exact retargeted entering Edge destination", moved)
+	}
+}
+
 func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")

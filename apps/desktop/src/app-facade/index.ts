@@ -9,6 +9,7 @@ export * from "./projectDeletionEvents";
 export * from "./projectCatalogQueries";
 export * from "./projectRoutePersistence";
 export * from "./queryKeys";
+export * from "./queryErrors";
 export * from "./services";
 export * from "./servicesContext";
 export * from "./sidebarContext";

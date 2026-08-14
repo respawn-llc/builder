@@ -803,8 +803,8 @@ func TestContextSourceValidation(t *testing.T) {
 		{name: "selected target node", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeContinueSession, source: selected("open_pr")},
 		{name: "explicit source on start edge", edgeID: "edge_start", mode: workflow.ContextModeContinueSession, source: selected("implementation")},
 		{name: "selected source with new session", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeNewSession, source: selected("implementation")},
-		{name: "continuation role mismatch", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeContinueSession, source: selected("implementation"), roleMismatch: true, valid: true},
-		{name: "compact continuation role mismatch", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeCompactAndContinueSession, source: selected("implementation"), roleMismatch: true, valid: true},
+		{name: "continue preserves retained role despite target mismatch", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeContinueSession, source: selected("implementation"), roleMismatch: true, valid: true},
+		{name: "compact continuation establishes target role despite source mismatch", edgeID: "edge_accept_open_pr", mode: workflow.ContextModeCompactAndContinueSession, source: selected("implementation"), roleMismatch: true, valid: true},
 		{name: "immediate source after join", edgeID: "edge_join_accept", mode: workflow.ContextModeContinueSession},
 		{name: "previous target terminal target", edgeID: "edge_open_pr_done", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}},
 		{name: "previous target without target dominance", edgeID: "edge_implementation_review", mode: workflow.ContextModeContinueSession, source: workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget}},
@@ -826,33 +826,13 @@ func TestContextSourceValidation(t *testing.T) {
 				})
 			}
 			result := validateForTask(def)
-			if tt.roleMismatch && tt.mode == workflow.ContextModeContinueSession {
-				assertHasCodes(t, result, workflow.CodeInvalidContinueSessionRole)
-				assertNoCode(t, result, workflow.CodeInvalidContextSource)
-			} else if tt.valid {
+			if tt.valid {
 				assertNoCode(t, result, workflow.CodeInvalidContextSource)
 			} else {
 				assertHasCodes(t, result, workflow.CodeInvalidContextSource)
 			}
 		})
 	}
-
-	t.Run("continuation normalized role identity matches", func(t *testing.T) {
-		def := reviewAcceptanceWorkflow(t)
-		edge := edgeByIDForValidationTest(t, &def, "edge_accept_open_pr")
-		edge.ContextMode = workflow.ContextModeContinueSession
-		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceSelectedNode, NodeKey: "implementation"}
-		updateNodeByKeyForValidationTest(t, &def, "implementation", func(_ *workflow.NodeIdentity, _ *workflow.NodeKind, fields *workflow.NodeFields) {
-			fields.SubagentRole = " Coder "
-		})
-
-		result := workflow.ValidateDefinition(def, workflow.ValidationOptions{
-			Context:      workflow.ValidationContextTaskCreation,
-			RoleResolver: testsetup.QuestionsEnabled("Coder", "coder"),
-		})
-
-		assertNoCode(t, result, workflow.CodeInvalidContinueSessionRole)
-	})
 
 	t.Run("rework loop remains statically valid", func(t *testing.T) {
 		def := reviewAcceptanceWorkflow(t)

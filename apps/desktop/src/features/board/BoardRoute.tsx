@@ -9,7 +9,7 @@ import { useConnectionSnapshot } from "@/app-facade";
 import { SidebarRootOwner, useOwnedSidebarRoots } from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useNativeDialogFallback } from "@/app-facade";
-import { useStatusController } from "@/app-facade";
+import { reportNonCancelledError, useStatusController } from "@/app-facade";
 import { useWindowChromeTitle } from "@/app-facade";
 import {
   TaskInitiatingActionDialogs,
@@ -61,7 +61,6 @@ const manualMoveBlockerTranslationKeys = {
   invalid_workflow: "board.moveBlockedInvalidWorkflow",
   no_source_position: "board.moveBlockedNoSource",
   unsupported_destination: "board.moveBlockedUnsupportedDestination",
-  waiting_question: "board.moveBlockedWaitingQuestion",
   lifecycle_conflict: "board.moveBlockedLifecycle",
   context_session_unavailable: "board.moveBlockedContextSession",
   no_usable_transition: "board.moveBlockedNoUsableTransition",
@@ -220,8 +219,10 @@ function BoardContent({
   const actions = useBoardTaskActions(board.projectID);
   const reportActionError = useCallback(
     (id: string, title: string, error: unknown) => {
-      const body = errorMessage(error);
-      push({ id, tone: "danger", title, body, durationMs: Infinity });
+      reportNonCancelledError(error, (failure) => {
+        const body = errorMessage(failure);
+        push({ id, tone: "danger", title, body, durationMs: Infinity });
+      });
     },
     [push],
   );

@@ -39,7 +39,7 @@ func TestWorkflowTaskMovePreviewResponseValidatesEachOutcome(t *testing.T) {
 		},
 		{
 			Outcome: WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &WorkflowTaskMovePreviewBlocked{Reason: WorkflowTaskMovePreviewBlockerWaitingQuestion},
+			Blocked: &WorkflowTaskMovePreviewBlocked{Reason: WorkflowTaskMovePreviewBlockerLifecycleConflict},
 		},
 	}
 

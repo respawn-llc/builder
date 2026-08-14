@@ -137,10 +137,7 @@ func transitionContractTargetSessionPolicyModeForEdge(edge workflow.Edge) transi
 				purpose != workflow.ParameterPurposeTargetThinking) {
 			continue
 		}
-		contextSourceKind := workflow.CanonicalContextSource(edge.ContextSource).Kind
-		if edge.ContextMode == workflow.ContextModeContinueSession &&
-			(contextSourceKind == workflow.ContextSourcePreviousTarget ||
-				contextSourceKind == workflow.ContextSourcePreviousTargetOrNew) {
+		if edge.ContextMode == workflow.ContextModeContinueSession {
 			return transitionContractTargetSessionPolicyRequired
 		}
 	}

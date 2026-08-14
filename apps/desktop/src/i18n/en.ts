@@ -294,7 +294,6 @@ export const englishResources = {
       manualMoveConfirmBody: "Confirm this manual workflow override.",
       manualMoveConfirm: "Confirm move",
       moveBlocked: "Task move blocked",
-      moveBlockedWaitingQuestion: "Answer the waiting question before moving this task.",
       moveBlockedLifecycle: "The task is busy with another lifecycle operation.",
       moveBlockedInvalidWorkflow: "Fix the workflow validation errors before moving this task.",
       moveBlockedNoSource: "This task has no current workflow position to replace.",

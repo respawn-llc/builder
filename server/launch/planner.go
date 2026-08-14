@@ -143,10 +143,9 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 }
 
 type RunPromptOverrideOptions struct {
-	AllowLockedAgentRoleChange bool
-	AgentSelectionPersisted    bool
-	RequiredTools              []toolspec.ID
-	WorkflowThinking           WorkflowThinkingMutation
+	AgentSelectionPersisted bool
+	RequiredTools           []toolspec.ID
+	WorkflowThinking        WorkflowThinkingMutation
 }
 
 type WorkflowThinkingMutationKind uint8
@@ -707,13 +706,13 @@ func withWorkflowThinking(plan SessionPlan, mutation WorkflowThinkingMutation) (
 
 func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	locked := store.Meta().Locked
-	toolLock := locked
-	if options.AllowLockedAgentRoleChange {
-		toolLock = nil
+	effectiveOverrides := overrides
+	if locked != nil {
+		effectiveOverrides.AgentRole = nil
 	}
-	prepared, err := prepareRunPromptOverridesWithBudget(baseConfigForPlan(plan), overrides, authState, RunPromptPreparationContext{
+	prepared, err := prepareRunPromptOverridesWithBudget(baseConfigForPlan(plan), effectiveOverrides, authState, RunPromptPreparationContext{
 		ModelLock: locked,
-		ToolLock:  toolLock,
+		ToolLock:  locked,
 		OmittedTarget: &PreparedBaseTarget{
 			Settings:     plan.ActiveSettings,
 			Source:       plan.Source,
@@ -723,7 +722,7 @@ func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, stor
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyBudget)
+	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, effectiveOverrides, prepared, options, applyBudget)
 }
 
 func baseConfigForPlan(plan SessionPlan) config.App {
@@ -1045,19 +1044,17 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	if store.Meta().Continuation != nil {
 		continuationAgentRole = cloneContinuationRole(store.Meta().Continuation.AgentRole)
 	}
-	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
 		ctx := session.ContinuationContext{
 			OpenAIBaseURL: textutil.OptionalTrimmedString(next.ActiveSettings.OpenAIBaseURL),
 			AgentRole:     continuationAgentRole,
 		}
-		if staleLockedPromptFacingContract {
-			_, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx)
-			return err
-		}
 		return store.SetContinuationContext(ctx)
 	}
 	roleOverride := prepared.AgentRole
+	if plan.ModelContractLocked {
+		roleOverride = serverapi.RunPromptAgentRoleOverride{}
+	}
 	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
 		shouldPersistContinuation = true
 	}
@@ -1078,12 +1075,6 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	var requestedContinuationRole *string
 	if roleOverride.Present && !roleOverride.Default {
 		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
-	}
-	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange {
-		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
-	}
-	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
-		staleLockedPromptFacingContract = true
 	}
 	if roleOverride.Present {
 		shouldPersistContinuation = shouldPersistContinuation || !options.AgentSelectionPersisted
@@ -1185,13 +1176,6 @@ func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOpt
 
 func resolvePreparedSubagentSettings(base config.Settings, baseSource config.SourceReport, target preparedSubagentIdentity, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	return resolveSubagentSettingsFromRole(base, baseSource, target.Selector, target.Role, target.ProviderID, allowModelOverride, validate)
-}
-
-func continuationRoleDisplay(role *string) string {
-	if role == nil {
-		return config.DefaultSubagentRole
-	}
-	return *role
 }
 
 func cloneContinuationRole(role *string) *string {

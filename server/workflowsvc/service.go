@@ -1736,13 +1736,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{}, err
 	}
 	switch disposition {
-	case workflowexecution.ManualMoveDispositionWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
-				Reason: serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
-			},
-		}, nil
 	case workflowexecution.ManualMoveDispositionLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
@@ -1948,8 +1941,6 @@ func manualMovePreviewBlocker(blocker workflowstore.ManualMoveBlocker) (serverap
 		return serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition, nil
 	case workflowstore.ManualMoveBlockerUnsupportedDestination:
 		return serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination, nil
-	case workflowstore.ManualMoveBlockerWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion, nil
 	case workflowstore.ManualMoveBlockerLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict, nil
 	case workflowstore.ManualMoveBlockerContextSessionUnavailable:

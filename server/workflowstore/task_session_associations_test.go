@@ -23,8 +23,35 @@ func requireCurrentBindingAssociation(
 	return association
 }
 
-func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(t *testing.T) {
-	ctx, store, binding, _ := newTestStoreWithConfigContext(t)
+func TestContinueSessionUsesRetainedSessionThinkingContract(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source workflow.ContextSource
+	}{
+		{
+			name:   "immediate source",
+			source: workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource},
+		},
+		{
+			name: "selected Node",
+			source: workflow.ContextSource{
+				Kind:    workflow.ContextSourceSelectedNode,
+				NodeKey: "plan",
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requireRetainedSessionThinkingContract(t, test.source)
+		})
+	}
+}
+
+func requireRetainedSessionThinkingContract(
+	t *testing.T,
+	contextSource workflow.ContextSource,
+) {
+	t.Helper()
+	ctx, store, binding, cfg := newTestStoreWithConfigContext(t)
 	store.roleResolver = completionTargetCatalog{
 		roles: map[string]workflow.TargetAgentRole{
 			"coder": {
@@ -33,7 +60,16 @@ func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(
 				Thinking: workflow.ThinkingCapability{
 					ReasoningCapable: true,
 					Finite:           true,
-					Levels:           []string{"low", "high"},
+					Levels:           []string{"low"},
+				},
+			},
+			"reviewer": {
+				Identity:         "reviewer",
+				QuestionsEnabled: true,
+				Thinking: workflow.ThinkingCapability{
+					ReasoningCapable: true,
+					Finite:           true,
+					Levels:           []string{"high", "xhigh"},
 				},
 			},
 		},
@@ -46,7 +82,7 @@ func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
 		edge := workflowGraphSaveEdgeRecord(t, req.Edges, edgeByKey(t, definition, "review").ID)
 		edge.ContextMode = workflow.ContextModeContinueSession
-		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourceImmediateSource}
+		edge.ContextSource = contextSource
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
 		edge.Parameters = append(edge.Parameters, workflow.Parameter{
 			Key:     "thinking",
@@ -56,9 +92,58 @@ func TestResolveCurrentNodeStartContextDefersImmediateSourceForThinkingContract(
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	started := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	sessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		started.Reference,
+	)
+	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, sessionID, "reviewer")
 
-	if _, err := store.ResolveCurrentNodeStartContext(ctx, started.Reference); err != nil {
+	startContext, err := store.ResolveCurrentNodeStartContext(ctx, started.Reference)
+	if err != nil {
 		t.Fatalf("ResolveCurrentNodeStartContext: %v", err)
+	}
+	var thinkingParameterPresent bool
+	for _, option := range startContext.TransitionOptions {
+		if option.ID != "review" {
+			continue
+		}
+		for _, parameter := range option.Parameters {
+			thinkingParameterPresent = thinkingParameterPresent ||
+				parameter.Key == "thinking"
+		}
+	}
+	if !thinkingParameterPresent {
+		t.Fatalf("retained Session thinking parameter omitted: %+v", startContext.TransitionOptions)
+	}
+
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       started.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{
+			"summary":  "plan complete",
+			"thinking": "high",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode with retained Session thinking: %v", err)
+	}
+	target := completed.Mutation.Created[0]
+	if target.SessionID == nil || *target.SessionID != sessionID {
+		t.Fatalf("target Session = %v, want retained %q", target.SessionID, sessionID)
+	}
+	if target.AgentExecutionSelection == nil ||
+		target.AgentExecutionSelection.Assignee != "reviewer" ||
+		target.AgentExecutionSelection.Thinking == nil ||
+		*target.AgentExecutionSelection.Thinking != workflow.ThinkingValue("high") ||
+		target.AgentExecutionSelection.Origin != workflow.AssigneeOriginRetainedSession {
+		t.Fatalf(
+			"target execution selection = %+v, want retained reviewer/high",
+			target.AgentExecutionSelection,
+		)
 	}
 }
 

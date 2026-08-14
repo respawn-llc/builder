@@ -2,7 +2,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
 
 import { errorMessage } from "@/api";
-import { queryKeys, useAppServices, useConnectionSnapshot } from "@/app-facade";
+import {
+  queryKeys,
+  reportNonCancelledError,
+  useAppServices,
+  useConnectionSnapshot,
+} from "@/app-facade";
 import { useStableCallback } from "@/ui";
 import { createProjectLabelEffects } from "./labelEventEffects";
 import { ProjectLabelDataContext } from "./projectLabelContext";
@@ -36,10 +41,12 @@ export function ProjectLabelsProvider({
   );
   const filter = useManagedProjectLabelFilter(projectID, catalogLabelIDs);
   const reportBackgroundError = useStableCallback((error: unknown) => {
-    onBackgroundError?.(error);
-    void logger.append("warn", "Project label refresh failed.", {
-      error: errorMessage(error),
-      projectID,
+    reportNonCancelledError(error, (failure) => {
+      onBackgroundError?.(failure);
+      void logger.append("warn", "Project label refresh failed.", {
+        error: errorMessage(failure),
+        projectID,
+      });
     });
   });
   const reportedPersistenceError = useRef<unknown>(null);

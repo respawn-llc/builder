@@ -261,7 +261,7 @@ OpenAI-family request identity, ChatGPT Codex routing, and provider turn state a
 - Worktree controls are available from every client. List and status are reads. Creation and deletion that do not switch the calling Session execute immediately.
 - Entering, leaving, or deleting a worktree when it switches the calling Session is scheduled for the next between-step idle point before queued user work. The command returns an accepted result without waiting for the current step. If no model step is active, the transition may apply immediately but retains its scheduled reminder behavior. At most one such transition can be pending per Exact Execution Scope; a matching retry returns the original result and a different transition is rejected.
 - Later failure does not alter the accepted worktree command result; attached clients receive completion or failure, and the affected Session receives a failure notice when it can accept one. A successful target change becomes authoritative only when its ordinary worktree reminder arrives. Pending transitions are lost on restart rather than resumed.
-- Resuming a Session reapplies its recorded subagent role when available; a missing role does not block explicit continuation.
+- Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion
 
