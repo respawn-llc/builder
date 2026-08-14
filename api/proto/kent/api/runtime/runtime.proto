@@ -54,7 +54,14 @@ enum ActivityActiveKind {
 }
 
 message ReadModelVersion {
-  string epoch = 1 [(buf.validate.field).string.min_len = 1];
+  string epoch = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.runtime.read_model_epoch_nonblank"
+      message: "epoch must not be blank"
+      expression: "this.trim() != ''"
+    }
+  ];
   uint64 generation = 2 [(buf.validate.field).uint64 = {
     gte: 1
     lte: 9007199254740991
@@ -113,7 +120,7 @@ message Activity {
 
 message ContextUsage {
   int32 used_tokens = 1 [(buf.validate.field).int32.gte = 0];
-  int32 window_tokens = 2 [(buf.validate.field).int32.gte = 0];
+  int32 window_tokens = 2 [(buf.validate.field).int32.gte = 1];
   optional int32 cache_hit_percent = 3 [(buf.validate.field).int32 = {
     gte: 0
     lte: 100
@@ -127,8 +134,14 @@ message GoalView {
     defined_only: true
     not_in: [0]
   }];
-  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
-  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp created_at = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  google.protobuf.Timestamp updated_at = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
   optional GoalAvailability availability = 6 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [0]

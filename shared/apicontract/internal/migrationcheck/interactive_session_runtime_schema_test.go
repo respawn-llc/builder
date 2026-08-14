@@ -2,6 +2,7 @@ package migrationcheck
 
 import (
 	"testing"
+	"time"
 
 	"core/shared/protoapi"
 	runtimepb "core/shared/protoapi/gen/kent/api/runtime"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestInteractiveSessionReadSchemasHaveExactLegacyProvenanceAndPolicies(t *testing.T) {
@@ -195,7 +197,15 @@ func TestInteractiveSessionRuntimeLegacyFieldCoverageAndReshapesAreExact(t *test
 
 func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 	validID := "123e4567-e89b-42d3-a456-426614174000"
+	validTimestamp := timestamppb.New(time.Unix(1_700_000_000, 0))
+	zeroTimestamp := timestamppb.New(time.Time{})
 	for name, message := range map[string]proto.Message{
+		"blank read-model epoch": &runtimepb.ReadModelVersion{
+			Epoch:      " ",
+			Generation: 1,
+			Sequence:   1,
+		},
+		"zero context window":         &runtimepb.ContextUsage{},
 		"noncanonical prompt command": &runtimepb.PromptCommandInput{Name: "bogus"},
 		"blank user turn text": &runtimepb.UserTurnInput{
 			Input: &runtimepb.UserTurnInput_Text{Text: " "},
@@ -210,6 +220,20 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 			Id:        "goal",
 			Objective: " ",
 			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+		},
+		"zero goal creation time": &runtimepb.GoalView{
+			Id:        "goal",
+			Objective: "objective",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+			CreatedAt: zeroTimestamp,
+			UpdatedAt: validTimestamp,
+		},
+		"zero goal update time": &runtimepb.GoalView{
+			Id:        "goal",
+			Objective: "objective",
+			Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+			CreatedAt: validTimestamp,
+			UpdatedAt: zeroTimestamp,
 		},
 	} {
 		if err := protoapi.ValidateGeneratedMessage(message); err == nil {

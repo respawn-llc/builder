@@ -472,8 +472,14 @@ message GoalView {
     defined_only: true
     not_in: [0]
   }];
-  google.protobuf.Timestamp created_at = 4 [(buf.validate.field).required = true];
-  google.protobuf.Timestamp updated_at = 5 [(buf.validate.field).required = true];
+  google.protobuf.Timestamp created_at = 4 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
+  google.protobuf.Timestamp updated_at = 5 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).timestamp.gt = {seconds: 0}
+  ];
   bool suspended = 6;
 }
 

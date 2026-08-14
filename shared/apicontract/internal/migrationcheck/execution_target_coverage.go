@@ -23,7 +23,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-const reviewedExceptionalWireFingerprint = "4d3ce078cce447adb4329dc4b8e1fbbd28b5fab3172110229b15152913e3937a"
+const reviewedExceptionalWireFingerprint = "6ff799e833b6f30cf308979e3e24d1ed05d1bc37ac9d5e42be35dc6e05d9e0bd"
 
 func actualTargetWireExceptions() []WireException {
 	return []WireException{
@@ -52,12 +52,12 @@ func actualTargetWireExceptions() []WireException {
 		wireExceptionSignoff[serverapi.RuntimeLiveWaitResponse]("kent.api.runtime.LiveWaitSuccess", WireExceptionOneofReshape, "1219a8f4adf8c6913fda169331d7a32ac0381199a627e4f6643d4e7697c7cef3", "08dda6168e52a39e2c0ef234f8b05430f1370c9542738f85de0512aba2ddadca"),
 		wireExceptionSignoff[serverapi.RuntimeLiveWatchOutcome]("kent.api.prompt.LiveWatchOutcome", WireExceptionOneofReshape, "2c1fcb261f58e21765c3ebba2187e963e3cb2c21835a6777138c0c8d25b1ac32", "dcd6360e9d859ef10a2951a58afd2780f5bf88339013c11154e3efab925ebeed"),
 		wireExceptionSignoff[serverapi.RuntimeGoalShowResponse]("kent.api.runtime.GoalShowSuccess", WireExceptionFieldReshape, "30aea36c1ebcbbee81b278b17858ad9653d22be144a712945222d7b2641690fa", "eb882fe50da68f7043b2fbec2743ab09f387d2c24d18454bdbada26b1ca5a2e2"),
-		wireExceptionSignoff[clientui.RuntimeGoal]("kent.api.runtime.GoalView", WireExceptionFieldReshape, "5d495850fce6a0006c55f0cc9ab085874d4da742fe66ec00930b325132c2d222", "d1aa4d2cc543f422d735d0e199884015187d2dda86c64830f5afcad617928d9b"),
+		wireExceptionSignoff[clientui.RuntimeGoal]("kent.api.runtime.GoalView", WireExceptionFieldReshape, "5d495850fce6a0006c55f0cc9ab085874d4da742fe66ec00930b325132c2d222", "57d6ad969788d140749f35471bde62912ae2e29c8ed6cd5f40727f93b9361a60"),
 		wireExceptionSignoff[runtimeinput.Input]("kent.api.runtime.UserTurnInput", WireExceptionFieldReshape, "a5db12285f7fe96a7c42dd5d39fa70d6210f2f7d8dd1d95f38f1d561dae3efeb", "806ae9d4e254a9fb15217bd07fc97412930c1f4ca928ffbb762fede3ffeb5dd2"),
 		wireExceptionSignoff[serverapi.RuntimeSubmitUserTurnResponse]("kent.api.runtime.SubmitUserTurnSuccess", WireExceptionOneofReshape, "34de4fdd64b6868dd545697953c53cee3e13b5550456deaa056b93b6eaca0977", "13ce76d533903d301aa8524dab570b7aec1f5702586e8d0522ebf19f83c78000"),
 		wireExceptionSignoff[serverapi.ServerReadinessResponse]("kent.api.server.GetReadinessSuccess", WireExceptionFieldReshape, "b2a549921e1c9aa1ef7bb65e70d789149e4a0b3b648d403f664639cdd3fd4eb3", "4ed1763079a0eea5854b0915811b99ab09a3f6d6547f58144e3235d34f9e4887"),
 		wireExceptionSignoff[serverapi.UpdateStatusResponse]("kent.api.server.GetUpdateStatusSuccess", WireExceptionFieldReshape, "6e50a015cc4ead280b1b79a8a9f26bf266a6e71ff73b311aed9a0f00fdfa1c9f", "3ac016331ee780bbd02f2cb4d86d5a31d9996b4309624cdf4f1907f3a5aebeec"),
-		wireExceptionSignoff[clientui.RuntimeContextUsage]("kent.api.runtime.ContextUsage", WireExceptionFieldReshape, "a332c153bf134bc681c8576ff709315aca28ce9732fbc43457ad51eb51c28fe8", "9658b31f448da501f63e1d689ad420d525fba340b4a2b1bffb5b5c1b9f5820bb"),
+		wireExceptionSignoff[clientui.RuntimeContextUsage]("kent.api.runtime.ContextUsage", WireExceptionFieldReshape, "a332c153bf134bc681c8576ff709315aca28ce9732fbc43457ad51eb51c28fe8", "b8243957306965981069a360040af447a4a3dc457e4bb4a8406a7fbabaa46a78"),
 		wireExceptionSignoff[clientui.TranscriptCommittedRow]("kent.api.transcript.CommittedRow", WireExceptionFieldReshape, "5c4cb3eee932c0c7e2b4adc2310d248aa8cb18ec1d0db9870e25534fd2a16902", "22b9eb76cd37d305389af3557488b1dab6790eba446a2facf5db898632876adf"),
 		wireExceptionSignoff[rollbacktarget.CandidateLocator]("kent.api.transcript.RollbackCandidate", WireExceptionFieldReshape, "f7f923a3d5d95572ad523819430c4b66f6779ef15405b31b7f96d67606b7940f", "3d73b39754b4df338bda14525d5499a1e00786d5163a1ad8882c6fa06e4984c6"),
 		wireExceptionSignoff[config.Settings]("kent.api.session_launch.Settings", WireExceptionFieldReshape, "cebb39125cc5fc4d862a2734c25d69d6b2e2df86814141e6d2fb43725457f64d", "652e3917d3cc251822f7298412ac37d2ef1a076297dffd36535ca5643d2d00a2"),
