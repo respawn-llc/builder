@@ -6,7 +6,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "contract:run": "../scripts/generate-protobuf.sh run ts --",
+    "contract:run": "bash ../scripts/generate-protobuf.sh run ts --",
     "deps:policy": "node ./scripts/check-dependency-policy.mjs",
     "desktop:dev": "pnpm --filter @app/desktop tauri:dev",
     "desktop:dev:browser": "pnpm --filter @app/desktop dev:browser",

@@ -80,7 +80,7 @@ func TestRuntimeLiveWatchResponseRejectsQuestionSessionMismatch(t *testing.T) {
 		{Approval: &clientui.PendingApproval{
 			PromptID: "approval-1", SessionID: observationSessionID(t, "session-b"),
 			StepID: observationStepID(t), Question: "Allow?",
-			Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce, Label: "Allow once"}},
+			Options: []clientui.ApprovalOption{{Decision: clientui.ApprovalDecisionAllowOnce}},
 		}},
 	} {
 		response := RuntimeLiveWatchResponse{
@@ -93,6 +93,22 @@ func TestRuntimeLiveWatchResponseRejectsQuestionSessionMismatch(t *testing.T) {
 		if err := response.Validate(); err == nil {
 			t.Fatalf("question session mismatch unexpectedly validated: %+v", response)
 		}
+	}
+}
+
+func TestObservationQuestionRejectsDuplicateApprovalDecisions(t *testing.T) {
+	question := ObservationQuestion{Approval: &clientui.PendingApproval{
+		PromptID:  "approval-1",
+		SessionID: observationSessionID(t, "session-1"),
+		StepID:    observationStepID(t),
+		Question:  "Allow?",
+		Options: []clientui.ApprovalOption{
+			{Decision: clientui.ApprovalDecisionAllowOnce},
+			{Decision: clientui.ApprovalDecisionAllowOnce},
+		},
+	}}
+	if err := question.Validate(); err == nil {
+		t.Fatal("duplicate approval decisions unexpectedly validated")
 	}
 }
 

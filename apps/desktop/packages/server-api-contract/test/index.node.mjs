@@ -128,6 +128,7 @@ test("new schema slice executes generated validation in TypeScript", () => {
   assert.equal(transcript.QueuedMessageStateSchema, QueuedMessageStateSchema);
   assert.equal(attention.NotificationSchema, AttentionNotificationSchema);
   assert.equal(runPrompt.ProgressEventSchema, ProgressEventSchema);
+  assert.equal(prompt.ApprovalOptionSchema.fields.some((field) => field.name === "label"), false);
   const timestamp = create(TimestampSchema, { seconds: 1700000000n });
   const validUUID = "123e4567-e89b-42d3-a456-426614174000";
 
@@ -149,6 +150,32 @@ test("new schema slice executes generated validation in TypeScript", () => {
     recommendedOptionIndex: 2,
     createdAt: timestamp,
   })));
+  validateGeneratedMessage(prompt.ApprovalSchema, create(prompt.ApprovalSchema, {
+    promptId: "approval-1",
+    sessionId: "session-1",
+    stepId: validUUID,
+    question: "Allow?",
+    options: [
+      create(prompt.ApprovalOptionSchema, { decision: prompt.ApprovalDecision.ALLOW_ONCE }),
+      create(prompt.ApprovalOptionSchema, { decision: prompt.ApprovalDecision.DENY }),
+    ],
+    createdAt: timestamp,
+  }));
+  assert.throws(() => validateGeneratedMessage(prompt.ApprovalSchema, create(prompt.ApprovalSchema, {
+    promptId: "approval-1",
+    sessionId: "session-1",
+    stepId: validUUID,
+    question: "Allow?",
+    options: [
+      create(prompt.ApprovalOptionSchema, { decision: prompt.ApprovalDecision.ALLOW_ONCE }),
+      create(prompt.ApprovalOptionSchema, { decision: prompt.ApprovalDecision.ALLOW_ONCE }),
+    ],
+    createdAt: timestamp,
+  })));
+  assert.throws(() => validateGeneratedMessage(
+    prompt.ListPendingRequestSchema,
+    create(prompt.ListPendingRequestSchema, { sessionId: " " }),
+  ));
   assert.throws(() => validateGeneratedMessage(
     runtime.PromptCommandInputSchema,
     create(runtime.PromptCommandInputSchema, { name: "bogus" }),

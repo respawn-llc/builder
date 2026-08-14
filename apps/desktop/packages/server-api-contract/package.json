@@ -10,9 +10,9 @@
     }
   },
   "scripts": {
-    "build": "../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false",
+    "build": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false",
     "test": "pnpm build && node --test test/index.node.mjs",
-    "typecheck": "../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false"
+    "typecheck": "bash ../../../../scripts/generate-protobuf.sh run ts -- node ./node_modules/typescript7/bin/tsc -b --pretty false"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.13.0",

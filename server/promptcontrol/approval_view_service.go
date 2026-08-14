@@ -78,7 +78,6 @@ func approvalOptionsFromRequest(options []askquestion.AskQuestionApprovalOption)
 	for _, option := range options {
 		out = append(out, clientui.ApprovalOption{
 			Decision: clientui.ApprovalDecision(option.Decision),
-			Label:    option.Label,
 		})
 	}
 	return out

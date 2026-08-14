@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/cli/app"
 	"core/shared/client"
+	"core/shared/clientui"
 	"core/shared/serverapi"
 	"core/shared/textutil"
 	"database/sql"
@@ -130,7 +131,7 @@ func projectObservationQuestion(question serverapi.ObservationQuestion, answerSe
 		id, text = string(question.Approval.PromptID), question.Approval.Question
 		suggestions = make([]string, 0, len(question.Approval.Options))
 		for _, option := range question.Approval.Options {
-			suggestions = append(suggestions, option.Label)
+			suggestions = append(suggestions, clientui.ApprovalDecisionLabel(option.Decision))
 		}
 	default:
 		return nil, errors.New("question outcome has no question payload")

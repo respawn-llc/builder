@@ -39,7 +39,10 @@ message Question {
       expression: "this == this.trim()"
     }
   ];
-  string session_id = 2 [(buf.validate.field).string.min_len = 1];
+  string session_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string step_id = 3 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
@@ -80,14 +83,8 @@ message ApprovalOption {
     defined_only: true
     not_in: [0]
   }];
-  string label = 2 [
-    (buf.validate.field).string.min_len = 1,
-    (buf.validate.field).cel = {
-      id: "kent.prompt.approval_option_label_nonblank"
-      message: "label must be non-blank"
-      expression: "this.trim() != ''"
-    }
-  ];
+  reserved 2;
+  reserved "label";
 }
 
 message Approval {
@@ -99,7 +96,10 @@ message Approval {
       expression: "this == this.trim()"
     }
   ];
-  string session_id = 2 [(buf.validate.field).string.min_len = 1];
+  string session_id = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
   string step_id = 3 [
     (buf.validate.field).string.uuid = true,
     (buf.validate.field).string.(kent.api.shared.canonical_uuid_v4) = true
@@ -120,10 +120,19 @@ message Approval {
     (buf.validate.field).required = true,
     (buf.validate.field).timestamp.gt = {seconds: 0}
   ];
+
+  option (buf.validate.message).cel = {
+    id: "kent.prompt.approval_decisions_unique"
+    message: "approval option decisions must be unique"
+    expression: "this.options.map(option, option.decision).unique()"
+  };
 }
 
 message ListPendingRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).string.(kent.api.shared.nonblank) = true
+  ];
 }
 
 message ListQuestionsSuccess {

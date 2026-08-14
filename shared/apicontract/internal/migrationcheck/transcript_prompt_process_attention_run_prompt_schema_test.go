@@ -75,12 +75,30 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 		}
 	}
 
-	approvalOption := &promptpb.ApprovalOption{
-		Decision: promptpb.ApprovalDecision_APPROVAL_DECISION_ALLOW_ONCE,
-		Label:    " ",
+	approvalOptionDescriptor := (&promptpb.ApprovalOption{}).ProtoReflect().Descriptor()
+	if approvalOptionDescriptor.Fields().ByName("label") != nil {
+		t.Fatal("approval option exposes a server-authored UI label")
 	}
-	if err := protoapi.ValidateGeneratedMessage(approvalOption); err == nil {
-		t.Fatal("accepted a blank approval option label")
+	validApproval := &promptpb.Approval{
+		PromptId:  "approval-1",
+		SessionId: "session-1",
+		StepId:    validUUID,
+		Question:  "Allow?",
+		Options: []*promptpb.ApprovalOption{
+			{Decision: promptpb.ApprovalDecision_APPROVAL_DECISION_ALLOW_ONCE},
+			{Decision: promptpb.ApprovalDecision_APPROVAL_DECISION_DENY},
+		},
+		CreatedAt: timestamppb.New(time.Unix(1_700_000_000, 0)),
+	}
+	if err := protoapi.ValidateGeneratedMessage(validApproval); err != nil {
+		t.Fatalf("valid approval: %v", err)
+	}
+	validApproval.Options[1].Decision = promptpb.ApprovalDecision_APPROVAL_DECISION_ALLOW_ONCE
+	if err := protoapi.ValidateGeneratedMessage(validApproval); err == nil {
+		t.Fatal("accepted duplicate approval decisions")
+	}
+	if err := protoapi.ValidateGeneratedMessage(&promptpb.ListPendingRequest{SessionId: " "}); err == nil {
+		t.Fatal("accepted a blank pending-prompt session ID")
 	}
 
 	validQuestion := &promptpb.Question{

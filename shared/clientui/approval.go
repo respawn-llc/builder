@@ -1,6 +1,7 @@
 package clientui
 
 import (
+	"fmt"
 	"time"
 
 	"core/shared/runtimeids"
@@ -17,7 +18,19 @@ const (
 
 type ApprovalOption struct {
 	Decision ApprovalDecision
-	Label    string
+}
+
+func ApprovalDecisionLabel(decision ApprovalDecision) string {
+	switch decision {
+	case ApprovalDecisionAllowOnce:
+		return "Allow once"
+	case ApprovalDecisionAllowSession:
+		return "Allow for this session"
+	case ApprovalDecisionDeny:
+		return "Deny"
+	default:
+		panic(fmt.Sprintf("unsupported approval decision %q", decision))
+	}
 }
 
 type PendingApproval struct {

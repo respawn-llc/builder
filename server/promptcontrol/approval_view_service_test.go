@@ -38,7 +38,9 @@ func TestServiceListsPendingApprovalsBySession(t *testing.T) {
 		resp.Approvals[0].StepID.String() != promptViewStepID {
 		t.Fatalf("unexpected pending approval: %+v", resp.Approvals[0])
 	}
-	if len(resp.Approvals[0].Options) != 2 || resp.Approvals[0].Options[0].Decision != clientui.ApprovalDecisionAllowOnce {
+	if len(resp.Approvals[0].Options) != 2 ||
+		resp.Approvals[0].Options[0].Decision != clientui.ApprovalDecisionAllowOnce ||
+		resp.Approvals[0].Options[1].Decision != clientui.ApprovalDecisionDeny {
 		t.Fatalf("unexpected approval options: %+v", resp.Approvals[0].Options)
 	}
 }

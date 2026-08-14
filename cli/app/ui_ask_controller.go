@@ -506,7 +506,7 @@ func askVisibleOptions(req clientui.TranscriptPrompt) []string {
 	if transcriptPromptIsApproval(req) && len(req.ApprovalOptions) > 0 {
 		out := make([]string, 0, len(req.ApprovalOptions))
 		for _, decision := range req.ApprovalOptions {
-			out = append(out, approvalDecisionLabel(decision))
+			out = append(out, clientui.ApprovalDecisionLabel(decision))
 		}
 		return out
 	}
@@ -553,7 +553,7 @@ func approvalCommentaryLabel(req clientui.TranscriptPrompt, cursor int) string {
 	if !transcriptPromptIsApproval(req) || cursor < 0 || cursor >= len(req.ApprovalOptions) {
 		return "Commentary:"
 	}
-	return fmt.Sprintf("Commentary for %s:", approvalDecisionLabel(req.ApprovalOptions[cursor]))
+	return fmt.Sprintf("Commentary for %s:", clientui.ApprovalDecisionLabel(req.ApprovalOptions[cursor]))
 }
 
 func selectedAskOptionNumber(req clientui.TranscriptPrompt, cursor int) (int, bool) {
@@ -608,17 +608,4 @@ func askSupportsDraftRoundTrip(req clientui.TranscriptPrompt) bool {
 
 func transcriptPromptIsApproval(prompt clientui.TranscriptPrompt) bool {
 	return prompt.Kind == clientui.TranscriptPromptKindApproval
-}
-
-func approvalDecisionLabel(decision clientui.ApprovalDecision) string {
-	switch decision {
-	case clientui.ApprovalDecisionAllowOnce:
-		return "Allow once"
-	case clientui.ApprovalDecisionAllowSession:
-		return "Allow for this session"
-	case clientui.ApprovalDecisionDeny:
-		return "Deny"
-	default:
-		panic(fmt.Sprintf("unsupported approval decision %q", decision))
-	}
 }
