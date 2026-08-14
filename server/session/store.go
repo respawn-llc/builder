@@ -263,12 +263,13 @@ func newLazyWithIDAndStoreOptions(sessionID runtimeids.SessionID, workspaceConta
 		eventsFP:   filepath.Join(sessionDir, eventsFile),
 		options:    storeOpts,
 		meta: Meta{
-			SessionID:          sid,
-			Category:           sessionCategoryPointer(validatedCategory),
-			WorkspaceRoot:      workspaceRoot,
-			WorkspaceContainer: workspaceContainerName,
-			CreatedAt:          now,
-			UpdatedAt:          now,
+			SessionID:                     sid,
+			Category:                      sessionCategoryPointer(validatedCategory),
+			WorkspaceRoot:                 workspaceRoot,
+			WorkspaceContainer:            workspaceContainerName,
+			CreatedAt:                     now,
+			UpdatedAt:                     now,
+			ActiveWorkflowAssignmentState: &ActiveWorkflowAssignmentState{},
 		},
 		conversationFreshness:   ConversationFreshnessFresh,
 		persisted:               false,
@@ -552,13 +553,14 @@ func (s *Store) Meta() Meta {
 func (s *Store) PromptFacingMetadataSnapshot() PromptFacingMetadataSnapshot {
 	meta := s.Meta()
 	return PromptFacingMetadataSnapshot{
-		Name:                         meta.Name,
-		FirstPromptPreview:           meta.FirstPromptPreview,
-		Continuation:                 cloneContinuationContext(meta.Continuation),
-		ChatSettings:                 cloneChatSettingsOverrides(meta.ChatSettings),
-		PromptCacheLineageGeneration: meta.PromptCacheLineageGeneration,
-		Locked:                       cloneLockedContract(meta.Locked),
-		ActiveWorkflowAssignment:     cloneMessageRecord(meta.ActiveWorkflowAssignment),
+		Name:                          meta.Name,
+		FirstPromptPreview:            meta.FirstPromptPreview,
+		Continuation:                  cloneContinuationContext(meta.Continuation),
+		ChatSettings:                  cloneChatSettingsOverrides(meta.ChatSettings),
+		PromptCacheLineageGeneration:  meta.PromptCacheLineageGeneration,
+		Locked:                        cloneLockedContract(meta.Locked),
+		ActiveWorkflowAssignment:      cloneMessageRecord(meta.ActiveWorkflowAssignment),
+		ActiveWorkflowAssignmentState: cloneActiveWorkflowAssignmentState(meta.ActiveWorkflowAssignmentState),
 	}
 }
 
@@ -571,6 +573,7 @@ func (s *Store) RestorePromptFacingMetadata(snapshot PromptFacingMetadataSnapsho
 		s.meta.PromptCacheLineageGeneration = snapshot.PromptCacheLineageGeneration
 		s.meta.Locked = cloneLockedContract(snapshot.Locked)
 		s.meta.ActiveWorkflowAssignment = cloneMessageRecord(snapshot.ActiveWorkflowAssignment)
+		s.meta.ActiveWorkflowAssignmentState = cloneActiveWorkflowAssignmentState(snapshot.ActiveWorkflowAssignmentState)
 		s.meta.UpdatedAt = time.Now().UTC()
 		return nil
 	})
