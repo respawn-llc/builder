@@ -107,9 +107,6 @@ func (p metaContextProjection) Messages() []llm.Message {
 	out = append(out, p.Environment...)
 	return out
 }
-func (r metaContextBuildResult) OrderedMetaMessages() []llm.Message {
-	return r.Projection().Messages()
-}
 func (r metaContextBuildResult) StablePrefixMessages() []llm.Message {
 	out := make([]llm.Message, 0, len(r.Agents)+len(r.Skills)+len(r.Subagents)+len(r.Headless)+len(r.HeadlessExit)+len(r.ActiveGoalContinuation)+len(r.Workflow)+len(r.Worktree)+len(r.WorktreeExit))
 	out = append(out, r.Headless...)

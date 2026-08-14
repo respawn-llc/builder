@@ -290,10 +290,11 @@ func TestSubagentCatalogUsesSamePolicyOnBaseInjectionAndCompaction(t *testing.T)
 			if got := hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()); got != tt.workerVisible {
 				t.Fatalf("base worker visibility = %t, want %t", got, tt.workerVisible)
 			}
-			compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			compacted := projection.Messages()
 			if got := hasSubagentMetaMessage(compacted); got != tt.workerVisible {
 				t.Fatalf("compaction worker visibility = %t, want %t", got, tt.workerVisible)
 			}
@@ -341,10 +342,11 @@ func TestSubagentCatalogRemainsVisibleAcrossDepthPreservingSessionPathsAndLimits
 			if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 				t.Fatal("base context hid the subagent catalog")
 			}
-			compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			compacted := projection.Messages()
 			if !hasSubagentMetaMessage(compacted) {
 				t.Fatal("compaction reconstruction hid the subagent catalog")
 			}
@@ -389,10 +391,11 @@ func TestSubagentCatalogIgnoresPersistedCallerTargetPolicyInBaseAndCompaction(t 
 	if !hasSubagentMetaMessage(eng.transcriptRuntimeState().SnapshotMessages()) {
 		t.Fatal("base catalog must advertise eligible targets regardless of persisted caller callability")
 	}
-	compacted, err := eng.compactionReinjectedMetaMessages(context.Background())
+	projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 	if err != nil {
 		t.Fatalf("compaction reinjection: %v", err)
 	}
+	compacted := projection.Messages()
 	if !hasSubagentMetaMessage(compacted) {
 		t.Fatal("compaction catalog must advertise eligible targets regardless of persisted caller callability")
 	}
@@ -483,10 +486,11 @@ func TestCompactionReinjectsSubagentsMetaContext(t *testing.T) {
 		SubagentCatalogSettings: settings,
 	})
 
-	messages, err := eng.compactionReinjectedMetaMessages(context.Background())
+	projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 	if err != nil {
-		t.Fatalf("compactionReinjectedMetaMessages: %v", err)
+		t.Fatalf("compaction reinjection: %v", err)
 	}
+	messages := projection.Messages()
 	if !hasSubagentMetaMessage(messages) {
 		t.Fatalf("expected compaction-reinjected subagent catalog, got %+v", messages)
 	}
@@ -525,10 +529,11 @@ func TestCompactionReinjectedSkillsFollowCurrentPolicy(t *testing.T) {
 				Model:       "gpt-5",
 				SkillPolicy: tt.policy,
 			})
-			messages, err := eng.compactionReinjectedMetaMessages(context.Background())
+			projection, err := eng.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 			if err != nil {
 				t.Fatalf("compaction reinjection: %v", err)
 			}
+			messages := projection.Messages()
 			_, found := skillMessageContent(messages)
 			if found != tt.wantSkills {
 				t.Fatalf("skills message present = %t, want %t; messages=%+v", found, tt.wantSkills, messages)

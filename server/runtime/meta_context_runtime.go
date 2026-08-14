@@ -447,16 +447,6 @@ func roleOrUser(role *llm.Role) llm.Role {
 	return *role
 }
 
-func (e *Engine) compactionReinjectedMetaMessages(ctx context.Context) ([]llm.Message, error) {
-	return e.compactionReinjectedMetaMessagesForMode(ctx, compactionModeManual)
-}
-func (e *Engine) compactionReinjectedMetaMessagesForMode(ctx context.Context, mode compactionMode) ([]llm.Message, error) {
-	projection, err := e.compactionReinjectedMetaContextProjection(ctx, mode)
-	if err != nil {
-		return nil, err
-	}
-	return projection.Messages(), nil
-}
 func (e *Engine) compactionReinjectedMetaContextProjection(ctx context.Context, mode compactionMode) (metaContextProjection, error) {
 	meta := e.store.Meta()
 	skillPolicy, err := e.reconstructionSkillPolicy(ctx)

@@ -62,11 +62,11 @@ func assertFreshRequestMatchesCompactionProjection(t *testing.T, engine *Engine,
 	if err != nil {
 		t.Fatalf("build fresh request: %v", err)
 	}
-	compactionMessages, err := engine.compactionReinjectedMetaMessages(context.Background())
+	projection, err := engine.compactionReinjectedMetaContextProjection(context.Background(), compactionModeManual)
 	if err != nil {
 		t.Fatalf("build compaction meta context: %v", err)
 	}
 
 	assertMetaContextTypes(t, requestMessages(freshRequest), want)
-	assertMetaContextTypes(t, compactionMessages, want)
+	assertMetaContextTypes(t, projection.Messages(), want)
 }

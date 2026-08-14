@@ -57,7 +57,7 @@ func TestActiveGoalContinuationUsesOneCanonicalMetaContextSlot(t *testing.T) {
 		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeEnvironment,
 	}
-	got := metaContextMessageTypes(result.OrderedMetaMessages())
+	got := metaContextMessageTypes(result.Projection().Messages())
 	if len(got) != len(want) {
 		t.Fatalf("ordered meta message types = %+v, want %+v", got, want)
 	}
@@ -87,7 +87,7 @@ func TestMetaContextProjectionSelectsWorkflowOverActiveGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build meta context: %v", err)
 	}
-	assertMetaContextTypes(t, result.OrderedMetaMessages(), []llm.MessageType{
+	assertMetaContextTypes(t, result.Projection().Messages(), []llm.MessageType{
 		llm.MessageTypeWorkflowMode,
 		llm.MessageTypeEnvironment,
 	})
@@ -109,7 +109,7 @@ func TestMetaContextProjectionSelectsWorkflowOverActiveGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build goal meta context: %v", err)
 	}
-	assertMetaContextTypes(t, goal.OrderedMetaMessages(), []llm.MessageType{
+	assertMetaContextTypes(t, goal.Projection().Messages(), []llm.MessageType{
 		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeEnvironment,
 	})
@@ -151,9 +151,9 @@ func TestMetaContextProjectionUsesCanonicalStablePrefixAcrossEmissionOrders(t *t
 		llm.MessageTypeActiveGoalContinuation,
 		llm.MessageTypeEnvironment,
 	}
-	assertMetaContextTypes(t, forward.OrderedMetaMessages(), want)
-	assertMetaContextTypes(t, reverse.OrderedMetaMessages(), want)
-	if got, want := metaContextMessageTypes(forward.OrderedMetaMessages()), metaContextMessageTypes(reverse.OrderedMetaMessages()); !reflect.DeepEqual(got, want) {
+	assertMetaContextTypes(t, forward.Projection().Messages(), want)
+	assertMetaContextTypes(t, reverse.Projection().Messages(), want)
+	if got, want := metaContextMessageTypes(forward.Projection().Messages()), metaContextMessageTypes(reverse.Projection().Messages()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("canonical projection changed with emission order: forward=%+v reverse=%+v", got, want)
 	}
 
