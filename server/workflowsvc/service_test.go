@@ -21,6 +21,7 @@ import (
 	"core/server/sessionruntime"
 	"core/server/workflow"
 	"core/server/workflowexecution"
+	"core/server/workflowruntime"
 	"core/server/workflowscript"
 	"core/server/workflowstore"
 	"core/server/workflowview"
@@ -1445,10 +1446,11 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 			t.Fatalf("InterruptCurrentNode: %v", err)
 		}
 	}
+	releaseRunner := make(chan struct{})
 	authority := sessionruntime.NewAuthority(sessionruntime.AuthorityOptions{})
 	controller, err := workflowexecution.NewCurrentNodeController(
 		service.store,
-		initialBranchControllerRunner{},
+		workflowServiceConcurrentResumeRunner{release: releaseRunner},
 		authority,
 		service.taskMutations,
 		workflowexecution.CurrentNodeControllerConfig{
@@ -1460,6 +1462,7 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		t.Fatalf("NewCurrentNodeController: %v", err)
 	}
 	t.Cleanup(func() {
+		close(releaseRunner)
 		_ = controller.Close()
 		_ = authority.Close(context.Background())
 	})
@@ -1492,6 +1495,22 @@ func TestServiceConcurrentTaskResumeReturnsAppliedThenNoOp(t *testing.T) {
 		outcomes[serverapi.WorkflowExecutionTargetActionOutcomeNoOp] != 1 {
 		t.Fatalf("concurrent Resume outcomes = %+v, want one applied and one no_op", outcomes)
 	}
+}
+
+type workflowServiceConcurrentResumeRunner struct {
+	release <-chan struct{}
+}
+
+func (r workflowServiceConcurrentResumeRunner) StartCurrentNode(
+	context.Context,
+	workflow.CurrentNodeReference,
+	workflowruntime.TaskPromptDelivery,
+	*workflowexecution.CurrentNodeClassifiedAssignment,
+	sessionruntime.WorkflowExecutionLease,
+	workflowruntime.Controller,
+) error {
+	<-r.release
+	return nil
 }
 
 func TestServiceTaskResumePromotesConcurrencyQueuedCurrentNodes(t *testing.T) {
