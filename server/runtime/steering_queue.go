@@ -278,10 +278,10 @@ func (q *steeringQueue) append(entry *steeringQueueEntry) (bool, error) {
 		entry.completeClosed()
 		return false, ErrEngineClosed
 	}
+	defer q.mu.Unlock()
 	q.requirePendingCapacityLocked()
 	q.pending = append(q.pending, entry)
 	wake := q.claimDrainLocked()
-	q.mu.Unlock()
 	return wake, nil
 }
 
@@ -398,6 +398,7 @@ func (q *steeringQueue) appendHuman(
 		q.mu.Unlock()
 		return false, err
 	}
+	defer q.mu.Unlock()
 	entry.human = &steeringHumanAssociation{
 		ordinal: ordinal,
 		scope:   cloneExecutionScopeID(scope),
@@ -405,7 +406,6 @@ func (q *steeringQueue) appendHuman(
 	q.requirePendingCapacityLocked()
 	q.pending = append(q.pending, entry)
 	wake := drainImmediately && q.claimDrainLocked()
-	q.mu.Unlock()
 	return wake, nil
 }
 
