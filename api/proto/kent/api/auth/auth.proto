@@ -232,7 +232,14 @@ message GetStatusRequest {
 }
 
 message StatusFailure {
-  string cause = 1 [(buf.validate.field).string.min_len = 1];
+  string cause = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.auth.status_failure_cause_nonblank"
+      message: "auth failure cause must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 enum AuthMethod {

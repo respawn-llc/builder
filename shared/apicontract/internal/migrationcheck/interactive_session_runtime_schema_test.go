@@ -216,6 +216,12 @@ func TestInteractiveSessionRuntimeReviewedValidationBoundaries(t *testing.T) {
 				Input: &runtimepb.UserTurnInput_Text{Text: "message"},
 			},
 		},
+		"blank main-view session ID": &sessionpb.MainViewRequest{
+			SessionId: " ",
+		},
+		"blank execution-environment session ID": &sessionpb.ExecutionEnvironmentRequest{
+			SessionId: " ",
+		},
 		"unknown status compaction mode": &runtimepb.Status{
 			ReviewerFrequency: "off",
 			ThinkingLevel:     "medium",

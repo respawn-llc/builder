@@ -424,6 +424,10 @@ func TestCompletedSchemaSliceAuthDisplayOriginBoundaries(t *testing.T) {
 }
 
 func TestAuthUnavailableResolutionRejectsPartialFailure(t *testing.T) {
+	if err := protoapi.ValidateGeneratedMessage(&authpb.StatusFailure{Cause: " "}); err == nil {
+		t.Fatal("auth status failure accepted a blank cause")
+	}
+
 	failure := &authpb.StatusFailure{
 		Cause: "unavailable",
 	}

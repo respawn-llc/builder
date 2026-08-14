@@ -171,7 +171,14 @@ message ExecutionEnvironment {
 }
 
 message MainViewRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.main_view_session_id_nonblank"
+      message: "session ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message MainViewSuccess {
@@ -200,7 +207,14 @@ message MainViewResult {
 }
 
 message ExecutionEnvironmentRequest {
-  string session_id = 1 [(buf.validate.field).string.min_len = 1];
+  string session_id = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.session.execution_environment_session_id_nonblank"
+      message: "session ID must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message ExecutionEnvironmentSuccess {
