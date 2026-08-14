@@ -264,7 +264,7 @@ func TestTaskListProjectionSuppressesEnrichedWorkflowNameForOneWorkflow(t *testi
 	workflowName := "Delivery"
 	projection, err := taskListProjectionFromResponse(
 		serverapi.WorkflowTaskListResponse{
-			Scope: serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
+			Scope:                       serverapi.WorkflowTaskListScope{ProjectID: "project-1"},
 			MatchingWorkflowCardinality: serverapi.WorkflowTaskListMatchingWorkflowCardinalityOne,
 			Tasks: []serverapi.WorkflowTaskListItem{{
 				TaskID:       "task-1",
