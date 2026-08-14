@@ -33,7 +33,7 @@ func (s *questionHistorySubscription) Next(ctx context.Context) (serverapi.Quest
 		if err := ctx.Err(); err != nil {
 			return serverapi.QuestionHistoryEvent{}, err
 		}
-		record, err := s.cursor.Next()
+		record, err := s.cursor.Next(ctx)
 		if err != nil {
 			return serverapi.QuestionHistoryEvent{}, err
 		}

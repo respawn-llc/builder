@@ -2,6 +2,8 @@ package session
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,7 +48,7 @@ func TestQuestionHistoryCursorAcceptsVersionedHeaderOnlyLogs(t *testing.T) {
 			if cursor.Version() != version || cursor.InitialSize() <= 0 {
 				t.Fatalf("cursor facts = version %d size %d", cursor.Version(), cursor.InitialSize())
 			}
-			record, err := cursor.Next()
+			record, err := cursor.Next(t.Context())
 			if err != nil || record != nil {
 				t.Fatalf("header-only Next = record %#v error %v", record, err)
 			}
@@ -74,7 +76,7 @@ func TestQuestionHistoryCursorReadsNewestToOldestAcrossRetainedWindows(t *testin
 	defer func() { _ = cursor.Close() }()
 	var sequences []int64
 	for {
-		record, err := cursor.Next()
+		record, err := cursor.Next(t.Context())
 		if err != nil {
 			t.Fatalf("Next: %v", err)
 		}
@@ -124,11 +126,11 @@ func TestQuestionHistoryCursorMaxHandoffsOneDetectsOmissionWithoutDecodingOlderC
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record == nil || record.Seq() != 3 {
 		t.Fatalf("first Next = %#v, %v", record, err)
 	}
-	record, err = cursor.Next()
+	record, err = cursor.Next(t.Context())
 	if err != nil || record != nil {
 		t.Fatalf("terminal Next = %#v, %v", record, err)
 	}
@@ -184,11 +186,11 @@ func TestQuestionHistoryCursorRejectsCorruptReplacementAtBoundary(t *testing.T) 
 				t.Fatalf("open cursor: %v", err)
 			}
 			defer func() { _ = cursor.Close() }()
-			record, err := cursor.Next()
+			record, err := cursor.Next(t.Context())
 			if err != nil || record == nil || record.Seq() != 3 {
 				t.Fatalf("newest Next = %#v, %v", record, err)
 			}
-			if _, err := cursor.Next(); err == nil {
+			if _, err := cursor.Next(t.Context()); err == nil {
 				t.Fatal("corrupt replacement completed history scan")
 			}
 		})
@@ -238,11 +240,11 @@ func TestQuestionHistoryCursorStreamsLargeReplacementBoundaryWithoutMaterializin
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record == nil || record.Seq() != 2 {
 		t.Fatalf("newest Next = %#v, %v", record, err)
 	}
-	record, err = cursor.Next()
+	record, err = cursor.Next(t.Context())
 	if err != nil || record != nil {
 		t.Fatalf("terminal Next = %#v, %v", record, err)
 	}
@@ -260,7 +262,7 @@ func TestQuestionHistoryCursorLargeIgnoredScalarAllocationIsSizeIndependent(t *t
 		if err != nil {
 			t.Fatalf("open ignored-record cursor: %v", err)
 		}
-		record, nextErr := cursor.Next()
+		record, nextErr := cursor.Next(t.Context())
 		closeErr := cursor.Close()
 		if nextErr != nil || closeErr != nil || record != nil {
 			t.Fatalf(
@@ -336,7 +338,7 @@ func TestQuestionHistoryCursorSurfacesOversizedLegacyDiscriminatorsWithSizeIndep
 				if err != nil {
 					t.Fatalf("open oversized-token cursor: %v", err)
 				}
-				_, nextErr := cursor.Next()
+				_, nextErr := cursor.Next(t.Context())
 				closeErr := cursor.Close()
 				if nextErr == nil || closeErr != nil {
 					t.Fatalf(
@@ -387,7 +389,7 @@ func TestQuestionHistoryCursorRejectsSkippedV2TypedAnswerCorruption(t *testing.T
 				t.Fatalf("open cursor: %v", err)
 			}
 			defer func() { _ = cursor.Close() }()
-			if _, err := cursor.Next(); err == nil {
+			if _, err := cursor.Next(t.Context()); err == nil {
 				t.Fatal("corrupt skipped v2 completion did not terminate cursor")
 			}
 		})
@@ -408,7 +410,7 @@ func TestQuestionHistoryCursorRejectsCandidateTrailingGarbage(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	if _, err := cursor.Next(); err == nil {
+	if _, err := cursor.Next(t.Context()); err == nil {
 		t.Fatal("candidate with trailing garbage did not fail")
 	}
 }
@@ -422,7 +424,7 @@ func TestQuestionHistoryCursorDecodesEscapedQuestionToolName(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record == nil || record.Seq() != 1 {
 		t.Fatalf("escaped Question completion = %#v, %v", record, err)
 	}
@@ -439,7 +441,7 @@ func TestQuestionHistoryCursorAcceptsLongIgnoredNumber(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record != nil {
 		t.Fatalf("long ignored number = %#v, %v", record, err)
 	}
@@ -460,7 +462,7 @@ func TestQuestionHistoryCursorRejectsExcessiveIgnoredNesting(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	if _, err := cursor.Next(); err == nil {
+	if _, err := cursor.Next(t.Context()); err == nil {
 		t.Fatal("excessively nested ignored payload did not fail")
 	}
 }
@@ -486,9 +488,51 @@ func TestQuestionHistoryCursorIgnoresIncompleteConcurrentTail(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record == nil || record.Seq() != 1 {
 		t.Fatalf("Next = %#v, %v", record, err)
+	}
+}
+
+func TestQuestionHistoryCursorReadsCompleteUnterminatedTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, eventsFile)
+	header, err := encodeEventLogHeader(EventLogVersionV2)
+	if err != nil {
+		t.Fatalf("encode header: %v", err)
+	}
+	line, err := encodeEventRecordV2(
+		mustQuestionHistoryCursorRecord(t, 1, "unterminated"),
+	)
+	if err != nil {
+		t.Fatalf("encode unterminated Question: %v", err)
+	}
+	content := append(header, '\n')
+	content = append(content, line...)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write unterminated event log: %v", err)
+	}
+	cursor, err := OpenQuestionHistoryCursor(dir, 1)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer func() { _ = cursor.Close() }()
+	record, err := cursor.Next(t.Context())
+	if err != nil || record == nil || record.Seq() != 1 {
+		t.Fatalf("unterminated Question = %#v, %v", record, err)
+	}
+}
+
+func TestQuestionHistoryCursorCancellationInterruptsLargeRecordScan(t *testing.T) {
+	dir := writeQuestionHistoryCursorIgnoredRecord(t, 4<<20)
+	cursor, err := OpenQuestionHistoryCursor(dir, 2)
+	if err != nil {
+		t.Fatalf("open cursor: %v", err)
+	}
+	defer func() { _ = cursor.Close() }()
+	ctx := &cancelDuringQuestionHistoryReadContext{Context: t.Context()}
+	if _, err := cursor.Next(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("large-record scan error = %v, want context canceled", err)
 	}
 }
 
@@ -563,7 +607,7 @@ func TestQuestionHistoryCursorSurfacesCompleteDecodeFailure(t *testing.T) {
 		t.Fatalf("open cursor: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	if _, err := cursor.Next(); err == nil {
+	if _, err := cursor.Next(t.Context()); err == nil {
 		t.Fatal("complete malformed record did not fail")
 	}
 }
@@ -581,7 +625,7 @@ func TestQuestionHistoryCursorDoesNotWaitForSessionMutationLock(t *testing.T) {
 		t.Fatalf("open cursor while mutation lock held: %v", err)
 	}
 	defer func() { _ = cursor.Close() }()
-	record, err := cursor.Next()
+	record, err := cursor.Next(t.Context())
 	if err != nil || record == nil {
 		t.Fatalf("Next while mutation lock held = %#v, %v", record, err)
 	}
@@ -666,4 +710,17 @@ func equalInt64s(left, right []int64) bool {
 		}
 	}
 	return true
+}
+
+type cancelDuringQuestionHistoryReadContext struct {
+	context.Context
+	errCalls int
+}
+
+func (c *cancelDuringQuestionHistoryReadContext) Err() error {
+	c.errCalls++
+	if c.errCalls >= 7 {
+		return context.Canceled
+	}
+	return nil
 }

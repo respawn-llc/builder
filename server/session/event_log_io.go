@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -31,7 +32,7 @@ func writeAll(fp *os.File, payload []byte) (int, error) {
 	return offset, nil
 }
 
-func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
+func lastNewlineOffset(reader io.ReaderAt, fileSize int64) (int64, error) {
 	if fileSize == 0 {
 		return -1, nil
 	}
@@ -44,7 +45,7 @@ func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
 		}
 		start := position - chunkSize
 		chunk := buffer[:chunkSize]
-		if _, err := fp.ReadAt(chunk, start); err != nil {
+		if _, err := reader.ReadAt(chunk, start); err != nil {
 			return -1, fmt.Errorf("scan events file for newline: %w", err)
 		}
 		if idx := bytes.LastIndexByte(chunk, '\n'); idx >= 0 {
@@ -56,7 +57,7 @@ func lastNewlineOffset(fp *os.File, fileSize int64) (int64, error) {
 }
 
 func previousCurrentEventLineRange(
-	fp *os.File,
+	reader io.ReaderAt,
 	endOffset int64,
 	firstEventOffset int64,
 ) (startOffset int64, lineEnd int64, terminated bool, err error) {
@@ -65,7 +66,7 @@ func previousCurrentEventLineRange(
 	}
 	lineEnd = endOffset
 	lastByte := [1]byte{}
-	if _, err := fp.ReadAt(lastByte[:], endOffset-1); err != nil {
+	if _, err := reader.ReadAt(lastByte[:], endOffset-1); err != nil {
 		return 0, 0, false, fmt.Errorf("read current event line end: %w", err)
 	}
 	if lastByte[0] == '\n' {
@@ -75,7 +76,7 @@ func previousCurrentEventLineRange(
 	if lineEnd <= firstEventOffset {
 		return firstEventOffset, firstEventOffset, terminated, nil
 	}
-	previousNewline, err := lastNewlineOffset(fp, lineEnd)
+	previousNewline, err := lastNewlineOffset(reader, lineEnd)
 	if err != nil {
 		return 0, 0, false, err
 	}

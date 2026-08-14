@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -86,16 +87,26 @@ func (c *QuestionHistoryCursor) Close() error {
 	return err
 }
 
-func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
+func (c *QuestionHistoryCursor) Next(ctx context.Context) (*EventRecord, error) {
 	if c == nil || c.fp == nil {
 		return nil, errors.New("Question-history cursor is closed")
+	}
+	if ctx == nil {
+		return nil, errors.New("Question-history context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if c.done {
 		return nil, nil
 	}
+	reader := questionHistoryContextReaderAt{ctx: ctx, reader: c.fp}
 	for c.position > c.firstEventOffset {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		recordOffset, lineEnd, terminated, err := previousCurrentEventLineRange(
-			c.fp,
+			reader,
 			c.position,
 			c.firstEventOffset,
 		)
@@ -112,16 +123,17 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 				recordOffset,
 			)
 		}
-		if !terminated {
-			// A concurrent append may leave a torn newest line. The opened
-			// cursor's contract permits ignoring that unfinished tail.
-			continue
-		}
 		inspection, err := inspectEventRecordStream(
-			io.NewSectionReader(c.fp, recordOffset, lineEnd-recordOffset),
+			io.NewSectionReader(reader, recordOffset, lineEnd-recordOffset),
 			c.version,
 		)
 		if err != nil {
+			if !terminated {
+				// A concurrent append may leave a torn newest line. Complete
+				// unterminated records remain visible; only undecodable tails
+				// are ignored.
+				continue
+			}
 			return nil, fmt.Errorf(
 				"decode Question-history event record at byte %d: %w",
 				recordOffset,
@@ -130,7 +142,7 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 		}
 		if inspection.Kind == EventKindHistoryReplace {
 			if err := inspectHistoryReplacementRecordStream(
-				io.NewSectionReader(c.fp, recordOffset, lineEnd-recordOffset),
+				io.NewSectionReader(reader, recordOffset, lineEnd-recordOffset),
 			); err != nil {
 				return nil, fmt.Errorf(
 					"decode Question-history replacement at byte %d: %w",
@@ -149,8 +161,10 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 		if inspection.Kind != EventKindToolCompletion || !inspection.QuestionCandidate {
 			continue
 		}
-		line := make([]byte, lineEnd-recordOffset)
-		if _, err := c.fp.ReadAt(line, recordOffset); err != nil {
+		line, err := io.ReadAll(
+			io.NewSectionReader(reader, recordOffset, lineEnd-recordOffset),
+		)
+		if err != nil {
 			return nil, fmt.Errorf(
 				"read Question-history event record at byte %d: %w",
 				recordOffset,
@@ -177,4 +191,17 @@ func (c *QuestionHistoryCursor) Next() (*EventRecord, error) {
 	}
 	c.done = true
 	return nil, nil
+}
+
+type questionHistoryContextReaderAt struct {
+	ctx    context.Context
+	reader io.ReaderAt
+}
+
+func (r questionHistoryContextReaderAt) ReadAt(buffer []byte, offset int64) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	read, readErr := r.reader.ReadAt(buffer, offset)
+	return read, errors.Join(readErr, r.ctx.Err())
 }
