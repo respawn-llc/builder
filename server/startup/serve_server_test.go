@@ -35,6 +35,51 @@ type envAuthHandler struct {
 	lookupEnv func(string) string
 }
 
+type blockingAuthStore struct {
+	base        auth.Store
+	saveStarted chan auth.State
+	releaseSave <-chan struct{}
+}
+
+func (s *blockingAuthStore) Load(ctx context.Context) (auth.State, error) {
+	return s.base.Load(ctx)
+}
+
+func (s *blockingAuthStore) LoadPersisted(ctx context.Context) (auth.State, error) {
+	if persisted, ok := s.base.(auth.PersistedStateLoader); ok {
+		return persisted.LoadPersisted(ctx)
+	}
+	return s.base.Load(ctx)
+}
+
+func (s *blockingAuthStore) Save(ctx context.Context, state auth.State) error {
+	select {
+	case s.saveStarted <- state:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-s.releaseSave:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.base.Save(ctx, state)
+}
+
+type blockingAuthHandler struct {
+	envAuthHandler
+	saveStarted chan auth.State
+	releaseSave <-chan struct{}
+}
+
+func (h blockingAuthHandler) WrapStore(base auth.Store) auth.Store {
+	return &blockingAuthStore{
+		base:        h.envAuthHandler.WrapStore(base),
+		saveStarted: h.saveStarted,
+		releaseSave: h.releaseSave,
+	}
+}
+
 func (h envAuthHandler) WrapStore(base auth.Store) auth.Store {
 	return authservice.WrapStoreWithEnvAPIKeyOverride(base, h.LookupEnv)
 }
@@ -103,7 +148,7 @@ func newServeWorkspace(t *testing.T) string {
 	return workspace
 }
 
-func startServeTestServer(t *testing.T, request Request, authHandler envAuthHandler, onboarding OnboardingHandler) *ServeServer {
+func startServeTestServer(t *testing.T, request Request, authHandler AuthHandler, onboarding OnboardingHandler) *ServeServer {
 	t.Helper()
 	server, err := StartServeServer(context.Background(), request, authHandler, onboarding)
 	if err != nil {
@@ -534,7 +579,6 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	releaseBuild := make(chan struct{})
 	var releaseBuildOnce sync.Once
 	releaseCoreBuild := func() { releaseBuildOnce.Do(func() { close(releaseBuild) }) }
-	t.Cleanup(releaseCoreBuild)
 	server.deps.buildCore = func(
 		ctx context.Context,
 		cfg config.App,
@@ -547,6 +591,7 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		return originalBuilder(ctx, cfg, authSupport, runtimeSupport, options)
 	}
 	startServingTestServer(t, server)
+	t.Cleanup(releaseCoreBuild)
 
 	activator, err := client.DialConfiguredRemote(context.Background(), server.Config())
 	if err != nil {
@@ -575,6 +620,20 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	if err != nil {
 		t.Fatalf("initial capability facts: %v", err)
 	}
+	if initialFacts.Providers.CurrentEffective == nil {
+		t.Fatal("initial capability facts omitted the effective provider")
+	}
+	var helperInitiallyEnabled bool
+	for _, projection := range initialFacts.Imports.SkillEnablement {
+		for _, candidate := range projection.Candidates {
+			if candidate.Ref.TargetName == "helper" && candidate.DefaultEnabled != nil && *candidate.DefaultEnabled {
+				helperInitiallyEnabled = true
+			}
+		}
+	}
+	if !helperInitiallyEnabled {
+		t.Fatalf("initial capability facts did not expose enabled helper import: %+v", initialFacts.Imports.SkillEnablement)
+	}
 
 	provider := "anthropic"
 	finalizeDone := make(chan error, 1)
@@ -592,6 +651,10 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 	pendingConfig := <-buildStarted
 	if pendingConfig.Settings.Model != "pending-model" || pendingConfig.Settings.ProviderOverride != provider || pendingConfig.Settings.SkillToggles["helper"] {
 		t.Fatalf("pending activation config = %+v", pendingConfig.Settings)
+	}
+	if initialFacts.Defaults.PrimaryModelID == pendingConfig.Settings.Model ||
+		initialFacts.Providers.CurrentEffective.LLMProviderID == pendingConfig.Settings.ProviderOverride {
+		t.Fatalf("initial and pending capability settings are not observably different: initial=%+v pending=%+v", initialFacts, pendingConfig.Settings)
 	}
 
 	readCtx, cancelReads := context.WithTimeout(context.Background(), time.Second)
@@ -639,10 +702,199 @@ func TestStartupGatewayReadsPublishedTupleWhileActivationBuildsCore(t *testing.T
 		facts.Providers.CurrentEffective.LLMProviderID != provider {
 		t.Fatalf("capability facts after activation = %+v", facts)
 	}
+	bootstrap, err := reader.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("auth bootstrap after activation: %v", err)
+	}
+	if bootstrap.AuthRequired {
+		t.Fatalf("auth bootstrap after activation = %+v, want non-OpenAI settings", bootstrap)
+	}
+	authStatus, err := reader.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	if err != nil {
+		t.Fatalf("auth status after activation: %v", err)
+	}
+	if authStatus.Resolution.Facts == nil || authStatus.Resolution.Facts.Provider.Identifier != provider {
+		t.Fatalf("auth status after activation = %+v, want provider %q", authStatus, provider)
+	}
+	if ready.AuthRequired {
+		t.Fatalf("readiness after activation = %+v, want non-OpenAI settings", ready)
+	}
+	var helperDisabled bool
+	for _, projection := range facts.Imports.SkillEnablement {
+		for _, candidate := range projection.Candidates {
+			if candidate.Ref.TargetName == "helper" && candidate.DefaultEnabled != nil && !*candidate.DefaultEnabled {
+				helperDisabled = true
+			}
+		}
+	}
+	if !helperDisabled {
+		t.Fatalf("capability facts after activation did not publish disabled helper import: %+v", facts.Imports.SkillEnablement)
+	}
 	updateCtx, cancelUpdate := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancelUpdate()
 	if _, err := reader.GetUpdateStatus(updateCtx, serverapi.UpdateStatusRequest{}); errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
 		t.Fatalf("update status did not reach published Core: %v", err)
+	}
+}
+
+func TestStartupGatewayReadsPublishedAuthFactsWhileMutationIsBlocked(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("HOME", home)
+	configureServeTestServerPort(t)
+
+	saveStarted := make(chan auth.State, 3)
+	releaseSave := make(chan struct{})
+	var releaseSaveOnce sync.Once
+	releaseAuthSaves := func() { releaseSaveOnce.Do(func() { close(releaseSave) }) }
+	handler := blockingAuthHandler{
+		envAuthHandler: envAuthHandler{lookupEnv: func(string) string { return "" }},
+		saveStarted:    saveStarted,
+		releaseSave:    releaseSave,
+	}
+	server := startServeTestServer(t, Request{WorkspaceRoot: workspace, WorkspaceRootExplicit: true}, handler, nil)
+	startServingTestServer(t, server)
+	t.Cleanup(releaseAuthSaves)
+
+	dial := func(name string) *client.Remote {
+		t.Helper()
+		remote, err := client.DialConfiguredRemote(context.Background(), server.Config())
+		if err != nil {
+			t.Fatalf("dial %s remote: %v", name, err)
+		}
+		t.Cleanup(func() { _ = remote.Close() })
+		return remote
+	}
+	firstMutation := dial("first mutation")
+	secondMutation := dial("second mutation")
+	acknowledger := dial("acknowledgement")
+	gated := dial("startup gate")
+	reader := dial("reader")
+
+	initialReadiness, err := reader.GetServerReadiness(context.Background(), serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("initial readiness: %v", err)
+	}
+	initialBootstrap, err := reader.GetAuthBootstrapStatus(context.Background(), serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("initial auth bootstrap: %v", err)
+	}
+	initialAuth, err := reader.GetAuthStatus(context.Background(), serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	if err != nil {
+		t.Fatalf("initial auth status: %v", err)
+	}
+	initialFacts, err := reader.GetCapabilityFacts(context.Background(), serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("initial capability facts: %v", err)
+	}
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, mutationErr := firstMutation.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+			Mode:   serverapi.AuthBootstrapModeAPIKey,
+			Force:  true,
+			APIKey: "first-blocked-key",
+		})
+		firstDone <- mutationErr
+	}()
+	firstSave := <-saveStarted
+	if firstSave.Method.APIKey == nil || firstSave.Method.APIKey.Key != "first-blocked-key" {
+		t.Fatalf("first blocked auth state = %+v", firstSave)
+	}
+
+	secondStarted := make(chan struct{})
+	secondDone := make(chan error, 1)
+	go func() {
+		close(secondStarted)
+		_, mutationErr := secondMutation.CompleteAuthBootstrap(context.Background(), serverapi.AuthCompleteBootstrapRequest{
+			Mode:   serverapi.AuthBootstrapModeAPIKey,
+			Force:  true,
+			APIKey: "second-serialized-key",
+		})
+		secondDone <- mutationErr
+	}()
+	<-secondStarted
+	ackStarted := make(chan struct{})
+	ackDone := make(chan error, 1)
+	go func() {
+		close(ackStarted)
+		_, ackErr := acknowledger.AcknowledgeNoAuth(context.Background(), serverapi.AuthAcknowledgeNoAuthRequest{})
+		ackDone <- ackErr
+	}()
+	<-ackStarted
+	gateStarted := make(chan struct{})
+	gateDone := make(chan error, 1)
+	go func() {
+		close(gateStarted)
+		_, gateErr := gated.ListProjects(context.Background(), serverapi.ProjectListRequest{})
+		gateDone <- gateErr
+	}()
+	<-gateStarted
+
+	readCtx, cancelReads := context.WithTimeout(context.Background(), time.Second)
+	defer cancelReads()
+	duringReadiness, err := reader.GetServerReadiness(readCtx, serverapi.ServerReadinessRequest{})
+	if err != nil {
+		t.Fatalf("readiness during auth mutation: %v", err)
+	}
+	duringBootstrap, err := reader.GetAuthBootstrapStatus(readCtx, serverapi.AuthGetBootstrapStatusRequest{})
+	if err != nil {
+		t.Fatalf("auth bootstrap during auth mutation: %v", err)
+	}
+	duringAuth, err := reader.GetAuthStatus(readCtx, serverapi.AuthStatusRequest{SkipSubscriptionUsage: true})
+	if err != nil {
+		t.Fatalf("auth status during auth mutation: %v", err)
+	}
+	duringFacts, err := reader.GetCapabilityFacts(readCtx, serverapi.CapabilityFactsRequest{})
+	if err != nil {
+		t.Fatalf("capability facts during auth mutation: %v", err)
+	}
+	if _, err := reader.GetUpdateStatus(readCtx, serverapi.UpdateStatusRequest{}); !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("update status during auth mutation = %v, want onboarding required", err)
+	}
+	if !reflect.DeepEqual(duringReadiness, initialReadiness) ||
+		!reflect.DeepEqual(duringBootstrap, initialBootstrap) ||
+		!reflect.DeepEqual(duringAuth, initialAuth) ||
+		!reflect.DeepEqual(duringFacts, initialFacts) {
+		t.Fatal("auth mutation reads did not return the prior published facts")
+	}
+	select {
+	case state := <-saveStarted:
+		t.Fatalf("second auth mutation reached Save before the first completed: %+v", state)
+	default:
+	}
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second auth mutation completed before the first: %v", err)
+	default:
+	}
+	select {
+	case err := <-ackDone:
+		t.Fatalf("auth acknowledgement completed before the first mutation: %v", err)
+	default:
+	}
+	select {
+	case err := <-gateDone:
+		t.Fatalf("startup authorization gate completed before the auth mutation: %v", err)
+	default:
+	}
+
+	releaseAuthSaves()
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first auth mutation: %v", err)
+	}
+	secondSave := <-saveStarted
+	if secondSave.Method.APIKey == nil || secondSave.Method.APIKey.Key != "second-serialized-key" {
+		t.Fatalf("second serialized auth state = %+v", secondSave)
+	}
+	if err := <-secondDone; err != nil {
+		t.Fatalf("second auth mutation: %v", err)
+	}
+	if err := <-ackDone; err != nil {
+		t.Fatalf("auth acknowledgement: %v", err)
+	}
+	if err := <-gateDone; !errors.Is(err, serverapi.ErrServerNotReadyOnboardingRequired) {
+		t.Fatalf("startup authorization gate error = %v, want onboarding required", err)
 	}
 }
 
