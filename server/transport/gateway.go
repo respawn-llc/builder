@@ -90,6 +90,7 @@ type GatewayProjectDependencies interface {
 
 type GatewaySessionDependencies interface {
 	SessionBelongsToProject(context.Context, string, string) error
+	ChatSettingsClient() apicontract.ChatSettingsService
 	SessionViewClient() apicontract.SessionViewService
 	SessionLifecycleClient() apicontract.SessionLifecycleService
 	SessionRuntimeClient() apicontract.SessionRuntimeService

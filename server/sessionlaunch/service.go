@@ -235,6 +235,121 @@ func (s *Service) ResolveWorkspaceChatDraftAggregate(ctx context.Context) (Works
 	return owner.ResolveWorkspaceChatDraft(ctx, workspaceID, s.workspaceChatDraftResolverInput)
 }
 
+func (s *Service) LazyChatSettings(ctx context.Context) (serverapi.ChatSettingsReadResponse, error) {
+	resolved, err := s.ResolveWorkspaceChatDraftAggregate(ctx)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	draft := resolved.Draft
+	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: resolved.Catalog,
+		Agent:   draft.Agent,
+		Settings: session.ChatSettings{
+			Supervisor:     draft.Supervisor,
+			Thinking:       resolved.PersistedThinking,
+			Fast:           draft.Fast,
+			Questions:      resolved.PersistedQuestionsPolicy,
+			AutoCompaction: draft.AutoCompaction,
+		},
+		CompactionMode: resolved.CompactionMode,
+	})
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	return serverapi.ChatSettingsReadResponse{Settings: settings}, nil
+}
+
+func (s *Service) MaterializedChatSettings(
+	ctx context.Context,
+	sessionID runtimeids.SessionID,
+) (serverapi.ChatSettingsReadResponse, error) {
+	record, err := s.planner.PersistedSessions.ResolvePersistedSession(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	planner := s.planner
+	if planner.ReloadConfig != nil {
+		planner.Config, err = planner.ReloadConfig()
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+	}
+	authState := auth.EmptyState()
+	if s.authStates != nil {
+		authState, err = s.authStates.StoredState(ctx)
+		if err != nil {
+			return serverapi.ChatSettingsReadResponse{}, err
+		}
+	}
+	catalog, err := launch.PrepareChatAgentCatalog(
+		planner.Config,
+		authState,
+		false,
+	)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	state, err := session.ChatSettingsStateFromMeta(*record.Meta)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	baselineEntry, ok := catalog.Lookup(state.Agent)
+	if !ok {
+		baselineEntry, _ = catalog.Lookup(config.DefaultSubagentRole)
+	}
+	effective, err := session.ResolveEffectiveChatSettings(
+		state.Settings,
+		nil,
+		baselineEntry.Settings.Baseline,
+	)
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	taskID, err := s.workflowTaskID(ctx, sessionID.String())
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	workflowLocked := taskID != nil
+	settings, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog:        catalog,
+		Agent:          state.Agent,
+		Settings:       effective,
+		WorkflowLocked: workflowLocked,
+		CompactionMode: planner.Config.Settings.CompactionMode,
+		Locked:         record.Meta.Locked,
+	})
+	if err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	facts := &serverapi.ChatSettingsSessionFacts{
+		SessionID:         sessionID,
+		TaskID:            taskID,
+		PreviousSessionID: record.Meta.PreviousSessionID,
+	}
+	return serverapi.ChatSettingsReadResponse{
+		Settings: settings,
+		Session:  facts,
+	}, nil
+}
+
+func (s *Service) workflowTaskID(ctx context.Context, sessionID string) (*string, error) {
+	reader, ok := s.planner.PersistedSessions.(interface {
+		WorkflowTaskIDForSession(context.Context, string) (*string, error)
+	})
+	if !ok {
+		return nil, errors.New("workflow Task reader is required")
+	}
+	taskID, err := reader.WorkflowTaskIDForSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if taskID == nil {
+		return nil, nil
+	}
+	validated, err := runtimeids.ParseTaskID(*taskID)
+	return &validated, err
+}
+
 func (s *Service) TransformWorkspaceChatDraftAggregate(ctx context.Context, transform WorkspaceChatDraftTransform) (WorkspaceChatDraft, error) {
 	owner, workspaceID, err := s.workspaceChatDraftOwner()
 	if err != nil {

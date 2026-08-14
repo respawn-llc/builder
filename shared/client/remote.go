@@ -780,6 +780,26 @@ func (c *Remote) MaterializeWorkspaceChat(ctx context.Context, req serverapi.Wor
 	return resp, nil
 }
 
+func (c *Remote) ReadChatSettings(
+	ctx context.Context,
+	req serverapi.ChatSettingsReadRequest,
+) (serverapi.ChatSettingsReadResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	var response serverapi.ChatSettingsReadResponse
+	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
+	if err := response.ValidateForTarget(req.Target); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, invalidResponseError(
+			"Chat settings",
+			err,
+		)
+	}
+	return response, nil
+}
+
 func (c *Remote) GetSessionMainView(ctx context.Context, req serverapi.SessionMainViewRequest) (serverapi.SessionMainViewResponse, error) {
 	return callValidatedControlRPC[serverapi.SessionMainViewRequest, serverapi.SessionMainViewResponse](c, ctx, protocol.MethodSessionGetMainView, req)
 }

@@ -99,6 +99,7 @@ const (
 	MethodSessionPlan                                   = "session.plan"
 	MethodSessionWorkspaceChatDraft                     = "session.workspaceChatDraft"
 	MethodSessionWorkspaceChatMaterialize               = "session.materializeWorkspaceChat"
+	MethodChatSettingsRead                              = "chat.settings.read"
 	MethodSessionGetMainView                            = "session.getMainView"
 	MethodSessionGetExecutionEnvironment                = "session.getExecutionEnvironment"
 	MethodSessionGetTranscriptPage                      = "session.getTranscriptPage"

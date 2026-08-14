@@ -1359,6 +1359,15 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	if _, err := remote.RetargetSessionWorkspace(context.Background(), serverapi.SessionRetargetWorkspaceRequest{ClientRequestID: "retarget-foreign", SessionID: foreignSession.Meta().SessionID, WorkspaceRoot: resolvedA.Config.WorkspaceRoot}); err == nil {
 		t.Fatal("expected foreign-project session retarget to be rejected")
 	}
+	foreignSessionID, err := runtimeids.ParseSessionID(foreignSession.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID foreign: %v", err)
+	}
+	if _, err := remote.ReadChatSettings(context.Background(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.SessionChatSettingsTarget(foreignSessionID),
+	}); err == nil {
+		t.Fatal("expected foreign-project Chat settings access to be rejected")
+	}
 	conn := dialGateway(t, server)
 	defer func() { _ = conn.Close() }()
 	handshakeGateway(t, conn)
@@ -1366,6 +1375,76 @@ func TestGatewayRejectsSessionAccessOutsideAttachedProject(t *testing.T) {
 	assertForeignGoalAccessRejected(t, conn, foreignSession.Meta().SessionID)
 	if bindingA.ProjectID == bindingB.ProjectID {
 		t.Fatalf("expected distinct project ids, both=%q", bindingA.ProjectID)
+	}
+}
+
+func TestGatewayAuthorizesBothChatSettingsTargetArms(t *testing.T) {
+	appCore, server := newGatewayTestServer(t)
+	defer func() { _ = appCore.Close() }()
+	defer server.Close()
+	store := createGatewayAuthoritativeSession(t, appCore)
+	sessionID, err := runtimeids.ParseSessionID(store.Meta().SessionID)
+	if err != nil {
+		t.Fatalf("ParseSessionID: %v", err)
+	}
+	workspace, err := appCore.MetadataStore().ResolveProjectSourceWorkspace(
+		t.Context(),
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("ResolveProjectSourceWorkspace: %v", err)
+	}
+	remote, err := remoteclient.DialRemoteURLForProject(
+		t.Context(),
+		"ws"+server.URL[len("http"):],
+		appCore.ProjectID(),
+	)
+	if err != nil {
+		t.Fatalf("DialRemoteURLForProject: %v", err)
+	}
+	defer func() { _ = remote.Close() }()
+
+	lazy, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.LazyChatSettingsTarget(appCore.ProjectID(), workspace.ID),
+	})
+	if err != nil {
+		t.Fatalf("ReadChatSettings lazy: %v", err)
+	}
+	if lazy.Session != nil {
+		t.Fatalf("lazy response has Session facts: %+v", lazy.Session)
+	}
+	materialized, err := remote.ReadChatSettings(t.Context(), serverapi.ChatSettingsReadRequest{
+		Target: serverapi.SessionChatSettingsTarget(sessionID),
+	})
+	if err != nil {
+		t.Fatalf("ReadChatSettings Session: %v", err)
+	}
+	if materialized.Session == nil || materialized.Session.SessionID != sessionID {
+		t.Fatalf("materialized response = %+v", materialized.Session)
+	}
+
+	conn := dialGateway(t, server)
+	defer func() { _ = conn.Close() }()
+	handshakeGateway(t, conn)
+	callGateway(
+		t,
+		conn,
+		"attach-project-chat-settings",
+		protocol.MethodAttachProject,
+		protocol.AttachProjectRequest{ProjectID: appCore.ProjectID()},
+		nil,
+	)
+	mismatched := callGatewayExpectError(
+		t,
+		conn,
+		"chat-settings-project-mismatch",
+		protocol.MethodChatSettingsRead,
+		serverapi.ChatSettingsReadRequest{
+			Target: serverapi.LazyChatSettingsTarget("project-foreign", workspace.ID),
+		},
+	)
+	if mismatched.Code == 0 {
+		t.Fatalf("lazy project mismatch unexpectedly succeeded")
 	}
 }
 

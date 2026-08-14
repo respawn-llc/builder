@@ -283,7 +283,15 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 	if cached := s.safeBundles().Sessions.sessionServices[scopeKey]; cached != nil {
 		return cached
 	}
-	service := sessionlaunch.NewService(launch.Planner{
+	service := s.newSessionLaunchService(projectCtx).
+		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
+		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...)
+	s.safeBundles().Sessions.sessionServices[scopeKey] = service
+	return service
+}
+
+func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch.Service {
+	return sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
 		ContainerDir:             projectCtx.projectSession,
 		StoreOptions:             s.safeBundles().Persistence.metadataStore.AuthoritativeSessionStoreOptions(),
@@ -294,13 +302,9 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 			return s.configForWorkspace(projectCtx.projectRoot)
 		},
 	}).
-		WithWorkspaceChatDraft(s.safeBundles().Sessions.draftOwner, projectCtx.workspaceID).
-		WithWorkspaceChatMaterializationStoreOptions(s.safeBundles().Persistence.metadataStore.WorkspaceChatMaterializationStoreOptions(projectCtx.workspaceID)...).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
-	s.safeBundles().Sessions.sessionServices[scopeKey] = service
-	return service
 }
 
 func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apicontract.RunPromptService {
@@ -390,6 +394,10 @@ func (s *Core) SessionViewClient() apicontract.SessionViewService {
 		return nil
 	}
 	return s.safeBundles().Sessions.sessionViews
+}
+
+func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
+	return chatSettingsService{core: s}
 }
 
 func (s *Core) ProjectID() string {
