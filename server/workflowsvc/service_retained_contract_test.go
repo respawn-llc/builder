@@ -171,6 +171,89 @@ func TestServiceRetainsWorkflowLabelsAndDependencies(t *testing.T) {
 	}
 }
 
+func TestServiceTaskDependencyMutationEventsAreTypedAndIdempotent(t *testing.T) {
+	fixture := corefixture.New(t)
+	service := fixture.Core.WorkflowClient()
+	createdWorkflow, err := service.CreateAndLinkWorkflowToProject(t.Context(), serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "Dependency mutation workflow",
+		ProjectID:     fixture.Binding.ProjectID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultIfProjectHasNone,
+	})
+	if err != nil {
+		t.Fatalf("CreateAndLinkWorkflowToProject: %v", err)
+	}
+	createTask := func(title string) serverapi.WorkflowTaskSummary {
+		t.Helper()
+		response, createErr := service.CreateWorkflowTask(t.Context(), serverapi.WorkflowTaskCreateRequest{
+			ProjectID:  fixture.Binding.ProjectID,
+			WorkflowID: &createdWorkflow.Workflow.ID,
+			Title:      title,
+			LabelIDs:   []string{},
+		})
+		if createErr != nil {
+			t.Fatalf("CreateWorkflowTask %q: %v", title, createErr)
+		}
+		return response.Task
+	}
+	blocker := createTask("Blocker")
+	blocked := createTask("Blocked")
+	subscription, err := service.SubscribeWorkflowProject(t.Context(), serverapi.WorkflowProjectSubscribeRequest{
+		ProjectID: fixture.Binding.ProjectID,
+	})
+	if err != nil {
+		t.Fatalf("SubscribeWorkflowProject: %v", err)
+	}
+	defer func() { _ = subscription.Close() }()
+
+	added, err := service.AddWorkflowTaskDependency(t.Context(), serverapi.WorkflowTaskDependencyAddRequest{
+		BlockerTaskID: blocker.ID,
+		BlockedTaskID: blocked.ID,
+	})
+	if err != nil {
+		t.Fatalf("AddWorkflowTaskDependency: %v", err)
+	}
+	if added.Outcome != serverapi.WorkflowTaskDependencyOutcomeAdded {
+		t.Fatalf("add response = %+v, want added", added)
+	}
+	assertDependencyChangedEvent(t, subscription, blocker.ID, blocked.ID)
+
+	idempotentAdd, err := service.AddWorkflowTaskDependency(t.Context(), serverapi.WorkflowTaskDependencyAddRequest{
+		BlockerTaskID: blocker.ID,
+		BlockedTaskID: blocked.ID,
+	})
+	if err != nil {
+		t.Fatalf("idempotent AddWorkflowTaskDependency: %v", err)
+	}
+	if idempotentAdd.Outcome != serverapi.WorkflowTaskDependencyOutcomeAlreadyPresent {
+		t.Fatalf("idempotent add response = %+v, want already present", idempotentAdd)
+	}
+	assertNoWorkflowProjectEvent(t, subscription)
+
+	removed, err := service.RemoveWorkflowTaskDependency(t.Context(), serverapi.WorkflowTaskDependencyRemoveRequest{
+		BlockerTaskID: blocker.ID,
+		BlockedTaskID: blocked.ID,
+	})
+	if err != nil {
+		t.Fatalf("RemoveWorkflowTaskDependency: %v", err)
+	}
+	if removed.Outcome != serverapi.WorkflowTaskDependencyOutcomeRemoved {
+		t.Fatalf("remove response = %+v, want removed", removed)
+	}
+	assertDependencyChangedEvent(t, subscription, blocker.ID, blocked.ID)
+
+	idempotentRemove, err := service.RemoveWorkflowTaskDependency(t.Context(), serverapi.WorkflowTaskDependencyRemoveRequest{
+		BlockerTaskID: blocker.ID,
+		BlockedTaskID: blocked.ID,
+	})
+	if err != nil {
+		t.Fatalf("idempotent RemoveWorkflowTaskDependency: %v", err)
+	}
+	if idempotentRemove.Outcome != serverapi.WorkflowTaskDependencyOutcomeAlreadyAbsent {
+		t.Fatalf("idempotent remove response = %+v, want already absent", idempotentRemove)
+	}
+	assertNoWorkflowProjectEvent(t, subscription)
+}
+
 func TestServiceTaskCreatePublishesOneDependencyEventForEveryAffectedTask(t *testing.T) {
 	fixture := corefixture.New(t)
 	service := fixture.Core.WorkflowClient()
@@ -241,9 +324,34 @@ func TestServiceTaskCreatePublishesOneDependencyEventForEveryAffectedTask(t *tes
 	if len(related) != 2 || !related[blocked.ID] || !related[blocker.ID] {
 		t.Fatalf("dependency event related IDs = %+v", dependencyEvent.RelatedIDs)
 	}
+	assertNoWorkflowProjectEvent(t, subscription)
+}
+
+func assertDependencyChangedEvent(
+	t *testing.T,
+	subscription serverapi.WorkflowProjectSubscription,
+	blockerTaskID string,
+	blockedTaskID string,
+) {
+	t.Helper()
+	event, err := subscription.Next(t.Context())
+	if err != nil {
+		t.Fatalf("receive dependency event: %v", err)
+	}
+	if event.Resource != serverapi.WorkflowProjectEventResourceTask ||
+		event.Action != serverapi.WorkflowProjectEventActionDependenciesChanged ||
+		event.PrimaryEntityID != blockerTaskID ||
+		len(event.RelatedIDs) != 1 ||
+		event.RelatedIDs[0] != blockedTaskID {
+		t.Fatalf("dependency event = %+v", event)
+	}
+}
+
+func assertNoWorkflowProjectEvent(t *testing.T, subscription serverapi.WorkflowProjectSubscription) {
+	t.Helper()
 	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	if _, err := subscription.Next(waitCtx); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("unexpected extra event: %v", err)
+		t.Fatalf("unexpected Workflow Project event: %v", err)
 	}
 }

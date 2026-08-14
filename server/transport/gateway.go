@@ -183,20 +183,6 @@ func (p gatewayRequestPanicDiagnostic) Error() string {
 
 var gatewayProgressHandlers = routeHandlersForKind(apicontract.KindProgress, gatewayProgressHandlerEntries)
 
-func RuntimeLiveControlRoutesExecutable() bool {
-	for _, method := range []string{
-		protocol.MethodRuntimeLiveSteer,
-		protocol.MethodRuntimeLiveStop,
-		protocol.MethodRuntimeLiveWait,
-		protocol.MethodRuntimeLiveWatch,
-	} {
-		if _, ok := gatewayUnaryHandlers[method]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 func protocolSubscriptionMethodSet() map[string]struct{} {
 	methods := apicontract.SubscriptionMethods()
 	set := make(map[string]struct{}, len(methods))
