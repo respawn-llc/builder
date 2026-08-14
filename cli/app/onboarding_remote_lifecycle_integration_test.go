@@ -273,7 +273,7 @@ func TestOnboardingRemoteLifecycleKeepsSubmittedRPCAliveAfterParentCancellation(
 		ParseableInputs: []pty.ParseableInputEvent{
 			{Bytes: []byte("\r\x1b[B\r")},
 		},
-		Timeout: 10 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run onboarding lifecycle helper: %v raw=%q", err, string(capture.Raw))
@@ -305,7 +305,7 @@ func TestOnboardingRemoteLifecycleEscapeCancelsBeforeFinalization(t *testing.T) 
 		ParseableInputs: []pty.ParseableInputEvent{
 			{Bytes: []byte{0x1b}},
 		},
-		Timeout: 10 * time.Second,
+		Timeout: 5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("run onboarding escape helper: %v raw=%q", err, string(capture.Raw))

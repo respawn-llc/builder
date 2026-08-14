@@ -125,6 +125,9 @@ func TestAllMetadataMigrationsMatchLatestInMemorySchema(t *testing.T) {
 func TestDropSessionLastSequenceMigrationPreservesSessionRows(t *testing.T) {
 	db := openEmptyMetadataTestDatabase(t)
 	t.Cleanup(func() { _ = db.Close() })
+	if err := registerMetadataSQLiteFunctions(); err != nil {
+		t.Fatalf("register metadata migration functions: %v", err)
+	}
 	provider, err := newMetadataMigrationProvider(db)
 	if err != nil {
 		t.Fatalf("create metadata migration provider: %v", err)
