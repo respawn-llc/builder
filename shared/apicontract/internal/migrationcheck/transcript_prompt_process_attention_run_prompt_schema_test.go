@@ -202,6 +202,52 @@ func TestNewSliceGeneratedValidationBoundaries(t *testing.T) {
 	if err := protoapi.ValidateGeneratedMessage(notice); err == nil {
 		t.Fatal("accepted notice reason with mismatched payload")
 	}
+	for name, diagnostic := range map[string]*transcriptpb.Diagnostic{
+		"code":   {Code: " ", Detail: "failure detail"},
+		"detail": {Code: "runtime", Detail: " "},
+	} {
+		if err := protoapi.ValidateGeneratedMessage(diagnostic); err == nil {
+			t.Fatalf("accepted diagnostic with blank %s", name)
+		}
+	}
+	reviewerError := &transcriptpb.CommittedRow{
+		Visibility: transcriptpb.EntryVisibility_ENTRY_VISIBILITY_ONGOING,
+		Integrity:  transcriptpb.RowIntegrity_ROW_INTEGRITY_VALID,
+		Locator:    &transcriptpb.CommittedRowLocator{EventSequence: 1, RowOrdinal: 1},
+		Row: &transcriptpb.CommittedRow_ReviewerError{
+			ReviewerError: &transcriptpb.ReviewerErrorRow{
+				Id:     validUUID,
+				StepId: validUUID,
+			},
+		},
+	}
+	if err := protoapi.ValidateGeneratedMessage(reviewerError); err != nil {
+		t.Fatalf("valid reviewer error row: %v", err)
+	}
+	reviewerError.Visibility = transcriptpb.EntryVisibility_ENTRY_VISIBILITY_DETAIL
+	if err := protoapi.ValidateGeneratedMessage(reviewerError); err == nil {
+		t.Fatal("accepted reviewer error row with detail visibility")
+	}
+	goal := &transcriptpb.GoalView{
+		Id:        "goal-1",
+		Objective: "ship it",
+		Status:    runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_ACTIVE,
+		CreatedAt: timestamppb.New(time.Unix(1_700_000_000, 0)),
+		UpdatedAt: timestamppb.New(time.Unix(1_700_000_001, 0)),
+		Suspended: true,
+	}
+	if err := protoapi.ValidateGeneratedMessage(goal); err != nil {
+		t.Fatalf("valid suspended active goal: %v", err)
+	}
+	for _, status := range []runtimepb.GoalStatus{
+		runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_PAUSED,
+		runtimepb.GoalStatus_RUNTIME_GOAL_STATUS_COMPLETE,
+	} {
+		goal.Status = status
+		if err := protoapi.ValidateGeneratedMessage(goal); err == nil {
+			t.Fatalf("accepted suspended goal with status %s", status)
+		}
+	}
 	providerMismatch := &transcriptpb.NoticeRow{
 		Reason:   transcriptpb.NoticeReason_NOTICE_REASON_PROVIDER_MODEL_MISMATCH,
 		Severity: transcriptpb.NoticeSeverity_NOTICE_SEVERITY_WARNING,

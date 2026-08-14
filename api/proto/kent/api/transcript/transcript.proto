@@ -175,8 +175,22 @@ enum NoticeMessageType {
 }
 
 message Diagnostic {
-  string code = 1 [(buf.validate.field).string.min_len = 1];
-  string detail = 2 [(buf.validate.field).string.min_len = 1];
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.diagnostic_code_nonblank"
+      message: "diagnostic code must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
+  string detail = 2 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "kent.transcript.diagnostic_detail_nonblank"
+      message: "diagnostic detail must be non-blank"
+      expression: "this.trim() != ''"
+    }
+  ];
 }
 
 message CommittedRowLocator {
@@ -313,6 +327,11 @@ message CommittedRow {
     ReviewerFeedbackRow reviewer_feedback = 9;
     ReviewerErrorRow reviewer_error = 10;
   }
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.reviewer_error_visibility"
+    message: "reviewer error rows must use ongoing visibility"
+    expression: "!has(this.reviewer_error) || this.visibility == 1"
+  };
 }
 
 message RuntimeReadModelUpdate {
@@ -481,6 +500,11 @@ message GoalView {
     (buf.validate.field).timestamp.gt = {seconds: 0}
   ];
   bool suspended = 6;
+  option (buf.validate.message).cel = {
+    id: "kent.transcript.goal_suspension_status"
+    message: "only active goals may be suspended"
+    expression: "!this.suspended || this.status == 1"
+  };
 }
 
 message GoalStatus {
