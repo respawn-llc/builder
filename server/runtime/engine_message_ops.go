@@ -181,14 +181,15 @@ func (e *Engine) prepareStoredToolCompletion(
 	}
 	backgroundSessionID, hasBackgroundSession := harvestedBackgroundCompletionSessionID(r)
 	payload := storedToolCompletion{
-		CallID:        r.CallID,
-		Name:          string(r.Name),
-		IsError:       r.IsError,
-		Output:        append(json.RawMessage(nil), r.Output...),
-		Summary:       r.Summary,
-		CondensedText: r.CondensedText,
-		Presentation:  r.Presentation,
-		ProviderItems: e.providerItemsForToolCompletion(r),
+		CallID:         r.CallID,
+		Name:           string(r.Name),
+		IsError:        r.IsError,
+		Output:         append(json.RawMessage(nil), r.Output...),
+		Summary:        r.Summary,
+		CondensedText:  r.CondensedText,
+		Presentation:   r.Presentation,
+		ProviderItems:  e.providerItemsForToolCompletion(r),
+		QuestionAnswer: r.QuestionAnswer,
 	}
 	return payload, backgroundSessionID, hasBackgroundSession
 }

@@ -491,25 +491,28 @@ func (e *Engine) queueUserMessage(text string, accept CommandAcceptance) (Queued
 	}
 	var item QueuedUserMessage
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		var queueErr error
-		if err := e.workflowControl.validateSteering(steeringAdmissionPostTurnQueue); err != nil {
-			return false, err
-		}
-		ordinal, ordinalErr := e.steering.nextHumanOrdinal()
-		if ordinalErr != nil {
-			return false, ordinalErr
-		}
-		var scope *runtimeids.ExecutionScopeID
-		if execution, active := e.currentNodeExecutionConfig(); active {
-			scopeID := execution.ScopeID
-			scope = &scopeID
-		}
-		item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
-			admission: ordinal,
-			scope:     scope,
+		admitted, err := e.workflowControl.withSteeringAdmission(steeringAdmissionPostTurnQueue, func() (bool, error) {
+			var queueErr error
+			ordinal, ordinalErr := e.steering.nextHumanOrdinal()
+			if ordinalErr != nil {
+				return false, ordinalErr
+			}
+			var scope *runtimeids.ExecutionScopeID
+			if execution, active := e.currentNodeExecutionConfig(); active {
+				scopeID := execution.ScopeID
+				scope = &scopeID
+			}
+			item, queueErr = e.messageFlow.QueueUserMessage(text, queuedUserMessageAssociation{
+				admission: ordinal,
+				scope:     scope,
+			})
+			if queueErr != nil {
+				return false, queueErr
+			}
+			return true, nil
 		})
-		if queueErr != nil {
-			return false, queueErr
+		if err != nil || !admitted {
+			return admitted, err
 		}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		return true, nil

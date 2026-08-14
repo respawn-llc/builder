@@ -33,6 +33,25 @@ func (s *workflowControlState) validateSteering(family steeringAdmissionFamily) 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.validateSteeringLocked(family)
+}
+
+func (s *workflowControlState) withSteeringAdmission(
+	family steeringAdmissionFamily,
+	admit func() (bool, error),
+) (bool, error) {
+	if s == nil {
+		return false, errors.New("Runtime Steering admission is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.validateSteeringLocked(family); err != nil {
+		return false, err
+	}
+	return admit()
+}
+
+func (s *workflowControlState) validateSteeringLocked(family steeringAdmissionFamily) error {
 	if s.controlOnly {
 		switch family {
 		case steeringAdmissionGoal, steeringAdmissionUserShell, steeringAdmissionWorkflowAssignment:

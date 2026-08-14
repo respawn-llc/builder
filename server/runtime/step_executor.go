@@ -277,7 +277,7 @@ func (s *defaultStepExecutor) RunStepLoopWithOptions(ctx context.Context, stepID
 func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID string, options stepLoopOptions) (stepLoopResult, error) {
 	e := s.engine
 	executedToolCall := false
-	patchEditsApplied := false
+	patchEditsApplied, mismatchWarningCommitted := false, false
 	for {
 		if err := ctx.Err(); err != nil {
 			return stepLoopResult{}, err
@@ -317,6 +317,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		humanAdmissionOrdinal := e.steering.humanAdmissionOrdinal()
 
 		var reasoningSteerErr error
+		var dispatchedRequest llm.Request
 		resp, err := e.generateWithMissingToolOutputRepair(
 			ctx,
 			stepID,
@@ -325,7 +326,8 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 				if buildErr != nil {
 					return llm.Request{}, buildErr
 				}
-				return requestPlan.Request, nil
+				dispatchedRequest = requestPlan.Request
+				return dispatchedRequest, nil
 			},
 			func(delta llm.AssistantDelta) {
 				_ = e.steer(stepID, steerAssistantDeltaIntent(delta))
@@ -345,9 +347,7 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 		if reasoningSteerErr != nil {
 			return stepLoopResult{}, fmt.Errorf("apply streamed reasoning update: %w", reasoningSteerErr)
 		}
-		if _, err := e.recordLastUsage(resp.Usage); err != nil {
-			return stepLoopResult{}, err
-		}
+		candidate := newSuccessfulRequestCandidate(dispatchedRequest, resp)
 
 		prepared, err := s.prepareCompletedResponse(ctx, stepID, resp)
 		if err != nil {
@@ -386,9 +386,16 @@ func (s *defaultStepExecutor) runStepLoopWithOptions(ctx context.Context, stepID
 			}
 			continue
 		case completedResponseNextFinalAnswerToolsTerminal:
+			if _, err := e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted); err != nil {
+				return stepLoopResult{}, err
+			}
 			e.cascadeCompleteActiveGoalOnWorkflowCompletion()
 			return stepLoopResult{FinalAnswer: textutil.Value(prepared.assistant), ExecutedToolCall: true}, nil
 		case completedResponseNextAccepted:
+			mismatchWarningCommitted, err = e.commitAcceptedResponseCandidate(stepID, candidate, mismatchWarningCommitted)
+			if err != nil {
+				return stepLoopResult{}, err
+			}
 		default:
 			return stepLoopResult{}, errors.New("completed response preparation produced an invalid next action")
 		}

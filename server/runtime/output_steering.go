@@ -1127,19 +1127,21 @@ func (e *Engine) acceptHumanMessageSteering(message llm.Message, accept CommandA
 		Message: message,
 	}
 	committed, err := runCommandAcceptance(accept, func() (bool, error) {
-		if err := e.workflowControl.validateSteering(steeringAdmissionSend); err != nil {
-			return false, err
-		}
-		deferUntilStepBoundary := e.stepLifecycle.Snapshot() != nil
-		entry := newHumanSteeringQueueEntry(item, deferUntilStepBoundary)
-		var scope *runtimeids.ExecutionScopeID
-		if execution, active := e.currentNodeExecutionConfig(); active {
-			scopeID := execution.ScopeID
-			scope = &scopeID
-		}
-		wake, err := e.steering.appendHuman(entry, scope, !deferUntilStepBoundary)
-		if err != nil {
-			return false, err
+		var wake bool
+		admitted, err := e.workflowControl.withSteeringAdmission(steeringAdmissionSend, func() (bool, error) {
+			deferUntilStepBoundary := e.stepLifecycle.Snapshot() != nil
+			entry := newHumanSteeringQueueEntry(item, deferUntilStepBoundary)
+			var scope *runtimeids.ExecutionScopeID
+			if execution, active := e.currentNodeExecutionConfig(); active {
+				scopeID := execution.ScopeID
+				scope = &scopeID
+			}
+			var appendErr error
+			wake, appendErr = e.steering.appendHuman(entry, scope, !deferUntilStepBoundary)
+			return appendErr == nil, appendErr
+		})
+		if err != nil || !admitted {
+			return admitted, err
 		}
 		e.emitQueuedUserMessageStatus(item, QueuedUserMessageAccepted, "", false)
 		if wake {
