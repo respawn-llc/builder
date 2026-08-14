@@ -294,6 +294,11 @@ func (e *Engine) maybeReserveEagerCompaction(activeKind ActiveKind, resultKind L
 	if !e.launchLifecycleTask(func(ctx context.Context) *resultGroupFatal {
 		defer e.stepLifecycle.ReleaseReservation(reservation)
 		err := runExclusiveStepWhenIdle(ctx, e.stepLifecycle, ActiveKindCompaction, reservation, func(stepCtx context.Context, stepID string) error {
+			planningSnapshot := e.compactionPlanningSnapshot()
+			planner := e.compactionPlannerState()
+			if !planner.autoCompactionAvailable(planningSnapshot) || !planner.eagerCompactionEligible(planningSnapshot) {
+				return nil
+			}
 			_, receipt, compactErr := e.compactNow(stepCtx, stepID, compactionModeAuto, compactionInstructionsInput{}, false)
 			if compactErr == nil || receipt.Committed {
 				e.handoffRuntimeState().ClearRequest()
