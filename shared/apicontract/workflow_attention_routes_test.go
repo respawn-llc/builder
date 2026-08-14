@@ -16,8 +16,7 @@ func TestWorkflowAttentionListRouteIsGlobal(t *testing.T) {
 	if route.Kind != KindUnary ||
 		route.Auth != AuthServer ||
 		route.Scope != ScopeNone ||
-		route.Connection != ConnectionUnscoped ||
-		route.Dependency != DependencyWorkflow {
+		route.Connection != ConnectionUnscoped {
 		t.Fatalf("workflow attention list route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.WorkflowAttentionListRequest{}) ||

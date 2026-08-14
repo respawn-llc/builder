@@ -1,17 +1,13 @@
 package metadata
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -107,18 +103,7 @@ var (
 	ErrWorktreeIDRequired            = errors.New("worktree id is required")
 	ErrWorktreeWorkspaceIDRequired   = errors.New("workspace id is required")
 	ErrWorktreeCanonicalRootRequired = errors.New("worktree canonical root is required")
-	ErrInvalidPageToken              = errors.New("page_token is invalid")
 )
-
-const sessionPageTokenVersion = 1
-
-type sessionPageTokenPayload struct {
-	Version         int                             `json:"version"`
-	ProjectID       string                          `json:"project_id"`
-	Category        sessioncontract.SessionCategory `json:"category"`
-	UpdatedAtUnixMs int64                           `json:"updated_at_unix_ms"`
-	SessionID       runtimeids.SessionID            `json:"session_id"`
-}
 
 // WorktreeWorkspaceMismatchError reports that a worktree is not owned by the
 // expected workspace. It exposes the involved identifiers so callers can
@@ -278,51 +263,6 @@ func (s *Store) WorkspaceChatMaterializationStoreOptions(workspaceID string) []s
 		session.WithPersistedSessionResolver(s),
 		session.WithSessionContextFactWriter(s),
 	}
-}
-
-func (s *Store) WriteSessionContextFacts(ctx context.Context, sessionID string, facts session.SessionContextFacts) error {
-	if s == nil || s.queries == nil {
-		return errors.New("metadata store is required")
-	}
-	if facts.CompletedCompactionCount == nil || facts.ManualCompactEligible == nil {
-		return errors.New("complete Session Context facts are required")
-	}
-	rows, err := s.queries.UpdateSessionContextFacts(ctx, sqlitegen.UpdateSessionContextFactsParams{
-		CompletedCompactionCount: sql.NullInt64{Int64: int64(*facts.CompletedCompactionCount), Valid: true},
-		ManualCompactEligible:    sql.NullInt64{Int64: boolToInt64(*facts.ManualCompactEligible), Valid: true},
-		SessionID:                strings.TrimSpace(sessionID),
-	})
-	if err != nil {
-		return fmt.Errorf("update Session Context facts: %w", err)
-	}
-	if rows == 0 {
-		return session.ErrSessionNotFound
-	}
-	return nil
-}
-
-func (s *Store) WriteManualCompactEligibility(ctx context.Context, sessionID string, eligible bool) error {
-	if s == nil || s.queries == nil {
-		return errors.New("metadata store is required")
-	}
-	rows, err := s.queries.UpdateSessionManualCompactEligibility(ctx, sqlitegen.UpdateSessionManualCompactEligibilityParams{
-		ManualCompactEligible: sql.NullInt64{Int64: boolToInt64(eligible), Valid: true},
-		SessionID:             strings.TrimSpace(sessionID),
-	})
-	if err != nil {
-		return fmt.Errorf("update Session manual-Compact eligibility: %w", err)
-	}
-	if rows == 0 {
-		return session.ErrSessionNotFound
-	}
-	return nil
-}
-
-func boolToInt64(value bool) int64 {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 func (s *Store) EnsureWorkspaceBinding(ctx context.Context, workspaceRoot string) (Binding, error) {
@@ -848,35 +788,45 @@ func (s *Store) CreateProjectForWorkspaceWithKey(ctx context.Context, workspaceR
 	return s.insertWorkspaceBinding(ctx, canonicalRoot, trimmedProjectName, strings.TrimSpace(projectKey), workspaceName, projectID, workspaceID, now, true)
 }
 
+type ProjectWorkspaceAttachResult struct {
+	Binding  Binding
+	Attached bool
+}
+
 func (s *Store) AttachWorkspaceToProject(ctx context.Context, projectID string, workspaceRoot string) (Binding, error) {
+	result, err := s.AttachWorkspaceToProjectWithResult(ctx, projectID, workspaceRoot)
+	return result.Binding, err
+}
+
+func (s *Store) AttachWorkspaceToProjectWithResult(ctx context.Context, projectID string, workspaceRoot string) (ProjectWorkspaceAttachResult, error) {
 	if s == nil || s.queries == nil {
-		return Binding{}, errors.New("metadata store is required")
+		return ProjectWorkspaceAttachResult{}, errors.New("metadata store is required")
 	}
 	trimmedProjectID := strings.TrimSpace(projectID)
 	if trimmedProjectID == "" {
-		return Binding{}, errors.New("project id is required")
+		return ProjectWorkspaceAttachResult{}, errors.New("project id is required")
 	}
 	canonicalRoot, err := config.CanonicalWorkspaceRoot(workspaceRoot)
 	if err != nil {
-		return Binding{}, err
+		return ProjectWorkspaceAttachResult{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Binding{}, fmt.Errorf("begin workspace attach tx: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("begin workspace attach tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	q := s.queries.WithTx(tx)
 	if _, err := q.AcquireWorkspaceRegistrationLock(ctx); err != nil {
-		return Binding{}, fmt.Errorf("lock workspace attach: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("lock workspace attach: %w", err)
 	}
-	binding, _, err := attachWorkspaceToProjectWithQueries(ctx, q, trimmedProjectID, canonicalRoot, time.Now().UTC())
+	binding, attached, err := attachWorkspaceToProjectWithQueries(ctx, q, trimmedProjectID, canonicalRoot, time.Now().UTC())
 	if err != nil {
-		return Binding{}, err
+		return ProjectWorkspaceAttachResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return Binding{}, fmt.Errorf("commit workspace attach tx: %w", err)
+		return ProjectWorkspaceAttachResult{}, fmt.Errorf("commit workspace attach tx: %w", err)
 	}
-	return binding, nil
+	return ProjectWorkspaceAttachResult{Binding: binding, Attached: attached}, nil
 }
 
 // UpdateProjectMetadata updates a project's display name and, when projectKey is
@@ -2065,74 +2015,25 @@ func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRe
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionPageResponse{}, err
 	}
-	var rows []sessionPageRow
-	var hasMore bool
-	limit := int64(req.PageSize + 1)
-	switch req.Position.Kind() {
-	case serverapi.SessionPagePositionNewest:
-		queryRows, err := s.queries.ListNewestSessionPage(ctx, sqlitegen.ListNewestSessionPageParams{
-			ProjectID: strings.TrimSpace(req.ProjectID),
-			Category:  sql.NullString{String: string(req.Category), Valid: true},
-			PageLimit: limit,
-		})
-		if err != nil {
-			return serverapi.SessionPageResponse{}, fmt.Errorf("list newest session page: %w", err)
-		}
-		for _, row := range queryRows {
-			rows = append(rows, sessionPageRow(row))
-		}
-	case serverapi.SessionPagePositionOlder, serverapi.SessionPagePositionNewer:
-		continuation, ok := req.Position.Continuation()
-		if !ok {
-			return serverapi.SessionPageResponse{}, ErrInvalidPageToken
-		}
-		token, err := decodeSessionPageToken(continuation, req.ProjectID, req.Category)
-		if err != nil {
-			return serverapi.SessionPageResponse{}, err
-		}
-		if req.Position.Kind() == serverapi.SessionPagePositionOlder {
-			queryRows, err := s.queries.ListOlderSessionPage(ctx, sqlitegen.ListOlderSessionPageParams{
-				ProjectID:               strings.TrimSpace(req.ProjectID),
-				Category:                sql.NullString{String: string(req.Category), Valid: true},
-				BoundaryUpdatedAtUnixMs: token.UpdatedAtUnixMs,
-				BoundarySessionID:       token.SessionID.String(),
-				PageLimit:               limit,
-			})
-			if err != nil {
-				return serverapi.SessionPageResponse{}, fmt.Errorf("list older session page: %w", err)
-			}
-			for _, row := range queryRows {
-				rows = append(rows, sessionPageRow(row))
-			}
-		} else {
-			queryRows, err := s.queries.ListNewerSessionPage(ctx, sqlitegen.ListNewerSessionPageParams{
-				ProjectID:               strings.TrimSpace(req.ProjectID),
-				Category:                sql.NullString{String: string(req.Category), Valid: true},
-				BoundaryUpdatedAtUnixMs: token.UpdatedAtUnixMs,
-				BoundarySessionID:       token.SessionID.String(),
-				PageLimit:               limit,
-			})
-			if err != nil {
-				return serverapi.SessionPageResponse{}, fmt.Errorf("list newer session page: %w", err)
-			}
-			for _, row := range queryRows {
-				rows = append(rows, sessionPageRow(row))
-			}
-		}
-	default:
-		return serverapi.SessionPageResponse{}, errors.New("session page position is invalid")
+	window, err := req.ResolveWindow()
+	if err != nil {
+		return serverapi.SessionPageResponse{}, err
 	}
-	if len(rows) > req.PageSize {
-		hasMore = true
-		rows = rows[:req.PageSize]
+	rows, err := s.queries.ListSessionPage(ctx, sqlitegen.ListSessionPageParams{
+		ProjectID:  strings.TrimSpace(req.ProjectID),
+		Category:   sql.NullString{String: string(req.Category), Valid: true},
+		PageLimit:  int64(window.Limit + 1),
+		PageOffset: int64(window.Offset),
+	})
+	if err != nil {
+		return serverapi.SessionPageResponse{}, fmt.Errorf("list session page: %w", err)
 	}
-	if req.Position.Kind() == serverapi.SessionPagePositionNewer {
-		slices.Reverse(rows)
-	}
+	rows, nextOffset := serverapi.TrimOffsetLookahead(window, rows)
 	out := serverapi.SessionPageResponse{
-		ProjectID: strings.TrimSpace(req.ProjectID),
-		Category:  req.Category,
-		Sessions:  make([]clientui.SessionSummary, 0, len(rows)),
+		ProjectID:  strings.TrimSpace(req.ProjectID),
+		Category:   req.Category,
+		Sessions:   make([]clientui.SessionSummary, 0, len(rows)),
+		NextOffset: nextOffset,
 	}
 	for _, row := range rows {
 		sessionID, err := runtimeids.ParseSessionID(row.ID)
@@ -2151,100 +2052,10 @@ func (s *Store) ListSessionPage(ctx context.Context, req serverapi.SessionPageRe
 			UpdatedAt:          timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		})
 	}
-	if len(rows) > 0 {
-		setContinuation := func(target **serverapi.SessionPageContinuation, row sessionPageRow) error {
-			continuation, err := encodeSessionPageToken(req.ProjectID, req.Category, row)
-			if err != nil {
-				return err
-			}
-			*target = continuation
-			return nil
-		}
-		switch req.Position.Kind() {
-		case serverapi.SessionPagePositionNewest:
-			if hasMore {
-				if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
-					return serverapi.SessionPageResponse{}, err
-				}
-			}
-		case serverapi.SessionPagePositionOlder:
-			if err := setContinuation(&out.Newer, rows[0]); err != nil {
-				return serverapi.SessionPageResponse{}, err
-			}
-			if hasMore {
-				if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
-					return serverapi.SessionPageResponse{}, err
-				}
-			}
-		case serverapi.SessionPagePositionNewer:
-			if err := setContinuation(&out.Older, rows[len(rows)-1]); err != nil {
-				return serverapi.SessionPageResponse{}, err
-			}
-			if hasMore {
-				if err := setContinuation(&out.Newer, rows[0]); err != nil {
-					return serverapi.SessionPageResponse{}, err
-				}
-			}
-		}
-	}
 	if err := out.Validate(); err != nil {
 		return serverapi.SessionPageResponse{}, err
 	}
 	return out, nil
-}
-
-type sessionPageRow struct {
-	ID                 string
-	Name               string
-	FirstPromptPreview string
-	Category           string
-	UpdatedAtUnixMs    int64
-}
-
-func encodeSessionPageToken(projectID string, category sessioncontract.SessionCategory, row sessionPageRow) (*serverapi.SessionPageContinuation, error) {
-	sessionID, err := runtimeids.ParseSessionID(row.ID)
-	if err != nil {
-		return nil, err
-	}
-	raw, err := json.Marshal(sessionPageTokenPayload{
-		Version:         sessionPageTokenVersion,
-		ProjectID:       strings.TrimSpace(projectID),
-		Category:        category,
-		UpdatedAtUnixMs: row.UpdatedAtUnixMs,
-		SessionID:       sessionID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("encode session page token: %w", err)
-	}
-	continuation, err := serverapi.ParseSessionPageContinuation(base64.RawURLEncoding.EncodeToString(raw))
-	if err != nil {
-		return nil, err
-	}
-	return &continuation, nil
-}
-
-func decodeSessionPageToken(continuation serverapi.SessionPageContinuation, projectID string, category sessioncontract.SessionCategory) (sessionPageTokenPayload, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(continuation.String())
-	if err != nil {
-		return sessionPageTokenPayload{}, ErrInvalidPageToken
-	}
-	var payload sessionPageTokenPayload
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil {
-		return sessionPageTokenPayload{}, ErrInvalidPageToken
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return sessionPageTokenPayload{}, ErrInvalidPageToken
-	}
-	if payload.Version != sessionPageTokenVersion ||
-		payload.ProjectID != strings.TrimSpace(projectID) ||
-		payload.Category != category ||
-		payload.UpdatedAtUnixMs <= 0 ||
-		payload.SessionID.IsZero() {
-		return sessionPageTokenPayload{}, ErrInvalidPageToken
-	}
-	return payload, nil
 }
 
 func (s *Store) ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error) {
@@ -2401,6 +2212,13 @@ func (s *Store) resolveSessionExecutionTargetRow(ctx context.Context, sessionID 
 	}
 	row, err := s.queries.GetSessionExecutionTargetByID(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf(
+				"%w: %q",
+				session.ErrSessionNotFound,
+				strings.TrimSpace(sessionID),
+			)
+		}
 		return sqlitegen.GetSessionExecutionTargetByIDRow{}, fmt.Errorf("get session execution target: %w", err)
 	}
 	return row, nil
@@ -2428,7 +2246,83 @@ func (s *Store) ResolvePersistedSession(ctx context.Context, sessionID string) (
 	return session.PersistedSessionRecord{
 		SessionDir: sessionDir,
 		Meta:       &meta,
+		ContextFacts: session.SessionContextFacts{
+			CompletedCompactionCount: optionalContextFactInt(row.CompletedCompactionCount),
+			ManualCompactEligible:    optionalContextFactBool(row.ManualCompactEligible),
+		},
 	}, nil
+}
+
+func (s *Store) WriteSessionContextFacts(
+	ctx context.Context,
+	sessionID string,
+	facts session.SessionContextFacts,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	if facts.CompletedCompactionCount == nil || facts.ManualCompactEligible == nil {
+		return errors.New("complete Session Context facts are required")
+	}
+	rows, err := s.queries.UpdateSessionContextFacts(ctx, sqlitegen.UpdateSessionContextFactsParams{
+		CompletedCompactionCount: sql.NullInt64{Int64: int64(*facts.CompletedCompactionCount), Valid: true},
+		ManualCompactEligible:    sql.NullInt64{Int64: boolToInt64(*facts.ManualCompactEligible), Valid: true},
+		SessionID:                strings.TrimSpace(sessionID),
+	})
+	if err != nil {
+		return fmt.Errorf("update Session Context facts: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func (s *Store) WriteManualCompactEligibility(
+	ctx context.Context,
+	sessionID string,
+	eligible bool,
+) error {
+	if s == nil || s.queries == nil {
+		return errors.New("metadata store is required")
+	}
+	rows, err := s.queries.UpdateSessionManualCompactEligibility(
+		ctx,
+		sqlitegen.UpdateSessionManualCompactEligibilityParams{
+			ManualCompactEligible: sql.NullInt64{Int64: boolToInt64(eligible), Valid: true},
+			SessionID:             strings.TrimSpace(sessionID),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("update Session manual-Compact eligibility: %w", err)
+	}
+	if rows == 0 {
+		return session.ErrSessionNotFound
+	}
+	return nil
+}
+
+func optionalContextFactInt(value sql.NullInt64) *int {
+	if !value.Valid {
+		return nil
+	}
+	resolved := int(value.Int64)
+	return &resolved
+}
+
+func optionalContextFactBool(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	resolved := value.Int64 != 0
+	return &resolved
+}
+
+func boolToInt64(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) ImportSessionSnapshot(ctx context.Context, snapshot session.PersistedStoreSnapshot) error {
@@ -2835,6 +2729,10 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 	if err := unmarshalStoredJSON(row.MetadataJson, &metadataPayload); err != nil {
 		return session.Meta{}, fmt.Errorf("decode session metadata json: %w", err)
 	}
+	chatSettings, err := session.NormalizeChatSettingsOverrides(metadataPayload.ChatSettings)
+	if err != nil {
+		return session.Meta{}, fmt.Errorf("validate session Chat settings: %w", err)
+	}
 	var decodedContinuation session.ContinuationContext
 	if err := unmarshalStoredJSON(row.ContinuationJson, &decodedContinuation); err != nil {
 		return session.Meta{}, fmt.Errorf("decode continuation json: %w", err)
@@ -2886,7 +2784,7 @@ func sessionMetaFromRecordRow(row sqlitegen.GetSessionRecordByIDRow) (session.Me
 		WorkspaceRoot:                   workspaceRoot,
 		WorkspaceContainer:              workspaceContainer,
 		Continuation:                    continuation,
-		ChatSettings:                    metadataPayload.ChatSettings,
+		ChatSettings:                    chatSettings,
 		CreatedAt:                       timeFromStoredTimestamp(row.CreatedAtUnixMs),
 		UpdatedAt:                       timeFromStoredTimestamp(row.UpdatedAtUnixMs),
 		LastSequence:                    row.LastSequence,

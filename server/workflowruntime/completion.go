@@ -17,6 +17,7 @@ import (
 	"core/server/workflow"
 	"core/server/workflowstore"
 	"core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/sessioncontract"
 )
@@ -358,11 +359,17 @@ func StructuredOutput(contract CompletionContract) (*llm.StructuredOutput, error
 	if err != nil {
 		return nil, err
 	}
+	prepared, err := jsoncontract.NewPreparer(false).StructuredDocument(
+		"workflow completion structured output",
+		schema,
+	)
+	if err != nil {
+		return nil, err
+	}
 	return &llm.StructuredOutput{
 		Name:        structuredOutputName,
 		Description: "Complete the current workflow node by selecting a transition and returning required transition parameters.",
-		Schema:      schema,
-		Strict:      true,
+		Schema:      prepared,
 	}, nil
 }
 

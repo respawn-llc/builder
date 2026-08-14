@@ -28,7 +28,9 @@ func (e *Engine) persistCompletedCompactionFactsBestEffort(
 		e.reportContextFactPersistenceError(stepID, "completed compaction", err)
 		return
 	}
-	e.compactionRuntimeState().SetContextFacts(sessionContextFacts(completedCompactionCount, false))
+	count := completedCompactionCount
+	eligible := false
+	e.compactionRuntimeState().SetContextFacts(sessionContextFacts(count, eligible))
 }
 
 func sessionContextFacts(count int, eligible bool) session.SessionContextFacts {

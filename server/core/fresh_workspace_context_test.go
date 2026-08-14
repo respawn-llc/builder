@@ -71,8 +71,9 @@ func TestCoreWorkspaceChatContextAndFollowingPlanReloadPrimaryAndSecondaryFromSt
 				t.Fatalf("SessionLaunchClientForProjectWorkspace: %v", err)
 			}
 			plan, err := client.PlanSession(context.Background(), serverapi.SessionPlanRequest{
-				Mode:   serverapi.SessionLaunchModeHeadless,
-				Intent: serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
+				ClientRequestID: "fresh-" + test.name,
+				Mode:            serverapi.SessionLaunchModeHeadless,
+				Intent:          serverapi.CreateNewSessionLaunchIntent(serverapi.IndependentSessionCreateOrigin()),
 			})
 			if err != nil {
 				t.Fatalf("PlanSession: %v", err)

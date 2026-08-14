@@ -573,7 +573,8 @@ func (e *Engine) buildRequestWithoutPromptRefresh(ctx context.Context) (llm.Requ
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
+	sessionID := e.SessionID()
+	req.SessionID = &sessionID
 	if e.supportsPromptCacheKey(ctx) {
 		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 			req.PromptCacheKey = cacheKey

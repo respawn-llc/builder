@@ -107,7 +107,7 @@ function isBranchToAlignedJoin(
   targetAligned: boolean,
 ): boolean {
   return (
-    targetAligned && target.kind === "join" && source.groupID.length > 0 && source.groupID === target.groupID
+    targetAligned && target.kind === "join" && source.groupID !== null && source.groupID === target.groupID
   );
 }
 
@@ -117,7 +117,8 @@ function branchJoinEdgeRoutePoints(
 ): readonly WorkflowGraphPoint[] {
   const start = sourceHandlePoint(endpoints.source, endpoints.sourcePort);
   const end = targetHandlePoint(endpoints.target, endpoints.targetPort);
-  const groupNode = groupNodeByGroupID.get(endpoints.target.groupID);
+  const groupNode =
+    endpoints.target.groupID === null ? undefined : groupNodeByGroupID.get(endpoints.target.groupID);
   const groupRight =
     groupNode === undefined
       ? endpoints.source.x + endpoints.source.width

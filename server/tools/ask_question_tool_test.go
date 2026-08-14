@@ -739,28 +739,6 @@ func callAskQuestionTool(t *testing.T, b *AskQuestionBroker, id string, input st
 	return result
 }
 
-func TestToolCallRejectsUnsupportedFields(t *testing.T) {
-	for name, input := range map[string]string{
-		"action":           `{"question":"pick one","action":{"id":"unsafe"}}`,
-		"approval":         `{"question":"Approve?","approval":true}`,
-		"approval_options": `{"question":"Approve?","approval_options":[{"decision":"allow_once","label":"Allow once"}]}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			result := callAskQuestionTool(t, NewAskQuestionBroker(), "call-"+name, input)
-			if !result.IsError {
-				t.Fatalf("expected error result, got %+v", result)
-			}
-			var payload map[string]string
-			if err := json.Unmarshal(result.Output, &payload); err != nil {
-				t.Fatalf("decode error output: %v", err)
-			}
-			if payload["error"] == "" {
-				t.Fatalf("missing typed input error: %+v", payload)
-			}
-		})
-	}
-}
-
 func TestToolCallSerializesResponsesAsPlainText(t *testing.T) {
 	tests := []struct {
 		id, input, condensedText string

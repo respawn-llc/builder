@@ -260,7 +260,7 @@ func (s *Store) MutateChatSettings(mutation ChatSettingsMutation) (ChatSettingsM
 		continuation.AgentRole = &agent
 	}
 	if prepared.agent != nil {
-		continuation.OpenAIBaseURL = ""
+		continuation.OpenAIBaseURL = nil
 	}
 	normalizedContinuation, err := NormalizeContinuationContext(*continuation)
 	if err != nil {
@@ -425,10 +425,8 @@ func chatSettingsOverridesEqual(left *ChatSettingsOverrides, right *ChatSettings
 }
 
 func normalizeChatSupervisor(value string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	switch normalized {
-	case "off", "edits", "all":
-	default:
+	normalized, ok := NormalizeReviewerFrequency(value)
+	if !ok {
 		return "", fmt.Errorf("Chat settings Supervisor %q is invalid", value)
 	}
 	return normalized, nil

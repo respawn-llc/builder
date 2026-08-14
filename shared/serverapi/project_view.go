@@ -106,17 +106,104 @@ type ProjectHomeSummary struct {
 	WorkflowCount        int                     `json:"workflow_count"`
 }
 
+const MaxProjectWorkspacePageSize = 100
+
 type ProjectWorkspaceListRequest struct {
 	ProjectID string `json:"project_id"`
-	PageSize  int    `json:"page_size"`
-	PageToken string `json:"page_token"`
+	Offset    int    `json:"offset"`
+	Limit     int    `json:"limit"`
 }
 
 type ProjectWorkspaceListResponse struct {
-	ProjectID          string                    `json:"project_id"`
-	Workspaces         []ProjectWorkspaceSummary `json:"workspaces"`
-	DefaultWorkspaceID string                    `json:"default_workspace_id"`
-	NextPageToken      string                    `json:"next_page_token"`
+	ProjectID  string                       `json:"project_id"`
+	Offset     int                          `json:"offset"`
+	Workspaces []ProjectWorkspaceCatalogRow `json:"workspaces"`
+	NextOffset *int                         `json:"next_offset"`
+}
+
+type ProjectWorkspaceGetResult string
+
+const (
+	ProjectWorkspaceGetResultAttached    ProjectWorkspaceGetResult = "attached"
+	ProjectWorkspaceGetResultNotAttached ProjectWorkspaceGetResult = "not_attached"
+)
+
+type ProjectWorkspaceGetRequest struct {
+	ProjectID string `json:"project_id"`
+	ProjectWorkspaceSelector
+}
+
+type ProjectWorkspaceGetResponse struct {
+	ProjectID string                      `json:"project_id"`
+	Result    ProjectWorkspaceGetResult   `json:"result"`
+	Workspace *ProjectWorkspaceCatalogRow `json:"workspace"`
+}
+
+type ProjectWorkspaceCatalogRow struct {
+	WorkspaceID string `json:"workspace_id"`
+	DisplayName string `json:"display_name"`
+	RootPath    string `json:"root_path"`
+	IsDefault   bool   `json:"is_default"`
+}
+
+func (r ProjectWorkspaceCatalogRow) Validate() error {
+	if strings.TrimSpace(r.WorkspaceID) == "" || strings.TrimSpace(r.WorkspaceID) != r.WorkspaceID {
+		return errors.New("workspace_id is invalid")
+	}
+	if strings.TrimSpace(r.RootPath) == "" || strings.TrimSpace(r.RootPath) != r.RootPath {
+		return errors.New("root_path is invalid")
+	}
+	if strings.TrimSpace(r.DisplayName) == "" && !IsFilesystemRootPath(r.RootPath) {
+		return errors.New("display_name must not be blank")
+	}
+	if strings.TrimSpace(r.DisplayName) != r.DisplayName {
+		return errors.New("display_name must not have leading or trailing whitespace")
+	}
+	return nil
+}
+
+func (r ProjectWorkspaceListResponse) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" || strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id is invalid")
+	}
+	if r.Offset < 0 {
+		return errors.New("offset must be non-negative")
+	}
+	if r.Workspaces == nil {
+		return errors.New("workspaces must be an array")
+	}
+	if len(r.Workspaces) > MaxProjectWorkspacePageSize {
+		return fmt.Errorf("workspace page exceeds maximum size %d", MaxProjectWorkspacePageSize)
+	}
+	for index, workspace := range r.Workspaces {
+		if err := workspace.Validate(); err != nil {
+			return fmt.Errorf("workspaces[%d]: %w", index, err)
+		}
+	}
+	if r.NextOffset != nil && *r.NextOffset <= 0 {
+		return errors.New("next_offset must be positive")
+	}
+	return nil
+}
+
+func (r ProjectWorkspaceGetResponse) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" || strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id is invalid")
+	}
+	switch r.Result {
+	case ProjectWorkspaceGetResultAttached:
+		if r.Workspace == nil {
+			return errors.New("attached result requires workspace")
+		}
+		return r.Workspace.Validate()
+	case ProjectWorkspaceGetResultNotAttached:
+		if r.Workspace != nil {
+			return errors.New("not_attached result must not contain workspace")
+		}
+		return nil
+	default:
+		return errors.New("result is invalid")
+	}
 }
 
 type ProjectEditGetRequest struct {
@@ -379,8 +466,34 @@ func normalizeWorkspaceSelectorArm(value *string, field string) (*string, error)
 	return &trimmed, nil
 }
 
+type ProjectWorkspaceAttachOutcome string
+
+const (
+	ProjectWorkspaceAttachOutcomeAttached        ProjectWorkspaceAttachOutcome = "attached"
+	ProjectWorkspaceAttachOutcomeAlreadyAttached ProjectWorkspaceAttachOutcome = "already_attached"
+)
+
 type ProjectAttachWorkspaceResponse struct {
-	Binding ProjectBinding `json:"binding"`
+	Binding ProjectBinding                `json:"binding"`
+	Outcome ProjectWorkspaceAttachOutcome `json:"outcome"`
+}
+
+func (r ProjectAttachWorkspaceResponse) Validate() error {
+	switch r.Outcome {
+	case ProjectWorkspaceAttachOutcomeAttached, ProjectWorkspaceAttachOutcomeAlreadyAttached:
+	default:
+		return errors.New("outcome is invalid")
+	}
+	if strings.TrimSpace(r.Binding.ProjectID) == "" {
+		return errors.New("binding.project_id is required")
+	}
+	if strings.TrimSpace(r.Binding.WorkspaceID) == "" {
+		return errors.New("binding.workspace_id is required")
+	}
+	if strings.TrimSpace(r.Binding.CanonicalRoot) == "" {
+		return errors.New("binding.canonical_root is required")
+	}
+	return nil
 }
 
 type ProjectRebindWorkspaceRequest struct {
@@ -398,6 +511,13 @@ type ProjectGetOverviewRequest struct {
 
 type ProjectGetOverviewResponse struct {
 	Overview clientui.ProjectOverview
+}
+
+func (r ProjectGetOverviewRequest) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project id is required")
+	}
+	return nil
 }
 
 func (r ProjectResolvePathRequest) Validate() error {
@@ -484,25 +604,37 @@ func (r ProjectAttachWorkspaceRequest) Validate() error {
 }
 
 func (r ProjectWorkspaceListRequest) Validate() error {
-	return validateProjectWorkspacePage(r.ProjectID, r.PageSize, r.PageToken)
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id is required")
+	}
+	if strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id must not have leading or trailing whitespace")
+	}
+	if r.Offset < 0 {
+		return errors.New("offset must be non-negative")
+	}
+	if r.Limit < 1 || r.Limit > MaxProjectWorkspacePageSize {
+		return fmt.Errorf("limit must be between 1 and %d", MaxProjectWorkspacePageSize)
+	}
+	return nil
+}
+
+func (r ProjectWorkspaceGetRequest) Validate() error {
+	if strings.TrimSpace(r.ProjectID) == "" {
+		return errors.New("project_id is required")
+	}
+	if strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id must not have leading or trailing whitespace")
+	}
+	return r.ProjectWorkspaceSelector.Validate()
 }
 
 func (r ProjectEditGetRequest) Validate() error {
 	if strings.TrimSpace(r.ProjectID) == "" {
 		return errors.New("project_id is required")
 	}
-	return nil
-}
-
-func validateProjectWorkspacePage(projectID string, pageSize int, pageToken string) error {
-	if strings.TrimSpace(projectID) == "" {
-		return errors.New("project_id is required")
-	}
-	if pageSize < 0 {
-		return errors.New("page_size must be non-negative")
-	}
-	if strings.TrimSpace(pageToken) != pageToken {
-		return errors.New("page_token must not have leading or trailing whitespace")
+	if strings.TrimSpace(r.ProjectID) != r.ProjectID {
+		return errors.New("project_id must not have leading or trailing whitespace")
 	}
 	return nil
 }
@@ -513,13 +645,6 @@ func (r ProjectRebindWorkspaceRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.NewWorkspaceRoot) == "" {
 		return errors.New("new_workspace_root is required")
-	}
-	return nil
-}
-
-func (r ProjectGetOverviewRequest) Validate() error {
-	if strings.TrimSpace(r.ProjectID) == "" {
-		return errors.New("project_id is required")
 	}
 	return nil
 }

@@ -113,7 +113,6 @@ const (
 	CodeMissingProtectedParameter        ValidationErrorCode = "workflow.validation.missing_protected_parameter"
 	CodeDuplicateProtectedParameter      ValidationErrorCode = "workflow.validation.duplicate_protected_parameter"
 	CodeInvalidContextSource             ValidationErrorCode = "workflow.validation.invalid_context_source"
-	CodeInvalidContinueSessionRole       ValidationErrorCode = "workflow.validation.invalid_continue_session_role"
 	CodeAssigneeSelectionInapplicable    ValidationErrorCode = "workflow.validation.assignee_selection_inapplicable"
 	CodeAssigneeSelectionUnavailable     ValidationErrorCode = "workflow.validation.assignee_selection_unavailable"
 	CodeThinkingSelectionInapplicable    ValidationErrorCode = "workflow.validation.thinking_selection_inapplicable"
@@ -137,13 +136,13 @@ type ValidationError struct {
 	Code              ValidationErrorCode
 	Message           string
 	WorkflowID        *runtimeids.WorkflowID
-	NodeID            NodeID
-	TransitionGroupID TransitionGroupID
-	EdgeID            EdgeID
+	NodeID            *NodeID
+	TransitionGroupID *TransitionGroupID
+	EdgeID            *EdgeID
 	FieldName         string
 	InputName         string
 	Placeholder       string
-	ProviderEdgeID    EdgeID
+	ProviderEdgeID    *EdgeID
 	RelatedIDs        []string
 	RelatedEntities   []workflowcontract.WorkflowGraphEntityReference
 	AgentRole         *string

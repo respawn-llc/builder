@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
@@ -25,7 +25,7 @@ import {
   useStatusController,
 } from "@/app-facade";
 import { useUpdateTask } from "@/shared/task-mutations";
-import { createVirtualizedPixelOffsetRequest, type VirtualizedPixelOffsetRequest } from "@/ui";
+import type { VirtualizedPixelOffsetRequest } from "@/ui";
 import {
   initialDescriptionPresentationState,
   type DescriptionPresentationState,
@@ -145,12 +145,7 @@ export function TaskDetailContent({
   const navigation = useAppNavigation();
   const relationshipNavigationAvailable = hasRelationshipNavigation(navigator, openSidebar);
   const restored = decodeTaskDetailRetainedState(retainedState);
-  const restorationKey = useId();
   const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null);
-  const restoredPixelOffsetRequest = useMemo(
-    () => restoredPixelOffsetRequestFor(restorationKey, restored),
-    [restorationKey, restored],
-  );
   const serverDraft = taskDraft(detail);
   const [draftState, setDraftState] = useState<TaskDraftState>(() => ({
     base: restored?.base ?? serverDraft,
@@ -176,7 +171,6 @@ export function TaskDetailContent({
     editingComment,
     navigator,
     newCommentBody,
-    scrollElement,
     selectedTab,
   });
   const reportActionError = useCallback(
@@ -222,7 +216,6 @@ export function TaskDetailContent({
   const focusPresentation = taskDetailFocusPresentation({
     initialFocus,
     localDependencyFocusRequest,
-    restored: restored !== undefined,
   });
 
   async function saveDraft(nextDraft: TaskDraft = draft): Promise<void> {
@@ -294,7 +287,7 @@ export function TaskDetailContent({
           }}
           onScrollElementChange={setScrollElement}
           onSaveDraft={saveDraft}
-          pixelOffsetRequest={promptAnswers.pixelOffsetRequest ?? restoredPixelOffsetRequest}
+          pixelOffsetRequest={promptAnswers.pixelOffsetRequest}
           primaryFocusRequest={promptAnswers.primaryFocusRequest}
           promptAnswerState={promptAnswers.state}
           selectedTab={selectedTab}
@@ -443,16 +436,14 @@ function useTaskPromptAnswers({
 function taskDetailFocusPresentation({
   initialFocus,
   localDependencyFocusRequest,
-  restored,
 }: Readonly<{
   initialFocus: TaskDetailInitialFocus | undefined;
   localDependencyFocusRequest: number | null;
-  restored: boolean;
 }>): TaskDetailInitialFocus | undefined {
   if (localDependencyFocusRequest !== null) {
     return { kind: "dependencies" };
   }
-  return restored ? undefined : initialFocus;
+  return initialFocus;
 }
 
 function presentTaskDependencies({
@@ -508,12 +499,16 @@ function openRelatedTaskCreation({
   const destination = {
     boardQueryWorkflowID: detail.workflowID,
     initialSourceWorkspaceID: detail.sourceWorkspace.id,
+    initialPreparedDependency: {
+      direction: direction === "blocked-by" ? ("blocks" as const) : ("blocked-by" as const),
+      taskID: detail.id,
+      shortID: detail.shortID,
+      title: detail.title,
+      workflowID: detail.workflowID,
+      status: detail.status,
+    },
     kind: "newTask" as const,
     mode: "overlay" as const,
-    pendingRelationship: {
-      originTaskID: detail.id,
-      newTaskRole: direction === "blocked-by" ? ("blocker" as const) : ("blocked" as const),
-    },
     projectID: detail.projectID,
     workflowID: detail.workflowID,
   };
@@ -538,7 +533,6 @@ function useTaskDetailRetainedCapture({
   editingComment,
   navigator,
   newCommentBody,
-  scrollElement,
   selectedTab,
 }: Readonly<{
   base: TaskDraft;
@@ -547,30 +541,19 @@ function useTaskDetailRetainedCapture({
   editingComment: Readonly<{ id: string; body: string }> | null;
   navigator?: SidebarPageNavigator | undefined;
   newCommentBody: string;
-  scrollElement: HTMLDivElement | null;
   selectedTab: "comments" | "activity";
 }>) {
   useEffect(() => {
-    if (navigator === undefined || scrollElement === null) return;
+    if (navigator === undefined) return;
     return navigator.registerCapture(() => ({
       base,
       descriptionPresentation,
       draft,
       editingComment,
       newCommentBody,
-      scrollOffsetPx: scrollElement.scrollTop,
       selectedTab,
     }));
-  }, [
-    base,
-    descriptionPresentation,
-    draft,
-    editingComment,
-    navigator,
-    newCommentBody,
-    scrollElement,
-    selectedTab,
-  ]);
+  }, [base, descriptionPresentation, draft, editingComment, navigator, newCommentBody, selectedTab]);
 }
 
 type TaskDetailRetainedState = Readonly<{
@@ -579,7 +562,6 @@ type TaskDetailRetainedState = Readonly<{
   draft: TaskDraft;
   editingComment: Readonly<{ id: string; body: string }> | null;
   newCommentBody: string;
-  scrollOffsetPx: number;
   selectedTab: "comments" | "activity";
 }>;
 
@@ -589,22 +571,11 @@ const taskDetailRetainedStateSchema = z.object({
   draft: z.object({ body: z.string(), title: z.string() }),
   editingComment: z.object({ body: z.string(), id: z.string() }).nullable(),
   newCommentBody: z.string(),
-  scrollOffsetPx: z.number().nonnegative(),
   selectedTab: z.enum(["comments", "activity"]),
 });
 
 function decodeTaskDetailRetainedState(state: unknown): TaskDetailRetainedState | undefined {
   return taskDetailRetainedStateSchema.safeParse(state).data;
-}
-
-function restoredPixelOffsetRequestFor(
-  restorationKey: string,
-  restored: TaskDetailRetainedState | undefined,
-): VirtualizedPixelOffsetRequest | undefined {
-  if (restored === undefined) {
-    return undefined;
-  }
-  return createVirtualizedPixelOffsetRequest(restorationKey, restored.scrollOffsetPx);
 }
 
 function dependencyFocusRequestKey(taskID: string, request: number | null): string | undefined {

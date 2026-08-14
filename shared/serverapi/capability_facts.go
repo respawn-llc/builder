@@ -88,7 +88,6 @@ type LLMProviderCapabilityFact struct {
 	Role                          string `json:"role"`
 	SupportsResponsesAPI          bool   `json:"supports_responses_api"`
 	SupportsNativeCompaction      bool   `json:"supports_native_compaction"`
-	SupportsInputTokenCount       bool   `json:"supports_input_token_count"`
 	SupportsPromptCacheKey        bool   `json:"supports_prompt_cache_key"`
 	SupportsNativeWebSearch       bool   `json:"supports_native_web_search"`
 	SupportsReasoningEncryption   bool   `json:"supports_reasoning_encryption"`

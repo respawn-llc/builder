@@ -146,6 +146,25 @@ func TestGeneratedTaskSearchSchemaContractAdapterIsFresh(t *testing.T) {
 	}
 }
 
+func TestGeneratedWorkflowSessionDependencyInvalidationAdapterIsFresh(t *testing.T) {
+	const generatedPath = "../sqlitegen/workflow_session_dependency_invalidation_generated.go"
+	query, err := testMetadataQueryRenderer(t).RenderWorkflowSessionDependencyInvalidation()
+	if err != nil {
+		t.Fatalf("render Workflow Session dependency invalidation query: %v", err)
+	}
+	want, err := generateWorkflowSessionDependencyInvalidation(query)
+	if err != nil {
+		t.Fatalf("generate Workflow Session dependency invalidation adapter: %v", err)
+	}
+	got, err := os.ReadFile(generatedPath)
+	if err != nil {
+		t.Fatalf("read generated Workflow Session dependency invalidation adapter: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("generated Workflow Session dependency invalidation adapter is stale; run go generate ./server/metadata/sqlitegen")
+	}
+}
+
 func testMetadataQueryRenderer(t testing.TB) metadata.QuerySourceRenderer {
 	t.Helper()
 	renderer, err := metadata.LoadQuerySourceRenderer("../querysrc")

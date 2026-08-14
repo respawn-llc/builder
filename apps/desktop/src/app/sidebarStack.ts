@@ -1,5 +1,5 @@
 import { createElement, Fragment, type ComponentType, type ReactNode } from "react";
-import type { SidebarDestination, SidebarDestinationPolicy, SidebarNavigationOutcome, SidebarPageNavigator, SidebarPhase, SidebarRootHandle, SidebarRootOutcome, SidebarTransitionDirection } from "@/app-facade";
+import type { SidebarBackResult, SidebarDestination, SidebarDestinationPolicy, SidebarNavigationOutcome, SidebarPageNavigator, SidebarPhase, SidebarRootHandle, SidebarRootOutcome, SidebarTransitionDirection } from "@/app-facade";
 const stackLimit = 50;
 const exitAnimationMs = 140;
 interface Capability { active: boolean; availability: Readonly<{ back: boolean; close: boolean }> | null; capture: Readonly<{ read: () => unknown }> | null }
@@ -48,7 +48,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     const capability: Capability = { active: true, availability: null, capture: null };
     const Boundary = ({ children }: Readonly<{ children: ReactNode }>) => createElement(Fragment, null, children);
     const navigator: SidebarPageNavigator = {
-      back: () => back(capability),
+      back: (result) => back(capability, result),
       close: () => close(capability),
       push: (next) => push(capability, next),
       replace: (next) => replace(capability, next),
@@ -94,7 +94,7 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     }, exitAnimationMs);
     return "accepted";
   };
-  const back = (capability: Capability): Exclude<SidebarNavigationOutcome, "unavailable"> => {
+  const back = (capability: Capability, result?: SidebarBackResult): Exclude<SidebarNavigationOutcome, "unavailable"> => {
     if (!capability.active) {
       return "stale";
     }
@@ -106,11 +106,11 @@ export function createSidebarStack(policy: SidebarDestinationPolicy, publish: (v
     if (previous === undefined) {
       throw new Error("Sidebar Back requires a previous page.");
     }
-    emit(
-      [...view.entries.slice(0, -2), createEntry(previous.destination, previous.retainedState)],
-      "open",
-      "back",
-    );
+    const retainedState =
+      result === undefined
+        ? previous.retainedState
+        : policy.applyBackResult(previous.destination, previous.retainedState, result);
+    emit([...view.entries.slice(0, -2), createEntry(previous.destination, retainedState)], "open", "back");
     return "accepted";
   };
   const replace = (capability: Capability, destination: SidebarDestination): Exclude<SidebarNavigationOutcome, "unavailable"> => {

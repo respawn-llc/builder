@@ -4,26 +4,24 @@ import (
 	"context"
 
 	"core/server/llm"
+	"core/shared/jsoncontract"
 	"core/shared/transcript"
 )
 
-func reviewerSuggestionsStructuredOutput() *llm.StructuredOutput {
+type reviewerSuggestionsPayload struct {
+	Suggestions []string `json:"suggestions"`
+}
+
+func prepareReviewerSuggestionsContract(
+	preparer jsoncontract.Preparer,
+) (jsoncontract.Structured, error) {
+	return preparer.Structured("reviewer suggestions", reviewerSuggestionsPayload{})
+}
+
+func reviewerSuggestionsStructuredOutput(contract jsoncontract.Structured) *llm.StructuredOutput {
 	return &llm.StructuredOutput{
-		Name: "reviewer_suggestions",
-		Schema: mustJSON(map[string]any{
-			"type":                 "object",
-			"additionalProperties": false,
-			"properties": map[string]any{
-				"suggestions": map[string]any{
-					"type": "array",
-					"items": map[string]any{
-						"type": "string",
-					},
-				},
-			},
-			"required": []string{"suggestions"},
-		}),
-		Strict: true,
+		Name:   "reviewer_suggestions",
+		Schema: contract,
 	}
 }
 
@@ -37,6 +35,11 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 	if err != nil {
 		return llm.Request{}, err
 	}
+	contract, err := prepareReviewerSuggestionsContract(jsoncontract.NewPreparer(false))
+	if err != nil {
+		return llm.Request{}, err
+	}
+	sessionID := reviewerSessionID(e.store.Meta().SessionID)
 	req := llm.Request{
 		Model:                   reviewerCfg.Model,
 		Temperature:             1,
@@ -45,11 +48,11 @@ func (e *Engine) buildReviewerRequest(ctx context.Context, reviewerClient llm.Cl
 		ReasoningEffort:         reviewerCfg.ThinkingLevel,
 		SupportsReasoningEffort: reviewerCfg.ModelCapabilities.SupportsReasoningEffort,
 		SystemPrompt:            systemPrompt,
-		SessionID:               reviewerSessionID(e.store.Meta().SessionID),
+		SessionID:               &sessionID,
 		Items:                   reviewerItems,
 		Tools:                   []llm.Tool{},
 		ToolChoiceMode:          llm.ToolChoiceModeAutomatic,
-		StructuredOutput:        reviewerSuggestionsStructuredOutput(),
+		StructuredOutput:        reviewerSuggestionsStructuredOutput(contract),
 	}
 	if supportsPromptCacheKeyForClient(ctx, reviewerClient) {
 		if cacheKey := e.conversationPromptCacheKey(reviewerSessionID(e.store.Meta().SessionID)); cacheKey != "" {

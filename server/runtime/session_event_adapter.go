@@ -164,6 +164,12 @@ func sessionToolCompletionRecordFromRuntime(
 		Summary:       textutil.Pointer(result.Summary),
 		CondensedText: textutil.Pointer(result.CondensedText),
 	}
+	if result.QuestionAnswer != nil {
+		record.QuestionAnswer = &session.QuestionAnswerRecord{
+			SelectedOptionNumber: textutil.Pointer(result.QuestionAnswer.SelectedOptionNumber),
+			Freeform:             textutil.Pointer(result.QuestionAnswer.Freeform),
+		}
+	}
 	if result.Presentation != nil {
 		record.Presentation = transcript.EncodeToolCallMeta(*result.Presentation)
 	}
@@ -223,14 +229,15 @@ func storedToolCompletionFromSessionRecord(
 		providerItems = append(providerItems, providerItem)
 	}
 	return storedToolCompletion{
-		CallID:        record.CallID,
-		Name:          record.Name,
-		IsError:       record.IsError,
-		Output:        append(json.RawMessage(nil), record.Output...),
-		Summary:       textutil.Pointer(record.Summary),
-		CondensedText: textutil.Pointer(record.CondensedText),
-		Presentation:  presentation,
-		ProviderItems: providerItems,
+		CallID:         record.CallID,
+		Name:           record.Name,
+		IsError:        record.IsError,
+		Output:         append(json.RawMessage(nil), record.Output...),
+		Summary:        textutil.Pointer(record.Summary),
+		CondensedText:  textutil.Pointer(record.CondensedText),
+		Presentation:   presentation,
+		ProviderItems:  providerItems,
+		QuestionAnswer: questionAnswerFromSession(record.QuestionAnswer),
 	}, nil
 }
 
@@ -238,15 +245,26 @@ func sessionToolCompletionRecordFromStored(
 	completion storedToolCompletion,
 ) (session.ToolCompletionRecord, error) {
 	result := tools.Result{
-		CallID:        completion.CallID,
-		Name:          toolspec.ID(completion.Name),
-		IsError:       completion.IsError,
-		Output:        append(json.RawMessage(nil), completion.Output...),
-		Summary:       completion.Summary,
-		CondensedText: completion.CondensedText,
-		Presentation:  completion.Presentation,
+		CallID:         completion.CallID,
+		Name:           toolspec.ID(completion.Name),
+		IsError:        completion.IsError,
+		Output:         append(json.RawMessage(nil), completion.Output...),
+		Summary:        completion.Summary,
+		CondensedText:  completion.CondensedText,
+		Presentation:   completion.Presentation,
+		QuestionAnswer: completion.QuestionAnswer,
 	}
 	return sessionToolCompletionRecordFromRuntime(result, completion.ProviderItems)
+}
+
+func questionAnswerFromSession(answer *session.QuestionAnswerRecord) *tools.AskQuestionAnswer {
+	if answer == nil {
+		return nil
+	}
+	return &tools.AskQuestionAnswer{
+		SelectedOptionNumber: textutil.Pointer(answer.SelectedOptionNumber),
+		Freeform:             textutil.Pointer(answer.Freeform),
+	}
 }
 
 func sessionLocalEntryRecordFromRuntime(
@@ -257,15 +275,16 @@ func sessionLocalEntryRecordFromRuntime(
 		return session.LocalEntryRecord{}, err
 	}
 	record := session.LocalEntryRecord{
-		Visibility:       visibility,
-		Role:             entry.Role,
-		Text:             textutil.OptionalExactString(entry.Text),
-		DurationMs:       textutil.Pointer(entry.DurationMs),
-		CondensedText:    textutil.Pointer(entry.CondensedText),
-		DiagnosticKey:    textutil.Pointer(entry.DiagnosticKey),
-		NoticeID:         textutil.Pointer(entry.NoticeID),
-		AfterToolCallID:  textutil.Pointer(entry.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(entry.ToolOutputRepair),
+		Visibility:            visibility,
+		Role:                  entry.Role,
+		Text:                  textutil.OptionalExactString(entry.Text),
+		DurationMs:            textutil.Pointer(entry.DurationMs),
+		CondensedText:         textutil.Pointer(entry.CondensedText),
+		DiagnosticKey:         textutil.Pointer(entry.DiagnosticKey),
+		NoticeID:              textutil.Pointer(entry.NoticeID),
+		AfterToolCallID:       textutil.Pointer(entry.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(entry.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(entry.ProviderModelMismatch),
 	}
 	normalized, err := session.NewEventRecord(1, nil, record)
 	if err != nil {
@@ -325,15 +344,16 @@ func storedLocalEntryFromSessionRecord(
 	}
 	text, _ := textutil.OptionalExact(record.Text)
 	return storedLocalEntry{
-		Visibility:       runtimeEntryVisibilityFromSession(record.Visibility),
-		Role:             record.Role,
-		Text:             text,
-		DurationMs:       textutil.Pointer(record.DurationMs),
-		CondensedText:    textutil.Pointer(record.CondensedText),
-		DiagnosticKey:    textutil.Pointer(record.DiagnosticKey),
-		NoticeID:         textutil.Pointer(record.NoticeID),
-		AfterToolCallID:  textutil.Pointer(record.AfterToolCallID),
-		ToolOutputRepair: textutil.Pointer(record.ToolOutputRepair),
+		Visibility:            runtimeEntryVisibilityFromSession(record.Visibility),
+		Role:                  record.Role,
+		Text:                  text,
+		DurationMs:            textutil.Pointer(record.DurationMs),
+		CondensedText:         textutil.Pointer(record.CondensedText),
+		DiagnosticKey:         textutil.Pointer(record.DiagnosticKey),
+		NoticeID:              textutil.Pointer(record.NoticeID),
+		AfterToolCallID:       textutil.Pointer(record.AfterToolCallID),
+		ToolOutputRepair:      textutil.Pointer(record.ToolOutputRepair),
+		ProviderModelMismatch: textutil.Pointer(record.ProviderModelMismatch),
 	}, nil
 }
 

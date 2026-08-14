@@ -12,6 +12,7 @@ import (
 	"core/server/tools"
 	"core/server/workflowruntime"
 	compactionutil "core/shared/config"
+	"core/shared/jsoncontract"
 	"core/shared/textutil"
 	"core/shared/toolspec"
 	"core/shared/transcript"
@@ -96,7 +97,8 @@ func (e *Engine) buildRequestPlanWithExtraItems(ctx context.Context, stepID stri
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
+	sessionID := e.SessionID()
+	req.SessionID = &sessionID
 	if e.supportsPromptCacheKey(ctx) {
 		if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 			req.PromptCacheKey = cacheKey
@@ -395,10 +397,17 @@ func (e *Engine) requestTools(ctx context.Context, workflowMode workflowruntime.
 			if err != nil {
 				continue
 			}
-			tool.Schema = schema
+			prepared, err := jsoncontract.NewPreparer(false).FunctionDocument(
+				"workflow completion function",
+				schema,
+			)
+			if err != nil {
+				continue
+			}
+			tool.Schema = prepared
 		}
 		if d.ID == toolspec.ToolPatch && customPatchSupported {
-			tool.Schema = nil
+			tool.Schema = jsoncontract.Function{}
 			tool.Custom = &llm.CustomToolFormat{Type: "grammar", Syntax: "lark", Definition: llm.PatchToolLarkGrammar}
 		}
 		out = append(out, tool)

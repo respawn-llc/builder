@@ -41,9 +41,6 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		if params.ProtocolVersion != protocol.Version {
 			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeProtocolVersionMismatch, fmt.Sprintf("unsupported protocol version %q; server requires %q, upgrade the older Kent process", params.ProtocolVersion, protocol.Version))
 		}
-		if params.ClientCapabilities != nil {
-			state.clientCapabilities = *params.ClientCapabilities
-		}
 		state.handshakeDone = true
 		return protocol.NewSuccessResponse(req.ID, protocol.HandshakeResponse{Identity: g.identity})
 	},
@@ -184,13 +181,19 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 		return protocol.NewSuccessResponse(req.ID, resp)
 	},
 	protocol.MethodOnboardingFinalize: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.OnboardingFinalizeRequest) (serverapi.OnboardingFinalizeResponse, error) {
-			finalizeClient := g.deps.OnboardingFinalizeClient()
-			if finalizeClient == nil {
-				return serverapi.OnboardingFinalizeResponse{}, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil)
-			}
-			return finalizeClient.FinalizeOnboarding(ctx, params)
-		})
+		params, err := g.onboardingFinalizeRequestContract.Decode(req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
+		}
+		finalizeClient := g.deps.OnboardingFinalizeClient()
+		if finalizeClient == nil {
+			return responseForError(req.ID, serverapi.NewServerNotReadyError(serverapi.ServerNotReadyOnboardingRequired, nil, nil))
+		}
+		resp, err := finalizeClient.FinalizeOnboarding(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, resp)
 	},
 	protocol.MethodAttachProject: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params protocol.AttachProjectRequest) (protocol.AttachResponse, error) {
@@ -245,6 +248,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodProjectUpdate:                  gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectUpdateRequest, serverapi.ProjectUpdateResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UpdateProject),
 	protocol.MethodProjectSetDefaultWorkspace:     gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDefaultWorkspaceSetRequest, serverapi.ProjectDefaultWorkspaceSetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.SetDefaultWorkspace),
 	protocol.MethodProjectWorkspaceList:           gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceListRequest, serverapi.ProjectWorkspaceListResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.ListProjectWorkspaces),
+	protocol.MethodProjectWorkspaceGet:            gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceGetRequest, serverapi.ProjectWorkspaceGetResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.GetProjectWorkspace),
 	protocol.MethodProjectUnlinkWorkspace:         gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectWorkspaceUnlinkRequest, serverapi.ProjectWorkspaceUnlinkResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.UnlinkWorkspaceFromProject),
 	protocol.MethodProjectDelete:                  gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectDeleteRequest, serverapi.ProjectDeleteResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.DeleteProject),
 	protocol.MethodProjectAttachWorkspace:         gatewayClientCall[apicontract.ProjectViewService, serverapi.ProjectAttachWorkspaceRequest, serverapi.ProjectAttachWorkspaceResponse](GatewayDependencies.ProjectViewClient, apicontract.ProjectViewService.AttachWorkspaceToProject),
@@ -295,6 +299,7 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodWorkflowTaskCommentReplace:     gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCommentReplaceRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ReplaceWorkflowTaskComment),
 	protocol.MethodWorkflowTaskCommentDelete:      gatewayClientCallNoResponse[apicontract.WorkflowService, serverapi.WorkflowTaskCommentDeleteRequest](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.DeleteWorkflowTaskComment),
 	protocol.MethodWorkflowTaskActivityList:       gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskActivityListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskActivity),
+	protocol.MethodWorkflowTaskSessionList:        gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskOffsetPageRequest, serverapi.WorkflowTaskSessionListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTaskSessions),
 	protocol.MethodWorkflowTaskList:               gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowTaskListRequest, serverapi.WorkflowTaskListResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.ListWorkflowTasks),
 	protocol.MethodWorkflowProjectTaskGroupCounts: gatewayClientCall[apicontract.WorkflowService, serverapi.WorkflowProjectTaskGroupCountsRequest, serverapi.WorkflowProjectTaskGroupCountsResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.GetWorkflowProjectTaskGroupCounts),
 	protocol.MethodWorkflowTaskSearch:             gatewayClientCall[apicontract.WorkflowService, serverapi.TaskSearchRequest, serverapi.TaskSearchResponse](GatewayDependencies.WorkflowClient, apicontract.WorkflowService.SearchWorkflowTasks),
@@ -365,9 +370,15 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	protocol.MethodSessionGetTranscriptPage:                      gatewayClientCall[apicontract.SessionViewService, serverapi.SessionTranscriptPageRequest, serverapi.SessionTranscriptPageResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetSessionTranscriptPage),
 	protocol.MethodSessionGetLatestCommittedAssistantFinalAnswer: gatewayClientCall[apicontract.SessionViewService, serverapi.SessionLatestCommittedAssistantFinalAnswerRequest, serverapi.SessionLatestCommittedAssistantFinalAnswerResponse](GatewayDependencies.SessionViewClient, apicontract.SessionViewService.GetLatestCommittedAssistantFinalAnswer),
 	protocol.MethodSessionGetExecutionEnvironment: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
-		return decodeAndHandle(req, func(params serverapi.SessionExecutionEnvironmentRequest) (serverapi.SessionExecutionEnvironmentResponse, error) {
-			return g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
-		})
+		params, err := g.sessionExecutionRequestContract.Decode(req.Params)
+		if err != nil {
+			return protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidParams, fmt.Sprintf("decode params: %v", err))
+		}
+		response, err := g.deps.SessionViewClient().GetSessionExecutionEnvironment(ctx, params)
+		if err != nil {
+			return responseForError(req.ID, err)
+		}
+		return protocol.NewSuccessResponse(req.ID, response)
 	},
 	protocol.MethodSessionGetInitialInput:      gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionInitialInputRequest, serverapi.SessionInitialInputResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.GetInitialInput),
 	protocol.MethodSessionPersistInputDraft:    gatewayClientCall[apicontract.SessionLifecycleService, serverapi.SessionPersistInputDraftRequest, serverapi.SessionPersistInputDraftResponse](GatewayDependencies.SessionLifecycleClient, apicontract.SessionLifecycleService.PersistInputDraft),

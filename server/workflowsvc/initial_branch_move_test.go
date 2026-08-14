@@ -172,6 +172,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 	}
 	targetNodeID := workflow.NodeID(workflowServiceNodeIDByKey(t, definition.Definition, "plan"))
 	execution := newManualMoveExecutionStub(service)
+	execution.manualMoveAssignments = workflowServiceTestManualMoveAssignments(t, metadataStore)
 	service.currentNodeExecution = execution
 	requestedRef := "HEAD"
 	commitOID := strings.Repeat("e", 40)
@@ -239,7 +240,7 @@ func TestServiceManualMoveAcceptedBranchReturnsConflictWhenFinalRevalidationBeco
 				},
 			},
 		}
-		moved, err := applyManualMoveForWorkflowServiceTest(ctx, service.store, prepared, candidate)
+		moved, err := execution.ApplyManualMove(ctx, prepared, candidate)
 		if err != nil {
 			t.Errorf("apply concurrent Manual Move: %v", err)
 			return

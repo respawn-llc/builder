@@ -74,6 +74,8 @@ type SessionRequest struct {
 	Intent                              serverapi.SessionLaunchIntent
 	SkipContinuationAgentRoleValidation bool
 	PreparedPromptFacingTarget          *PreparedBaseTarget
+	AgentSelectionResolved              bool
+	ReadOnlySnapshot                    bool
 }
 
 type SessionPlan struct {
@@ -141,9 +143,9 @@ func (p Planner) sessionPlanWithSnapshot(plan SessionPlan, store *session.Store)
 }
 
 type RunPromptOverrideOptions struct {
-	AllowLockedAgentRoleChange bool
-	RequiredTools              []toolspec.ID
-	WorkflowThinking           WorkflowThinkingMutation
+	AgentSelectionPersisted bool
+	RequiredTools           []toolspec.ID
+	WorkflowThinking        WorkflowThinkingMutation
 }
 
 type WorkflowThinkingMutationKind uint8
@@ -287,7 +289,7 @@ func resolveReadOnlySessionContextSettings(
 			return config.Settings{}, config.SourceReport{}, session.ChatSettings{}, err
 		}
 		if shouldApplyPersistedContinuationBaseURL(baseActive, meta.Continuation.AgentRole) {
-			if baseURL := strings.TrimSpace(meta.Continuation.OpenAIBaseURL); baseURL != "" {
+			if baseURL, present := textutil.OptionalTrimmed(meta.Continuation.OpenAIBaseURL); present {
 				active.OpenAIBaseURL = baseURL
 			}
 		}
@@ -435,6 +437,9 @@ func (p Planner) PlanSessionWithStore(ctx context.Context, req SessionRequest, s
 }
 
 func preparePlanStore(req SessionRequest, store *session.Store) error {
+	if req.ReadOnlySnapshot {
+		return nil
+	}
 	if req.Intent.Kind() == serverapi.SessionLaunchIntentOpenExisting && req.Mode == ModeInteractive {
 		if _, err := store.PromoteSubagentToMain(); err != nil {
 			return err
@@ -444,7 +449,7 @@ func preparePlanStore(req SessionRequest, store *session.Store) error {
 }
 
 func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, store *session.Store) (SessionPlan, error) {
-	if req.Mode == ModeHeadless {
+	if req.Mode == ModeHeadless && !req.ReadOnlySnapshot {
 		if err := EnsureSubagentSessionName(store); err != nil {
 			return SessionPlan{}, err
 		}
@@ -453,10 +458,10 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 	baseActive := EffectiveSettings(p.Config.Settings, meta.Locked)
 	baseSource := p.Config.Source
 	var continuationAgentRole *string
-	continuationBaseURL := ""
+	var continuationBaseURL *string
 	if meta.Continuation != nil {
 		continuationAgentRole = cloneContinuationRole(meta.Continuation.AgentRole)
-		continuationBaseURL = strings.TrimSpace(meta.Continuation.OpenAIBaseURL)
+		continuationBaseURL = textutil.Pointer(meta.Continuation.OpenAIBaseURL)
 	}
 	active, source := baseActive, baseSource
 	enabledTools := []toolspec.ID(nil)
@@ -470,16 +475,18 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		if err != nil {
 			return SessionPlan{}, err
 		}
-		if shouldApplyPersistedContinuationBaseURL(baseActive, continuationAgentRole) && continuationBaseURL != "" {
-			active.OpenAIBaseURL = continuationBaseURL
+		if shouldApplyPersistedContinuationBaseURL(baseActive, continuationAgentRole) && continuationBaseURL != nil {
+			active.OpenAIBaseURL = *continuationBaseURL
 		}
 	}
-	continuation := session.ContinuationContext{OpenAIBaseURL: active.OpenAIBaseURL}
+	continuation := session.ContinuationContext{OpenAIBaseURL: textutil.OptionalTrimmedString(active.OpenAIBaseURL)}
 	if meta.Continuation != nil {
 		continuation.AgentRole = continuationAgentRole
 	}
-	if err := store.SetContinuationContext(continuation); err != nil {
-		return SessionPlan{}, err
+	if !req.AgentSelectionResolved && !req.ReadOnlySnapshot {
+		if err := store.SetContinuationContext(continuation); err != nil {
+			return SessionPlan{}, err
+		}
 	}
 	if req.PreparedPromptFacingTarget == nil {
 		enabledTools, err = ActiveToolIDsForPlan(active, source, meta.Locked)
@@ -487,7 +494,13 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 			return SessionPlan{}, err
 		}
 	}
-	if meta.Locked != nil && (!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") {
+	active, chatSettings, err := applySessionChatSettings(meta, active)
+	if err != nil {
+		return SessionPlan{}, err
+	}
+	if meta.Locked != nil &&
+		(!meta.Locked.HasEnabledTools || strings.TrimSpace(meta.Locked.WebSearchMode) == "") &&
+		!req.ReadOnlySnapshot {
 		backfill, backfillErr := store.BackfillLockedRequestShape(session.LockedRequestShapeBackfill{
 			EnabledTools:    toolspec.IDStrings(enabledTools),
 			HasEnabledTools: true,
@@ -541,6 +554,8 @@ func (p Planner) planSessionWithStore(ctx context.Context, req SessionRequest, s
 		ManagedWorktreeRoots:                append([]string(nil), managedWorktreeRoots...),
 		Source:                              source,
 		BaseSource:                          baseSource,
+		QuestionsEnabled:                    chatSettings.Questions,
+		AutoCompactionEnabled:               chatSettings.AutoCompaction,
 	}, store), nil
 }
 
@@ -691,13 +706,13 @@ func withWorkflowThinking(plan SessionPlan, mutation WorkflowThinkingMutation) (
 
 func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, store *session.Store, overrides serverapi.RunPromptOverrides, authState auth.State, options RunPromptOverrideOptions, applyBudget modelContextBudgetApplier) (SessionPlan, []string, error) {
 	locked := store.Meta().Locked
-	toolLock := locked
-	if options.AllowLockedAgentRoleChange {
-		toolLock = nil
+	effectiveOverrides := overrides
+	if locked != nil {
+		effectiveOverrides.AgentRole = nil
 	}
-	prepared, err := prepareRunPromptOverridesWithBudget(baseConfigForPlan(plan), overrides, authState, RunPromptPreparationContext{
+	prepared, err := prepareRunPromptOverridesWithBudget(baseConfigForPlan(plan), effectiveOverrides, authState, RunPromptPreparationContext{
 		ModelLock: locked,
-		ToolLock:  toolLock,
+		ToolLock:  locked,
 		OmittedTarget: &PreparedBaseTarget{
 			Settings:     plan.ActiveSettings,
 			Source:       plan.Source,
@@ -707,7 +722,7 @@ func (p Planner) applyRunPromptOverridesWithBudgetApplier(plan SessionPlan, stor
 	if err != nil {
 		return SessionPlan{}, nil, err
 	}
-	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, overrides, prepared, options, applyBudget)
+	return p.applyPreparedRunPromptOverridesWithBudgetApplier(plan, store, effectiveOverrides, prepared, options, applyBudget)
 }
 
 func baseConfigForPlan(plan SessionPlan) config.App {
@@ -769,6 +784,12 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 				return PreparedRunPromptOverrides{}, targetErr
 			}
 			prepared.BaseTarget = &target
+		} else if preparation.SkipProviderReadinessValidation {
+			target, targetErr := prepareBaseTargetWithoutProviderReadiness(app, preparation.ModelLock, preparation.ToolLock)
+			if targetErr != nil {
+				return PreparedRunPromptOverrides{}, targetErr
+			}
+			prepared.BaseTarget = &target
 		} else {
 			target, targetErr := prepareBaseTarget(app, overrideConfig, overrides, preparation.ModelLock, preparation.ToolLock, applyBudget)
 			if targetErr != nil {
@@ -798,13 +819,14 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 	providerSettings.Subagents = nil
 	providerSettings = config.OverlaySubagentRoleProviderSettings(providerSettings, lookup.Role)
 	providerID := persistedRoleProviderID(providerSettings)
+	var providerCapabilities *llm.ProviderCapabilities
 	if !preparation.SkipProviderReadinessValidation {
-		providerCaps, capabilityErr := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
-		if capabilityErr != nil {
-			return PreparedRunPromptOverrides{}, capabilityErr
+		providerCaps, err := llm.ProviderCapabilitiesForSettings(authState, providerSettings)
+		if err != nil {
+			return PreparedRunPromptOverrides{}, err
 		}
 		providerID = strings.TrimSpace(providerCaps.ProviderID)
-		prepared.ProviderCapabilities = &providerCaps
+		providerCapabilities = &providerCaps
 	}
 	target, err := prepareNamedTarget(
 		app,
@@ -822,7 +844,22 @@ func prepareRunPromptOverridesWithBudget(app config.App, overrides serverapi.Run
 		return PreparedRunPromptOverrides{}, err
 	}
 	prepared.NamedTarget = &target
+	prepared.ProviderCapabilities = providerCapabilities
 	return prepared, nil
+}
+
+func prepareBaseTargetWithoutProviderReadiness(app config.App, modelLock, toolLock *session.LockedContract) (PreparedBaseTarget, error) {
+	resolved := EffectiveSettings(app.Settings, modelLock)
+	source := app.Source
+	enabledTools, err := ActiveToolIDsForPlan(resolved, source, toolLock)
+	if err != nil {
+		return PreparedBaseTarget{}, err
+	}
+	return PreparedBaseTarget{
+		Settings:     resolved,
+		Source:       source,
+		EnabledTools: enabledTools,
+	}, nil
 }
 
 func prepareBaseTarget(app, overrideConfig config.App, overrides serverapi.RunPromptOverrides, modelLock, toolLock *session.LockedContract, applyBudget modelContextBudgetApplier) (PreparedBaseTarget, error) {
@@ -1007,19 +1044,20 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	if store.Meta().Continuation != nil {
 		continuationAgentRole = cloneContinuationRole(store.Meta().Continuation.AgentRole)
 	}
-	staleLockedPromptFacingContract := false
 	persistContinuation := func() error {
 		ctx := session.ContinuationContext{
-			OpenAIBaseURL: next.ActiveSettings.OpenAIBaseURL,
+			OpenAIBaseURL: textutil.OptionalTrimmedString(next.ActiveSettings.OpenAIBaseURL),
 			AgentRole:     continuationAgentRole,
-		}
-		if staleLockedPromptFacingContract {
-			_, err := store.SetContinuationContextAndMarkLockedPromptFacingContractStale(ctx)
-			return err
 		}
 		return store.SetContinuationContext(ctx)
 	}
 	roleOverride := prepared.AgentRole
+	if plan.ModelContractLocked {
+		roleOverride = serverapi.RunPromptAgentRoleOverride{}
+	}
+	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
+		shouldPersistContinuation = true
+	}
 	if !roleOverride.Present && prepared.BaseTarget != nil {
 		next.ActiveSettings = cloneSettings(prepared.BaseTarget.Settings)
 		next.Source = cloneSourceReport(prepared.BaseTarget.Source)
@@ -1038,14 +1076,8 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	if roleOverride.Present && !roleOverride.Default {
 		requestedContinuationRole = cloneContinuationRole(&roleOverride.Role)
 	}
-	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && !options.AllowLockedAgentRoleChange {
-		return SessionPlan{}, nil, fmt.Errorf("%w: current=%q requested=%q", ErrLockedAgentRoleChange, continuationRoleDisplay(continuationAgentRole), roleOverride.Role)
-	}
-	if roleOverride.Present && plan.ModelContractLocked && !textutil.EqualOptional(continuationAgentRole, requestedContinuationRole) && options.AllowLockedAgentRoleChange {
-		staleLockedPromptFacingContract = true
-	}
 	if roleOverride.Present {
-		shouldPersistContinuation = true
+		shouldPersistContinuation = shouldPersistContinuation || !options.AgentSelectionPersisted
 		continuationAgentRole = requestedContinuationRole
 		next.ActiveSettings = cloneSettings(baseSettings)
 		next.Source = baseSource
@@ -1101,9 +1133,6 @@ func (p Planner) applyPreparedRunPromptOverridesWithBudgetApplier(plan SessionPl
 	loaded := prepared.OverrideConfig
 	locked := store.Meta().Locked
 	var err error
-	if strings.TrimSpace(overrides.OpenAIBaseURL) != "" {
-		shouldPersistContinuation = true
-	}
 	next.ActiveSettings, next.Source, next.EnabledTools, err = applyPreparedConfigOverrides(
 		cloneSettings(next.ActiveSettings),
 		cloneSourceReport(next.Source),
@@ -1147,13 +1176,6 @@ func runPromptLoadOptions(overrides serverapi.RunPromptOverrides) config.LoadOpt
 
 func resolvePreparedSubagentSettings(base config.Settings, baseSource config.SourceReport, target preparedSubagentIdentity, allowModelOverride bool, validate bool) (config.Settings, config.SourceReport, *string, error) {
 	return resolveSubagentSettingsFromRole(base, baseSource, target.Selector, target.Role, target.ProviderID, allowModelOverride, validate)
-}
-
-func continuationRoleDisplay(role *string) string {
-	if role == nil {
-		return config.DefaultSubagentRole
-	}
-	return *role
 }
 
 func cloneContinuationRole(role *string) *string {

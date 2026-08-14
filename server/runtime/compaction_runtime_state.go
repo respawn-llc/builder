@@ -71,12 +71,6 @@ func (s *compactionRuntimeState) SetContextFacts(facts session.SessionContextFac
 	}
 	s.mu.Lock()
 	s.contextFacts = facts.Clone()
-	if facts.CompletedCompactionCount != nil {
-		s.count = *facts.CompletedCompactionCount
-	}
-	if facts.ManualCompactEligible != nil {
-		s.manualEligible = *facts.ManualCompactEligible
-	}
 	s.mu.Unlock()
 }
 
@@ -86,7 +80,6 @@ func (s *compactionRuntimeState) SetPresentedManualCompactEligibility(eligible b
 	}
 	s.mu.Lock()
 	s.contextFacts.ManualCompactEligible = &eligible
-	s.manualEligible = eligible
 	s.mu.Unlock()
 }
 

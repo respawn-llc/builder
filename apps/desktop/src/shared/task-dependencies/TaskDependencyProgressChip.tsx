@@ -14,6 +14,7 @@ import {
 
 export type TaskDependencyProgressChipProps = Readonly<
   Omit<ProgressChipProps, "label" | "maximum" | "tone" | "value"> & {
+    preview?: boolean | undefined;
     progress: TaskDependencyProgress;
   }
 >;
@@ -25,12 +26,17 @@ export type TaskDependencyProgressInteractiveChipProps = Readonly<
 >;
 
 export function TaskDependencyProgressChip({
+  preview = false,
   progress,
   tabIndex = 0,
   ...appearance
 }: TaskDependencyProgressChipProps) {
   return (
-    <TaskDependencyProgressChipPresentation appearance={{ ...appearance, tabIndex }} progress={progress} />
+    <TaskDependencyProgressChipPresentation
+      appearance={{ ...appearance, tabIndex }}
+      preview={preview}
+      progress={progress}
+    />
   );
 }
 
@@ -44,22 +50,27 @@ export function TaskDependencyProgressInteractiveChip({
 function TaskDependencyProgressChipPresentation({
   appearance,
   behavior,
+  preview = false,
   progress,
 }: Readonly<{
   appearance?: Omit<ProgressChipProps, "label" | "maximum" | "tone" | "value">;
   behavior?: Omit<ProgressInteractiveChipProps, "label" | "maximum" | "tone" | "value">;
+  preview?: boolean | undefined;
   progress: TaskDependencyProgress;
 }>) {
   const { t } = useTranslation();
   const complete = progress.satisfiedCount === progress.totalCount;
-  const tooltip = t(complete ? "task.dependenciesProgressComplete" : "task.dependenciesProgress", {
+  const values = {
     completed: progress.satisfiedCount,
     total: progress.totalCount,
-  });
-  const accessibleLabel = t("task.dependenciesProgressAccessible", {
-    completed: progress.satisfiedCount,
-    total: progress.totalCount,
-  });
+  };
+  const tooltip = preview
+    ? t("task.dependenciesProgressPreview", values)
+    : t(complete ? "task.dependenciesProgressComplete" : "task.dependenciesProgress", values);
+  const accessibleLabel = t(
+    preview ? "task.dependenciesProgressPreviewAccessible" : "task.dependenciesProgressAccessible",
+    values,
+  );
   const progressProps = {
     label: accessibleLabel,
     maximum: progress.totalCount,

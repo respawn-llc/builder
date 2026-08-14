@@ -5,11 +5,9 @@ import { TaskDeleteWindowRoute, taskDeleteNativeDialogPath } from "@/features/bo
 import { ProjectCreateWindowRoute } from "@/features/home";
 import { ProjectDeleteWindowRoute, WorkspaceUnlinkWindowRoute } from "@/features/project-edit";
 import { TaskDetailWindowRoute } from "@/features/task-detail";
-import { NewTaskWindowRoute } from "@/features/tasks";
 import { InvalidNativeDialogRoute } from "./InvalidNativeDialogRoute";
 import { taskDetailNativeDialogPath } from "./sidebarPopOut";
 import { useWindowChromeTitle } from "@/app-facade";
-import { workflowIDSchema } from "@/api";
 
 export const projectDeleteNativeDialogPath = "/native-dialog/project-delete";
 export const workspaceUnlinkNativeDialogPath = "/native-dialog/workspace-unlink";
@@ -33,11 +31,6 @@ const taskDeleteSearchSchema = z.object({
 
 const taskDetailSearchSchema = z.object({
   taskID: optionalSearchString,
-});
-
-const newTaskSearchSchema = z.object({
-  projectID: optionalSearchString,
-  workflowID: workflowIDSchema,
 });
 
 const workspaceUnlinkSearchSchema = z.object({
@@ -109,18 +102,6 @@ export function createNativeDialogRoutes(rootRoute: AnyRootRoute) {
     return <TaskDetailWindowRoute taskID={taskID} />;
   }
 
-  const newTaskWindowRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/native-dialog/new-task",
-    validateSearch: (search: Record<string, unknown>) => newTaskSearchSchema.parse(search),
-    component: NewTaskNativeRoute,
-  });
-
-  function NewTaskNativeRoute() {
-    const search = newTaskSearchSchema.parse(newTaskWindowRoute.useSearch());
-    return <NewTaskWindowRoute projectID={search.projectID} workflowID={search.workflowID} />;
-  }
-
   const workspaceUnlinkWindowRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: workspaceUnlinkNativeDialogPath,
@@ -144,7 +125,6 @@ export function createNativeDialogRoutes(rootRoute: AnyRootRoute) {
     projectDeleteRoute,
     taskDeleteWindowRoute,
     taskDetailWindowRoute,
-    newTaskWindowRoute,
     workspaceUnlinkWindowRoute,
   ] as const;
 }

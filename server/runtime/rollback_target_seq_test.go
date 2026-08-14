@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"core/server/llm"
-	"core/server/tools"
 	"core/shared/rollbacktarget"
 	"core/shared/textutil"
 )
@@ -17,7 +16,7 @@ func TestPostCompactionSegmentRollbackTargetEncodesGlobalEventSeq(t *testing.T) 
 	mustAppendTestEvent(t, store, "s1", historyReplacementPayload{Engine: "compaction", Mode: "auto"})
 	u2Evt := mustAppendTestEvent(t, store, "s2", llm.Message{Role: llm.RoleUser, Content: textutil.Value("u2")})
 
-	page, err := mustNewTestEngine(t, store, &fakeClient{}, tools.NewRegistry(), Config{}).TranscriptNewestSegmentPage()
+	page, err := mustNewTestEngine(t, store, &fakeClient{}, newTestToolRegistry(t), Config{}).TranscriptNewestSegmentPage()
 	if err != nil {
 		t.Fatalf("project newest segment: %v", err)
 	}

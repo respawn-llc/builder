@@ -36,7 +36,9 @@ export function SidebarDestinationView({
   retainedState?: unknown;
 }>): ReactElement {
   if (destination.kind === "newTask")
-    return <NewTaskDestination destination={destination} navigator={navigator} />;
+    return (
+      <NewTaskDestination destination={destination} navigator={navigator} retainedState={retainedState} />
+    );
   if (destination.kind === "taskDetail") {
     return (
       <TaskDetailDestination destination={destination} navigator={navigator} retainedState={retainedState} />
@@ -48,6 +50,15 @@ export function SidebarDestinationView({
     return <LinkWorkflowDestinationView destination={destination} navigator={navigator} />;
   if (destination.kind === "workflowInspect")
     return <WorkflowInspectorDestination destination={destination} navigator={navigator} />;
+  if (destination.kind === "workflowSettings")
+    return (
+      <WorkflowEditorRoute
+        navigator={navigator}
+        projectID=""
+        surface="settings"
+        workflowID={destination.workflowID}
+      />
+    );
   if (destination.kind === "workflowEditor")
     return (
       <WorkflowEditorRoute
@@ -131,48 +142,37 @@ function TaskDetailHeaderActions({
 function NewTaskDestination({
   destination,
   navigator,
+  retainedState,
 }: Readonly<{
   destination: Extract<SidebarDestination, { kind: "newTask" }>;
   navigator: SidebarPageNavigator;
+  retainedState?: unknown;
 }>): ReactElement {
   const [pending, setPending] = useState(false);
   useEffect(
     () =>
       navigator.registerAvailability({
-        back: destination.pendingRelationship === undefined || !pending,
-        close: destination.pendingRelationship === undefined || !pending,
+        back: destination.initialPreparedDependency === undefined || !pending,
+        close: destination.initialPreparedDependency === undefined || !pending,
       }),
-    [destination.pendingRelationship, navigator, pending],
+    [destination.initialPreparedDependency, navigator, pending],
   );
   const formProps = {
     boardQueryWorkflowID: destination.boardQueryWorkflowID,
     className: "w-full",
+    initialPreparedDependency: destination.initialPreparedDependency,
     initialSourceWorkspaceID: destination.initialSourceWorkspaceID,
+    navigator,
+    onCreated: destination.onCreated,
     onPendingChange: setPending,
-    onProjectMissing: navigator.back,
-    onSubmitted: (taskID: string) => {
-      if (destination.pendingRelationship === undefined) {
-        if (navigator.close() === "accepted") void destination.onCreated?.(taskID);
-      }
-      else
-        navigator.replace({
-          kind: "taskDetail",
-          taskID,
-          ...(destination.mode === undefined ? {} : { mode: destination.mode }),
-        });
-    },
+    parentReturnDirection: destination.parentReturnDirection,
     projectID: destination.projectID,
+    retainedState,
   };
-  return (
-    destination.workflowID === undefined ? (
-      <NewTaskForm {...formProps} />
-    ) : (
-      <NewTaskForm
-        {...formProps}
-        pendingRelationship={destination.pendingRelationship}
-        workflowID={destination.workflowID}
-      />
-    )
+  return destination.workflowID === undefined ? (
+    <NewTaskForm {...formProps} />
+  ) : (
+    <NewTaskForm {...formProps} workflowID={destination.workflowID} />
   );
 }
 
@@ -209,7 +209,13 @@ function LinkWorkflowDestinationView({
   const complete = (completion: Parameters<typeof destination.onCompleted>[0]) => {
     if (navigator.close() !== "accepted") return;
     void (async () => destination.onCompleted(completion))().catch((error: unknown) => {
-      push({ body: errorMessage(error), durationMs: Infinity, id: "workflow-link-completion-error", title: t("states.error"), tone: "danger" });
+      push({
+        body: errorMessage(error),
+        durationMs: Infinity,
+        id: "workflow-link-completion-error",
+        title: t("states.error"),
+        tone: "danger",
+      });
     });
   };
   return (

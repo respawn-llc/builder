@@ -22,7 +22,7 @@ import type { DescriptionPresentationState } from "./TaskDetailDescriptionPresen
 import { TaskDetailInboxRow } from "./TaskDetailInboxRow";
 import { DescriptionIsland, PropertiesIsland, TaskHeaderIsland, type TaskDraft } from "./TaskDetailRows";
 import { TaskTabs, type DetailTab } from "./TaskDetailTabs";
-import { TaskDependenciesArea } from "./TaskDependenciesArea";
+import { TaskDependenciesArea } from "./TaskDependenciesAreaAdapter";
 import type { QuestionSelectionState } from "./TaskDetailQuestionState";
 import { promptAnswerKey, type PromptAnswerKey, type PromptAnswerState } from "./PromptAnswerState";
 import type { PromptPrimaryFocusRequest } from "./PromptPrimaryControlRegistry";
@@ -174,7 +174,7 @@ export function TaskDetailList({
     ],
   );
   const initialScrollKey =
-    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? undefined : "inbox";
+    initialFocus?.kind === "dependencies" ? "dependencies" : initialFocus === undefined ? "header" : "inbox";
   const pinnedItemKeys = useMemo(() => {
     const keys = new Set<string>();
     if (attention.isPending || (initialFocus !== undefined && initialFocus.kind !== "dependencies")) {
@@ -222,7 +222,9 @@ export function TaskDetailList({
       initialScrollKey={initialScrollKey}
       initialScrollRequestKey={
         focusRequestKey ??
-        (initialFocus === undefined ? undefined : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
+        (initialFocus === undefined
+          ? `${detail.id}:top`
+          : taskDetailInitialFocusRequestKey(detail.id, initialFocus))
       }
       isFetchingNextPage={paging.isFetchingNextPage}
       isFetchingPreviousPage={paging.isFetchingPreviousPage}

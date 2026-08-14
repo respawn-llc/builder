@@ -8,7 +8,12 @@ import {
 import { useCallback, useEffect } from "react";
 
 import { boardNodeCardsPageSize, type BoardNodeCardsPage, type WorkflowProjectEvent } from "@/api";
-import { invalidateProjectBoardQueries, invalidateProjectTaskSearches, queryKeys } from "@/app-facade";
+import {
+  invalidateProjectBoardQueries,
+  invalidateProjectTaskSearches,
+  queryKeys,
+  reportNonCancelledError,
+} from "@/app-facade";
 import { useAppServices } from "@/app-facade";
 import { useConnectionSnapshot } from "@/app-facade";
 import { workflowProjectEventCanChangeTaskSearch } from "@/app-facade";
@@ -123,7 +128,7 @@ export function useProjectBoardSubscription(
   const { onBackgroundError, onSelectedTaskDeleted, selectedTaskID, selectedWorkflowID } = input;
   const consumeBackgroundError = useCallback(
     (error: unknown): void => {
-      onBackgroundError?.(error);
+      reportNonCancelledError(error, (failure) => onBackgroundError?.(failure));
     },
     [onBackgroundError],
   );

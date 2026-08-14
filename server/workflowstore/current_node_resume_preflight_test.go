@@ -43,7 +43,7 @@ func TestPreflightTaskResumeRejectsEditedTransitionParameterWithoutMutatingCurre
 	if _, err := store.db.ExecContext(ctx, `
 UPDATE workflow_edges
 SET parameters_json = ?
-WHERE id = ?`, parameters, string(*review.EnteredByEdgeID)); err != nil {
+WHERE id = ?`, parameters, testGraphEntityBlob(t, string(*review.EnteredByEdgeID))); err != nil {
 		t.Fatalf("edit entering Transition Branch: %v", err)
 	}
 
@@ -144,6 +144,110 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 	}
 }
 
+func TestWorkflowGraphSaveBlocksRetargetingEnteringEdgeReferencedByCurrentNode(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	review := reviewResult.Mutation.Created[0]
+	if review.EnteredByEdgeID == nil {
+		t.Fatal("review Current Node has no entering Edge")
+	}
+
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	request := NewWorkflowGraphSaveRequest(definition, record.Version)
+	gateNodeID := testNodeID("node-retarget-gate-" + workflowID.String())
+	gateGroupID := testTransitionGroupID("group-retarget-gate-" + workflowID.String())
+	gateEdgeID := testEdgeID("edge-retarget-gate-" + workflowID.String())
+	request.Nodes = append(request.Nodes, NodeRecord{
+		ID:           gateNodeID,
+		WorkflowID:   workflowID,
+		Key:          "retarget_gate",
+		Kind:         workflow.NodeKindAgent,
+		DisplayName:  "Retarget Gate",
+		SubagentRole: "coder",
+	})
+	request.TransitionGroups = append(request.TransitionGroups, TransitionGroupRecord{
+		ID:           gateGroupID,
+		WorkflowID:   workflowID,
+		SourceNodeID: gateNodeID,
+		TransitionID: "enter_review",
+		DisplayName:  "Enter Review",
+	})
+	request.Edges = append(request.Edges, EdgeRecord{
+		ID:                gateEdgeID,
+		WorkflowID:        workflowID,
+		TransitionGroupID: gateGroupID,
+		Key:               "review",
+		TargetNodeID:      review.Reference.NodeID,
+		ContextMode:       workflow.ContextModeNewSession,
+		PromptTemplate:    "Review the gated plan.",
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
+	})
+	retargeted := false
+	for index := range request.Edges {
+		if request.Edges[index].ID != *review.EnteredByEdgeID {
+			continue
+		}
+		request.Edges[index].TargetNodeID = gateNodeID
+		request.Edges[index].PromptTemplate = "Validate {{.Params.summary}}."
+		retargeted = true
+	}
+	if !retargeted {
+		t.Fatalf("workflow edge %q not found in save request", *review.EnteredByEdgeID)
+	}
+
+	preview, err := store.PreviewWorkflowGraphSave(ctx, request)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if workflowGraphSaveBlockerCount(preview.Blockers, "task_referenced_edge_group_changed") != 1 {
+		t.Fatalf("retarget preview = %+v, want referenced-edge routing blocker", preview)
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, request)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if saved.Saved {
+		t.Fatalf("retarget save = %+v, want blocked graph mutation", saved)
+	}
+	unchanged, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition after blocked save: %v", err)
+	}
+	persistedEdgeFound := false
+	for _, edge := range unchanged.Edges {
+		if edge.ID == *review.EnteredByEdgeID {
+			persistedEdgeFound = true
+			if edge.TargetNodeID != review.Reference.NodeID {
+				t.Fatalf(
+					"referenced Edge target after blocked save = %q, want %q",
+					edge.TargetNodeID,
+					review.Reference.NodeID,
+				)
+			}
+			break
+		}
+	}
+	if !persistedEdgeFound {
+		t.Fatalf("referenced Edge %q missing after blocked save", *review.EnteredByEdgeID)
+	}
+}
+
 func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)
@@ -163,13 +267,17 @@ func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_current_nodes WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatalf("delete seeded Current Node: %v", err)
 	}
+	enteringEdgeID := testEdgeID("edge-join-synth-" + workflowID.String())
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, current_input_values_json, prior_node_values_json,
     scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id,
     effective_assignee, assignee_origin
 ) VALUES (?, ?, '{"joined":"existing"}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?, 'default', 'configured_fallback')`,
-		task.ID, synthID, "edge-join-synth-"+workflowID.String()); err != nil {
+		task.ID,
+		testGraphEntityBlob(t, string(synthID)),
+		testGraphEntityBlob(t, string(enteringEdgeID)),
+	); err != nil {
 		t.Fatalf("seed Join Current Node: %v", err)
 	}
 	parameters, err := marshalJSONArray([]workflow.Parameter{
@@ -182,7 +290,7 @@ INSERT INTO task_current_nodes (
 	if _, err := store.db.ExecContext(ctx, `
 UPDATE workflow_edges
 SET parameters_json = ?
-WHERE id = ?`, parameters, "edge-join-a-"+workflowID.String()); err != nil {
+WHERE id = ?`, parameters, testGraphEntityBlob(t, string(testEdgeID("edge-join-a-"+workflowID.String())))); err != nil {
 		t.Fatalf("edit Join incoming Transition Branch: %v", err)
 	}
 
@@ -196,7 +304,7 @@ WHERE id = ?`, parameters, "edge-join-a-"+workflowID.String()); err != nil {
 	diagnostic := classifications[0].Diagnostics[0]
 	if diagnostic.Code != CurrentNodeResumeParameterNotMaterializedCode ||
 		!diagnostic.CurrentNode.Equal(synth) ||
-		diagnostic.EnteringEdgeID != workflow.EdgeID("edge-join-synth-"+workflowID.String()) ||
+		diagnostic.EnteringEdgeID != enteringEdgeID ||
 		diagnostic.ParameterKey != "risk" {
 		t.Fatalf("Join resume diagnostic = %+v, want exact derived binding context", diagnostic)
 	}
@@ -220,12 +328,16 @@ func TestPreflightTaskResumeRejectsEnteringEdgeForDifferentTarget(t *testing.T) 
 	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_current_nodes WHERE task_id = ?`, task.ID); err != nil {
 		t.Fatalf("delete Current Node: %v", err)
 	}
+	enteringEdgeID := testEdgeID("edge-start-" + workflowID.String())
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO task_current_nodes (
     task_id, node_id, current_input_values_json, prior_node_values_json,
     scheduling_state, interruption_reason, interruption_detail_json, interrupted_at_unix_ms, entered_by_edge_id
 ) VALUES (?, ?, '{}', '{"transition_parameters":{}}', 'interrupted', 'user_interrupt', '{}', 1, ?)`,
-		task.ID, reference.NodeID, "edge-start-"+workflowID.String()); err != nil {
+		task.ID,
+		testGraphEntityBlob(t, string(reference.NodeID)),
+		testGraphEntityBlob(t, string(enteringEdgeID)),
+	); err != nil {
 		t.Fatalf("seed mismatched Current Node: %v", err)
 	}
 	if _, err := store.PreflightTaskResume(ctx, task.ID); err == nil {

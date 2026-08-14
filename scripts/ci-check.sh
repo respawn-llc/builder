@@ -75,7 +75,7 @@ run_build() {
 
 run_test() {
 	echo "==> test"
-	./scripts/test.sh "$@"
+	./scripts/test.sh --full "$@"
 }
 
 run_rust_policy() {

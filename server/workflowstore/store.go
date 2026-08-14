@@ -12,21 +12,25 @@ import (
 	"core/server/metadata"
 	"core/server/metadata/sqlitegen"
 	"core/server/workflow"
+	"core/shared/invariant"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 	"github.com/google/uuid"
 )
 
 type Store struct {
-	metadata     *metadata.Store
-	db           *sql.DB
-	queries      *sqlitegen.Queries
-	roleResolver workflow.RoleResolver
-	now          func() time.Time
-	approvalGate chan struct{}
-	graphSaves   *metadata.MutationLaneRegistry[runtimeids.WorkflowID]
-	eventMu      sync.RWMutex
-	eventSink    WorkflowEventPublisher
+	metadata            *metadata.Store
+	db                  *sql.DB
+	queries             *sqlitegen.Queries
+	priorValuesContract jsoncontract.Internal
+	roleResolver        workflow.RoleResolver
+	now                 func() time.Time
+	approvalGate        chan struct{}
+	graphSaves          *metadata.MutationLaneRegistry[runtimeids.WorkflowID]
+	eventMu             sync.RWMutex
+	eventSink           WorkflowEventPublisher
+	invariantPolicy     invariant.Policy
 }
 
 type Option func(*Store)
@@ -52,18 +56,40 @@ func WithNow(now func() time.Time) Option {
 	}
 }
 
+func WithDebug(debug bool) Option {
+	return func(s *Store) {
+		mode := invariant.ModeDiagnostic
+		if debug {
+			mode = invariant.ModePanic
+		}
+		s.invariantPolicy = invariant.NewPolicy(
+			invariant.WithMode(mode),
+			invariant.WithSink(workflowInvariantSlogSink{}),
+		)
+	}
+}
+
 func New(metadataStore *metadata.Store, opts ...Option) (*Store, error) {
 	if metadataStore == nil || metadataStore.DB() == nil || metadataStore.Queries() == nil {
 		return nil, errors.New("metadata store is required")
 	}
+	priorValues, err := jsoncontract.NewPreparer(false).Internal(
+		"Workflow Store current-node prior values",
+		workflow.MaterializedPriorValues{},
+	)
+	if err != nil {
+		return nil, err
+	}
 	store := &Store{
-		metadata:     metadataStore,
-		db:           metadataStore.DB(),
-		queries:      metadataStore.Queries(),
-		now:          func() time.Time { return time.Now().UTC() },
-		approvalGate: make(chan struct{}, 1),
-		graphSaves:   metadata.NewMutationLaneRegistry[runtimeids.WorkflowID](),
-		eventSink:    noopWorkflowEventPublisher{},
+		metadata:            metadataStore,
+		db:                  metadataStore.DB(),
+		queries:             metadataStore.Queries(),
+		priorValuesContract: priorValues,
+		now:                 func() time.Time { return time.Now().UTC() },
+		approvalGate:        make(chan struct{}, 1),
+		graphSaves:          metadata.NewMutationLaneRegistry[runtimeids.WorkflowID](),
+		eventSink:           noopWorkflowEventPublisher{},
+		invariantPolicy:     invariant.NewPolicy(invariant.WithSink(workflowInvariantSlogSink{})),
 	}
 	for _, opt := range opts {
 		opt(store)
@@ -117,7 +143,7 @@ type NodeRecord struct {
 	Key                workflow.ModelKey
 	Kind               workflow.NodeKind
 	DisplayName        string
-	GroupID            string
+	GroupID            *string
 	GroupKey           string
 	SubagentRole       string
 	CompletionMode     string
@@ -370,8 +396,8 @@ func insertWorkflow(ctx context.Context, q *sqlitegen.Queries, now int64, req Cr
 	}
 	description := strings.TrimSpace(req.Description)
 	workflowID := runtimeids.NewWorkflowID()
-	startID := prefixedID("node")
-	doneID := prefixedID("node")
+	startID := runtimeids.NewGraphEntityID()
+	doneID := runtimeids.NewGraphEntityID()
 	policy := workflow.DefaultExecutionTargetPolicy()
 	if err := q.InsertWorkflow(ctx, sqlitegen.InsertWorkflowParams{
 		ID:                    workflowID,

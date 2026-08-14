@@ -11,7 +11,6 @@ import (
 	"core/prompts"
 	"core/server/auth"
 	"core/server/launch"
-	"core/server/runtime"
 	shelltool "core/server/tools/shell"
 	"core/server/tools/shell/postprocess"
 	"core/shared/config"
@@ -51,9 +50,8 @@ type AuthSupport struct {
 }
 
 type RuntimeSupport struct {
-	FastModeState *runtime.FastModeState
-	Background    *shelltool.Manager
-	Generated     prompts.GeneratedSyncResult
+	Background *shelltool.Manager
+	Generated  prompts.GeneratedSyncResult
 }
 
 func ResolveConfig(req Request) (ConfigPlan, error) {
@@ -140,8 +138,7 @@ func BuildRuntimeSupport(cfg config.App) (RuntimeSupport, error) {
 		return RuntimeSupport{}, err
 	}
 	return RuntimeSupport{
-		FastModeState: runtime.NewFastModeState(cfg.Settings.PriorityRequestMode),
-		Background:    background,
+		Background: background,
 	}, nil
 }
 

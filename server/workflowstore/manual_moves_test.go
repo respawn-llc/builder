@@ -1,11 +1,17 @@
 package workflowstore
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"core/server/metadata"
 	"core/server/workflow"
+	"core/shared/config"
+	"core/shared/runtimeids"
 )
 
 func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
@@ -23,6 +29,372 @@ func TestPrepareManualMoveRejectsOversizedCommentary(t *testing.T) {
 	var validation CompletionValidationError
 	if !errors.As(err, &validation) || !validation.HasCode(CompletionCodeCommentaryTooLarge) {
 		t.Fatalf("PrepareManualMove error = %T %v, want oversized commentary validation", err, err)
+	}
+}
+
+func TestApplyManualMoveRejectsAgentPlacementWithoutAssignmentPreparation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if _, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding)); err == nil {
+		t.Fatal("ApplyManualMove allowed Agent placement without assignment preparation")
+	}
+	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("ListCurrentNodes: %v", err)
+	}
+	if len(currentNodes) != 1 || currentNodes[0].Reference.NodeID == workflow.NodeIDOf(target) {
+		t.Fatalf("Current Nodes after rejected Agent move = %+v, want unchanged origin", currentNodes)
+	}
+}
+
+func TestManualMoveAssignmentPreparationIncludesCommentary(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Commentary:   "  operator handoff  ",
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	var observed []CurrentNodeStartContext
+	if _, err := applyManualMoveForStoreTestWithPreparation(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(inputs []CurrentNodeStartContext) {
+			observed = append([]CurrentNodeStartContext(nil), inputs...)
+		},
+	); err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	if len(observed) != 1 ||
+		observed[0].CurrentNode.CurrentInputValues[workflow.RuntimePromptParameterCommentary] != "operator handoff" {
+		t.Fatalf("assignment preparation contexts = %+v, want trimmed operator commentary", observed)
+	}
+}
+
+func TestManualMoveRejectsWorkflowVersionChangeAfterAssignmentPreparation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	origin := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	assignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
+	aborted := false
+	_, err = store.ApplyManualMoveWithTargetAssignments(
+		ctx,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+			version, versionErr := store.incrementWorkflowVersion(ctx, store.queries, workflowID)
+			if versionErr != nil {
+				return ManualMoveTargetAssignmentPreparation{}, versionErr
+			}
+			if version != record.Version+1 {
+				return ManualMoveTargetAssignmentPreparation{}, errors.New("workflow version did not advance")
+			}
+			preparation, assignmentErr := manualMoveTargetAssignmentsForSession(inputs, assignmentSessionID)
+			if assignmentErr != nil {
+				return ManualMoveTargetAssignmentPreparation{}, assignmentErr
+			}
+			preparation.Abort = func(err error) error {
+				aborted = true
+				return err
+			}
+			return preparation, nil
+		},
+	)
+	if err == nil {
+		t.Fatal("ApplyManualMoveWithTargetAssignments accepted changed Workflow Version")
+	}
+	if !aborted {
+		t.Fatal("changed Workflow Version did not abort prepared assignments")
+	}
+	currentNodes, listErr := store.ListCurrentNodes(ctx, task.ID)
+	if listErr != nil {
+		t.Fatalf("ListCurrentNodes: %v", listErr)
+	}
+	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(origin.Reference) {
+		t.Fatalf("Current Nodes after Workflow edit = %+v, want origin %v", currentNodes, origin.Reference)
+	}
+}
+
+func TestManualMoveRetainedAssignmentBlocksWorkflowSaveUntilMoveCommits(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: workflow.NodeIDOf(target),
+		Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	assignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
+	assignmentPrepared := make(chan struct{})
+	releaseAssignment := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseAssignment) })
+	})
+	moveDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			prepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				close(assignmentPrepared)
+				<-releaseAssignment
+				return manualMoveTargetAssignmentsForSession(inputs, assignmentSessionID)
+			},
+		)
+		moveDone <- moveErr
+	}()
+	select {
+	case <-assignmentPrepared:
+	case <-time.After(time.Second):
+		t.Fatal("Manual Move did not reach assignment preparation")
+	}
+	updated := definition
+	updated.Edges = append([]workflow.Edge(nil), definition.Edges...)
+	for index := range updated.Edges {
+		if updated.Edges[index].TargetNodeID == workflow.NodeIDOf(target) {
+			updated.Edges[index].PromptTemplate = "Updated assignment instructions."
+			break
+		}
+	}
+	saveDone := make(chan WorkflowGraphSaveResult, 1)
+	saveErr := make(chan error, 1)
+	go func() {
+		saved, err := store.SaveWorkflowGraph(ctx, NewWorkflowGraphSaveRequest(updated, record.Version))
+		if err != nil {
+			saveErr <- err
+			return
+		}
+		saveDone <- saved
+	}()
+	select {
+	case err := <-saveErr:
+		t.Fatalf("SaveWorkflowGraph returned while Manual Move assignment was pending: %v", err)
+	case saved := <-saveDone:
+		t.Fatalf("SaveWorkflowGraph returned while Manual Move assignment was pending: %+v", saved)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseAssignment) })
+	if err := <-moveDone; err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	select {
+	case err := <-saveErr:
+		t.Fatalf("SaveWorkflowGraph after Manual Move: %v", err)
+	case saved := <-saveDone:
+		if !saved.Saved || saved.Version != record.Version+1 {
+			t.Fatalf("SaveWorkflowGraph after Manual Move = %+v, want version %d", saved, record.Version+1)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("SaveWorkflowGraph remained blocked after Manual Move")
+	}
+}
+
+func TestManualMoveAssignmentWaitDoesNotBlockAnotherTaskInSameWorkflow(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	firstTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	secondTask := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, firstTask.ID)
+	startTask(t, ctx, store, secondTask.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	target := nodeByKey(t, definition, "implement")
+	prepare := func(taskID workflow.TaskID) ManualMovePreparation {
+		prepared, prepareErr := store.PrepareManualMove(ctx, ManualMoveRequest{
+			TaskID:       taskID,
+			TargetNodeID: workflow.NodeIDOf(target),
+			Values:       map[workflow.ModelKey]map[string]string{"plan": {"prior_summary": "manual plan"}},
+		})
+		if prepareErr != nil {
+			t.Fatalf("PrepareManualMove %q: %v", taskID, prepareErr)
+		}
+		return prepared
+	}
+	firstPrepared := prepare(firstTask.ID)
+	secondPrepared := prepare(secondTask.ID)
+	firstAssignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
+	secondAssignmentSessionID := createManualMoveAssignmentSession(t, ctx, store, binding)
+	firstWaiting := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(releaseFirst) })
+	})
+	firstDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			firstPrepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				close(firstWaiting)
+				<-releaseFirst
+				return manualMoveTargetAssignmentsForSession(inputs, firstAssignmentSessionID)
+			},
+		)
+		firstDone <- moveErr
+	}()
+	select {
+	case <-firstWaiting:
+	case <-time.After(time.Second):
+		t.Fatal("first Manual Move did not reach assignment wait")
+	}
+	secondDone := make(chan error, 1)
+	go func() {
+		_, moveErr := store.ApplyManualMoveWithTargetAssignments(
+			ctx,
+			secondPrepared,
+			noneManualMoveExecutionTargetCandidate(binding),
+			func(_ context.Context, inputs []CurrentNodeStartContext) (ManualMoveTargetAssignmentPreparation, error) {
+				return manualMoveTargetAssignmentsForSession(inputs, secondAssignmentSessionID)
+			},
+		)
+		secondDone <- moveErr
+	}()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second Manual Move: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second Task Manual Move blocked on first Task assignment wait")
+	}
+	releaseOnce.Do(func() { close(releaseFirst) })
+	if err := <-firstDone; err != nil {
+		t.Fatalf("first Manual Move: %v", err)
+	}
+}
+
+func createManualMoveAssignmentSession(
+	t *testing.T,
+	ctx context.Context,
+	store *Store,
+	binding metadata.Binding,
+) runtimeids.SessionID {
+	t.Helper()
+	sessionID, err := runtimeids.ParseSessionID(createTestSession(t, ctx, store, binding, config.App{
+		PersistenceRoot: store.metadata.PersistenceRoot(),
+		WorkspaceRoot:   binding.CanonicalRoot,
+	}))
+	if err != nil {
+		t.Fatalf("parse test Session ID: %v", err)
+	}
+	return sessionID
+}
+
+func TestApplyManualMoveRejectsScriptDestinationWithAgentFanoutWithoutAssignmentPreparation(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMixedExecutableFanoutWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+	startTask(t, ctx, store, task.ID)
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	script := nodeByKey(t, definition, "script")
+	transition := workflow.TransitionID("split")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(script),
+		TransitionKey: &transition,
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove: %v", err)
+	}
+	if _, err := store.ApplyManualMove(ctx, prepared, noneManualMoveExecutionTargetCandidate(binding)); err == nil {
+		t.Fatal("ApplyManualMove allowed mixed executable fan-out without assignment preparation")
+	}
+	var observed []CurrentNodeStartContext
+	moved, err := applyManualMoveForStoreTestWithPreparation(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+		func(inputs []CurrentNodeStartContext) {
+			observed = append([]CurrentNodeStartContext(nil), inputs...)
+		},
+	)
+	if err != nil {
+		t.Fatalf("ApplyManualMoveWithTargetAssignments: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied || len(moved.Mutation.Created) != 2 {
+		t.Fatalf("mixed fan-out Manual Move = %+v, want two applied targets", moved)
+	}
+	var agentContexts int
+	var scriptContexts int
+	for _, input := range observed {
+		switch input.Node.Kind {
+		case workflow.NodeKindAgent:
+			agentContexts++
+		case workflow.NodeKindScript:
+			scriptContexts++
+		}
+	}
+	if agentContexts != 1 || scriptContexts != 1 {
+		t.Fatalf("mixed fan-out assignment contexts = Agent %d Script %d, want one each", agentContexts, scriptContexts)
 	}
 }
 
@@ -96,6 +468,133 @@ func TestManualMoveForwardExecutableAgentReplacesSerialCurrentNode(t *testing.T)
 	}
 }
 
+func TestManualMoveRepairsCurrentNodeWhoseEnteringEdgeWasRetargetedToRequestedTarget(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
+	gateNodeID := testNodeID("node-manual-move-repair-gate-" + workflowID.String())
+	gateGroupID := testTransitionGroupID("group-manual-move-repair-gate-" + workflowID.String())
+	continueGroupID := testTransitionGroupID("group-manual-move-repair-continue-" + workflowID.String())
+	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(definition workflow.Definition, request *WorkflowGraphSaveRequest) {
+		plan := nodeByKey(t, definition, "plan")
+		implementation := nodeByKey(t, definition, "implement")
+		request.Nodes = append(request.Nodes, NodeRecord{
+			ID:           gateNodeID,
+			WorkflowID:   workflowID,
+			Key:          "repair_gate",
+			Kind:         workflow.NodeKindAgent,
+			DisplayName:  "Repair Gate",
+			SubagentRole: "coder",
+		})
+		request.TransitionGroups = append(request.TransitionGroups,
+			TransitionGroupRecord{
+				ID:           gateGroupID,
+				WorkflowID:   workflowID,
+				SourceNodeID: workflow.NodeIDOf(plan),
+				TransitionID: "gate",
+				DisplayName:  "Gate",
+			},
+			TransitionGroupRecord{
+				ID:           continueGroupID,
+				WorkflowID:   workflowID,
+				SourceNodeID: gateNodeID,
+				TransitionID: "continue",
+				DisplayName:  "Continue",
+			},
+		)
+		request.Edges = append(request.Edges,
+			EdgeRecord{
+				ID:                testEdgeID("edge-manual-move-repair-gate-" + workflowID.String()),
+				WorkflowID:        workflowID,
+				TransitionGroupID: gateGroupID,
+				Key:               "gate",
+				TargetNodeID:      gateNodeID,
+				ContextMode:       workflow.ContextModeNewSession,
+				PromptTemplate:    "Check the plan.",
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+			},
+			EdgeRecord{
+				ID:                testEdgeID("edge-manual-move-repair-continue-" + workflowID.String()),
+				WorkflowID:        workflowID,
+				TransitionGroupID: continueGroupID,
+				Key:               "continue",
+				TargetNodeID:      workflow.NodeIDOf(implementation),
+				ContextMode:       workflow.ContextModeNewSession,
+				PromptTemplate:    "Implement the checked plan.",
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
+			},
+		)
+	})
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	implementationResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "next",
+		OutputValues: map[string]string{"prior_summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	implementation := implementationResult.Mutation.Created[0]
+	if implementation.EnteredByEdgeID == nil {
+		t.Fatal("implementation Current Node has no entering Edge")
+	}
+	definition, _, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	gate := nodeByKey(t, definition, "repair_gate")
+	if _, err := store.db.ExecContext(ctx, `
+UPDATE workflow_edges
+SET target_node_id = ?
+WHERE id = ?`,
+		testGraphEntityBlob(t, string(workflow.NodeIDOf(gate))),
+		testGraphEntityBlob(t, string(*implementation.EnteredByEdgeID)),
+	); err != nil {
+		t.Fatalf("retarget entering Edge: %v", err)
+	}
+
+	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:       task.ID,
+		TargetNodeID: plan.Reference.NodeID,
+	}); err == nil {
+		t.Fatal("manual move to unrelated target accepted retargeted entering Edge")
+	}
+
+	transition := workflow.TransitionID("next")
+	prepared, err := store.PrepareManualMove(ctx, ManualMoveRequest{
+		TaskID:        task.ID,
+		TargetNodeID:  workflow.NodeIDOf(gate),
+		TransitionKey: &transition,
+		Values: map[workflow.ModelKey]map[string]string{
+			"plan": {"prior_summary": "approved plan"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PrepareManualMove to retargeted entering Edge target: %v", err)
+	}
+	moved, err := applyManualMoveForStoreTest(
+		t,
+		ctx,
+		store,
+		prepared,
+		noneManualMoveExecutionTargetCandidate(binding),
+	)
+	if err != nil {
+		t.Fatalf("ApplyManualMove to retargeted entering Edge target: %v", err)
+	}
+	if moved.Outcome != ManualMoveResultOutcomeApplied ||
+		len(moved.Mutation.Created) != 1 ||
+		moved.Mutation.Created[0].Reference.NodeID != workflow.NodeIDOf(gate) ||
+		moved.Mutation.Created[0].EnteredByEdgeID == nil ||
+		*moved.Mutation.Created[0].EnteredByEdgeID != *implementation.EnteredByEdgeID {
+		t.Fatalf("manual move repair = %+v, want exact retargeted entering Edge destination", moved)
+	}
+}
+
 func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeNewSession, "coder")
@@ -133,36 +632,6 @@ func TestPrepareManualMoveValidatesExecutableCompletionShapeWithoutMutation(t *t
 		if !currentNodes[index].Reference.Equal(before[index].Reference) {
 			t.Fatalf("current nodes after rejected move = %+v, before = %+v", currentNodes, before)
 		}
-	}
-}
-
-func TestPrepareManualMoveDryRunsTargetValueAndContextMaterialization(t *testing.T) {
-	ctx, store, binding := newTestStoreContext(t)
-	workflowID := createChainedContextModeWorkflow(t, ctx, store, workflow.ContextModeContinueSession, "coder")
-	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
-	task := createDefaultTask(t, ctx, store, binding.ProjectID)
-	source := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	definition, _, err := store.GetDefinition(ctx, workflowID)
-	if err != nil {
-		t.Fatalf("GetDefinition: %v", err)
-	}
-	target := nodeByKey(t, definition, "implement")
-
-	if _, err := store.PrepareManualMove(ctx, ManualMoveRequest{
-		TaskID:       task.ID,
-		TargetNodeID: workflow.NodeIDOf(target),
-		Values: map[workflow.ModelKey]map[string]string{
-			"plan": {"prior_summary": "manual plan"},
-		},
-	}); err == nil {
-		t.Fatal("PrepareManualMove accepted a target whose required continuation context could not be materialized")
-	}
-	currentNodes, err := store.ListCurrentNodes(ctx, task.ID)
-	if err != nil {
-		t.Fatalf("ListCurrentNodes: %v", err)
-	}
-	if len(currentNodes) != 1 || !currentNodes[0].Reference.Equal(source.Reference) {
-		t.Fatalf("current nodes = %+v, want unchanged source", currentNodes)
 	}
 }
 

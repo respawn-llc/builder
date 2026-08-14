@@ -2,7 +2,6 @@ package workflowstore
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 
 	"core/server/metadata/sqlitegen"
@@ -171,7 +170,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 		}
 	}
 	for _, edgeID := range structural.Removed.edges {
-		count, err := q.CountTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
+		count, err := q.CountTaskEdgeReferences(ctx, string(edgeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
@@ -205,7 +204,7 @@ func evaluateWorkflowGraphSaveDynamicDecision(ctx context.Context, q *sqlitegen.
 	}
 	historyEdgeChangeEntities := []WorkflowGraphEntityReference{}
 	for _, edgeID := range structural.EditPolicy.HistoryEdgeChanges {
-		refCount, err := q.CountAllTaskEdgeReferences(ctx, sql.NullString{String: string(edgeID), Valid: true})
+		refCount, err := q.CountAllTaskEdgeReferences(ctx, string(edgeID))
 		if err != nil {
 			return workflowGraphSaveDynamicImpact{}, err
 		}
@@ -259,7 +258,8 @@ func workflowGraphSaveRemovedImpact(removed removedWorkflowGraphRows) WorkflowGr
 }
 
 func workflowEdgeHistoryReinterpretingChange(current EdgeRecord, next EdgeRecord) bool {
-	return current.TransitionGroupID != next.TransitionGroupID
+	return current.TransitionGroupID != next.TransitionGroupID ||
+		current.TargetNodeID != next.TargetNodeID
 }
 
 func workflowGraphEdgesByID(edges []EdgeRecord) map[workflow.EdgeID]EdgeRecord {
@@ -288,7 +288,7 @@ func workflowGraphEditPolicyBlockers(
 		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_node_kind_changed", Message: "Workflow node kind changes are blocked for nodes referenced by existing tasks.", Count: impact.TaskReferencedNodeKindChangeRefCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(nodeKindChanges)})
 	}
 	if impact.HistoryReinterpretingEdgeChangeCount > 0 {
-		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_edge_group_changed", Message: "Transition branch group changes are blocked for branches referenced by existing tasks.", Count: impact.HistoryReinterpretingEdgeRefCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(historyEdgeChanges)})
+		blockers = append(blockers, WorkflowGraphEditPolicyBlocker{Code: "task_referenced_edge_group_changed", Message: "Transition branch routing changes are blocked for branches referenced by existing tasks.", Count: impact.HistoryReinterpretingEdgeRefCount, AffectedEntities: canonicalWorkflowGraphEntityReferences(historyEdgeChanges)})
 	}
 	return blockers
 }

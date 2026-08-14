@@ -15,7 +15,6 @@ func TestQuestionHistoryRouteContract(t *testing.T) {
 	}
 	if route.Kind != KindSubscription ||
 		route.Scope != ScopeAttachedSession ||
-		route.Dependency != DependencySessionView ||
 		route.RequestType != reflect.TypeOf(serverapi.QuestionHistorySubscribeRequest{}) ||
 		route.EventType != reflect.TypeOf(protocol.SessionQuestionHistoryEventParams{}) ||
 		route.EventMethod != protocol.MethodSessionQuestionHistoryEvent ||

@@ -659,14 +659,14 @@ type WorkflowValidationErrorDetails struct {
 }
 
 type WorkflowTaskCreateRequest struct {
-	ProjectID         string                              `json:"project_id"`
-	WorkflowID        *runtimeids.WorkflowID              `json:"workflow_id,omitempty"`
-	Title             string                              `json:"title"`
-	Body              string                              `json:"body,omitempty"`
-	SourceURL         string                              `json:"source_url,omitempty"`
-	SourceWorkspaceID string                              `json:"source_workspace_id,omitempty"`
-	LabelIDs          []string                            `json:"label_ids"`
-	DependencyIntent  *WorkflowTaskDependencyCreateIntent `json:"dependency_intent,omitempty"`
+	ProjectID         string                               `json:"project_id"`
+	WorkflowID        *runtimeids.WorkflowID               `json:"workflow_id,omitempty"`
+	Title             string                               `json:"title"`
+	Body              string                               `json:"body,omitempty"`
+	SourceURL         string                               `json:"source_url,omitempty"`
+	SourceWorkspaceID string                               `json:"source_workspace_id,omitempty"`
+	LabelIDs          []string                             `json:"label_ids"`
+	DependencyIntents []WorkflowTaskDependencyCreateIntent `json:"dependency_intents,omitempty"`
 }
 
 type WorkflowTaskCreateResponse struct {
@@ -1747,6 +1747,27 @@ type WorkflowTaskActivityListResponse struct {
 	WorkflowOffsetPage[WorkflowTaskActivityItem]
 }
 
+type WorkflowTaskSessionStatus string
+
+const (
+	WorkflowTaskSessionStatusRunning  WorkflowTaskSessionStatus = "running"
+	WorkflowTaskSessionStatusQuestion WorkflowTaskSessionStatus = "question"
+	WorkflowTaskSessionStatusIdle     WorkflowTaskSessionStatus = "idle"
+)
+
+type WorkflowTaskSessionItem struct {
+	SessionID   string                    `json:"session_id"`
+	SessionName *string                   `json:"session_name,omitempty"`
+	NodeName    *string                   `json:"node_name,omitempty"`
+	AgentRole   string                    `json:"agent_role"`
+	Status      WorkflowTaskSessionStatus `json:"status"`
+}
+
+type WorkflowTaskSessionListResponse struct {
+	TaskID string `json:"task_id"`
+	WorkflowOffsetPage[WorkflowTaskSessionItem]
+}
+
 type WorkflowTaskSummary struct {
 	ID                string                `json:"id"`
 	ProjectID         string                `json:"project_id"`
@@ -1907,27 +1928,22 @@ func (r WorkflowListRequest) Validate() error {
 	return nil
 }
 
-type WorkflowOffsetWindow struct {
-	Offset int
-	Limit  int
-}
+type WorkflowOffsetWindow = OffsetWindow
 
 func ResolveWorkflowOffsetWindow(offset *int, limit *int) (WorkflowOffsetWindow, error) {
-	resolvedOffset := 0
-	if offset != nil {
-		if *offset < 0 {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "offset", "offset must be non-negative")
-		}
-		resolvedOffset = *offset
+	window, err := ResolveOffsetWindow(offset, limit)
+	if err == nil {
+		return window, nil
 	}
-	resolvedLimit := WorkflowPaginationMaxLimit
-	if limit != nil {
-		if *limit < 1 || *limit > WorkflowPaginationMaxLimit {
-			return WorkflowOffsetWindow{}, workflowRequestError(WorkflowRequestErrorInvalidMode, "limit", fmt.Sprintf("limit must be between 1 and %d", WorkflowPaginationMaxLimit))
-		}
-		resolvedLimit = *limit
+	var windowError *offsetWindowError
+	if !errors.As(err, &windowError) {
+		return WorkflowOffsetWindow{}, err
 	}
-	return WorkflowOffsetWindow{Offset: resolvedOffset, Limit: resolvedLimit}, nil
+	return WorkflowOffsetWindow{}, workflowRequestError(
+		WorkflowRequestErrorInvalidMode,
+		windowError.Field,
+		windowError.Message,
+	)
 }
 
 func (r WorkflowGetRequest) Validate() error {
@@ -2379,9 +2395,33 @@ func (r WorkflowTaskCreateRequest) Validate() error {
 	if err := validateLabelIDs("label_ids", r.LabelIDs); err != nil {
 		return err
 	}
-	if r.DependencyIntent != nil {
-		if err := r.DependencyIntent.Validate(); err != nil {
+	roleCounts := map[WorkflowTaskDependencyRole]int{}
+	type dependencyIntentIdentity struct {
+		role          WorkflowTaskDependencyRole
+		relatedTaskID string
+	}
+	seenIntents := map[dependencyIntentIdentity]struct{}{}
+	for index, intent := range r.DependencyIntents {
+		field := fmt.Sprintf("dependency_intents[%d]", index)
+		if err := intent.validate(field); err != nil {
 			return err
+		}
+		identity := dependencyIntentIdentity{role: intent.NewTaskRole, relatedTaskID: intent.RelatedTaskID}
+		if _, exists := seenIntents[identity]; exists {
+			return workflowRequestError(
+				WorkflowRequestErrorInvalidValue,
+				field+".related_task_id",
+				"dependency intent duplicates an earlier entry for the same new Task role",
+			)
+		}
+		seenIntents[identity] = struct{}{}
+		roleCounts[intent.NewTaskRole]++
+		if roleCounts[intent.NewTaskRole] > workflowcontract.MaxTaskDependencies {
+			return workflowRequestError(
+				WorkflowRequestErrorTooLong,
+				"dependency_intents",
+				fmt.Sprintf("dependency intents must contain at most %d entries per new Task role", workflowcontract.MaxTaskDependencies),
+			)
 		}
 	}
 	if r.WorkflowID != nil {

@@ -972,6 +972,13 @@ func (callbackCurrentNodeLLMClient) ProviderCapabilities(context.Context) (llm.P
 }
 
 func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
+	return newCurrentNodeQuestionFixtureWithPromptFeed(t, nil)
+}
+
+func newCurrentNodeQuestionFixtureWithPromptFeed(
+	t *testing.T,
+	promptFeed sessionruntime.ExecutionPromptFeed,
+) currentNodeQuestionFixture {
 	t.Helper()
 	home := t.TempDir()
 	workspace := t.TempDir()
@@ -995,6 +1002,7 @@ func newCurrentNodeQuestionFixture(t *testing.T) currentNodeQuestionFixture {
 		}),
 		PersistenceRoot: appCfg.PersistenceRoot,
 		StoreOptions:    metadataStore.AuthoritativeSessionStoreOptions(),
+		PromptFeed:      promptFeed,
 	})
 	controller = newCurrentNodeControllerForTest(t, store, &countingCurrentNodeRunner{}, authority, 1)
 	t.Cleanup(func() {

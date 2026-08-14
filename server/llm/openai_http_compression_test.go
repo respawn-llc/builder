@@ -17,8 +17,17 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-func compressionSessionID() string {
-	return "session-1"
+func compressionDispatch(t *testing.T, kind CodexRequestKind) (*string, *CodexDispatchContext) {
+	t.Helper()
+	dispatch, err := NewCodexDispatchContext(CodexDispatchFacts{
+		SessionID:   "session-1",
+		RunID:       "run-1",
+		RequestKind: kind.Optional(),
+	})
+	if err != nil {
+		t.Fatalf("dispatch context: %v", err)
+	}
+	return textutil.Value("session-1"), dispatch
 }
 
 func TestGenerateChatGPTCodexCompressesLargeResponsesBodyWithZstd(t *testing.T) {
@@ -39,11 +48,12 @@ func TestGenerateChatGPTCodexCompressesLargeResponsesBodyWithZstd(t *testing.T) 
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.Client = httpcompression.NewClient(newRewritingHTTPClient(t, server))
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 
 	response, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	})
@@ -89,11 +99,12 @@ func TestGenerateOpenAIAPIKeyLeavesLargeResponsesBodyUncompressed(t *testing.T) 
 	transport.BaseURL = server.URL
 	transport.BaseURLExplicit = true
 	transport.Client = server.Client()
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 
 	if _, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5",
 		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}); err != nil {
@@ -116,10 +127,11 @@ func TestGenerateExplicitLocalOAuthCompatibleEndpointLeavesResponsesBodyUncompre
 	transport.Client = newRewritingHTTPClient(t, server)
 	transport.BaseURL = "http://127.0.0.1:11434/v1"
 	transport.BaseURLExplicit = true
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 	if _, err := transport.Generate(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}); err != nil {
@@ -145,10 +157,11 @@ func TestGenerateStreamChatGPTCodexCompressesResponsesBody(t *testing.T) {
 	transport.Client = newRewritingHTTPClient(t, server)
 	transport.BaseURL = server.URL
 	transport.BaseURLExplicit = false
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 	_, err := transport.GenerateStreamWithEvents(context.Background(), OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}, StreamCallbacks{})
@@ -176,11 +189,12 @@ func TestCompactChatGPTCodexCompressesResponsesBody(t *testing.T) {
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindCompaction)
 	response, err := transport.Compact(context.Background(), OpenAICompactionRequest{
-		Model:      "gpt-5.6-sol",
-		SessionID:  sessionID,
-		InputItems: PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value(strings.Repeat("history ", 200))}}),
+		Model:         "gpt-5.6-sol",
+		SessionID:     sessionID,
+		CodexDispatch: dispatch,
+		InputItems:    PrepareOpenAIInputItems([]ResponseItem{{Type: ResponseItemTypeMessage, Role: textutil.Value(RoleUser), Content: textutil.Value(strings.Repeat("history ", 200))}}),
 	})
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
@@ -214,10 +228,11 @@ func TestGenerateLogicalRetrySendsCompressedSemanticEquivalents(t *testing.T) {
 
 	transport := NewHTTPTransport(oauthStaticAuth{})
 	transport.Client = newRewritingHTTPClient(t, server)
-	sessionID := compressionSessionID()
+	sessionID, dispatch := compressionDispatch(t, CodexRequestKindTurn)
 	request := OpenAIRequest{
 		Model:          "gpt-5.6-sol",
 		SessionID:      sessionID,
+		CodexDispatch:  dispatch,
 		ToolChoiceMode: ToolChoiceModeAutomatic,
 		SystemPrompt:   strings.Repeat("large request content ", 100),
 	}

@@ -2,7 +2,7 @@ import { Plus, SearchIcon } from "lucide-react";
 import { useMemo, useRef, useState, type ReactElement } from "react";
 import { useTranslation } from "react-i18next";
 
-import { errorMessage, type TaskDependencies, type TaskDependencyDirection } from "@/api";
+import { errorMessage } from "@/api";
 import { taskSearchDebounceMs, useDebouncedText, useTaskSearch, type TaskSearchResult } from "@/app-facade";
 import { TaskStatusIcon } from "@/shared/task-status";
 import {
@@ -16,63 +16,50 @@ import {
   fieldInputClassName,
   type VirtualizedInfiniteListBoundaryState,
 } from "@/ui";
-import type { TaskDependencyPair } from "./dependencyCache";
 
 export function TaskDependencyPicker({
-  dependencies,
-  direction,
   disabled,
-  onAddExisting,
+  excludedTaskIDs,
   onCreateTask,
+  onSelect,
   projectID,
-  taskID,
   trigger,
 }: Readonly<{
-  dependencies: TaskDependencies;
-  direction: TaskDependencyDirection;
   disabled: boolean;
-  onAddExisting(pair: TaskDependencyPair): Promise<unknown>;
+  excludedTaskIDs: ReadonlySet<string>;
   onCreateTask(): void;
+  onSelect(result: TaskSearchResult): Promise<unknown>;
   projectID: string;
-  taskID: string;
   trigger: ReactElement;
 }>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [pendingTaskID, setPendingTaskID] = useState<string | null>(null);
+  const [acceptedTaskIDs, setAcceptedTaskIDs] = useState<ReadonlySet<string>>(() => new Set());
   const inputRef = useRef<HTMLInputElement | null>(null);
   const debouncedQuery = useDebouncedText(query, taskSearchDebounceMs);
   const search = useTaskSearch(projectID, open && !disabled, debouncedQuery);
-  const excludedTaskIDs = useMemo(
-    () =>
-      new Set([
-        taskID,
-        ...dependencies.directions.flatMap((candidateDirection) =>
-          candidateDirection.items.map((item) => item.taskID),
-        ),
-      ]),
-    [dependencies.directions, taskID],
-  );
   const results = useMemo(
-    () => search.results.filter((result) => !excludedTaskIDs.has(result.group.taskID)),
-    [excludedTaskIDs, search.results],
+    () =>
+      search.results.filter(
+        (result) => !excludedTaskIDs.has(result.group.taskID) && !acceptedTaskIDs.has(result.group.taskID),
+      ),
+    [acceptedTaskIDs, excludedTaskIDs, search.results],
   );
   const close = (): void => {
     setOpen(false);
     setQuery("");
     setPendingTaskID(null);
+    setAcceptedTaskIDs(new Set());
   };
-  const addExisting = async (result: TaskSearchResult): Promise<void> => {
+  const select = async (result: TaskSearchResult): Promise<void> => {
     const selectedTaskID = result.group.taskID;
-    const pair =
-      direction === "blocked-by"
-        ? { blockerTaskID: selectedTaskID, blockedTaskID: taskID }
-        : { blockerTaskID: taskID, blockedTaskID: selectedTaskID };
     setPendingTaskID(selectedTaskID);
     try {
-      await onAddExisting(pair);
-      close();
+      await onSelect(result);
+      setAcceptedTaskIDs((current) => new Set([...current, selectedTaskID]));
+      setPendingTaskID(null);
     } catch {
       setPendingTaskID(null);
     }
@@ -84,6 +71,7 @@ export function TaskDependencyPicker({
         if (!nextOpen) {
           setQuery("");
           setPendingTaskID(null);
+          setAcceptedTaskIDs(new Set());
         }
       }}
       open={open}
@@ -139,7 +127,7 @@ export function TaskDependencyPicker({
           </IconTooltipButton>
         </div>
         <TaskDependencySearchResults
-          onActivate={(result) => void addExisting(result)}
+          onActivate={(result) => void select(result)}
           pendingTaskID={pendingTaskID}
           results={results}
           search={search}

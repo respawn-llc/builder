@@ -9,11 +9,7 @@ import { toKanbanCardVM } from "./BoardColumnViewModel";
 describe("classifyDrop", () => {
   it("routes a same-current destination through authoritative preview", () => {
     expect(
-      classifyDrop(
-        baseColumn,
-        { ...baseDragPayload, activeNodeIDs: ["node-target"] },
-        undefined,
-      ),
+      classifyDrop(baseColumn, { ...baseDragPayload, activeNodeIDs: ["node-target"] }, undefined),
     ).toEqual({ kind: "move" });
   });
 
@@ -40,7 +36,7 @@ const baseDragPayload: BoardCardDragPayload = {
 
 const baseColumn: BoardColumn = {
   assigneeRole: "",
-  groupID: "",
+  groupID: null,
   id: "node-target",
   isBacklog: false,
   isDone: false,

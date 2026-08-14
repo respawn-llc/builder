@@ -7,7 +7,7 @@ import (
 )
 
 func TestListTaskAssignedLabelsByTasksUsesBoundedTaskAssignmentIndex(t *testing.T) {
-	db := openSQLiteFixture(t, ":memory:")
+	db := openSQLiteFixture(t)
 	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(`
 CREATE TABLE project_labels (

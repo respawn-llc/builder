@@ -13,7 +13,7 @@ func TestCapabilityFactsRouteContract(t *testing.T) {
 	if !ok {
 		t.Fatal("capability facts route missing")
 	}
-	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeNone || route.Connection != ConnectionUnscoped || route.Dependency != DependencyCapabilityFacts {
+	if route.Kind != KindUnary || route.Auth != AuthPreServerAuth || route.Scope != ScopeNone || route.Connection != ConnectionUnscoped {
 		t.Fatalf("capability facts route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.CapabilityFactsRequest{}) || route.ResponseType != reflect.TypeOf(serverapi.CapabilityFactsResponse{}) {

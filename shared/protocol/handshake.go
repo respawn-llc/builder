@@ -34,6 +34,7 @@ const (
 	MethodProjectUpdate                                 = "project.update"
 	MethodProjectSetDefaultWorkspace                    = "project.defaultWorkspace.set"
 	MethodProjectWorkspaceList                          = "project.workspace.list"
+	MethodProjectWorkspaceGet                           = "project.workspace.get"
 	MethodProjectUnlinkWorkspace                        = "project.unlinkWorkspace"
 	MethodProjectDelete                                 = "project.delete"
 	MethodProjectAttachWorkspace                        = "project.attachWorkspace"
@@ -84,6 +85,7 @@ const (
 	MethodWorkflowTaskCommentReplace                    = "workflow.task.comment.replace"
 	MethodWorkflowTaskCommentDelete                     = "workflow.task.comment.delete"
 	MethodWorkflowTaskActivityList                      = "workflow.task.activity.list"
+	MethodWorkflowTaskSessionList                       = "workflow.task.session.list"
 	MethodWorkflowTaskList                              = "workflow.task.list"
 	MethodWorkflowProjectTaskGroupCounts                = "workflow.task.groupCounts"
 	MethodWorkflowTaskSearch                            = "workflow.task.search"
@@ -169,21 +171,13 @@ const (
 	MethodSessionSubscribeTranscript                    = "session.subscribeTranscript"
 	MethodSessionTranscriptEvent                        = "session.transcript"
 	MethodSessionTranscriptComplete                     = "session.transcript.complete"
-	MethodProcessSubscribeOutput                        = "process.subscribeOutput"
-	MethodProcessOutputEvent                            = "process.output"
-	MethodProcessOutputComplete                         = "process.output.complete"
 	MethodSessionQuestionHistorySubscribe               = "session.questionHistory.subscribe"
 	MethodSessionQuestionHistoryEvent                   = "session.questionHistory.event"
 	MethodSessionQuestionHistoryComplete                = "session.questionHistory.complete"
 )
 
 type HandshakeRequest struct {
-	ProtocolVersion    string              `json:"protocol_version"`
-	ClientCapabilities *ClientCapabilities `json:"client_capabilities,omitempty"`
-}
-
-type ClientCapabilities struct {
-	TranscriptLiveRunFinished bool `json:"transcript_live_run_finished"`
+	ProtocolVersion string `json:"protocol_version"`
 }
 
 type HandshakeResponse struct {
@@ -810,10 +804,6 @@ type SessionTranscriptEventParams struct {
 	Message clientui.TranscriptMessage `json:"message"`
 }
 
-type ProcessOutputEventParams struct {
-	Chunk clientui.ProcessOutputChunk `json:"chunk"`
-}
-
 type SessionQuestionHistoryEventParams struct {
 	Event SessionQuestionHistoryEvent `json:"event"`
 }
@@ -918,9 +908,6 @@ type StreamCompleteParams struct {
 func (r HandshakeRequest) Validate() error {
 	if strings.TrimSpace(r.ProtocolVersion) == "" {
 		return errors.New("protocol_version is required")
-	}
-	if r.ClientCapabilities != nil && !r.ClientCapabilities.TranscriptLiveRunFinished {
-		return errors.New("client_capabilities must advertise at least one supported capability")
 	}
 	return nil
 }

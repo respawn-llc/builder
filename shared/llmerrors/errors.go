@@ -34,16 +34,23 @@ const (
 
 const providerTypeResponseIncomplete = "response.incomplete"
 
+const (
+	providerAuthorizationDiagnosticPrefix = " Provider authorization diagnostic: "
+	providerRequestIDPrefix               = " Provider request ID: "
+)
+
 type ProviderAPIError struct {
-	ProviderID    string
-	StatusCode    int
-	Code          UnifiedErrorCode
-	ProviderCode  string
-	ProviderType  string
-	ProviderParam string
-	Message       string
-	Raw           string
-	Err           error
+	ProviderID              string
+	StatusCode              int
+	Code                    UnifiedErrorCode
+	ProviderCode            string
+	ProviderType            string
+	ProviderParam           string
+	ProviderRequestID       *string
+	AuthorizationDiagnostic *string
+	Message                 string
+	Raw                     string
+	Err                     error
 }
 
 func NewProviderContractError(providerID string, statusCode int, cause error) *ProviderAPIError {
@@ -228,7 +235,14 @@ func UserFacingError(err error) string {
 	var providerErr *ProviderAPIError
 	if errors.As(err, &providerErr) {
 		if providerErr.Code == UnifiedErrorCodeAuthentication || providerErr.StatusCode == 401 || providerErr.StatusCode == 403 {
-			return authenticationFailedWarning(providerErr.ProviderID, providerErr.StatusCode)
+			message := authenticationFailedWarning(providerErr.ProviderID, providerErr.StatusCode)
+			if diagnostic := optionalDiagnosticValue(providerErr.AuthorizationDiagnostic); diagnostic != "" {
+				message += providerAuthorizationDiagnosticPrefix + diagnostic + "."
+			}
+			if requestID := optionalDiagnosticValue(providerErr.ProviderRequestID); requestID != "" {
+				message += providerRequestIDPrefix + requestID + "."
+			}
+			return message
 		}
 	}
 	var statusErr *APIStatusError
@@ -238,6 +252,13 @@ func UserFacingError(err error) string {
 		}
 	}
 	return ""
+}
+
+func optionalDiagnosticValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func authenticationFailedWarning(provider string, statusCode int) string {

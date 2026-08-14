@@ -18,8 +18,7 @@ func TestTaskSearchRouteContract(t *testing.T) {
 		route.Auth != apicontract.AuthServer ||
 		route.Scope != apicontract.ScopeNone ||
 		route.Connection != apicontract.ConnectionDedicated ||
-		route.DedicatedRequestID != apicontract.TaskSearchDedicatedRequestID ||
-		route.Dependency != apicontract.DependencyWorkflow {
+		route.DedicatedRequestID != apicontract.TaskSearchDedicatedRequestID {
 		t.Fatalf("task search route = %+v", route)
 	}
 	if route.RequestType != reflect.TypeOf(serverapi.TaskSearchRequest{}) ||

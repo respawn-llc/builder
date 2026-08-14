@@ -4,6 +4,7 @@ import (
 	"context"
 	"core/server/session"
 	"core/shared/clientui"
+	"core/shared/jsoncontract"
 	"core/shared/modelcontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
@@ -409,10 +410,10 @@ func stringFromJSONRaw(raw json.RawMessage) string {
 }
 
 type Tool struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Schema      json.RawMessage   `json:"schema"`
-	Custom      *CustomToolFormat `json:"custom,omitempty"`
+	Name        string                `json:"name"`
+	Description string                `json:"description"`
+	Schema      jsoncontract.Function `json:"-"`
+	Custom      *CustomToolFormat     `json:"custom,omitempty"`
 }
 
 type CustomToolFormat struct {
@@ -459,10 +460,9 @@ type ToolResult struct {
 }
 
 type StructuredOutput struct {
-	Name        string          `json:"name"`
-	Schema      json.RawMessage `json:"schema"`
-	Description string          `json:"description,omitempty"`
-	Strict      bool            `json:"strict,omitempty"`
+	Name        string                  `json:"name"`
+	Schema      jsoncontract.Structured `json:"-"`
+	Description string                  `json:"description,omitempty"`
 }
 
 type ToolChoiceMode string
@@ -522,7 +522,8 @@ type Request struct {
 	SystemPrompt            string                       `json:"system_prompt"`
 	PromptCacheKey          string                       `json:"prompt_cache_key,omitempty"`
 	PromptCacheScope        transcript.CacheWarningScope `json:"prompt_cache_scope,omitempty"`
-	SessionID               string                       `json:"session_id,omitempty"`
+	SessionID               *string                      `json:"session_id,omitempty"`
+	CodexDispatch           *CodexDispatchContext        `json:"-"`
 	Items                   []ResponseItem               `json:"items,omitempty"`
 	Tools                   []Tool                       `json:"tools,omitempty"`
 	ToolChoiceMode          ToolChoiceMode               `json:"tool_choice_mode"`
@@ -553,8 +554,8 @@ func (r Request) Validate() error {
 		if r.Tools[i].Name == "" {
 			return fmt.Errorf("%w: tool name is required at index %d", ErrInvalidRequest, i)
 		}
-		if len(r.Tools[i].Schema) > 0 && !json.Valid(r.Tools[i].Schema) {
-			return fmt.Errorf("%w: tool schema is invalid json at index %d", ErrInvalidRequest, i)
+		if r.Tools[i].Custom == nil && !r.Tools[i].Schema.Prepared() {
+			return fmt.Errorf("%w: tool schema is not prepared at index %d", ErrInvalidRequest, i)
 		}
 		if r.Tools[i].Custom != nil && strings.TrimSpace(r.Tools[i].Custom.Type) == "grammar" {
 			if strings.TrimSpace(r.Tools[i].Custom.Definition) == "" {
@@ -566,9 +567,12 @@ func (r Request) Validate() error {
 		if strings.TrimSpace(r.StructuredOutput.Name) == "" {
 			return fmt.Errorf("%w: structured_output.name is required", ErrInvalidRequest)
 		}
-		if len(r.StructuredOutput.Schema) == 0 || !json.Valid(r.StructuredOutput.Schema) {
-			return fmt.Errorf("%w: structured_output.schema must be valid json", ErrInvalidRequest)
+		if !r.StructuredOutput.Schema.Prepared() {
+			return fmt.Errorf("%w: structured_output.schema must be prepared", ErrInvalidRequest)
 		}
+	}
+	if err := validateSessionDispatchPairing(r.SessionID, r.CodexDispatch); err != nil {
+		return err
 	}
 	return nil
 }
@@ -590,7 +594,6 @@ func RequestFromLockedContract(locked session.LockedContract, systemPrompt strin
 		SystemPrompt:            systemPrompt,
 		PromptCacheKey:          "",
 		PromptCacheScope:        "",
-		SessionID:               "",
 		Items:                   CloneResponseItems(items),
 		Tools:                   append([]Tool(nil), tools...),
 		ToolChoiceMode:          controls.ChoiceMode,
@@ -693,20 +696,25 @@ func (u Usage) CacheHitPercent() (int, bool) {
 }
 
 type Response struct {
-	Assistant      Message          `json:"assistant"`
-	ProviderPhase  *ProviderPhase   `json:"-"`
-	ToolCalls      []ToolCall       `json:"tool_calls,omitempty"`
-	Reasoning      []ReasoningEntry `json:"reasoning,omitempty"`
-	ReasoningItems []ReasoningItem  `json:"reasoning_items,omitempty"`
-	OutputItems    []ResponseItem   `json:"output_items,omitempty"`
-	Usage          Usage            `json:"usage"`
+	Assistant         Message          `json:"assistant"`
+	ProviderPhase     *ProviderPhase   `json:"-"`
+	ServedModel       *string          `json:"served_model,omitempty"`
+	ReasoningIncluded bool             `json:"reasoning_included,omitempty"`
+	ToolCalls         []ToolCall       `json:"tool_calls,omitempty"`
+	Reasoning         []ReasoningEntry `json:"reasoning,omitempty"`
+	ReasoningItems    []ReasoningItem  `json:"reasoning_items,omitempty"`
+	OutputItems       []ResponseItem   `json:"output_items,omitempty"`
+	Usage             Usage            `json:"usage"`
 }
 
 type CompactionRequest struct {
-	Model        string
-	Instructions string
-	SessionID    string
-	InputItems   []ResponseItem
+	Model          string
+	Instructions   string
+	PromptCacheKey string
+	SessionID      *string
+	FastMode       bool
+	CodexDispatch  *CodexDispatchContext `json:"-"`
+	InputItems     []ResponseItem
 }
 
 type CompactionResponse struct {

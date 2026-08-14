@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "re
 import { useTranslation } from "react-i18next";
 
 import type { SelectedWorkflowBoard, WorkflowPickerItem } from "@/api";
+import { desktopChatEnabled } from "@/shared/feature-flags";
 import { Item, ItemContent, ItemGroup, ItemTitle } from "@/ui";
 import { cx } from "@/ui";
 
@@ -18,6 +19,29 @@ export type BoardHoverMenuProps = Readonly<{
 }>;
 
 export function BoardHoverMenu({
+  board,
+  canCreateTask,
+  onNewTask,
+  onWorkflowEdit,
+  onWorkflowLink,
+  onWorkflowSelect,
+}: BoardHoverMenuProps) {
+  if (desktopChatEnabled) {
+    return null;
+  }
+  return (
+    <BoardLegacyHoverMenu
+      board={board}
+      canCreateTask={canCreateTask}
+      onNewTask={onNewTask}
+      onWorkflowEdit={onWorkflowEdit}
+      onWorkflowLink={onWorkflowLink}
+      onWorkflowSelect={onWorkflowSelect}
+    />
+  );
+}
+
+function BoardLegacyHoverMenu({
   board,
   canCreateTask,
   onNewTask,

@@ -18,32 +18,10 @@ const (
 	ReadinessPath  = "/readyz"
 )
 
-type CapabilityFlags struct {
-	JSONRPCWebSocket       bool `json:"jsonrpc_websocket"`
-	AuthBootstrap          bool `json:"auth_bootstrap"`
-	ProjectAttach          bool `json:"project_attach"`
-	SessionAttach          bool `json:"session_attach"`
-	HealthEndpoint         bool `json:"health_endpoint"`
-	ReadinessEndpoint      bool `json:"readiness_endpoint"`
-	RunPrompt              bool `json:"run_prompt"`
-	SessionPlan            bool `json:"session_plan"`
-	SessionLifecycle       bool `json:"session_lifecycle"`
-	SessionTranscript      bool `json:"session_transcript"`
-	SessionRuntime         bool `json:"session_runtime"`
-	RuntimeControl         bool `json:"runtime_control"`
-	RuntimeLiveControl     bool `json:"runtime_live_control"`
-	PromptControl          bool `json:"prompt_control"`
-	ProcessOutput          bool `json:"process_output"`
-	AttentionNotifications bool `json:"attention_notifications"`
-	OnboardingFinalize     bool `json:"onboarding_finalize"`
-	PromptCommands         bool `json:"prompt_commands"`
-}
-
 type ServerIdentity struct {
-	ProtocolVersion string          `json:"protocol_version"`
-	ServerID        string          `json:"server_id"`
-	PID             int             `json:"pid"`
-	Capabilities    CapabilityFlags `json:"capabilities"`
+	ProtocolVersion string `json:"protocol_version"`
+	ServerID        string `json:"server_id"`
+	PID             int    `json:"pid"`
 	// PersistenceRootID is a short, stable hash of the server's persistence
 	// root (see config.PersistenceRootHash). Clients that explicitly select a
 	// non-default root use it to confirm an attached server serves that root

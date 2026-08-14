@@ -22,6 +22,11 @@ type ActiveStepSnapshotProvider interface {
 	ActiveStepSnapshot() *runtime.RunSnapshot
 }
 
+type ActiveSessionSnapshot struct {
+	SessionID string
+	Activity  clientui.RuntimeActivity
+}
+
 func ActiveStepFromProvider(provider ActiveStepSnapshotProvider) *ActiveStepSnapshot {
 	if provider == nil {
 		return nil

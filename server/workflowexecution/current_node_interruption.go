@@ -195,9 +195,9 @@ func interruptSelectorAlreadyInterrupted(
 }
 
 // InterruptForManualMove atomically revalidates the mutation, then fences all
-// currently running, pending-free workflow scopes for a Task before closing
-// their canonical prompt stores. It intentionally rejects queued and
-// waiting-Question work before requesting any stop.
+// currently running workflow scopes for a Task before closing their canonical
+// prompt stores. Pending Questions are canceled with their scopes; queued,
+// and pending-Approval work remains conflicting.
 func (c *CurrentNodeController) InterruptForManualMove(
 	ctx context.Context,
 	taskID workflow.TaskID,
@@ -216,7 +216,7 @@ func (c *CurrentNodeController) InterruptForManualMove(
 		admissionWaits []currentNodeAdmissionWait
 		taskFence      *currentNodeInterruptFence
 	)
-	if err := c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
+	selectionErr := c.runTaskMutation(ctx, taskID, func(ctx context.Context) error {
 		if beforeSelection != nil {
 			if err := beforeSelection(); err != nil {
 				return err
@@ -317,23 +317,27 @@ func (c *CurrentNodeController) InterruptForManualMove(
 			}
 			return nil
 		})
-	}); err != nil {
-		if errors.Is(err, sessionruntime.ErrWorkflowQuestionPending) {
-			return err
-		}
-		if errors.Is(err, sessionruntime.ErrWorkflowApprovalPending) {
+	})
+	if selectionErr != nil {
+		if errors.Is(selectionErr, sessionruntime.ErrWorkflowApprovalPending) {
 			return ErrManualMoveLifecycleConflict
 		}
-		return err
 	}
-	return c.cleanupInterrupt(currentNodeInterruptCleanupState{
+	cleanupState := currentNodeInterruptCleanupState{
 		taskID:         taskID,
 		stopHandles:    stopHandles,
 		waitHandles:    waitHandles,
 		references:     references,
 		admissionWaits: admissionWaits,
 		taskFence:      taskFence,
-	})
+	}
+	if selectionErr != nil {
+		if taskFence == nil {
+			return selectionErr
+		}
+		return errors.Join(selectionErr, c.cleanupInterrupt(cleanupState))
+	}
+	return c.cleanupInterrupt(cleanupState)
 }
 
 func appendAdmissionWait(

@@ -258,7 +258,7 @@ To respond, run: kent run steer <source-session-id> "message"
 - Entering or leaving a Worktree for an Active Session Runtime is a Steering Intent carrying the domain Worktree Operation identity. When it reaches the head of the drain, the Worktree owner executes the transition and the Runtime waits for its result before applying the target, Working Directory, tool environment, and reminder or failure.
 - Each explicit Worktree transition is an independent domain operation. Kent does not return an earlier result for a matching retry, reject a different transition merely because another is pending, replay an ambiguous operation, or resume process-local pending transitions after restart.
 - Worktree deletion follows the concrete multi-Session and process blockers in the Runtime Steering and Workflow specifications. It does not use a generic Runtime handoff or settlement protocol.
-- Resuming a Session reapplies its recorded subagent role when available; a missing role does not block explicit continuation.
+- Resuming a Session reapplies its recorded subagent role, including a role that is no longer available in the catalog. If no role was recorded, explicit continuation does not block. After the Session Contract is locked, a later role selection does not replace the retained role.
 
 ## Provider Stream Completion
 

@@ -46,6 +46,7 @@ import type {
   BindingPlan,
   BoardNodeCardsPage,
   CommentPage,
+  CreatedTaskSummary,
   PendingAsk,
   ProjectWorkflowLink,
   ProjectBinding,
@@ -569,7 +570,7 @@ export class ApiClient implements ApiService {
     return taskDetail.listTaskAttention(this.#transport, taskID);
   }
 
-  async createTask(input: TaskMutationInput): Promise<string> {
+  async createTask(input: TaskMutationInput): Promise<CreatedTaskSummary> {
     return workflowLabels.createTask(this.#transport, input);
   }
 

@@ -19,6 +19,7 @@ import (
 	"core/server/worktree"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
+	"core/shared/textutil"
 	"core/shared/worktreecontract"
 )
 
@@ -648,17 +649,17 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		SourceWorkspaceID: req.SourceWorkspaceID,
 		LabelIDs:          req.LabelIDs,
 	}
-	if req.DependencyIntent != nil {
+	for _, requestedIntent := range req.DependencyIntents {
 		intent := workflow.TaskDependencyCreateIntent{
-			RelatedTaskID: workflow.TaskID(req.DependencyIntent.RelatedTaskID),
+			RelatedTaskID: workflow.TaskID(requestedIntent.RelatedTaskID),
 		}
-		switch req.DependencyIntent.NewTaskRole {
+		switch requestedIntent.NewTaskRole {
 		case serverapi.WorkflowTaskDependencyRoleBlocker:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocker
 		case serverapi.WorkflowTaskDependencyRoleBlocked:
 			intent.NewTaskRole = workflow.TaskDependencyRoleBlocked
 		}
-		taskRequest.DependencyIntent = &intent
+		taskRequest.DependencyIntents = append(taskRequest.DependencyIntents, intent)
 	}
 	task, err := s.store.CreateTask(ctx, taskRequest)
 	if err != nil {
@@ -669,9 +670,12 @@ func (s *Service) CreateWorkflowTask(ctx context.Context, req serverapi.Workflow
 		return serverapi.WorkflowTaskCreateResponse{}, workflowTaskCreateError(err, req.ProjectID)
 	}
 	s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionCreated, string(task.ID))
-	if req.DependencyIntent != nil {
-		relatedID := req.DependencyIntent.RelatedTaskID
-		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedID)
+	if len(req.DependencyIntents) > 0 {
+		relatedIDs := make([]string, 0, len(req.DependencyIntents))
+		for _, intent := range req.DependencyIntents {
+			relatedIDs = append(relatedIDs, intent.RelatedTaskID)
+		}
+		s.publishProjectWorkflowEvent(ctx, task.ProjectID, task.WorkflowID, serverapi.WorkflowProjectEventResourceTask, serverapi.WorkflowProjectEventActionDependenciesChanged, string(task.ID), relatedIDs...)
 	}
 	detail, err := s.readModels.TaskDetail.GetTask(ctx, string(task.ID))
 	if err != nil {
@@ -1698,13 +1702,6 @@ func (s *Service) PreviewWorkflowTaskMove(ctx context.Context, req serverapi.Wor
 		return serverapi.WorkflowTaskMovePreviewResponse{}, err
 	}
 	switch disposition {
-	case workflowexecution.ManualMoveDispositionWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewResponse{
-			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
-			Blocked: &serverapi.WorkflowTaskMovePreviewBlocked{
-				Reason: serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion,
-			},
-		}, nil
 	case workflowexecution.ManualMoveDispositionLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewResponse{
 			Outcome: serverapi.WorkflowTaskMovePreviewOutcomeBlocked,
@@ -1910,8 +1907,6 @@ func manualMovePreviewBlocker(blocker workflowstore.ManualMoveBlocker) (serverap
 		return serverapi.WorkflowTaskMovePreviewBlockerNoSourcePosition, nil
 	case workflowstore.ManualMoveBlockerUnsupportedDestination:
 		return serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination, nil
-	case workflowstore.ManualMoveBlockerWaitingQuestion:
-		return serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion, nil
 	case workflowstore.ManualMoveBlockerLifecycleConflict:
 		return serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict, nil
 	case workflowstore.ManualMoveBlockerContextSessionUnavailable:
@@ -2212,6 +2207,17 @@ func (s *Service) ListWorkflowTaskAttention(ctx context.Context, req serverapi.W
 	}
 	if err := response.ValidateForTask(strings.TrimSpace(req.TaskID)); err != nil {
 		return serverapi.WorkflowTaskAttentionListResponse{}, err
+	}
+	return response, nil
+}
+
+func (s *Service) ListWorkflowTaskSessions(ctx context.Context, req serverapi.WorkflowTaskOffsetPageRequest) (serverapi.WorkflowTaskSessionListResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
+	}
+	response, err := s.readModels.TaskSessions.List(ctx, req)
+	if err != nil {
+		return serverapi.WorkflowTaskSessionListResponse{}, err
 	}
 	return response, nil
 }
@@ -2541,7 +2547,7 @@ func workflowDefinitionFromGraphDraft(workflowID runtimeids.WorkflowID, graph se
 				ID:          workflow.NodeID(node.ID),
 				Key:         workflow.ModelKey(node.Key),
 				DisplayName: node.DisplayName,
-				GroupID:     groupID,
+				GroupID:     textutil.OptionalExactString(groupID),
 			},
 			workflow.NodeKind(node.Kind),
 			workflow.NodeFields{

@@ -25,10 +25,8 @@ func (g *Gateway) serveRunPrompt(conn rpcwire.Conn, ctx context.Context, state *
 	if !state.handshakeDone {
 		return sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeInvalidRequest, "handshake is required before other methods"))
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			return sendResponse(ctx, conn, responseForError(req.ID, err))
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		return sendResponse(ctx, conn, responseForError(req.ID, err))
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		return sendResponse(ctx, conn, responseForError(req.ID, err))
@@ -87,11 +85,9 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 		_ = sendResponse(ctx, conn, protocol.NewErrorResponse(req.ID, protocol.ErrCodeMethodNotFound, fmt.Sprintf("method %q not found", req.Method)))
 		return
 	}
-	if availability, ok := g.deps.(GatewayDependencyAvailability); ok {
-		if err := availability.RouteDependencyAvailable(route.Dependency); err != nil {
-			_ = sendResponse(ctx, conn, responseForError(req.ID, err))
-			return
-		}
+	if err := g.preflightStartup(req.Method); err != nil {
+		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
+		return
 	}
 	if err := newRoutePolicyExecutor(g).requireAuth(ctx, state, req.Method); err != nil {
 		_ = sendResponse(ctx, conn, responseForError(req.ID, err))
@@ -110,17 +106,7 @@ func (g *Gateway) serveSubscription(conn rpcwire.Conn, ctx context.Context, stat
 }
 
 func (g *Gateway) serveSessionTranscriptSubscription(conn rpcwire.Conn, ctx context.Context, state *connectionState, route rpccontract.Route, req protocol.Request) {
-	subscribe := g.deps.SessionTranscriptClient().SubscribeSessionTranscript
-	if !state.clientCapabilities.TranscriptLiveRunFinished {
-		subscribe = func(ctx context.Context, req serverapi.TranscriptSubscribeRequest) (serverapi.TranscriptSubscription, error) {
-			subscription, err := g.deps.SessionTranscriptClient().SubscribeSessionTranscript(ctx, req)
-			if err != nil {
-				return nil, err
-			}
-			return &legacyTranscriptSubscription{inner: subscription}, nil
-		}
-	}
-	serveGatewaySubscription(conn, ctx, route, req, subscribe, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
+	serveGatewaySubscription(conn, ctx, route, req, g.deps.SessionTranscriptClient().SubscribeSessionTranscript, func(message clientui.TranscriptMessage) protocol.SessionTranscriptEventParams {
 		return protocol.SessionTranscriptEventParams{Message: message}
 	})
 }
@@ -150,49 +136,6 @@ func (g *Gateway) serveQuestionHistorySubscription(conn rpcwire.Conn, ctx contex
 			return protocol.SessionQuestionHistoryEventParams{Event: wire}
 		},
 	)
-}
-
-type legacyTranscriptSubscription struct {
-	inner      serverapi.TranscriptSubscription
-	suppressed uint64
-}
-
-type legacyTranscriptSequenceError struct {
-	Sequence   uint64
-	Suppressed uint64
-}
-
-func (e *legacyTranscriptSequenceError) Error() string {
-	return fmt.Sprintf(
-		"legacy transcript sequence %d is below suppressed message count %d",
-		e.Sequence,
-		e.Suppressed,
-	)
-}
-
-func (s *legacyTranscriptSubscription) Next(ctx context.Context) (clientui.TranscriptMessage, error) {
-	for {
-		message, err := s.inner.Next(ctx)
-		if err != nil {
-			return clientui.TranscriptMessage{}, err
-		}
-		if message.Kind() == clientui.TranscriptMessageLiveRunFinished {
-			s.suppressed++
-			continue
-		}
-		if message.Sequence < s.suppressed {
-			return clientui.TranscriptMessage{}, &legacyTranscriptSequenceError{
-				Sequence:   message.Sequence,
-				Suppressed: s.suppressed,
-			}
-		}
-		message.Sequence -= s.suppressed
-		return message, nil
-	}
-}
-
-func (s *legacyTranscriptSubscription) Close() error {
-	return s.inner.Close()
 }
 
 func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire any, Sub gatewaySubscription[Event]](
@@ -237,12 +180,6 @@ func serveGatewaySubscription[Req interface{ Validate() error }, Event any, Wire
 			return
 		}
 	}
-}
-
-func (g *Gateway) serveProcessOutputSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {
-	serveGatewaySubscription(conn, ctx, route, req, g.deps.ProcessOutputClient().SubscribeProcessOutput, func(chunk clientui.ProcessOutputChunk) protocol.ProcessOutputEventParams {
-		return protocol.ProcessOutputEventParams{Chunk: chunk}
-	})
 }
 
 func (g *Gateway) serveAttentionNotificationSubscription(conn rpcwire.Conn, ctx context.Context, _ *connectionState, route rpccontract.Route, req protocol.Request) {

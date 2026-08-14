@@ -4,7 +4,7 @@ import { vi } from "vitest";
 
 import type { TaskDependencies } from "@/api";
 import type { TaskSearchResult } from "@/app-facade";
-import { TaskDependenciesArea } from "./TaskDependenciesArea";
+import { TaskDependenciesArea } from "./TaskDependenciesAreaAdapter";
 
 const searchFixture = vi.hoisted<{ results: readonly TaskSearchResult[] }>(() => ({ results: [] }));
 
@@ -215,7 +215,7 @@ describe("TaskDependenciesArea", () => {
     });
   });
 
-  it("adds an existing searched Task in the selected direction", async () => {
+  it("adds an existing searched Task and resets accepted IDs after close", async () => {
     const onAddExisting = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     searchFixture.results = [
@@ -283,6 +283,10 @@ describe("TaskDependenciesArea", () => {
       blockerTaskID: "task-9",
       blockedTaskID: "task-1",
     });
+    expect(screen.queryByTestId("dependency-candidate-task-9")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    await user.click(screen.getByTestId("dependency-add-blocked-by"));
+    expect(screen.getByTestId("dependency-candidate-task-9")).toBeInTheDocument();
   });
 
   it("blocks relationship navigation while keeping Remove independently available", async () => {

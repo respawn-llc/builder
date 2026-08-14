@@ -23,6 +23,28 @@
 )
 {{end}}
 
+{{define "taskSessionProjectionFields"}}
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+{{end}}
+
+{{define "taskSessionProjectionJoins"}}
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+{{end}}
+
 -- name: ListWorkspaceBindingsByCanonicalRoot :many
 SELECT
     p.id AS project_id,
@@ -2411,6 +2433,31 @@ SELECT CAST(COUNT(*) AS INTEGER) AS session_count
 FROM sessions
 WHERE task_id = sqlc.arg(task_id);
 
+-- name: ListIdleWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM sessions session INDEXED BY sessions_task_activity_idx
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id)
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(sqlc.arg(excluded_session_ids_json) AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
+
+-- name: ListActiveWorkflowTaskSessions :many
+{{template "taskSessionProjectionFields" .}}
+FROM json_each(CAST(sqlc.arg(session_ids_json) AS TEXT)) active
+CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
+    ON session.id = CAST(active.value AS TEXT)
+{{template "taskSessionProjectionJoins" .}}
+WHERE session.task_id = sqlc.arg(task_id);
+
 -- name: GetLatestSerialTaskSessionAssociationForNode :one
 SELECT
     association.session_id,
@@ -2737,6 +2784,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2761,6 +2811,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2887,6 +2940,20 @@ WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND scheduling_state IN ('ready', 'admitted');
 
+-- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
+UPDATE task_current_nodes
+SET interruption_reason = 'workflow_runtime_start_failed',
+    interruption_detail_json = sqlc.arg(interruption_detail_json),
+    interrupted_at_unix_ms = sqlc.arg(interrupted_at_unix_ms)
+WHERE task_id = sqlc.arg(task_id)
+  AND node_id = sqlc.arg(node_id)
+  AND (
+      (sqlc.narg(transition_branch_key) IS NULL AND transition_branch_key IS NULL)
+      OR transition_branch_key = sqlc.narg(transition_branch_key)
+  )
+  AND scheduling_state = 'interrupted'
+  AND interruption_reason = 'user_interrupt';
+
 -- name: RecoverExecutableCurrentNodes :many
 UPDATE task_current_nodes
 SET scheduling_state = 'interrupted',
@@ -2915,6 +2982,9 @@ INSERT INTO task_current_nodes (
     current_input_values_json,
     prior_node_values_json,
     session_id,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized,
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -2930,6 +3000,9 @@ INSERT INTO task_current_nodes (
     sqlc.arg(current_input_values_json),
     sqlc.arg(prior_node_values_json),
     sqlc.arg(session_id),
+    sqlc.narg(continuation_source_kind),
+    sqlc.narg(continuation_source_session_id),
+    sqlc.arg(legacy_materialized),
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
@@ -2967,12 +3040,18 @@ INSERT INTO task_active_fanout_branches (
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(transition_branch_key),
     'pending',
-    NULL
+    NULL,
+    sqlc.narg(continuation_source_kind),
+    sqlc.narg(continuation_source_session_id),
+    sqlc.arg(legacy_materialized)
 );
 
 -- name: UpdateTaskActiveFanoutBranchArrival :execrows
@@ -2980,6 +3059,16 @@ UPDATE task_active_fanout_branches
 SET
     arrival_state = 'arrived',
     arrival_values_json = sqlc.arg(arrival_values_json)
+WHERE task_id = sqlc.arg(task_id)
+  AND transition_branch_key = sqlc.arg(transition_branch_key)
+  AND arrival_state = 'pending';
+
+-- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = sqlc.narg(continuation_source_kind),
+    continuation_source_session_id = sqlc.narg(continuation_source_session_id),
+    legacy_materialized = sqlc.arg(legacy_materialized)
 WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND arrival_state = 'pending';
@@ -3056,7 +3145,10 @@ SELECT
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 FROM task_active_fanout_branches
 WHERE task_id = sqlc.arg(task_id)
 ORDER BY transition_branch_key;

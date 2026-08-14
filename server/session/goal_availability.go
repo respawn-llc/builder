@@ -29,7 +29,6 @@ func (s *Store) GoalMutationAvailability() *GoalAvailability {
 	}
 	return &availability
 }
-
 func GoalAvailabilityFromMeta(meta Meta) (GoalAvailability, error) {
 	if meta.Locked == nil || !meta.Locked.HasEnabledTools {
 		return GoalAvailable, nil

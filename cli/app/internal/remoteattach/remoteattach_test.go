@@ -52,7 +52,6 @@ func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	pinErr := errors.New("root mismatch")
 	projectViews := &projectViewRemoteStub{
-		identity:    protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
 		requireRoot: func(string) error { return pinErr },
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			t.Fatal("discovery must not run when the project-view root pin fails")
@@ -69,7 +68,6 @@ func TestDialHeadlessPinsProjectViewRootBeforeDiscovery(t *testing.T) {
 			t.Fatal("workspace dial must not run when the project-view root pin fails")
 			return nil, nil
 		},
-		Supports: SupportsRunPrompt,
 	})
 	if !errors.Is(err, pinErr) {
 		t.Fatalf("DialHeadless err = %v, want %v", err, pinErr)
@@ -92,7 +90,6 @@ func TestDialHeadlessUsesWorkspaceDiscoveryAndFreshWorkspaceDialTimeout(t *testi
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	attachTimeout := 20 * time.Millisecond
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
 		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			if req.Path != cfg.WorkspaceRoot {
 				t.Fatalf("path = %q, want %q", req.Path, cfg.WorkspaceRoot)
@@ -132,7 +129,6 @@ func TestDialHeadlessUsesWorkspaceDiscoveryAndFreshWorkspaceDialTimeout(t *testi
 			}
 			return new(client.Remote), nil
 		},
-		Supports: SupportsRunPrompt,
 	})
 	if err != nil {
 		t.Fatalf("DialHeadless: %v", err)
@@ -174,7 +170,6 @@ func TestDialHeadlessRejectsNilDialers(t *testing.T) {
 func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 	wantErr := errors.New("plan failed")
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{}, wantErr
 		},
@@ -190,7 +185,6 @@ func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 			t.Fatal("unexpected workspace dial")
 			return nil, nil
 		},
-		Supports: SupportsRunPrompt,
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("DialHeadless error = %v, want %v", err, wantErr)
@@ -209,7 +203,6 @@ func TestDialHeadlessClosesAndReturnsPlanFailure(t *testing.T) {
 func TestDialHeadlessReturnsWorkspaceDialFailure(t *testing.T) {
 	wantErr := errors.New("workspace dial failed")
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true, AuthBootstrap: true, ProjectAttach: true}},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{
 				Kind:    serverapi.ProjectBindingPlanKindBound,
@@ -227,7 +220,6 @@ func TestDialHeadlessReturnsWorkspaceDialFailure(t *testing.T) {
 		DialWorkspace: func(context.Context, config.App, string, string) (*client.Remote, error) {
 			return nil, wantErr
 		},
-		Supports: SupportsRunPrompt,
 	})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("DialHeadless error = %v, want %v", err, wantErr)
@@ -243,33 +235,6 @@ func TestDialHeadlessReturnsWorkspaceDialFailure(t *testing.T) {
 	}
 }
 
-func TestDialHeadlessClosesAndSkipsUnsupportedServer(t *testing.T) {
-	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{RunPrompt: true}},
-	}
-	remote, ok, err := DialHeadless(context.Background(), HeadlessRequest{
-		Config:        config.App{WorkspaceRoot: "/workspace"},
-		AttachTimeout: time.Second,
-		DialProjectView: func(context.Context, config.App) (ProjectViewRemote, error) {
-			return projectViews, nil
-		},
-		DialWorkspace: func(context.Context, config.App, string, string) (*client.Remote, error) {
-			t.Fatal("unexpected workspace dial")
-			return nil, nil
-		},
-		Supports: SupportsRunPrompt,
-	})
-	if err != nil {
-		t.Fatalf("DialHeadless: %v", err)
-	}
-	if ok || remote != nil {
-		t.Fatalf("expected unsupported server to be skipped, remote=%v ok=%t", remote, ok)
-	}
-	if !projectViews.closed {
-		t.Fatal("expected unsupported project view remote to close")
-	}
-}
-
 func TestDialInteractiveRejectsNilDialers(t *testing.T) {
 	remote, ok := DialInteractive(context.Background(), InteractiveRequest{})
 	if ok || remote != nil {
@@ -280,7 +245,6 @@ func TestDialInteractiveRejectsNilDialers(t *testing.T) {
 func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *testing.T) {
 	cfg := config.App{WorkspaceRoot: "/workspace"}
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{ProjectAttach: true}},
 		plan: func(ctx context.Context, req serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			if err := ctx.Err(); err != nil {
 				return serverapi.ProjectBindingPlanResponse{}, err
@@ -309,7 +273,6 @@ func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *test
 			}
 			return new(client.Remote), nil
 		},
-		Supports: func(protocol.CapabilityFlags) bool { return true },
 	})
 	if !ok {
 		t.Fatal("expected interactive attach to succeed")
@@ -324,7 +287,6 @@ func TestDialInteractiveBoundWorkspaceDialsWorkspaceAndClosesProjectView(t *test
 
 func TestDialInteractiveClosesNonRemoteUnboundFallback(t *testing.T) {
 	projectViews := &projectViewRemoteStub{
-		identity: protocol.ServerIdentity{Capabilities: protocol.CapabilityFlags{ProjectAttach: true}},
 		plan: func(context.Context, serverapi.ProjectBindingPlanRequest) (serverapi.ProjectBindingPlanResponse, error) {
 			return serverapi.ProjectBindingPlanResponse{Kind: serverapi.ProjectBindingPlanKindLocalUnbound}, nil
 		},
@@ -339,7 +301,6 @@ func TestDialInteractiveClosesNonRemoteUnboundFallback(t *testing.T) {
 			t.Fatal("unexpected workspace dial")
 			return nil, nil
 		},
-		Supports:     func(protocol.CapabilityFlags) bool { return true },
 		RequireBound: false,
 	})
 	if ok || remote != nil {

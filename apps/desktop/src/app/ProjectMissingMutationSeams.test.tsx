@@ -1,17 +1,17 @@
-import { render, screen } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { I18nextProvider } from "react-i18next";
 
-import { RpcError, rpcErrorCodes, type WorkspaceList } from "@/api";
+import { RpcError, rpcErrorCodes } from "@/api";
 import { NewTaskForm } from "@/features/tasks";
 import { LinkWorkflowSidebar } from "@/features/workflows";
 import { appI18n, initializeI18n } from "@/i18n";
+import type * as TaskDependenciesModule from "@/shared/task-dependencies";
 import { createTestSidebarNavigator } from "@/test-support/sidebar";
 const fixture = vi.hoisted<{
   createError: Error | null;
   linkError: Error | null;
-  workspaces: WorkspaceList | undefined;
-}>(() => ({ createError: null, linkError: null, workspaces: undefined }));
+}>(() => ({ createError: null, linkError: null }));
 
 vi.mock("@tanstack/react-query", () => ({
   useMutation: () => ({
@@ -20,7 +20,17 @@ vi.mock("@tanstack/react-query", () => ({
     isPending: false,
     mutateAsync: vi.fn(),
   }),
-  useQuery: () => ({ data: [], error: null, isError: false, isPending: false }),
+  useInfiniteQuery: () => ({
+    data: undefined,
+    error: null,
+    hasNextPage: false,
+    isError: false,
+    isFetchingNextPage: false,
+    isPending: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
+  }),
+  useQuery: () => ({ data: undefined, error: null, isError: false, isPending: false, refetch: vi.fn() }),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 vi.mock("@/app-facade", async (importOriginal) => ({
@@ -28,8 +38,10 @@ vi.mock("@/app-facade", async (importOriginal) => ({
   queryKeys: { allBoards: [], allProjectWorkflowLinks: [], allWorkflows: [], projectWorkflowLinks: () => [] },
   useAppServices: () => ({ api: {} }),
   useConnectionSnapshot: () => ({ phase: "connected" }),
+  projectWorkspaceQueryOptions: () => ({}),
   useStatusController: () => ({ push: vi.fn() }),
   useTextFieldSubmitShortcut: () => undefined,
+  workspaceCatalogInfiniteQueryOptions: () => ({}),
 }));
 vi.mock("@/shared/labels", () => ({
   LabelChooser: () => null,
@@ -39,7 +51,10 @@ vi.mock("@/shared/labels", () => ({
 }));
 vi.mock("@/shared/task-mutations", () => ({
   useCreateTask: () => ({ error: fixture.createError, isPending: false, mutateAsync: vi.fn() }),
-  useWorkspaces: () => ({ data: fixture.workspaces, error: null }),
+}));
+vi.mock("@/shared/task-dependencies", async (importOriginal) => ({
+  ...(await importOriginal<typeof TaskDependenciesModule>()),
+  DependenciesArea: () => null,
 }));
 vi.mock("@/shared/workflow-library", () => ({
   useWorkflowPages: () => ({
@@ -55,7 +70,7 @@ vi.mock("@/shared/workflow-library", () => ({
 const missing = new RpcError({ code: rpcErrorCodes.projectNotFound, message: "gone", method: "mutation" });
 
 beforeAll(async () => initializeI18n());
-beforeEach(() => Object.assign(fixture, { createError: null, linkError: null, workspaces: undefined }));
+beforeEach(() => Object.assign(fixture, { createError: null, linkError: null }));
 
 function renderWithI18n(element: ReactElement) {
   return render(<I18nextProvider i18n={appI18n}>{element}</I18nextProvider>);
@@ -64,17 +79,16 @@ function renderWithI18n(element: ReactElement) {
 describe("Project-missing mutation seams", () => {
   it("dismisses New Task when creation reports the Project missing", async () => {
     fixture.createError = missing;
-    const onProjectMissing = vi.fn();
+    const navigator = createTestSidebarNavigator();
     renderWithI18n(
       <NewTaskForm
         boardQueryWorkflowID="workflow-1"
-        onProjectMissing={onProjectMissing}
-        onSubmitted={vi.fn()}
+        navigator={navigator}
         projectID="project-1"
         workflowID="workflow-1"
       />,
     );
-    expect(onProjectMissing).toHaveBeenCalledOnce();
+    expect(navigator.back).toHaveBeenCalledOnce();
   });
 
   it("backs out of Link Workflow when linking reports the Project missing", async () => {
@@ -90,61 +104,5 @@ describe("Project-missing mutation seams", () => {
       />,
     );
     expect(navigator.back).toHaveBeenCalledOnce();
-  });
-});
-
-describe("New Task workspace selection", () => {
-  it("renders Source workspace only when the Project has a workspace choice", () => {
-    const sourceWorkspaceLabel = appI18n.t("task.sourceWorkspace");
-    const primaryWorkspace = {
-      id: "workspace-1",
-      name: "kent",
-      rootPath: "/workspace",
-      availability: "available" as const,
-      isPrimary: true,
-      updatedAt: 1,
-    };
-    fixture.workspaces = {
-      projectID: "project-1",
-      defaultWorkspaceID: "workspace-1",
-      nextPageToken: null,
-      workspaces: [primaryWorkspace],
-    };
-
-    const { unmount } = renderWithI18n(
-      <NewTaskForm
-        boardQueryWorkflowID="workflow-1"
-        onSubmitted={vi.fn()}
-        projectID="project-1"
-        workflowID="workflow-1"
-      />,
-    );
-
-    expect(screen.queryByText(sourceWorkspaceLabel)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: sourceWorkspaceLabel })).not.toBeInTheDocument();
-
-    unmount();
-    fixture.workspaces = {
-      ...fixture.workspaces,
-      workspaces: [
-        primaryWorkspace,
-        {
-          ...primaryWorkspace,
-          id: "workspace-2",
-          name: "docs",
-          isPrimary: false,
-        },
-      ],
-    };
-    renderWithI18n(
-      <NewTaskForm
-        boardQueryWorkflowID="workflow-1"
-        onSubmitted={vi.fn()}
-        projectID="project-1"
-        workflowID="workflow-1"
-      />,
-    );
-
-    expect(screen.getByRole("button", { name: sourceWorkspaceLabel })).toBeEnabled();
   });
 });

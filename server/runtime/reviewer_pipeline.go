@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"core/server/llm"
+	"core/shared/jsoncontract"
 	"core/shared/textutil"
 	"core/shared/transcript"
 )
@@ -94,8 +95,12 @@ func (r *defaultReviewerPipeline) RunSuggestions(ctx context.Context, stepID str
 			HasCacheHitPercentage: hasCachePct,
 		}, nil
 	}
+	contract, err := prepareReviewerSuggestionsContract(jsoncontract.NewPreparer(false))
+	if err != nil {
+		return reviewerSuggestionsResult{}, err
+	}
 	return reviewerSuggestionsResult{
-		Suggestions:           parseReviewerSuggestionsObject(*resp.Assistant.Content),
+		Suggestions:           parseReviewerSuggestionsObject(contract, *resp.Assistant.Content),
 		CacheHitPercent:       cachePct,
 		HasCacheHitPercentage: hasCachePct,
 	}, nil

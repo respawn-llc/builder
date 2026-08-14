@@ -30,10 +30,11 @@ func (e *Engine) compactRemote(ctx context.Context, stepID string, input []llm.R
 		return compactionResult{}, err
 	}
 	requestItems := llm.CloneResponseItems(input)
+	sessionID := e.store.Meta().SessionID
 	baseRequest := llm.CompactionRequest{
 		Model:        locked.Model,
 		Instructions: instructions,
-		SessionID:    e.store.Meta().SessionID,
+		SessionID:    &sessionID,
 		InputItems:   requestItems,
 	}
 
@@ -211,7 +212,8 @@ func (e *Engine) compactionCacheObservationRequest(ctx context.Context, request 
 	}
 	req.ReasoningEffort = e.ThinkingLevel()
 	req.FastMode = e.FastModeEnabled()
-	req.SessionID = e.SessionID()
+	sessionID := e.SessionID()
+	req.SessionID = &sessionID
 	req.PromptCacheKey = cacheKey
 	req.PromptCacheScope = transcript.CacheWarningScopeConversation
 	return req, true, nil
@@ -330,7 +332,8 @@ func (e *Engine) localCompactionSummaryFromWindow(ctx context.Context, stepID *s
 		}
 		req.ReasoningEffort = e.ThinkingLevel()
 		req.FastMode = e.FastModeEnabled()
-		req.SessionID = e.SessionID()
+		sessionID := e.SessionID()
+		req.SessionID = &sessionID
 		if e.supportsPromptCacheKey(ctx) {
 			if cacheKey := e.conversationPromptCacheKey(e.SessionID()); cacheKey != "" {
 				req.PromptCacheKey = cacheKey

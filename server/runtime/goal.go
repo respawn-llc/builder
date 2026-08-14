@@ -77,6 +77,20 @@ func (e *Engine) Goal() *session.GoalState {
 	return cloneRuntimeGoal(e.store.Meta().Goal)
 }
 
+func (e *Engine) GoalAvailability() (session.GoalAvailability, error) {
+	if e == nil || e.store == nil {
+		return 0, errors.New("runtime session store is required")
+	}
+	return e.store.GoalAvailability()
+}
+
+func (e *Engine) GoalMutationAvailability() *session.GoalAvailability {
+	if e == nil || e.store == nil {
+		return nil
+	}
+	return e.store.GoalMutationAvailability()
+}
+
 func (e *Engine) GoalLoopSuspended() bool {
 	if e == nil {
 		return false

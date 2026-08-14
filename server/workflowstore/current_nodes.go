@@ -12,15 +12,42 @@ import (
 	"core/server/metadata/sqlitegen"
 	"core/server/session"
 	"core/server/workflow"
+	"core/shared/jsoncontract"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
 )
+
+// CurrentNodeInterruptionPostCommitDiagnostic reports that interruption
+// scheduling committed but its Task event could not be delivered.
+type CurrentNodeInterruptionPostCommitDiagnostic struct {
+	Reference workflow.CurrentNodeReference
+}
+
+func (e *CurrentNodeInterruptionPostCommitDiagnostic) Error() string {
+	if e == nil {
+		return "current node interruption committed with a Task event diagnostic"
+	}
+	return fmt.Sprintf("current node interruption %v committed with a Task event diagnostic", e.Reference)
+}
+
+func currentNodeInterruptionPostCommitDiagnostic(
+	reference workflow.CurrentNodeReference,
+	cause error,
+) error {
+	if cause == nil {
+		return nil
+	}
+	return errors.Join(
+		&CurrentNodeInterruptionPostCommitDiagnostic{Reference: reference},
+		cause,
+	)
+}
 
 func (s *Store) ListCurrentNodes(ctx context.Context, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	if strings.TrimSpace(string(taskID)) == "" {
 		return nil, fmt.Errorf("task id is required")
 	}
-	return listTaskCurrentNodes(ctx, s.queries, taskID)
+	return s.listTaskCurrentNodes(ctx, s.queries, taskID)
 }
 
 func (s *Store) publishCurrentNodeTaskEvent(ctx context.Context, taskID workflow.TaskID, action serverapi.WorkflowProjectEventAction) error {
@@ -48,7 +75,7 @@ func (s *Store) ListCurrentNodesByTask(ctx context.Context, taskIDs []workflow.T
 	if s == nil {
 		return nil, errors.New("workflow store is required")
 	}
-	return ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
+	return s.ListCurrentNodesByTaskWithQueries(ctx, s.queries, taskIDs)
 }
 
 func interruptCurrentNodeQuery(
@@ -81,7 +108,10 @@ func interruptCurrentNodeQuery(
 // ListCurrentNodesByTaskWithQueries decodes Current Nodes through the supplied
 // generated queries. A read-only transaction can therefore own the query
 // generation without duplicating the canonical Current Node decoder.
-func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+func (s *Store) ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries, taskIDs []workflow.TaskID) (map[workflow.TaskID][]workflow.CurrentNode, error) {
+	if s == nil {
+		return nil, errors.New("workflow store is required")
+	}
 	if q == nil {
 		return nil, errors.New("workflow queries are required")
 	}
@@ -105,7 +135,7 @@ func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries
 		return nil, err
 	}
 	for _, row := range rows {
-		currentNode, err := currentNodeFromRow(sqlitegen.ListTaskCurrentNodesRow(row))
+		currentNode, err := s.currentNodeFromRow(sqlitegen.ListTaskCurrentNodesRow(row))
 		if err != nil {
 			return nil, err
 		}
@@ -118,8 +148,8 @@ func ListCurrentNodesByTaskWithQueries(ctx context.Context, q *sqlitegen.Queries
 	return nodesByTask, nil
 }
 
-func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (workflow.CurrentNode, error) {
-	currentNodes, err := listTaskCurrentNodes(ctx, q, reference.TaskID)
+func (s *Store) currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (workflow.CurrentNode, error) {
+	currentNodes, err := s.listTaskCurrentNodes(ctx, q, reference.TaskID)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -131,14 +161,14 @@ func currentNodeForReference(ctx context.Context, q *sqlitegen.Queries, referenc
 	return workflow.CurrentNode{}, sql.ErrNoRows
 }
 
-func listTaskCurrentNodes(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
+func (s *Store) listTaskCurrentNodes(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]workflow.CurrentNode, error) {
 	rows, err := q.ListTaskCurrentNodes(ctx, string(taskID))
 	if err != nil {
 		return nil, err
 	}
 	currentNodes := make([]workflow.CurrentNode, 0, len(rows))
 	for _, row := range rows {
-		currentNode, err := currentNodeFromRow(row)
+		currentNode, err := s.currentNodeFromRow(row)
 		if err != nil {
 			return nil, err
 		}
@@ -172,9 +202,15 @@ func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, entered
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, nil, workflow.MaterializedPriorValues{}, nil, &workflow.CurrentNodeScheduling{
-		State: workflow.CurrentNodeSchedulingReady,
-	}, selection)
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedSource(
+		reference,
+		nil,
+		workflow.MaterializedPriorValues{},
+		nil,
+		workflow.DeferredSelfMaterializedContinuationSource(),
+		&workflow.CurrentNodeScheduling{State: workflow.CurrentNodeSchedulingReady},
+		selection,
+	)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
@@ -182,15 +218,19 @@ func newReadyCurrentNode(taskID workflow.TaskID, nodeID workflow.NodeID, entered
 	return currentNode, nil
 }
 
-func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.CurrentNode, error) {
+func (s *Store) currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.CurrentNode, error) {
 	var branchKey *workflow.TransitionBranchKey
 	if row.TransitionBranchKey.Valid {
 		value := workflow.TransitionBranchKey(row.TransitionBranchKey.String)
 		branchKey = &value
 	}
 	var enteredByEdgeID *workflow.EdgeID
-	if row.EnteredByEdgeID.Valid {
-		value := workflow.EdgeID(row.EnteredByEdgeID.String)
+	enteredByEdge, err := nullableGraphIdentity(row.EnteredByEdgeID)
+	if err != nil {
+		return workflow.CurrentNode{}, fmt.Errorf("decode current node entering edge: %w", err)
+	}
+	if enteredByEdge != nil {
+		value := workflow.EdgeID(*enteredByEdge)
 		enteredByEdgeID = &value
 	}
 	reference, err := workflow.NewCurrentNodeReference(workflow.TaskID(row.TaskID), workflow.NodeID(row.NodeID), branchKey)
@@ -213,15 +253,31 @@ func currentNodeFromRow(row sqlitegen.ListTaskCurrentNodesRow) (workflow.Current
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	priorValues, err := priorValuesFromJSON(row.PriorNodeValuesJson)
+	priorValues, err := priorValuesFromJSON(s.priorValuesContract, row.PriorNodeValuesJson)
 	if err != nil {
 		return workflow.CurrentNode{}, err
+	}
+	continuationSource, err := materializedContinuationSourceFromColumns(
+		row.ContinuationSourceKind,
+		row.ContinuationSourceSessionID,
+		row.LegacyMaterialized,
+	)
+	if err != nil {
+		return workflow.CurrentNode{}, fmt.Errorf("decode current node continuation source: %w", err)
 	}
 	selection, err := currentNodeExecutionSelectionFromRow(row)
 	if err != nil {
 		return workflow.CurrentNode{}, err
 	}
-	currentNode, err := workflow.NewCurrentNodeWithExecutionSelection(reference, currentInputValues, priorValues, sessionID, scheduling, selection)
+	currentNode, err := workflow.NewCurrentNodeWithMaterializedSource(
+		reference,
+		currentInputValues,
+		priorValues,
+		sessionID,
+		continuationSource,
+		scheduling,
+		selection,
+	)
 	if err != nil {
 		return workflow.CurrentNode{}, fmt.Errorf("decode current node: %w", err)
 	}
@@ -277,20 +333,13 @@ func currentNodeInputValuesFromJSON(raw string) (map[string]string, error) {
 	return values, nil
 }
 
-func priorValuesFromJSON(raw string) (workflow.MaterializedPriorValues, error) {
-	object := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(raw), &object); err != nil {
+func priorValuesFromJSON(contract jsoncontract.Internal, raw string) (workflow.MaterializedPriorValues, error) {
+	if err := contract.Validate([]byte(raw)); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
-	}
-	if len(object) != 1 || object["transition_parameters"] == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected exactly one transition_parameters object")
 	}
 	values := workflow.MaterializedPriorValues{}
 	if err := json.Unmarshal([]byte(raw), &values); err != nil {
 		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: %w", err)
-	}
-	if values.TransitionParameters == nil {
-		return workflow.MaterializedPriorValues{}, fmt.Errorf("decode current node prior values: expected transition_parameters object")
 	}
 	return values, nil
 }
@@ -317,12 +366,17 @@ func currentNodeSchedulingFromRow(row sqlitegen.ListTaskCurrentNodesRow) (*workf
 	return scheduling, nil
 }
 
-func insertTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, currentNode workflow.CurrentNode) error {
+func insertTaskCurrentNode(
+	ctx context.Context,
+	q *sqlitegen.Queries,
+	currentNode workflow.CurrentNode,
+	associatedAt time.Time,
+) error {
 	node, err := q.GetWorkflowNode(ctx, string(currentNode.Reference.NodeID))
 	if err != nil {
 		return fmt.Errorf("resolve current node kind: %w", err)
 	}
-	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind))
+	return insertTaskCurrentNodeWithKind(ctx, q, currentNode, workflow.NodeKind(node.Kind), associatedAt)
 }
 
 func insertTaskCurrentNodeWithKind(
@@ -330,6 +384,7 @@ func insertTaskCurrentNodeWithKind(
 	q *sqlitegen.Queries,
 	currentNode workflow.CurrentNode,
 	nodeKind workflow.NodeKind,
+	associatedAt time.Time,
 ) error {
 	switch nodeKind {
 	case workflow.NodeKindAgent:
@@ -347,7 +402,40 @@ func insertTaskCurrentNodeWithKind(
 	if err != nil {
 		return err
 	}
-	return q.InsertTaskCurrentNode(ctx, params)
+	if currentNode.SessionID != nil && nodeKind != workflow.NodeKindAgent {
+		return fmt.Errorf("%s current node cannot retain a Session", nodeKind)
+	}
+	if err := q.InsertTaskCurrentNode(ctx, params); err != nil {
+		return err
+	}
+	if currentNode.SessionID == nil {
+		return nil
+	}
+	association, err := normalizeTaskSessionAssociationRequest(TaskSessionAssociationRequest{
+		SessionID:    *currentNode.SessionID,
+		CurrentNode:  currentNode.Reference,
+		AssociatedAt: associatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	if err := bindSessionToTask(ctx, q, association); err != nil {
+		return err
+	}
+	switch currentNode.ContinuationSource.Kind() {
+	case workflow.MaterializedContinuationSourceExact:
+		_, exact := currentNode.ContinuationSource.ExactSessionID()
+		if !exact {
+			return errors.New("exact retained current node omitted source Session")
+		}
+	case workflow.MaterializedContinuationSourceLegacy:
+	default:
+		return fmt.Errorf(
+			"retained current node has invalid continuation source kind %q",
+			currentNode.ContinuationSource.Kind(),
+		)
+	}
+	return upsertTaskSessionAssociation(ctx, q, association)
 }
 
 func deleteTaskCurrentNode(ctx context.Context, q *sqlitegen.Queries, reference workflow.CurrentNodeReference) (int64, error) {
@@ -404,7 +492,7 @@ func (s *Store) AdmitCurrentNode(ctx context.Context, reference workflow.Current
 }
 
 // ResumeCurrentNode clears an interrupted restart marker. Workflow Execution
-// immediately follows it with AdmitCurrentNode under the same mutation permit;
+// immediately follows it with AdmitCurrentNode under the same Task mutation owner;
 // it is deliberately not an automatic recovery path.
 func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.CurrentNodeReference) (InterruptedCurrentNodeAttentionProjection, bool, error) {
 	if err := reference.Validate(); err != nil {
@@ -432,7 +520,7 @@ func (s *Store) ResumeCurrentNode(ctx context.Context, reference workflow.Curren
 	if locked != 1 {
 		return InterruptedCurrentNodeAttentionProjection{}, false, sql.ErrNoRows
 	}
-	projection, found, err := pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
+	projection, found, err := s.pendingInterruptedCurrentNodeAttentionProjection(ctx, q, reference)
 	if err != nil {
 		return InterruptedCurrentNodeAttentionProjection{}, false, err
 	}
@@ -528,7 +616,10 @@ func (s *Store) InterruptAdmittedCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
 }
 
 // InterruptCurrentNode records an interruption for ready or admitted
@@ -559,7 +650,46 @@ func (s *Store) InterruptCurrentNode(
 	if interrupted != 1 {
 		return sql.ErrNoRows
 	}
-	return s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted)
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
+}
+
+func (s *Store) ReplaceUserInterruptionWithAssignmentFailure(
+	ctx context.Context,
+	reference workflow.CurrentNodeReference,
+	detail workflow.CurrentNodeInterruptionDetail,
+) error {
+	if err := reference.Validate(); err != nil {
+		return err
+	}
+	detailJSON, err := json.Marshal(detail)
+	if err != nil {
+		return fmt.Errorf("encode current node interruption detail: %w", err)
+	}
+	now := s.now().UTC().UnixMilli()
+	branchKey, branchScoped := reference.TransitionBranchKey()
+	replaced, err := s.queries.ReplaceUserInterruptionWithAssignmentFailure(
+		ctx,
+		sqlitegen.ReplaceUserInterruptionWithAssignmentFailureParams{
+			InterruptionDetailJson: sql.NullString{String: string(detailJSON), Valid: true},
+			InterruptedAtUnixMs:    sql.NullInt64{Int64: now, Valid: true},
+			TaskID:                 string(reference.TaskID),
+			NodeID:                 string(reference.NodeID),
+			TransitionBranchKey:    sql.NullString{String: string(branchKey), Valid: branchScoped},
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if replaced != 1 {
+		return sql.ErrNoRows
+	}
+	return currentNodeInterruptionPostCommitDiagnostic(
+		reference,
+		s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted),
+	)
 }
 
 // RecoverExecutableCurrentNodes turns ready or admitted executable work left
@@ -605,7 +735,7 @@ func (s *Store) RecoverExecutableCurrentNodes(
 		}
 		seenTasks[reference.TaskID] = struct{}{}
 		if err := s.publishCurrentNodeTaskEvent(ctx, reference.TaskID, serverapi.WorkflowProjectEventActionInterrupted); err != nil {
-			return references, err
+			return references, currentNodeInterruptionPostCommitDiagnostic(reference, err)
 		}
 	}
 	return references, nil
@@ -636,6 +766,13 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		EffectiveThinking:      sql.NullString{},
 		AssigneeOrigin:         sql.NullString{},
 	}
+	sourceKind, sourceSessionID, legacyMaterialized, err := materializedContinuationSourceColumns(currentNode.ContinuationSource)
+	if err != nil {
+		return sqlitegen.InsertTaskCurrentNodeParams{}, fmt.Errorf("encode current node continuation source: %w", err)
+	}
+	params.ContinuationSourceKind = sourceKind
+	params.ContinuationSourceSessionID = sourceSessionID
+	params.LegacyMaterialized = legacyMaterialized
 	if branchKey, ok := currentNode.Reference.TransitionBranchKey(); ok {
 		params.TransitionBranchKey = sql.NullString{String: string(branchKey), Valid: true}
 	}
@@ -682,4 +819,74 @@ func taskCurrentNodeInsertParams(currentNode workflow.CurrentNode) (sqlitegen.In
 		Valid: true,
 	}
 	return params, nil
+}
+
+func materializedContinuationSourceColumns(
+	source workflow.MaterializedContinuationSource,
+) (sql.NullString, sql.NullString, int64, error) {
+	if err := source.Validate(); err != nil {
+		return sql.NullString{}, sql.NullString{}, 0, err
+	}
+	switch source.Kind() {
+	case workflow.MaterializedContinuationSourceExact:
+		sessionID, ok := source.ExactSessionID()
+		if !ok {
+			return sql.NullString{}, sql.NullString{}, 0, errors.New("exact continuation source omitted Session ID")
+		}
+		return sql.NullString{String: "exact", Valid: true},
+			sql.NullString{String: sessionID.String(), Valid: true},
+			0,
+			nil
+	case workflow.MaterializedContinuationSourceDeferredSelf:
+		return sql.NullString{String: "deferred_self", Valid: true}, sql.NullString{}, 0, nil
+	case workflow.MaterializedContinuationSourceAbsent:
+		return sql.NullString{String: "absent", Valid: true}, sql.NullString{}, 0, nil
+	case workflow.MaterializedContinuationSourceLegacy:
+		return sql.NullString{}, sql.NullString{}, 1, nil
+	default:
+		return sql.NullString{}, sql.NullString{}, 0, fmt.Errorf("unsupported continuation source kind %q", source.Kind())
+	}
+}
+
+func materializedContinuationSourceFromColumns(
+	kind sql.NullString,
+	sessionID sql.NullString,
+	legacyMaterialized int64,
+) (workflow.MaterializedContinuationSource, error) {
+	switch legacyMaterialized {
+	case 1:
+		if kind.Valid || sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("legacy continuation source cannot carry exact source fields")
+		}
+		return workflow.LegacyMaterializedContinuationSource(), nil
+	case 0:
+	default:
+		return workflow.MaterializedContinuationSource{}, fmt.Errorf("legacy materialized value %d is invalid", legacyMaterialized)
+	}
+	if !kind.Valid {
+		return workflow.MaterializedContinuationSource{}, errors.New("continuation source kind is required")
+	}
+	switch kind.String {
+	case "exact":
+		if !sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("exact continuation source Session ID is required")
+		}
+		parsed, err := runtimeids.ParseSessionID(sessionID.String)
+		if err != nil {
+			return workflow.MaterializedContinuationSource{}, err
+		}
+		return workflow.NewExactMaterializedContinuationSource(parsed)
+	case "deferred_self":
+		if sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("deferred self continuation source cannot carry a Session ID")
+		}
+		return workflow.DeferredSelfMaterializedContinuationSource(), nil
+	case "absent":
+		if sessionID.Valid {
+			return workflow.MaterializedContinuationSource{}, errors.New("absent continuation source cannot carry a Session ID")
+		}
+		return workflow.AbsentMaterializedContinuationSource(), nil
+	default:
+		return workflow.MaterializedContinuationSource{}, fmt.Errorf("continuation source kind %q is invalid", kind.String)
+	}
 }

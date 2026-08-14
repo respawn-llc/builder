@@ -511,8 +511,8 @@ FROM (
 )
 `
 
-func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, edgeID)
+func (q *Queries) CountAllTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countAllTaskEdgeReferences, sql.NullString{String: edgeID, Valid: true})
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countAllTaskEdgeReferences, 1)
 
@@ -889,8 +889,8 @@ FROM (
 )
 `
 
-func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID sql.NullString) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countTaskEdgeReferences, edgeID)
+func (q *Queries) CountTaskEdgeReferences(ctx context.Context, edgeID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countTaskEdgeReferences, sql.NullString{String: edgeID, Valid: true})
 	var ref_count int64
 	err := recordQueryError(ctx, row.Scan(&ref_count), countTaskEdgeReferences, 1)
 
@@ -2253,6 +2253,8 @@ func (q *Queries) GetTaskPendingApproval(ctx context.Context, id string) (TaskPe
 	return i, err
 }
 
+type GetTaskPendingApprovalRow = TaskPendingApproval
+
 const getTaskProjectWorkflowIDs = `-- name: GetTaskProjectWorkflowIDs :one
 SELECT project_id, workflow_id
 FROM task_records
@@ -3052,23 +3054,38 @@ INSERT INTO task_active_fanout_branches (
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 ) VALUES (
     ?1,
     ?2,
     'pending',
-    NULL
+    NULL,
+    ?3,
+    ?4,
+    ?5
 )
 `
 
 type InsertTaskActiveFanoutBranchParams struct {
-	TaskID              string
-	TransitionBranchKey string
+	TaskID                      string
+	TransitionBranchKey         string
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
 }
 
 func (q *Queries) InsertTaskActiveFanoutBranch(ctx context.Context, arg InsertTaskActiveFanoutBranchParams) error {
-	_, err := q.db.ExecContext(ctx, insertTaskActiveFanoutBranch, arg.TaskID, arg.TransitionBranchKey)
-	err = recordQueryError(ctx, err, insertTaskActiveFanoutBranch, 2)
+	_, err := q.db.ExecContext(ctx, insertTaskActiveFanoutBranch,
+		arg.TaskID,
+		arg.TransitionBranchKey,
+		arg.ContinuationSourceKind,
+		arg.ContinuationSourceSessionID,
+		arg.LegacyMaterialized,
+	)
+	err = recordQueryError(ctx, err, insertTaskActiveFanoutBranch, 5)
 	return err
 }
 
@@ -3126,6 +3143,9 @@ INSERT INTO task_current_nodes (
     current_input_values_json,
     prior_node_values_json,
     session_id,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized,
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -3147,25 +3167,31 @@ INSERT INTO task_current_nodes (
     ?11,
     ?12,
     ?13,
-    ?14
+    ?14,
+    ?15,
+    ?16,
+    ?17
 )
 `
 
 type InsertTaskCurrentNodeParams struct {
-	TaskID                 string
-	NodeID                 string
-	TransitionBranchKey    sql.NullString
-	EnteredByEdgeID        sql.NullString
-	CurrentInputValuesJson string
-	PriorNodeValuesJson    string
-	SessionID              sql.NullString
-	SchedulingState        sql.NullString
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson sql.NullString
-	InterruptedAtUnixMs    sql.NullInt64
-	EffectiveAssignee      sql.NullString
-	EffectiveThinking      sql.NullString
-	AssigneeOrigin         sql.NullString
+	TaskID                      string
+	NodeID                      string
+	TransitionBranchKey         sql.NullString
+	EnteredByEdgeID             sql.NullString
+	CurrentInputValuesJson      string
+	PriorNodeValuesJson         string
+	SessionID                   sql.NullString
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
+	SchedulingState             sql.NullString
+	InterruptionReason          sql.NullString
+	InterruptionDetailJson      sql.NullString
+	InterruptedAtUnixMs         sql.NullInt64
+	EffectiveAssignee           sql.NullString
+	EffectiveThinking           sql.NullString
+	AssigneeOrigin              sql.NullString
 }
 
 func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurrentNodeParams) error {
@@ -3177,6 +3203,9 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.CurrentInputValuesJson,
 		arg.PriorNodeValuesJson,
 		arg.SessionID,
+		arg.ContinuationSourceKind,
+		arg.ContinuationSourceSessionID,
+		arg.LegacyMaterialized,
 		arg.SchedulingState,
 		arg.InterruptionReason,
 		arg.InterruptionDetailJson,
@@ -3185,7 +3214,7 @@ func (q *Queries) InsertTaskCurrentNode(ctx context.Context, arg InsertTaskCurre
 		arg.EffectiveThinking,
 		arg.AssigneeOrigin,
 	)
-	err = recordQueryError(ctx, err, insertTaskCurrentNode, 14)
+	err = recordQueryError(ctx, err, insertTaskCurrentNode, 17)
 
 	return err
 }
@@ -4080,6 +4109,163 @@ func (q *Queries) ListBoardNodeTasks(ctx context.Context, arg ListBoardNodeTasks
 	return items, nil
 }
 
+const listActiveWorkflowTaskSessions = `-- name: ListActiveWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+
+FROM json_each(CAST(?1 AS TEXT)) active
+CROSS JOIN sessions session
+    INDEXED BY sqlite_autoindex_sessions_1
+    ON session.id = CAST(active.value AS TEXT)
+
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?2
+`
+
+type ListActiveWorkflowTaskSessionsParams struct {
+	SessionIdsJson string
+	TaskID         sql.NullString
+}
+
+type ListActiveWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListActiveWorkflowTaskSessions(ctx context.Context, arg ListActiveWorkflowTaskSessionsParams) ([]ListActiveWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveWorkflowTaskSessions, arg.SessionIdsJson, arg.TaskID)
+	err = recordQueryError(ctx, err, listActiveWorkflowTaskSessions, 2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListActiveWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListActiveWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listActiveWorkflowTaskSessions, 2); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listActiveWorkflowTaskSessions, 2); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIdleWorkflowTaskSessions = `-- name: ListIdleWorkflowTaskSessions :many
+
+SELECT
+    session.id AS session_id,
+    session.name AS session_name,
+    node.display_name AS node_name,
+    session.continuation_json,
+    session.created_at_unix_ms
+
+FROM sessions session INDEXED BY sessions_task_activity_idx
+
+LEFT JOIN session_workflow_node_associations association
+    ON association.rowid = (
+        SELECT candidate.rowid
+        FROM session_workflow_node_associations candidate
+            INDEXED BY session_workflow_node_associations_session_recency_idx
+        WHERE candidate.session_id = session.id
+        ORDER BY candidate.associated_at_unix_ms DESC, candidate.node_id DESC
+        LIMIT 1
+    )
+LEFT JOIN workflow_nodes node ON node.id = association.node_id
+
+WHERE session.task_id = ?1
+  AND NOT EXISTS (
+      SELECT 1
+      FROM json_each(CAST(?2 AS TEXT)) excluded
+      WHERE CAST(excluded.value AS TEXT) = session.id
+  )
+ORDER BY
+    session.created_at_unix_ms DESC,
+    CAST('session_started:' || session.id AS TEXT) DESC
+LIMIT ?4
+OFFSET ?3
+`
+
+type ListIdleWorkflowTaskSessionsParams struct {
+	TaskID                 sql.NullString
+	ExcludedSessionIdsJson string
+	PageOffset             int64
+	PageLimit              int64
+}
+
+type ListIdleWorkflowTaskSessionsRow struct {
+	SessionID        string
+	SessionName      string
+	NodeName         sql.NullString
+	ContinuationJson string
+	CreatedAtUnixMs  int64
+}
+
+func (q *Queries) ListIdleWorkflowTaskSessions(ctx context.Context, arg ListIdleWorkflowTaskSessionsParams) ([]ListIdleWorkflowTaskSessionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listIdleWorkflowTaskSessions,
+		arg.TaskID,
+		arg.ExcludedSessionIdsJson,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	err = recordQueryError(ctx, err, listIdleWorkflowTaskSessions, 4)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListIdleWorkflowTaskSessionsRow
+	for rows.Next() {
+		var i ListIdleWorkflowTaskSessionsRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.SessionID,
+			&i.SessionName,
+			&i.NodeName,
+			&i.ContinuationJson,
+			&i.CreatedAtUnixMs,
+		), listIdleWorkflowTaskSessions, 4); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listIdleWorkflowTaskSessions, 4); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listIdleWorkflowTaskSessions, 4); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listManagedWorktreeRoots = `-- name: ListManagedWorktreeRoots :many
 SELECT wt.canonical_root_path
 FROM worktrees wt
@@ -4889,6 +5075,76 @@ func (q *Queries) ListProjectWorkspaceBoundary(ctx context.Context, arg ListProj
 	return items, nil
 }
 
+const listProjectWorkspaceCatalogPage = `-- name: ListProjectWorkspaceCatalogPage :many
+WITH catalog_page AS (
+    SELECT
+        w.id AS workspace_id,
+        w.canonical_root_path AS canonical_root,
+        CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_default,
+        w.created_at_unix_ms
+    FROM projects p
+    JOIN workspaces w ON w.project_id = p.id
+    WHERE p.id = ?1
+    ORDER BY is_default DESC, w.created_at_unix_ms DESC, w.id ASC
+    LIMIT ?3
+    OFFSET ?2
+)
+SELECT
+    p.id AS project_id,
+    catalog_page.workspace_id,
+    catalog_page.canonical_root,
+    catalog_page.is_default
+FROM projects p
+LEFT JOIN catalog_page ON TRUE
+WHERE p.id = ?1
+ORDER BY
+    catalog_page.is_default DESC,
+    catalog_page.created_at_unix_ms DESC,
+    catalog_page.workspace_id ASC
+`
+
+type ListProjectWorkspaceCatalogPageParams struct {
+	ProjectID  string
+	OffsetRows int64
+	LimitRows  int64
+}
+
+type ListProjectWorkspaceCatalogPageRow struct {
+	ProjectID     string
+	WorkspaceID   sql.NullString
+	CanonicalRoot sql.NullString
+	IsDefault     sql.NullInt64
+}
+
+func (q *Queries) ListProjectWorkspaceCatalogPage(ctx context.Context, arg ListProjectWorkspaceCatalogPageParams) ([]ListProjectWorkspaceCatalogPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listProjectWorkspaceCatalogPage, arg.ProjectID, arg.OffsetRows, arg.LimitRows)
+	err = recordQueryError(ctx, err, listProjectWorkspaceCatalogPage, 3)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListProjectWorkspaceCatalogPageRow
+	for rows.Next() {
+		var i ListProjectWorkspaceCatalogPageRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.CanonicalRoot,
+			&i.IsDefault,
+		), listProjectWorkspaceCatalogPage, 3); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listProjectWorkspaceCatalogPage, 3); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listProjectWorkspaceCatalogPage, 3); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjectWorkspaces = `-- name: ListProjectWorkspaces :many
 SELECT
     w.id,
@@ -5135,6 +5391,72 @@ func (q *Queries) ListSessionNamesByIDs(ctx context.Context, ids []string) ([]Li
 	return items, nil
 }
 
+const listSessionPage = `-- name: ListSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = ?1
+  AND launch_visible <> 0
+  AND COALESCE(category, 'main') = ?2
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT ?4
+OFFSET ?3
+`
+
+type ListSessionPageParams struct {
+	ProjectID  string
+	Category   sql.NullString
+	PageOffset int64
+	PageLimit  int64
+}
+
+type ListSessionPageRow struct {
+	ID                 string
+	Name               string
+	FirstPromptPreview string
+	Category           string
+	UpdatedAtUnixMs    int64
+}
+
+func (q *Queries) ListSessionPage(ctx context.Context, arg ListSessionPageParams) ([]ListSessionPageRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSessionPage,
+		arg.ProjectID,
+		arg.Category,
+		arg.PageOffset,
+		arg.PageLimit,
+	)
+	err = recordQueryError(ctx, err, listSessionPage, 4)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSessionPageRow
+	for rows.Next() {
+		var i ListSessionPageRow
+		if err := recordQueryError(ctx, rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.FirstPromptPreview,
+			&i.Category,
+			&i.UpdatedAtUnixMs,
+		), listSessionPage, 4); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := recordQueryError(ctx, rows.Close(), listSessionPage, 4); err != nil {
+		return nil, err
+	}
+	if err := recordQueryError(ctx, rows.Err(), listSessionPage, 4); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionPromptHistoryText = `-- name: ListSessionPromptHistoryText :many
 SELECT text
 FROM (
@@ -5255,7 +5577,10 @@ SELECT
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json
+    arrival_values_json,
+    continuation_source_kind,
+    continuation_source_session_id,
+    legacy_materialized
 FROM task_active_fanout_branches
 WHERE task_id = ?1
 ORDER BY transition_branch_key
@@ -5276,6 +5601,9 @@ func (q *Queries) ListTaskActiveFanoutBranches(ctx context.Context, taskID strin
 			&i.TransitionBranchKey,
 			&i.ArrivalState,
 			&i.ArrivalValuesJson,
+			&i.ContinuationSourceKind,
+			&i.ContinuationSourceSessionID,
+			&i.LegacyMaterialized,
 		), listTaskActiveFanoutBranches, 1); err != nil {
 			return nil, err
 		}
@@ -5456,6 +5784,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -5473,21 +5804,24 @@ ORDER BY
 `
 
 type ListTaskCurrentNodesRow struct {
-	TaskID                 string
-	NodeID                 string
-	TransitionBranchKey    sql.NullString
-	EnteredByEdgeID        sql.NullString
-	CurrentInputValuesJson string
-	PriorNodeValuesJson    string
-	SessionID              sql.NullString
-	SchedulingState        sql.NullString
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson sql.NullString
-	InterruptedAtUnixMs    sql.NullInt64
-	EffectiveAssignee      sql.NullString
-	EffectiveThinking      sql.NullString
-	AssigneeOrigin         sql.NullString
-	NodeKind               string
+	TaskID                      string
+	NodeID                      string
+	TransitionBranchKey         sql.NullString
+	EnteredByEdgeID             sql.NullString
+	CurrentInputValuesJson      string
+	PriorNodeValuesJson         string
+	SessionID                   sql.NullString
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
+	SchedulingState             sql.NullString
+	InterruptionReason          sql.NullString
+	InterruptionDetailJson      sql.NullString
+	InterruptedAtUnixMs         sql.NullInt64
+	EffectiveAssignee           sql.NullString
+	EffectiveThinking           sql.NullString
+	AssigneeOrigin              sql.NullString
+	NodeKind                    string
 }
 
 func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]ListTaskCurrentNodesRow, error) {
@@ -5508,6 +5842,9 @@ func (q *Queries) ListTaskCurrentNodes(ctx context.Context, taskID string) ([]Li
 			&i.CurrentInputValuesJson,
 			&i.PriorNodeValuesJson,
 			&i.SessionID,
+			&i.ContinuationSourceKind,
+			&i.ContinuationSourceSessionID,
+			&i.LegacyMaterialized,
 			&i.SchedulingState,
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
@@ -5539,6 +5876,9 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
+    current_node.continuation_source_kind,
+    current_node.continuation_source_session_id,
+    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -5557,21 +5897,24 @@ ORDER BY
 `
 
 type ListTaskCurrentNodesByTasksRow struct {
-	TaskID                 string
-	NodeID                 string
-	TransitionBranchKey    sql.NullString
-	EnteredByEdgeID        sql.NullString
-	CurrentInputValuesJson string
-	PriorNodeValuesJson    string
-	SessionID              sql.NullString
-	SchedulingState        sql.NullString
-	InterruptionReason     sql.NullString
-	InterruptionDetailJson sql.NullString
-	InterruptedAtUnixMs    sql.NullInt64
-	EffectiveAssignee      sql.NullString
-	EffectiveThinking      sql.NullString
-	AssigneeOrigin         sql.NullString
-	NodeKind               string
+	TaskID                      string
+	NodeID                      string
+	TransitionBranchKey         sql.NullString
+	EnteredByEdgeID             sql.NullString
+	CurrentInputValuesJson      string
+	PriorNodeValuesJson         string
+	SessionID                   sql.NullString
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
+	SchedulingState             sql.NullString
+	InterruptionReason          sql.NullString
+	InterruptionDetailJson      sql.NullString
+	InterruptedAtUnixMs         sql.NullInt64
+	EffectiveAssignee           sql.NullString
+	EffectiveThinking           sql.NullString
+	AssigneeOrigin              sql.NullString
+	NodeKind                    string
 }
 
 func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []string) ([]ListTaskCurrentNodesByTasksRow, error) {
@@ -5602,6 +5945,9 @@ func (q *Queries) ListTaskCurrentNodesByTasks(ctx context.Context, taskIds []str
 			&i.CurrentInputValuesJson,
 			&i.PriorNodeValuesJson,
 			&i.SessionID,
+			&i.ContinuationSourceKind,
+			&i.ContinuationSourceSessionID,
+			&i.LegacyMaterialized,
 			&i.SchedulingState,
 			&i.InterruptionReason,
 			&i.InterruptionDetailJson,
@@ -5922,6 +6268,8 @@ func (q *Queries) ListTaskPendingApprovals(ctx context.Context, taskID string) (
 	return items, nil
 }
 
+type ListTaskPendingApprovalsRow = TaskPendingApproval
+
 const listTaskPendingApprovalsByTasks = `-- name: ListTaskPendingApprovalsByTasks :many
 SELECT
     id,
@@ -5974,6 +6322,8 @@ func (q *Queries) ListTaskPendingApprovalsByTasks(ctx context.Context, taskIdsJs
 	}
 	return items, nil
 }
+
+type ListTaskPendingApprovalsByTasksRow = TaskPendingApproval
 
 const listTasksByIDs = `-- name: ListTasksByIDs :many
 SELECT
@@ -8223,6 +8573,44 @@ func (q *Queries) RecoverExecutableCurrentNodes(ctx context.Context, arg Recover
 	return items, nil
 }
 
+const replaceUserInterruptionWithAssignmentFailure = `-- name: ReplaceUserInterruptionWithAssignmentFailure :execrows
+UPDATE task_current_nodes
+SET interruption_reason = 'workflow_runtime_start_failed',
+    interruption_detail_json = ?1,
+    interrupted_at_unix_ms = ?2
+WHERE task_id = ?3
+  AND node_id = ?4
+  AND (
+      (?5 IS NULL AND transition_branch_key IS NULL)
+      OR transition_branch_key = ?5
+  )
+  AND scheduling_state = 'interrupted'
+  AND interruption_reason = 'user_interrupt'
+`
+
+type ReplaceUserInterruptionWithAssignmentFailureParams struct {
+	InterruptionDetailJson sql.NullString
+	InterruptedAtUnixMs    sql.NullInt64
+	TaskID                 string
+	NodeID                 string
+	TransitionBranchKey    sql.NullString
+}
+
+func (q *Queries) ReplaceUserInterruptionWithAssignmentFailure(ctx context.Context, arg ReplaceUserInterruptionWithAssignmentFailureParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUserInterruptionWithAssignmentFailure,
+		arg.InterruptionDetailJson,
+		arg.InterruptedAtUnixMs,
+		arg.TaskID,
+		arg.NodeID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, replaceUserInterruptionWithAssignmentFailure, 5)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const renameProjectLabel = `-- name: RenameProjectLabel :one
 UPDATE project_labels
 SET
@@ -8746,6 +9134,40 @@ type UpdateTaskActiveFanoutBranchArrivalParams struct {
 func (q *Queries) UpdateTaskActiveFanoutBranchArrival(ctx context.Context, arg UpdateTaskActiveFanoutBranchArrivalParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchArrival, arg.ArrivalValuesJson, arg.TaskID, arg.TransitionBranchKey)
 	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchArrival, 3)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateTaskActiveFanoutBranchContinuationSource = `-- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
+UPDATE task_active_fanout_branches
+SET
+    continuation_source_kind = ?1,
+    continuation_source_session_id = ?2,
+    legacy_materialized = ?3
+WHERE task_id = ?4
+  AND transition_branch_key = ?5
+  AND arrival_state = 'pending'
+`
+
+type UpdateTaskActiveFanoutBranchContinuationSourceParams struct {
+	ContinuationSourceKind      sql.NullString
+	ContinuationSourceSessionID sql.NullString
+	LegacyMaterialized          int64
+	TaskID                      string
+	TransitionBranchKey         string
+}
+
+func (q *Queries) UpdateTaskActiveFanoutBranchContinuationSource(ctx context.Context, arg UpdateTaskActiveFanoutBranchContinuationSourceParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateTaskActiveFanoutBranchContinuationSource,
+		arg.ContinuationSourceKind,
+		arg.ContinuationSourceSessionID,
+		arg.LegacyMaterialized,
+		arg.TaskID,
+		arg.TransitionBranchKey,
+	)
+	err = recordQueryError(ctx, err, updateTaskActiveFanoutBranchContinuationSource, 5)
 	if err != nil {
 		return 0, err
 	}

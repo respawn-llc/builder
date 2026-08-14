@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -20,6 +21,9 @@ import (
 )
 
 var metadataTestDatabaseSequence atomic.Uint64
+
+//go:embed testdata/latest_schema.sql
+var latestMetadataTestSchema []byte
 
 func openInMemoryMetadataTestStore(t *testing.T, persistenceRoot string) *Store {
 	t.Helper()
@@ -44,13 +48,26 @@ func openInMemoryMetadataTestStore(t *testing.T, persistenceRoot string) *Store 
 func openLatestMetadataTestDatabase(t testing.TB) *sql.DB {
 	t.Helper()
 	db := openEmptyMetadataTestDatabase(t)
-	if err := runMigrations(db); err != nil {
+	if _, err := db.Exec(string(executableLatestMetadataTestSchema())); err != nil {
 		_ = db.Close()
-		t.Fatalf("migrate in-memory metadata schema: %v", err)
+		t.Fatalf("create latest in-memory metadata schema: %v", err)
 	}
 	db.SetMaxOpenConns(metadataSQLiteConnectionPoolSize)
 	db.SetMaxIdleConns(metadataSQLiteConnectionPoolSize)
 	return db
+}
+
+func executableLatestMetadataTestSchema() []byte {
+	lines := bytes.Split(latestMetadataTestSchema, []byte{'\n'})
+	executable := make([][]byte, 0, len(lines))
+	for _, line := range lines {
+		if bytes.HasPrefix(line, []byte("CREATE TABLE 'task_search_fts_")) ||
+			bytes.HasPrefix(line, []byte("CREATE TABLE 'task_search_short_id_fts_")) {
+			continue
+		}
+		executable = append(executable, line)
+	}
+	return bytes.Join(executable, []byte{'\n'})
 }
 
 func openEmptyMetadataTestDatabase(t testing.TB) *sql.DB {
@@ -77,7 +94,14 @@ func TestAllMetadataMigrationsMatchLatestInMemorySchema(t *testing.T) {
 		t.Fatalf("run full metadata migration chain in memory: %v", err)
 	}
 
-	_ = metadataTestSchema(t, migrated)
+	migratedSchema := metadataTestSchema(t, migrated)
+	if !bytes.Equal(migratedSchema, latestMetadataTestSchema) {
+		t.Fatalf(
+			"full migration schema does not match testdata/latest_schema.sql; regenerate it with ./scripts/dump-metadata-schema.sh\nwant_sha256=%x\ngot_sha256=%x",
+			sha256Bytes(latestMetadataTestSchema),
+			sha256Bytes(migratedSchema),
+		)
+	}
 	var integrity string
 	if err := migrated.QueryRowContext(t.Context(), "PRAGMA integrity_check").Scan(&integrity); err != nil {
 		t.Fatalf("migration integrity check: %v", err)

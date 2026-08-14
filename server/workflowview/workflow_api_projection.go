@@ -62,9 +62,9 @@ func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflo
 			Code:              string(err.Code),
 			Message:           err.Message,
 			WorkflowID:        err.WorkflowID,
-			NodeID:            string(err.NodeID),
-			TransitionGroupID: string(err.TransitionGroupID),
-			EdgeID:            string(err.EdgeID),
+			NodeID:            graphIDValue(err.NodeID),
+			TransitionGroupID: graphIDValue(err.TransitionGroupID),
+			EdgeID:            graphIDValue(err.EdgeID),
 			Details:           validationErrorDetails(err),
 			RelatedIDs:        relatedIDs,
 			BlocksContext:     err.BlocksContext,
@@ -77,6 +77,13 @@ func ValidationErrors(inheritedWorkflowID *runtimeids.WorkflowID, errs []workflo
 	return out
 }
 
+func graphIDValue[T ~string](value *T) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
+}
+
 func validationErrorDetails(err workflow.ValidationError) *serverapi.WorkflowValidationErrorDetails {
 	var requiredTool *string
 	if err.RequiredTool != nil {
@@ -87,7 +94,7 @@ func validationErrorDetails(err workflow.ValidationError) *serverapi.WorkflowVal
 		FieldName:      err.FieldName,
 		InputName:      err.InputName,
 		Placeholder:    err.Placeholder,
-		ProviderEdgeID: string(err.ProviderEdgeID),
+		ProviderEdgeID: graphIDValue(err.ProviderEdgeID),
 		Role:           err.AgentRole,
 		RequiredTool:   requiredTool,
 	}

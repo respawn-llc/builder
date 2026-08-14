@@ -13,7 +13,6 @@ import (
 	"core/server/launch"
 	"core/server/metadata"
 	"core/server/runprompt"
-	"core/server/runtime"
 	"core/server/sessionlaunch"
 	shelltool "core/server/tools/shell"
 	"core/shared/apicontract"
@@ -339,7 +338,6 @@ func (s *Core) runPromptClientForProjectContext(projectCtx projectContext) apico
 	}
 	client := runprompt.NewInProcessRunPromptClient(runprompt.HeadlessBootstrap{
 		SessionLaunch:          s.sessionLaunchServiceForProjectContext(projectCtx),
-		FastModeState:          s.safeBundles().Runtime.fastModeState,
 		PromptHistory:          s.safeBundles().Persistence.metadataStore,
 		RuntimeAuthority:       s.safeBundles().Runtime.runtimeAuthority,
 		ManagedWorktreeBaseDir: s.safeBundles().Projects.cfg.Settings.Worktrees.BaseDir,
@@ -401,13 +399,6 @@ func (s *Core) ServerAuthRequired() bool {
 		return true
 	}
 	return s.safeBundles().Auth.authRequired
-}
-
-func (s *Core) FastModeState() *runtime.FastModeState {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Runtime.fastModeState
 }
 
 func (s *Core) Background() *shelltool.Manager {
@@ -560,13 +551,6 @@ func (s *Core) ProcessControlClient() apicontract.ProcessControlService {
 		return nil
 	}
 	return s.safeBundles().Processes.processControls
-}
-
-func (s *Core) ProcessOutputClient() apicontract.ProcessOutputService {
-	if s == nil {
-		return nil
-	}
-	return s.safeBundles().Processes.processOutput
 }
 
 func (s *Core) SessionTranscriptClient() apicontract.SessionTranscriptService {

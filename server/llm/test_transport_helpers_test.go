@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,13 +8,6 @@ import (
 
 	"core/internal/testharness/httpclient"
 )
-
-const completedResponseSSEJSON = `{"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}}`
-
-func writeCompletedResponseSSE(w http.ResponseWriter) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", completedResponseSSEJSON)
-}
 
 func newCanonicalOAuthTestTransport(t *testing.T, server *httptest.Server) *HTTPTransport {
 	t.Helper()

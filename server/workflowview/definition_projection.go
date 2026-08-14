@@ -117,14 +117,18 @@ func ProjectDefinition(def workflow.Definition, record workflowstore.WorkflowRec
 			})
 		}
 		nodeID := string(identity.ID)
+		groupID := ""
+		if identity.GroupID != nil {
+			groupID = *identity.GroupID
+		}
 		api.Nodes = append(api.Nodes, serverapi.WorkflowNode{
 			ID:                 nodeID,
 			WorkflowID:         identity.WorkflowID,
 			Key:                string(identity.Key),
 			Kind:               string(node.Kind()),
 			DisplayName:        identity.DisplayName,
-			GroupID:            identity.GroupID,
-			GroupKey:           groupKeyByID[identity.GroupID],
+			GroupID:            groupID,
+			GroupKey:           groupKeyByID[groupID],
 			SubagentRole:       workflow.NodeSubagentRole(node),
 			CompletionMode:     workflow.NodeCompletionMode(node),
 			ScriptPath:         scriptPath,

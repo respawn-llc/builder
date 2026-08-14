@@ -311,7 +311,7 @@ func prepareExecutorToolCalls(engine *Engine, stepID string, runID string, workf
 		if !knownTool || toolID != toolspec.ToolAskQuestion || !askQuestionMaterializable(engine) {
 			continue
 		}
-		if _, err := tools.PrepareAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
+		if _, err := tools.DecodeAskQuestionToolRequest(executableCall.ID, executableCall.Input); err != nil {
 			continue
 		}
 		askCandidateIndexes = append(askCandidateIndexes, len(prepared)-1)

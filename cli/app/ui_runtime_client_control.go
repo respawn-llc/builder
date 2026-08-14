@@ -154,9 +154,13 @@ func runtimeGoalFromAPI(goal *serverapi.RuntimeGoal) *clientui.RuntimeGoal {
 		return nil
 	}
 	return &clientui.RuntimeGoal{
-		ID:        goal.ID,
-		Objective: goal.Objective,
-		Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(goal.Status)),
+		Goal: &clientui.Goal{
+			ID:        goal.ID,
+			Objective: goal.Objective,
+			Status:    clientui.RuntimeGoalStatus(strings.TrimSpace(goal.Status)),
+			CreatedAt: goal.CreatedAt,
+			UpdatedAt: goal.UpdatedAt,
+		},
 	}
 }
 
@@ -165,6 +169,10 @@ func cloneRuntimeGoal(goal *clientui.RuntimeGoal) *clientui.RuntimeGoal {
 		return nil
 	}
 	cloned := *goal
+	if goal.Goal != nil {
+		core := *goal.Goal
+		cloned.Goal = &core
+	}
 	return &cloned
 }
 

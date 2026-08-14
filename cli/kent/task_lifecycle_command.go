@@ -896,8 +896,6 @@ func manualMoveBlockerMessage(reason serverapi.WorkflowTaskMovePreviewBlocker) s
 		return "the task has no current workflow position; start the task before moving it"
 	case serverapi.WorkflowTaskMovePreviewBlockerUnsupportedDestination:
 		return "the destination cannot be entered by Manual Move; choose an executable or terminal node"
-	case serverapi.WorkflowTaskMovePreviewBlockerWaitingQuestion:
-		return "the task is waiting for an answer; answer the question before moving it"
 	case serverapi.WorkflowTaskMovePreviewBlockerLifecycleConflict:
 		return "the task is changing state; wait for the current operation to finish and try again"
 	case serverapi.WorkflowTaskMovePreviewBlockerContextSessionUnavailable:

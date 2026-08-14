@@ -3,7 +3,6 @@ package workflowstore
 import (
 	"path/filepath"
 	"testing"
-	"time"
 
 	"core/server/metadata"
 	"core/server/session"
@@ -38,8 +37,9 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	audit := nodeByKey(t, definition, "audit")
+	reviewNode := nodeByKey(t, definition, "review")
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 		edge.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
@@ -47,17 +47,11 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 			Key:     "role",
 			Purpose: workflow.ParameterPurposeTargetAssignee,
 		}}
+		appendRetainedTargetReturnToReviewFixture(req, workflowID, audit, reviewNode, "role")
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-
-	targetReference, err := workflow.NewCurrentNodeReference(task.ID, workflow.NodeIDOf(audit), nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference target: %v", err)
-	}
-	targetSessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, targetReference, time.UnixMilli(2))
-	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
 
 	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
@@ -67,8 +61,34 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, review.Mutation.Created[0].Reference)
+	firstAudit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "audit",
+		OutputValues: map[string]string{"role": "coder"},
+	})
+	if err != nil {
+		t.Fatalf("complete review to establish Audit: %v", err)
+	}
+	targetSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		firstAudit.Mutation.Created[0].Reference,
+	)
+	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
+	returnedReview, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       firstAudit.Mutation.Created[0].Reference,
+		TransitionID: "return_review",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+	if err != nil {
+		t.Fatalf("complete Audit to return Review: %v", err)
+	}
+	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       returnedReview.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 	})
 	if err != nil {
@@ -113,9 +133,9 @@ func TestAutomaticCompletionPreservesRetainedTargetSessionRole(t *testing.T) {
 func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
-	alternateID := workflow.NodeID("node-alternate-" + workflowID.String())
-	alternateGroupID := workflow.TransitionGroupID("group-alternate-" + workflowID.String())
-	alternateDoneGroupID := workflow.TransitionGroupID("group-alternate-done-" + workflowID.String())
+	alternateID := testNodeID("node-alternate-" + workflowID.String())
+	alternateGroupID := testTransitionGroupID("group-alternate-" + workflowID.String())
+	alternateDoneGroupID := testTransitionGroupID("group-alternate-done-" + workflowID.String())
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(def workflow.Definition, req *WorkflowGraphSaveRequest) {
 		plan := nodeByKey(t, def, "plan")
 		audit := nodeByKey(t, def, "audit")
@@ -145,25 +165,29 @@ func TestConvergingIncomingEdgesKeepIndependentSelections(t *testing.T) {
 		)
 		req.Edges = append(req.Edges,
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-plan-alternate-" + workflowID.String()),
+				ID:                testEdgeID("edge-plan-alternate-" + workflowID.String()),
 				WorkflowID:        workflowID,
 				TransitionGroupID: alternateGroupID,
 				Key:               "alternate",
 				TargetNodeID:      alternateID,
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession,
-				PromptTemplate:    "Alternate.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
+				PromptTemplate:    "Alternate.",
 			},
 			EdgeRecord{
-				ID:                workflow.EdgeID("edge-alternate-audit-" + workflowID.String()),
+				ID:                testEdgeID("edge-alternate-audit-" + workflowID.String()),
 				WorkflowID:        workflowID,
 				TransitionGroupID: alternateDoneGroupID,
 				Key:               "audit",
 				TargetNodeID:      workflow.NodeIDOf(audit),
+				AssigneeSelection: workflow.AssigneeSelectionConfigured,
+				ThinkingSelection: workflow.ThinkingSelectionConfigured,
 				ContextMode:       workflow.ContextModeNewSession,
-				PromptTemplate:    "Audit.", AssigneeSelection: workflow.AssigneeSelectionConfigured, ThinkingSelection: workflow.ThinkingSelectionConfigured,
+				PromptTemplate:    "Audit.",
 			},
 		)
-		override := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		override := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		override.AssigneeSelection = workflow.AssigneeSelectionPreviousNode
 		override.Parameters = []workflow.Parameter{{
 			Key:     "role",
@@ -254,23 +278,19 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 		t.Fatalf("GetDefinition: %v", err)
 	}
 	audit := nodeByKey(t, definition, "audit")
+	reviewNode := nodeByKey(t, definition, "review")
 	saveWorkflowGraphFixture(t, ctx, store, workflowID, func(_ workflow.Definition, req *WorkflowGraphSaveRequest) {
-		edge := workflowGraphSaveEdgeRecord(t, req.Edges, workflow.EdgeID("edge-audit-"+workflowID.String()))
+		edge := workflowGraphSaveEdgeRecord(t, req.Edges, testEdgeID("edge-audit-"+workflowID.String()))
 		edge.ContextMode = workflow.ContextModeContinueSession
 		edge.ContextSource = workflow.ContextSource{Kind: workflow.ContextSourcePreviousTargetOrNew}
 		edge.AssigneeSelection = workflow.AssigneeSelectionConfigured
 		edge.ThinkingSelection = workflow.ThinkingSelectionPreviousNode
 		edge.Parameters = []workflow.Parameter{{Key: "effort", Purpose: workflow.ParameterPurposeTargetThinking}}
+		appendRetainedTargetReturnToReviewFixture(req, workflowID, audit, reviewNode, "thinking")
 	})
 	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
 	task := createDefaultTask(t, ctx, store, binding.ProjectID)
 	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
-	targetReference, err := workflow.NewCurrentNodeReference(task.ID, workflow.NodeIDOf(audit), nil)
-	if err != nil {
-		t.Fatalf("NewCurrentNodeReference target: %v", err)
-	}
-	targetSessionID := associateTaskSessionForTest(t, ctx, store, binding, cfg, targetReference, time.UnixMilli(2))
-	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
 	review, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
 		Source:       plan.Reference,
 		TransitionID: "review",
@@ -279,7 +299,33 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 	if err != nil {
 		t.Fatalf("complete plan: %v", err)
 	}
-	startContext, err := store.ResolveCurrentNodeStartContext(ctx, review.Mutation.Created[0].Reference)
+	associateAndBindCurrentNodeSessionForTest(t, ctx, store, binding, cfg, review.Mutation.Created[0].Reference)
+	firstAudit, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       review.Mutation.Created[0].Reference,
+		TransitionID: "audit",
+		OutputValues: map[string]string{"effort": "low"},
+	})
+	if err != nil {
+		t.Fatalf("complete review to establish Audit: %v", err)
+	}
+	targetSessionID := associateAndBindCurrentNodeSessionForTest(
+		t,
+		ctx,
+		store,
+		binding,
+		cfg,
+		firstAudit.Mutation.Created[0].Reference,
+	)
+	setPersistedSessionRoleForTest(t, cfg, binding, store.metadata, targetSessionID, "reviewer")
+	returnedReview, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       firstAudit.Mutation.Created[0].Reference,
+		TransitionID: "return_review",
+		OutputValues: map[string]string{"summary": "review again"},
+	})
+	if err != nil {
+		t.Fatalf("complete Audit to return Review: %v", err)
+	}
+	startContext, err := store.ResolveCurrentNodeStartContext(ctx, returnedReview.Mutation.Created[0].Reference)
 	if err != nil {
 		t.Fatalf("ResolveCurrentNodeStartContext retained thinking contract: %v", err)
 	}
@@ -296,7 +342,7 @@ func TestAutomaticCompletionChangesThinkingOnRetainedTargetSession(t *testing.T)
 		t.Fatalf("retained target thinking contract omitted effort parameter: %+v", startContext.TransitionOptions)
 	}
 	completed, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
-		Source:       review.Mutation.Created[0].Reference,
+		Source:       returnedReview.Mutation.Created[0].Reference,
 		TransitionID: "audit",
 		OutputValues: map[string]string{"effort": "high"},
 	})
@@ -383,4 +429,38 @@ func setPersistedSessionRoleForTest(t *testing.T, cfg config.App, binding metada
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
 		t.Fatalf("SetContinuationContext: %v", err)
 	}
+}
+
+func appendRetainedTargetReturnToReviewFixture(
+	req *WorkflowGraphSaveRequest,
+	workflowID runtimeids.WorkflowID,
+	source workflow.Node,
+	target workflow.Node,
+	identity string,
+) {
+	groupID := testTransitionGroupID("group-" + identity + "-return-review-" + workflowID.String())
+	req.TransitionGroups = append(req.TransitionGroups, TransitionGroupRecord{
+		ID:           groupID,
+		WorkflowID:   workflowID,
+		SourceNodeID: workflow.NodeIDOf(source),
+		TransitionID: "return_review",
+		DisplayName:  "Return Review",
+	})
+	req.Edges = append(req.Edges, EdgeRecord{
+		ID:                testEdgeID("edge-" + identity + "-return-review-" + workflowID.String()),
+		WorkflowID:        workflowID,
+		TransitionGroupID: groupID,
+		Key:               "return_review",
+		TargetNodeID:      workflow.NodeIDOf(target),
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
+		ContextMode:       workflow.ContextModeContinueSession,
+		ContextSource:     workflow.ContextSource{Kind: workflow.ContextSourcePreviousTarget},
+		PromptTemplate:    "Review {{.Params.summary}}.",
+		Parameters: []workflow.Parameter{{
+			Key:         "summary",
+			Description: "Review summary.",
+			Purpose:     workflow.ParameterPurposeOrdinary,
+		}},
+	})
 }

@@ -125,6 +125,9 @@
 - Kent validates and applies one relationship mutation atomically.
 - A relationship validation failure changes neither Task nor relationship
   state.
+- Task creation may request multiple incoming and outgoing Task Dependencies.
+- Kent validates Task creation and every requested Task Dependency as one operation, then atomically creates the Task and all requested relationships.
+- A validation failure during Task creation creates neither the Task nor any requested relationship.
 - Concurrent relationship additions cannot exceed either cardinality limit.
 - Typed relationship errors identify the violated rule and the affected Tasks.
 - A Task Dependency is satisfied if and only if its Blocker Task has
@@ -411,8 +414,9 @@
 - Task Start and manual movement into executable work make no Task change while Execution Target selection is required. Dismissal leaves the Task unchanged.
 - After required selection, Task Start durably places the Task and acknowledges that placement before Execution Target resolution, filesystem work, setup, Session creation, or runtime startup. Those operations run asynchronously without holding the shared Workflow mutation permit; failure interrupts the placed Current Node through the ordinary runtime-start error path.
 - Once a Manual Move is ready to apply and any required Execution Target selection has succeeded, Kent automatically interrupts all live Agent and Script work on the Task, waits for it to stop, revalidates the move, and applies it. A separate Interrupt action is not required.
+- As part of that interruption, Manual Move cancels every pending Question on the Task.
 - Human `kent task complete --force` is command composition over the existing Task Interrupt and Manual Move operations. It explicitly interrupts and waits first, then invokes this same Manual Move owner with the selected outgoing Transition, commentary, and Parameter values; it is not another completion authority.
-- Manual Move does not cancel or join a waiting Question scope. The operator must answer the Question or wait for scope retirement before moving the Task.
+- A pending Approval in a Session blocks Manual Move until it resolves.
 - Other conflicting lifecycle operations block Manual Move.
 - If revalidation or movement fails after live work has been interrupted, the origin Current Nodes remain interrupted and Kent surfaces the move failure instead of resuming them.
 
@@ -430,6 +434,11 @@
 - Manual movement supports every Context Source. An incoming Transition is usable only when every selected branch can resolve any Session required by its Context Source.
 - Manual movement never infers one origin branch from a parallel Task or from the dragged card. During parallel work it does not preserve branch-scoped Session context. When the selected Transition source is not the Task's sole unscoped Current Node, required retained-Session context resolves only from serial associations; branch-scoped-only context makes the Transition unusable. A selected Fan-Out Transition resolves context before its targets receive their new Transition Branch Keys.
 - Pending Approvals freeze context-source resolution before Approval. A fallback-to-new result remains `new_session` even if another matching Session appears before Approval, and a selected Session remains fixed if a newer matching Session appears.
+- A uniquely repaired legacy Current Node, active Fan-Out branch, or pending Approval uses the repaired exact Context Source after upgrade.
+- If unresolved legacy state reaches `previous_target_or_new` and the target is an Agent Node, Kent starts a fresh target Session and reports a diagnostic.
+- If unresolved legacy state reaches strict `previous_target`, a non-Agent `previous_target_or_new` target, or a final Join, production reports a typed actionable error without changing Workflow state. Debug operation fails fast.
+- Kent removes this unresolved-legacy compatibility handling in v2.6.2.
+- If a fresh retained-target Session binds but later start preparation fails, Resume reports the invalid binding and does not create another Session. Recovery requires operator intervention.
 - `continue_session` may reuse only a Session whose persisted Assignee identity matches the target Current Node's materialized Assignee.
 - Workflow validation rejects statically known Assignee incompatibility, runtime rejects retained-Session Assignee incompatibility, and valid direct continuation preserves the reused Session's Assignee, contract generation, and cache lineage.
 - Transition-selected Assignees never rotate or invalidate an established Session's prompt-cache lineage.
@@ -655,7 +664,7 @@
 - Current Nodes have no independent product identity.
 - Every Agent Current Node materializes and persists its effective Assignee and thinking when it is created.
 - During upgrade, the Session resolved as continuation context does not by itself determine the target Assignee.
-- An unstarted target that will establish a fresh or compacted Session contract, or that requires retained-context Assignee compatibility, materializes the required target Agent Node fallback. An unstarted target-owned retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
+- An unstarted target that will establish a fresh or compacted Session contract materializes the required target Agent Node fallback. An unstarted retained continuation preserves the retained Session Assignee, treating an absent retained role as Kent's canonical default role.
 - A target execution already bound to a Session preserves that Session's Assignee. A pending Approval target has not started and therefore derives its Assignee only from its frozen Context-Preservation Mode and Context Source resolution.
 - Pre-feature state migrates with absent/no-thinking because it had no frozen thinking value. Migration does not validate preserved role availability against current configuration; an unavailable role becomes an ordinary Current Node start failure after startup.
 - Later Workflow edits do not change an admitted Agent Current Node's materialized Assignee or thinking.

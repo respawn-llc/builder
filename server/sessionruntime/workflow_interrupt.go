@@ -89,7 +89,6 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 		locked = append(locked, execution)
 	}
 	a.mu.Unlock()
-	hasQuestion := false
 	hasApproval := false
 	for _, execution := range locked {
 		for _, entry := range execution.prompts.pending {
@@ -98,17 +97,12 @@ func (a *Authority) WithWorkflowManualMoveSelection(
 			}
 			if entry.snapshot.Request.Approval {
 				hasApproval = true
-			} else {
-				hasQuestion = true
 			}
 		}
 	}
-	if hasQuestion || hasApproval {
+	if hasApproval {
 		for _, execution := range locked {
 			execution.prompts.mu.Unlock()
-		}
-		if hasQuestion {
-			return ErrWorkflowQuestionPending
 		}
 		return ErrWorkflowApprovalPending
 	}

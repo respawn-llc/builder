@@ -1,16 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import type { TaskEditInput, TaskMutationInput } from "@/api";
 import { invalidateProjectTaskSearches, queryKeys, useAppServices } from "@/app-facade";
-
-export function useWorkspaces(projectID: string) {
-  const { api } = useAppServices();
-  return useQuery({
-    queryKey: queryKeys.workspaces(projectID),
-    queryFn: async () => api.listWorkspaces(projectID),
-    enabled: projectID.length > 0,
-  });
-}
 
 export function useCreateTask(
   projectID: string,

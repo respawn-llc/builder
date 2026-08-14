@@ -83,7 +83,7 @@ func TestFailedAgentStepContextFactWriteDoesNotFailStepOrRetryLater(t *testing.T
 		&fakeClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		}}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 	)
 	engine.cfg.OnEvent = func(event Event) {
 		events = append(events, event)
@@ -120,7 +120,7 @@ func TestFailedCompactionContextFactWriteDoesNotFailCompactionOrRetryLater(t *te
 		&fakeCompactionClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		}}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 	)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)
 
@@ -154,7 +154,7 @@ func TestSuccessfulAgentStepEstablishesAbsentManualEligibilityFact(t *testing.T)
 		&fakeClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("done")},
 		}}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5"},
 	)
 
@@ -185,7 +185,7 @@ func TestSuccessfulCompactionEstablishesBothAbsentContextFacts(t *testing.T) {
 		&fakeCompactionClient{responses: []llm.Response{{
 			Assistant: llm.Message{Role: llm.RoleAssistant, Content: textutil.Value("summary")},
 		}}},
-		tools.NewRegistry(),
+		newTestToolRegistry(t),
 		Config{Model: "gpt-5", CompactionMode: "local"},
 	)
 	engine.compactionRuntimeState().SetManualCompactionEligible(true)

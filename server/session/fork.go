@@ -270,10 +270,11 @@ func streamReplayIntoChild(parentLog MaterializedEventLog, childLog Materialized
 				replacement,
 				latestRollbackCandidate,
 			)
-			rebasedRecord, err := NewEventRecord(
+			rebasedRecord, err := newEventRecord(
 				record.Seq(),
 				record.StepID(),
 				rebasedReplacement,
+				record.CommittedAtUnixMs(),
 			)
 			if err != nil {
 				return err
@@ -403,10 +404,8 @@ func cloneContinuationContext(in *ContinuationContext) *ContinuationContext {
 		return nil
 	}
 	copyContext := *in
-	if in.AgentRole != nil {
-		role := *in.AgentRole
-		copyContext.AgentRole = &role
-	}
+	copyContext.OpenAIBaseURL = textutil.Pointer(in.OpenAIBaseURL)
+	copyContext.AgentRole = textutil.Pointer(in.AgentRole)
 	return &copyContext
 }
 

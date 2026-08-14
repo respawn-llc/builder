@@ -43,7 +43,7 @@ export function WorkflowEditorStatusIsland({
       tone={statusIslandTone(controller)}
     >
       <div className="grid gap-[var(--space-3)] pt-[6px]">
-        <StatusIslandActions
+        <WorkflowEditorSaveActions
           confirmationPreview={confirmationPreview}
           controller={controller}
           onCancelConfirmation={onCancelConfirmation}
@@ -95,7 +95,7 @@ function errorsOrEmpty(
   return validation?.errors ?? [];
 }
 
-function StatusIslandActions({
+export function WorkflowEditorSaveActions({
   confirmationPreview,
   controller,
   onCancelConfirmation,

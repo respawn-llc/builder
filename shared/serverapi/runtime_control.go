@@ -235,6 +235,38 @@ type RuntimeGoalShowResponse struct {
 	Goal *RuntimeGoal `json:"goal,omitempty"`
 }
 
+func (r RuntimeGoalShowResponse) Validate() error {
+	if r.Goal == nil {
+		return nil
+	}
+	if strings.TrimSpace(r.Goal.ID) == "" {
+		return errors.New("runtime goal id is required")
+	}
+	if strings.TrimSpace(r.Goal.Objective) == "" {
+		return errors.New("runtime goal objective is required")
+	}
+	if strings.TrimSpace(r.Goal.Status) == "" {
+		return errors.New("runtime goal status is required")
+	}
+	if r.Goal.CreatedAt.IsZero() {
+		return errors.New("runtime goal created_at is required")
+	}
+	if r.Goal.UpdatedAt.IsZero() {
+		return errors.New("runtime goal updated_at is required")
+	}
+	return nil
+}
+
+type RuntimeGoalMutationResponse struct {
+	Goal         *clientui.Goal             `json:"goal,omitempty"`
+	Pending      *clientui.GoalPreview      `json:"pending,omitempty"`
+	Availability *clientui.GoalAvailability `json:"availability,omitempty"`
+}
+
+func (r RuntimeGoalMutationResponse) Validate() error {
+	return clientui.GoalMutationResult(r).Validate()
+}
+
 type RuntimeGoalSetRequest struct {
 	SessionID string `json:"session_id"`
 	Objective string `json:"objective"`

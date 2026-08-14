@@ -44,7 +44,7 @@ func TestRuntimeLiveControlRouteContracts(t *testing.T) {
 		if !ok {
 			t.Fatalf("route %q missing", tt.method)
 		}
-		if route.Kind != KindUnary || route.Auth != AuthServer || route.Scope != tt.scope || route.Connection != tt.connection || route.Dependency != DependencyRuntimeControl {
+		if route.Kind != KindUnary || route.Auth != AuthServer || route.Scope != tt.scope || route.Connection != tt.connection {
 			t.Fatalf("route %q metadata = %+v", tt.method, route)
 		}
 		if route.RequestType != tt.requestType || route.ResponseType != tt.responseType || !route.ValidatesRequest {

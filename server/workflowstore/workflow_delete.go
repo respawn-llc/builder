@@ -85,7 +85,7 @@ func (s *Store) DeleteWorkflow(ctx context.Context, req WorkflowDeleteRequest) (
 	}
 
 	now := s.now().UnixMilli()
-	resolution, err := workflowAttentionResolution(ctx, q, req.WorkflowID)
+	resolution, err := s.workflowAttentionResolution(ctx, q, req.WorkflowID)
 	if err != nil {
 		return WorkflowDeleteResult{}, fmt.Errorf("project workflow attention resolution: %w", err)
 	}
