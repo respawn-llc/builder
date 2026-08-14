@@ -584,7 +584,7 @@ func (c *CurrentNodeController) ApplyManualMove(
 						return preparation, keyErr
 					}
 					if steers[key] == nil {
-						return preparation, fmt.Errorf("Manual Move target %v has no prepared assignment steer", input.CurrentNode.Reference)
+						return preparation, fmt.Errorf("manual move target %v has no prepared assignment steer", input.CurrentNode.Reference)
 					}
 				}
 				preparedAssignments = steers
