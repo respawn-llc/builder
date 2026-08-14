@@ -223,13 +223,10 @@ type TaskActiveFanout struct {
 }
 
 type TaskActiveFanoutBranch struct {
-	TaskID                      string
-	TransitionBranchKey         string
-	ArrivalState                string
-	ArrivalValuesJson           sql.NullString
-	ContinuationSourceKind      sql.NullString
-	ContinuationSourceSessionID sql.NullString
-	LegacyMaterialized          int64
+	TaskID              string
+	TransitionBranchKey string
+	ArrivalState        string
+	ArrivalValuesJson   sql.NullString
 }
 
 type TaskComment struct {

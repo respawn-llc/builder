@@ -374,9 +374,6 @@ func (s *Store) CompleteCurrentNode(ctx context.Context, req CurrentNodeCompleti
 	if removed != 1 {
 		return definitelyUncommitted(sql.ErrNoRows)
 	}
-	if err := updateActiveFanoutBranchContinuationSource(ctx, q, prepared.Source, targetCurrentNode.ContinuationSource); err != nil {
-		return definitelyUncommitted(err)
-	}
 	if err := insertTaskCurrentNode(ctx, q, targetCurrentNode, nowTime); err != nil {
 		return definitelyUncommitted(err)
 	}

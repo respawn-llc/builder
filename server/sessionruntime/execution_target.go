@@ -57,7 +57,10 @@ func (a *Authority) SubmitWorktreeTransition(
 	a.mu.Unlock()
 	if resource == nil {
 		go func() {
-			_ = a.withMaintenanceResource(context.Background(), id, func(runCtx context.Context, store *session.Store, _ *agentResource, _ *runtime.Engine) (bool, error) {
+			_ = a.withMaintenanceResource(context.Background(), id, func(runCtx context.Context, store *session.Store, resource *agentResource, engine *runtime.Engine) (bool, error) {
+				if resource != nil {
+					return false, engine.SubmitWorktreeTransition(operation)
+				}
 				return false, operation(runCtx, func(target clientui.SessionExecutionTarget, reminder *session.WorktreeReminderState) error {
 					_, normalizedReminder, normalizeErr := normalizeTarget(target, reminder)
 					if normalizeErr != nil || normalizedReminder == nil {

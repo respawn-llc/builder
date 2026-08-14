@@ -933,7 +933,7 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = sqlc.arg(edge_id)
+    WHERE current_node.entered_by_edge_id = CAST(sqlc.arg(edge_id) AS TEXT)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
@@ -945,7 +945,7 @@ SELECT CAST(COUNT(*) AS INTEGER) AS ref_count
 FROM (
     SELECT current_node.task_id
     FROM task_current_nodes current_node
-    WHERE current_node.entered_by_edge_id = sqlc.arg(edge_id)
+    WHERE current_node.entered_by_edge_id = CAST(sqlc.arg(edge_id) AS TEXT)
     UNION ALL
     SELECT branch.approval_id
     FROM task_pending_approval_branches branch
@@ -2186,6 +2186,48 @@ ORDER BY CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END DESC, w.creat
 LIMIT sqlc.arg(limit_rows)
 OFFSET sqlc.arg(offset_rows);
 
+-- name: ListProjectWorkspaceCatalogPage :many
+WITH catalog_page AS (
+    SELECT
+        w.id AS workspace_id,
+        w.canonical_root_path AS canonical_root,
+        CASE WHEN w.id = p.primary_workspace_id THEN 1 ELSE 0 END AS is_default,
+        w.created_at_unix_ms
+    FROM projects p
+    JOIN workspaces w ON w.project_id = p.id
+    WHERE p.id = sqlc.arg(project_id)
+    ORDER BY is_default DESC, w.created_at_unix_ms DESC, w.id ASC
+    LIMIT sqlc.arg(limit_rows)
+    OFFSET sqlc.arg(offset_rows)
+)
+SELECT
+    p.id AS project_id,
+    catalog_page.workspace_id,
+    catalog_page.canonical_root,
+    catalog_page.is_default
+FROM projects p
+LEFT JOIN catalog_page ON TRUE
+WHERE p.id = sqlc.arg(project_id)
+ORDER BY
+    catalog_page.is_default DESC,
+    catalog_page.created_at_unix_ms DESC,
+    catalog_page.workspace_id ASC;
+
+-- name: ListSessionPage :many
+SELECT
+    id,
+    name,
+    first_prompt_preview,
+    COALESCE(category, 'main') AS category,
+    updated_at_unix_ms
+FROM sessions
+WHERE project_id = sqlc.arg(project_id)
+  AND launch_visible <> 0
+  AND COALESCE(category, 'main') = sqlc.arg(category)
+ORDER BY updated_at_unix_ms DESC, id DESC
+LIMIT sqlc.arg(page_limit)
+OFFSET sqlc.arg(page_offset);
+
 -- name: ListNewestSessionPage :many
 SELECT
     id,
@@ -2784,9 +2826,6 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
-    current_node.continuation_source_kind,
-    current_node.continuation_source_session_id,
-    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2811,9 +2850,6 @@ SELECT
     current_node.current_input_values_json,
     current_node.prior_node_values_json,
     current_node.session_id,
-    current_node.continuation_source_kind,
-    current_node.continuation_source_session_id,
-    current_node.legacy_materialized,
     current_node.scheduling_state,
     current_node.interruption_reason,
     current_node.interruption_detail_json,
@@ -2982,9 +3018,6 @@ INSERT INTO task_current_nodes (
     current_input_values_json,
     prior_node_values_json,
     session_id,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized,
     scheduling_state,
     interruption_reason,
     interruption_detail_json,
@@ -3000,9 +3033,6 @@ INSERT INTO task_current_nodes (
     sqlc.arg(current_input_values_json),
     sqlc.arg(prior_node_values_json),
     sqlc.arg(session_id),
-    sqlc.narg(continuation_source_kind),
-    sqlc.narg(continuation_source_session_id),
-    sqlc.arg(legacy_materialized),
     sqlc.arg(scheduling_state),
     sqlc.arg(interruption_reason),
     sqlc.arg(interruption_detail_json),
@@ -3040,18 +3070,12 @@ INSERT INTO task_active_fanout_branches (
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized
+    arrival_values_json
 ) VALUES (
     sqlc.arg(task_id),
     sqlc.arg(transition_branch_key),
     'pending',
-    NULL,
-    sqlc.narg(continuation_source_kind),
-    sqlc.narg(continuation_source_session_id),
-    sqlc.arg(legacy_materialized)
+    NULL
 );
 
 -- name: UpdateTaskActiveFanoutBranchArrival :execrows
@@ -3059,16 +3083,6 @@ UPDATE task_active_fanout_branches
 SET
     arrival_state = 'arrived',
     arrival_values_json = sqlc.arg(arrival_values_json)
-WHERE task_id = sqlc.arg(task_id)
-  AND transition_branch_key = sqlc.arg(transition_branch_key)
-  AND arrival_state = 'pending';
-
--- name: UpdateTaskActiveFanoutBranchContinuationSource :execrows
-UPDATE task_active_fanout_branches
-SET
-    continuation_source_kind = sqlc.narg(continuation_source_kind),
-    continuation_source_session_id = sqlc.narg(continuation_source_session_id),
-    legacy_materialized = sqlc.arg(legacy_materialized)
 WHERE task_id = sqlc.arg(task_id)
   AND transition_branch_key = sqlc.arg(transition_branch_key)
   AND arrival_state = 'pending';
@@ -3145,10 +3159,7 @@ SELECT
     task_id,
     transition_branch_key,
     arrival_state,
-    arrival_values_json,
-    continuation_source_kind,
-    continuation_source_session_id,
-    legacy_materialized
+    arrival_values_json
 FROM task_active_fanout_branches
 WHERE task_id = sqlc.arg(task_id)
 ORDER BY transition_branch_key;

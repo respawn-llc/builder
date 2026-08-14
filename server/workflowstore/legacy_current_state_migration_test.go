@@ -336,20 +336,6 @@ WHERE id = 'group-fanout'`)
 		current.SourceSessionID != parsedSourceSessionID {
 		t.Fatalf("migrated Approval target current association = %+v, %v; want exact frozen source", current, err)
 	}
-	if _, err := metadataStore.DB().ExecContext(t.Context(), `
-UPDATE task_current_nodes
-SET continuation_source_kind = NULL,
-    continuation_source_session_id = NULL,
-    legacy_materialized = 1
-WHERE task_id = ?
-  AND node_id = kent_graph_entity_id_blob_v1(?)
-  AND transition_branch_key = ?`,
-		string(deferredTarget.Reference.TaskID),
-		string(deferredTarget.Reference.NodeID),
-		string(workflow.TransitionBranchKey("split_a")),
-	); err != nil {
-		t.Fatalf("mark unbound migrated Approval target legacy: %v", err)
-	}
 	freshSessionID := runtimeids.NewSessionID()
 	if _, err := metadataStore.DB().ExecContext(t.Context(), `
 INSERT INTO sessions (

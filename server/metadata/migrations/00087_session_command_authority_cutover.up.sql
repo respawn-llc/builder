@@ -474,6 +474,13 @@ CREATE INDEX session_workflow_node_associations_lookup_idx
         session_id DESC
     );
 
+CREATE INDEX session_workflow_node_associations_session_recency_idx
+    ON session_workflow_node_associations(
+        session_id,
+        associated_at_unix_ms DESC,
+        node_id DESC
+    );
+
 -- +goose StatementBegin
 CREATE TRIGGER sessions_task_owner_clear_associations
 AFTER UPDATE OF task_id ON sessions

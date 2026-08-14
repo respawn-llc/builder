@@ -58,22 +58,6 @@ func completeCurrentNodeJoinArrival(
 	if err != nil {
 		return CurrentNodeCompletionResult{}, fmt.Errorf("encode join arrival values: %w", err)
 	}
-	persistedArrivals, _, err := currentFanoutJoinArrivals(ctx, q, source.Reference.TaskID)
-	if err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	if err := rejectLegacyCurrentFanoutJoinSource(
-		policy,
-		definition,
-		source.Reference,
-		workflow.NodeIDOf(joinNode),
-		persistedArrivals,
-	); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
-	if err := updateActiveFanoutBranchContinuationSource(ctx, q, source.Reference, contextResolution.ActiveSource); err != nil {
-		return CurrentNodeCompletionResult{}, err
-	}
 	updated, err := q.UpdateTaskActiveFanoutBranchArrival(ctx, sqlitegen.UpdateTaskActiveFanoutBranchArrivalParams{
 		TaskID:              string(source.Reference.TaskID),
 		TransitionBranchKey: string(branchKey),
@@ -120,10 +104,7 @@ func completeCurrentNodeJoinArrival(
 	if target.Node.Kind() != workflow.NodeKindTerminal &&
 		contextSource.Kind != workflow.ContextSourceSelectedNode &&
 		(target.Edge.ContextMode != workflow.ContextModeNewSession || target.Node.Kind() != workflow.NodeKindAgent) {
-		joinContinuationSource, err = mergeCurrentFanoutJoinContinuationSources(arrivals)
-		if err != nil {
-			return CurrentNodeCompletionResult{}, err
-		}
+		joinContinuationSource = contextResolution.ActiveSource
 	}
 	joinSource, err := newNonExecutableCurrentNodeWithPriorValues(
 		source.Reference.TaskID,
@@ -204,9 +185,8 @@ func completeCurrentNodeJoinArrival(
 }
 
 type currentFanoutJoinArrival struct {
-	BranchKey          workflow.TransitionBranchKey
-	Values             map[string]string
-	ContinuationSource workflow.MaterializedContinuationSource
+	BranchKey workflow.TransitionBranchKey
+	Values    map[string]string
 }
 
 func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID workflow.TaskID) ([]currentFanoutJoinArrival, bool, error) {
@@ -223,20 +203,11 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 	arrivals := make([]currentFanoutJoinArrival, 0, len(rows))
 	ready := true
 	for _, row := range rows {
-		continuationSource, err := materializedContinuationSourceFromColumns(
-			row.ContinuationSourceKind,
-			row.ContinuationSourceSessionID,
-			row.LegacyMaterialized,
-		)
-		if err != nil {
-			return nil, false, fmt.Errorf("decode fan-out branch continuation source: %w", err)
-		}
 		switch row.ArrivalState {
 		case "pending":
 			ready = false
 			arrivals = append(arrivals, currentFanoutJoinArrival{
-				BranchKey:          workflow.TransitionBranchKey(row.TransitionBranchKey),
-				ContinuationSource: continuationSource,
+				BranchKey: workflow.TransitionBranchKey(row.TransitionBranchKey),
 			})
 			continue
 		case "arrived":
@@ -251,74 +222,11 @@ func currentFanoutJoinArrivals(ctx context.Context, q *sqlitegen.Queries, taskID
 			return nil, false, fmt.Errorf("decode fan-out branch arrival values: %w", err)
 		}
 		arrivals = append(arrivals, currentFanoutJoinArrival{
-			BranchKey:          workflow.TransitionBranchKey(row.TransitionBranchKey),
-			Values:             values,
-			ContinuationSource: continuationSource,
+			BranchKey: workflow.TransitionBranchKey(row.TransitionBranchKey),
+			Values:    values,
 		})
 	}
 	return arrivals, ready, nil
-}
-
-func rejectLegacyCurrentFanoutJoinSource(
-	policy invariant.Policy,
-	definition workflow.Definition,
-	source workflow.CurrentNodeReference,
-	targetNodeID workflow.NodeID,
-	arrivals []currentFanoutJoinArrival,
-) error {
-	resolution, resolved := workflow.ResolveFanoutJoin(definition, currentFanoutBranchKeys(arrivals))
-	if !resolved {
-		return currentFanoutJoinTopologyError(definition, source.TaskID)
-	}
-	for _, arrival := range arrivals {
-		if arrival.ContinuationSource.Kind() == workflow.MaterializedContinuationSourceLegacy {
-			joinEdge, exists := resolution.BranchJoinEdges[arrival.BranchKey]
-			if !exists {
-				return errors.New("fan-out Join resolution has no Edge for legacy branch")
-			}
-			group, err := transitionGroupForEdge(definition, joinEdge)
-			if err != nil {
-				return err
-			}
-			branchKey := arrival.BranchKey
-			branchSource, err := workflow.NewCurrentNodeReference(
-				source.TaskID,
-				group.SourceNodeID,
-				&branchKey,
-			)
-			if err != nil {
-				return err
-			}
-			return legacyContinuationSourceError(
-				policy,
-				legacyContinuationSourceFallbackDetail{
-					Source:       branchSource,
-					TargetNodeID: targetNodeID,
-					EdgeID:       joinEdge.ID,
-					Scope:        workflow.LegacyContinuationSourceFanoutBranch,
-				},
-			)
-		}
-	}
-	return nil
-}
-
-func mergeCurrentFanoutJoinContinuationSources(
-	arrivals []currentFanoutJoinArrival,
-) (workflow.MaterializedContinuationSource, error) {
-	if len(arrivals) == 0 {
-		return workflow.MaterializedContinuationSource{}, errors.New("fan-out Join has no branch continuation sources")
-	}
-	merged := arrivals[0].ContinuationSource
-	if err := merged.Validate(); err != nil {
-		return workflow.MaterializedContinuationSource{}, err
-	}
-	for _, arrival := range arrivals[1:] {
-		if !sameMaterializedContinuationSource(merged, arrival.ContinuationSource) {
-			return workflow.MaterializedContinuationSource{}, errors.New("fan-out Join branch continuation sources disagree")
-		}
-	}
-	return merged, nil
 }
 
 func currentFanoutBranchKeys(arrivals []currentFanoutJoinArrival) []workflow.TransitionBranchKey {
