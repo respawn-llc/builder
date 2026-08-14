@@ -35,11 +35,7 @@ export function ProjectTaskStatusLegend({
             </span>
           ) : (
             definitions.map((definition) => (
-              <section
-                aria-label={t(`home.prototype.statusGroups.${definition.group}`)}
-                className="grid gap-[var(--space-1)]"
-                key={definition.group}
-              >
+              <section className="grid gap-[var(--space-1)]" key={definition.group}>
                 <strong>{t(`home.prototype.statusGroups.${definition.group}`)}</strong>
                 {definition.statusKinds.map((status) => (
                   <span className="grid grid-cols-[16px_auto] items-center gap-[var(--space-2)]" key={status}>

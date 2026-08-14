@@ -225,20 +225,11 @@ func TestWorkflowTaskListRequestRoundTripsAndValidatesStatusKinds(t *testing.T) 
 }
 
 func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t *testing.T) {
-	request := WorkflowProjectTaskGroupCountsRequest{
-		ProjectID: "project-1",
-	}
+	request := WorkflowProjectTaskGroupCountsRequest{ProjectID: "project-1"}
 	if err := request.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	requestData, err := json.Marshal(request)
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	var requestJSON map[string]json.RawMessage
-	if err := json.Unmarshal(requestData, &requestJSON); err != nil {
-		t.Fatalf("decode request JSON: %v", err)
-	}
+	_, requestJSON := marshalWorkflowJSON[map[string]json.RawMessage](t, request)
 	if len(requestJSON) != 1 {
 		t.Fatalf("group-count request JSON keys = %v, want only project_id", requestJSON)
 	}
@@ -262,14 +253,7 @@ func TestWorkflowProjectTaskGroupCountsContractIsProjectScopedAndNonPaginated(t 
 	if err := response.Validate(); err != nil {
 		t.Fatalf("response Validate: %v", err)
 	}
-	data, err := json.Marshal(response)
-	if err != nil {
-		t.Fatalf("marshal response: %v", err)
-	}
-	var responseJSON map[string]json.RawMessage
-	if err := json.Unmarshal(data, &responseJSON); err != nil {
-		t.Fatalf("decode response JSON: %v", err)
-	}
+	data, responseJSON := marshalWorkflowJSON[map[string]json.RawMessage](t, response)
 	for _, forbiddenKey := range []string{"tasks", "offset", "limit"} {
 		if _, exists := responseJSON[forbiddenKey]; exists {
 			t.Fatalf("group-count response includes forbidden key %q: %s", forbiddenKey, data)

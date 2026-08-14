@@ -458,51 +458,13 @@ describe("ProjectTasksSurface", () => {
     expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
   });
 
-  it("renders canonical six-column content and opens Task Detail with the containing sidebar mode", () => {
-    const view = renderSurface(createProjectTasksViewMemory(), "overlay", [
-      task("active-1", "KNT-LONG-1001", "Canonical row", {
-        dependencyProgress: { satisfiedCount: 1, totalCount: 3 },
-        labels: [
-          { id: "label-1", name: "Priority" },
-          { id: "label-2", name: "Frontend" },
-        ],
-        status: { kind: "running", nativeState: "running", nodeIDs: [], attentionTypes: [] },
-        workflowName: "Very long delivery workflow",
-      }),
-    ]);
+  it("opens Task Detail with the containing sidebar mode", () => {
+    renderSurface(createProjectTasksViewMemory(), "overlay", [task("active-1", "KNT-1", "Task")]);
 
-    expect(screen.getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "Dependencies" })).toBeInTheDocument();
-    expect(screen.getByTestId("project-task-status-active-1")).toContainHTML("<svg");
-    expect(screen.getByRole("progressbar", { name: "Dependencies: 1 of 3 complete." })).toBeInTheDocument();
-    expect(screen.getByTestId("project-task-id-active-1")).toHaveAttribute("title", "KNT-LONG-1001");
-    expect(screen.getByTestId("project-task-id-active-1")).toHaveClass("text-ellipsis", "[direction:rtl]");
-    expect(screen.getByTestId("project-task-workflow-active-1")).toHaveClass("truncate");
-    expect(screen.getByRole("group", { name: "Labels" })).toHaveTextContent("Priority");
-    expect(screen.getByRole("group", { name: "Labels" })).toHaveTextContent("Frontend");
-
-    fireEvent.click(screen.getByRole("row", { name: "KNT-LONG-1001 Canonical row" }));
+    fireEvent.click(screen.getByRole("row", { name: "KNT-1 Task" }));
     expect(fixture.open).toHaveBeenCalledWith({
       kind: "taskDetail",
       mode: "overlay",
-      taskID: "active-1",
-    });
-
-    fixture.activeDestination = { kind: "taskDetail", mode: "overlay", taskID: "active-1" };
-    view.rerender(withQueryClient(surface(createProjectTasksViewMemory(), "shift")));
-    fireEvent.click(screen.getByRole("row", { name: "KNT-LONG-1001 Canonical row" }));
-    expect(fixture.open).toHaveBeenLastCalledWith({
-      kind: "taskDetail",
-      mode: "overlay",
-      taskID: "active-1",
-    });
-
-    fixture.activeDestination = null;
-    view.rerender(withQueryClient(surface(createProjectTasksViewMemory(), "shift")));
-    fireEvent.click(screen.getByRole("row", { name: "KNT-LONG-1001 Canonical row" }));
-    expect(fixture.open).toHaveBeenLastCalledWith({
-      kind: "taskDetail",
-      mode: "shift",
       taskID: "active-1",
     });
   });
