@@ -291,9 +291,6 @@ func (s *Core) sessionLaunchServiceForProjectContextLocked(projectCtx projectCon
 }
 
 func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch.Service {
-	if s == nil {
-		return nil
-	}
 	return sessionlaunch.NewService(launch.Planner{
 		Config:                   projectCtx.config,
 		ContainerDir:             projectCtx.projectSession,
@@ -307,7 +304,6 @@ func (s *Core) newSessionLaunchService(projectCtx projectContext) *sessionlaunch
 	}).
 		WithAuthStateReader(s.safeBundles().Auth.support.AuthManager).
 		WithPromptHistoryReader(s.safeBundles().Persistence.metadataStore).
-		WithWorkflowTaskReader(s.safeBundles().Persistence.metadataStore).
 		WithRuntimeAuthority(s.safeBundles().Runtime.runtimeAuthority)
 }
 
@@ -401,9 +397,6 @@ func (s *Core) SessionViewClient() apicontract.SessionViewService {
 }
 
 func (s *Core) ChatSettingsClient() apicontract.ChatSettingsService {
-	if s == nil {
-		return nil
-	}
 	return chatSettingsService{core: s}
 }
 

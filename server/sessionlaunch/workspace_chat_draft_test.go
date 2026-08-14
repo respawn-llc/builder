@@ -95,11 +95,10 @@ func TestWorkspaceChatDraftResolutionRetainsQuestionsPolicyForSettingsRead(t *te
 			Supervisor:     resolved.Draft.Supervisor,
 			Thinking:       resolved.Draft.Thinking,
 			Fast:           resolved.Draft.Fast,
-			Questions:      resolved.Draft.Questions,
+			Questions:      resolved.PersistedQuestionsPolicy,
 			AutoCompaction: resolved.Draft.AutoCompaction,
 		},
-		PersistedQuestionsPolicy: resolved.PersistedQuestionsPolicy,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
+		CompactionMode: resolved.CompactionMode,
 	})
 	if err != nil {
 		t.Fatalf("ProjectChatSettings: %v", err)

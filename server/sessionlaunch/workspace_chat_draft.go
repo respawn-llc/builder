@@ -209,16 +209,13 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 	for agent, limit := range limits {
 		baselines[agent] = limit.draft
 	}
-	if stored == nil {
+	finish := func(draft WorkspaceChatDraft, questions bool, thinking string) (WorkspaceChatDraftResolution, error) {
 		return workspaceChatDraftResolution(
-			defaults.draft,
-			defaults.draft.Questions,
-			defaults.draft.Thinking,
-			input.Settings.CompactionMode,
-			baselines,
-			catalog,
-			limits,
+			draft, questions, thinking, input.Settings.CompactionMode, baselines, catalog, limits,
 		)
+	}
+	if stored == nil {
+		return finish(defaults.draft, defaults.draft.Questions, defaults.draft.Thinking)
 	}
 	draft := *stored
 	if err := draft.Validate(); err != nil {
@@ -247,15 +244,7 @@ func ResolveWorkspaceChatDraft(input WorkspaceChatDraftResolverInput, stored *Wo
 			draft.Questions = false
 		}
 	}
-	return workspaceChatDraftResolution(
-		draft,
-		persistedQuestions,
-		persistedThinking,
-		input.Settings.CompactionMode,
-		baselines,
-		catalog,
-		limits,
-	)
+	return finish(draft, persistedQuestions, persistedThinking)
 }
 
 func workspaceChatDraftResolution(
@@ -296,9 +285,7 @@ func resolveWorkspaceChatDraftBaselines(
 	catalog, err := launch.PrepareChatAgentCatalog(
 		config.App{Settings: input.Settings, Source: input.Source},
 		input.AuthState,
-		launch.ChatAgentCatalogOptions{
-			SkipProviderReadinessValidation: input.SkipProviderReadinessValidation,
-		},
+		input.SkipProviderReadinessValidation,
 	)
 	if err != nil {
 		return launch.PreparedChatAgentCatalog{}, nil, err

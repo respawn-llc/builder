@@ -1,7 +1,7 @@
 package sessionlaunch
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 
 	"core/server/auth"
@@ -12,336 +12,103 @@ import (
 	"core/shared/toolspec"
 )
 
-func TestProjectChatSettingsRepairsUnlockedAgentsAndInvalidControls(t *testing.T) {
-	catalog := projectionCatalog(t)
-	tests := []struct {
-		name     string
-		input    ChatSettingsProjectionInput
-		wantRole string
-		want     session.ChatSettings
-	}{
-		{
-			name: "available Agent retains valid controls",
-			input: ChatSettingsProjectionInput{
-				Catalog: catalog,
-				Agent:   "worker",
-				Settings: session.ChatSettings{
-					Supervisor:     "all",
-					Thinking:       "high",
-					Fast:           false,
-					Questions:      true,
-					AutoCompaction: false,
-				},
-				PersistedQuestionsPolicy: true,
-				CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-			},
-			wantRole: "worker",
-			want: session.ChatSettings{
-				Supervisor:     "all",
-				Thinking:       "high",
-				Fast:           false,
-				Questions:      true,
-				AutoCompaction: false,
-			},
-		},
-		{
-			name: "unavailable Agent repairs to default complete baseline",
-			input: ChatSettingsProjectionInput{
-				Catalog:                  catalog,
-				Agent:                    "removed",
-				Settings:                 session.ChatSettings{Supervisor: "all", Thinking: "high", Fast: true},
-				PersistedQuestionsPolicy: false,
-				CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-			},
-			wantRole: "default",
-			want:     catalogBaseline(t, catalog, "default"),
-		},
-		{
-			name: "available Agent preserves custom Thinking and repairs Fast",
-			input: ChatSettingsProjectionInput{
-				Catalog: catalog,
-				Agent:   "worker",
-				Settings: session.ChatSettings{
-					Supervisor:     "off",
-					Thinking:       "invalid",
-					Fast:           true,
-					Questions:      false,
-					AutoCompaction: true,
-				},
-				PersistedQuestionsPolicy: false,
-				CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-			},
-			wantRole: "worker",
-			want: session.ChatSettings{
-				Supervisor:     "off",
-				Thinking:       "invalid",
-				Fast:           false,
-				Questions:      false,
-				AutoCompaction: true,
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := ProjectChatSettings(test.input)
-			if err != nil {
-				t.Fatalf("ProjectChatSettings: %v", err)
-			}
-			if got.SelectedAgent.Role != test.wantRole {
-				t.Fatalf("selected role = %q, want %q", got.SelectedAgent.Role, test.wantRole)
-			}
-			if got.Supervisor.Value != serverapi.ChatSettingsSupervisorValue(test.want.Supervisor) ||
-				got.Thinking.Value != test.want.Thinking ||
-				got.Questions.Enabled != test.want.Questions ||
-				got.AutoCompaction.Stored != test.want.AutoCompaction {
-				t.Fatalf("projected settings = %+v, want %+v", got, test.want)
-			}
-			if got.Fast != nil && got.Fast.Value != test.want.Fast {
-				t.Fatalf("Fast = %+v, want %t", got.Fast, test.want.Fast)
-			}
-		})
-	}
-}
+func TestProjectChatSettingsAuthoritativeReadSemantics(t *testing.T) {
+	catalog := testChatSettingsCatalog(t)
+	baseline, _ := catalog.Lookup(config.DefaultSubagentRole)
 
-func TestProjectChatSettingsSeparatesQuestionsCapabilityAndPolicy(t *testing.T) {
-	catalog := projectionCatalog(t)
-	input := ChatSettingsProjectionInput{
+	repaired, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: catalog,
+		Agent:   "removed",
+		Settings: session.ChatSettings{
+			Supervisor: "all", Thinking: "high", Fast: true, Questions: false,
+		},
+		WorkflowLocked: true,
+	})
+	if err != nil {
+		t.Fatalf("repair unavailable Agent: %v", err)
+	}
+	if repaired.SelectedAgent.Role != "default" ||
+		repaired.SelectedAgent.Thinking != baseline.Settings.Baseline.Thinking ||
+		repaired.AgentEditability != serverapi.ChatSettingsWorkflowLock ||
+		!repaired.AutoCompaction.Effective ||
+		repaired.AutoCompaction.Policy != serverapi.ChatSettingsAutoCompactionRequired {
+		t.Fatalf("repaired projection = %+v", repaired)
+	}
+
+	custom, err := ProjectChatSettings(ChatSettingsProjectionInput{
 		Catalog: catalog,
 		Agent:   "no-questions",
 		Settings: session.ChatSettings{
-			Supervisor:     "edits",
-			Thinking:       "medium",
-			Questions:      false,
+			Supervisor: "edits", Thinking: "provider-depth", Fast: true, Questions: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("project custom settings: %v", err)
+	}
+	if custom.Thinking == nil ||
+		custom.Thinking.Kind != serverapi.ChatSettingsThinkingCustom ||
+		custom.Fast == nil || !custom.Fast.Value ||
+		custom.Questions.Capable ||
+		!custom.Questions.Enabled {
+		t.Fatalf("custom projection = %+v", custom)
+	}
+
+	locked, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog: catalog,
+		Agent:   "historical",
+		Settings: session.ChatSettings{
+			Supervisor: "off", Thinking: "high", Fast: true, Questions: true,
 			AutoCompaction: true,
 		},
-		PersistedQuestionsPolicy: true,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-	}
-	got, err := ProjectChatSettings(input)
-	if err != nil {
-		t.Fatalf("ProjectChatSettings: %v", err)
-	}
-	if got.Questions.Capable || !got.Questions.Enabled ||
-		got.Questions.Editability != serverapi.ChatSettingsEditable {
-		t.Fatalf("Questions = %+v", got.Questions)
-	}
-}
-
-func TestProjectChatSettingsTrimsCustomThinkingAndReturnsCustomMode(t *testing.T) {
-	catalog := projectionCatalog(t)
-	got, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:                  catalog,
-		Agent:                    "worker",
-		Settings:                 session.ChatSettings{Supervisor: "edits", Thinking: "  provider-depth  "},
-		PersistedQuestionsPolicy: false,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
+		Locked: &session.LockedContract{
+			Model:        "gpt-5",
+			EnabledTools: []string{},
+			ProviderContract: session.LockedProviderCapabilities{
+				ProviderID: "anthropic",
+			},
+		},
 	})
 	if err != nil {
-		t.Fatalf("ProjectChatSettings: %v", err)
+		t.Fatalf("project caching lock: %v", err)
 	}
-	if got.SelectedAgent.Thinking != "provider-depth" ||
-		got.Thinking == nil ||
-		got.Thinking.Kind != serverapi.ChatSettingsThinkingCustom ||
-		got.Thinking.Value != "provider-depth" ||
-		got.Thinking.BaselineValue != "high" {
-		t.Fatalf("Thinking = %+v, selected = %+v", got.Thinking, got.SelectedAgent)
+	if locked.SelectedAgent.Role != "historical" ||
+		locked.SelectedAgent.Model != "gpt-5" ||
+		locked.AgentEditability != serverapi.ChatSettingsCachingLock ||
+		!locked.AgentLocked || !locked.CachingLocked ||
+		locked.Questions.Capable || !locked.Questions.Enabled ||
+		locked.Fast != nil {
+		t.Fatalf("locked projection = %+v", locked)
 	}
-}
 
-func TestProjectChatSettingsAppliesBlockerAndCompactionMatrix(t *testing.T) {
-	catalog := projectionCatalog(t)
-	tests := []struct {
-		name           string
-		workflowLocked bool
-		cachingLocked  bool
-		policy         serverapi.ChatSettingsAutoCompactionPolicy
-		stored         bool
-		wantAgent      serverapi.ChatSettingsEditability
-		wantCompaction serverapi.ChatSettingsEditability
-		wantEffective  bool
-	}{
-		{
-			name:           "editable optional",
-			policy:         serverapi.ChatSettingsAutoCompactionOptional,
-			stored:         false,
-			wantAgent:      serverapi.ChatSettingsEditable,
-			wantCompaction: serverapi.ChatSettingsEditable,
-		},
-		{
-			name:           "workflow required",
-			workflowLocked: true,
-			policy:         serverapi.ChatSettingsAutoCompactionRequired,
-			stored:         false,
-			wantAgent:      serverapi.ChatSettingsWorkflowLock,
-			wantCompaction: serverapi.ChatSettingsWorkflowLock,
-			wantEffective:  true,
-		},
-		{
-			name:           "caching does not block controls",
-			cachingLocked:  true,
-			policy:         serverapi.ChatSettingsAutoCompactionOptional,
-			stored:         true,
-			wantAgent:      serverapi.ChatSettingsCachingLock,
-			wantCompaction: serverapi.ChatSettingsEditable,
-			wantEffective:  true,
-		},
-		{
-			name:           "disabled wins workflow",
-			workflowLocked: true,
-			policy:         serverapi.ChatSettingsAutoCompactionDisabled,
-			stored:         true,
-			wantAgent:      serverapi.ChatSettingsWorkflowLock,
-			wantCompaction: serverapi.ChatSettingsPolicyDisabled,
-			wantEffective:  false,
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			settings := catalogBaseline(t, catalog, "default")
-			settings.AutoCompaction = test.stored
-			var locked *session.LockedContract
-			if test.cachingLocked {
-				locked = &session.LockedContract{
-					Model: "gpt-5",
-					ProviderContract: session.LockedProviderCapabilities{
-						ProviderID: "anthropic",
-					},
-				}
-			}
-			got, err := ProjectChatSettings(ChatSettingsProjectionInput{
-				Catalog:                  catalog,
-				Agent:                    "default",
-				Settings:                 settings,
-				WorkflowLocked:           test.workflowLocked,
-				CachingLocked:            test.cachingLocked,
-				CompactionPolicy:         test.policy,
-				PersistedQuestionsPolicy: true,
-				Locked:                   locked,
-			})
-			if err != nil {
-				t.Fatalf("ProjectChatSettings: %v", err)
-			}
-			if got.AgentEditability != test.wantAgent ||
-				got.AutoCompaction.Editability != test.wantCompaction ||
-				got.AutoCompaction.Stored != test.stored ||
-				got.AutoCompaction.Effective != test.wantEffective {
-				t.Fatalf("projection = %+v", got)
-			}
-			if got.Supervisor.Editability != serverapi.ChatSettingsEditable ||
-				got.Thinking.Editability != serverapi.ChatSettingsEditable ||
-				got.Questions.Editability != serverapi.ChatSettingsEditable {
-				t.Fatal("independent control was locked")
-			}
-		})
-	}
-}
-
-func TestProjectChatSettingsDoesNotMutateInputs(t *testing.T) {
-	catalog := projectionCatalog(t)
-	before := catalog.Entries()
-	input := ChatSettingsProjectionInput{
-		Catalog:                  catalog,
-		Agent:                    "worker",
-		Settings:                 catalogBaseline(t, catalog, "worker"),
-		PersistedQuestionsPolicy: true,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-	}
-	if _, err := ProjectChatSettings(input); err != nil {
-		t.Fatalf("ProjectChatSettings: %v", err)
-	}
-	if !reflect.DeepEqual(before, catalog.Entries()) {
-		t.Fatal("projector mutated prepared catalog")
-	}
-}
-
-func TestProjectChatSettingsUsesLockedCapabilityAuthorities(t *testing.T) {
-	catalog := projectionCatalog(t)
-	current := catalogBaseline(t, catalog, "default")
-	current.Thinking = "high"
-	current.Fast = true
-	current.Questions = true
-	locked := &session.LockedContract{
-		Model: "gpt-5",
-		EnabledTools: []string{
-			string(toolspec.ToolAskQuestion),
-		},
-		ProviderContract: session.LockedProviderCapabilities{
-			ProviderID:           "openai",
-			SupportsResponsesAPI: true,
-			IsOpenAIFirstParty:   true,
-		},
-		ModelCapabilities: session.LockedModelCapabilities{
-			SupportsReasoningEffort: true,
-		},
-	}
-	got, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:                  catalog,
-		Agent:                    "default",
-		Settings:                 current,
-		PersistedQuestionsPolicy: false,
-		CachingLocked:            true,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-		Locked:                   locked,
+	disabled, err := ProjectChatSettings(ChatSettingsProjectionInput{
+		Catalog:        catalog,
+		Agent:          "default",
+		Settings:       baseline.Settings.Baseline,
+		CompactionMode: config.CompactionModeNone,
 	})
 	if err != nil {
-		t.Fatalf("ProjectChatSettings: %v", err)
+		t.Fatalf("project disabled compaction: %v", err)
 	}
-	if got.SelectedAgent.Model != "gpt-5" ||
-		got.Thinking == nil ||
-		got.Fast == nil ||
-		!got.Fast.Value ||
-		!got.Questions.Capable ||
-		got.Questions.Enabled {
-		t.Fatalf(
-			"locked projection model=%q thinking=%+v fast=%+v questions=%+v",
-			got.SelectedAgent.Model,
-			got.Thinking,
-			got.Fast,
-			got.Questions,
-		)
+	if disabled.AutoCompaction.Policy != serverapi.ChatSettingsAutoCompactionDisabled ||
+		disabled.AutoCompaction.Effective ||
+		disabled.AutoCompaction.Stored != baseline.Settings.Baseline.AutoCompaction ||
+		disabled.AutoCompaction.Editability != serverapi.ChatSettingsPolicyDisabled {
+		t.Fatalf("disabled compaction = %+v", disabled.AutoCompaction)
+	}
+	if got := choiceRoles(disabled.AgentChoices); !slices.Equal(
+		got,
+		[]string{"default", "fast", "no-questions"},
+	) {
+		t.Fatalf("choice roles = %v", got)
 	}
 }
 
-func TestProjectChatSettingsTreatsEmptyLockedToolsAsAuthoritative(t *testing.T) {
-	catalog := projectionCatalog(t)
-	locked := &session.LockedContract{
-		Model:           "gpt-5",
-		HasEnabledTools: false,
-		EnabledTools:    nil,
-		ProviderContract: session.LockedProviderCapabilities{
-			ProviderID: "anthropic",
-		},
-	}
-	got, err := ProjectChatSettings(ChatSettingsProjectionInput{
-		Catalog:                  catalog,
-		Agent:                    "historical",
-		Settings:                 catalogBaseline(t, catalog, "default"),
-		PersistedQuestionsPolicy: true,
-		CachingLocked:            true,
-		CompactionPolicy:         serverapi.ChatSettingsAutoCompactionOptional,
-		Locked:                   locked,
-	})
-	if err != nil {
-		t.Fatalf("ProjectChatSettings: %v", err)
-	}
-	if got.SelectedAgent.Role != "historical" ||
-		got.Questions.Capable ||
-		!got.Questions.Enabled {
-		t.Fatalf("locked zero-tool projection = %+v", got)
-	}
-}
-
-func projectionCatalog(t *testing.T) launch.PreparedChatAgentCatalog {
+func testChatSettingsCatalog(t *testing.T) launch.PreparedChatAgentCatalog {
 	t.Helper()
 	settings := config.DefaultOnboardingSettings()
 	settings.Model = "gpt-5"
 	settings.ThinkingLevel = "medium"
-	settings.Reviewer.Model = settings.Model
-	settings.Reviewer.ThinkingLevel = settings.ThinkingLevel
-	settings.Reviewer.ModelContextWindow = settings.ModelContextWindow
-	settings.ProviderCapabilities = config.ProviderCapabilitiesOverride{
-		ProviderID: "anthropic",
-	}
+	settings.ProviderCapabilities.ProviderID = "anthropic"
 	settings.EnabledTools = map[toolspec.ID]bool{
 		toolspec.ToolAskQuestion: true,
 		toolspec.ToolExecCommand: true,
@@ -349,21 +116,7 @@ func projectionCatalog(t *testing.T) launch.PreparedChatAgentCatalog {
 	settings.Subagents = map[string]config.SubagentRole{
 		config.BuiltInSubagentRoleFast: {
 			Settings: config.Settings{Model: "gpt-5", ThinkingLevel: "low"},
-			Sources: map[string]string{
-				"model":          "file",
-				"thinking_level": "file",
-			},
-		},
-		"worker": {
-			Settings: config.Settings{
-				Model:         "gpt-5",
-				ThinkingLevel: "high",
-				Reviewer:      config.ReviewerSettings{Frequency: "all"},
-			},
-			Sources: map[string]string{
-				"thinking_level":     "file",
-				"reviewer.frequency": "file",
-			},
+			Sources:  map[string]string{"model": "file", "thinking_level": "file"},
 		},
 		"no-questions": {
 			Settings: config.Settings{
@@ -375,7 +128,7 @@ func projectionCatalog(t *testing.T) launch.PreparedChatAgentCatalog {
 	catalog, err := launch.PrepareChatAgentCatalog(
 		config.App{Settings: settings},
 		auth.EmptyState(),
-		launch.ChatAgentCatalogOptions{},
+		true,
 	)
 	if err != nil {
 		t.Fatalf("PrepareChatAgentCatalog: %v", err)
@@ -383,15 +136,10 @@ func projectionCatalog(t *testing.T) launch.PreparedChatAgentCatalog {
 	return catalog
 }
 
-func catalogBaseline(
-	t *testing.T,
-	catalog launch.PreparedChatAgentCatalog,
-	agent string,
-) session.ChatSettings {
-	t.Helper()
-	entry, ok := catalog.Lookup(agent)
-	if !ok {
-		t.Fatalf("catalog entry %q is missing", agent)
+func choiceRoles(choices []serverapi.ChatSettingsAgentChoice) []string {
+	roles := make([]string, len(choices))
+	for i, choice := range choices {
+		roles[i] = choice.Role
 	}
-	return entry.Settings.Baseline
+	return roles
 }

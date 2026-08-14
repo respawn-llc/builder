@@ -296,19 +296,21 @@ var gatewayUnaryHandlerEntries = map[string]gatewayUnaryHandler{
 	},
 	protocol.MethodChatSettingsRead: func(g *Gateway, ctx context.Context, state *connectionState, req protocol.Request) protocol.Response {
 		return decodeAndHandle(req, func(params serverapi.ChatSettingsReadRequest) (serverapi.ChatSettingsReadResponse, error) {
-			switch params.Target.Kind() {
+			switch params.Target.TargetKind {
 			case serverapi.ChatSettingsReadTargetLazy:
-				projectID, _, _ := params.Target.Lazy()
 				activeProjectID, err := g.activeProjectID(ctx, state)
 				if err != nil {
 					return serverapi.ChatSettingsReadResponse{}, err
 				}
-				if strings.TrimSpace(projectID) != strings.TrimSpace(activeProjectID) {
+				if strings.TrimSpace(*params.Target.ProjectID) != strings.TrimSpace(activeProjectID) {
 					return serverapi.ChatSettingsReadResponse{}, serverapi.ErrWorkspaceNotRegistered
 				}
 			case serverapi.ChatSettingsReadTargetSession:
-				sessionID, _ := params.Target.SessionID()
-				if err := g.requireSessionInActiveProject(ctx, state, sessionID.String()); err != nil {
+				if err := g.requireSessionInActiveProject(
+					ctx,
+					state,
+					params.Target.Session.String(),
+				); err != nil {
 					return serverapi.ChatSettingsReadResponse{}, err
 				}
 			default:

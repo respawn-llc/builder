@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"core/server/sessionlaunch"
-	"core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
@@ -22,35 +21,22 @@ func (s chatSettingsService) ReadChatSettings(
 	if err := req.Validate(); err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	switch req.Target.Kind() {
+	switch req.Target.TargetKind {
 	case serverapi.ChatSettingsReadTargetLazy:
-		projectID, workspaceID, _ := req.Target.Lazy()
-		service, err := s.core.SessionLaunchClientForProjectWorkspaceID(
-			ctx,
-			projectID,
-			workspaceID,
-		)
+		projectCtx, err := s.core.resolveProjectContext(ctx, *req.Target.ProjectID, *req.Target.WorkspaceID, "")
 		if err != nil {
 			return serverapi.ChatSettingsReadResponse{}, err
 		}
-		scoped, ok := service.(*sessionlaunch.Service)
-		if !ok {
-			return serverapi.ChatSettingsReadResponse{}, errors.New(
-				"Chat settings require scoped Session launch service",
-			)
-		}
-		return scoped.LazyChatSettings(ctx)
+		return s.core.sessionLaunchServiceForProjectContext(projectCtx).LazyChatSettings(ctx)
 	case serverapi.ChatSettingsReadTargetSession:
-		sessionID, _ := req.Target.SessionID()
+		sessionID := *req.Target.Session
 		service, err := s.materializedService(ctx, sessionID.String())
 		if err != nil {
 			return serverapi.ChatSettingsReadResponse{}, err
 		}
 		return service.MaterializedChatSettings(ctx, sessionID)
 	default:
-		return serverapi.ChatSettingsReadResponse{}, errors.New(
-			"Chat settings target kind is invalid",
-		)
+		return serverapi.ChatSettingsReadResponse{}, errors.New("Chat settings target kind is invalid")
 	}
 }
 
@@ -58,23 +44,12 @@ func (s chatSettingsService) materializedService(
 	ctx context.Context,
 	sessionID string,
 ) (*sessionlaunch.Service, error) {
-	if s.core == nil || s.core.safeBundles().Persistence.metadataStore == nil {
-		return nil, errors.New("metadata store is required")
-	}
-	record, err := s.core.safeBundles().Persistence.metadataStore.ResolvePersistedSession(
-		ctx,
-		sessionID,
-	)
+	store := s.core.safeBundles().Persistence.metadataStore
+	record, err := store.ResolvePersistedSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if record.Meta == nil {
-		return nil, errors.New("persisted Session metadata is required")
-	}
-	boundary, err := s.core.safeBundles().Persistence.metadataStore.ResolveSessionProjectWorkspaceBoundary(
-		ctx,
-		sessionID,
-	)
+	boundary, err := store.ResolveSessionProjectWorkspaceBoundary(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -86,17 +61,10 @@ func (s chatSettingsService) materializedService(
 	if err != nil {
 		return nil, err
 	}
-	projectCtx := projectContext{
+	return s.core.newSessionLaunchService(projectContext{
 		config:         projectCfg,
 		projectID:      boundary.ProjectID,
 		projectRoot:    effectiveRoot,
 		projectSession: filepath.Join(projectCfg.PersistenceRoot, "projects", boundary.ProjectID, "sessions"),
-	}
-	return s.core.detachedChatSettingsService(projectCtx), nil
+	}), nil
 }
-
-func (s *Core) detachedChatSettingsService(projectCtx projectContext) *sessionlaunch.Service {
-	return s.newSessionLaunchService(projectCtx)
-}
-
-var _ apicontract.ChatSettingsService = chatSettingsService{}

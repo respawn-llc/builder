@@ -4,12 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"core/shared/protocol"
 	"core/shared/runtimeids"
-	"core/shared/toolspec"
 )
 
 type ChatSettingsReadTargetKind string
@@ -20,60 +18,39 @@ const (
 )
 
 type ChatSettingsReadTarget struct {
-	kind        ChatSettingsReadTargetKind
-	projectID   *string
-	workspaceID *string
-	sessionID   *runtimeids.SessionID
+	TargetKind  ChatSettingsReadTargetKind `json:"kind"`
+	ProjectID   *string                    `json:"project_id,omitempty"`
+	WorkspaceID *string                    `json:"workspace_id,omitempty"`
+	Session     *runtimeids.SessionID      `json:"session_id,omitempty"`
 }
 
 func LazyChatSettingsTarget(projectID, workspaceID string) ChatSettingsReadTarget {
 	return ChatSettingsReadTarget{
-		kind:        ChatSettingsReadTargetLazy,
-		projectID:   &projectID,
-		workspaceID: &workspaceID,
+		TargetKind:  ChatSettingsReadTargetLazy,
+		ProjectID:   &projectID,
+		WorkspaceID: &workspaceID,
 	}
 }
 
 func SessionChatSettingsTarget(sessionID runtimeids.SessionID) ChatSettingsReadTarget {
-	return ChatSettingsReadTarget{
-		kind:      ChatSettingsReadTargetSession,
-		sessionID: &sessionID,
-	}
-}
-
-func (t ChatSettingsReadTarget) Kind() ChatSettingsReadTargetKind {
-	return t.kind
-}
-
-func (t ChatSettingsReadTarget) Lazy() (projectID, workspaceID string, ok bool) {
-	if t.projectID == nil || t.workspaceID == nil {
-		return "", "", false
-	}
-	return *t.projectID, *t.workspaceID, true
-}
-
-func (t ChatSettingsReadTarget) SessionID() (runtimeids.SessionID, bool) {
-	if t.sessionID == nil {
-		return runtimeids.SessionID{}, false
-	}
-	return *t.sessionID, true
+	return ChatSettingsReadTarget{TargetKind: ChatSettingsReadTargetSession, Session: &sessionID}
 }
 
 func (t ChatSettingsReadTarget) Validate() error {
-	switch t.kind {
+	switch t.TargetKind {
 	case ChatSettingsReadTargetLazy:
-		if t.sessionID != nil {
+		if t.Session != nil {
 			return errors.New("lazy Chat settings target cannot contain session_id")
 		}
-		if err := validateOpaqueChatTargetID("project_id", t.projectID); err != nil {
+		if err := validateChatTargetID("project_id", t.ProjectID); err != nil {
 			return err
 		}
-		return validateOpaqueChatTargetID("workspace_id", t.workspaceID)
+		return validateChatTargetID("workspace_id", t.WorkspaceID)
 	case ChatSettingsReadTargetSession:
-		if t.projectID != nil || t.workspaceID != nil {
+		if t.ProjectID != nil || t.WorkspaceID != nil {
 			return errors.New("session Chat settings target cannot contain lazy target identifiers")
 		}
-		if t.sessionID == nil || t.sessionID.IsZero() {
+		if t.Session == nil || t.Session.IsZero() {
 			return errors.New("session Chat settings target requires session_id")
 		}
 		return nil
@@ -82,7 +59,7 @@ func (t ChatSettingsReadTarget) Validate() error {
 	}
 }
 
-func validateOpaqueChatTargetID(field string, value *string) error {
+func validateChatTargetID(field string, value *string) error {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return fmt.Errorf("%s is required", field)
 	}
@@ -92,68 +69,20 @@ func validateOpaqueChatTargetID(field string, value *string) error {
 	return nil
 }
 
-func (t ChatSettingsReadTarget) MarshalJSON() ([]byte, error) {
-	if err := t.Validate(); err != nil {
-		return nil, err
-	}
-	type wire struct {
-		Kind        ChatSettingsReadTargetKind `json:"kind"`
-		ProjectID   *string                    `json:"project_id,omitempty"`
-		WorkspaceID *string                    `json:"workspace_id,omitempty"`
-		SessionID   *runtimeids.SessionID      `json:"session_id,omitempty"`
-	}
-	return json.Marshal(wire{
-		Kind:        t.kind,
-		ProjectID:   t.projectID,
-		WorkspaceID: t.workspaceID,
-		SessionID:   t.sessionID,
-	})
-}
-
-func (t *ChatSettingsReadTarget) UnmarshalJSON(data []byte) error {
-	var wire struct {
-		Kind        ChatSettingsReadTargetKind `json:"kind"`
-		ProjectID   *string                    `json:"project_id"`
-		WorkspaceID *string                    `json:"workspace_id"`
-		SessionID   *runtimeids.SessionID      `json:"session_id"`
-	}
-	if err := json.Unmarshal(data, &wire); err != nil {
-		return err
-	}
-	decoded := ChatSettingsReadTarget{
-		kind:        wire.Kind,
-		projectID:   wire.ProjectID,
-		workspaceID: wire.WorkspaceID,
-		sessionID:   wire.SessionID,
-	}
-	if err := decoded.Validate(); err != nil {
-		return err
-	}
-	*t = decoded
-	return nil
-}
-
 type ChatSettingsReadRequest struct {
 	Target ChatSettingsReadTarget `json:"target"`
 }
 
-func (r ChatSettingsReadRequest) Validate() error {
-	return r.Target.Validate()
-}
+func (r ChatSettingsReadRequest) Validate() error { return r.Target.Validate() }
 
 func (r *ChatSettingsReadRequest) UnmarshalJSON(data []byte) error {
-	var decoded struct {
-		Target ChatSettingsReadTarget `json:"target"`
-	}
+	type wire ChatSettingsReadRequest
+	var decoded wire
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err
 	}
-	request := ChatSettingsReadRequest{Target: decoded.Target}
-	if err := request.Validate(); err != nil {
-		return err
-	}
-	*r = request
-	return nil
+	*r = ChatSettingsReadRequest(decoded)
+	return r.Validate()
 }
 
 type ChatSettingsEditability string
@@ -260,7 +189,30 @@ type ChatSettingsReadResponse struct {
 	Session  *ChatSettingsSessionFacts `json:"session,omitempty"`
 }
 
-var ErrChatSettingsAgentPreparation = errors.New("Chat settings Agent preparation failed")
+func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
+	if err := target.Validate(); err != nil {
+		return fmt.Errorf("target: %w", err)
+	}
+	switch target.TargetKind {
+	case ChatSettingsReadTargetLazy:
+		if r.Session != nil {
+			return errors.New("lazy Chat settings response cannot contain Session facts")
+		}
+	case ChatSettingsReadTargetSession:
+		if r.Session == nil || r.Session.SessionID != *target.Session {
+			return errors.New("materialized Chat settings response must contain the target Session")
+		}
+		if r.Session.PreviousSessionID != nil && r.Session.PreviousSessionID.IsZero() {
+			return errors.New("previous Session ID is invalid")
+		}
+		if r.Session.TaskID != nil {
+			if _, err := runtimeids.ParseTaskID(*r.Session.TaskID); err != nil {
+				return fmt.Errorf("task_id: %w", err)
+			}
+		}
+	}
+	return nil
+}
 
 type ChatSettingsAgentPreparationCategory string
 
@@ -276,22 +228,12 @@ type ChatSettingsAgentPreparationError struct {
 }
 
 func (e *ChatSettingsAgentPreparationError) Error() string {
-	if e == nil {
-		return ErrChatSettingsAgentPreparation.Error()
-	}
-	return fmt.Sprintf("%s: %s (%s)", ErrChatSettingsAgentPreparation, e.Agent, e.Category)
-}
-
-func (e *ChatSettingsAgentPreparationError) Is(target error) bool {
-	return target == ErrChatSettingsAgentPreparation
+	return fmt.Sprintf("Chat settings Agent preparation failed: %s (%s)", e.Agent, e.Category)
 }
 
 func (e *ChatSettingsAgentPreparationError) Validate() error {
-	if e == nil {
-		return errors.New("Chat settings Agent preparation error is required")
-	}
-	if err := validateTrimmedNonblank("agent", e.Agent); err != nil {
-		return err
+	if e == nil || strings.TrimSpace(e.Agent) == "" || strings.TrimSpace(e.Agent) != e.Agent {
+		return errors.New("Chat settings Agent is invalid")
 	}
 	switch e.Category {
 	case ChatSettingsAgentInvalidConfiguration,
@@ -299,7 +241,7 @@ func (e *ChatSettingsAgentPreparationError) Validate() error {
 		ChatSettingsAgentInternalPreparation:
 		return nil
 	default:
-		return errors.New("category is invalid")
+		return errors.New("Chat settings Agent preparation category is invalid")
 	}
 }
 
@@ -314,10 +256,7 @@ func (e *ChatSettingsAgentPreparationError) RPCErrorData() json.RawMessage {
 	return marshalRPCErrorData(struct {
 		Type string `json:"type"`
 		ChatSettingsAgentPreparationError
-	}{
-		Type:                              "chat_settings_agent_preparation",
-		ChatSettingsAgentPreparationError: *e,
-	})
+	}{"chat_settings_agent_preparation", *e})
 }
 
 func DecodeChatSettingsAgentPreparationError(data json.RawMessage, message string) error {
@@ -331,297 +270,7 @@ func DecodeChatSettingsAgentPreparationError(data json.RawMessage, message strin
 		return &envelope.ChatSettingsAgentPreparationError
 	}
 	if strings.TrimSpace(message) == "" {
-		return ErrChatSettingsAgentPreparation
+		return errors.New("Chat settings Agent preparation failed")
 	}
-	return errors.Join(ErrChatSettingsAgentPreparation, errors.New(strings.TrimSpace(message)))
-}
-
-func (r ChatSettingsReadResponse) Validate() error {
-	if err := r.Settings.Validate(); err != nil {
-		return fmt.Errorf("settings: %w", err)
-	}
-	if r.Session != nil {
-		if err := r.Session.Validate(); err != nil {
-			return fmt.Errorf("session: %w", err)
-		}
-	}
-	return nil
-}
-
-func (r ChatSettingsReadResponse) ValidateForTarget(target ChatSettingsReadTarget) error {
-	if err := target.Validate(); err != nil {
-		return fmt.Errorf("target: %w", err)
-	}
-	if err := r.Validate(); err != nil {
-		return err
-	}
-	switch target.Kind() {
-	case ChatSettingsReadTargetLazy:
-		if r.Session != nil {
-			return errors.New("lazy Chat settings response cannot contain Session facts")
-		}
-	case ChatSettingsReadTargetSession:
-		if r.Session == nil {
-			return errors.New("materialized Chat settings response requires Session facts")
-		}
-		targetSessionID, _ := target.SessionID()
-		if r.Session.SessionID != targetSessionID {
-			return errors.New("materialized Chat settings response Session ID must match target")
-		}
-	default:
-		return errors.New("Chat settings target kind is invalid")
-	}
-	return nil
-}
-
-func (r ChatSettingsReadResponse) MarshalJSON() ([]byte, error) {
-	if err := r.Validate(); err != nil {
-		return nil, err
-	}
-	type wire ChatSettingsReadResponse
-	return json.Marshal(wire(r))
-}
-
-func (r *ChatSettingsReadResponse) UnmarshalJSON(data []byte) error {
-	type wire ChatSettingsReadResponse
-	var decoded wire
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	response := ChatSettingsReadResponse(decoded)
-	if err := response.Validate(); err != nil {
-		return err
-	}
-	*r = response
-	return nil
-}
-
-func (s ChatSettings) Validate() error {
-	if err := s.SelectedAgent.Validate(); err != nil {
-		return fmt.Errorf("selected agent: %w", err)
-	}
-	if len(s.AgentChoices) == 0 {
-		return errors.New("agent choices are required")
-	}
-	roles := make(map[string]struct{}, len(s.AgentChoices))
-	for index, choice := range s.AgentChoices {
-		if err := choice.Validate(); err != nil {
-			return fmt.Errorf("agent choice %d: %w", index, err)
-		}
-		if _, exists := roles[choice.Role]; exists {
-			return fmt.Errorf("agent choice role %q is duplicated", choice.Role)
-		}
-		roles[choice.Role] = struct{}{}
-		if index == 0 && choice.Role != "default" {
-			return errors.New("default must be the first agent choice")
-		}
-		if index == 1 && choice.Role == "fast" {
-			continue
-		}
-		if index > 0 {
-			previous := s.AgentChoices[index-1].Role
-			if previous != "default" && previous != "fast" && previous >= choice.Role {
-				return errors.New("remaining agent choices must be sorted by role")
-			}
-			if previous == "default" && choice.Role != "fast" && index+1 < len(s.AgentChoices) &&
-				s.AgentChoices[index+1].Role == "fast" {
-				return errors.New("fast must immediately follow default")
-			}
-		}
-	}
-	_, selectedPresent := roles[s.SelectedAgent.Role]
-	if !selectedPresent && !s.CachingLocked {
-		return errors.New("selected agent must be present in choices unless caching locked")
-	}
-	if s.AgentLocked != (s.WorkflowLocked || s.CachingLocked) {
-		return errors.New("agent_locked must equal workflow_locked or caching_locked")
-	}
-	wantAgentEditability := ChatSettingsEditable
-	if s.WorkflowLocked {
-		wantAgentEditability = ChatSettingsWorkflowLock
-	} else if s.CachingLocked {
-		wantAgentEditability = ChatSettingsCachingLock
-	}
-	if s.AgentEditability != wantAgentEditability {
-		return fmt.Errorf("agent editability must be %q", wantAgentEditability)
-	}
-	if err := s.Supervisor.Validate(); err != nil {
-		return fmt.Errorf("supervisor: %w", err)
-	}
-	if s.Thinking != nil {
-		if err := s.Thinking.Validate(); err != nil {
-			return fmt.Errorf("thinking: %w", err)
-		}
-	}
-	if s.Fast != nil {
-		if err := s.Fast.Validate(); err != nil {
-			return fmt.Errorf("fast: %w", err)
-		}
-	}
-	if err := s.Questions.Validate(); err != nil {
-		return fmt.Errorf("questions: %w", err)
-	}
-	if err := s.AutoCompaction.Validate(s.WorkflowLocked); err != nil {
-		return fmt.Errorf("auto_compaction: %w", err)
-	}
-	return nil
-}
-
-func (a ChatSettingsAgentSummary) Validate() error {
-	if err := validateTrimmedNonblank("role", a.Role); err != nil {
-		return err
-	}
-	if err := validateTrimmedNonblank("model", a.Model); err != nil {
-		return err
-	}
-	if err := validateTrimmedNonblank("thinking", a.Thinking); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (a ChatSettingsAgentChoice) Validate() error {
-	if err := (ChatSettingsAgentSummary{
-		Role:     a.Role,
-		Model:    a.Model,
-		Thinking: a.Thinking,
-	}).Validate(); err != nil {
-		return err
-	}
-	return validateChatSettingsTools(a.Tools)
-}
-
-func (s ChatSettingsSupervisor) Validate() error {
-	switch s.Value {
-	case ChatSettingsSupervisorOff, ChatSettingsSupervisorAfterEdits, ChatSettingsSupervisorAlways:
-	default:
-		return errors.New("value is invalid")
-	}
-	return requireEditable(s.Editability)
-}
-
-func (t ChatSettingsThinking) Validate() error {
-	if err := validateTrimmedNonblank("value", t.Value); err != nil {
-		return err
-	}
-	if err := validateTrimmedNonblank("baseline_value", t.BaselineValue); err != nil {
-		return err
-	}
-	if err := requireEditable(t.Editability); err != nil {
-		return err
-	}
-	switch t.Kind {
-	case ChatSettingsThinkingEnumerated:
-		if len(t.Values) == 0 {
-			return errors.New("enumerated Thinking values are required")
-		}
-		seen := make(map[string]struct{}, len(t.Values))
-		for _, value := range t.Values {
-			if err := validateTrimmedNonblank("Thinking value", value); err != nil {
-				return err
-			}
-			if _, exists := seen[value]; exists {
-				return fmt.Errorf("Thinking value %q is duplicated", value)
-			}
-			seen[value] = struct{}{}
-		}
-		if _, ok := seen[t.Value]; !ok {
-			return errors.New("current Thinking value must be enumerated")
-		}
-		if _, ok := seen[t.BaselineValue]; !ok {
-			return errors.New("baseline Thinking value must be enumerated")
-		}
-	case ChatSettingsThinkingCustom:
-		if len(t.Values) != 0 {
-			return errors.New("custom Thinking cannot contain enumerated values")
-		}
-	default:
-		return errors.New("kind is invalid")
-	}
-	return nil
-}
-
-func (f ChatSettingsFast) Validate() error {
-	return requireEditable(f.Editability)
-}
-
-func (q ChatSettingsQuestions) Validate() error {
-	return requireEditable(q.Editability)
-}
-
-func (a ChatSettingsAutoCompaction) Validate(workflowLocked bool) error {
-	var wantEffective bool
-	var wantEditability ChatSettingsEditability
-	switch a.Policy {
-	case ChatSettingsAutoCompactionOptional:
-		wantEffective = a.Stored
-		wantEditability = ChatSettingsEditable
-	case ChatSettingsAutoCompactionRequired:
-		wantEffective = true
-		if workflowLocked {
-			wantEditability = ChatSettingsWorkflowLock
-		} else {
-			wantEditability = ChatSettingsEditable
-		}
-	case ChatSettingsAutoCompactionDisabled:
-		wantEffective = false
-		wantEditability = ChatSettingsPolicyDisabled
-	default:
-		return errors.New("policy is invalid")
-	}
-	if a.Effective != wantEffective {
-		return fmt.Errorf("effective value must be %t for %q policy", wantEffective, a.Policy)
-	}
-	if a.Editability != wantEditability {
-		return fmt.Errorf("editability must be %q for %q policy", wantEditability, a.Policy)
-	}
-	return nil
-}
-
-func (f ChatSettingsSessionFacts) Validate() error {
-	if f.SessionID.IsZero() {
-		return errors.New("session_id is required")
-	}
-	if f.PreviousSessionID != nil && f.PreviousSessionID.IsZero() {
-		return errors.New("previous_session_id cannot be empty")
-	}
-	if f.TaskID != nil {
-		if _, err := runtimeids.ParseTaskID(*f.TaskID); err != nil {
-			return fmt.Errorf("task_id: %w", err)
-		}
-	}
-	return nil
-}
-
-func requireEditable(value ChatSettingsEditability) error {
-	if value != ChatSettingsEditable {
-		return fmt.Errorf("editability must be %q", ChatSettingsEditable)
-	}
-	return nil
-}
-
-func validateTrimmedNonblank(field, value string) error {
-	if strings.TrimSpace(value) == "" {
-		return fmt.Errorf("%s is required", field)
-	}
-	if strings.TrimSpace(value) != value {
-		return fmt.Errorf("%s must not have leading or trailing whitespace", field)
-	}
-	return nil
-}
-
-func validateChatSettingsTools(values []string) error {
-	catalog := toolspec.IDStrings(toolspec.CatalogIDs())
-	lastIndex := -1
-	for _, value := range values {
-		index := slices.Index(catalog, value)
-		if index < 0 {
-			return fmt.Errorf("unknown tool %q", value)
-		}
-		if index <= lastIndex {
-			return errors.New("tools must be unique and in canonical catalog order")
-		}
-		lastIndex = index
-	}
-	return nil
+	return errors.New(strings.TrimSpace(message))
 }

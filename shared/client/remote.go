@@ -784,6 +784,9 @@ func (c *Remote) ReadChatSettings(
 	ctx context.Context,
 	req serverapi.ChatSettingsReadRequest,
 ) (serverapi.ChatSettingsReadResponse, error) {
+	if err := req.Validate(); err != nil {
+		return serverapi.ChatSettingsReadResponse{}, err
+	}
 	var response serverapi.ChatSettingsReadResponse
 	if err := c.call(ctx, protocol.MethodChatSettingsRead, req, &response); err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
