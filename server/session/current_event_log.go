@@ -252,9 +252,33 @@ func (l *currentEventLog) prepareAppend(fp *os.File) (currentSize int64, needsSe
 	if err != nil {
 		return 0, false, fmt.Errorf("stat current event log before append: %w", err)
 	}
-	currentSize, needsSeparator, err = repairCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
+	classification, err := classifyCurrentEventLogTail(fp, info.Size(), l.firstEventOffset)
 	if err != nil {
 		return 0, false, err
+	}
+	switch classification.kind {
+	case currentEventLogTailValidTerminated:
+		currentSize = info.Size()
+	case currentEventLogTailValidUnterminated:
+		currentSize = info.Size()
+		needsSeparator = true
+	case currentEventLogTailCompleteInvalid:
+		return 0, false, fmt.Errorf(
+			"decode complete current event log tail at byte %d: %w",
+			classification.lineStart,
+			classification.decodeErr,
+		)
+	case currentEventLogTailMalformedIncomplete:
+		return 0, false, fmt.Errorf(
+			"decode incomplete current event log tail at byte %d: %w",
+			classification.lineStart,
+			classification.decodeErr,
+		)
+	default:
+		return 0, false, fmt.Errorf(
+			"unknown current event log tail classification %d",
+			classification.kind,
+		)
 	}
 	lastRecord, err := readLastCurrentEventRecord(fp, currentSize, l.firstEventOffset)
 	if err != nil {

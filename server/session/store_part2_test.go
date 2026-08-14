@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -374,7 +375,7 @@ func TestReadEventsIgnoresTrailingTruncatedEOFLine(t *testing.T) {
 	}
 }
 
-func TestAppendEventDoesNotRepairTruncatedTailLive(t *testing.T) {
+func TestAppendEventRejectsTruncatedTailLive(t *testing.T) {
 	store := newSessionTestStore(t)
 	log := mustMaterializeSessionTestEventLog(t, store)
 	if _, _, err := log.AppendRecord(stringPointer("s1"), sessionTestMessage(MessageRoleUser, "u1")); err != nil {
@@ -392,12 +393,32 @@ func TestAppendEventDoesNotRepairTruncatedTailLive(t *testing.T) {
 	if err := fp.Close(); err != nil {
 		t.Fatalf("close events file: %v", err)
 	}
-
-	if _, receipt, err := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2")); err != nil || !receipt.Committed {
-		t.Fatalf("live append after external tail damage: receipt=%+v error=%v", receipt, err)
+	before, err := os.ReadFile(store.eventsFP)
+	if err != nil {
+		t.Fatalf("read externally damaged event log: %v", err)
 	}
-	if _, err := collectEvents(store); err == nil {
-		t.Fatal("live append silently repaired externally damaged tail")
+
+	_, receipt, appendErr := log.AppendRecord(stringPointer("s2"), sessionTestMessage(MessageRoleAssistant, "a2"))
+	if appendErr == nil || receipt.Committed {
+		t.Fatalf("live append after external tail damage: receipt=%+v error=%v", receipt, appendErr)
+	}
+	var persistenceErr *EventLogPersistenceError
+	if !errors.As(appendErr, &persistenceErr) ||
+		persistenceErr.Certainty != EventLogCommitNotCommitted {
+		t.Fatalf("live append error = %v, want not-committed persistence failure", appendErr)
+	}
+	after, err := os.ReadFile(store.eventsFP)
+	if err != nil {
+		t.Fatalf("read event log after rejected append: %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("live append repaired or mutated the externally damaged tail")
+	}
+	if _, _, laterErr := log.AppendRecord(
+		stringPointer("s3"),
+		sessionTestMessage(MessageRoleUser, "must remain stopped"),
+	); !errors.Is(laterErr, persistenceErr) {
+		t.Fatalf("later append error = %v, want latched %v", laterErr, persistenceErr)
 	}
 }
 

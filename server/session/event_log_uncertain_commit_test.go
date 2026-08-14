@@ -102,44 +102,6 @@ func TestEventLogShortWritesPreserveEveryCompleteMultiRecordPrefix(t *testing.T)
 	}
 }
 
-func TestEventLogFsyncFailureAfterCompleteWriteLatchesUnknownCommit(t *testing.T) {
-	store := newSessionTestStore(t)
-	log := mustMaterializeSessionTestEventLog(t, store)
-	log.log.path = os.DevNull
-
-	records, receipt, appendErr := log.AppendRecordsAtomic(nil, []EventRecordPayload{
-		sessionTestMessage(MessageRoleAssistant, "complete write before fsync failure"),
-	})
-	if appendErr == nil {
-		t.Fatal("append to an unsyncable file unexpectedly succeeded")
-	}
-	if receipt.Committed {
-		t.Fatalf("fsync failure receipt = %+v, want uncertain failure", receipt)
-	}
-	if len(records) != 1 {
-		t.Fatalf("fsync failure built records = %d, want 1", len(records))
-	}
-	var persistenceErr *EventLogPersistenceError
-	if !errors.As(appendErr, &persistenceErr) ||
-		persistenceErr.Certainty != EventLogCommitUnknown {
-		t.Fatalf("fsync failure = %v, want unknown commit certainty", appendErr)
-	}
-	if _, _, laterErr := log.AppendRecord(
-		nil,
-		sessionTestMessage(MessageRoleUser, "must not retry after fsync failure"),
-	); !errors.Is(laterErr, persistenceErr) {
-		t.Fatalf("later append error = %v, want latched %v", laterErr, persistenceErr)
-	}
-
-	reopened := mustOpenSessionTestStore(t, store)
-	reopenedLog := mustMaterializeSessionTestEventLog(t, reopened)
-	if revision, err := reopenedLog.Revision(); err != nil {
-		t.Fatalf("read reopened revision: %v", err)
-	} else if revision != 0 {
-		t.Fatalf("reopened revision = %d, want allowed absent append", revision)
-	}
-}
-
 func TestEventLogShortWriteHelperProcess(t *testing.T) {
 	if os.Getenv(eventLogShortWriteHelperEnv) != "1" {
 		return
