@@ -64,6 +64,7 @@ export type LabelChooserProps = Readonly<{
   invocation: LabelChooserInvocation;
   onOpenChange?: ((open: boolean) => void) | undefined;
   open?: boolean | undefined;
+  preferredSide?: "bottom" | "top" | undefined;
   trigger: ReactElement;
 }>;
 
@@ -182,6 +183,7 @@ export function LabelChooser({
   invocation,
   onOpenChange,
   open: controlledOpen,
+  preferredSide,
   trigger,
 }: LabelChooserProps) {
   const { t } = useTranslation();
@@ -257,7 +259,7 @@ export function LabelChooser({
       <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent
         align="start"
-        className="w-[min(25.3rem,calc(100vw-24px))] gap-[var(--space-2)] p-[var(--space-2)]"
+        className="max-h-[var(--radix-popover-content-available-height)] w-[min(25.3rem,calc(100vw-24px))] gap-[var(--space-2)] overflow-y-auto overscroll-contain p-[var(--space-2)]"
         collisionPadding={12}
         level={3}
         onEscapeKeyDown={(event) => {
@@ -271,6 +273,7 @@ export function LabelChooser({
         onPointerDownOutside={() => {
           outsideInteractionRef.current = true;
         }}
+        side={labelChooserPopoverSide(preferredSide)}
       >
         {renderLabelChooserSearch({
           canCreate,
@@ -342,6 +345,10 @@ export function LabelChooser({
       </PopoverContent>
     </Popover>
   );
+}
+
+function labelChooserPopoverSide(side: LabelChooserProps["preferredSide"]): "bottom" | "top" {
+  return side ?? "bottom";
 }
 
 function renderLabelChooserResults({

@@ -1,3 +1,4 @@
+import type { ButtonHTMLAttributes, Ref } from "react";
 import type { useTranslation } from "react-i18next";
 
 import type { TaskListItem } from "@/api";
@@ -78,6 +79,7 @@ function OpenProjectTaskLabelChooser({
       }}
       onOpenChange={onOpenChange}
       open
+      preferredSide="top"
       trigger={trigger}
     />
   );
@@ -88,28 +90,35 @@ function TaskLabelTrigger({
   loading,
   onOpenChange,
   open,
+  ref,
   task,
   t,
+  ...buttonProps
 }: Readonly<{
   disabled: boolean;
   loading: boolean;
   onOpenChange(open: boolean): void;
   open: boolean;
+  ref?: Ref<HTMLButtonElement> | undefined;
   task: TaskListItem;
   t: ReturnType<typeof useTranslation>["t"];
-}>) {
+}> &
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, "disabled">) {
   return (
     <button
+      {...buttonProps}
       aria-expanded={open}
       aria-label={t("home.prototype.editTaskLabels", { shortID: task.shortID })}
       className="block h-full w-full min-w-0 rounded-[var(--radius-s)] text-left outline-none focus-visible:ring-[3px] focus-visible:ring-[color-mix(in_srgb,var(--color-primary)_40%,transparent)] disabled:cursor-not-allowed disabled:opacity-45"
       disabled={disabled}
       onClick={(event) => {
         event.stopPropagation();
+        buttonProps.onClick?.(event);
         if (!open) {
           onOpenChange(true);
         }
       }}
+      ref={ref}
       type="button"
     >
       {loading ? (

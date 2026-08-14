@@ -84,7 +84,7 @@ export function projectTaskColumnEntry(t: ReturnType<typeof useTranslation>["t"]
       { key: "workflow", content: t("home.prototype.workflowColumn") },
       { key: "labels", content: t("labels.filter") },
     ],
-    className: projectTaskGridClassName("border-b border-[var(--color-outline)] bg-[var(--color-island-1)]"),
+    className: projectTaskGridClassName("border-b border-[var(--color-outline)] bg-[var(--color-background)]"),
   };
 }
 
