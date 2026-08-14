@@ -1,15 +1,7 @@
 package architectureguard
 
 import (
-	"errors"
-	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
-	"sort"
-	"strings"
 )
 
 var forbiddenAPICapabilityDeclarations = map[string]map[string]struct{}{
@@ -122,90 +114,51 @@ var forbiddenAPICapabilitySelectors = map[string]map[string]struct{}{
 }
 
 func CheckNoAPICapabilityNegotiation(root string) error {
-	root = filepath.Clean(root)
-	var violations []string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			switch entry.Name() {
-			case ".git", "node_modules", "vendor":
-				return filepath.SkipDir
-			default:
+	return checkProductionGo(root, goASTPolicy{
+		errorHeading: "API capability negotiation is forbidden",
+		inspect: func(source goSourceFile) []string {
+			declarations := forbiddenAPICapabilityDeclarations[source.relativePath]
+			fields := forbiddenAPICapabilityFields[source.relativePath]
+			selectors := forbiddenAPICapabilitySelectors[source.relativePath]
+			if len(declarations) == 0 && len(fields) == 0 && len(selectors) == 0 {
 				return nil
 			}
-		}
-		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		relative = filepath.ToSlash(relative)
-		declarations := forbiddenAPICapabilityDeclarations[relative]
-		fields := forbiddenAPICapabilityFields[relative]
-		selectors := forbiddenAPICapabilitySelectors[relative]
-		if len(declarations) == 0 && len(fields) == 0 && len(selectors) == 0 {
-			return nil
-		}
 
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, path, nil, 0)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", path, err)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			switch declaration := node.(type) {
-			case *ast.TypeSpec:
-				if _, forbidden := declarations[declaration.Name.Name]; forbidden {
-					violations = appendCapabilityViolation(violations, root, fileSet, declaration.Name, declaration.Name.Name)
-				}
-				forbiddenFields := fields[declaration.Name.Name]
-				if structType, ok := declaration.Type.(*ast.StructType); ok && len(forbiddenFields) != 0 {
-					for _, field := range structType.Fields.List {
-						for _, name := range field.Names {
-							if _, forbidden := forbiddenFields[name.Name]; forbidden {
-								violations = appendCapabilityViolation(violations, root, fileSet, name, declaration.Name.Name+"."+name.Name)
+			var violations []string
+			ast.Inspect(source.file, func(node ast.Node) bool {
+				switch declaration := node.(type) {
+				case *ast.TypeSpec:
+					if _, forbidden := declarations[declaration.Name.Name]; forbidden {
+						violations = append(violations, source.violation(declaration.Name, declaration.Name.Name))
+					}
+					forbiddenFields := fields[declaration.Name.Name]
+					if structType, ok := declaration.Type.(*ast.StructType); ok && len(forbiddenFields) != 0 {
+						for _, field := range structType.Fields.List {
+							for _, name := range field.Names {
+								if _, forbidden := forbiddenFields[name.Name]; forbidden {
+									violations = append(violations, source.violation(name, declaration.Name.Name+"."+name.Name))
+								}
 							}
 						}
 					}
-				}
-			case *ast.FuncDecl:
-				if _, forbidden := declarations[declaration.Name.Name]; forbidden {
-					violations = appendCapabilityViolation(violations, root, fileSet, declaration.Name, declaration.Name.Name)
-				}
-			case *ast.ValueSpec:
-				for _, name := range declaration.Names {
-					if _, forbidden := declarations[name.Name]; forbidden {
-						violations = appendCapabilityViolation(violations, root, fileSet, name, name.Name)
+				case *ast.FuncDecl:
+					if _, forbidden := declarations[declaration.Name.Name]; forbidden {
+						violations = append(violations, source.violation(declaration.Name, declaration.Name.Name))
+					}
+				case *ast.ValueSpec:
+					for _, name := range declaration.Names {
+						if _, forbidden := declarations[name.Name]; forbidden {
+							violations = append(violations, source.violation(name, name.Name))
+						}
+					}
+				case *ast.SelectorExpr:
+					if _, forbidden := selectors[declaration.Sel.Name]; forbidden {
+						violations = append(violations, source.violation(declaration.Sel, declaration.Sel.Name+" selector"))
 					}
 				}
-			case *ast.SelectorExpr:
-				if _, forbidden := selectors[declaration.Sel.Name]; forbidden {
-					violations = appendCapabilityViolation(violations, root, fileSet, declaration.Sel, declaration.Sel.Name+" selector")
-				}
-			}
-			return true
-		})
-		return nil
+				return true
+			})
+			return violations
+		},
 	})
-	if err != nil {
-		return err
-	}
-	if len(violations) == 0 {
-		return nil
-	}
-	sort.Strings(violations)
-	return errors.New("API capability negotiation is forbidden:\n" + strings.Join(violations, "\n"))
-}
-
-func appendCapabilityViolation(violations []string, root string, fileSet *token.FileSet, node ast.Node, symbol string) []string {
-	position := fileSet.Position(node.Pos())
-	relative, err := filepath.Rel(root, position.Filename)
-	if err != nil {
-		relative = position.Filename
-	}
-	return append(violations, fmt.Sprintf("%s:%d: %s", filepath.ToSlash(relative), position.Line, symbol))
 }
