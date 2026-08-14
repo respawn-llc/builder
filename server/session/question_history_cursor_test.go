@@ -226,7 +226,7 @@ func TestQuestionHistoryCursorLargeIgnoredScalarAllocationIsSizeIndependent(t *t
 	}
 }
 
-func TestQuestionHistoryCursorOversizedInspectedTokensFailWithSizeIndependentAllocation(t *testing.T) {
+func TestQuestionHistoryCursorSurfacesOversizedLegacyDiscriminatorsWithSizeIndependentAllocation(t *testing.T) {
 	tests := []struct {
 		name  string
 		write func(t *testing.T, tokenBytes int) string

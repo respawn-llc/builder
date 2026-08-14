@@ -18,6 +18,8 @@ const (
 	EventLogVersionV1 = 1
 	EventLogVersionV2 = 2
 	CacheDigestV1     = 1
+
+	eventRecordDiscriminatorMaxBytes = 4096
 )
 
 type EventLogHeader struct {
@@ -645,10 +647,20 @@ func encodeEventRecordV2(record EventRecord) ([]byte, error) {
 	if err := validateEventRecordV2(record); err != nil {
 		return nil, err
 	}
-	return encodeEventRecord(record, encodeEventRecordPayloadV2)
+	line, err := encodeEventRecord(record, encodeEventRecordPayloadV2)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEventRecordV2FieldNames(line); err != nil {
+		return nil, err
+	}
+	return line, nil
 }
 
 func decodeEventRecordV2(line []byte) (EventRecord, error) {
+	if err := validateEventRecordV2FieldNames(line); err != nil {
+		return EventRecord{}, err
+	}
 	var envelope eventRecordV1Envelope
 	if err := json.Unmarshal(line, &envelope); err != nil {
 		return EventRecord{}, fmt.Errorf("decode event record: %w", err)
@@ -690,6 +702,12 @@ func validateEventRecordV2(record EventRecord) error {
 	completion, ok := payload.(ToolCompletionRecord)
 	if !ok {
 		return nil
+	}
+	if len(completion.Name) > eventRecordDiscriminatorMaxBytes {
+		return fmt.Errorf(
+			"tool name exceeds %d UTF-8 bytes",
+			eventRecordDiscriminatorMaxBytes,
+		)
 	}
 	isQuestion := completion.Name == askQuestionToolName
 	successfulQuestion := isQuestion && !completion.IsError

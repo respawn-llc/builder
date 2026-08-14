@@ -14,6 +14,8 @@ type eventRecordStreamInspection struct {
 	QuestionCandidate bool
 }
 
+const eventRecordInspectionTokenMaxBytes = eventRecordDiscriminatorMaxBytes * 8
+
 var errEventRecordInspectionTokenTooLarge = errors.New(
 	"event record inspected JSON token exceeds fixed size limit",
 )
@@ -40,7 +42,7 @@ func (r *eventRecordInspectionReader) Read(buffer []byte) (int, error) {
 }
 
 func (r *eventRecordInspectionReader) boundNextToken() {
-	r.remaining = eventLogScanChunkSize
+	r.remaining = eventRecordInspectionTokenMaxBytes
 	r.bounded = true
 }
 
@@ -194,6 +196,9 @@ func inspectEventRecordObject(
 	return decoder.Obj(func(decoder *jx.Decoder, field string) error {
 		inspectionReader.allowStreamingValue()
 		defer inspectionReader.boundNextToken()
+		if err := inspectEventRecordFieldName(field); err != nil {
+			return err
+		}
 		return inspect(decoder, field)
 	})
 }
@@ -204,5 +209,25 @@ func inspectEventRecordString(
 ) (string, error) {
 	inspectionReader.boundNextToken()
 	defer inspectionReader.allowStreamingValue()
-	return decoder.Str()
+	value, err := decoder.Str()
+	if err != nil {
+		return "", err
+	}
+	if len(value) > eventRecordDiscriminatorMaxBytes {
+		return "", fmt.Errorf(
+			"event record discriminator exceeds %d UTF-8 bytes",
+			eventRecordDiscriminatorMaxBytes,
+		)
+	}
+	return value, nil
+}
+
+func inspectEventRecordFieldName(field string) error {
+	if len(field) > eventRecordDiscriminatorMaxBytes {
+		return fmt.Errorf(
+			"event record field name exceeds %d UTF-8 bytes",
+			eventRecordDiscriminatorMaxBytes,
+		)
+	}
+	return nil
 }

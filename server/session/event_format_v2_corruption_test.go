@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
@@ -126,6 +127,103 @@ func TestEventLogV2QuestionCompletionWireAddsNoQuestionOrSuggestionCopy(t *testi
 		if _, exists := envelope.Payload[field]; exists {
 			t.Fatalf("v2 completion duplicated presentation-owned field %q", field)
 		}
+	}
+}
+
+func TestEventLogV2RejectsOversizedDiscriminators(t *testing.T) {
+	t.Run("tool name", func(t *testing.T) {
+		record, err := NewEventRecord(
+			1,
+			nil,
+			ToolCompletionRecord{
+				CallID:     "call",
+				Name:       string(bytes.Repeat([]byte{'x'}, eventRecordDiscriminatorMaxBytes+1)),
+				OutputKind: ToolOutputKindFunction,
+				Output:     json.RawMessage(`"answer"`),
+			},
+		)
+		if err != nil {
+			t.Fatalf("create oversized-tool fixture: %v", err)
+		}
+		if _, err := encodeEventRecordV2(record); err == nil {
+			t.Fatal("v2 encoder accepted oversized tool name")
+		}
+		line, err := encodeEventRecordV1(record)
+		if err != nil {
+			t.Fatalf("v1 encoder rejected compatible oversized tool name: %v", err)
+		}
+		if _, err := decodeEventRecordV2(line); err == nil {
+			t.Fatal("v2 decoder accepted oversized tool name")
+		}
+		if _, err := decodeEventRecordV1(line); err != nil {
+			t.Fatalf("v1 decoder rejected compatible oversized tool name: %v", err)
+		}
+	})
+
+	t.Run("event field name", func(t *testing.T) {
+		var line bytes.Buffer
+		line.WriteString(`{"seq":1,"kind":"message","`)
+		line.Write(bytes.Repeat([]byte{'x'}, eventRecordDiscriminatorMaxBytes+1))
+		line.WriteString(`":null,"payload":{"role":"user","content":"message"}}`)
+		if _, err := decodeEventRecordV2(line.Bytes()); err == nil {
+			t.Fatal("v2 decoder accepted oversized event field name")
+		}
+		if _, err := decodeEventRecordV1(line.Bytes()); err != nil {
+			t.Fatalf("v1 decoder rejected compatible oversized event field name: %v", err)
+		}
+	})
+
+	t.Run("payload field name", func(t *testing.T) {
+		var line bytes.Buffer
+		line.WriteString(`{"seq":1,"kind":"message","payload":{"role":"user","content":"message","`)
+		line.Write(bytes.Repeat([]byte{'x'}, eventRecordDiscriminatorMaxBytes+1))
+		line.WriteString(`":null}}`)
+		if _, err := decodeEventRecordV2(line.Bytes()); err == nil {
+			t.Fatal("v2 decoder accepted oversized payload field name")
+		}
+		if _, err := decodeEventRecordV1(line.Bytes()); err != nil {
+			t.Fatalf("v1 decoder rejected compatible oversized payload field name: %v", err)
+		}
+	})
+}
+
+func TestEventLogV2AcceptsDiscriminatorsAtLimit(t *testing.T) {
+	toolName := string(bytes.Repeat([]byte{'x'}, eventRecordDiscriminatorMaxBytes))
+	record, err := NewEventRecord(
+		1,
+		nil,
+		ToolCompletionRecord{
+			CallID:     "call",
+			Name:       toolName,
+			OutputKind: ToolOutputKindFunction,
+			Output:     json.RawMessage(`"answer"`),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create boundary-tool fixture: %v", err)
+	}
+	line, err := encodeEventRecordV2(record)
+	if err != nil {
+		t.Fatalf("encode boundary tool name: %v", err)
+	}
+	decoded, err := decodeEventRecordV2(line)
+	if err != nil {
+		t.Fatalf("decode boundary tool name: %v", err)
+	}
+	payload, err := decoded.Payload()
+	if err != nil {
+		t.Fatalf("read boundary tool payload: %v", err)
+	}
+	if payload.(ToolCompletionRecord).Name != toolName {
+		t.Fatal("boundary tool name changed during round trip")
+	}
+
+	var unknownFieldLine bytes.Buffer
+	unknownFieldLine.WriteString(`{"seq":1,"kind":"message","`)
+	unknownFieldLine.Write(bytes.Repeat([]byte{'x'}, eventRecordDiscriminatorMaxBytes))
+	unknownFieldLine.WriteString(`":null,"payload":{"role":"user","content":"message"}}`)
+	if _, err := decodeEventRecordV2(unknownFieldLine.Bytes()); err != nil {
+		t.Fatalf("decode boundary event field name: %v", err)
 	}
 }
 

@@ -126,7 +126,9 @@
 - Question-history delivery reuses the generic subscription transport. The server emits start metadata, zero or more Questions, and final omission metadata in that order; clients consume those typed events without a separate lifecycle-validation state machine. Generic transport completion is operation success, and a transport failure remains an operational failure even after final omission metadata.
 - Question-history reading ignores provider-history items carried by history replacements. It reads self-contained Question completion events only.
 - New Sessions store structured Question answers and their answer commit time in event-log schema v2.
+- Event-log schema v2 limits event-envelope field names, top-level event-payload field names, and tool names to 4,096 UTF-8 bytes. Writing or decoding an oversized discriminator fails visibly. This limit does not apply to Question text, answers, Commentary, provider history, or other payload content.
 - Event-log schema v1 Sessions remain openable, resumable, and writable without migration. Question history uses their normalized presented Question text and verbatim flattened completion output, and does not infer selected options, Commentary, or answer time.
+- Event-log schema v1 preserves existing discriminator lengths. If bounded Question-history inspection encounters a legacy discriminator that exceeds the v2 limit, the read stops with a visible decode failure instead of silently omitting the record.
 - A forked or cloned Session inherits its source Session's event-log schema version.
 - Kent 3.0 removes the event-log v1 Question-history fallback.
 
