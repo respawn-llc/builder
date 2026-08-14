@@ -115,12 +115,12 @@ func selectWorkflowTaskPrompt(items []llm.ResponseItem, currentNodeIdentity stri
 	if !ok {
 		panic("select workflow task prompt: workflow-mode message classification failed")
 	}
-	if trigger == workflowTaskPromptTriggerResumeDelivery {
-		return prompts.WorkflowTaskPromptInitialAssignment, false
-	}
 	current, hasWorkflowPrompt := latestActiveMetaContextForSlot(items, metaContextKindWorkflow)
 	if !hasWorkflowPrompt {
 		return prompts.WorkflowTaskPromptInitialAssignment, true
+	}
+	if trigger == workflowTaskPromptTriggerResumeDelivery {
+		return prompts.WorkflowTaskPromptInitialAssignment, false
 	}
 	sameRun := sameMetaContextIdentity(current, desired)
 	switch trigger {

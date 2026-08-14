@@ -144,6 +144,89 @@ func TestWorkflowGraphSaveAllowsParameterEditForInterruptedCurrentNode(t *testin
 	}
 }
 
+func TestWorkflowGraphSaveBlocksRetargetingEnteringEdgeReferencedByCurrentNode(t *testing.T) {
+	ctx, store, binding := newTestStoreContext(t)
+	workflowID := createMaterializedCurrentNodeWorkflow(t, ctx, store)
+	linkWorkflow(t, ctx, store, binding.ProjectID, workflowID, true)
+	task := createDefaultTask(t, ctx, store, binding.ProjectID)
+
+	plan := startTask(t, ctx, store, task.ID).Mutation.Created[0]
+	reviewResult, err := store.CompleteCurrentNode(ctx, CurrentNodeCompletionRequest{
+		Source:       plan.Reference,
+		TransitionID: "review",
+		OutputValues: map[string]string{"summary": "approved plan"},
+	})
+	if err != nil {
+		t.Fatalf("CompleteCurrentNode: %v", err)
+	}
+	review := reviewResult.Mutation.Created[0]
+	if review.EnteredByEdgeID == nil {
+		t.Fatal("review Current Node has no entering Edge")
+	}
+
+	definition, record, err := store.GetDefinition(ctx, workflowID)
+	if err != nil {
+		t.Fatalf("GetDefinition: %v", err)
+	}
+	request := NewWorkflowGraphSaveRequest(definition, record.Version)
+	gateNodeID := testNodeID("node-retarget-gate-" + workflowID.String())
+	gateGroupID := testTransitionGroupID("group-retarget-gate-" + workflowID.String())
+	gateEdgeID := testEdgeID("edge-retarget-gate-" + workflowID.String())
+	request.Nodes = append(request.Nodes, NodeRecord{
+		ID:           gateNodeID,
+		WorkflowID:   workflowID,
+		Key:          "retarget_gate",
+		Kind:         workflow.NodeKindAgent,
+		DisplayName:  "Retarget Gate",
+		SubagentRole: "coder",
+	})
+	request.TransitionGroups = append(request.TransitionGroups, TransitionGroupRecord{
+		ID:           gateGroupID,
+		WorkflowID:   workflowID,
+		SourceNodeID: gateNodeID,
+		TransitionID: "enter_review",
+		DisplayName:  "Enter Review",
+	})
+	request.Edges = append(request.Edges, EdgeRecord{
+		ID:                gateEdgeID,
+		WorkflowID:        workflowID,
+		TransitionGroupID: gateGroupID,
+		Key:               "review",
+		TargetNodeID:      review.Reference.NodeID,
+		ContextMode:       workflow.ContextModeNewSession,
+		PromptTemplate:    "Review the gated plan.",
+		AssigneeSelection: workflow.AssigneeSelectionConfigured,
+		ThinkingSelection: workflow.ThinkingSelectionConfigured,
+	})
+	retargeted := false
+	for index := range request.Edges {
+		if request.Edges[index].ID != *review.EnteredByEdgeID {
+			continue
+		}
+		request.Edges[index].TargetNodeID = gateNodeID
+		request.Edges[index].PromptTemplate = "Validate {{.Params.summary}}."
+		retargeted = true
+	}
+	if !retargeted {
+		t.Fatalf("workflow edge %q not found in save request", *review.EnteredByEdgeID)
+	}
+
+	preview, err := store.PreviewWorkflowGraphSave(ctx, request)
+	if err != nil {
+		t.Fatalf("PreviewWorkflowGraphSave: %v", err)
+	}
+	if workflowGraphSaveBlockerCount(preview.Blockers, "task_referenced_edge_group_changed") != 1 {
+		t.Fatalf("retarget preview = %+v, want referenced-edge routing blocker", preview)
+	}
+	saved, err := store.SaveWorkflowGraph(ctx, request)
+	if err != nil {
+		t.Fatalf("SaveWorkflowGraph: %v", err)
+	}
+	if saved.Saved {
+		t.Fatalf("retarget save = %+v, want blocked graph mutation", saved)
+	}
+}
+
 func TestPreflightTaskResumeRejectsEditedJoinDerivedParameter(t *testing.T) {
 	ctx, store, binding := newTestStoreContext(t)
 	workflowID := createFanoutJoinWorkflow(t, ctx, store)

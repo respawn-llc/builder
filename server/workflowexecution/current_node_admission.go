@@ -162,8 +162,9 @@ func (c *CurrentNodeController) admit(ctx context.Context, start currentNodeQueu
 	if err != nil {
 		return err
 	}
-	if start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment &&
-		start.assignment == nil {
+	if start.assignment == nil &&
+		(start.taskPromptDelivery == workflowruntime.TaskPromptDeliveryAssignment ||
+			start.policy == currentNodeAdmissionAutomaticAgent) {
 		prepared, err := c.steerAssignment(ctx, reference)
 		if err != nil {
 			return err

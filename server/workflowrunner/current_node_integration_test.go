@@ -1142,6 +1142,23 @@ func TestManualMoveToRetainedTargetAssignsBeforeResumingLockedSession(t *testing
 			nodes[0].Scheduling.Interruption != nil
 	})
 	f.waitForTaskQuiescence(t, task.ID)
+	retainedRecord, err := f.metadata.ResolvePersistedSession(context.Background(), review.SessionID.String())
+	if err != nil {
+		t.Fatalf("resolve retained Review Session: %v", err)
+	}
+	retainedStore, err := session.Open(
+		retainedRecord.SessionDir,
+		f.metadata.AuthoritativeSessionStoreOptions()...,
+	)
+	if err != nil {
+		t.Fatalf("open retained Review Session: %v", err)
+	}
+	legacySnapshot := retainedStore.PromptFacingMetadataSnapshot()
+	legacySnapshot.ActiveWorkflowAssignment = nil
+	legacySnapshot.ActiveWorkflowAssignmentState = nil
+	if err := retainedStore.RestorePromptFacingMetadata(legacySnapshot); err != nil {
+		t.Fatalf("simulate retained Session created before assignment projection: %v", err)
+	}
 	rework := workflow.TransitionID("rework")
 	prepared, err := f.store.PrepareManualMove(context.Background(), workflowstore.ManualMoveRequest{
 		TaskID:        task.ID,

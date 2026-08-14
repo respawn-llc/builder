@@ -631,6 +631,42 @@ func TestWorkflowModePromptResumedCurrentNodeMessageSkipsTaskAwarenessQueryAndRe
 	}
 }
 
+func TestWorkflowModePromptResumeRepairsMissingCurrentNodeAssignmentBeforeModelRequest(t *testing.T) {
+	t.Parallel()
+	store := mustCreateTestSession(t)
+	counter := &fakeTaskAwarenessSource{
+		awareness: workflowruntime.TaskAwareness{CommentCount: 2},
+	}
+	workflowCfg := testWorkflowConfig(&fakeWorkflowController{}, config.WorkflowCompletionModeTool)
+	workflowCfg.TaskAwarenessSource = counter
+	workflowCfg.TaskPromptDelivery = workflowruntime.TaskPromptDeliveryResume
+	client := &fakeClient{responses: []llm.Response{commentaryResponse(
+		"complete",
+		completeNodeCall(
+			"call_complete",
+			json.RawMessage(`{"commentary":"complete","summary":"done"}`),
+		),
+	)}}
+	eng := mustNewWorkflowTestEngine(t, store, client, workflowCfg, Config{})
+
+	if _, err := eng.SubmitWorkflowTurn(context.Background()); err != nil {
+		t.Fatalf("submit resumed workflow turn: %v", err)
+	}
+
+	assertModelCallCount(t, client, 1)
+	workflowMessages := workflowPromptMessages(requestMessages(client.calls[0]))
+	if len(workflowMessages) != 1 {
+		t.Fatalf("workflow messages = %+v, want one repaired current-node assignment", workflowMessages)
+	}
+	wantIdentity := workflowruntime.CurrentNodePromptIdentity(workflowCfg.Instructions.CurrentNode)
+	if workflowMessages[0].SourcePath == nil || *workflowMessages[0].SourcePath != wantIdentity {
+		t.Fatalf("workflow assignment identity = %v, want %q", workflowMessages[0].SourcePath, wantIdentity)
+	}
+	if got := counter.calls.Load(); got != 1 {
+		t.Fatalf("TaskAwareness calls = %d, want one repaired assignment prompt", got)
+	}
+}
+
 func TestWorkflowModePromptSameNodeReentryRefreshesAssignment(t *testing.T) {
 	t.Parallel()
 	store := mustCreateTestSession(t)

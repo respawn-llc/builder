@@ -134,19 +134,29 @@ func TestSelectWorkflowTaskPromptAfterCompactionForAnotherNodeAssignment(t *test
 	}
 }
 
-func TestSelectWorkflowTaskPromptResumeNeverAppendsAssignment(t *testing.T) {
+func TestSelectWorkflowTaskPromptResumeOnlyRepairsMissingAssignment(t *testing.T) {
 	t.Parallel()
-	for _, items := range [][]llm.ResponseItem{
-		nil,
-		workflowPromptItems("run-previous"),
-		workflowPromptItems("run-current"),
+	for _, test := range []struct {
+		items  []llm.ResponseItem
+		inject bool
+	}{
+		{items: nil, inject: true},
+		{items: workflowPromptItems("run-previous"), inject: false},
+		{items: workflowPromptItems("run-current"), inject: false},
 	} {
-		if _, ok := selectWorkflowTaskPrompt(
-			items,
+		kind, inject := selectWorkflowTaskPrompt(
+			test.items,
 			"run-current",
 			workflowTaskPromptTriggerResumeDelivery,
-		); ok {
-			t.Fatalf("resume selected a workflow assignment for items %+v", items)
+		)
+		if inject != test.inject {
+			t.Fatalf(
+				"resume selected workflow assignment kind %d, inject=%t for items %+v; want inject=%t",
+				kind,
+				inject,
+				test.items,
+				test.inject,
+			)
 		}
 	}
 }
