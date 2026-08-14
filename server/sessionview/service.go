@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"core/server/auth"
 	"core/server/chatcontext"
@@ -48,7 +47,6 @@ type Service struct {
 	app               config.App
 	auth              servicecontract.AuthStatusService
 	git               *worktree.GitInspector
-	cacheWarningMu    sync.RWMutex
 	cacheWarningMode  config.CacheWarningMode
 	contextWorkspaces chatContextWorkspaceResolver
 	contextAuth       chatContextAuthReader
@@ -87,7 +85,7 @@ func NewService(
 	if persisted, ok := sessions.(PersistedSessionResolver); ok {
 		svc.persisted = persisted
 	}
-	svc.snapshots = newResolvedSessionSnapshotSource(sessions, mainViews, svc.cacheWarningModeValue)
+	svc.snapshots = newResolvedSessionSnapshotSource(sessions, mainViews, svc.cacheWarningMode)
 	return svc
 }
 
@@ -192,26 +190,11 @@ func (s *Service) WithCacheWarningMode(mode config.CacheWarningMode) *Service {
 	if s == nil {
 		return nil
 	}
-	s.setCacheWarningMode(normalizeServiceCacheWarningMode(mode))
+	s.cacheWarningMode = normalizeServiceCacheWarningMode(mode)
+	if s.snapshots != nil {
+		s.snapshots.cacheWarningMode = s.cacheWarningMode
+	}
 	return s
-}
-
-func (s *Service) cacheWarningModeValue() config.CacheWarningMode {
-	if s == nil {
-		return config.CacheWarningModeDefault
-	}
-	s.cacheWarningMu.RLock()
-	defer s.cacheWarningMu.RUnlock()
-	return s.cacheWarningMode
-}
-
-func (s *Service) setCacheWarningMode(mode config.CacheWarningMode) {
-	if s == nil {
-		return
-	}
-	s.cacheWarningMu.Lock()
-	defer s.cacheWarningMu.Unlock()
-	s.cacheWarningMode = mode
 }
 
 func normalizeServiceCacheWarningMode(mode config.CacheWarningMode) config.CacheWarningMode {
@@ -255,7 +238,7 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 	if err != nil {
 		return nil, err
 	}
-	return (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningModeValue}).TranscriptTailEntries(ctx)
+	return (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningMode}).TranscriptTailEntries(ctx)
 }
 
 func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
@@ -267,7 +250,7 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
-	page, err := (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningModeValue}).TranscriptPage(ctx, pageReq)
+	page, err := (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningMode}).TranscriptPage(ctx, pageReq)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}

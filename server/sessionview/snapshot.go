@@ -47,7 +47,7 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 type resolvedSessionSnapshotSource struct {
 	sessions         PersistedSessionResolver
 	mainViews        runtimeMainViewSnapshotProvider
-	cacheWarningMode func() config.CacheWarningMode
+	cacheWarningMode config.CacheWarningMode
 }
 
 func resolvePersistedSessionView(
@@ -68,7 +68,7 @@ func resolvePersistedSessionView(
 func newResolvedSessionSnapshotSource(
 	sessions SessionStoreResolver,
 	mainViews runtimeMainViewSnapshotProvider,
-	cacheWarningMode func() config.CacheWarningMode,
+	cacheWarningMode config.CacheWarningMode,
 ) *resolvedSessionSnapshotSource {
 	persisted, _ := sessions.(PersistedSessionResolver)
 	return &resolvedSessionSnapshotSource{
@@ -113,7 +113,7 @@ func (s publishedRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui
 
 type dormantSessionSnapshot struct {
 	view             *session.PersistedSessionView
-	cacheWarningMode func() config.CacheWarningMode
+	cacheWarningMode config.CacheWarningMode
 }
 
 func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
@@ -236,10 +236,7 @@ func (s dormantSessionSnapshot) newestSegment(ctx context.Context) (runtime.Tran
 }
 
 func (s dormantSessionSnapshot) cacheWarningModeOrDefault() config.CacheWarningMode {
-	if s.cacheWarningMode == nil {
-		return config.CacheWarningModeDefault
-	}
-	return normalizeServiceCacheWarningMode(s.cacheWarningMode())
+	return normalizeServiceCacheWarningMode(s.cacheWarningMode)
 }
 
 func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegmentPage) (clientui.TranscriptPage, error) {
