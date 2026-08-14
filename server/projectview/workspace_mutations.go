@@ -5,12 +5,11 @@ import (
 	"errors"
 	"strings"
 
-	servicecontract "core/shared/apicontract"
 	"core/shared/serverapi"
 )
 
 func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.ProjectDefaultWorkspaceSetRequest) (serverapi.ProjectDefaultWorkspaceSetResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.ProjectDefaultWorkspaceSetResponse{}, err
 	}
 	if s == nil {
@@ -28,7 +27,7 @@ func (s *Service) SetDefaultWorkspace(ctx context.Context, req serverapi.Project
 }
 
 func (s *Service) UnlinkWorkspaceFromProject(ctx context.Context, req serverapi.ProjectWorkspaceUnlinkRequest) (serverapi.ProjectWorkspaceUnlinkResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.ProjectWorkspaceUnlinkResponse{}, err
 	}
 	if s == nil {

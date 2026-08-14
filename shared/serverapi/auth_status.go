@@ -149,7 +149,8 @@ func OpenAIAuthProviderFacts() AuthProviderFacts {
 	}
 }
 
-func (r AuthStatusRequest) Validate() error {
+func (r AuthStatusRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	if r.Provider == nil {
 		return nil
 	}

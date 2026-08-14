@@ -24,7 +24,8 @@ type RuntimeLiveWatchRequest struct {
 	SessionID string `json:"session_id"`
 }
 
-func (r RuntimeLiveWatchRequest) Validate() error {
+func (r RuntimeLiveWatchRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	_, err := prepareRuntimeLiveWaitRequest(RuntimeLiveWaitRequest{SessionID: r.SessionID})
 	return err
 }
@@ -219,7 +220,8 @@ type WorkflowTaskObservationRequest struct {
 	Mode      WorkflowTaskObservationMode `json:"mode"`
 }
 
-func (r WorkflowTaskObservationRequest) Validate() error {
+func (r WorkflowTaskObservationRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	if err := validateRequired("task_id", r.TaskID); err != nil {
 		return err
 	}

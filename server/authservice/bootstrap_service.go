@@ -81,7 +81,7 @@ func (s *BootstrapService) AcknowledgeNoAuth(ctx context.Context, _ serverapi.Au
 }
 
 func (s *BootstrapService) CompleteAuthBootstrap(ctx context.Context, req serverapi.AuthCompleteBootstrapRequest) (serverapi.AuthCompleteBootstrapResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.AuthCompleteBootstrapResponse{}, err
 	}
 	if s == nil || s.manager == nil {

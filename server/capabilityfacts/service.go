@@ -9,7 +9,6 @@ import (
 	"core/server/auth"
 	"core/server/llm"
 	"core/server/onboardingimports"
-	"core/shared/apicontract"
 	"core/shared/clientui"
 	"core/shared/config"
 	"core/shared/serverapi"
@@ -46,7 +45,7 @@ func NewService(opts Options) *Service {
 }
 
 func (s *Service) GetCapabilityFacts(ctx context.Context, req serverapi.CapabilityFactsRequest) (serverapi.CapabilityFactsResponse, error) {
-	if err := apicontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.CapabilityFactsResponse{}, err
 	}
 	currentProvider, err := s.currentProviderFacts(ctx)

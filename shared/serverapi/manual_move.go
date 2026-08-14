@@ -69,7 +69,8 @@ type WorkflowTaskMovePreviewBlocked struct {
 	Reason WorkflowTaskMovePreviewBlocker `json:"reason"`
 }
 
-func (r WorkflowTaskMovePreviewRequest) Validate() error {
+func (r WorkflowTaskMovePreviewRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	return validateRequiredFields(
 		requiredField("task_id", r.TaskID),
 		requiredField("target_node_id", r.TargetNodeID),

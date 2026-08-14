@@ -24,7 +24,7 @@ func (s *Service) withLiveExecutionRuntime(ctx context.Context, id runtimeids.Se
 }
 
 func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerRequest) (serverapi.RuntimeLiveSteerResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveSteerResponse{}, err
 	}
 	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
@@ -98,7 +98,7 @@ func (s *Service) LiveSteer(ctx context.Context, req serverapi.RuntimeLiveSteerR
 }
 
 func (s *Service) LiveStop(ctx context.Context, req serverapi.RuntimeLiveStopRequest) (serverapi.RuntimeLiveStopResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveStopResponse{}, err
 	}
 	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
@@ -143,7 +143,7 @@ func (s *Service) captureLiveRun(ctx context.Context, id runtimeids.SessionID) (
 }
 
 func (s *Service) LiveWait(ctx context.Context, req serverapi.RuntimeLiveWaitRequest) (serverapi.RuntimeLiveWaitResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveWaitResponse{}, err
 	}
 	sessionID, err := parseCanonicalLiveSessionID(req.SessionID)
@@ -196,7 +196,7 @@ func (s *Service) pendingWatchQuestion(ctx context.Context, sessionID string) (*
 }
 
 func (s *Service) LiveWatch(ctx context.Context, req serverapi.RuntimeLiveWatchRequest) (serverapi.RuntimeLiveWatchResponse, error) {
-	if err := servicecontract.ClassifyRequestValidation(req.Validate()); err != nil {
+	if err := req.Validate(); err != nil {
 		return serverapi.RuntimeLiveWatchResponse{}, err
 	}
 	id, err := parseCanonicalLiveSessionID(req.SessionID)

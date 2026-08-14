@@ -12,7 +12,8 @@ type CapabilityFactsRequest struct {
 	ExplicitLLMProviderIDs []string `json:"explicit_llm_provider_ids,omitempty"`
 }
 
-func (r CapabilityFactsRequest) Validate() error {
+func (r CapabilityFactsRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	if r.WorkspaceRoot != nil && strings.TrimSpace(*r.WorkspaceRoot) == "" {
 		return errors.New("workspace_root must be a non-blank path when supplied")
 	}

@@ -67,7 +67,8 @@ type AuthCompleteBootstrapResponse struct {
 	Email          string `json:"email,omitempty"`
 }
 
-func (r AuthCompleteBootstrapRequest) Validate() error {
+func (r AuthCompleteBootstrapRequest) Validate() (resultErr error) {
+	defer func() { resultErr = classifyRequestValidation(resultErr) }()
 	switch r.Mode {
 	case AuthBootstrapModeNone:
 		return nil
