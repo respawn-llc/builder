@@ -441,118 +441,74 @@ func TestExclusiveStepLifecycleFailedEagerCompactionDoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestEagerCompactionRechecksEligibilityAfterQueuedManualCompaction(t *testing.T) {
+func TestEagerCompactionRevalidatesCurrentPolicyBeforeDispatch(t *testing.T) {
 	t.Parallel()
-	client := &fakeCompactionClient{
-		compactionResponses: []llm.CompactionResponse{
-			remoteCompactionReplacement(100, 10, 2_000),
-		},
+	tests := []struct {
+		name         string
+		mutate       func(*Engine)
+		wantCompacts int
+	}{
+		{name: "disabled", mutate: func(engine *Engine) {
+			engine.SetAutoCompactionEnabled(false)
+		}},
+		{name: "below threshold", mutate: func(engine *Engine) {
+			engine.setLastUsage(llm.Usage{InputTokens: 100, WindowTokens: 2_000})
+		}},
+		{name: "still eligible", wantCompacts: 1},
 	}
-	engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
-		Model:                 "gpt-5",
-		ContextWindowTokens:   2_000,
-		AutoCompactTokenLimit: 1_900,
-	})
-	if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
-		steeringPriorityNormal,
-		steeringMessageEventNone,
-		true,
-		[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}},
-	)); err != nil {
-		t.Fatalf("seed transcript: %v", err)
-	}
-	engine.ensureOrchestrationCollaborators()
-	lifecycle := engine.stepLifecycle.(*defaultExclusiveStepLifecycle)
-
-	blockerStarted := make(chan struct{})
-	releaseBlocker := make(chan struct{})
-	blockerDone := make(chan error, 1)
-	go func() {
-		blockerDone <- lifecycle.Run(
-			context.Background(),
-			exclusiveStepOptions{ActiveKind: ActiveKindUserTurn},
-			func(context.Context, string) error {
-				close(blockerStarted)
-				<-releaseBlocker
-				return nil
-			},
-		)
-	}()
-	select {
-	case <-blockerStarted:
-	case <-time.After(runtimeTestSynchronizationTimeout):
-		t.Fatal("timed out waiting for blocking step")
-	}
-
-	manualReservation := &exclusiveStepReservation{
-		Kind:      exclusiveStepReservationManualCompaction,
-		queueable: true,
-	}
-	if err := lifecycle.AcquireReservation(manualReservation); err != nil {
-		t.Fatalf("acquire manual reservation: %v", err)
-	}
-	manualDone := make(chan error, 1)
-	go func() {
-		defer lifecycle.ReleaseReservation(manualReservation)
-		manualDone <- runExclusiveStepWhenIdle(
-			context.Background(),
-			lifecycle,
-			ActiveKindCompaction,
-			manualReservation,
-			func(ctx context.Context, stepID string) error {
-				_, receipt, err := engine.compactNow(
-					ctx,
-					stepID,
-					compactionModeManual,
-					compactionInstructionsInput{},
-					false,
-				)
-				if err == nil || receipt.Committed {
-					engine.handoffRuntimeState().ClearRequest()
-				}
-				engine.setLastUsage(llm.Usage{InputTokens: 100, WindowTokens: 2_000})
-				return err
-			},
-		)
-	}()
-
-	waitReservationQueue := func(want int) {
-		t.Helper()
-		for deadline := time.Now().Add(runtimeTestSynchronizationTimeout); time.Now().Before(deadline); {
-			lifecycle.mu.Lock()
-			got := len(lifecycle.nextWaiters)
-			lifecycle.mu.Unlock()
-			if got == want {
-				return
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeCompactionClient{
+				compactionResponses: []llm.CompactionResponse{
+					remoteCompactionReplacement(100, 10, 2_000),
+				},
 			}
-			time.Sleep(time.Millisecond)
-		}
-		t.Fatalf("timed out waiting for %d queued reservations", want)
-	}
-	waitReservationQueue(1)
-
-	engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
-	engine.maybeReserveEagerCompaction(
-		ActiveKindUserTurn,
-		LiveRunResultAssistantFinalAnswer,
-		llm.Message{
-			Role:    llm.RoleAssistant,
-			Phase:   textutil.Value(llm.MessagePhaseFinal),
-			Content: textutil.Value("final"),
-		},
-	)
-	waitReservationQueue(2)
-
-	close(releaseBlocker)
-	if err := <-blockerDone; err != nil {
-		t.Fatalf("blocking step: %v", err)
-	}
-	if err := <-manualDone; err != nil {
-		t.Fatalf("manual compaction: %v", err)
-	}
-	waitEngineLifecycleTasks(t, engine)
-	if got := len(client.compactionCalls); got != 1 {
-		t.Fatalf("compaction calls = %d, want one manual compaction and no stale eager retry", got)
+			engine := mustNewTestEngine(t, mustCreateTestSession(t), client, newTestToolRegistry(t), Config{
+				Model:                 "gpt-5",
+				ContextWindowTokens:   2_000,
+				AutoCompactTokenLimit: 1_900,
+			})
+			if err := engine.steer("seed", steerMessagesWithPersistenceIntent(
+				steeringPriorityNormal,
+				steeringMessageEventNone,
+				true,
+				[]llm.Message{{Role: llm.RoleUser, Content: textutil.Value("seed")}},
+			)); err != nil {
+				t.Fatalf("seed transcript: %v", err)
+			}
+			engine.ensureOrchestrationCollaborators()
+			lifecycle := engine.stepLifecycle.(*defaultExclusiveStepLifecycle)
+			started := make(chan struct{})
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			go func() {
+				done <- lifecycle.Run(context.Background(), exclusiveStepOptions{ActiveKind: ActiveKindUserTurn}, func(context.Context, string) error {
+					close(started)
+					<-release
+					return nil
+				})
+			}()
+			select {
+			case <-started:
+			case <-time.After(runtimeTestSynchronizationTimeout):
+				t.Fatal("timed out waiting for active step")
+			}
+			engine.setLastUsage(llm.Usage{InputTokens: 1_760, WindowTokens: 2_000})
+			engine.maybeReserveEagerCompaction(ActiveKindUserTurn, LiveRunResultAssistantFinalAnswer, llm.Message{
+				Role: llm.RoleAssistant, Phase: textutil.Value(llm.MessagePhaseFinal), Content: textutil.Value("final"),
+			})
+			if test.mutate != nil {
+				test.mutate(engine)
+			}
+			close(release)
+			if err := <-done; err != nil {
+				t.Fatalf("blocking step: %v", err)
+			}
+			waitEngineLifecycleTasks(t, engine)
+			if got := len(client.compactionCalls); got != test.wantCompacts {
+				t.Fatalf("compaction calls = %d, want %d", got, test.wantCompacts)
+			}
+		})
 	}
 }
 
