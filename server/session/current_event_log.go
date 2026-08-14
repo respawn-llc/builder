@@ -24,6 +24,7 @@ type currentEventLog struct {
 	version            int
 	firstEventOffset   int64
 	lastSequence       int64
+	frozenEndOffset    *int64
 	mode               currentEventLogMode
 	durabilityObserver DurabilityObserver
 }
@@ -307,7 +308,7 @@ func (l *currentEventLog) readSegmentForward(
 	if err != nil {
 		return EventRecordWindow{}, fmt.Errorf("stat current event log: %w", err)
 	}
-	size := info.Size()
+	size := l.boundedReadSize(info.Size())
 	if startOffset <= 0 {
 		startOffset = l.firstEventOffset
 	}
@@ -410,7 +411,7 @@ func (l *currentEventLog) readNewestSegmentBackward(
 	if err != nil {
 		return EventRecordWindow{}, fmt.Errorf("stat current event log: %w", err)
 	}
-	return l.readSegmentBackward(info.Size(), chunkBytes, match)
+	return l.readSegmentBackward(l.boundedReadSize(info.Size()), chunkBytes, match)
 }
 
 func (l *currentEventLog) readActiveSegment() (EventRecordWindow, error) {
@@ -446,7 +447,7 @@ func (l *currentEventLog) readRecentRecords(
 	if err != nil {
 		return EventRecordWindow{}, fmt.Errorf("stat current event log: %w", err)
 	}
-	size := info.Size()
+	size := l.boundedReadSize(info.Size())
 	if maxRecords <= 0 || size == l.firstEventOffset {
 		return EventRecordWindow{
 			StartOffset:  l.firstEventOffset,
@@ -526,7 +527,7 @@ func (l *currentEventLog) readSegmentBackward(
 	if err != nil {
 		return EventRecordWindow{}, fmt.Errorf("stat current event log: %w", err)
 	}
-	size := info.Size()
+	size := l.boundedReadSize(info.Size())
 	if endOffset > size {
 		endOffset = size
 	}
@@ -631,6 +632,13 @@ func (l *currentEventLog) readSegmentBackward(
 		ReachedStart: startOffset == l.firstEventOffset,
 		ReachedEnd:   atEOF,
 	}, nil
+}
+
+func (l *currentEventLog) boundedReadSize(actual int64) int64 {
+	if l != nil && l.frozenEndOffset != nil && *l.frozenEndOffset < actual {
+		return *l.frozenEndOffset
+	}
+	return actual
 }
 
 type currentEventRecordAtOffset struct {
@@ -813,7 +821,18 @@ func readLastCurrentEventRecord(
 	size int64,
 	firstEventOffset int64,
 ) (*EventRecord, error) {
+	record, _, _, err := readLastCurrentEventRecordBoundary(fp, size, firstEventOffset, true)
+	return record, err
+}
+
+func readLastCurrentEventRecordBoundary(
+	fp *os.File,
+	size int64,
+	firstEventOffset int64,
+	tolerateTornTail bool,
+) (*EventRecord, int64, bool, error) {
 	endOffset := size
+	tornTail := false
 	for endOffset > firstEventOffset {
 		line, startOffset, terminated, err := readPreviousCurrentEventLine(
 			fp,
@@ -821,37 +840,45 @@ func readLastCurrentEventRecord(
 			firstEventOffset,
 		)
 		if err != nil {
-			return nil, err
+			return nil, 0, false, err
 		}
 		if len(bytes.TrimSpace(line)) == 0 {
 			if terminated {
-				return nil, fmt.Errorf(
+				return nil, 0, false, fmt.Errorf(
 					"current event log contains an empty event line at byte %d",
 					startOffset,
 				)
 			}
+			if !tolerateTornTail {
+				return nil, 0, false, fmt.Errorf(
+					"current event log contains an incomplete empty event line at byte %d",
+					startOffset,
+				)
+			}
+			tornTail = true
 			endOffset = startOffset
 			continue
 		}
 		trimmedLine := bytes.TrimSpace(line)
 		header, _, headerErr := readCurrentEventLogHeader(fp)
 		if headerErr != nil {
-			return nil, headerErr
+			return nil, 0, false, headerErr
 		}
 		record, err := decodeEventRecordForVersion(header.Version, trimmedLine)
 		if err == nil {
-			return &record, nil
+			return &record, endOffset, tornTail, nil
 		}
-		if terminated || json.Valid(trimmedLine) {
-			return nil, fmt.Errorf(
+		if terminated || json.Valid(trimmedLine) || !tolerateTornTail {
+			return nil, 0, false, fmt.Errorf(
 				"decode current event record at byte %d: %w",
 				startOffset,
 				err,
 			)
 		}
+		tornTail = true
 		endOffset = startOffset
 	}
-	return nil, nil
+	return nil, firstEventOffset, tornTail, nil
 }
 
 func encodeEventRecordForVersion(version int, record EventRecord) ([]byte, error) {

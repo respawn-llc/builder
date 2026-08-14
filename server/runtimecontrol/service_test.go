@@ -1148,6 +1148,62 @@ func TestServiceShowGoalReturnsPersistedGoalWithoutRuntime(t *testing.T) {
 	}
 }
 
+func TestServiceShowGoalDoesNotWaitForSessionMetadataMutation(t *testing.T) {
+	persistence := sessiontest.NewPersistence()
+	gate := sessiontest.NewPersistenceGate(persistence)
+	options := []session.StoreOption{
+		session.WithPersistenceObserver(gate),
+		session.WithPersistedSessionResolver(persistence),
+		session.WithSessionContextFactWriter(persistence),
+	}
+	store, err := session.Create(
+		t.TempDir(),
+		"workspace",
+		t.TempDir(),
+		sessioncontract.SessionCategoryMain,
+		options...,
+	)
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	goal, _, err := store.SetGoal("persisted Goal", session.GoalActorUser)
+	if err != nil {
+		t.Fatalf("set Goal: %v", err)
+	}
+	blocked, release := gate.BlockNextAfter()
+	t.Cleanup(release)
+	mutationDone := make(chan error, 1)
+	go func() { mutationDone <- store.SetName("committed name") }()
+	<-blocked
+
+	type goalReadResult struct {
+		response serverapi.RuntimeGoalShowResponse
+		err      error
+	}
+	result := make(chan goalReadResult, 1)
+	go func() {
+		response, readErr := NewService(nil).
+			WithPersistedSessionResolver(persistence).
+			ShowGoal(t.Context(), serverapi.RuntimeGoalShowRequest{SessionID: store.Meta().SessionID})
+		result <- goalReadResult{response: response, err: readErr}
+	}()
+	select {
+	case read := <-result:
+		if read.err != nil {
+			t.Fatalf("ShowGoal during metadata mutation: %v", read.err)
+		}
+		if read.response.Goal == nil || read.response.Goal.ID != goal.ID {
+			t.Fatalf("ShowGoal = %+v, want persisted Goal %q", read.response.Goal, goal.ID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ShowGoal waited for the Session mutation owner")
+	}
+	release()
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("complete metadata mutation: %v", err)
+	}
+}
+
 func TestServiceShowGoalReturnsEmptyResponseForPersistedSessionWithoutGoal(t *testing.T) {
 	store, _ := newRuntimeControlTestEngine(t, nil, nil, runtime.Config{})
 	sessionID := store.Meta().SessionID

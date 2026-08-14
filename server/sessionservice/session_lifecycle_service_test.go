@@ -85,7 +85,8 @@ func newSessionLifecycleServiceWithOptions(root string, authManager *auth.Manage
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewSessionLifecycleService(root, authority, authManager)
+	return NewSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.Manager, storeOptions []session.StoreOption) *SessionLifecycleService {
@@ -93,7 +94,8 @@ func newGlobalSessionLifecycleServiceWithOptions(root string, authManager *auth.
 		PersistenceRoot: root,
 		StoreOptions:    storeOptions,
 	})
-	return NewGlobalSessionLifecycleService(root, authority, authManager)
+	return NewGlobalSessionLifecycleService(root, authority, authManager).
+		WithPersistedSessionResolver(sessionServiceTestPersistence)
 }
 
 var sessionServiceTestPersistence = sessiontest.NewPersistence()
@@ -177,6 +179,62 @@ func TestServiceGetInitialInputPrefersStoredDraft(t *testing.T) {
 	}
 	if resp.Input != "draft from store" {
 		t.Fatalf("input = %q, want %q", resp.Input, "draft from store")
+	}
+}
+
+func TestServiceGetInitialInputDoesNotWaitForSessionMetadataMutation(t *testing.T) {
+	persistence := sessiontest.NewPersistence()
+	gate := sessiontest.NewPersistenceGate(persistence)
+	root := t.TempDir()
+	containerDir := filepath.Join(root, "sessions")
+	options := []session.StoreOption{
+		session.WithPersistenceObserver(gate),
+		session.WithPersistedSessionResolver(persistence),
+		session.WithSessionContextFactWriter(persistence),
+	}
+	store, err := session.Create(
+		containerDir,
+		"workspace",
+		t.TempDir(),
+		sessioncontract.SessionCategoryMain,
+		options...,
+	)
+	if err != nil {
+		t.Fatalf("create Session: %v", err)
+	}
+	if err := store.SetInputDraft("persisted draft"); err != nil {
+		t.Fatalf("set input draft: %v", err)
+	}
+	blocked, release := gate.BlockNextAfter()
+	t.Cleanup(release)
+	mutationDone := make(chan error, 1)
+	go func() { mutationDone <- store.SetName("committed name") }()
+	<-blocked
+
+	result := make(chan error, 1)
+	go func() {
+		response, readErr := newTestSessionLifecycleService(containerDir, nil, options).
+			WithPersistedSessionResolver(persistence).
+			GetInitialInput(t.Context(), serverapi.SessionInitialInputRequest{
+				SessionID:       store.Meta().SessionID,
+				TransitionInput: "transition input",
+			})
+		if readErr == nil && response.Input != "persisted draft" {
+			readErr = fmt.Errorf("input = %q, want persisted draft", response.Input)
+		}
+		result <- readErr
+	}()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("GetInitialInput during metadata mutation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("GetInitialInput waited for the Session mutation owner")
+	}
+	release()
+	if err := <-mutationDone; err != nil {
+		t.Fatalf("complete metadata mutation: %v", err)
 	}
 }
 

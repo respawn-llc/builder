@@ -45,23 +45,6 @@ type sessionChatContextAuthReader struct {
 	calls int
 }
 
-type disappearingSessionChatContextRuntime struct {
-	delegate *sessionruntime.Authority
-	calls    int
-}
-
-func (r *disappearingSessionChatContextRuntime) WithCurrentRuntime(
-	ctx context.Context,
-	sessionID runtimeids.SessionID,
-	callback func(context.Context, *runtime.Engine) error,
-) error {
-	r.calls++
-	if err := r.delegate.WithCurrentRuntime(ctx, sessionID, callback); err != nil {
-		return err
-	}
-	return serverapi.ErrRuntimeUnavailable
-}
-
 func (r *sessionChatContextAuthReader) Load(context.Context) (auth.State, error) {
 	r.calls++
 	return r.state, r.err
@@ -181,7 +164,7 @@ func TestReadDormantSessionChatContextUsesCurrentRoleSettingsWithLockedContinuit
 	}
 }
 
-func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEventLogMaterialization(t *testing.T) {
+func TestReadDormantSessionChatContextRejectsMalformedEventLogWithoutMaterialization(t *testing.T) {
 	persistenceRoot := t.TempDir()
 	workspaceRoot := t.TempDir()
 	metadataStore, err := metadata.Open(persistenceRoot)
@@ -229,14 +212,21 @@ func TestReadDormantSessionChatContextUsesProductionPersistenceResolverWithoutEv
 		app: config.App{Settings: settings},
 	}).WithChatContextAuthReader(&sessionChatContextAuthReader{})
 
-	got, err := service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
+	before, err := os.ReadFile(filepath.Join(store.Dir(), "events.jsonl"))
 	if err != nil {
-		t.Fatalf("ReadSessionChatContext: %v", err)
+		t.Fatalf("read malformed event log before Context read: %v", err)
 	}
-	if got.UsedTokens != 42_000 ||
-		got.CompletedCompactionCount != 2 ||
-		!got.ManualCompactAvailable {
-		t.Fatalf("production persisted Context = %+v", got)
+	_, err = service.ReadSessionChatContext(t.Context(), sessionChatContextSessionID(t, store))
+	var materializationErr *session.EventLogMaterializationError
+	if !errors.As(err, &materializationErr) {
+		t.Fatalf("ReadSessionChatContext error = %v, want EventLogMaterializationError", err)
+	}
+	after, err := os.ReadFile(filepath.Join(store.Dir(), "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read malformed event log after Context read: %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("Chat Context read materialized or repaired malformed event log")
 	}
 }
 
@@ -262,7 +252,7 @@ func TestReadDormantSessionChatContextPropagatesLoadAndAuthFailures(t *testing.T
 	}
 }
 
-func TestReadLiveSessionChatContextUsesOnlyCohesiveEngineFacts(t *testing.T) {
+func TestReadSessionChatContextUsesPersistedFactsWhenRuntimeIsAttached(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
 	if _, err := store.SetUsageState(&session.UsageState{InputTokens: 64_000}); err != nil {
 		t.Fatalf("SetUsageState: %v", err)
@@ -281,8 +271,8 @@ func TestReadLiveSessionChatContextUsesOnlyCohesiveEngineFacts(t *testing.T) {
 	fixture.withEngine(t, func(engine *runtime.Engine) {
 		engine.SetAutoCompactionEnabled(false)
 	})
-	resolver := &sessionChatContextWorkspaceResolver{err: errors.New("live Context must not reload config")}
-	authReader := &sessionChatContextAuthReader{err: errors.New("live Context must not load auth")}
+	resolver := &sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}
+	authReader := &sessionChatContextAuthReader{}
 	service := NewService(
 		newTestSessionResolver(store),
 		nil,
@@ -294,22 +284,19 @@ func TestReadLiveSessionChatContextUsesOnlyCohesiveEngineFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadSessionChatContext: %v", err)
 	}
-	want := serverapi.ChatContext{
-		ContextWindowTokens:      100_000,
-		UsedTokens:               64_000,
-		RemainingTokens:          36_000,
-		AutomaticThresholdTokens: 75_000,
-		CompactionMode:           serverapi.ChatContextCompactionModeLocal,
+	if got.ContextWindowTokens != 100_000 ||
+		got.UsedTokens != 64_000 ||
+		got.RemainingTokens != 36_000 ||
+		got.AutomaticThresholdTokens != 75_000 ||
+		got.CompactionMode != serverapi.ChatContextCompactionModeLocal {
+		t.Fatalf("persisted Context = %+v", got)
 	}
-	if got != want {
-		t.Fatalf("live Context = %+v, want %+v", got, want)
-	}
-	if len(resolver.roots) != 0 || authReader.calls != 0 {
-		t.Fatalf("live Context mixed fresh sources: roots=%v auth_calls=%d", resolver.roots, authReader.calls)
+	if len(resolver.roots) != 1 || authReader.calls != 1 {
+		t.Fatalf("persisted Context reads: roots=%v auth_calls=%d", resolver.roots, authReader.calls)
 	}
 }
 
-func TestReadSessionChatContextReleaseReResolvesDormantConfigAndAuth(t *testing.T) {
+func TestReadSessionChatContextReResolvesPersistedConfigWhileRuntimeIsAttached(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
 	settings := config.DefaultOnboardingSettings()
 	settings.ProviderOverride = "openai"
@@ -339,90 +326,27 @@ func TestReadSessionChatContextReleaseReResolvesDormantConfigAndAuth(t *testing.
 	resolver.app.Settings.ModelContextWindow = 180_000
 	resolver.app.Settings.ContextCompactionThresholdTokens = 140_000
 	resolver.app.Settings.CompactionMode = config.CompactionModeNone
-	authReader.err = errors.New("changed auth must not affect a live Engine")
-	stable, err := service.ReadSessionChatContext(t.Context(), fixture.sessionID)
-	if err != nil {
-		t.Fatalf("stable live ReadSessionChatContext: %v", err)
-	}
-	if stable != live || len(resolver.roots) != 0 || authReader.calls != 0 {
-		t.Fatalf("live Context changed or mixed fresh sources: got=%+v want=%+v roots=%v auth_calls=%d", stable, live, resolver.roots, authReader.calls)
-	}
-
-	if _, err := fixture.attachment.Release(t.Context(), sessionruntime.RuntimeReleaseClose); err != nil {
-		t.Fatalf("Release runtime: %v", err)
+	authErr := errors.New("changed auth")
+	authReader.err = authErr
+	if _, err := service.ReadSessionChatContext(t.Context(), fixture.sessionID); !errors.Is(err, authErr) {
+		t.Fatalf("changed persisted auth error = %v, want %v", err, authErr)
 	}
 	authReader.err = nil
-	dormant, err := service.ReadSessionChatContext(t.Context(), fixture.sessionID)
+	updated, err := service.ReadSessionChatContext(t.Context(), fixture.sessionID)
 	if err != nil {
-		t.Fatalf("dormant ReadSessionChatContext: %v", err)
+		t.Fatalf("updated ReadSessionChatContext: %v", err)
 	}
-	if dormant.ContextWindowTokens != 180_000 ||
-		dormant.AutomaticThresholdTokens != 140_000 ||
-		dormant.CompactionMode != serverapi.ChatContextCompactionModeDisabled {
-		t.Fatalf("released dormant Context = %+v, want freshly resolved policy", dormant)
+	if updated.ContextWindowTokens != 180_000 ||
+		updated.AutomaticThresholdTokens != 140_000 ||
+		updated.CompactionMode != serverapi.ChatContextCompactionModeDisabled {
+		t.Fatalf("updated persisted Context = %+v", updated)
 	}
-	if len(resolver.roots) != 1 || authReader.calls != 1 {
-		t.Fatalf("released dormant resolution roots=%v auth_calls=%d, want one complete dormant projection", resolver.roots, authReader.calls)
+	if len(resolver.roots) != 3 || authReader.calls != 3 {
+		t.Fatalf("persisted resolution roots=%v auth_calls=%d, want one per read", resolver.roots, authReader.calls)
 	}
 }
 
-func TestReadSessionChatContextRuntimeDisappearanceDiscardsPartialLiveFacts(t *testing.T) {
-	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
-	if _, err := store.SetUsageState(&session.UsageState{InputTokens: 21_000}); err != nil {
-		t.Fatalf("SetUsageState: %v", err)
-	}
-	if err := store.SetSessionContextFacts(4, true); err != nil {
-		t.Fatalf("SetSessionContextFacts: %v", err)
-	}
-	settings := config.DefaultOnboardingSettings()
-	settings.ProviderOverride = "openai"
-	settings.Model = "gpt-5"
-	settings.Reviewer.Frequency = "off"
-	settings.ModelContextWindow = 100_000
-	settings.ContextCompactionThresholdTokens = 75_000
-	settings.CompactionMode = config.CompactionModeLocal
-	fixture := newSessionChatContextRuntimeFixture(t, store, settings, llm.ProviderCapabilities{})
-	fixture.withEngine(t, func(engine *runtime.Engine) {
-		engine.SetAutoCompactionEnabled(false)
-	})
-
-	dormantSettings := settings
-	dormantSettings.ModelContextWindow = 180_000
-	dormantSettings.ContextCompactionThresholdTokens = 140_000
-	dormantSettings.CompactionMode = config.CompactionModeNone
-	resolver := &sessionChatContextWorkspaceResolver{app: config.App{Settings: dormantSettings}}
-	authReader := &sessionChatContextAuthReader{}
-	disappearing := &disappearingSessionChatContextRuntime{delegate: fixture.authority}
-	service := NewService(
-		newTestSessionResolver(store),
-		nil,
-		nil,
-		staticExecutionTargetResolver{target: availableSessionExecutionTarget(t.TempDir())},
-	).WithChatContextWorkspaceResolver(resolver).WithChatContextAuthReader(authReader)
-	service.contextRuntimes = disappearing
-
-	got, err := service.ReadSessionChatContext(t.Context(), fixture.sessionID)
-	if err != nil {
-		t.Fatalf("ReadSessionChatContext: %v", err)
-	}
-	want := serverapi.ChatContext{
-		ContextWindowTokens:      180_000,
-		UsedTokens:               21_000,
-		RemainingTokens:          159_000,
-		AutomaticThresholdTokens: 140_000,
-		AutoCompactionEnabled:    true,
-		CompactionMode:           serverapi.ChatContextCompactionModeDisabled,
-		CompletedCompactionCount: 4,
-	}
-	if got != want {
-		t.Fatalf("race fallback Context = %+v, want complete dormant %+v", got, want)
-	}
-	if disappearing.calls != 1 || len(resolver.roots) != 1 || authReader.calls != 1 {
-		t.Fatalf("race resolution calls: runtime=%d roots=%v auth=%d, want one live callback then one complete dormant projection", disappearing.calls, resolver.roots, authReader.calls)
-	}
-}
-
-func TestReadSessionChatContextDormantPolicyEqualsFirstLivePolicyForNamedAgent(t *testing.T) {
+func TestReadSessionChatContextRuntimeAttachmentDoesNotChangeNamedAgentPolicy(t *testing.T) {
 	store := newSessionViewStore(t, t.TempDir(), "workspace", t.TempDir())
 	role := "worker"
 	if err := store.SetContinuationContext(session.ContinuationContext{AgentRole: &role}); err != nil {
@@ -476,8 +400,8 @@ func TestReadSessionChatContextDormantPolicyEqualsFirstLivePolicyForNamedAgent(t
 	}
 	fixture := newSessionChatContextRuntimeFixture(t, store, current.Settings, capabilities)
 	liveService := NewService(newTestSessionResolver(store), nil, fixture.authority, targets).
-		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{err: errors.New("live Context must not reload config")}).
-		WithChatContextAuthReader(&sessionChatContextAuthReader{err: errors.New("live Context must not load auth")})
+		WithChatContextWorkspaceResolver(&sessionChatContextWorkspaceResolver{app: config.App{Settings: settings}}).
+		WithChatContextAuthReader(&sessionChatContextAuthReader{})
 	live, err := liveService.ReadSessionChatContext(t.Context(), fixture.sessionID)
 	if err != nil {
 		t.Fatalf("live ReadSessionChatContext: %v", err)

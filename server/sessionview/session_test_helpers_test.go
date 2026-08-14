@@ -53,7 +53,11 @@ func (r testSessionResolver) ResolvePersistedSession(_ context.Context, sessionI
 		return session.PersistedSessionRecord{}, fmt.Errorf("session %q not available", strings.TrimSpace(sessionID))
 	}
 	meta := r.store.Meta()
-	return session.PersistedSessionRecord{SessionDir: r.store.Dir(), Meta: &meta}, nil
+	return session.PersistedSessionRecord{
+		SessionDir:   r.store.Dir(),
+		Meta:         &meta,
+		ContextFacts: r.store.ContextFacts(),
+	}, nil
 }
 
 type sessionViewRuntimeFixture struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"core/server/auth"
@@ -11,6 +12,7 @@ import (
 	"core/server/requestmemo"
 	"core/server/session"
 	"core/server/sessionruntime"
+	"core/shared/config"
 	"core/shared/rollbacktarget"
 	"core/shared/runtimeids"
 	"core/shared/serverapi"
@@ -26,8 +28,18 @@ type SessionLifecycleService struct {
 	retargeter      sessionWorkspaceRetargeter
 	navigation      sessionNavigationTargetResolver
 	authManager     *auth.Manager
+	persisted       session.PersistedSessionResolver
 	drafts          *requestmemo.Memo[sessionDraftMemoRequest, serverapi.SessionPersistInputDraftResponse]
 	transitions     *requestmemo.Memo[sessionTransitionMemoRequest, serverapi.SessionResolveTransitionResponse]
+}
+
+func (s *SessionLifecycleService) WithPersistedSessionResolver(
+	resolver session.PersistedSessionResolver,
+) *SessionLifecycleService {
+	if s != nil {
+		s.persisted = resolver
+	}
+	return s
 }
 
 type sessionDraftMemoRequest struct {
@@ -98,21 +110,45 @@ func (s *SessionLifecycleService) GetInitialInput(ctx context.Context, req serve
 	if strings.TrimSpace(req.SessionID) == "" {
 		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
 	}
-	var resp serverapi.SessionInitialInputResponse
-	err := s.withStore(ctx, req.SessionID, func(_ context.Context, store *session.Store) error {
-		if req.OverrideStoredDraft {
-			resp.Input = req.TransitionInput
-			return nil
-		}
-		resp = serverapi.SessionInitialInputResponse{
-			Input: initialSessionInput(store, req.TransitionInput),
-		}
-		return nil
-	})
+	if req.OverrideStoredDraft {
+		return serverapi.SessionInitialInputResponse{Input: req.TransitionInput}, nil
+	}
+	if s == nil || s.persisted == nil {
+		return serverapi.SessionInitialInputResponse{}, errors.New("persisted Session resolver is required")
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	record, err := s.persisted.ResolvePersistedSession(ctx, sessionID)
 	if err != nil {
 		return serverapi.SessionInitialInputResponse{}, err
 	}
-	return resp, nil
+	if containerDir := strings.TrimSpace(s.containerDir); containerDir != "" {
+		expectedDir, err := session.ResolveScopedSessionDir(containerDir, sessionID)
+		if err != nil {
+			return serverapi.SessionInitialInputResponse{}, err
+		}
+		expectedIdentity, err := config.CanonicalPathIdentity(expectedDir)
+		if err != nil {
+			return serverapi.SessionInitialInputResponse{}, err
+		}
+		recordIdentity, err := config.CanonicalPathIdentity(record.SessionDir)
+		if err != nil {
+			return serverapi.SessionInitialInputResponse{}, err
+		}
+		if recordIdentity != expectedIdentity {
+			return serverapi.SessionInitialInputResponse{}, fmt.Errorf(
+				"session %q is outside workspace container: %w",
+				req.SessionID,
+				session.ErrOutsideWorkspaceContainer,
+			)
+		}
+	}
+	view, err := session.OpenPersistedSessionView(sessionID, record)
+	if err != nil {
+		return serverapi.SessionInitialInputResponse{}, err
+	}
+	return serverapi.SessionInitialInputResponse{
+		Input: initialSessionInput(view.Meta(), req.TransitionInput),
+	}, nil
 }
 
 func (s *SessionLifecycleService) PersistInputDraft(ctx context.Context, req serverapi.SessionPersistInputDraftRequest) (serverapi.SessionPersistInputDraftResponse, error) {

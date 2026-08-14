@@ -59,6 +59,15 @@ func (r mismatchedSessionStoreResolver) ResolveSessionStore(context.Context, str
 	return r.store, nil
 }
 
+func (r mismatchedSessionStoreResolver) ResolvePersistedSession(context.Context, string) (session.PersistedSessionRecord, error) {
+	meta := r.store.Meta()
+	return session.PersistedSessionRecord{
+		SessionDir:   r.store.Dir(),
+		Meta:         &meta,
+		ContextFacts: r.store.ContextFacts(),
+	}, nil
+}
+
 type failingExecutionTargetResolver struct {
 	err error
 }

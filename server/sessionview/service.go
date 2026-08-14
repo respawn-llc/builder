@@ -28,9 +28,7 @@ type SessionStoreResolver interface {
 	ResolveSessionStore(ctx context.Context, sessionID string) (*session.Store, error)
 }
 
-type PersistedSessionResolver interface {
-	ResolvePersistedSession(ctx context.Context, sessionID string) (session.PersistedSessionRecord, error)
-}
+type PersistedSessionResolver = session.PersistedSessionResolver
 
 type ExecutionTargetResolver interface {
 	ResolveSessionExecutionTarget(ctx context.Context, sessionID string) (clientui.SessionExecutionTarget, error)
@@ -44,12 +42,7 @@ type chatContextAuthReader interface {
 	Load(context.Context) (auth.State, error)
 }
 
-type currentRuntimeReader interface {
-	WithCurrentRuntime(context.Context, runtimeids.SessionID, func(context.Context, *runtime.Engine) error) error
-}
-
 type Service struct {
-	sessions          SessionStoreResolver
 	persisted         PersistedSessionResolver
 	snapshots         *resolvedSessionSnapshotSource
 	targets           ExecutionTargetResolver
@@ -60,7 +53,6 @@ type Service struct {
 	cacheWarningMode  config.CacheWarningMode
 	contextWorkspaces chatContextWorkspaceResolver
 	contextAuth       chatContextAuthReader
-	contextRuntimes   currentRuntimeReader
 }
 
 func (s *Service) WithExecutionEnvironmentConfig(app config.App) *Service {
@@ -91,15 +83,11 @@ func NewService(
 	targets ExecutionTargetResolver,
 ) *Service {
 	svc := &Service{
-		sessions:         sessions,
 		targets:          targets,
 		cacheWarningMode: config.CacheWarningModeDefault,
 	}
 	if persisted, ok := sessions.(PersistedSessionResolver); ok {
 		svc.persisted = persisted
-	}
-	if authority != nil {
-		svc.contextRuntimes = authority
 	}
 	svc.snapshots = newResolvedSessionSnapshotSource(sessions, activity, authority, svc.cacheWarningModeValue)
 	return svc
@@ -141,24 +129,8 @@ func (s *Service) WithChatContextAuthReader(reader chatContextAuthReader) *Servi
 }
 
 func (s *Service) ReadSessionChatContext(ctx context.Context, sessionID runtimeids.SessionID) (serverapi.ChatContext, error) {
-	if s == nil || s.sessions == nil {
-		return serverapi.ChatContext{}, errors.New("session store resolver is required")
-	}
-	if s.contextRuntimes != nil {
-		var live serverapi.ChatContext
-		err := s.contextRuntimes.WithCurrentRuntime(ctx, sessionID, func(callbackCtx context.Context, engine *runtime.Engine) error {
-			var readErr error
-			live, readErr = readWithContext(callbackCtx, func() (serverapi.ChatContext, error) {
-				return chatcontext.Project(engine.LiveChatContextSnapshot()), nil
-			})
-			return readErr
-		})
-		if err == nil {
-			return live, nil
-		}
-		if !errors.Is(err, serverapi.ErrRuntimeUnavailable) {
-			return serverapi.ChatContext{}, err
-		}
+	if s == nil || s.persisted == nil {
+		return serverapi.ChatContext{}, errors.New("persisted Session resolver is required")
 	}
 	return s.readDormantSessionChatContext(ctx, sessionID)
 }
@@ -170,11 +142,11 @@ func (s *Service) readDormantSessionChatContext(ctx context.Context, sessionID r
 	if s.contextWorkspaces == nil {
 		return serverapi.ChatContext{}, errors.New("fresh workspace config resolver is required")
 	}
-	store, err := s.sessions.ResolveSessionStore(ctx, sessionID.String())
+	view, err := resolvePersistedSessionView(ctx, s.persisted, sessionID.String())
 	if err != nil {
 		return serverapi.ChatContext{}, err
 	}
-	snapshot := store.ContextSnapshot()
+	snapshot := view.ContextSnapshot()
 	target, err := s.targets.ResolveSessionExecutionTarget(ctx, sessionID.String())
 	if err != nil {
 		return serverapi.ChatContext{}, err
@@ -281,11 +253,11 @@ func (s *Service) SessionTranscriptTailEntries(ctx context.Context, sessionID st
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, serverapi.ErrSessionIDRequired
 	}
-	snapshot, err := s.resolveSnapshot(ctx, sessionID)
+	view, err := resolvePersistedSessionView(ctx, s.persisted, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return snapshot.TranscriptTailEntries(ctx)
+	return (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningModeValue}).TranscriptTailEntries(ctx)
 }
 
 func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.SessionTranscriptPageRequest) (serverapi.SessionTranscriptPageResponse, error) {
@@ -293,11 +265,11 @@ func (s *Service) GetSessionTranscriptPage(ctx context.Context, req serverapi.Se
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
 	pageReq := clientui.TranscriptPageRequest{Cursor: req.Cursor, NewerCursor: req.NewerCursor}
-	snapshot, err := s.resolveSnapshot(ctx, req.SessionID)
+	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
-	page, err := snapshot.TranscriptPage(ctx, pageReq)
+	page, err := (dormantSessionSnapshot{view: view, cacheWarningMode: s.cacheWarningModeValue}).TranscriptPage(ctx, pageReq)
 	if err != nil {
 		return serverapi.SessionTranscriptPageResponse{}, err
 	}
@@ -331,11 +303,11 @@ func (s *Service) GetLatestCommittedAssistantFinalAnswer(ctx context.Context, re
 	if s == nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, errSessionStoreResolverRequired
 	}
-	_, eventLog, err := resolveSessionStoreAndEventLog(ctx, s.sessions, req.SessionID)
+	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
-	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromEventLog(eventLog)
+	answer, err := runtime.LatestCommittedAssistantFinalAnswerFromEventLog(view)
 	if err != nil {
 		return serverapi.SessionLatestCommittedAssistantFinalAnswerResponse{}, err
 	}
@@ -349,14 +321,14 @@ func (s *Service) GetSessionExecutionEnvironment(ctx context.Context, req server
 	if err := req.Validate(); err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	if s == nil || s.sessions == nil {
+	if s == nil || s.persisted == nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, errSessionStoreResolverRequired
 	}
-	store, err := s.sessions.ResolveSessionStore(ctx, req.SessionID.String())
+	view, err := resolvePersistedSessionView(ctx, s.persisted, req.SessionID.String())
 	if err != nil {
 		return serverapi.SessionExecutionEnvironmentResponse{}, err
 	}
-	meta := store.Meta()
+	meta := view.Meta()
 	if strings.TrimSpace(meta.SessionID) != req.SessionID.String() {
 		return serverapi.SessionExecutionEnvironmentResponse{}, fmt.Errorf("session execution environment identity mismatch: requested %q, resolved %q", req.SessionID.String(), meta.SessionID)
 	}

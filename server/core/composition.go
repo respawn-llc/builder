@@ -219,6 +219,7 @@ func NewWithContextOptions(ctx context.Context, cfg config.App, authSupport serv
 		WithCacheWarningMode(cfg.Settings.CacheWarningMode)
 	sessionWorkspaceRetargeter := sessionservice.NewSessionWorkspaceRetargeter(metadataStore, runtimeAuthority, runtimeRegistry, runtimeSupport.Background)
 	sessionLifecycleService := sessionservice.NewGlobalSessionLifecycleService(cfg.PersistenceRoot, runtimeAuthority, authSupport.AuthManager).
+		WithPersistedSessionResolver(metadataStore).
 		WithWorkspaceRetargeter(sessionWorkspaceRetargeter).
 		WithNavigationTargetResolver(metadataStore)
 	var workflowRuntimeStarter *workflowrunner.Starter

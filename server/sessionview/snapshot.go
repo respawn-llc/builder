@@ -19,8 +19,6 @@ import (
 
 type sessionSnapshot interface {
 	MainView(ctx context.Context) (clientui.RuntimeMainView, error)
-	TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error)
-	TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error)
 }
 
 type runtimeReadModelSnapshotProvider interface {
@@ -64,32 +62,25 @@ func resultWithContext[T any](ctx context.Context, value T) (T, error) {
 }
 
 type resolvedSessionSnapshotSource struct {
-	sessions         SessionStoreResolver
+	sessions         PersistedSessionResolver
 	activity         runtimeReadModelSnapshotProvider
 	authority        *sessionruntime.Authority
 	cacheWarningMode func() config.CacheWarningMode
 }
 
-func resolveSessionStoreAndEventLog(
+func resolvePersistedSessionView(
 	ctx context.Context,
-	sessions SessionStoreResolver,
+	sessions PersistedSessionResolver,
 	sessionID string,
-) (*session.Store, session.MaterializedEventLog, error) {
+) (*session.PersistedSessionView, error) {
 	if sessions == nil {
-		return nil, session.MaterializedEventLog{}, errSessionStoreResolverRequired
+		return nil, errSessionStoreResolverRequired
 	}
-	store, err := sessions.ResolveSessionStore(ctx, sessionID)
+	view, err := session.ResolvePersistedSessionView(ctx, sessions, sessionID)
 	if err != nil {
-		return nil, session.MaterializedEventLog{}, err
+		return nil, err
 	}
-	if store == nil {
-		return nil, session.MaterializedEventLog{}, errSessionStoreResolverRequired
-	}
-	eventLog, err := store.MaterializeEventLog()
-	if err != nil {
-		return nil, session.MaterializedEventLog{}, err
-	}
-	return store, eventLog, nil
+	return view, nil
 }
 
 func newResolvedSessionSnapshotSource(
@@ -98,8 +89,9 @@ func newResolvedSessionSnapshotSource(
 	authority *sessionruntime.Authority,
 	cacheWarningMode func() config.CacheWarningMode,
 ) *resolvedSessionSnapshotSource {
+	persisted, _ := sessions.(PersistedSessionResolver)
 	return &resolvedSessionSnapshotSource{
-		sessions:         sessions,
+		sessions:         persisted,
 		activity:         activity,
 		authority:        authority,
 		cacheWarningMode: cacheWarningMode,
@@ -136,13 +128,12 @@ func (s *resolvedSessionSnapshotSource) resolveSessionSnapshot(ctx context.Conte
 	if s.sessions == nil {
 		return nil, errSessionStoreResolverRequired
 	}
-	store, eventLog, err := resolveSessionStoreAndEventLog(ctx, s.sessions, sessionID)
+	view, err := resolvePersistedSessionView(ctx, s.sessions, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	return dormantSessionSnapshot{
-		store:            store,
-		eventLog:         eventLog,
+		view:             view,
 		activity:         readModelSnapshot,
 		cacheWarningMode: s.cacheWarningMode,
 	}, nil
@@ -164,22 +155,6 @@ func (s liveRuntimeSessionSnapshot) MainView(ctx context.Context) (clientui.Runt
 	})
 }
 
-func (s liveRuntimeSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) (clientui.TranscriptPage, error) {
-		return runtimeview.TranscriptPageFromRuntime(engine, req)
-	})
-}
-
-func (s liveRuntimeSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
-	return withLiveRuntime(ctx, s.authority, s.sessionID, func(engine *runtime.Engine) ([]runtime.ChatEntry, error) {
-		page, err := engine.TranscriptNewestSegmentPage()
-		if err != nil {
-			return nil, err
-		}
-		return append([]runtime.ChatEntry(nil), page.Snapshot.Entries...), nil
-	})
-}
-
 func withLiveRuntime[T any](
 	ctx context.Context,
 	authority *sessionruntime.Authority,
@@ -198,27 +173,26 @@ func withLiveRuntime[T any](
 }
 
 type dormantSessionSnapshot struct {
-	store            *session.Store
-	eventLog         session.MaterializedEventLog
+	view             *session.PersistedSessionView
 	activity         runtimeactivity.ResponseSnapshot
 	cacheWarningMode func() config.CacheWarningMode
 }
 
 func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeMainView, error) {
-	if s.store == nil {
-		return clientui.RuntimeMainView{}, errors.New("session store is required")
+	if s.view == nil {
+		return clientui.RuntimeMainView{}, errors.New("persisted Session view is required")
 	}
 	segment, err := s.newestSegment(ctx)
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
-	meta := s.store.Meta()
-	sessionFreshness, err := s.eventLog.ConversationFreshness()
+	meta := s.view.Meta()
+	sessionFreshness, err := s.view.ConversationFreshness()
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
 	freshness := runtimeview.ConversationFreshnessFromSession(sessionFreshness)
-	goalAvailability, err := s.store.GoalAvailability()
+	goalAvailability, err := session.GoalAvailabilityFromMeta(meta)
 	if err != nil {
 		return clientui.RuntimeMainView{}, err
 	}
@@ -245,8 +219,8 @@ func (s dormantSessionSnapshot) MainView(ctx context.Context) (clientui.RuntimeM
 }
 
 func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui.TranscriptPageRequest) (clientui.TranscriptPage, error) {
-	if s.store == nil {
-		return clientui.TranscriptPage{}, errors.New("session store is required")
+	if s.view == nil {
+		return clientui.TranscriptPage{}, errors.New("persisted Session view is required")
 	}
 	if req.NewerCursor == nil && req.Cursor == nil {
 		segment, err := s.newestSegment(ctx)
@@ -265,11 +239,11 @@ func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui
 	)
 	if req.NewerCursor != nil {
 		segment, err = readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
-			return runtime.TranscriptSegmentPageForwardFromEventLog(s.eventLog, *req.NewerCursor, s.cacheWarningModeOrDefault())
+			return runtime.TranscriptSegmentPageForwardFromEventLog(s.view, *req.NewerCursor, s.cacheWarningModeOrDefault())
 		})
 	} else {
 		segment, err = readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
-			return runtime.TranscriptSegmentPageFromEventLog(s.eventLog, *req.Cursor, s.cacheWarningModeOrDefault())
+			return runtime.TranscriptSegmentPageFromEventLog(s.view, *req.Cursor, s.cacheWarningModeOrDefault())
 		})
 	}
 	if err != nil {
@@ -288,8 +262,8 @@ func (s dormantSessionSnapshot) TranscriptPage(ctx context.Context, req clientui
 }
 
 func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]runtime.ChatEntry, error) {
-	if s.store == nil {
-		return nil, errors.New("session store is required")
+	if s.view == nil {
+		return nil, errors.New("persisted Session view is required")
 	}
 	segment, err := s.newestSegment(ctx)
 	if err != nil {
@@ -300,7 +274,7 @@ func (s dormantSessionSnapshot) TranscriptTailEntries(ctx context.Context) ([]ru
 
 func (s dormantSessionSnapshot) newestSegment(ctx context.Context) (runtime.TranscriptSegmentPage, error) {
 	return readWithContext(ctx, func() (runtime.TranscriptSegmentPage, error) {
-		return runtime.TranscriptNewestSegmentPageFromEventLog(s.eventLog, s.cacheWarningModeOrDefault())
+		return runtime.TranscriptNewestSegmentPageFromEventLog(s.view, s.cacheWarningModeOrDefault())
 	})
 }
 
@@ -312,8 +286,8 @@ func (s dormantSessionSnapshot) cacheWarningModeOrDefault() config.CacheWarningM
 }
 
 func (s dormantSessionSnapshot) transcriptPage(segment runtime.TranscriptSegmentPage) (clientui.TranscriptPage, error) {
-	meta := s.store.Meta()
-	freshness, err := s.eventLog.ConversationFreshness()
+	meta := s.view.Meta()
+	freshness, err := s.view.ConversationFreshness()
 	if err != nil {
 		return clientui.TranscriptPage{}, err
 	}

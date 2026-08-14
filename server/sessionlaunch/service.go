@@ -286,10 +286,11 @@ func (s *Service) MaterializedChatSettings(
 	ctx context.Context,
 	sessionID runtimeids.SessionID,
 ) (serverapi.ChatSettingsReadResponse, error) {
-	record, err := s.planner.PersistedSessions.ResolvePersistedSession(ctx, sessionID.String())
+	view, err := session.ResolvePersistedSessionView(ctx, s.planner.PersistedSessions, sessionID.String())
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
+	meta := view.Meta()
 	planner := s.planner
 	if planner.ReloadConfig != nil {
 		planner.Config, err = planner.ReloadConfig()
@@ -312,7 +313,7 @@ func (s *Service) MaterializedChatSettings(
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
-	state, err := session.ChatSettingsStateFromMeta(*record.Meta)
+	state, err := session.ChatSettingsStateFromMeta(meta)
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
 	}
@@ -339,7 +340,7 @@ func (s *Service) MaterializedChatSettings(
 		Settings:       effective,
 		WorkflowLocked: workflowLocked,
 		CompactionMode: planner.Config.Settings.CompactionMode,
-		Locked:         record.Meta.Locked,
+		Locked:         meta.Locked,
 	})
 	if err != nil {
 		return serverapi.ChatSettingsReadResponse{}, err
@@ -347,7 +348,7 @@ func (s *Service) MaterializedChatSettings(
 	facts := &serverapi.ChatSettingsSessionFacts{
 		SessionID:         sessionID,
 		TaskID:            taskID,
-		PreviousSessionID: record.Meta.PreviousSessionID,
+		PreviousSessionID: meta.PreviousSessionID,
 	}
 	return serverapi.ChatSettingsReadResponse{
 		Settings: settings,
