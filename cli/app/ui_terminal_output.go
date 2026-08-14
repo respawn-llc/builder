@@ -13,12 +13,19 @@ type uiTerminalOutput struct {
 	mu               sync.Mutex
 	out              io.Writer
 	err              error
+	failures         chan error
+	failuresDone     chan struct{}
+	failuresStop     sync.Once
 	started          bool
 	readinessPending bool
 }
 
 func newUITerminalOutput(out io.Writer) *uiTerminalOutput {
-	return &uiTerminalOutput{out: out}
+	return &uiTerminalOutput{
+		out:          out,
+		failures:     make(chan error, 1),
+		failuresDone: make(chan struct{}),
+	}
 }
 
 func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
@@ -35,15 +42,13 @@ func (w *uiTerminalOutput) Write(payload []byte) (int, error) {
 	}
 	if w.readinessPending {
 		if _, err := w.write([]byte(xansi.ShowCursor)); err != nil {
-			w.err = fmt.Errorf("announce terminal input readiness: %w", err)
-			return 0, w.err
+			return 0, w.recordFailureLocked(fmt.Errorf("announce terminal input readiness: %w", err))
 		}
 		w.readinessPending = false
 	}
 	n, err := w.write(payload)
 	if err != nil {
-		w.err = err
-		return n, err
+		return n, w.recordFailureLocked(err)
 	}
 	w.started = true
 	return n, err
@@ -60,6 +65,22 @@ func (w *uiTerminalOutput) write(payload []byte) (int, error) {
 	return n, nil
 }
 
+func (w *uiTerminalOutput) recordFailureLocked(err error) error {
+	if err == nil {
+		return nil
+	}
+	if w.err != nil {
+		return w.err
+	}
+	w.err = err
+	select {
+	case w.failures <- err:
+	case <-w.failuresDone:
+	default:
+	}
+	return err
+}
+
 func (w *uiTerminalOutput) Err() error {
 	if w == nil {
 		return nil
@@ -67,6 +88,27 @@ func (w *uiTerminalOutput) Err() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.err
+}
+
+func (w *uiTerminalOutput) waitFailure() error {
+	if w == nil {
+		return nil
+	}
+	select {
+	case err := <-w.failures:
+		return err
+	case <-w.failuresDone:
+		return nil
+	}
+}
+
+func (w *uiTerminalOutput) stopFailureEvents() {
+	if w == nil {
+		return
+	}
+	w.failuresStop.Do(func() {
+		close(w.failuresDone)
+	})
 }
 
 func (w *uiTerminalOutput) Restore() {

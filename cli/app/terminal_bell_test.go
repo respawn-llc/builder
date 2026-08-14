@@ -13,6 +13,8 @@ import (
 	"core/shared/clientui"
 	"core/shared/runtimeids"
 	"core/shared/transcript"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 type countRinger struct {
@@ -85,16 +87,33 @@ func TestOSC9NotifierEncodesFormattedMessageVerbatim(t *testing.T) {
 }
 
 func TestTerminalNotifierUsesBoundSharedTerminalOutput(t *testing.T) {
-	expected := errors.New("terminal unavailable")
-	raw := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{err: expected}}}
-	output := newUITerminalOutput(raw)
-	hooks := newBellHooks(newBELTerminalNotifier(io.Discard), nil)
+	for _, method := range []string{notificationMethodBEL, notificationMethodOSC9} {
+		t.Run(method, func(t *testing.T) {
+			expected := errors.New("terminal unavailable")
+			raw := &terminalOutputScriptWriter{results: []terminalOutputWriteResult{{err: expected}}}
+			output := newUITerminalOutput(raw)
+			hooks := newBellHooks(newTerminalNotifier(method, io.Discard, nil), nil)
 
-	hooks.setOutput(output)
-	hooks.notifier.Bell()
+			hooks.setOutput(output)
+			hooks.notifier.Notify("done")
 
-	if !errors.Is(output.Err(), expected) {
-		t.Fatalf("terminal output error = %v, want %v", output.Err(), expected)
+			if !errors.Is(output.Err(), expected) {
+				t.Fatalf("terminal output error = %v, want %v", output.Err(), expected)
+			}
+			msg := waitTerminalOutputFailure(output)()
+			terminalFailure, ok := msg.(terminalSequenceWriteErrMsg)
+			if !ok || !errors.Is(terminalFailure.err, expected) {
+				t.Fatalf("terminal failure message = %T %+v, want %v", msg, msg, expected)
+			}
+			model := newProjectedStaticUIModel()
+			_, quit := model.Update(msg)
+			if quit == nil {
+				t.Fatal("terminal notification failure did not request UI termination")
+			}
+			if _, ok := quit().(tea.QuitMsg); !ok {
+				t.Fatal("terminal notification failure did not return Bubble Tea quit")
+			}
+		})
 	}
 }
 

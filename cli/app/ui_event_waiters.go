@@ -11,4 +11,17 @@ func waitRuntimeConnectionStateChange(events <-chan runtimeConnectionStateChange
 	}
 }
 
+func waitTerminalOutputFailure(output *uiTerminalOutput) tea.Cmd {
+	if output == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err := output.waitFailure()
+		if err == nil {
+			return nil
+		}
+		return terminalSequenceWriteErrMsg{err: err}
+	}
+}
+
 func (m *uiModel) dropNativeSurface() {}

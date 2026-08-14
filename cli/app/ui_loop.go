@@ -179,6 +179,10 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 			Duration: transientStatusDuration,
 		}))
 	}
+	model.startupCmds = append(
+		model.startupCmds,
+		waitTerminalOutputFailure(terminalOutput.uiTerminalOutput),
+	)
 	model.promptAnswers = request.wiring.promptAnswers.withConnectionOutcomeSink(func(err error) {
 		enqueueRuntimeConnectionStateChange(model.runtimeConnectionEvents, err)
 	})
@@ -200,6 +204,7 @@ func composeUIProgram(request uiLoopRequest, output io.Writer) (*uiProgramCompos
 		output:   terminalOutput,
 		terminal: terminalOutput.uiTerminalOutput,
 		close: func() {
+			terminalOutput.stopFailureEvents()
 			model.Close()
 			if tuiLogger != nil {
 				_ = tuiLogger.Close()
