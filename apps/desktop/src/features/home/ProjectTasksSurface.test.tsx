@@ -58,6 +58,7 @@ const fixture = vi.hoisted<{
   invalidations: unknown[];
   open: ReturnType<typeof vi.fn<SidebarRootController["open"]>>;
   labelCatalogRequests: number;
+  projectSubscriptions: number;
   assignmentRequests: number;
 }>(() => ({
   activeDestination: null,
@@ -91,7 +92,7 @@ const fixture = vi.hoisted<{
   initialGroupPagesError: false,
   initialGroupPagesEstablished: true,
   initialGroupPagesRefreshing: false,
-  backlogTasks: [taskFixture("backlog-1", "KNT-3", "Backlog task")],
+  backlogTasks: [task("backlog-1", "KNT-3", "Backlog task")],
   doneDataOverrides: {},
   invalidations: [],
   open: vi.fn<SidebarRootController["open"]>(() => ({
@@ -99,6 +100,7 @@ const fixture = vi.hoisted<{
     release: vi.fn(),
   })),
   labelCatalogRequests: 0,
+  projectSubscriptions: 0,
   assignmentRequests: 0,
 }));
 
@@ -119,11 +121,20 @@ vi.mock("@/app-facade", async (importOriginal) => ({
           labels: [{ id: "label-1", name: "Priority" }],
         };
       },
+      subscribeProject: () => {
+        fixture.projectSubscriptions += 1;
+        return {
+          close() {
+            fixture.projectSubscriptions -= 1;
+          },
+        };
+      },
     },
     logger: { append: vi.fn() },
     nativeBridge: { capabilities: { platform: "macos" } },
+    storageNamespace: null,
   }),
-  useConnectionSnapshot: () => ({ generation: 1, phase: "disconnected" }),
+  useConnectionSnapshot: () => ({ generation: 1, phase: "connected" }),
   useOwnedSidebarRoots: () => ({ open: fixture.open }),
   useSidebarShell: () => ({ activeDestination: fixture.activeDestination }),
   useStatusController: () => ({ dismiss: vi.fn(), push: vi.fn() }),
@@ -199,6 +210,7 @@ describe("ProjectTasksSurface", () => {
     fixture.open.mockReset();
     fixture.invalidations = [];
     fixture.labelCatalogRequests = 0;
+    fixture.projectSubscriptions = 0;
     fixture.assignmentRequests = 0;
     mockedActiveTasks = undefined;
   });
@@ -491,7 +503,7 @@ describe("ProjectTasksSurface", () => {
     expect(fixture.open).toHaveBeenCalledTimes(3);
   });
 
-  it("keeps Labels as the only cell action and applies last-wins selection while it is open", async () => {
+  it("keeps Labels subscribed and applies last-wins selection while the chooser is open", async () => {
     fixture.activeDestination = { kind: "taskDetail", mode: "shift", taskID: "active-1" };
     renderSurface(createProjectTasksViewMemory(), "shift", [
       task("active-1", "KNT-1", "Detail selected"),
@@ -516,6 +528,7 @@ describe("ProjectTasksSurface", () => {
     await waitFor(() => {
       expect(fixture.labelCatalogRequests).toBe(1);
       expect(fixture.assignmentRequests).toBe(1);
+      expect(fixture.projectSubscriptions).toBe(1);
       expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "top");
     });
 
@@ -526,6 +539,7 @@ describe("ProjectTasksSurface", () => {
     expect(labelsRow).toHaveAttribute("aria-selected", "false");
     expect(fixture.labelCatalogRequests).toBe(1);
     expect(fixture.assignmentRequests).toBe(1);
+    expect(fixture.projectSubscriptions).toBe(0);
   });
 });
 
@@ -622,22 +636,6 @@ function groupData(
     previousRequestGeneration: "project-1:0",
     refetch: vi.fn(),
     tasks: establishedTasks,
-  };
-}
-
-function taskFixture(id: string, shortID: string, title: string): TaskListItem {
-  return {
-    id,
-    shortID,
-    workflowID: "workflow-1",
-    workflowName: "Delivery",
-    title,
-    createdAt: 1,
-    updatedAt: 1,
-    columnKeys: null,
-    status: { kind: "active", nativeState: "active", nodeIDs: [], attentionTypes: [] },
-    labels: [],
-    dependencyProgress: null,
   };
 }
 

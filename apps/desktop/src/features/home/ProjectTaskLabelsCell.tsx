@@ -37,7 +37,7 @@ export function ProjectTaskLabelsCell({
     );
   }
   return (
-    <ProjectLabelsProvider projectID={projectID} queryEnabled subscribeToProject={false}>
+    <ProjectLabelsProvider projectID={projectID} queryEnabled>
       <TaskLabelAssignmentProvider taskID={task.id}>
         <OpenProjectTaskLabelChooser onOpenChange={onOpenChange} task={task} t={t} />
       </TaskLabelAssignmentProvider>
