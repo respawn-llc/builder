@@ -62,20 +62,14 @@ export function ProjectPrototypeDetail({
           value={tab}
         />
       </div>
-      <div className="relative min-h-0 flex-1">
-        <div
-          aria-hidden={tab !== "tasks"}
-          className={
-            tab === "tasks" ? "h-full min-h-0" : "pointer-events-none invisible absolute inset-0"
-          }
-        >
+      <div className="min-h-0 flex-1">
+        {tab === "tasks" ? (
           <ProjectTasksSurface
             projectID={projectID}
             sidebarMode={sidebarMode}
             viewMemory={taskListViewMemory}
           />
-        </div>
-        {tab === "tasks" ? null : (
+        ) : (
           <SessionPrototypeList query={tab === "sessions" ? mainSessionsQuery : subagentSessionsQuery} />
         )}
       </div>

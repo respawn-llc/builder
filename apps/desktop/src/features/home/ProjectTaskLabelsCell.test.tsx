@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { cloneElement, type ReactElement, type ReactNode, type Ref } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { TaskLabelAssignmentData } from "@/shared/labels";
@@ -19,28 +19,16 @@ const assignment = vi.hoisted<MutableAssignment>(() => ({
   selectedLabelIDs: [],
   setSelected: vi.fn(),
 }));
-const chooserTriggerAnchor = vi.hoisted<{ current: HTMLButtonElement | null }>(() => ({ current: null }));
-
 vi.mock("@/shared/labels", () => ({
   LabelChooser: ({
     invocation,
-    preferredSide,
     trigger,
   }: Readonly<{
     invocation: Readonly<{ disabled?: boolean }>;
-    preferredSide?: "top" | "bottom";
-    trigger: ReactElement<{ ref?: Ref<HTMLButtonElement> | undefined }>;
+    trigger: ReactElement;
   }>) => (
-    <div
-      data-assignment-disabled={invocation.disabled === true ? "true" : "false"}
-      data-preferred-side={preferredSide}
-      data-testid="assignment-state"
-    >
-      {cloneElement(trigger, {
-        ref(element) {
-          chooserTriggerAnchor.current = element;
-        },
-      })}
+    <div data-assignment-disabled={invocation.disabled === true ? "true" : "false"} data-testid="assignment-state">
+      {trigger}
     </div>
   ),
   ProjectLabelsProvider: ({ children }: Readonly<{ children: ReactNode }>): ReactNode => children,
@@ -53,7 +41,6 @@ describe("ProjectTaskLabelsCell", () => {
   beforeEach(() => {
     assignment.error = null;
     assignment.isPending = false;
-    chooserTriggerAnchor.current = null;
   });
 
   it("reuses assignment loading and error gating after the lazy row editor mounts", () => {
@@ -72,10 +59,6 @@ describe("ProjectTaskLabelsCell", () => {
     expect(screen.queryByTestId("spinner")).not.toBeInTheDocument();
     expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByTestId("assignment-state")).toHaveAttribute("data-assignment-disabled", "true");
-    expect(screen.getByTestId("assignment-state")).toHaveAttribute("data-preferred-side", "top");
-    expect(chooserTriggerAnchor.current).toBe(
-      screen.getByRole("button", { name: "home.prototype.editTaskLabels" }),
-    );
   });
 });
 

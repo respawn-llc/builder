@@ -477,6 +477,7 @@ describe("ProjectTasksSurface", () => {
     await waitFor(() => {
       expect(fixture.labelCatalogRequests).toBe(1);
       expect(fixture.assignmentRequests).toBe(1);
+      expect(screen.getByRole("dialog")).toHaveAttribute("data-side", "top");
     });
 
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Search or create labels" }), {

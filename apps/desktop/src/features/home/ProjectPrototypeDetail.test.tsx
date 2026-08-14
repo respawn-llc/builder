@@ -1,6 +1,8 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { useCallback } from "react";
 
 import { initializeI18n } from "@/i18n";
+import type { ProjectTasksViewMemory } from "./projectTasksViewMemory";
 import { ProjectPrototypeDetail } from "./ProjectPrototypeDetail";
 
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
@@ -23,27 +25,43 @@ vi.mock("@/app-facade", async (importOriginal) => ({
 }));
 
 vi.mock("./ProjectTasksSurface", () => ({
-  ProjectTasksSurface: () => (
-    <div aria-label="Retained tasks" data-testid="retained-tasks-grid" role="region" />
-  ),
+  ProjectTasksSurface: ({ viewMemory }: Readonly<{ viewMemory: ProjectTasksViewMemory }>) => {
+    const registerGrid = useCallback(
+      (element: HTMLDivElement | null) => {
+        if (element === null) return;
+        const memory = viewMemory.read();
+        element.scrollTop = memory.verticalOffsetPx;
+        element.scrollLeft = memory.horizontalOffsetPx;
+      },
+      [viewMemory],
+    );
+    return (
+      <div
+        aria-label="Project tasks"
+        onScroll={(event) => {
+          viewMemory.setScrollOffsets(event.currentTarget.scrollTop, event.currentTarget.scrollLeft);
+        }}
+        ref={registerGrid}
+        role="grid"
+      />
+    );
+  },
 }));
 
 beforeAll(async () => initializeI18n());
 
-it("retains the mounted Tasks grid and its pixels across Project tab changes", () => {
+it("restores Task-grid pixels after visiting another Project tab", () => {
   render(<ProjectPrototypeDetail projectID="project-1" sidebarMode="shift" />);
-  const grid = screen.getByTestId("retained-tasks-grid");
+  const grid = screen.getByRole("grid", { name: "Project tasks" });
   grid.scrollTop = 500;
   grid.scrollLeft = 120;
+  fireEvent.scroll(grid);
 
   fireEvent.click(screen.getByRole("tab", { name: "Sessions" }));
-  expect(screen.getByTestId("retained-tasks-grid")).toBe(grid);
-  expect(screen.queryByRole("region", { name: "Retained tasks" })).not.toBeInTheDocument();
-  expect(screen.getByRole("region", { hidden: true, name: "Retained tasks" })).toBe(grid);
+  expect(screen.queryByRole("grid", { name: "Project tasks" })).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
-  expect(screen.getByTestId("retained-tasks-grid")).toBe(grid);
-  expect(screen.getByRole("region", { name: "Retained tasks" })).toBe(grid);
-  expect(grid.scrollTop).toBe(500);
-  expect(grid.scrollLeft).toBe(120);
+  const restoredGrid = screen.getByRole("grid", { name: "Project tasks" });
+  expect(restoredGrid.scrollTop).toBe(500);
+  expect(restoredGrid.scrollLeft).toBe(120);
 });
