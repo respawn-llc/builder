@@ -111,9 +111,8 @@ func (s *Store) ListProjectLabels(ctx context.Context, projectID string) ([]Proj
 	})
 }
 
-func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id label.ID, rawName string) (ProjectLabelRecord, error) {
+func (s *Store) RenameProjectLabel(ctx context.Context, projectID string, id label.ID, name label.Name) (ProjectLabelRecord, error) {
 	trimmedProjectID := strings.TrimSpace(projectID)
-	name := label.Name(rawName)
 	return withProjectLabelTransaction(ctx, s, func(q *sqlitegen.Queries) (ProjectLabelRecord, error) {
 		row, err := q.RenameProjectLabel(ctx, sqlitegen.RenameProjectLabelParams{
 			Name:            name.String(),

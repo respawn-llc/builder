@@ -310,19 +310,34 @@ func (r WorkflowProjectLabelCreateRequest) ValidateRPC() error {
 }
 
 func (r WorkflowProjectLabelRenameRequest) Validate() error {
+	_, err := r.prepare()
+	return err
+}
+
+func (r WorkflowProjectLabelRenameRequest) prepare() (labelcontract.Name, error) {
 	if err := validateRequiredFields(
 		requiredField("project_id", r.ProjectID),
 	); err != nil {
-		return err
+		return "", err
 	}
-	if err := validateLabelName(r.Name); err != nil {
-		return err
+	name, err := prepareLabelName(r.Name)
+	if err != nil {
+		return "", err
 	}
-	return validateLabelID("label_id", r.LabelID)
+	if err := validateLabelID("label_id", r.LabelID); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func (r WorkflowProjectLabelRenameRequest) PrepareRPC() (labelcontract.Name, error) {
+	name, err := r.prepare()
+	return name, workflowLabelRPCValidationError(err, r.ProjectID, "", true)
 }
 
 func (r WorkflowProjectLabelRenameRequest) ValidateRPC() error {
-	return workflowLabelRPCValidationError(r.Validate(), r.ProjectID, "", true)
+	_, err := r.PrepareRPC()
+	return err
 }
 
 func (r WorkflowProjectLabelDeleteRequest) Validate() error {
@@ -534,14 +549,20 @@ func validateLabelID(field string, id string) error {
 }
 
 func validateLabelName(name string) error {
-	if _, err := labelcontract.PrepareName(name); err != nil {
+	_, err := prepareLabelName(name)
+	return err
+}
+
+func prepareLabelName(name string) (labelcontract.Name, error) {
+	prepared, err := labelcontract.PrepareName(name)
+	if err != nil {
 		var nameErr *labelcontract.NameError
 		if errors.As(err, &nameErr) && nameErr.Reason == labelcontract.NameErrorRequired {
-			return workflowRequestError(WorkflowRequestErrorRequired, "name", err.Error())
+			return "", workflowRequestError(WorkflowRequestErrorRequired, "name", err.Error())
 		}
-		return workflowRequestError(WorkflowRequestErrorInvalidValue, "name", err.Error())
+		return "", workflowRequestError(WorkflowRequestErrorInvalidValue, "name", err.Error())
 	}
-	return nil
+	return prepared, nil
 }
 
 func validateLabelIDs(field string, ids []string) error {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -52,6 +51,13 @@ func runDarwinWatchdog(args []string) error {
 	}
 	if child.Parent != setup.HostPID || !commandArgsEqual(child.Command, setup.ChildCommand) {
 		return errors.New("Darwin watchdog server child identity does not match its host")
+	}
+	childTopology := darwinServiceTopology{
+		Host: darwinLaunchdHost{PID: setup.HostPID},
+		Child: &darwinOwnedChild{
+			PID:     child.PID,
+			Command: append([]string(nil), child.Command...),
+		},
 	}
 	kqueue, err := unix.Kqueue()
 	if err != nil {
@@ -104,7 +110,7 @@ func runDarwinWatchdog(args []string) error {
 			return nil
 		}
 		if hostExited {
-			return watchdogSettleOrphan(setup.ChildPID, childLease)
+			return watchdogSettleOrphan(childTopology, childLease)
 		}
 		for _, event := range events[:count] {
 			if event.Filter != unix.EVFILT_READ {
@@ -129,9 +135,14 @@ func runDarwinWatchdog(args []string) error {
 	}
 }
 
-func watchdogSettleOrphan(childPID int, childLease *os.File) error {
+func watchdogSettleOrphan(topology darwinServiceTopology, childLease *os.File) error {
 	_ = writeDarwinServiceMessage(childLease, darwinServiceMessage{Kind: "settling"})
-	if err := syscall.Kill(childPID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+	owned, err := capturedDarwinChildStillOwned(topology)
+	if err != nil || !owned {
+		return err
+	}
+	childPID := topology.Child.PID
+	if err := signalLaunchdServiceProcess(childPID); err != nil {
 		return fmt.Errorf("stop orphaned Darwin server child %d: %w", childPID, err)
 	}
 	timeout := launchdServiceShutdownTimeout
@@ -145,7 +156,11 @@ func watchdogSettleOrphan(childPID int, childLease *os.File) error {
 	if exited {
 		return nil
 	}
-	if err := syscall.Kill(childPID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	owned, err = capturedDarwinChildStillOwned(topology)
+	if err != nil || !owned {
+		return err
+	}
+	if err := killLaunchdServiceProcess(childPID); err != nil {
 		return fmt.Errorf("force stop orphaned Darwin server child %d: %w", childPID, err)
 	}
 	exited, err = waitForDarwinProcessExitEvent(childPID, timeout)

@@ -234,6 +234,54 @@ func TestDarwinShutdownRevalidatesChildAgainBeforeSIGKILL(t *testing.T) {
 	}
 }
 
+func TestDarwinWatchdogDoesNotSignalReusedChildPID(t *testing.T) {
+	topology := darwinServiceTopology{
+		Host: darwinLaunchdHost{PID: 100},
+		Child: &darwinOwnedChild{
+			PID:     101,
+			Command: []string{"kent", "serve"},
+		},
+	}
+	leasePair, err := darwinSocketPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	testLease := darwinSocketFile(leasePair[0], "test watchdog lease")
+	childLease := darwinSocketFile(leasePair[1], "watchdog child lease")
+	defer closeDarwinFiles(testLease, childLease)
+	previousInspect := inspectDarwinProcessIdentity
+	previousSignal := signalLaunchdServiceProcess
+	previousKill := killLaunchdServiceProcess
+	inspectDarwinProcessIdentity = func(pid int) (darwinProcessIdentity, error) {
+		return darwinProcessIdentity{
+			PID:     pid,
+			Parent:  999,
+			Command: append([]string(nil), topology.Child.Command...),
+		}, nil
+	}
+	signalLaunchdServiceProcess = func(int) error {
+		t.Fatal("watchdog sent SIGTERM to reused child PID")
+		return nil
+	}
+	killLaunchdServiceProcess = func(int) error {
+		t.Fatal("watchdog sent SIGKILL to reused child PID")
+		return nil
+	}
+	t.Cleanup(func() {
+		inspectDarwinProcessIdentity = previousInspect
+		signalLaunchdServiceProcess = previousSignal
+		killLaunchdServiceProcess = previousKill
+	})
+
+	if err := watchdogSettleOrphan(topology, childLease); err != nil {
+		t.Fatalf("settle reused watchdog child: %v", err)
+	}
+	message, err := readDarwinServiceMessage(testLease)
+	if err != nil || message.Kind != "settling" {
+		t.Fatalf("watchdog settlement message = %#v, %v", message, err)
+	}
+}
+
 func TestDarwinServiceLockHandoffIsCancellableAndExclusive(t *testing.T) {
 	root := t.TempDir()
 	lockPath := darwinServiceLockPath(root)

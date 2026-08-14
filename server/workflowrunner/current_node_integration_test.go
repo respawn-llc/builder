@@ -1744,6 +1744,12 @@ func TestPostCommitDiagnosticPreservesApprovalAndCACBoundary(t *testing.T) {
 }
 
 func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *testing.T) {
+	targetResponseRelease := make(chan struct{})
+	var releaseTargetResponse sync.Once
+	t.Cleanup(func() {
+		releaseTargetResponse.Do(func() { close(targetResponseRelease) })
+	})
+	targetResponse := ScriptedFinalAnswer(`{"commentary":"resumed target done"}`)
 	client := NewCompactingScriptedClient(
 		llm.ProviderCapabilities{
 			ProviderID:               "test",
@@ -1783,7 +1789,17 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 				Input: json.RawMessage(`{"transition":"next_2","commentary":"second done"}`),
 			},
 		),
-		ScriptedFinalAnswer(`{"commentary":"resumed target done"}`),
+		ScriptedRuntimeStep{
+			BeforeResponse: func(ctx context.Context) error {
+				select {
+				case <-targetResponseRelease:
+					return nil
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+			},
+			Response: targetResponse.Response,
+		},
 	)
 	f := newCurrentNodeRunnerFixtureWithClient(t, client)
 	f.starter.cfg.Settings.CompactionMode = config.CompactionModeNone
@@ -1825,6 +1841,8 @@ func TestDisabledCACRetriesExistingTargetOnResumeAfterConfigurationChange(t *tes
 	if targets[0].SessionID == nil || *targets[0].SessionID != *interrupted.SessionID {
 		t.Fatalf("resumed target Session = %v, want assigned Session %v", targets[0].SessionID, interrupted.SessionID)
 	}
+	releaseTargetResponse.Do(func() { close(targetResponseRelease) })
+	f.waitForTaskQuiescence(t, task.ID)
 	if len(requests) != 3 {
 		t.Fatalf("resumed model requests = %d, want source, source, target", len(requests))
 	}

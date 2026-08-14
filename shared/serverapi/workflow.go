@@ -1892,24 +1892,43 @@ type WorkflowTaskSessionStarted struct {
 }
 
 func (r WorkflowCreateRequest) Validate() error {
-	return validateWorkflowName(r.Name, "name")
+	_, err := r.Prepare()
+	return err
+}
+
+func (r WorkflowCreateRequest) Prepare() (workflowcontract.WorkflowName, error) {
+	return prepareWorkflowName(r.Name, "name")
 }
 
 func (r WorkflowCreateAndLinkProjectRequest) Validate() error {
-	if err := validateWorkflowName(r.Name, "name"); err != nil {
-		return err
+	_, err := r.Prepare()
+	return err
+}
+
+func (r WorkflowCreateAndLinkProjectRequest) Prepare() (workflowcontract.WorkflowName, error) {
+	name, err := prepareWorkflowName(r.Name, "name")
+	if err != nil {
+		return workflowcontract.WorkflowName{}, err
 	}
 	if err := validateRequired("project_id", r.ProjectID); err != nil {
-		return err
+		return workflowcontract.WorkflowName{}, err
 	}
-	return validateWorkflowProjectLinkDefaultMode(r.DefaultPolicy)
+	if err := validateWorkflowProjectLinkDefaultMode(r.DefaultPolicy); err != nil {
+		return workflowcontract.WorkflowName{}, err
+	}
+	return name, nil
 }
 
 func (r WorkflowUpdateRequest) Validate() error {
+	_, err := r.Prepare()
+	return err
+}
+
+func (r WorkflowUpdateRequest) Prepare() (workflowcontract.WorkflowName, error) {
 	if err := validateRequiredWorkflowID(r.WorkflowID); err != nil {
-		return err
+		return workflowcontract.WorkflowName{}, err
 	}
-	return validateWorkflowName(r.Name, "name")
+	return prepareWorkflowName(r.Name, "name")
 }
 
 func (r WorkflowListRequest) Validate() error {
@@ -2253,8 +2272,13 @@ func validateWorkflowGraphMetadata(metadata *WorkflowGraphMetadata) error {
 }
 
 func validateWorkflowName(raw string, field string) error {
-	_, err := workflowcontract.NewWorkflowName(raw)
-	return workflowNameRequestError(err, field)
+	_, err := prepareWorkflowName(raw, field)
+	return err
+}
+
+func prepareWorkflowName(raw string, field string) (workflowcontract.WorkflowName, error) {
+	name, err := workflowcontract.NewWorkflowName(raw)
+	return name, workflowNameRequestError(err, field)
 }
 
 func workflowNameRequestError(err error, field string) error {

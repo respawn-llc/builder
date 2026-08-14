@@ -49,14 +49,15 @@ func (s *Service) ListWorkflowProjectLabels(ctx context.Context, req serverapi.W
 }
 
 func (s *Service) RenameWorkflowProjectLabel(ctx context.Context, req serverapi.WorkflowProjectLabelRenameRequest) (serverapi.WorkflowProjectLabelRenameResponse, error) {
-	if err := req.ValidateRPC(); err != nil {
+	name, err := req.PrepareRPC()
+	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
 	}
 	id, err := label.ParseID(req.LabelID)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, err
 	}
-	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, id, req.Name)
+	record, err := s.store.RenameProjectLabel(ctx, req.ProjectID, id, name)
 	if err != nil {
 		return serverapi.WorkflowProjectLabelRenameResponse{}, workflowLabelError(err, workflowLabelErrorScope{
 			projectID: &req.ProjectID,

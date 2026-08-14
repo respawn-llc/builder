@@ -250,10 +250,11 @@ func New(store *workflowstore.Store, readModels ReadModels, roleResolver workflo
 }
 
 func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCreateRequest) (serverapi.WorkflowCreateResponse, error) {
-	if err := req.Validate(); err != nil {
+	name, err := req.Prepare()
+	if err != nil {
 		return serverapi.WorkflowCreateResponse{}, err
 	}
-	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: req.Name, Description: req.Description})
+	created, err := s.store.CreateWorkflow(ctx, workflowstore.CreateWorkflowRequest{Name: name.String(), Description: req.Description})
 	if err != nil {
 		return serverapi.WorkflowCreateResponse{}, err
 	}
@@ -261,11 +262,12 @@ func (s *Service) CreateWorkflow(ctx context.Context, req serverapi.WorkflowCrea
 }
 
 func (s *Service) CreateAndLinkWorkflowToProject(ctx context.Context, request serverapi.WorkflowCreateAndLinkProjectRequest) (serverapi.WorkflowCreateAndLinkProjectResponse, error) {
-	if err := request.Validate(); err != nil {
+	name, err := request.Prepare()
+	if err != nil {
 		return serverapi.WorkflowCreateAndLinkProjectResponse{}, err
 	}
 	created, link, err := s.store.CreateAndLinkWorkflow(ctx, workflowstore.CreateAndLinkWorkflowRequest{
-		Name:          request.Name,
+		Name:          name.String(),
 		Description:   request.Description,
 		ProjectID:     request.ProjectID,
 		DefaultPolicy: workflowStoreDefaultPolicy(request.DefaultPolicy),
@@ -323,11 +325,12 @@ func (s *Service) publishLinkedWorkflowEvent(ctx context.Context, workflowID run
 }
 
 func (s *Service) UpdateWorkflow(ctx context.Context, req serverapi.WorkflowUpdateRequest) (serverapi.WorkflowGetResponse, error) {
-	if err := req.Validate(); err != nil {
+	name, err := req.Prepare()
+	if err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}
 	if _, err := s.store.RunWorkflowGraphSaveOperation(ctx, req.WorkflowID, func(ctx context.Context) (workflowstore.WorkflowGraphSaveResult, error) {
-		return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, req.Name, req.Description)
+		return workflowstore.WorkflowGraphSaveResult{}, s.store.UpdateWorkflowInfo(ctx, req.WorkflowID, name.String(), req.Description)
 	}); err != nil {
 		return serverapi.WorkflowGetResponse{}, err
 	}

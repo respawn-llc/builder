@@ -101,6 +101,46 @@ func TestServiceRetainsWorkflowTaskAndCommentBoundaries(t *testing.T) {
 	}
 }
 
+func TestServicePersistsCanonicalWorkflowAndLabelNames(t *testing.T) {
+	fixture := corefixture.New(t)
+	service := fixture.Core.WorkflowClient()
+
+	unlinked, err := service.CreateWorkflow(t.Context(), serverapi.WorkflowCreateRequest{Name: "  Canonical unlinked  "})
+	if err != nil || unlinked.Workflow.Name != "Canonical unlinked" {
+		t.Fatalf("CreateWorkflow = %+v, %v", unlinked, err)
+	}
+	linked, err := service.CreateAndLinkWorkflowToProject(t.Context(), serverapi.WorkflowCreateAndLinkProjectRequest{
+		Name:          "  Canonical linked  ",
+		ProjectID:     fixture.Binding.ProjectID,
+		DefaultPolicy: serverapi.WorkflowProjectLinkDefaultNever,
+	})
+	if err != nil || linked.Workflow.Name != "Canonical linked" {
+		t.Fatalf("CreateAndLinkWorkflowToProject = %+v, %v", linked, err)
+	}
+	updated, err := service.UpdateWorkflow(t.Context(), serverapi.WorkflowUpdateRequest{
+		WorkflowID: linked.Workflow.ID,
+		Name:       "  Canonical updated  ",
+	})
+	if err != nil || updated.Definition.Workflow.Name != "Canonical updated" {
+		t.Fatalf("UpdateWorkflow = %+v, %v", updated, err)
+	}
+	createdLabel, err := service.CreateWorkflowProjectLabel(t.Context(), serverapi.WorkflowProjectLabelCreateRequest{
+		ProjectID: fixture.Binding.ProjectID,
+		Name:      "Original",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorkflowProjectLabel: %v", err)
+	}
+	renamedLabel, err := service.RenameWorkflowProjectLabel(t.Context(), serverapi.WorkflowProjectLabelRenameRequest{
+		ProjectID: fixture.Binding.ProjectID,
+		LabelID:   createdLabel.Label.ID,
+		Name:      "  Canonical label  ",
+	})
+	if err != nil || renamedLabel.Label.Name != "Canonical label" {
+		t.Fatalf("RenameWorkflowProjectLabel = %+v, %v", renamedLabel, err)
+	}
+}
+
 func TestServiceRetainsWorkflowLabelsAndDependencies(t *testing.T) {
 	fixture := corefixture.New(t)
 	service := fixture.Core.WorkflowClient()
